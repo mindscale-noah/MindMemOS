@@ -5,8 +5,6 @@ PRESERVE_ENV_VARS := \
 	MINDMEMOS_CONFIG_PATH \
 	MINDMEMOS_API_HOST \
 	MINDMEMOS_API_PORT \
-	MINDMEMOS_VIS_HOST \
-	MINDMEMOS_VIS_PORT \
 	MINDMEMOS_QDRANT_URL \
 	MINDMEMOS_QDRANT_HTTP_PORT \
 	MINDMEMOS_QDRANT_GRPC_PORT \
@@ -85,8 +83,6 @@ MINDMEMOS_NEO4J_PASSWORD ?= $(or $(MINDMEM_NEO4J_PASSWORD),$(MEMOS_NEO4J_PASSWOR
 MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS ?= localhost:$(MINDMEMOS_KAFKA_PORT)
 MINDMEMOS_KAFKA_PORT ?= $(or $(MINDMEM_KAFKA_PORT),$(MEMOS_KAFKA_PORT),9092)
 MINDMEMOS_KAFKA_UI_PORT ?= $(or $(MINDMEM_KAFKA_UI_PORT),$(MEMOS_KAFKA_UI_PORT),8080)
-VIS_HOST ?= $(or $(MINDMEMOS_VIS_HOST),$(MINDMEM_VIS_HOST),$(MEMOS_VIS_HOST),127.0.0.1)
-VIS_PORT ?= $(or $(MINDMEMOS_VIS_PORT),$(MINDMEM_VIS_PORT),$(MEMOS_VIS_PORT),8765)
 API_HOST ?= $(or $(MINDMEMOS_API_HOST),127.0.0.1)
 API_PORT ?= $(or $(MINDMEMOS_API_PORT),8000)
 API_RELOAD ?= 0
@@ -95,14 +91,8 @@ PROFILE_OUT ?= tmp/profile.svg
 PROFILE_SECONDS ?= 60
 PROFILE_RATE ?= 100
 PROFILE_PID ?= $(PID)
-VIS_PID := .mindmemos-viewer.pid
-VIS_LOG := .mindmemos-viewer.log
-MINDMEM_LEGACY_VIS_PID := .mindmem-viewer.pid
-MINDMEM_LEGACY_VIS_LOG := .mindmem-viewer.log
-LEGACY_VIS_PID := .memos-viewer.pid
-LEGACY_VIS_LOG := .memos-viewer.log
 
-.PHONY: dev dev-setup dev-core api profile-api db db-observability db-clean dev-down db-view
+.PHONY: dev dev-setup dev-core api profile-api db db-observability db-clean dev-down
 
 dev-setup:
 	$(UV) sync
@@ -110,42 +100,7 @@ dev-setup:
 	$(UV) run python scripts/check_nlp_assets.py
 
 dev: db-observability
-	@if [ -f "$(MINDMEM_LEGACY_VIS_PID)" ] && kill -0 "$$(cat $(MINDMEM_LEGACY_VIS_PID))" 2>/dev/null; then \
-		echo "Stopping MindMem legacy DB viewer $$(cat $(MINDMEM_LEGACY_VIS_PID))"; \
-		pid="$$(cat $(MINDMEM_LEGACY_VIS_PID))"; \
-		children="$$(pgrep -P "$$pid" 2>/dev/null || true)"; \
-		kill $$children "$$pid" 2>/dev/null || true; \
-	fi
-	@rm -f "$(MINDMEM_LEGACY_VIS_PID)" "$(MINDMEM_LEGACY_VIS_LOG)"
-	@if [ -f "$(LEGACY_VIS_PID)" ] && kill -0 "$$(cat $(LEGACY_VIS_PID))" 2>/dev/null; then \
-		echo "Stopping legacy DB viewer $$(cat $(LEGACY_VIS_PID))"; \
-		pid="$$(cat $(LEGACY_VIS_PID))"; \
-		children="$$(pgrep -P "$$pid" 2>/dev/null || true)"; \
-		kill $$children "$$pid" 2>/dev/null || true; \
-	fi
-	@rm -f "$(LEGACY_VIS_PID)" "$(LEGACY_VIS_LOG)"
-	@if [ -f "$(VIS_PID)" ] && kill -0 "$$(cat $(VIS_PID))" 2>/dev/null; then \
-		echo "DB viewer already running at http://$(VIS_HOST):$(VIS_PORT)"; \
-	else \
-		echo "Starting DB viewer at http://$(VIS_HOST):$(VIS_PORT)"; \
-		nohup "$(UV)" run python -u scripts/db_visualize.py > "$(VIS_LOG)" 2>&1 & echo $$! > "$(VIS_PID)"; \
-		viewer_pid="$$(cat $(VIS_PID))"; \
-		for i in $$(seq 1 60); do \
-			sleep 1; \
-			if lsof -nP -iTCP:$(VIS_PORT) -sTCP:LISTEN >/dev/null 2>&1; then break; fi; \
-			if ! kill -0 "$$viewer_pid" 2>/dev/null; then \
-				echo "DB viewer failed to start. Log:"; \
-				cat "$(VIS_LOG)"; \
-				exit 1; \
-			fi; \
-			if [ "$$i" = "60" ]; then \
-				echo "DB viewer did not listen on port $(VIS_PORT) within 60s. Log:"; \
-				cat "$(VIS_LOG)"; \
-				exit 1; \
-			fi; \
-		done; \
-	fi
-	@echo "Use 'make dev-down' to stop viewer and databases."
+	@echo "Use 'make dev-down' to stop databases."
 	@echo "Starting FastAPI at http://$(API_HOST):$(API_PORT) (Ctrl-C to stop)"
 	$(UV) run uvicorn mindmemos.api.app:app --host $(API_HOST) --port $(API_PORT) $(API_RELOAD_FLAGS)
 
@@ -183,43 +138,8 @@ db-observability:
 	@echo "Neo4j:      $(MINDMEMOS_NEO4J_URI)"
 	@echo "OTel OTLP:  $(MINDMEMOS_TELEMETRY_ENDPOINT)"
 
-db-view:
-	$(UV) run python scripts/db_visualize.py
-
 db-clean:
 	$(COMPOSE) down -v
 
 dev-down:
-	@if [ -f "$(VIS_PID)" ]; then \
-		pid="$$(cat $(VIS_PID))"; \
-		if kill -0 "$$pid" 2>/dev/null; then \
-			echo "Stopping DB viewer $$pid"; \
-			children="$$(pgrep -P "$$pid" 2>/dev/null || true)"; \
-			kill $$children "$$pid" 2>/dev/null || true; \
-		fi; \
-		rm -f "$(VIS_PID)" "$(VIS_LOG)"; \
-	fi
-	@if [ -f "$(MINDMEM_LEGACY_VIS_PID)" ]; then \
-		pid="$$(cat $(MINDMEM_LEGACY_VIS_PID))"; \
-		if kill -0 "$$pid" 2>/dev/null; then \
-			echo "Stopping MindMem legacy DB viewer $$pid"; \
-			children="$$(pgrep -P "$$pid" 2>/dev/null || true)"; \
-			kill $$children "$$pid" 2>/dev/null || true; \
-		fi; \
-		rm -f "$(MINDMEM_LEGACY_VIS_PID)" "$(MINDMEM_LEGACY_VIS_LOG)"; \
-	fi
-	@if [ -f "$(LEGACY_VIS_PID)" ]; then \
-		pid="$$(cat $(LEGACY_VIS_PID))"; \
-		if kill -0 "$$pid" 2>/dev/null; then \
-			echo "Stopping legacy DB viewer $$pid"; \
-			children="$$(pgrep -P "$$pid" 2>/dev/null || true)"; \
-			kill $$children "$$pid" 2>/dev/null || true; \
-		fi; \
-		rm -f "$(LEGACY_VIS_PID)" "$(LEGACY_VIS_LOG)"; \
-	fi
-	@port_pids="$$(lsof -tiTCP:$(VIS_PORT) -sTCP:LISTEN 2>/dev/null || true)"; \
-	if [ -n "$$port_pids" ]; then \
-		echo "Stopping DB viewer on port $(VIS_PORT): $$port_pids"; \
-		kill $$port_pids 2>/dev/null || true; \
-	fi
 	$(COMPOSE) down
