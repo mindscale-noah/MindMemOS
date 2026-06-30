@@ -121,7 +121,6 @@ Default local services:
 ```text
 FastAPI:   http://127.0.0.1:8000
 API Docs:  http://127.0.0.1:8000/docs
-DB Viewer: http://127.0.0.1:8765
 ```
 
 Call the local API the same way as the hosted FastAPI service: replace the base

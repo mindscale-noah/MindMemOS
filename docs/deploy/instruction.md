@@ -21,7 +21,6 @@ Default local addresses:
 
 - FastAPI: `http://127.0.0.1:8000`
 - API Docs: `http://127.0.0.1:8000/docs`
-- DB Viewer: `http://127.0.0.1:8765`
 - Qdrant: `http://localhost:6333`
 - Neo4j Browser: `http://localhost:7474`
 
@@ -32,7 +31,7 @@ make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
 ```
 
-Stop local dependencies and DB Viewer:
+Stop local dependencies:
 
 ```bash
 make dev-down
@@ -94,7 +93,7 @@ Local dependencies are started with:
 docker compose --env-file .env -f dockers/docker-compose.memory.yml up -d --wait qdrant neo4j kafka kafka-ui kafka-exporter
 ```
 
-`make dev-core` runs Qdrant, Neo4j, Kafka, Kafka UI, and kafka-exporter. `make dev` runs the full Docker dependency stack first, then starts DB Viewer and FastAPI. `make db` remains as a compatibility entry point for the full dependency tier and is equivalent to `make db-observability`.
+`make dev-core` runs Qdrant, Neo4j, Kafka, Kafka UI, and kafka-exporter. `make dev` runs the full Docker dependency stack first, then starts FastAPI. `make db` remains as a compatibility entry point for the full dependency tier and is equivalent to `make db-observability`.
 
 Core services in Docker Compose:
 

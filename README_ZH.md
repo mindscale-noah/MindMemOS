@@ -117,7 +117,6 @@ Docker 档位限制：
 ```text
 FastAPI:   http://127.0.0.1:8000
 API Docs:  http://127.0.0.1:8000/docs
-DB Viewer: http://127.0.0.1:8765
 ```
 
 本地 API 的调用方式与调用云端 FastAPI 相同：将 base URL 切换为
