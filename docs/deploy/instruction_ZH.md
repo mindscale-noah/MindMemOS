@@ -21,7 +21,6 @@ make dev
 
 - FastAPI: `http://127.0.0.1:8000`
 - API Docs: `http://127.0.0.1:8000/docs`
-- DB Viewer: `http://127.0.0.1:8765`
 - Qdrant: `http://localhost:6333`
 - Neo4j Browser: `http://localhost:7474`
 
@@ -32,7 +31,7 @@ make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
 ```
 
-停止本地依赖和 DB Viewer：
+停止本地依赖：
 
 ```bash
 make dev-down
@@ -91,7 +90,7 @@ API 监听地址：
 docker compose --env-file .env -f dockers/docker-compose.memory.yml up -d --wait qdrant neo4j kafka kafka-ui kafka-exporter
 ```
 
-`make dev-core` 会启动 Qdrant、Neo4j、Kafka、Kafka UI 和 kafka-exporter。`make dev` 会先启动全量 Docker 依赖，再启动 DB Viewer 和 FastAPI。`make db` 仍保留为全量依赖的兼容入口，等同于 `make db-observability`。
+`make dev-core` 会启动 Qdrant、Neo4j、Kafka、Kafka UI 和 kafka-exporter。`make dev` 会先启动全量 Docker 依赖，再启动 FastAPI。`make db` 仍保留为全量依赖的兼容入口，等同于 `make db-observability`。
 
 Docker Compose 内的核心服务：
 
