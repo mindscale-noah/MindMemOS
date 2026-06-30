@@ -1,0 +1,350 @@
+<h1>
+  <img src="./assets/mindmemos-logo-small.png" alt="MindMemOS logo" width="40" height="40" align="absmiddle" style="vertical-align: middle;" />
+  MindMemOS
+</h1>
+
+![MindMemOS Memory For AI Agents](./assets/mindmemos-hero.png)
+
+<p align="center">
+  <a href="https://mindmemos.cn">
+    <img src="https://img.shields.io/badge/Website-mindmemos.cn-0A66C2?logo=googlechrome&logoColor=white" alt="MindMemOS Website">
+  </a>
+  <a href="https://mindmemos.cn/api-docs">
+    <img src="https://img.shields.io/badge/FastAPI-Docs-009688?logo=fastapi&logoColor=white" alt="MindMemOS FastAPI Docs">
+  </a>
+  <a href="https://pypi.org/project/mindmemos-sdk/">
+    <img src="https://img.shields.io/pypi/v/mindmemos-sdk?color=%2334D058&label=pypi%20sdk" alt="MindMemOS SDK PyPI version">
+  </a>
+  <a href="https://pypi.org/project/mindmemos-sdk/">
+    <img src="https://img.shields.io/pypi/dm/mindmemos-sdk?label=pypi%20downloads" alt="MindMemOS SDK PyPI downloads">
+  </a>
+  <a href="https://www.npmjs.com/package/@mindmemos/openclaw-plugin">
+    <img src="https://img.shields.io/npm/v/%40mindmemos%2Fopenclaw-plugin?label=npm%20plugin" alt="MindMemOS OpenClaw Plugin npm version">
+  </a>
+  <a href="#license">
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License">
+  </a>
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> | <a href="README_ZH.md">简体中文</a>
+</p>
+
+MindMemOS is an open-source long-term memory system for AI agents and applications. It helps agents turn conversations, files, tool traces, feedback, and offline reflection into searchable, updateable, project-isolated memory.
+
+Star MindMemOS on GitHub, then join the [Feishu group](#community) to request more cloud-service API quota from an admin.
+
+[Website](https://mindmemos.cn) · [FastAPI Docs](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [Local Docs](docs/README.md)
+
+## Benchmark
+
+> Coming soon.
+
+| Dataset | Pipeline | Memory Model | Answer Model | Judge Model | Score | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+
+### Evaluation of Dreaming
+
+* Benchmark: MemoryAgentBench, comparing SubEM performance and memory count changes before and after Dreaming.
+* Experiment setting: top-k=50, chunk_size=1024
+* Note: MIRIX and mem0 baseline results are from the paper, where chunk_size=4096.
+
+| Pipeline | Memory Model | Judge Model | Answer Model | Single-hop SubEM | Single-hop Gain | Single-hop Memory Count Change | Multi-hop SubEM | Multi-hop Gain | Multi-hop Memory Count Change | Average SubEM | Average Gain | Average Memory Count Change |
+|----------|--------------|-------------|--------------|:----------------:|:---------------:|:------------------------------:|:---------------:|:--------------:|:-----------------------------:|:------------:|:------------:|:---------------------------:|
+| MIRIX | GPT-4.1-mini | - | GPT-4.1-mini | 20.00% | - | - | 3.00% | - | - | 11.50% | - | - |
+| mem0 | GPT-4o-mini | - | GPT-4o-mini | 18.00% | - | - | 2.00% | - | - | 10.00% | - | - |
+| Ours (Vanilla) | gpt-4.1-mini | - | gpt-4.1-mini | 83.00% | | - | 10.75% | | - | 46.88% | | - |
+| **Ours (Vanilla + Dreaming)** | **gpt-4.1-mini** | **-** | **gpt-4.1-mini** | **88.75%** | **+5.75%** 🟢 | **-27.5%** | **14.00%** | **+3.25%** 🟢 | **-28.3%** | **51.38%** | **+4.50%** 🟢 | **-27.9%** |
+
+## Core Features
+
+- **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable user assets that can move across OpenClaw, Hermes, Claude Code, OpenHands, and other agent frameworks.
+- **Self-evolving memory**: Improve memory quality continuously through schema learning, dreaming, and feedback, so the system can learn frequent memory patterns, consolidate duplicates, and use correction signals to optimize add/search behavior.
+- **Memory-Skills loop**: Turn experience memories into skill candidates, then feed skill execution results, failures, and user feedback back into memory so skills can keep evolving.
+
+## Coming Features
+
+- **Skills system**: Route and govern large, redundant skill libraries, evolve skills from real usage, and synthesize new skills from high-frequency user scenarios through offline simulation and refinement.
+- **File system memory**: Structure scattered knowledge across local files, documents, project artifacts, and agent outputs into managed knowledge objects or graphs, so agents can use the user's file knowledge more reliably to complete tasks.
+- **Agent integrations**: Deeper integrations with coding agents, OpenClaw, Codex-style workflows, and long-running multi-agent systems.
+
+## Quickstart Guide
+
+### 1. Local Deployment
+
+MindMemOS uses `uv` for dependency management and local command execution.
+
+For detailed configuration instructions, see [docs/deploy/instruction.md](docs/deploy/instruction.md).
+
+```bash
+cp .env.example .env
+cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
+```
+
+Configure `config/mindmemos/api_keys.yaml` with an API key and its bound `project_id`. Public memory APIs use bearer authentication:
+
+```text
+Authorization: Bearer <api_key>
+```
+
+Before starting the stack, edit `config/mindmemos/dev.yaml` and configure at least these model routers:
+
+- `chat_model_router`: LLM generation and extraction.
+- `embed_model_router`: semantic embedding generation.
+- `rerank_model_router`: reranking for search candidates.
+
+Also make sure `database.qdrant.vector_size` matches the embedding endpoint
+dimension.
+
+Start the local stack:
+
+```bash
+make dev
+```
+
+`make dev` starts the full Docker dependency stack before FastAPI. To start only core dependencies:
+
+```bash
+make dev-core          # Qdrant + Neo4j + Kafka
+make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+```
+
+Docker tier rules:
+
+- `make dev-core` starts Qdrant, Neo4j, Kafka, Kafka UI, and kafka-exporter.
+- `make dev` and `make db-observability` start the full Docker dependency stack.
+- If `telemetry.enabled=true`, use the full stack so the OTel collector and ClickHouse endpoint exist; Grafana is only for viewing telemetry.
+
+Default local services:
+
+```text
+FastAPI:   http://127.0.0.1:8000
+API Docs:  http://127.0.0.1:8000/docs
+DB Viewer: http://127.0.0.1:8765
+```
+
+Call the local API the same way as the hosted FastAPI service: replace the base
+URL with `http://127.0.0.1:8000` and use the API key configured in
+`config/mindmemos/api_keys.yaml`.
+
+Stop the local stack:
+
+```bash
+make dev-down
+```
+
+### 2. Call Cloud FastAPI
+
+Use this path when calling the hosted MindMemOS FastAPI service.
+Apply for an API key from the MindMemOS website: [https://mindmemos.cn](https://mindmemos.cn).
+Use the issued API key in the `Authorization: Bearer <api_key>` header.
+
+Add a memory:
+
+```bash
+curl -X POST https://mindmemos.cn/v1/memory/add \
+  -H "Authorization: Bearer <api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "u_123",
+    "messages": [
+      {
+        "role": "user",
+        "content": "I prefer iced Americano."
+      }
+    ],
+    "mode": "sync"
+  }'
+```
+
+Search memories:
+
+```bash
+curl -X POST https://mindmemos.cn/v1/memory/search \
+  -H "Authorization: Bearer <api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "u_123",
+    "query": "What coffee does the user prefer?",
+    "top_k": 5,
+    "search_strategy": "fast"
+  }'
+```
+
+For local deployment, replace the base URL with `http://127.0.0.1:8000`.
+
+### 3. Skills Basic Usage
+
+Skills are versioned `SKILL.md` bundles that can be attached to memory add
+traces and later evolved from real usage. Register a skill first:
+
+```bash
+curl -X POST https://mindmemos.cn/v1/skills/register \
+  -H "Authorization: Bearer <api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "travel-planner",
+    "content": "# Travel Planner\n\nPrefer concise itineraries and surface hotel preferences.",
+    "version_label": "v1"
+  }'
+```
+
+The response includes `cloud_skill_id`, `version_id`, and `content_hash`. List
+or inspect managed skills:
+
+```bash
+curl -X GET https://mindmemos.cn/v1/skills \
+  -H "Authorization: Bearer <api_key>"
+
+curl -X POST https://mindmemos.cn/v1/skills/<cloud_skill_id>/get \
+  -H "Authorization: Bearer <api_key>"
+```
+
+When writing task traces, pass lightweight `skill_context` references in
+`/v1/memory/add`; do not include full skill content there:
+
+```bash
+curl -X POST https://mindmemos.cn/v1/memory/add \
+  -H "Authorization: Bearer <api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "u_123",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Plan a two-day Guangzhou trip."
+      }
+    ],
+    "skill_context": [
+      {
+        "name": "travel-planner",
+        "content_hash": "<content_hash>",
+        "base_version_id": "<version_id>",
+        "usage": "injected"
+      }
+    ],
+    "mode": "sync"
+  }'
+```
+
+The Python SDK exposes the same flow through `MindMemOSClient.skills`; registered
+local skills can be pushed, pulled, synced, updated, rolled back, and used by
+`client.memory.add(...)` automatically when skill detection is enabled.
+
+### 4. Python SDK
+
+The Python SDK is available on PyPI: [mindmemos-sdk](https://pypi.org/project/mindmemos-sdk/).
+
+Configure credentials once:
+
+```bash
+uv run mindmemos auth
+```
+
+Then reuse the local SDK config:
+
+```python
+import time
+
+from mindmemos_sdk import MindMemOSClient
+from mindmemos_sdk.memory import DialogueMessage
+
+with MindMemOSClient() as client:
+    add_result = client.memory.add(
+        messages=[
+            DialogueMessage(
+                role="user",
+                content="I prefer iced Americano.",
+                timestamp=int(time.time() * 1000),
+            )
+        ]
+    )
+    for item in add_result.memories:
+        print(item.operation, item.memory_id, item.content)
+
+    search_result = client.memory.search("coffee preference", top_k=5)
+    for hit in search_result.memories:
+        print(hit.id, hit.memory)
+```
+
+Or pass credentials explicitly:
+
+```python
+from mindmemos_sdk import MindMemOSClient
+from mindmemos_sdk.memory import DialogueMessage
+
+client = MindMemOSClient(
+    base_url="https://mindmemos.cn",
+    api_key="mk_xxx",
+    user_id="u_123",
+)
+
+result = client.memory.add(
+    messages=[DialogueMessage(role="user", content="I prefer iced Americano.")]
+)
+print(result.memories)
+
+client.close()
+```
+
+### 5. CLI
+
+The CLI is shipped with the Python SDK package.
+
+Configure the CLI:
+
+```bash
+uv run mindmemos auth
+```
+
+Add and search memories:
+
+```bash
+uv run mindmemos memory add --content "我喜欢喝冰美式"
+uv run mindmemos memory search "咖啡偏好" --top-k 5
+```
+
+Manage memories:
+
+```bash
+uv run mindmemos memory get --top-k 10
+uv run mindmemos memory update <memory_id> --content "我现在更喜欢拿铁"
+uv run mindmemos memory delete <memory_id>
+uv run mindmemos memory feedback --text "刚才召回的偏好不准确"
+uv run mindmemos memory dreaming
+```
+
+### 6. OpenClaw Plugin
+
+The OpenClaw plugin is available on npm:
+[@mindmemos/openclaw-plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin).
+It searches MindMemOS before each prompt and injects relevant memories as
+context, then stores completed OpenClaw conversations through the `mindmemos`
+CLI.
+
+Authenticate the CLI first:
+
+```bash
+uv run mindmemos auth
+```
+
+Then install and enable the plugin in OpenClaw:
+
+```bash
+openclaw plugins install @mindmemos/openclaw-plugin
+openclaw plugins enable mindmemos-memory
+```
+
+For full configuration and troubleshooting, see
+[docs/sdk/openclaw_plugin.md](docs/sdk/openclaw_plugin.md).
+
+## Community
+
+Join the MindMemOS Feishu community for updates, discussions, and support.
+
+![MindMemOS Feishu group QR code](./assets/feishu-group-small.png)
+
+## License
+
+MIT License.

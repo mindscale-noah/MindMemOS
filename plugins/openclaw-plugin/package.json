@@ -1,0 +1,55 @@
+{
+  "name": "@mindmemos/openclaw-plugin",
+  "version": "0.1.2",
+  "description": "OpenClaw plugin that recalls and writes MindMemOS memories through the mindmemos CLI.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mindscale-noah/MindMemOS.git",
+    "directory": "plugins/openclaw-plugin"
+  },
+  "homepage": "https://github.com/mindscale-noah/MindMemOS/tree/main/plugins/openclaw-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/mindscale-noah/MindMemOS/issues"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "openclaw": "^2026.6.6",
+    "typescript": "^5.9.3"
+  },
+  "openclaw": {
+    "compat": {
+      "pluginApi": ">=2026.6.6"
+    },
+    "install": {
+      "minHostVersion": ">=2026.6.6"
+    },
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ],
+    "hooks": {
+      "allowConversationAccess": true
+    }
+  }
+}
