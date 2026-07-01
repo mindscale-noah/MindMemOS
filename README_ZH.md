@@ -69,7 +69,7 @@ MindMemOS 通过高阶属性建模与发现，在 PersonaMem 基准上达到 SOT
 
 ### Evaluation of Dreaming
 
-* Benchmark：[MemoryAgentBench](https://arxiv.org/abs/2503.08135)，多轮 Agent 记忆基准，使用 Subsequence Exact Match (SubEM) 衡量记忆增强问答效果。对比 Dreaming 前后的 SubEM 表现与记忆数量变化。
+* Benchmark：[MemoryAgentBench](https://arxiv.org/abs/2507.05257)，多轮 Agent 记忆基准，使用 Subsequence Exact Match (SubEM) 衡量记忆增强问答效果。对比 Dreaming 前后的 SubEM 表现与记忆数量变化。
 * 实验设置：top-k=50, chunk_size=1024
 * Note：MIRIX 与 mem0 baseline 结果来自论文，论文配置为 chunk_size=4096。
 
