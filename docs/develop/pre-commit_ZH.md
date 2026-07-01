@@ -60,10 +60,10 @@ git commit -m "your message"
 - `ruff format`：统一 Python 代码格式
 - `gitleaks protect --staged --redact`：扫描 staged 内容里的密钥
 
-也可以手动运行：
+也可以手动检查已暂存文件：
 
 ```bash
-uv run pre-commit run --all-files
+uv run pre-commit run
 ```
 
 ## 常见情况

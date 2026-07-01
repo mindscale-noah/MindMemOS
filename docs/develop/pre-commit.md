@@ -60,10 +60,10 @@ Before the commit is created, the hook runs:
 - `ruff format`: formats Python code consistently
 - `gitleaks protect --staged --redact`: scans staged files for secrets
 
-Run all hooks manually with:
+Run hooks manually against staged files with:
 
 ```bash
-uv run pre-commit run --all-files
+uv run pre-commit run
 ```
 
 ## Common Cases
