@@ -92,12 +92,23 @@ PROFILE_SECONDS ?= 60
 PROFILE_RATE ?= 100
 PROFILE_PID ?= $(PID)
 
-.PHONY: dev dev-setup dev-core api profile-api db db-observability db-clean dev-down
+.PHONY: dev dev-setup hooks-install format lint dev-core api profile-api db db-observability db-clean dev-down
 
 dev-setup:
 	$(UV) sync
+	$(UV) run pre-commit install --install-hooks
 	$(UV) run python scripts/install_nlp_assets.py
 	$(UV) run python scripts/check_nlp_assets.py
+
+hooks-install:
+	$(UV) run pre-commit install --install-hooks
+
+format:
+	$(UV) run ruff check --fix .
+	$(UV) run ruff format .
+
+lint:
+	$(UV) run ruff check .
 
 dev: db-observability
 	@echo "Use 'make dev-down' to stop databases."
