@@ -35,17 +35,43 @@ Star 后加入 [飞书群](#community) 领取更多云服务 API 额度。
 
 ## Benchmark
 
-> Coming soon.
+### Evaluation of Conversational Memory
 
-| 数据集 | Pipeline | 记忆模型 | 回复模型 | 评测模型 | 分数 | 备注 |
-| --- | --- | --- | --- | --- | --- | --- |
-| TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 SOTA，Overall 得分 **93.64**。
+
+* Benchmark：[LoCoMo](https://arxiv.org/abs/2402.09542)，记忆系统最主流、竞争最激烈的基准，聚焦事实记忆与联合分析，覆盖 single-hop、multi-hop、temporal 和 open-domain 问答。
+* Note：回复模型为 gpt-4.1-mini。Baseline 指标引用自 [EverMemOS](https://arxiv.org/abs/2507.00221) 论文。
+
+| Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
+| :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |
+| MemoryOS            |    67.30   |   59.34   |  42.26   |    59.03    |   60.11   |
+| Mem0                |    68.97   |   61.70   |  58.26   |    50.00    |   64.20   |
+| MemU                |    74.91   |   72.34   |  43.61   |    54.17    |   66.67   |
+| MemOS               |    85.37   |   79.43   |  75.08   |    64.58    |   80.76   |
+| Zep                 |    90.84   |   81.91   |  77.26   |    75.00    |   85.22   |
+| EverMemOS           |    96.67   |   91.84   |  89.72   |    76.04    |   93.05   |
+| **MindMemOS-schema** | **97.62**  | **93.26** | 89.01 |  75.00 | **93.64** |
+
+### Evaluation of Persona Memory
+
+MindMemOS 通过高阶属性建模与发现，在 PersonaMem 基准上达到 SOTA，Overall 准确率领先当前 SOTA 约 **2 个百分点**。
+
+* Benchmark：[PersonaMem](https://arxiv.org/abs/2505.15998)，以用户画像与喜好理解为中心的记忆基准，评测对用户特征的召回、追踪、重访、建议、推荐与泛化能力。
+* Note：所有实验结果来源于开源代码本地运行（记忆模型、回答模型均为 gpt-4.1-mini）。
+
+| Method              | Recall Sha. | Recall Men. (Ack. Latest) | Track Evo. | Revisit | Suggest | Recommend | Generalize | Overall          |
+| :------------------ | :---------: | :-----------------------: | :--------: | :-----: | :-----: | :-------: | :--------: | :--------------: |
+| MemOS               | 74.42% (96/129) | 82.35% (14/17) | 61.87% (86/139) | 77.78% (77/99) | 44.09% (41/93) | 67.27% (37/55) | 84.21% (48/57) | 67.74% (399/589) |
+| EverMemOS           | 74.42% (96/129) | 64.71% (11/17) | 64.03% (89/139) | 85.86% (85/99) | 35.48% (33/93) | 65.45% (36/55) | 84.21% (48/57) | 67.57% (398/589) |
+| MemU                | 64.34% (83/129) | 64.71% (11/17) | 66.20% (92/139) | 87.88% (87/99) | 31.18% (29/93) | 67.27% (37/55) | 84.21% (48/57) | 65.70% (387/589) |
+| **MindMemOS-schema** | 73.64% (95/129) | **82.35%** (14/17) | **67.63%** (94/139) | 85.86% (85/99) | 35.48% (33/93) | **80.00%** (44/55) | 78.95% (45/57) | **69.61% (410/589)** |
 
 
 ### Evaluation of Dreaming
-* 基准测试：MemoryAgentBench，对比 Dreaming 前后的 SubEM 表现与记忆数量变化。
+
+* Benchmark：[MemoryAgentBench](https://arxiv.org/abs/2503.08135)，多轮 Agent 记忆基准，使用 Subsequence Exact Match (SubEM) 衡量记忆增强问答效果。对比 Dreaming 前后的 SubEM 表现与记忆数量变化。
 * 实验设置：top-k=50, chunk_size=1024
-* 注：MIRIX 与 mem0 baseline 结果来自论文，论文配置为 chunk_size=4096。
+* Note：MIRIX 与 mem0 baseline 结果来自论文，论文配置为 chunk_size=4096。
 
 | Pipeline | 记忆模型 | 评测模型 | 回复模型 | Single-hop SubEM | Single-hop 提升 | Single-hop 记忆数量变化 | Multi-hop SubEM | Multi-hop 提升 | Multi-hop 记忆数量变化 | 平均 SubEM | 平均提升 | 平均记忆数量变化 |
 |----------|---------|---------|---------|:----------------:|:---------------:|:----------------------:|:---------------:|:--------------:|:---------------------:|:----------:|:--------:|:----------------:|
