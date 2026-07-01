@@ -71,7 +71,7 @@ MindMemOS achieves state-of-the-art on PersonaMem through higher-order property 
 
 ### Evaluation of Dreaming
 
-* Benchmark: [MemoryAgentBench](https://arxiv.org/abs/2503.08135), a multi-session agent benchmark measuring Subsequence Exact Match (SubEM) for memory-augmented QA. Compares SubEM performance and memory count changes before and after Dreaming.
+* Benchmark: [MemoryAgentBench](https://arxiv.org/abs/2507.05257), a multi-session agent benchmark measuring Subsequence Exact Match (SubEM) for memory-augmented QA. Compares SubEM performance and memory count changes before and after Dreaming.
 * Experiment setting: top-k=50, chunk_size=1024
 * Note: MIRIX and mem0 baseline results are from the paper, where chunk_size=4096.
 
