@@ -31,7 +31,7 @@
 
 > ⭐ **GitHub Star 后自动升级 Pro 额度会员。** [官网](https://mindmemos.cn)
 
-[FastAPI 手册](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [本地文档](docs/README.md)
+[官网](https://mindmemos.cn) · [FastAPI 手册](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [本地文档](docs/deploy/instruction_ZH.md)
 
 ## Benchmark
 
