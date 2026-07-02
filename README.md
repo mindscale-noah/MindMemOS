@@ -38,15 +38,40 @@ Star MindMemOS on GitHub, then join the [Feishu group](#community) to request mo
 
 ## Benchmark
 
-> Coming soon.
+### Evaluation of Conversational Memory
 
-| Dataset | Pipeline | Memory Model | Answer Model | Judge Model | Score | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive benchmark for long-term memory systems, with an overall score of **93.64**.
+
+* Benchmark: [LoCoMo](https://arxiv.org/abs/2402.09542), the most mainstream and fiercely contested benchmark for long-term memory systems, focused on factual memory retention and joint analysis, covering single-hop, multi-hop, temporal, and open-domain question answering.
+* Note: Answer model: gpt-4.1-mini. Baseline metrics are cited from the [EverMemOS](https://arxiv.org/abs/2507.00221) paper.
+
+| Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
+| :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |
+| MemoryOS            |    67.30   |   59.34   |  42.26   |    59.03    |   60.11   |
+| Mem0                |    68.97   |   61.70   |  58.26   |    50.00    |   64.20   |
+| MemU                |    74.91   |   72.34   |  43.61   |    54.17    |   66.67   |
+| MemOS               |    85.37   |   79.43   |  75.08   |    64.58    |   80.76   |
+| Zep                 |    90.84   |   81.91   |  77.26   |    75.00    |   85.22   |
+| EverMemOS           |    96.67   |   91.84   |  89.72   |    76.04    |   93.05   |
+| **MindMemOS-schema** | **97.62**  | **93.26** | 89.01 |  75.00 | **93.64** |
+
+### Evaluation of Persona Memory
+
+MindMemOS achieves state-of-the-art on PersonaMem through higher-order property modeling and discovery, leading the current SOTA by approximately **2 points** in overall accuracy.
+
+* Benchmark: [PersonaMem](https://arxiv.org/abs/2505.15998), a persona-centric memory benchmark focused on user profiling and preference understanding, evaluating recall, tracking, revisiting, suggestion, recommendation, and generalization of user traits.
+* Note: All results are from local runs of open-source code (memory model and answer model: gpt-4.1-mini).
+
+| Method              | Recall Sha. | Recall Men. (Ack. Latest) | Track Evo. | Revisit | Suggest | Recommend | Generalize | Overall          |
+| :------------------ | :---------: | :-----------------------: | :--------: | :-----: | :-----: | :-------: | :--------: | :--------------: |
+| MemOS               | 74.42% (96/129) | 82.35% (14/17) | 61.87% (86/139) | 77.78% (77/99) | 44.09% (41/93) | 67.27% (37/55) | 84.21% (48/57) | 67.74% (399/589) |
+| EverMemOS           | 74.42% (96/129) | 64.71% (11/17) | 64.03% (89/139) | 85.86% (85/99) | 35.48% (33/93) | 65.45% (36/55) | 84.21% (48/57) | 67.57% (398/589) |
+| MemU                | 64.34% (83/129) | 64.71% (11/17) | 66.20% (92/139) | 87.88% (87/99) | 31.18% (29/93) | 67.27% (37/55) | 84.21% (48/57) | 65.70% (387/589) |
+| **MindMemOS-schema** | 73.64% (95/129) | **82.35%** (14/17) | **67.63%** (94/139) | 85.86% (85/99) | 35.48% (33/93) | **80.00%** (44/55) | 78.95% (45/57) | **69.61% (410/589)** |
 
 ### Evaluation of Dreaming
 
-* Benchmark: MemoryAgentBench, comparing SubEM performance and memory count changes before and after Dreaming.
+* Benchmark: [MemoryAgentBench](https://arxiv.org/abs/2507.05257), a multi-session agent benchmark measuring Subsequence Exact Match (SubEM) for memory-augmented QA. Compares SubEM performance and memory count changes before and after Dreaming.
 * Experiment setting: top-k=50, chunk_size=1024
 * Note: MIRIX and mem0 baseline results are from the paper, where chunk_size=4096.
 
