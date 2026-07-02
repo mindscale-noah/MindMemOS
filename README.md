@@ -55,6 +55,16 @@ MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive bench
 | EverMemOS           |    96.67   |   91.84   |  89.72   |    76.04    |   93.05   |
 | **MindMemOS-schema** | **97.62**  | **93.26** | 89.01 |  75.00 | **93.64** |
 
+Evaluation config: [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml)
+
+```bash
+python -m mindmemos_eval memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list locomo \
+  --manifest-output output/locomo_manifest.jsonl \
+  --api-key-output config/mindmemos/api_keys.yaml
+```
+
 ### Evaluation of Persona Memory
 
 MindMemOS achieves state-of-the-art on PersonaMem through higher-order property modeling and discovery, leading the current SOTA by approximately **2 points** in overall accuracy.
@@ -81,33 +91,6 @@ MindMemOS achieves state-of-the-art on PersonaMem through higher-order property 
 | mem0 | GPT-4o-mini | - | GPT-4o-mini | 18.00% | - | - | 2.00% | - | - | 10.00% | - | - |
 | Ours (Vanilla) | gpt-4.1-mini | - | gpt-4.1-mini | 83.00% | | - | 10.75% | | - | 46.88% | | - |
 | **Ours (Vanilla + Dreaming)** | **gpt-4.1-mini** | **-** | **gpt-4.1-mini** | **88.75%** | **+5.75%** 🟢 | **-27.5%** | **14.00%** | **+3.25%** 🟢 | **-28.3%** | **51.38%** | **+4.50%** 🟢 | **-27.9%** |
-
-### Reproduce LoCoMo (Schema Mode)
-
-The LoCoMo benchmark results above use the **schema** algorithm profile. To reproduce:
-
-1. Start the local MindMemOS service with `make dev` (see [Quickstart Guide](#quickstart-guide)).
-2. Copy and edit the evaluation config:
-
-```bash
-cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
-```
-
-Fill in LLM API keys and base URLs in the `runner.llm`, `runner.answer_llm`, and `runner.judge_llm` sections.
-
-3. The config contains two algorithm profiles: `vanilla` and `schema`. The schema profile uses `config/presets/entity_modeling_locomo.json` as the entity schema definition. Key schema search parameters are configured under `algo_config.search.schema_search`.
-
-4. Run the evaluation:
-
-```bash
-python -m mindmemos_eval memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
-  --benchmark-list locomo \
-  --manifest-output output/locomo_manifest.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml
-```
-
-See [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml) for the full configuration reference.
 
 ## Core Features
 

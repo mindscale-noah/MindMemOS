@@ -52,6 +52,16 @@ MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 
 | EverMemOS           |    96.67   |   91.84   |  89.72   |    76.04    |   93.05   |
 | **MindMemOS-schema** | **97.62**  | **93.26** | 89.01 |  75.00 | **93.64** |
 
+评测配置：[`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml)
+
+```bash
+python -m mindmemos_eval memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list locomo \
+  --manifest-output output/locomo_manifest.jsonl \
+  --api-key-output config/mindmemos/api_keys.yaml
+```
+
 ### Evaluation of Persona Memory
 
 MindMemOS 通过高阶属性建模与发现，在 PersonaMem 基准上达到 SOTA，Overall 准确率领先当前 SOTA 约 **2 个百分点**。
@@ -79,33 +89,6 @@ MindMemOS 通过高阶属性建模与发现，在 PersonaMem 基准上达到 SOT
 | mem0 | GPT-4o-mini | - | GPT-4o-mini | 18.00% | - | - | 2.00% | - | - | 10.00% | - | - |
 | Ours (Vanilla) | gpt-4.1-mini | - | gpt-4.1-mini | 83.00% | | - | 10.75% | | - | 46.88% | | - |
 | **Ours (Vanilla + Dreaming)** | **gpt-4.1-mini** | **-** | **gpt-4.1-mini** | **88.75%** | **+5.75%** 🟢 | **-27.5%** | **14.00%** | **+3.25%** 🟢 | **-28.3%** | **51.38%** | **+4.50%** 🟢 | **-27.9%** |
-
-### 复现 LoCoMo 评测（Schema 模式）
-
-上述 LoCoMo 评测结果使用 **schema** 算法配置。复现步骤：
-
-1. 使用 `make dev` 启动本地 MindMemOS 服务（参见 [Quickstart Guide](#quickstart-guide)）。
-2. 拷贝并编辑评测配置：
-
-```bash
-cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
-```
-
-在 `runner.llm`、`runner.answer_llm`、`runner.judge_llm` 中填入 LLM API key 和 base URL。
-
-3. 配置中包含 `vanilla` 和 `schema` 两组算法配置。schema 配置使用 `config/presets/entity_modeling_locomo.json` 作为实体 schema 定义，核心搜索参数位于 `algo_config.search.schema_search` 下。
-
-4. 执行评测：
-
-```bash
-python -m mindmemos_eval memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
-  --benchmark-list locomo \
-  --manifest-output output/locomo_manifest.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml
-```
-
-完整配置参考 [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml)。
 
 ## Core Features
 
