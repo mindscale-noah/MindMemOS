@@ -32,9 +32,9 @@
 
 MindMemOS is an open-source long-term memory system for AI agents and applications. It helps agents turn conversations, files, tool traces, feedback, and offline reflection into searchable, updateable, project-isolated memory.
 
-Star MindMemOS on GitHub, then join the [Feishu group](#community) to request more cloud-service API quota from an admin.
+> ⭐ **GitHub Star automatically upgrades your account to Pro quota membership.** [Website](https://mindmemos.cn)
 
-[Website](https://mindmemos.cn) · [FastAPI Docs](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [Local Docs](docs/README.md)
+[FastAPI Docs](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [Local Docs](docs/README.md)
 
 ## Benchmark
 
