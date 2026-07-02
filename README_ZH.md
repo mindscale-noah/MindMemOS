@@ -31,7 +31,7 @@
 
 Star 后加入 [飞书群](#community) 领取更多云服务 API 额度。
 
-[官网](https://mindmemos.cn) · [FastAPI 手册](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [本地文档](docs/README.md)
+[官网](https://mindmemos.cn) · [FastAPI 手册](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [本地文档](docs/deploy/instruction_ZH.md)
 
 ## Benchmark
 
