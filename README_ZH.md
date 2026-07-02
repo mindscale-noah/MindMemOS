@@ -55,9 +55,12 @@ MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 
 评测配置：[`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml)
 
 ```bash
-python -m mindmemos_eval memory \
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+# 填入 API key 后执行：
+uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo \
+  --algorithm schema \
   --manifest-output output/locomo_manifest.jsonl \
   --api-key-output config/mindmemos/api_keys.yaml
 ```

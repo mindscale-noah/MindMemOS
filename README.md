@@ -58,9 +58,12 @@ MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive bench
 Evaluation config: [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml)
 
 ```bash
-python -m mindmemos_eval memory \
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+# fill in API keys, then run:
+uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo \
+  --algorithm schema \
   --manifest-output output/locomo_manifest.jsonl \
   --api-key-output config/mindmemos/api_keys.yaml
 ```
