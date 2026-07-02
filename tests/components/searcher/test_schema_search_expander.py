@@ -143,7 +143,7 @@ async def test_multi_hop_passes_neighbor_fetch_limit_to_db_reader(monkeypatch) -
 
     monkeypatch.setattr(expander, "_search_from_entity_store", fake_entity_store)
 
-    await expander.search_multi_hop(make_context(), "who knows Kai?", num_hops=2)
+    await expander.search(make_context(), "who knows Kai?", num_hops=2)
 
     assert db_reader.neighbor_limits == [7]
 

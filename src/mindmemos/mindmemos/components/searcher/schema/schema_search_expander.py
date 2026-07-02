@@ -69,13 +69,12 @@ def _exclude_episode_input_messages(results: list[dict[str, Any]]) -> list[dict[
 
 
 class SchemaSearchExpander(SearchStrategy, EntityHydrator):
-    """Orchestrates hybrid entity + property retrieval with fusion, reranking and disclosure.
+    """Orchestrates hybrid entity + property retrieval with fusion, reranking and graph expansion.
 
-    The engine exposes three main entry points:
+    Public entry point:
 
-    * ``search()`` -- full pipeline (entity store + property store -> fusion -> disclosure).
-    * ``search_multi_hop()`` -- iterative graph expansion search.
-    * ``search_with_entity_disclosure()`` -- search + per-entity property shrink with dynamic allocation.
+    * ``search()`` -- unified multi-hop schema search pipeline (entity store + property store
+      -> fusion -> graph expansion -> property shrink -> temporal extension).
     """
 
     def __init__(
@@ -118,62 +117,6 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
             self._entity_weights = schema_search_load_entity_weights(entity_manager)
 
     async def search(
-        self,
-        ctx: MemoryRequestContext,
-        query: str,
-        *,
-        entity_types: list[str] | None = None,
-        search_filter: SearchFilter | None = None,
-        entity_search_filter: SearchFilter | None = None,
-        top_k: int | None = None,
-    ) -> list[TemporalEntity]:
-        """Full search pipeline: entity store + property store -> fusion -> hydration.
-
-        Args:
-            ctx: Request context with project isolation.
-            query: User query string.
-            entity_types: Optional entity type filter.
-            top_k: Override final result count (defaults to ``config.entity.top_n``).
-
-        Returns:
-            List of hydrated TemporalEntity results.
-        """
-        final_top_k = top_k or self.config.entity.top_n
-
-        entity_task = self._search_from_entity_store(
-            ctx,
-            query,
-            entity_types=entity_types,
-            search_filter=search_filter,
-            entity_search_filter=entity_search_filter,
-        )
-        property_task = self._search_from_property_store(
-            ctx,
-            query,
-            entity_types=entity_types,
-            search_filter=search_filter,
-        )
-
-        if self.config.dual_path.enabled:
-            entity_results, property_results = await asyncio.gather(entity_task, property_task)
-        else:
-            entity_results = await entity_task
-            property_results = []
-
-        fused = self._entity_fusion.fuse_entities(entity_results, property_results)
-
-        fused = fused[:final_top_k]
-
-        logger.info(
-            "search_complete",
-            query=query[:80],
-            entity_count=len(entity_results),
-            property_count=len(property_results),
-            fused_count=len(fused),
-        )
-        return fused
-
-    async def search_multi_hop(
         self,
         ctx: MemoryRequestContext,
         query: str,
@@ -351,136 +294,8 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
             output_entities = [e for e in output_entities if e is not None]
             logger.info("time_filter_done", count=len(output_entities))
 
-        logger.info("search_multi_hop_done", total=len(output_entities))
+        logger.info("search_done", total=len(output_entities))
         return output_entities
-
-    async def search_with_entity_disclosure(
-        self,
-        ctx: MemoryRequestContext,
-        query: str,
-        *,
-        entity_types: list[str] | None = None,
-        global_property_filter: dict[str, list[str]] | None = None,
-        time_window: tuple[str | None, str | None] | None = None,
-        top_k: int | None = None,
-        top_m: int | None = None,
-    ) -> list[TemporalEntity]:
-        """Search + per-entity property shrink with dynamic allocation.
-
-        Pipeline:
-          1. Entity-level search (``search()``) to get top-K entities.
-          2. Dynamic budget allocation based on entity relevance scores.
-          3. ``entity_local_shrink()`` per entity to select best properties.
-          4. Optional temporal extension (``_apply_post_fusion_extension``).
-          5. Optional time-window filtering (``_filter_by_time_with_fallback``).
-
-        Args:
-            ctx: Request context.
-            query: User query string.
-            entity_types: Optional entity type filter.
-            global_property_filter: ``{entity_type: [property_name, ...]}`` allowlist.
-            time_window: Optional (start, end) time bounds.
-            top_k: Override entity count.
-            top_m: Override per-entity property budget.
-
-        Returns:
-            List of TemporalEntity with shrunk properties.
-        """
-        final_top_k = top_k or self.config.entity.top_n
-        base_top_m = top_m or self.config.property.top_n
-        prop_filter = global_property_filter or {}
-
-        entities = await self.search(ctx, query, entity_types=entity_types, top_k=final_top_k)
-
-        if not entities:
-            logger.info("disclosure_no_entities", query=query[:80])
-            return []
-
-        min_factor = self.config.property.alloc_min_factor
-        max_factor = self.config.property.alloc_max_factor
-        min_budget = max(1, int(base_top_m * min_factor))
-        max_budget = max(min_budget, int(base_top_m * max_factor))
-
-        entity_property_counts: list[int] = []
-        for entity in entities:
-            allowed = prop_filter.get(entity.entity_type)
-            disclosed = entity.get_properties_in_range(allowed, None)
-            count = sum(len(timeline) for timeline in disclosed.values()) if disclosed else 0
-            entity_property_counts.append(count)
-        total_property_count = sum(entity_property_counts)
-
-        budgets: list[int] = []
-        for count in entity_property_counts:
-            if total_property_count > 0:
-                ratio = count / total_property_count
-                allocated = max(1, int(base_top_m * len(entities) * ratio))
-            else:
-                allocated = base_top_m
-            budgets.append(max(min_budget, min(max_budget, allocated)))
-
-        shrink_tasks = []
-        for i, entity in enumerate(entities):
-            budget = budgets[i]
-            if entity_property_counts[i] <= budget:
-
-                async def _passthrough(e: TemporalEntity = entity) -> TemporalEntity:
-                    return e
-
-                shrink_tasks.append(_passthrough())
-            else:
-                shrink_tasks.append(
-                    schema_search_entity_local_shrink(
-                        entity,
-                        query,
-                        prop_filter,
-                        db_reader=self.db_reader,
-                        ctx=ctx,
-                        embed_client=self.embed_client,
-                        rerank_client=self.rerank_client,
-                        text_preprocessor=self.text_preprocessor,
-                        sparse_encoder=self.sparse_encoder,
-                        entity_manager=self.entity_manager,
-                        top_m=budget,
-                        hybrid_config={
-                            "recall_size": self.config.property.recall_size,
-                            "rrf_k": self.config.property.rrf_k,
-                            "top_k": self.config.property.top_k,
-                        },
-                        higher_order_ratio=self.config.property.higher_order_ratio,
-                    )
-                )
-
-        results = await asyncio.gather(*shrink_tasks, return_exceptions=True)
-
-        disclosed_entities: list[TemporalEntity] = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.warning("disclosure_shrink_failed", entity=entities[i].name, error=str(result))
-                disclosed_entities.append(entities[i])
-            elif isinstance(result, TemporalEntity):
-                disclosed_entities.append(result)
-            else:
-                disclosed_entities.append(entities[i])
-
-        logger.info(
-            "disclosure_shrink_complete",
-            entity_count=len(entities),
-            disclosed_count=len(disclosed_entities),
-        )
-
-        if self.config.property.use_property_extension:
-            extension_step = self.config.property.extension_step
-            disclosed_entities = [
-                self._apply_post_fusion_extension(original, disclosed, extension_step)
-                for original, disclosed in zip(entities, disclosed_entities)
-            ]
-
-        if time_window is not None:
-            disclosed_entities = [
-                self._filter_by_time_with_fallback(entity, time_window) for entity in disclosed_entities
-            ]
-
-        return disclosed_entities
 
     # Internal: per-entity property shrink with dynamic allocation
 

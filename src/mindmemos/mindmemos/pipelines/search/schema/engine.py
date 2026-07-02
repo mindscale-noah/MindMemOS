@@ -94,7 +94,7 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
             initial_time_window = await self._query_builder.extract_time_from_query(
                 inp.query, prompts=request_prompts
             )
-        entities = await self._expander.search_multi_hop(
+        entities = await self._expander.search(
             ctx=parsed_filters.context,
             query=inp.query,
             entity_types=list(property_filter.keys()) or None,

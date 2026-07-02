@@ -82,6 +82,33 @@ MindMemOS achieves state-of-the-art on PersonaMem through higher-order property 
 | Ours (Vanilla) | gpt-4.1-mini | - | gpt-4.1-mini | 83.00% | | - | 10.75% | | - | 46.88% | | - |
 | **Ours (Vanilla + Dreaming)** | **gpt-4.1-mini** | **-** | **gpt-4.1-mini** | **88.75%** | **+5.75%** 🟢 | **-27.5%** | **14.00%** | **+3.25%** 🟢 | **-28.3%** | **51.38%** | **+4.50%** 🟢 | **-27.9%** |
 
+### Reproduce LoCoMo (Schema Mode)
+
+The LoCoMo benchmark results above use the **schema** algorithm profile. To reproduce:
+
+1. Start the local MindMemOS service with `make dev` (see [Quickstart Guide](#quickstart-guide)).
+2. Copy and edit the evaluation config:
+
+```bash
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+```
+
+Fill in LLM API keys and base URLs in the `runner.llm`, `runner.answer_llm`, and `runner.judge_llm` sections.
+
+3. The config contains two algorithm profiles: `vanilla` and `schema`. The schema profile uses `config/presets/entity_modeling_locomo.json` as the entity schema definition. Key schema search parameters are configured under `algo_config.search.schema_search`.
+
+4. Run the evaluation:
+
+```bash
+python -m mindmemos_eval memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list locomo \
+  --manifest-output output/locomo_manifest.jsonl \
+  --api-key-output config/mindmemos/api_keys.yaml
+```
+
+See [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml) for the full configuration reference.
+
 ## Core Features
 
 - **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable user assets that can move across OpenClaw, Hermes, Claude Code, OpenHands, and other agent frameworks.
