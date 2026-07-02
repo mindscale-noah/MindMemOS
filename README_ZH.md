@@ -29,9 +29,9 @@
 
 精准记忆用户与任务上下文，跨 Agent 迁移复用；在持续交互中演化记忆，自动沉淀 Skills，并联动文件知识系统，让经验真正成为能力。
 
-Star 后加入 [飞书群](#community) 领取更多云服务 API 额度。
+> ⭐ **GitHub Star 后自动升级 Pro 额度会员。** [官网](https://mindmemos.cn)
 
-[官网](https://mindmemos.cn) · [FastAPI 手册](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [本地文档](docs/README.md)
+[FastAPI 手册](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [本地文档](docs/README.md)
 
 ## Benchmark
 
