@@ -32,7 +32,7 @@
 
 MindMemOS is an open-source long-term memory system for AI agents and applications. It helps agents turn conversations, files, tool traces, feedback, and offline reflection into searchable, updateable, project-isolated memory.
 
-Star MindMemOS on GitHub, then join the [Feishu group](#community) to request more cloud-service API quota from an admin.
+> ⭐ **GitHub Star automatically upgrades your account to Pro quota membership.** [Website](https://mindmemos.cn)
 
 [Website](https://mindmemos.cn) · [FastAPI Docs](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [Local Docs](docs/deploy/instruction.md)
 
@@ -71,7 +71,7 @@ MindMemOS achieves state-of-the-art on PersonaMem through higher-order property 
 
 ### Evaluation of Dreaming
 
-* Benchmark: [MemoryAgentBench](https://arxiv.org/abs/2503.08135), a multi-session agent benchmark measuring Subsequence Exact Match (SubEM) for memory-augmented QA. Compares SubEM performance and memory count changes before and after Dreaming.
+* Benchmark: [MemoryAgentBench](https://arxiv.org/abs/2507.05257), a multi-session agent benchmark measuring Subsequence Exact Match (SubEM) for memory-augmented QA. Compares SubEM performance and memory count changes before and after Dreaming.
 * Experiment setting: top-k=50, chunk_size=1024
 * Note: MIRIX and mem0 baseline results are from the paper, where chunk_size=4096.
 

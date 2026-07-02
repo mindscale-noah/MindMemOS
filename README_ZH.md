@@ -29,7 +29,7 @@
 
 精准记忆用户与任务上下文，跨 Agent 迁移复用；在持续交互中演化记忆，自动沉淀 Skills，并联动文件知识系统，让经验真正成为能力。
 
-Star 后加入 [飞书群](#community) 领取更多云服务 API 额度。
+> ⭐ **GitHub Star 后自动升级 Pro 额度会员。** [官网](https://mindmemos.cn)
 
 [官网](https://mindmemos.cn) · [FastAPI 手册](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [本地文档](docs/deploy/instruction_ZH.md)
 
@@ -69,7 +69,7 @@ MindMemOS 通过高阶属性建模与发现，在 PersonaMem 基准上达到 SOT
 
 ### Evaluation of Dreaming
 
-* Benchmark：[MemoryAgentBench](https://arxiv.org/abs/2503.08135)，多轮 Agent 记忆基准，使用 Subsequence Exact Match (SubEM) 衡量记忆增强问答效果。对比 Dreaming 前后的 SubEM 表现与记忆数量变化。
+* Benchmark：[MemoryAgentBench](https://arxiv.org/abs/2507.05257)，多轮 Agent 记忆基准，使用 Subsequence Exact Match (SubEM) 衡量记忆增强问答效果。对比 Dreaming 前后的 SubEM 表现与记忆数量变化。
 * 实验设置：top-k=50, chunk_size=1024
 * Note：MIRIX 与 mem0 baseline 结果来自论文，论文配置为 chunk_size=4096。
 
