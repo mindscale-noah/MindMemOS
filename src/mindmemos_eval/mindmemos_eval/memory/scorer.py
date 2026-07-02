@@ -31,6 +31,9 @@ class ScoreResult(BaseModel):
     passed: bool
     reason: str = ""
     raw: dict[str, Any] = Field(default_factory=dict)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 class Scorer:
@@ -103,11 +106,13 @@ class LLMJudgeScorer(Scorer):
         config: LLMConfig | None = None,
         system_prompt: str = DEFAULT_JUDGE_SYSTEM_PROMPT,
         pass_threshold: float = 0.5,
+        judge_runs: int = 1,
     ) -> None:
         """Handle init."""
         self._llm = llm or LLMClient(config)
         self._system_prompt = system_prompt
         self._threshold = pass_threshold
+        self._judge_runs = max(1, int(judge_runs))
 
     def _build_messages(self, question: str, answer: str, gold: str) -> list[dict[str, Any]]:
         user = (
@@ -129,13 +134,51 @@ class LLMJudgeScorer(Scorer):
         gold: str,
         contexts: list[str] | None = None,
     ) -> ScoreResult:
-        raw_text = (await self._llm.complete(self._build_messages(question, answer, gold))).content
-        payload = _parse_judge_json(raw_text)
+        vote_count = 0
+        score_values: list[float] = []
+        run_payloads: list[dict[str, Any]] = []
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_tokens = 0
 
-        score_val = _coerce_score(payload.get("score"), payload.get("correct"))
-        reason = str(payload.get("reason", "")).strip()
-        passed = bool(payload.get("correct")) if "correct" in payload else score_val >= self._threshold
-        return ScoreResult(score=score_val, passed=passed, reason=reason, raw=payload)
+        for run_index in range(self._judge_runs):
+            completion = await self._llm.complete(self._build_messages(question, answer, gold))
+            payload = _parse_judge_json(completion.content)
+            score_val = _coerce_score(payload.get("score"), payload.get("correct"))
+            reason = str(payload.get("reason", "")).strip()
+            passed = bool(payload.get("correct")) if "correct" in payload else score_val >= self._threshold
+
+            vote_count += int(passed)
+            score_values.append(score_val)
+            run_payloads.append(
+                {
+                    "run_index": run_index,
+                    "payload": payload,
+                    "passed": passed,
+                    "score": score_val,
+                    "reason": reason,
+                }
+            )
+            total_prompt_tokens += completion.prompt_tokens
+            total_completion_tokens += completion.completion_tokens
+            total_tokens += completion.total_tokens
+
+        passed = vote_count > (self._judge_runs // 2)
+        score_val = sum(score_values) / len(score_values) if score_values else 0.0
+        reason = f"majority_vote:{vote_count}/{self._judge_runs}"
+        return ScoreResult(
+            score=score_val,
+            passed=passed,
+            reason=reason,
+            raw={
+                "judge_runs": self._judge_runs,
+                "passed_votes": vote_count,
+                "runs": run_payloads,
+            },
+            prompt_tokens=total_prompt_tokens,
+            completion_tokens=total_completion_tokens,
+            total_tokens=total_tokens,
+        )
 
 
 def _parse_judge_json(text: str) -> dict[str, Any]:

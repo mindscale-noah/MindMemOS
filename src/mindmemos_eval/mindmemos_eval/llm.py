@@ -34,8 +34,8 @@ class LLMConfig(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     timeout: float = 600.0
-    max_retries: int = 5
-    retry_backoff: float = 1.0
+    max_retries: int = 8
+    retry_backoff: float = 15.0
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -126,6 +126,12 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         help="Maximum concurrent judge/scoring tasks; must be parseable as an integer.",
     )
     parser.add_argument(
+        "--judge-runs",
+        type=int,
+        metavar="N",
+        help="Number of independent judge runs per question; majority vote decides the final judge result.",
+    )
+    parser.add_argument(
         "--add",
         action=argparse.BooleanOptionalAction,
         default=None,

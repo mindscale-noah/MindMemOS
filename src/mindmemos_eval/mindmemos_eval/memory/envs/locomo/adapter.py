@@ -52,6 +52,7 @@ class LocomoAdapter:
             top_k=None if top_k is None else int(top_k),
             search_strategy=public_search_strategy,
             rerank=bool(rerank),
+            judge_runs=runner.judge_runs,
         )
         run = await env.run_dataset(
             data,
@@ -63,4 +64,6 @@ class LocomoAdapter:
             score=runner.score,
             show_progress=runner.show_progress,
         )
-        return run.model_dump()
+        result = run.model_dump()
+        result["metrics"] = run.official_metrics()
+        return result

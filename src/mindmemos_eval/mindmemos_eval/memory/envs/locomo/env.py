@@ -36,6 +36,7 @@ from tqdm.auto import tqdm
 
 from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.scorer import Scorer, ScoreResult, _parse_judge_json
+from mindmemos_eval.memory.tokens import aggregate_stage_metrics, completion_stage_metrics, search_stage_metrics
 
 # Prompt + context building
 
@@ -323,9 +324,10 @@ def _extract_answer(full_response: str) -> tuple[str, str]:
 class LocomoLLMJudgeScorer(Scorer):
     """LoCoMo LLM judge scorer that maps CORRECT/WRONG to 1/0."""
 
-    def __init__(self, llm: LLMClient, *, prompt: str = LOCOMO_ACCURACY_PROMPT) -> None:
+    def __init__(self, llm: LLMClient, *, prompt: str = LOCOMO_ACCURACY_PROMPT, judge_runs: int = 1) -> None:
         self._llm = llm
         self._prompt = prompt
+        self._judge_runs = max(1, int(judge_runs))
 
     async def score(
         self,
@@ -336,16 +338,53 @@ class LocomoLLMJudgeScorer(Scorer):
         contexts: list[str] | None = None,
     ) -> ScoreResult:
         content = self._prompt.format(question=question, gold_answer=gold, generated_answer=answer)
-        raw = (
-            await self._llm.complete(
+        vote_count = 0
+        labels: list[str] = []
+        run_payloads: list[dict[str, Any]] = []
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_tokens = 0
+
+        for run_index in range(self._judge_runs):
+            completion = await self._llm.complete(
                 [{"role": "user", "content": content}],
                 response_format={"type": "json_object"},
             )
-        ).content
-        payload = _parse_judge_json(raw)
-        label = str(payload.get("label", "")).strip().upper()
-        passed = label == "CORRECT"
-        return ScoreResult(score=1.0 if passed else 0.0, passed=passed, reason=label or raw[:120], raw=payload)
+            raw = completion.content
+            payload = _parse_judge_json(raw)
+            label = str(payload.get("label", "")).strip().upper()
+            passed = label == "CORRECT"
+
+            vote_count += int(passed)
+            labels.append(label)
+            run_payloads.append(
+                {
+                    "run_index": run_index,
+                    "payload": payload,
+                    "label": label,
+                    "passed": passed,
+                }
+            )
+            total_prompt_tokens += completion.prompt_tokens
+            total_completion_tokens += completion.completion_tokens
+            total_tokens += completion.total_tokens
+
+        passed = vote_count > (self._judge_runs // 2)
+        majority_label = "CORRECT" if passed else "WRONG"
+        return ScoreResult(
+            score=1.0 if passed else 0.0,
+            passed=passed,
+            reason=f"{majority_label} ({vote_count}/{self._judge_runs})",
+            raw={
+                "judge_runs": self._judge_runs,
+                "passed_votes": vote_count,
+                "labels": labels,
+                "runs": run_payloads,
+            },
+            prompt_tokens=total_prompt_tokens,
+            completion_tokens=total_completion_tokens,
+            total_tokens=total_tokens,
+        )
 
 
 class LocomoAnswer(BaseModel):
@@ -360,6 +399,13 @@ class LocomoAnswer(BaseModel):
     memories: list[str] = Field(default_factory=list)
     search_time: float = 0.0
     prompt: str = ""
+    search_llm_calls: int = 0
+    search_prompt_tokens: int = 0
+    search_completion_tokens: int = 0
+    search_total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 class LocomoQAResult(BaseModel):
@@ -375,6 +421,18 @@ class LocomoQAResult(BaseModel):
     memory: list[str] = Field(default_factory=list)
     search_time: float = 0.0
     score: ScoreResult | None = None
+    search_llm_calls: int = 0
+    search_prompt_tokens: int = 0
+    search_completion_tokens: int = 0
+    search_total_tokens: int = 0
+    answer_llm_calls: int = 0
+    answer_prompt_tokens: int = 0
+    answer_completion_tokens: int = 0
+    answer_total_tokens: int = 0
+    judge_llm_calls: int = 0
+    judge_prompt_tokens: int = 0
+    judge_completion_tokens: int = 0
+    judge_total_tokens: int = 0
 
 
 class LocomoAddSummary(BaseModel):
@@ -422,6 +480,7 @@ class LocomoRunResult(BaseModel):
     conversations: list[LocomoConversationResult] = Field(default_factory=list)
     total_questions: int = 0
     correct: int = 0
+    judge_runs_used: int = 1
 
     @property
     def accuracy(self) -> float:
@@ -446,6 +505,31 @@ class LocomoRunResult(BaseModel):
     def overall(self) -> MetricBucket:
         """Aggregate overall counts and accuracy."""
         return MetricBucket(count=self.total_questions, correct=self.correct)
+
+    def token_usage(self) -> dict[str, int]:
+        """Aggregate search/answer/judge LLM token usage across all questions."""
+        qa_results = [qa for conv in self.conversations for qa in conv.qa_results]
+        return aggregate_stage_metrics(qa_results, "search", "answer", "judge")
+
+    def official_metrics(self) -> dict[str, Any]:
+        """Return the benchmark-facing summary metrics."""
+        buckets = self.by_category()
+        return {
+            "by_category": {
+                category: {
+                    "count": bucket.count,
+                    "correct": bucket.correct,
+                    "accuracy": round(bucket.accuracy, 6),
+                }
+                for category, bucket in sorted(buckets.items())
+            },
+            "overall_accuracy": round(self.accuracy, 6),
+            "total_questions": self.total_questions,
+            "total": self.total_questions,
+            "correct": self.correct,
+            "judge_runs_used": self.judge_runs_used,
+            **self.token_usage(),
+        }
 
     def format_metrics(self) -> str:
         """Format category and overall metrics."""
@@ -498,11 +582,12 @@ class LocomoEnv:
         search_strategy: str = "agentic",
         rerank: bool = False,
         answer_template: str = LOCOMO_ANSWER_PROMPT_EN,
+        judge_runs: int = 1,
     ) -> None:
         """Handle init."""
         self._memory = memory
         self._answer_llm = answer_llm
-        self._scorer = scorer or LocomoLLMJudgeScorer(judge_llm or answer_llm)
+        self._scorer = scorer or LocomoLLMJudgeScorer(judge_llm or answer_llm, judge_runs=judge_runs)
         self._top_k = top_k
         self._search_strategy = search_strategy
         self._rerank = rerank
@@ -593,10 +678,13 @@ class LocomoEnv:
         )
         memories = [_format_memory_for_answering(hit) for hit in search.memories]
         search_time = time.time() - start
+        search_metrics = search_stage_metrics(search)
 
         prompt = build_answer_prompt(memories, question, self._answer_template)
-        full_response = (await self._answer_llm.complete([{"role": "user", "content": prompt}])).content
+        answer_completion = await self._answer_llm.complete([{"role": "user", "content": prompt}])
+        full_response = answer_completion.content
         answer_text, chain_of_thought = _extract_answer(full_response)
+        answer_metrics = completion_stage_metrics("answer", answer_completion)
         return LocomoAnswer(
             question=question,
             answer=answer_text,
@@ -605,6 +693,13 @@ class LocomoEnv:
             memories=memories,
             search_time=search_time,
             prompt=prompt,
+            search_llm_calls=search_metrics["search_llm_calls"],
+            search_prompt_tokens=search_metrics["search_prompt_tokens"],
+            search_completion_tokens=search_metrics["search_completion_tokens"],
+            search_total_tokens=search_metrics["search_total_tokens"],
+            prompt_tokens=answer_metrics["answer_prompt_tokens"],
+            completion_tokens=answer_metrics["answer_completion_tokens"],
+            total_tokens=answer_metrics["answer_total_tokens"],
         )
 
     async def score(self, question: str, gold_answer: str, response: str) -> ScoreResult:
@@ -628,6 +723,18 @@ class LocomoEnv:
             memory=answer.memories,
             search_time=answer.search_time,
             score=score_result,
+            search_llm_calls=answer.search_llm_calls,
+            search_prompt_tokens=answer.search_prompt_tokens,
+            search_completion_tokens=answer.search_completion_tokens,
+            search_total_tokens=answer.search_total_tokens,
+            answer_llm_calls=1,
+            answer_prompt_tokens=answer.prompt_tokens,
+            answer_completion_tokens=answer.completion_tokens,
+            answer_total_tokens=answer.total_tokens,
+            judge_llm_calls=1 if score_result is not None else 0,
+            judge_prompt_tokens=score_result.prompt_tokens if score_result else 0,
+            judge_completion_tokens=score_result.completion_tokens if score_result else 0,
+            judge_total_tokens=score_result.total_tokens if score_result else 0,
         )
 
     async def run_dataset(
@@ -649,10 +756,10 @@ class LocomoEnv:
         score_sem = asyncio.Semaphore(max_score_concurrency or max_qa_concurrency)
         conv_sem = asyncio.Semaphore(max_conv_concurrency)
 
-        # Precompute progress totals for sessions, conversations, and questions.
         total_sessions = sum(len(self._session_keys(it["conversation"])) for it in data) if add else 0
         total_questions = sum(
-            len([q for q in it.get("qa", []) if not (skip_category_5 and q.get("category") == 5)]) for it in data
+            len([q for q in it.get("qa", []) if not (skip_category_5 and q.get("category") == 5)])
+            for it in data
         )
 
         add_pbar = (
@@ -661,7 +768,9 @@ class LocomoEnv:
             else None
         )
         conv_pbar = (
-            tqdm(total=len(data), desc="对话测评 (conversation)", unit="conv", position=1) if show_progress else None
+            tqdm(total=len(data), desc="对话测评 (conversation)", unit="conv", position=1)
+            if show_progress
+            else None
         )
         qa_pbar = (
             tqdm(total=total_questions, desc="回答问题 (question)", unit="q", position=2) if show_progress else None
@@ -698,26 +807,38 @@ class LocomoEnv:
                         memory=answer.memories,
                         search_time=answer.search_time,
                         score=score_result,
+                        search_llm_calls=answer.search_llm_calls,
+                        search_prompt_tokens=answer.search_prompt_tokens,
+                        search_completion_tokens=answer.search_completion_tokens,
+                        search_total_tokens=answer.search_total_tokens,
+                        answer_llm_calls=1,
+                        answer_prompt_tokens=answer.prompt_tokens,
+                        answer_completion_tokens=answer.completion_tokens,
+                        answer_total_tokens=answer.total_tokens,
+                        judge_llm_calls=1 if score_result is not None else 0,
+                        judge_prompt_tokens=score_result.prompt_tokens if score_result else 0,
+                        judge_completion_tokens=score_result.completion_tokens if score_result else 0,
+                        judge_total_tokens=score_result.total_tokens if score_result else 0,
                     )
 
                 qa_results = await asyncio.gather(*(run_question(q) for q in qa_list)) if qa_list else []
                 if conv_pbar is not None:
                     conv_pbar.update()
-                return LocomoConversationResult(
+                result = LocomoConversationResult(
                     conv_idx=idx,
                     user_id=user_id,
                     num_questions=len(qa_list),
                     qa_results=list(qa_results),
                     add_summary=add_summary,
                 )
+                return result
 
         try:
-            conversations = await asyncio.gather(*(run_conversation(i, it) for i, it in enumerate(data)))
+            conversations = list(await asyncio.gather(*(run_conversation(i, it) for i, it in enumerate(data))))
         finally:
             for pbar in (qa_pbar, conv_pbar, add_pbar):
                 if pbar is not None:
                     pbar.close()
-        conversations = list(conversations)
 
         total = 0
         correct = 0
@@ -727,7 +848,12 @@ class LocomoEnv:
                     continue
                 total += 1
                 correct += int(qa.score.passed)
-        run = LocomoRunResult(conversations=conversations, total_questions=total, correct=correct)
+        run = LocomoRunResult(
+            conversations=conversations,
+            total_questions=total,
+            correct=correct,
+            judge_runs_used=getattr(self._scorer, "_judge_runs", 1),
+        )
         if print_report:
             print(run.format_report(), flush=True)
         return run

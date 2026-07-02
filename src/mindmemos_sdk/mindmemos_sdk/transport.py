@@ -16,6 +16,8 @@ config schema can evolve without touching this layer.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 import httpx
@@ -136,10 +138,11 @@ class HttpTransport:
             try:
                 return self._client.request(method, url, json=json, params=params, headers=headers)
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                # Connection/timeout errors are safe to retry; other errors propagate.
                 last_exc = exc
                 if attempt >= self._max_retries:
                     break
+                wait = min(5.0 * (2**attempt), 60.0)
+                time.sleep(wait)
         raise TransportError(f"Request to {url} failed after {self._max_retries + 1} attempt(s): {last_exc}")
 
     def _parse_envelope(self, response: httpx.Response) -> Envelope:
@@ -283,8 +286,9 @@ class AsyncHttpTransport:
             try:
                 return await self._client.request(method, url, json=json, params=params, headers=headers)
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                # Connection/timeout errors are safe to retry; other errors propagate.
                 last_exc = exc
                 if attempt >= self._max_retries:
                     break
+                wait = min(5.0 * (2**attempt), 60.0)
+                await asyncio.sleep(wait)
         raise TransportError(f"Request to {url} failed after {self._max_retries + 1} attempt(s): {last_exc}")

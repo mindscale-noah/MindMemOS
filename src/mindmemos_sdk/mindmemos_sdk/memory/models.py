@@ -123,6 +123,10 @@ class SearchResult(BaseModel):
 
     request_id: str | None = None
     memories: list[MemorySearchHit] = Field(default_factory=list)
+    llm_call_count: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 class GetResult(BaseModel):
