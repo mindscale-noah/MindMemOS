@@ -29,7 +29,7 @@
 
 精准记忆用户与任务上下文，跨 Agent 迁移复用；在持续交互中演化记忆，自动沉淀 Skills，并联动文件知识系统，让经验真正成为能力。
 
-Star 后加入 [飞书群](#community) 领取更多云服务 API 额度。
+> ⭐ **GitHub Star 后自动升级 Pro 额度会员。** [官网](https://mindmemos.cn)
 
 [官网](https://mindmemos.cn) · [FastAPI 手册](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [本地文档](docs/deploy/instruction_ZH.md)
 
@@ -51,6 +51,19 @@ MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 
 | Zep                 |    90.84   |   81.91   |  77.26   |    75.00    |   85.22   |
 | EverMemOS           |    96.67   |   91.84   |  89.72   |    76.04    |   93.05   |
 | **MindMemOS-schema** | **97.62**  | **93.26** | 89.01 |  75.00 | **93.64** |
+
+评测配置：[`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml)
+
+```bash
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+# 填入 API key 后执行：
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list locomo \
+  --algorithm schema \
+  --manifest-output output/locomo_manifest.jsonl \
+  --api-key-output config/mindmemos/api_keys.yaml
+```
 
 ### Evaluation of Persona Memory
 

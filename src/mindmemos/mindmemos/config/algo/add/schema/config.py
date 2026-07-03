@@ -23,5 +23,5 @@ class SchemaAddConfig:
     drain: DrainConfig = field(default_factory=DrainConfig)
     chunker: EpisodesChunkerConfig = field(default_factory=EpisodesChunkerConfig)
 
-    entity_modeling_path: str = field(default="config/presets/entity_modeling.json")
+    entity_modeling_path: str = field(default="config/presets/entity_modeling_locomo.json")
     """Path to the entity schema modeling JSON file used by schema add extraction."""

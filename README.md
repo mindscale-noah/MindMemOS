@@ -32,7 +32,7 @@
 
 MindMemOS is an open-source long-term memory system for AI agents and applications. It helps agents turn conversations, files, tool traces, feedback, and offline reflection into searchable, updateable, project-isolated memory.
 
-Star MindMemOS on GitHub, then join the [Feishu group](#community) to request more cloud-service API quota from an admin.
+> ⭐ **GitHub Star automatically upgrades your account to Pro quota membership.** [Website](https://mindmemos.cn)
 
 [Website](https://mindmemos.cn) · [FastAPI Docs](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [Local Docs](docs/deploy/instruction.md)
 
@@ -54,6 +54,19 @@ MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive bench
 | Zep                 |    90.84   |   81.91   |  77.26   |    75.00    |   85.22   |
 | EverMemOS           |    96.67   |   91.84   |  89.72   |    76.04    |   93.05   |
 | **MindMemOS-schema** | **97.62**  | **93.26** | 89.01 |  75.00 | **93.64** |
+
+Evaluation config: [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml)
+
+```bash
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+# fill in API keys, then run:
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list locomo \
+  --algorithm schema \
+  --manifest-output output/locomo_manifest.jsonl \
+  --api-key-output config/mindmemos/api_keys.yaml
+```
 
 ### Evaluation of Persona Memory
 

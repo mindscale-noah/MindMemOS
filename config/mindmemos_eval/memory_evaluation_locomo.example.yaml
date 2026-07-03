@@ -91,7 +91,7 @@ algorithm_profiles:
     memory_algorithm: schema
     search_params:
       public_search_strategy: agentic
-      top_k:
+      top_k: 50
       rerank: false
       agentic: true
     project_override_config:
@@ -100,7 +100,7 @@ algorithm_profiles:
           prompt_language: EN
         add:
           schema:
-            entity_modeling_path: config/presets/entity_modeling_locomo_schema.json
+            entity_modeling_path: config/presets/entity_modeling_locomo.json
             extraction:
               enable_schema_selection: true
               use_search_fields: true
@@ -165,7 +165,7 @@ algorithm_profiles:
               episode_weight: 0.7
               non_episode_weight: 0.3
             edge:
-              top_k: 2
+              top_k: 50
               min_relevance_score: 0.1
             multi_hop: 2
             use_entity_agent_search: true
