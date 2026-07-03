@@ -165,7 +165,11 @@ class LLMJudgeScorer(Scorer):
 
         passed = vote_count > (self._judge_runs // 2)
         score_val = sum(score_values) / len(score_values) if score_values else 0.0
-        reason = f"majority_vote:{vote_count}/{self._judge_runs}"
+        reason = (
+            run_payloads[0]["reason"]
+            if self._judge_runs == 1
+            else f"majority_vote:{vote_count}/{self._judge_runs}"
+        )
         return ScoreResult(
             score=score_val,
             passed=passed,
