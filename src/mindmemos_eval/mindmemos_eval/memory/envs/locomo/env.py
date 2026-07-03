@@ -36,7 +36,7 @@ from tqdm.auto import tqdm
 
 from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.scorer import Scorer, ScoreResult, _parse_judge_json
-from mindmemos_eval.memory.tokens import aggregate_stage_metrics, completion_stage_metrics, search_stage_metrics
+from mindmemos_eval.memory.tokens import aggregate_stage_metrics, completion_stage_metrics
 
 # Prompt + context building
 
@@ -399,10 +399,6 @@ class LocomoAnswer(BaseModel):
     memories: list[str] = Field(default_factory=list)
     search_time: float = 0.0
     prompt: str = ""
-    search_llm_calls: int = 0
-    search_prompt_tokens: int = 0
-    search_completion_tokens: int = 0
-    search_total_tokens: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -421,10 +417,6 @@ class LocomoQAResult(BaseModel):
     memory: list[str] = Field(default_factory=list)
     search_time: float = 0.0
     score: ScoreResult | None = None
-    search_llm_calls: int = 0
-    search_prompt_tokens: int = 0
-    search_completion_tokens: int = 0
-    search_total_tokens: int = 0
     answer_llm_calls: int = 0
     answer_prompt_tokens: int = 0
     answer_completion_tokens: int = 0
@@ -507,9 +499,14 @@ class LocomoRunResult(BaseModel):
         return MetricBucket(count=self.total_questions, correct=self.correct)
 
     def token_usage(self) -> dict[str, int]:
-        """Aggregate search/answer/judge LLM token usage across all questions."""
+        """Aggregate answer/judge LLM token usage across all questions.
+
+        Search is excluded here: ``SearchResult`` never carries per-call token
+        usage, so this online path can only ever report zero. Search token
+        accounting comes from the offline ClickHouse trace aggregation instead.
+        """
         qa_results = [qa for conv in self.conversations for qa in conv.qa_results]
-        return aggregate_stage_metrics(qa_results, "search", "answer", "judge")
+        return aggregate_stage_metrics(qa_results, "answer", "judge")
 
     def official_metrics(self) -> dict[str, Any]:
         """Return the benchmark-facing summary metrics."""
@@ -678,7 +675,6 @@ class LocomoEnv:
         )
         memories = [_format_memory_for_answering(hit) for hit in search.memories]
         search_time = time.time() - start
-        search_metrics = search_stage_metrics(search)
 
         prompt = build_answer_prompt(memories, question, self._answer_template)
         answer_completion = await self._answer_llm.complete([{"role": "user", "content": prompt}])
@@ -693,10 +689,6 @@ class LocomoEnv:
             memories=memories,
             search_time=search_time,
             prompt=prompt,
-            search_llm_calls=search_metrics["search_llm_calls"],
-            search_prompt_tokens=search_metrics["search_prompt_tokens"],
-            search_completion_tokens=search_metrics["search_completion_tokens"],
-            search_total_tokens=search_metrics["search_total_tokens"],
             prompt_tokens=answer_metrics["answer_prompt_tokens"],
             completion_tokens=answer_metrics["answer_completion_tokens"],
             total_tokens=answer_metrics["answer_total_tokens"],
@@ -723,10 +715,6 @@ class LocomoEnv:
             memory=answer.memories,
             search_time=answer.search_time,
             score=score_result,
-            search_llm_calls=answer.search_llm_calls,
-            search_prompt_tokens=answer.search_prompt_tokens,
-            search_completion_tokens=answer.search_completion_tokens,
-            search_total_tokens=answer.search_total_tokens,
             answer_llm_calls=1,
             answer_prompt_tokens=answer.prompt_tokens,
             answer_completion_tokens=answer.completion_tokens,
@@ -807,10 +795,6 @@ class LocomoEnv:
                         memory=answer.memories,
                         search_time=answer.search_time,
                         score=score_result,
-                        search_llm_calls=answer.search_llm_calls,
-                        search_prompt_tokens=answer.search_prompt_tokens,
-                        search_completion_tokens=answer.search_completion_tokens,
-                        search_total_tokens=answer.search_total_tokens,
                         answer_llm_calls=1,
                         answer_prompt_tokens=answer.prompt_tokens,
                         answer_completion_tokens=answer.completion_tokens,

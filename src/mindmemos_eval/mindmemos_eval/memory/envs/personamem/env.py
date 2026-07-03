@@ -18,12 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from tqdm.auto import tqdm
 
 from mindmemos_eval.llm import LLMClient
-from mindmemos_eval.memory.tokens import (
-    aggregate_stage_metrics,
-    completion_stage_metrics,
-    search_stage_metrics,
-    stage_metrics,
-)
+from mindmemos_eval.memory.tokens import completion_stage_metrics, stage_metrics
 
 PERSONAMEM_OFFICIAL_REPOSITORY = "https://github.com/bowen-upenn/PersonaMem"
 PERSONAMEM_OFFICIAL_PROTOCOL_COMMIT = "caaae44b3f236b8751d499a770e94e5aecffcff1"
@@ -105,10 +100,6 @@ class PersonaMemQAResult(BaseModel):
     retrieved_memories: list[str] = Field(default_factory=list)
     prompt: list[dict[str, Any]] = Field(default_factory=list)
     search_elapsed_seconds: float = 0.0
-    search_llm_calls: int = 0
-    search_prompt_tokens: int = 0
-    search_completion_tokens: int = 0
-    search_total_tokens: int = 0
     answer: PersonaMemAnswer | None = None
     error: str | None = None
 
@@ -353,15 +344,15 @@ def calculate_personamem_metrics(
     build_elapsed = sum(summary.elapsed_seconds for summary in build_summaries)
     search_elapsed = sum(result.search_elapsed_seconds for result in results)
     answer_elapsed = sum(answer.elapsed_seconds for answer in answers)
-    token_metrics = aggregate_stage_metrics(results, "search")
-    token_metrics.update(
-        stage_metrics(
-            "answer",
-            llm_calls=len(answers),
-            prompt_tokens=sum(answer.prompt_tokens for answer in answers),
-            completion_tokens=sum(answer.completion_tokens for answer in answers),
-            total_tokens=sum(answer.total_tokens for answer in answers),
-        )
+    # Search is excluded here: `SearchResult` never carries per-call token usage,
+    # so this online path can only ever report zero. Search token accounting comes
+    # from the offline ClickHouse trace aggregation instead.
+    token_metrics = stage_metrics(
+        "answer",
+        llm_calls=len(answers),
+        prompt_tokens=sum(answer.prompt_tokens for answer in answers),
+        completion_tokens=sum(answer.completion_tokens for answer in answers),
+        total_tokens=sum(answer.total_tokens for answer in answers),
     )
     token_metrics.update(stage_metrics("judge"))
     return {
@@ -486,21 +477,14 @@ class PersonaMemEnv:
                 )
                 memories = [hit.memory for hit in search.memories if hit.memory]
             except Exception as exc:  # noqa: BLE001 - failures remain in the official denominator
-                search_metrics = search_stage_metrics(None)
                 return PersonaMemQAResult(
                     item=item,
                     search_elapsed_seconds=time.monotonic() - search_started,
-                    search_llm_calls=search_metrics["search_llm_calls"],
-                    search_prompt_tokens=search_metrics["search_prompt_tokens"],
-                    search_completion_tokens=search_metrics["search_completion_tokens"],
-                    search_total_tokens=search_metrics["search_total_tokens"],
                     error=f"search failed: {type(exc).__name__}: {exc}",
                 )
             search_elapsed = time.monotonic() - search_started
-            search_metrics = search_stage_metrics(search)
             prompt = build_personamem_prompt(item, retrieved_memories=memories)
         else:
-            search_metrics = search_stage_metrics(None)
             prompt = build_personamem_prompt(item, visible_context=self._context_store.visible(item.scope))
 
         if "o" in self._answer_llm.config.model:
@@ -515,10 +499,6 @@ class PersonaMemEnv:
                 retrieved_memories=memories,
                 prompt=prompt,
                 search_elapsed_seconds=search_elapsed,
-                search_llm_calls=search_metrics["search_llm_calls"],
-                search_prompt_tokens=search_metrics["search_prompt_tokens"],
-                search_completion_tokens=search_metrics["search_completion_tokens"],
-                search_total_tokens=search_metrics["search_total_tokens"],
                 error=f"answer failed: {type(exc).__name__}: {exc}",
             )
         answer_elapsed = time.monotonic() - answer_started
@@ -529,10 +509,6 @@ class PersonaMemEnv:
             retrieved_memories=memories,
             prompt=prompt,
             search_elapsed_seconds=search_elapsed,
-            search_llm_calls=search_metrics["search_llm_calls"],
-            search_prompt_tokens=search_metrics["search_prompt_tokens"],
-            search_completion_tokens=search_metrics["search_completion_tokens"],
-            search_total_tokens=search_metrics["search_total_tokens"],
             answer=PersonaMemAnswer(
                 response=completion.content,
                 extracted_answer=extracted,

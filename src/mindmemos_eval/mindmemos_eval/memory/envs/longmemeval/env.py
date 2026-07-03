@@ -28,7 +28,7 @@ from tqdm.auto import tqdm
 
 from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.scorer import ScoreResult
-from mindmemos_eval.memory.tokens import aggregate_stage_metrics, completion_stage_metrics, search_stage_metrics
+from mindmemos_eval.memory.tokens import aggregate_stage_metrics, completion_stage_metrics
 
 LONGMEMEVAL_ANSWER_PROMPT = """
 You answer LongMemEval questions using only the retrieved memories.
@@ -429,10 +429,6 @@ class LongMemEvalAnswer(BaseModel):
     memories: list[str] = Field(default_factory=list)
     search_time: float = 0.0
     prompt: str = ""
-    search_llm_calls: int = 0
-    search_prompt_tokens: int = 0
-    search_completion_tokens: int = 0
-    search_total_tokens: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -455,10 +451,6 @@ class LongMemEvalQAResult(BaseModel):
     search_time: float = 0.0
     score: ScoreResult | None = None
     abstention: bool = False
-    search_llm_calls: int = 0
-    search_prompt_tokens: int = 0
-    search_completion_tokens: int = 0
-    search_total_tokens: int = 0
     answer_llm_calls: int = 0
     answer_prompt_tokens: int = 0
     answer_completion_tokens: int = 0
@@ -561,9 +553,14 @@ class LongMemEvalRunResult(BaseModel):
         return sum(bucket.accuracy for bucket in buckets.values()) / len(buckets)
 
     def token_usage(self) -> dict[str, int]:
-        """Aggregate search/answer/judge LLM token usage across all questions."""
+        """Aggregate answer/judge LLM token usage across all questions.
+
+        Search is excluded here: ``SearchResult`` never carries per-call token
+        usage, so this online path can only ever report zero. Search token
+        accounting comes from the offline ClickHouse trace aggregation instead.
+        """
         qa_results = [qa for sample in self.samples for qa in sample.qa_results]
-        return aggregate_stage_metrics(qa_results, "search", "answer", "judge")
+        return aggregate_stage_metrics(qa_results, "answer", "judge")
 
     def official_metrics(self) -> dict[str, Any]:
         """Return the benchmark-facing summary metrics."""
@@ -772,7 +769,6 @@ class LongMemEvalEnv:
         )
         memories = [_format_memory_for_answering(hit) for hit in search.memories]
         search_time = time.time() - start
-        search_metrics = search_stage_metrics(search)
         prompt = build_answer_prompt(memories, sample, question)
         answer_completion = await self._answer_llm.complete([{"role": "user", "content": prompt}])
         full_response = answer_completion.content
@@ -789,10 +785,6 @@ class LongMemEvalEnv:
             memories=memories,
             search_time=search_time,
             prompt=prompt,
-            search_llm_calls=search_metrics["search_llm_calls"],
-            search_prompt_tokens=search_metrics["search_prompt_tokens"],
-            search_completion_tokens=search_metrics["search_completion_tokens"],
-            search_total_tokens=search_metrics["search_total_tokens"],
             prompt_tokens=answer_metrics["answer_prompt_tokens"],
             completion_tokens=answer_metrics["answer_completion_tokens"],
             total_tokens=answer_metrics["answer_total_tokens"],
@@ -826,10 +818,6 @@ class LongMemEvalEnv:
             search_time=answer.search_time,
             score=score_result,
             abstention=_is_abstention_question(answer.question_id),
-            search_llm_calls=answer.search_llm_calls,
-            search_prompt_tokens=answer.search_prompt_tokens,
-            search_completion_tokens=answer.search_completion_tokens,
-            search_total_tokens=answer.search_total_tokens,
             answer_llm_calls=1,
             answer_prompt_tokens=answer.prompt_tokens,
             answer_completion_tokens=answer.completion_tokens,
@@ -933,10 +921,6 @@ class LongMemEvalEnv:
                         search_time=answer.search_time,
                         score=score_result,
                         abstention=_is_abstention_question(answer.question_id),
-                        search_llm_calls=answer.search_llm_calls,
-                        search_prompt_tokens=answer.search_prompt_tokens,
-                        search_completion_tokens=answer.search_completion_tokens,
-                        search_total_tokens=answer.search_total_tokens,
                         answer_llm_calls=1,
                         answer_prompt_tokens=answer.prompt_tokens,
                         answer_completion_tokens=answer.completion_tokens,
