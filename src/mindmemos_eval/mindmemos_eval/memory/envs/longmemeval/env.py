@@ -968,8 +968,8 @@ class LongMemEvalEnv:
                     pbar.close()
 
         samples = list(samples)
-        # total_questions 来自第 799 行，是全部问题数（不过滤）
-        # 现在计算有评分和正确的数量
+        # total_questions counts every question, unfiltered (computed above).
+        # Tally how many were actually scored and how many were correct.
         scored_correct = 0
         abstention_total = 0
         abstention_correct = 0
@@ -984,7 +984,7 @@ class LongMemEvalEnv:
 
         run = LongMemEvalRunResult(
             samples=samples,
-            total_questions=total_questions,  # ✅ 使用第 799 行的全部问题数
+            total_questions=total_questions,  # unfiltered question count
             correct=scored_correct,
             abstention_total=abstention_total,
             abstention_correct=abstention_correct,

@@ -778,7 +778,7 @@ def _eval_metrics_values(row: dict[str, Any]) -> list[Any]:
     metrics = dict(eval_result.get("metrics") or {})
     sp = dict(row.get("metrics", {}).get("clickhouse", {}).get("search_token_percentiles") or {})
 
-    # ✅ 检查关键字段，防止静默数据丢失
+    # Check key fields to catch silent data loss early.
     if eval_result and not eval_result.get("protocol"):
         warnings.warn(
             f"eval_result for run_id={row.get('run_id')} missing 'protocol' field",
