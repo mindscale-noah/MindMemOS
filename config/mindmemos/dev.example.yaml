@@ -148,7 +148,7 @@ algo_config:
     stopwords_en_path:
   add:
     schema:
-      entity_modeling_path: config/presets/entity_modeling.json
+      entity_modeling_path: config/presets/entity_modeling_locomo.json
       extraction:
         enable_schema_selection: true
         use_search_fields: true

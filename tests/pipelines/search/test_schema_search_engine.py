@@ -47,7 +47,7 @@ class FakeExpander:
     def __init__(self) -> None:
         self.calls = []
 
-    async def search_multi_hop(self, **kwargs):
+    async def search(self, **kwargs):
         self.calls.append(kwargs)
         return [TemporalEntity(entity_id="ent-1", name="Kai", entity_type="person", description="Kai likes Qdrant.")]
 
@@ -56,7 +56,7 @@ class EmptyExpander:
     def __init__(self) -> None:
         self.calls = []
 
-    async def search_multi_hop(self, **kwargs):
+    async def search(self, **kwargs):
         self.calls.append(kwargs)
         return []
 

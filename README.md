@@ -55,6 +55,19 @@ MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive bench
 | EverMemOS           |    96.67   |   91.84   |  89.72   |    76.04    |   93.05   |
 | **MindMemOS-schema** | **97.62**  | **93.26** | 89.01 |  75.00 | **93.64** |
 
+Evaluation config: [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml)
+
+```bash
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+# fill in API keys, then run:
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list locomo \
+  --algorithm schema \
+  --manifest-output output/locomo_manifest.jsonl \
+  --api-key-output config/mindmemos/api_keys.yaml
+```
+
 ### Evaluation of Persona Memory
 
 MindMemOS achieves state-of-the-art on PersonaMem through higher-order property modeling and discovery, leading the current SOTA by approximately **2 points** in overall accuracy.

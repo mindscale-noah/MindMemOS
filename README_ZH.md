@@ -52,6 +52,19 @@ MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 
 | EverMemOS           |    96.67   |   91.84   |  89.72   |    76.04    |   93.05   |
 | **MindMemOS-schema** | **97.62**  | **93.26** | 89.01 |  75.00 | **93.64** |
 
+评测配置：[`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml)
+
+```bash
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+# 填入 API key 后执行：
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list locomo \
+  --algorithm schema \
+  --manifest-output output/locomo_manifest.jsonl \
+  --api-key-output config/mindmemos/api_keys.yaml
+```
+
 ### Evaluation of Persona Memory
 
 MindMemOS 通过高阶属性建模与发现，在 PersonaMem 基准上达到 SOTA，Overall 准确率领先当前 SOTA 约 **2 个百分点**。

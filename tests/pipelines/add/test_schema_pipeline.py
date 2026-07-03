@@ -583,7 +583,7 @@ async def test_schema_add_pipeline_writes_entity_and_property_vectors():
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=FakeLLM(),
         embed_client=embed,
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
 
     before = datetime.now(UTC)
@@ -651,7 +651,7 @@ async def test_schema_add_pipeline_passes_locomo_named_speakers_to_extractor():
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=llm,
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
 
     result = await pipeline.add_sync(
@@ -687,7 +687,7 @@ async def test_schema_add_pipeline_maps_arbitrary_schema_types_to_display_memory
     qdrant = FakeQdrant()
     clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
     reader = MemoryDbReader(clients=clients)
-    manager = EntityManager("config/presets/entity_modeling.json")
+    manager = EntityManager("config/presets/entity_modeling_locomo.json")
     manager.register(
         "task_experience",
         entity_description="Reusable task experience.",
@@ -736,7 +736,7 @@ async def test_schema_add_pipeline_deduplicates_entity_edges_by_pair():
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=DuplicateEdgeLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
 
     await pipeline.add_sync(
@@ -773,7 +773,7 @@ async def test_schema_add_pipeline_uses_add_input_timestamp_for_text_messages():
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=FakeLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
     add_input = AddPipelineInput(
         mode="sync",
@@ -806,7 +806,7 @@ async def test_schema_add_pipeline_writes_back_to_trigger_add_record_and_links_b
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=FakeLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
 
     result = await pipeline.add_sync(
@@ -931,7 +931,7 @@ async def test_schema_add_async_appends_buffer_and_publishes_drain_task(monkeypa
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=FakeLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
 
     ctx = make_context()
@@ -971,7 +971,7 @@ async def test_schema_add_episode_kafka_dispatch_uses_buffer_key(monkeypatch):
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=FakeLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
     ctx = make_context()
 
@@ -1021,7 +1021,7 @@ async def test_schema_add_async_raises_when_kafka_disabled(monkeypatch):
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=FakeLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
 
     with pytest.raises(RuntimeError, match="kafka.enabled=true"):
@@ -1051,7 +1051,7 @@ async def test_schema_add_async_raises_when_drain_publish_fails(monkeypatch):
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=FakeLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
 
     async def fail_if_inline_drain_attempted(context):
@@ -1090,7 +1090,7 @@ async def test_schema_add_drain_uses_buffered_record_context_for_episode_kafka(m
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=FakeLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
     original_context = make_context()
     drain_context = original_context.model_copy(update={"request_id": "drain-req", "user_id": "drain-user"})
@@ -1126,7 +1126,7 @@ async def test_schema_add_pipeline_forces_split_when_llm_returns_no_boundary_at_
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=EmptyBoundaryLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
 
     await pipeline.add_sync(
@@ -1192,7 +1192,7 @@ async def test_schema_add_pipeline_property_merge_archives_existing_and_writes_m
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=PropertyMergeLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
         use_property_merge=True,
     )
 
@@ -1262,7 +1262,7 @@ async def test_schema_add_pipeline_higher_order_runs_for_updated_entity():
         property_hits=[first_order],
         list_memories=[first_order, current_higher],
     )
-    manager = EntityManager("config/presets/entity_modeling.json")
+    manager = EntityManager("config/presets/entity_modeling_locomo.json")
     user_entity = manager.get("person")
     assert isinstance(user_entity, EntityType)
     user_entity.dynamic_property["preference_summary"] = {
@@ -1311,7 +1311,7 @@ async def test_schema_add_pipeline_marks_episode_failed_when_generation_fails():
         add_buffer=AddRecordBuffer(clients=clients),
         llm_client=FailingGenerationLLM(),
         embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling.json"),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
     )
 
     result = await pipeline.add_sync(
