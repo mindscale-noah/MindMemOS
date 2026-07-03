@@ -209,16 +209,9 @@ def parse_add_result(envelope: Envelope) -> AddResult:
 
 def parse_search_result(envelope: Envelope) -> SearchResult:
     data = envelope.data or {}
-    usage = data.get("usage") if isinstance(data, dict) else {}
-    usage = usage if isinstance(usage, dict) else {}
-    llm_call_count = data.get("llm_call_count") if isinstance(data, dict) else 0
     return SearchResult(
         request_id=envelope.request_id,
         memories=data.get("memories", []),
-        llm_call_count=int(llm_call_count or usage.get("llm_call_count", 0) or 0),
-        prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
-        completion_tokens=int(usage.get("completion_tokens", 0) or 0),
-        total_tokens=int(usage.get("total_tokens", 0) or 0),
     )
 
 

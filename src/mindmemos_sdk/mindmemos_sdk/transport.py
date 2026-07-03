@@ -141,7 +141,7 @@ class HttpTransport:
                 last_exc = exc
                 if attempt >= self._max_retries:
                     break
-                wait = min(5.0 * (2**attempt), 60.0)
+                wait = min(1.0 * (2**attempt), 60.0)
                 time.sleep(wait)
         raise TransportError(f"Request to {url} failed after {self._max_retries + 1} attempt(s): {last_exc}")
 
@@ -289,6 +289,6 @@ class AsyncHttpTransport:
                 last_exc = exc
                 if attempt >= self._max_retries:
                     break
-                wait = min(5.0 * (2**attempt), 60.0)
+                wait = min(1.0 * (2**attempt), 60.0)
                 await asyncio.sleep(wait)
         raise TransportError(f"Request to {url} failed after {self._max_retries + 1} attempt(s): {last_exc}")
