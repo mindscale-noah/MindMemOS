@@ -127,6 +127,7 @@ async def collect_benchmark_metrics(
     config: MetricsCollectorConfig,
     table_output_path: str | Path | None = None,
     xlsx_output_path: str | Path | None = None,
+    json_output_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Collect Qdrant and ClickHouse metrics for every manifest row."""
     runs = load_manifest(manifest_path)
@@ -153,6 +154,8 @@ async def collect_benchmark_metrics(
         write_metrics_table(table_output_path, rows)
     if xlsx_output_path:
         write_metrics_xlsx(xlsx_output_path, rows)
+    if json_output_path:
+        write_metrics_json(json_output_path, rows)
     return rows
 
 
@@ -843,6 +846,169 @@ def write_metrics_table(path: str | Path, rows: Iterable[dict[str, Any]]) -> Non
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+LLM_BY_TASK_HEADERS = [
+    "run_id",
+    "algorithm",
+    "task",
+    "llm_calls",
+    "llm_total_tokens",
+    "llm_avg_tokens",
+    "llm_total_time_ms",
+]
+
+PERCENTILES_HEADERS = [
+    "run_id",
+    "algorithm",
+    "operation",
+    "time_min_ms",
+    "time_max_ms",
+    "time_p50_ms",
+    "time_p95_ms",
+    "token_min",
+    "token_max",
+    "token_p50",
+    "token_p95",
+]
+
+
+def _llm_by_task_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build one row per (run, LLM task) with token and timing breakdown."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        clickhouse = dict(row.get("metrics", {}).get("clickhouse") or {})
+        for task in clickhouse.get("llm_by_task") or []:
+            if not isinstance(task, dict):
+                continue
+            out.append(
+                {
+                    "run_id": row.get("run_id"),
+                    "algorithm": row.get("memory_algorithm"),
+                    "task": task.get("task"),
+                    "llm_calls": _to_int(task.get("llm_call_count")),
+                    "llm_total_tokens": _to_int(task.get("llm_total_tokens")),
+                    "llm_avg_tokens": _to_float(task.get("llm_avg_tokens")),
+                    "llm_total_time_ms": _to_float(task.get("llm_total_time_ms")),
+                }
+            )
+        em = dict((row.get("eval_result") or {}).get("metrics") or {})
+        for stage, calls_key, tokens_key, elapsed_key in (
+            ("eval.answer", "answer_llm_calls", "answer_total_tokens", "answer_elapsed_seconds"),
+            ("eval.judge", "judge_llm_calls", "judge_total_tokens", None),
+        ):
+            calls = _to_int(em.get(calls_key))
+            tokens = _to_int(em.get(tokens_key))
+            elapsed_s = em.get(elapsed_key) if elapsed_key else None
+            elapsed_ms = _to_float(elapsed_s * 1000) if elapsed_s is not None else None
+            avg_tokens = _to_float(tokens / calls) if calls else None
+            if calls:
+                out.append(
+                    {
+                        "run_id": row.get("run_id"),
+                        "algorithm": row.get("memory_algorithm"),
+                        "task": stage,
+                        "llm_calls": calls,
+                        "llm_total_tokens": tokens,
+                        "llm_avg_tokens": avg_tokens,
+                        "llm_total_time_ms": elapsed_ms,
+                    }
+                )
+    return out
+
+
+def _percentiles_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build min/max/p50/p95 rows for add/search/eval.answer/eval.judge operations."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        qdrant = dict(row.get("metrics", {}).get("qdrant") or {})
+        clickhouse = dict(row.get("metrics", {}).get("clickhouse") or {})
+        token_perc = clickhouse.get("llm_token_percentiles_by_task") or {}
+
+        for op_name in ("add", "search"):
+            time_percentiles = qdrant.get(f"{op_name}_percentiles_ms") or {}
+
+            if op_name == "search":
+                sp = clickhouse.get("search_token_percentiles") or {}
+                token_min = _to_int(sp["token_min"]) if sp.get("token_min") is not None else None
+                token_max = _to_int(sp["token_max"]) if sp.get("token_max") is not None else None
+                token_p50 = _to_int(sp["token_p50"]) if sp.get("token_p50") is not None else None
+                token_p95 = _to_int(sp["token_p95"]) if sp.get("token_p95") is not None else None
+            else:
+                token_stats = _aggregate_token_percentiles(token_perc, op_name)
+                token_min = token_stats.get("min")
+                token_max = token_stats.get("max")
+                token_p50 = token_stats.get("p50")
+                token_p95 = token_stats.get("p95")
+
+            out.append(
+                {
+                    "run_id": row.get("run_id"),
+                    "algorithm": row.get("memory_algorithm"),
+                    "operation": op_name,
+                    "time_min_ms": time_percentiles.get("min"),
+                    "time_max_ms": time_percentiles.get("max"),
+                    "time_p50_ms": time_percentiles.get("p50"),
+                    "time_p95_ms": time_percentiles.get("p95"),
+                    "token_min": token_min,
+                    "token_max": token_max,
+                    "token_p50": token_p50,
+                    "token_p95": token_p95,
+                }
+            )
+        qa_series = _eval_qa_token_series(row)
+        em = dict((row.get("eval_result") or {}).get("metrics") or {})
+        for stage, elapsed_key in (
+            ("answer", "answer_elapsed_seconds"),
+            ("judge", None),
+        ):
+            token_vals = qa_series.get(stage) or []
+            if not token_vals:
+                continue
+            tok_stats = _percentile_stats(token_vals)
+            calls = len(token_vals)
+            elapsed_s = em.get(elapsed_key) if elapsed_key else None
+            avg_time_ms = _to_float(elapsed_s * 1000 / calls) if (elapsed_s and calls) else None
+            out.append(
+                {
+                    "run_id": row.get("run_id"),
+                    "algorithm": row.get("memory_algorithm"),
+                    "operation": f"eval.{stage}",
+                    "time_min_ms": None,
+                    "time_max_ms": None,
+                    "time_p50_ms": avg_time_ms,
+                    "time_p95_ms": None,
+                    "token_min": tok_stats["min"],
+                    "token_max": tok_stats["max"],
+                    "token_p50": tok_stats["p50"],
+                    "token_p95": tok_stats["p95"],
+                }
+            )
+    return out
+
+
+def build_metrics_sheets(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Build the summary/eval_metrics/llm_by_task/percentiles sheets as plain dicts.
+
+    Shared by :func:`write_metrics_xlsx` and :func:`write_metrics_json` so the two
+    outputs can never drift apart in content.
+    """
+    return {
+        "summary": [dict(zip(SUMMARY_HEADERS, _summary_values(row), strict=True)) for row in rows],
+        "eval_metrics": [dict(zip(EVAL_METRICS_HEADERS, _eval_metrics_values(row), strict=True)) for row in rows],
+        "llm_by_task": _llm_by_task_rows(rows),
+        "percentiles": _percentiles_rows(rows),
+    }
+
+
+def write_metrics_json(path: str | Path, rows: list[dict[str, Any]]) -> None:
+    """Write the same four sheets as :func:`write_metrics_xlsx` to a single JSON file."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(build_metrics_sheets(rows), ensure_ascii=False, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+
 def write_metrics_xlsx(path: str | Path, rows: list[dict[str, Any]]) -> None:
     """Write the metrics as an Excel workbook for human review.
 
@@ -873,134 +1039,14 @@ def write_metrics_xlsx(path: str | Path, rows: list[dict[str, Any]]) -> None:
         eval_metrics_sheet.append([row[i] for i in non_empty_cols])
 
     by_task_sheet = wb.create_sheet("llm_by_task")
-    by_task_headers = [
-        "run_id",
-        "algorithm",
-        "task",
-        "llm_calls",
-        "llm_total_tokens",
-        "llm_avg_tokens",
-        "llm_total_time_ms",
-    ]
-    by_task_sheet.append(by_task_headers)
-    for row in rows:
-        clickhouse = dict(row.get("metrics", {}).get("clickhouse") or {})
-        for task in clickhouse.get("llm_by_task") or []:
-            if not isinstance(task, dict):
-                continue
-            by_task_sheet.append(
-                [
-                    row.get("run_id"),
-                    row.get("memory_algorithm"),
-                    task.get("task"),
-                    _to_int(task.get("llm_call_count")),
-                    _to_int(task.get("llm_total_tokens")),
-                    _to_float(task.get("llm_avg_tokens")),
-                    _to_float(task.get("llm_total_time_ms")),
-                ]
-            )
-        em = dict((row.get("eval_result") or {}).get("metrics") or {})
-        for stage, calls_key, tokens_key, elapsed_key in (
-            ("eval.answer", "answer_llm_calls", "answer_total_tokens", "answer_elapsed_seconds"),
-            ("eval.judge", "judge_llm_calls", "judge_total_tokens", None),
-        ):
-            calls = _to_int(em.get(calls_key))
-            tokens = _to_int(em.get(tokens_key))
-            elapsed_s = em.get(elapsed_key) if elapsed_key else None
-            elapsed_ms = _to_float(elapsed_s * 1000) if elapsed_s is not None else None
-            avg_tokens = _to_float(tokens / calls) if calls else None
-            if calls:
-                by_task_sheet.append(
-                    [
-                        row.get("run_id"),
-                        row.get("memory_algorithm"),
-                        stage,
-                        calls,
-                        tokens,
-                        avg_tokens,
-                        elapsed_ms,
-                    ]
-                )
+    by_task_sheet.append(LLM_BY_TASK_HEADERS)
+    for entry in _llm_by_task_rows(rows):
+        by_task_sheet.append([_xlsx_cell(entry[header]) for header in LLM_BY_TASK_HEADERS])
 
     percentiles_sheet = wb.create_sheet("percentiles")
-    percentiles_headers = [
-        "run_id",
-        "algorithm",
-        "operation",
-        "time_min_ms",
-        "time_max_ms",
-        "time_p50_ms",
-        "time_p95_ms",
-        "token_min",
-        "token_max",
-        "token_p50",
-        "token_p95",
-    ]
-    percentiles_sheet.append(percentiles_headers)
-    for row in rows:
-        qdrant = dict(row.get("metrics", {}).get("qdrant") or {})
-        clickhouse = dict(row.get("metrics", {}).get("clickhouse") or {})
-        token_perc = clickhouse.get("llm_token_percentiles_by_task") or {}
-
-        for op_name in ("add", "search"):
-            time_percentiles = qdrant.get(f"{op_name}_percentiles_ms") or {}
-
-            if op_name == "search":
-                sp = clickhouse.get("search_token_percentiles") or {}
-                token_min = _to_int(sp["token_min"]) if sp.get("token_min") is not None else None
-                token_max = _to_int(sp["token_max"]) if sp.get("token_max") is not None else None
-                token_p50 = _to_int(sp["token_p50"]) if sp.get("token_p50") is not None else None
-                token_p95 = _to_int(sp["token_p95"]) if sp.get("token_p95") is not None else None
-            else:
-                token_stats = _aggregate_token_percentiles(token_perc, op_name)
-                token_min = token_stats.get("min")
-                token_max = token_stats.get("max")
-                token_p50 = token_stats.get("p50")
-                token_p95 = token_stats.get("p95")
-
-            percentiles_sheet.append(
-                [
-                    row.get("run_id"),
-                    row.get("memory_algorithm"),
-                    op_name,
-                    time_percentiles.get("min"),
-                    time_percentiles.get("max"),
-                    time_percentiles.get("p50"),
-                    time_percentiles.get("p95"),
-                    token_min,
-                    token_max,
-                    token_p50,
-                    token_p95,
-                ]
-            )
-        qa_series = _eval_qa_token_series(row)
-        em = dict((row.get("eval_result") or {}).get("metrics") or {})
-        for stage, elapsed_key in (
-            ("answer", "answer_elapsed_seconds"),
-            ("judge", None),
-        ):
-            token_vals = qa_series.get(stage) or []
-            if not token_vals:
-                continue
-            tok_stats = _percentile_stats(token_vals)
-            calls = len(token_vals)
-            elapsed_s = em.get(elapsed_key) if elapsed_key else None
-            avg_time_ms = _to_float(elapsed_s * 1000 / calls) if (elapsed_s and calls) else None
-            percentiles_sheet.append(
-                [
-                    row.get("run_id"),
-                    row.get("memory_algorithm"),
-                    f"eval.{stage}",
-                    None,
-                    None,
-                    avg_time_ms,
-                    None,
-                    tok_stats["min"],
-                    tok_stats["max"],
-                    tok_stats["p50"],
-                    tok_stats["p95"],
-                ]
-            )
+    percentiles_sheet.append(PERCENTILES_HEADERS)
+    for entry in _percentiles_rows(rows):
+        percentiles_sheet.append([_xlsx_cell(entry[header]) for header in PERCENTILES_HEADERS])
 
     for sheet in (summary, eval_metrics_sheet, by_task_sheet, percentiles_sheet):
         for cell in sheet[1]:
@@ -1078,6 +1124,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strict-clickhouse", action="store_true")
     parser.add_argument("--table-output", help="Optional Markdown table output for compact human review.")
     parser.add_argument("--xlsx-output", help="Optional Excel (.xlsx) output for human review.")
+    parser.add_argument(
+        "--json-output",
+        help="Optional JSON mirror of the xlsx summary/eval_metrics/llm_by_task/percentiles sheets.",
+    )
     return parser
 
 
@@ -1091,6 +1141,7 @@ def main(argv: list[str] | None = None) -> int:
             config_from_args(args),
             args.table_output,
             args.xlsx_output,
+            args.json_output,
         )
     )
     return 0

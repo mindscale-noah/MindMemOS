@@ -144,10 +144,13 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 uv run python -m mindmemos_eval.memory.metrics \
   --manifest reports/vanilla_run.jsonl \
   --output reports/vanilla_run_metrics.jsonl \
-  --xlsx-output reports/vanilla_run_metrics.xlsx
+  --xlsx-output reports/vanilla_run_metrics.xlsx \
+  --json-output reports/vanilla_run_metrics_sheets.json
 ```
 
-生成的 xlsx 包含四个 sheet：
+`--output` 写的是每个 run 一行的原始数据（manifest 内容 + Qdrant/ClickHouse 查询结果），不是下面这四个整理好的 sheet。想要程序化读取下面四个 sheet 的内容，用 `--json-output`——它和 xlsx 的四个 sheet 内容完全一致，只是换成 `{"summary": [...], "eval_metrics": [...], "llm_by_task": [...], "percentiles": [...]}` 这样的 JSON 结构（每个 sheet 一个数组，数组元素是以列名为 key 的字典）。
+
+生成的 xlsx（或 `--json-output`）包含四个 sheet：
 
 ### summary sheet
 

@@ -145,10 +145,13 @@ After the evaluation completes, run:
 uv run python -m mindmemos_eval.memory.metrics \
   --manifest reports/vanilla_run.jsonl \
   --output reports/vanilla_run_metrics.jsonl \
-  --xlsx-output reports/vanilla_run_metrics.xlsx
+  --xlsx-output reports/vanilla_run_metrics.xlsx \
+  --json-output reports/vanilla_run_metrics_sheets.json
 ```
 
-The output xlsx contains four sheets:
+`--output` writes one row per run of raw data (manifest content plus the Qdrant/ClickHouse query results) — it is *not* the same as the four curated sheets below. To consume those four sheets programmatically, use `--json-output` instead: it mirrors the xlsx sheets exactly, just as `{"summary": [...], "eval_metrics": [...], "llm_by_task": [...], "percentiles": [...]}` (one array per sheet, each entry a dict keyed by column name).
+
+The output xlsx (or `--json-output`) contains four sheets:
 
 ### `summary` sheet
 
