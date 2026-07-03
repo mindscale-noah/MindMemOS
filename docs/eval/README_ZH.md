@@ -159,109 +159,49 @@ uv run python -m mindmemos_eval.memory.metrics \
 | `search_count` / `search_total_ms` / `search_avg_ms` | Qdrant | search 请求数和耗时 |
 | `memory_count` | Qdrant | 最终存储的 memory 条数 |
 | `llm_calls` / `llm_total_tokens` / `llm_prompt_tokens` | ClickHouse | server 侧 LLM 调用（add 阶段的 chunk/extract） |
-| `search_total_tokens` / `search_avg_tokens/query` / `search_avg_tokens/call` | ClickHouse | search 阶段 token 总量，按 `TraceId` 聚合到"每次 search 请求"级别（不是每次 LLM call） |
+| `search_total_tokens` / `search_avg_tokens/query` / `search_avg_tokens/call` | ClickHouse | search 阶段 token 总量，按 `TraceId` 聚合到"每次 search 请求"级别（不是每次 LLM call）——`SearchResult` 不回传 per-call token，这里的数字都是跑完之后从 ClickHouse OTel trace 重新算出来的 |
 | `overall_accuracy` | manifest | 评测得分 |
 | `answer_llm_calls` / `answer_prompt_tokens` / `answer_total_tokens` | manifest | eval 侧 answer 阶段 token |
 | `judge_llm_calls` / `judge_prompt_tokens` / `judge_total_tokens` | manifest | eval 侧 judge 阶段 token |
 | `add_token_avg` / `answer_token_avg` / `judge_token_avg` | ClickHouse / manifest | 平均每次 add 调用 / 每道题 answer / 每道题 judge 的 token 数 |
 
-> search 阶段的 token 不是从 SDK 响应里拿的——`SearchResult` 只包含 `request_id` 和 `memories`。所有 search token 数字都是跑完之后从 ClickHouse 的 OTel trace 数据里重新算出来的（见下方[数据流说明](#数据流说明)）。
-
 ### eval_metrics sheet
 
-每个 benchmark 一行，包含完整的评测指标（accuracy、各类别得分、search/answer/judge 的 token 和耗时）。`search_llm_calls` / `search_prompt_tokens` / `search_completion_tokens` / `search_total_tokens` 如果 manifest 本身没有记录，会回退到 ClickHouse 的逐 query 聚合值（`vanilla`/`fast` search 本来就不调用 LLM，两边都是 0）。
+每个 benchmark 一行，包含：
+
+| 列 | 来源 | 说明 |
+|----|------|------|
+| `overall_accuracy` / `correct` / `total` | manifest | 整体准确率和题数 |
+| `search_llm_calls` / `search_prompt_tokens` / `search_completion_tokens` / `search_total_tokens` | manifest，缺失时回退 ClickHouse 逐 query 聚合 | search 阶段 token（`vanilla`/`fast` 两边都是 0） |
+| `answer_llm_calls` / `answer_prompt_tokens` / `answer_completion_tokens` / `answer_total_tokens` | manifest | answer 阶段 token |
+| `judge_llm_calls` / `judge_prompt_tokens` / `judge_completion_tokens` / `judge_total_tokens` | manifest | judge 阶段 token |
+| `build_elapsed_seconds` / `search_elapsed_seconds` / `answer_elapsed_seconds` / `total_elapsed_seconds` | manifest | 各阶段累计耗时（秒） |
+| `by_question_type` / `by_topic` | manifest | 按题型 / 主题拆分的准确率 |
 
 ### llm_by_task sheet
 
 按 LLM 任务类型分行，包含：
 
-| task | 说明 |
-|------|------|
-| `memory.add.extract` | server 侧 add 时的 LLM 抽取调用（来自 ClickHouse） |
-| `eval.answer` | eval 侧 answer 生成调用（来自 manifest） |
-| `eval.judge` | eval 侧 judge 打分调用（来自 manifest） |
+| 列 | 来源 | 说明 |
+|----|------|------|
+| `memory.add.extract` | ClickHouse | server 侧 add 时的 LLM 抽取调用 |
+| `eval.answer` | manifest | eval 侧 answer 生成调用 |
+| `eval.judge` | manifest | eval 侧 judge 打分调用 |
 
 ### percentiles sheet
 
 每个操作的 token 和耗时分位数（min / max / p50 / p95，没有均值列——均值只在 summary sheet）：
 
-| operation | token 分位数来源 | time 分位数来源 |
-|-----------|--------------|--------------|
-| `add` | ClickHouse（逐次 add 调用） | Qdrant（逐请求） |
-| `search` | ClickHouse（逐次 search **请求**）——一次 search 内部的所有 `search.*` LLM call（比如 agentic search 的 `multi_query`、`sufficiency_check`）先按 `TraceId` 加总，再算分位数，反映的是真实的单次 search 成本 | Qdrant（逐请求） |
-| `eval.answer` | manifest 逐题记录（真实分位数） | manifest 仅有总耗时，`time_p50_ms` = 平均值 |
-| `eval.judge` | manifest 逐题记录（真实分位数） | 无逐题时间，`time_p50_ms` 为空 |
+| 列 | 来源 | 说明 |
+|----|------|------|
+| `add` token 分位数 | ClickHouse（逐次 add 调用） | |
+| `add` time 分位数 | Qdrant（逐请求） | |
+| `search` token 分位数 | ClickHouse（逐次 search **请求**，把一次 search 内部所有 `search.*` LLM call 按 `TraceId` 加总后再算分位数） | 反映真实的单次 search 成本，不是单次 LLM call 的成本 |
+| `search` time 分位数 | Qdrant（逐请求） | |
+| `eval.answer` token 分位数 | manifest（逐题记录） | 真实分位数 |
+| `eval.answer` time 分位数 | manifest（仅有总耗时） | `time_p50_ms` = 平均值，非真实分位数 |
+| `eval.judge` token 分位数 | manifest（逐题记录） | 真实分位数 |
+| `eval.judge` time 分位数 | 无逐题时间 | `time_p50_ms` 为空 |
 
 > PersonaMem 使用确定性评分，无 answer/judge LLM 调用，percentiles sheet 中不产生 `eval.*` 行。
 > `vanilla`/`fast` search 完全不调用 LLM，所以这类 run 的 `search` token 分位数是空的；只有 `agentic`/`schema`（一次 query 会触发多次 LLM call）才会填上数据。
-
----
-
-## 数据流说明
-
-```
-eval 进程                          MindMemOS Server (:8000)       外部 LLM
-─────────────────                  ────────────────────────        ─────────────────
-add 阶段：
-  mindmemos_sdk.add()  ──HTTP──►  /v1/memory/add
-                                   └─ chunk/extract ──────────►  yibuapi (dev.yaml key)
-                                   └─ 写 Qdrant + Neo4j
-                                   └─ 写 ClickHouse (OTel trace)
-
-search 阶段：
-  mindmemos_sdk.search() ──HTTP──► /v1/memory/search
-                                   └─ 查 Qdrant 返回 memories
-                                   └─（仅 agentic/schema）LLM 调用 ►  yibuapi (dev.yaml key)
-                                   └─ 写 ClickHouse (OTel trace)
-
-answer 阶段：
-  LLMClient.complete()  ─────────────────────────────────────►  yibuapi (memory_evaluation.yaml key)
-
-judge 阶段：
-  LLMClient.complete()  ─────────────────────────────────────►  yibuapi (memory_evaluation.yaml key)
-```
-
-`sdk.search()` 的返回值 `SearchResult` 只有 `request_id` 和 `memories` 两个字段——**不会**回传 per-call 的 token 用量，即使 server 内部（agentic/schema search）实际调用了好几次 LLM。所以 search 阶段的 token 统计从来不是从 SDK 响应里读的；`metrics.py` 是跑完之后直接查 ClickHouse，把底层 `search.*` LLM call 的 span 按 `TraceId` 分组聚合，还原出真实的"每次 search 请求"成本（见上面 `percentiles` sheet 的说明）。
-
----
-
-## 常见问题
-
-### search 返回 HTTP 500
-
-`make db-clean` 后重建了容器但未重启 server，server 持有旧连接。重启 server 即可：
-
-```bash
-# Ctrl+C 之前的 uvicorn 进程，然后
-uv run uvicorn mindmemos.api.app:app --host 127.0.0.1 --port 8000
-```
-
-### answer/judge 阶段卡住不动（进度条 0%）
-
-eval 侧 LLM API key 失效。检查并更新 `config/mindmemos_eval/memory_evaluation.yaml` 中 `llm` / `answer_llm` / `judge_llm` 的 `api_key`。
-
-```bash
-# 验证 key 是否有效
-curl -s -X POST https://your-llm-provider/v1/chat/completions \
-  -H "Authorization: Bearer <YOUR_KEY>" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4.1-mini","messages":[{"role":"user","content":"hi"}],"max_tokens":5}'
-# 正常返回 choices[]，异常返回 {"error": {"message": "Invalid token"...}}
-```
-
-### xlsx 中 ClickHouse llm_calls = 0
-
-ClickHouse 的 trace 数据依赖 OTel collector 正常运行。确认 `mindmemos-otel-collector` 容器健康，以及 `config/mindmemos/dev.yaml` 中的 `telemetry.endpoint` 配置正确。
-
-### add 成功但 search 失败
-
-两个阶段使用不同 API key：add 用 `api_keys.yaml`（server 侧），search 同样用 `api_keys.yaml`。如果 `make db-clean` 后重新跑，旧 key 已不在新 server 的内存中，需要重新跑评测命令（会写入新 key）或重启 server 让其热重载 `api_keys.yaml`。
-
-### 整体跑得比预期慢很多
-
-几个原因会叠加：
-
-- **`--algorithm schema` 默认用 `agentic` search**，一次 query 会串行触发好几次 LLM call（`multi_query`、`sufficiency_check` 等）。如果只是想验证 add/search 流程走不走得通、不关心 search 质量，可以用 `--search-strategy fast` 覆盖掉，跳过这些额外的 LLM 往返。
-- **`--limit N` 只裁剪最外层条目**（LoCoMo 是对话数，LongMemEval 是 sample 数，PersonaMem 是题目数），裁不到条目内部的工作量。一个 LoCoMo 对话可能有 15+ 个 session、约 200 道 QA，所以单靠 `--limit 1` 不能保证跑得快——LongMemEval 有 `--session-limit N` 能限制每个 sample 的 session 数，但 LoCoMo 没有对应的参数。想给 LoCoMo 做快速冒烟测试，需要直接裁一份数据集 JSON 副本（减少每个对话里的 `session_*` 数量和 `qa` 列表长度），再指向一份临时的 `benchmarks.locomo.dataset` 配置。
-- **`--judge-runs N > 1` 是串行执行的**，耗时会成倍增加（见上面"关键参数说明"）。
-- `--benchmark-list` 里的多个 benchmark 是**顺序**执行的，不是并行——想同时跑多个，需要拆成多条命令分别执行。
