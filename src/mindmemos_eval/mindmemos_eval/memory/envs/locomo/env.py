@@ -97,6 +97,103 @@ Return only the final answer inside <answer> and </answer>. Keep it brief, but i
 numbers, dates, places, teams, programming languages, image captions, and meal names.
 """
 
+LOCOMO_SCHEMA_ANSWER_PROMPT_EN = """
+You are an intelligent memory assistant answering questions based on structured personal memory records organized by person and topic.
+
+# CRITICAL REQUIREMENTS
+1. Never omit specific names — use "Amy's colleague Rob", not "a colleague"
+2. Always include exact numbers, amounts, prices, percentages, dates, times
+3. Preserve frequencies exactly — "every Tuesday and Thursday", not "twice a week"
+4. Maintain all proper nouns and entities as they appear in the records
+5. **COMPLETENESS FIRST**: Your answer MUST include ALL specific factual details found in memory. Never substitute a specific fact with a vague summary.
+6. **ENUMERATE, DON'T SUMMARIZE**: For questions about qualities, items, or reasons, LIST every distinct point rather than giving a generalized description.
+7. **ALIAS AWARENESS**: Property values may contain parenthesized aliases like "PS5 game(Star Wars)". Treat both the primary name and alias as valid references.
+
+# RESPONSE FORMAT (you MUST follow this structure)
+
+## Step 1: QUESTION CONSTRAINT LOCK
+Parse the question to extract hard constraints that MUST be strictly matched:
+  - **Who**: Which person(s)?
+  - **What**: What topic, event, or attribute?
+  - **When**: Specific date, time range, or temporal constraint?
+  - **Where**: Specific location?
+Write these explicitly. In later steps, REJECT any fact that violates these constraints.
+
+## Step 2: RELEVANT MEMORIES
+Scan ALL entities, ALL properties, and ALL episodes. The answer may hide in:
+  - An episode's `input_messages` (most detailed source)
+  - A property of a seemingly unrelated entity
+  - A `default_property` field
+List every memory that could relate, with its timestamp.
+
+## Step 3: KEY INFORMATION
+Extract all specific details from filtered candidates: names, numbers, dates, frequencies, entities.
+
+## Step 4: CROSS-MEMORY LINKING
+Identify shared entities across memories and make reasonable inferences:
+  - Placeholder → concrete value (e.g., "home country" + "grew up in Stockholm" → Sweden)
+  - Relationship inference from co-occurrence patterns
+  - Collective pronouns: infer people involved from context
+
+## Step 5: TIME CALCULATION
+- Inline dates like [2023-05-07] are event dates — use as-is
+- "Known from session on DATE" is when discussed, not when it happened
+- Resolve relative expressions: "yesterday" from session 2023-08-25 → 2023-08-24
+- Episode `input_messages` timestamps are the most reliable source
+- For duration questions, show explicit arithmetic
+- **"The X before [date]"**: First check what day [date] IS. If it matches X, the answer is [date] itself.
+- **DO NOT use relative time** like "4 years ago" — convert to absolute dates
+
+## Step 6: CONTRADICTION CHECK
+When facts conflict, trust the more recent record.
+Exception: for "favorite" attributes, prefer explicit declarations ("my favorite") over casual mentions.
+
+## Step 7: FINAL ANSWER
+State the answer directly and concisely first. Add supporting details after. Do not hedge — commit, then explain.
+If the question asks for qualities, reasons, or items, LIST each one explicitly.
+
+# KEY RULES
+- When the question specifies a date, match it exactly. Do not substitute nearby dates.
+- Episode `input_messages` often contain details NOT in entity properties — always check them.
+- When multiple entities of the same type exist, use names and dates to distinguish. Never merge distinct entities.
+- Use geographic knowledge to infer state/country from city names when asked.
+- Before saying "no record", re-scan every entity and episode. The answer often hides in input_messages.
+
+# FEW-SHOT EXAMPLES (abbreviated)
+
+## Example A: Time Calculation
+Context: [Person: Sarah] travel_event: "known from session on 2023-07-10: Sarah went camping last weekend"
+Question: "When did Sarah go camping?"
+Reasoning: Session 2023-07-10 (Monday). "Last weekend" = July 8-9, 2023.
+<answer>July 8-9, 2023</answer>
+
+## Example B: Cross-Memory Linking
+Context: [Person: Anna] location_event: "[2023-01] Anna moved back to her home country" | identity: "Anna grew up in Stockholm" | education: "Anna studied at Uppsala University"
+Question: "Which country did Anna move to?"
+Reasoning: "Home country" + Stockholm + Uppsala → Sweden.
+<answer>Sweden</answer>
+
+## Example C: Episode Mining
+Context: [Episode] input_messages: "John mentioned playing Mafia with friends" | [Person: John] hobby: "plays a social deduction game with friends"
+Question: "What board game does John play?"
+Reasoning: Property says "social deduction game" (generic). Episode says "Mafia" (specific). Prefer specific.
+<answer>Mafia</answer>
+
+---
+
+# Input Data
+
+## Context (Temporal Entity Slices)
+{context}
+
+## User Question
+{question}
+
+---
+
+Put your answer between <answer> and </answer> tags. Now, please answer the question briefly and clearly:
+"""
+
 # LLM-judge accuracy prompt.
 LOCOMO_ACCURACY_PROMPT = """
 Your task is to label an answer to a question as 'CORRECT' or 'WRONG'. You will be given the following data:
@@ -250,8 +347,30 @@ def build_answer_context(memories: list[str], question: str = "") -> str:
     return "\n".join(lines)
 
 
-def build_answer_prompt(memories: list[str], question: str, template: str | None = None) -> str:
-    """Build the LoCoMo answer prompt with grounding rules for flat memories (verbatim port)."""
+def build_schema_answer_context(memories: list[str]) -> str:
+    """Format retrieved structured entity slices for the schema answer prompt.
+
+    Schema mode uses simple zero-indexed numbering without timestamp prefixes
+    or focus-name annotations — the entity structure already carries attribution.
+    """
+    if not memories:
+        return "No relevant memories."
+    return "\n".join(f"{i}. {memory}" for i, memory in enumerate(memories))
+
+
+def build_answer_prompt(
+    memories: list[str],
+    question: str,
+    template: str | None = None,
+    *,
+    schema_mode: bool = False,
+) -> str:
+    """Build the LoCoMo answer prompt (vanilla flat-memory or schema mode)."""
+    if schema_mode:
+        context = build_schema_answer_context(memories)
+        selected_template = template or LOCOMO_SCHEMA_ANSWER_PROMPT_EN
+        return selected_template.replace("{context}", context).replace("{question}", question)
+
     context = build_answer_context(memories, question=question)
     selected_template = template or LOCOMO_ANSWER_PROMPT_EN
     prompt = (
@@ -260,6 +379,7 @@ def build_answer_prompt(memories: list[str], question: str, template: str | None
         .replace("{conversation_memories}", context)
         .replace("{question}", question)
     )
+    # Only reached in vanilla mode — schema_mode returns early above.
     if "{grounding_rules}" not in selected_template and "# CRITICAL REQUIREMENTS" in selected_template:
         prompt = prompt.replace("# CRITICAL REQUIREMENTS", LOCOMO_ANSWER_GROUNDING_RULES + "\n# CRITICAL REQUIREMENTS")
     return prompt
@@ -497,7 +617,8 @@ class LocomoEnv:
         top_k: int | None = 50,
         search_strategy: str = "agentic",
         rerank: bool = False,
-        answer_template: str = LOCOMO_ANSWER_PROMPT_EN,
+        answer_template: str | None = None,
+        schema_mode: bool = False,
     ) -> None:
         """Handle init."""
         self._memory = memory
@@ -506,7 +627,13 @@ class LocomoEnv:
         self._top_k = top_k
         self._search_strategy = search_strategy
         self._rerank = rerank
-        self._answer_template = answer_template
+        self._schema_mode = schema_mode
+        if answer_template is not None:
+            self._answer_template = answer_template
+        elif schema_mode:
+            self._answer_template = LOCOMO_SCHEMA_ANSWER_PROMPT_EN
+        else:
+            self._answer_template = LOCOMO_ANSWER_PROMPT_EN
 
     async def add_session(
         self,
@@ -591,10 +718,13 @@ class LocomoEnv:
             filters={"user_id": user_id},
             session_id=user_id,
         )
-        memories = [_format_memory_for_answering(hit) for hit in search.memories]
+        if self._schema_mode:
+            memories = [hit.memory for hit in search.memories]
+        else:
+            memories = [_format_memory_for_answering(hit) for hit in search.memories]
         search_time = time.time() - start
 
-        prompt = build_answer_prompt(memories, question, self._answer_template)
+        prompt = build_answer_prompt(memories, question, self._answer_template, schema_mode=self._schema_mode)
         full_response = (await self._answer_llm.complete([{"role": "user", "content": prompt}])).content
         answer_text, chain_of_thought = _extract_answer(full_response)
         return LocomoAnswer(

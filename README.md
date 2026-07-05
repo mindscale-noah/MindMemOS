@@ -47,8 +47,6 @@ MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive bench
 
 | Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
 | :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |
-| MemoryOS            |    67.30   |   59.34   |  42.26   |    59.03    |   60.11   |
-| Mem0                |    68.97   |   61.70   |  58.26   |    50.00    |   64.20   |
 | MemU                |    74.91   |   72.34   |  43.61   |    54.17    |   66.67   |
 | MemOS               |    85.37   |   79.43   |  75.08   |    64.58    |   80.76   |
 | Zep                 |    90.84   |   81.91   |  77.26   |    75.00    |   85.22   |

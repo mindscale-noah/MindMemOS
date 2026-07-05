@@ -188,9 +188,13 @@ def load_personamem_questions(path: str | Path) -> list[dict[str, str]]:
 
 
 def build_personamem_scope(shared_context_id: str, end_index: int) -> PersonaMemScope:
-    """Create a stable, isolated memory scope from the official visibility boundary."""
-    raw = f"{shared_context_id}\0{end_index}"
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+    """Create a stable, isolated memory scope from the official visibility boundary.
+
+    ``user_id`` is derived from ``shared_context_id`` alone so that all
+    end-index boundaries within the same conversation share one memory
+    space, enabling incremental ingestion without re-ingesting prefixes.
+    """
+    digest = hashlib.sha256(shared_context_id.encode("utf-8")).hexdigest()[:20]
     scope_id = f"{shared_context_id}:{end_index}"
     user_id = f"personamem-{digest}"
     return PersonaMemScope(
@@ -397,16 +401,28 @@ class PersonaMemEnv:
         """Load official question rows as normalized benchmark items."""
         return build_personamem_items(load_personamem_questions(path))
 
-    async def _build_scope(self, scope: PersonaMemScope) -> PersonaMemBuildSummary:
+    async def _build_scope(
+        self,
+        scope: PersonaMemScope,
+        *,
+        prev_end_index: int = 0,
+    ) -> PersonaMemBuildSummary:
+        """Add the incremental message segment ``[prev_end_index:scope.end_index)``.
+
+        When called repeatedly for the same conversation with ascending
+        ``end_index`` boundaries, each call ingests only the new messages
+        since the previous boundary — no message is ever re-ingested.
+        """
         started = time.monotonic()
         visible = self._context_store.visible(scope)
+        incremental = visible[prev_end_index:]
         messages = [
             {
                 "role": str(message.get("role") or "user"),
                 "content": str(message.get("content") or ""),
-                "timestamp": 1767225600000 + index * 60000,
+                "timestamp": 1767225600000 + (prev_end_index + index) * 60000,
             }
-            for index, message in enumerate(visible)
+            for index, message in enumerate(incremental)
             if str(message.get("content") or "").strip()
         ]
         added_messages = 0
@@ -514,57 +530,156 @@ class PersonaMemEnv:
         self,
         items: Sequence[PersonaMemItem],
         *,
-        max_build_concurrency: int = 2,
+        max_build_concurrency: int = 37,
         max_qa_concurrency: int = 4,
         add: bool = True,
         score: bool = True,
         show_progress: bool = True,
     ) -> PersonaMemRunResult:
-        """Build unique official scopes, answer questions, and score deterministically."""
+        """Run PersonaMem with incremental ingestion and interleaved QA.
+
+        Conversations are grouped by ``shared_context_id``.  Within each
+        conversation, boundaries are processed in ascending ``end_index``
+        order: the incremental message segment is added first, then all
+        questions at that boundary are answered, then the next boundary
+        is processed.  This guarantees zero leakage — the memory store
+        never contains messages beyond the current boundary.
+
+        ``max_build_concurrency`` controls how many conversations may
+        ingest messages concurrently (was scope-level; now conversation-level).
+        """
         del score  # PersonaMem scoring is deterministic and always accompanies an answer.
         started = time.monotonic()
-        scopes = {item.scope.scope_id: item.scope for item in items}
-        build_summaries: list[PersonaMemBuildSummary] = []
 
-        if self._evaluation_mode == "memory_rag":
-            build_sem = asyncio.Semaphore(max_build_concurrency)
-            build_pbar = tqdm(
-                total=len(scopes), disable=not show_progress, desc="Building PersonaMem scopes", unit="scope"
+        # --- full-context mode: no memory build, just answer ---
+        if self._evaluation_mode != "memory_rag":
+            qa_sem = asyncio.Semaphore(max_qa_concurrency)
+            qa_pbar = tqdm(
+                total=len(items), disable=not show_progress,
+                desc="Evaluating PersonaMem", unit="question",
             )
 
-            async def _build(scope: PersonaMemScope) -> PersonaMemBuildSummary:
-                async with build_sem:
-                    if add:
-                        summary = await self._build_scope(scope)
-                    else:
-                        summary = PersonaMemBuildSummary(scope=scope)
-                    build_pbar.update()
-                    return summary
+            async def _answer(item: PersonaMemItem) -> PersonaMemQAResult:
+                async with qa_sem:
+                    result = await self._answer_item(item, build_error=None)
+                    qa_pbar.update()
+                    return result
 
-            build_summaries = list(await asyncio.gather(*(_build(scope) for scope in scopes.values())))
-            build_pbar.close()
+            results = list(await asyncio.gather(*(_answer(item) for item in items)))
+            qa_pbar.close()
+            total_elapsed = time.monotonic() - started
+            metrics = calculate_personamem_metrics(
+                results, [], total_elapsed_seconds=total_elapsed,
+            )
+            return PersonaMemRunResult(
+                protocol="personamem-v1-official-full-context",
+                context_size=self._context_size,
+                evaluation_mode=self._evaluation_mode,
+                items=list(items),
+                build_summaries=[],
+                qa_results=results,
+                metrics=metrics,
+            )
 
-        build_errors = {summary.scope.scope_id: summary.error for summary in build_summaries}
+        # --- memory-RAG mode: incremental ingestion + interleaved QA ---
+        # Group items by shared_context_id so each conversation is one memory space.
+        groups: dict[str, list[PersonaMemItem]] = defaultdict(list)
+        for item in items:
+            groups[item.scope.shared_context_id].append(item)
+
+        # Sort within each group by end_index so boundaries are processed in order.
+        for ctx_items in groups.values():
+            ctx_items.sort(key=lambda it: it.scope.end_index)
+
+        conv_sem = asyncio.Semaphore(max_build_concurrency)
         qa_sem = asyncio.Semaphore(max_qa_concurrency)
-        qa_pbar = tqdm(total=len(items), disable=not show_progress, desc="Evaluating PersonaMem", unit="question")
 
-        async def _answer(item: PersonaMemItem) -> PersonaMemQAResult:
-            async with qa_sem:
-                result = await self._answer_item(item, build_error=build_errors.get(item.scope.scope_id))
-                qa_pbar.update()
-                return result
+        # Count total boundaries for the build progress bar
+        total_boundaries = sum(
+            len({it.scope.end_index for it in ctx_items})
+            for ctx_items in groups.values()
+        )
+        build_pbar = (
+            tqdm(
+                total=total_boundaries, disable=not show_progress or not add,
+                desc="Building PersonaMem scopes", unit="segment",
+            )
+            if add else None
+        )
+        qa_pbar = tqdm(
+            total=len(items), disable=not show_progress,
+            desc="Evaluating PersonaMem", unit="question",
+        )
 
-        results = list(await asyncio.gather(*(_answer(item) for item in items)))
+        async def _run_conversation(
+            conv_items: list[PersonaMemItem],
+        ) -> tuple[list[PersonaMemBuildSummary], list[PersonaMemQAResult]]:
+            async with conv_sem:
+                summaries: list[PersonaMemBuildSummary] = []
+                results: list[PersonaMemQAResult] = []
+
+                # Group items by end_index boundary within this conversation
+                boundaries: dict[int, list[PersonaMemItem]] = defaultdict(list)
+                for it in conv_items:
+                    boundaries[it.scope.end_index].append(it)
+
+                prev_end = 0
+                build_error: str | None = None
+
+                for end_index in sorted(boundaries):
+                    boundary_items = boundaries[end_index]
+                    scope = boundary_items[0].scope
+
+                    # Step A: ingest incremental segment [prev_end:end_index)
+                    if add and build_error is None:
+                        summary = await self._build_scope(scope, prev_end_index=prev_end)
+                        summaries.append(summary)
+                        if build_pbar is not None:
+                            build_pbar.update()
+                        if summary.error:
+                            build_error = summary.error
+
+                    # Step B: answer all questions at this boundary in parallel
+                    async def _answer_one(it: PersonaMemItem) -> PersonaMemQAResult:
+                        async with qa_sem:
+                            result = await self._answer_item(it, build_error=build_error)
+                            qa_pbar.update()
+                            return result
+
+                    boundary_results = await asyncio.gather(
+                        *(_answer_one(it) for it in boundary_items),
+                    )
+                    results.extend(boundary_results)
+
+                    prev_end = end_index
+
+                return summaries, results
+
+        pairs = await asyncio.gather(
+            *(_run_conversation(ctx_items)
+              for _ctx_id, ctx_items in groups.items()),
+        )
+
+        if build_pbar is not None:
+            build_pbar.close()
         qa_pbar.close()
+
+        all_build_summaries: list[PersonaMemBuildSummary] = []
+        all_results: list[PersonaMemQAResult] = []
+        for summaries, results in pairs:
+            all_build_summaries.extend(summaries)
+            all_results.extend(results)
+
         total_elapsed = time.monotonic() - started
-        protocol = f"personamem-v1-{'memory-rag' if self._evaluation_mode == 'memory_rag' else 'official-full-context'}"
-        metrics = calculate_personamem_metrics(results, build_summaries, total_elapsed_seconds=total_elapsed)
+        metrics = calculate_personamem_metrics(
+            all_results, all_build_summaries, total_elapsed_seconds=total_elapsed,
+        )
         return PersonaMemRunResult(
-            protocol=protocol,
+            protocol="personamem-v1-memory-rag",
             context_size=self._context_size,
             evaluation_mode=self._evaluation_mode,
             items=list(items),
-            build_summaries=build_summaries,
-            qa_results=results,
+            build_summaries=all_build_summaries,
+            qa_results=all_results,
             metrics=metrics,
         )
