@@ -81,6 +81,7 @@ class RunnerConfig:
     max_qa_concurrency: int = 8
     max_search_concurrency: int | None = None
     max_score_concurrency: int | None = None
+    judge_runs: int = 1
     add: bool = True
     score: bool = True
     show_progress: bool = True

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from tqdm.auto import tqdm
 
 from mindmemos_eval.llm import LLMClient
+from mindmemos_eval.memory.tokens import completion_stage_metrics, stage_metrics
 
 PERSONAMEM_OFFICIAL_REPOSITORY = "https://github.com/bowen-upenn/PersonaMem"
 PERSONAMEM_OFFICIAL_PROTOCOL_COMMIT = "caaae44b3f236b8751d499a770e94e5aecffcff1"
@@ -343,6 +344,17 @@ def calculate_personamem_metrics(
     build_elapsed = sum(summary.elapsed_seconds for summary in build_summaries)
     search_elapsed = sum(result.search_elapsed_seconds for result in results)
     answer_elapsed = sum(answer.elapsed_seconds for answer in answers)
+    # Search is excluded here: `SearchResult` never carries per-call token usage,
+    # so this online path can only ever report zero. Search token accounting comes
+    # from the offline ClickHouse trace aggregation instead.
+    token_metrics = stage_metrics(
+        "answer",
+        llm_calls=len(answers),
+        prompt_tokens=sum(answer.prompt_tokens for answer in answers),
+        completion_tokens=sum(answer.completion_tokens for answer in answers),
+        total_tokens=sum(answer.total_tokens for answer in answers),
+    )
+    token_metrics.update(stage_metrics("judge"))
     return {
         "overall_accuracy": correct / total if total else 0.0,
         "correct": correct,
@@ -355,10 +367,7 @@ def calculate_personamem_metrics(
         "scope_violation_count": 0,
         "search_failure_count": search_failure_count,
         "answer_failure_count": answer_failure_count,
-        "answer_llm_calls": len(answers),
-        "answer_prompt_tokens": sum(answer.prompt_tokens for answer in answers),
-        "answer_completion_tokens": sum(answer.completion_tokens for answer in answers),
-        "answer_total_tokens": sum(answer.total_tokens for answer in answers),
+        **token_metrics,
         "build_elapsed_seconds": build_elapsed,
         "search_elapsed_seconds": search_elapsed,
         "answer_elapsed_seconds": answer_elapsed,
@@ -494,6 +503,7 @@ class PersonaMemEnv:
             )
         answer_elapsed = time.monotonic() - answer_started
         is_correct, extracted = extract_personamem_answer(completion.content, item.correct_answer)
+        answer_metrics = completion_stage_metrics("answer", completion)
         return PersonaMemQAResult(
             item=item,
             retrieved_memories=memories,
@@ -503,9 +513,9 @@ class PersonaMemEnv:
                 response=completion.content,
                 extracted_answer=extracted,
                 is_correct=is_correct,
-                prompt_tokens=completion.prompt_tokens,
-                completion_tokens=completion.completion_tokens,
-                total_tokens=completion.total_tokens,
+                prompt_tokens=answer_metrics["answer_prompt_tokens"],
+                completion_tokens=answer_metrics["answer_completion_tokens"],
+                total_tokens=answer_metrics["answer_total_tokens"],
                 elapsed_seconds=answer_elapsed,
             ),
         )
@@ -524,12 +534,16 @@ class PersonaMemEnv:
         del score  # PersonaMem scoring is deterministic and always accompanies an answer.
         started = time.monotonic()
         scopes = {item.scope.scope_id: item.scope for item in items}
+
         build_summaries: list[PersonaMemBuildSummary] = []
 
         if self._evaluation_mode == "memory_rag":
             build_sem = asyncio.Semaphore(max_build_concurrency)
             build_pbar = tqdm(
-                total=len(scopes), disable=not show_progress, desc="Building PersonaMem scopes", unit="scope"
+                total=len(scopes),
+                disable=not show_progress,
+                desc="Building PersonaMem scopes",
+                unit="scope",
             )
 
             async def _build(scope: PersonaMemScope) -> PersonaMemBuildSummary:
@@ -539,20 +553,25 @@ class PersonaMemEnv:
                     else:
                         summary = PersonaMemBuildSummary(scope=scope)
                     build_pbar.update()
-                    return summary
+                return summary
 
             build_summaries = list(await asyncio.gather(*(_build(scope) for scope in scopes.values())))
             build_pbar.close()
 
         build_errors = {summary.scope.scope_id: summary.error for summary in build_summaries}
         qa_sem = asyncio.Semaphore(max_qa_concurrency)
-        qa_pbar = tqdm(total=len(items), disable=not show_progress, desc="Evaluating PersonaMem", unit="question")
+        qa_pbar = tqdm(
+            total=len(items),
+            disable=not show_progress,
+            desc="Evaluating PersonaMem",
+            unit="question",
+        )
 
         async def _answer(item: PersonaMemItem) -> PersonaMemQAResult:
             async with qa_sem:
                 result = await self._answer_item(item, build_error=build_errors.get(item.scope.scope_id))
                 qa_pbar.update()
-                return result
+            return result
 
         results = list(await asyncio.gather(*(_answer(item) for item in items)))
         qa_pbar.close()
