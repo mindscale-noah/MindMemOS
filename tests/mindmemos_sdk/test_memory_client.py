@@ -351,17 +351,11 @@ def test_feedback_omits_none_text():
     assert captured["body"] == {}
 
 
-def test_feedback_sends_explicit_text():
-    captured = {}
+def test_feedback_rejects_explicit_text_without_messages():
+    client = MemoryClient(_transport(lambda request: httpx.Response(500)))
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"code": "ok", "message": "thanks", "data": None})
-
-    client = MemoryClient(_transport(handler))
-    result = client.feedback(feedback="great recall")
-    assert captured["body"] == {"feedback": "great recall"}
-    assert result.message == "thanks"
+    with pytest.raises(ValueError, match="explicit feedback requires messages context"):
+        client.feedback(feedback="great recall")
 
 
 def test_feedback_sends_explicit_context():
@@ -394,14 +388,21 @@ def test_feedback_sends_actor_identity():
         return httpx.Response(200, json={"code": "ok", "data": None})
 
     client = MemoryClient(_transport(handler), default_user_id="u-default", default_app_id="app-default")
-    client.feedback(feedback="great recall", agent_id="agent-1", session_id="session-1")
+    client.feedback(
+        feedback="great recall",
+        messages=[DialogueMessage(role="user", content="That recall was useful.")],
+        agent_id="agent-1",
+        session_id="session-1",
+    )
 
-    assert captured["body"] == {
+    body = captured["body"]
+    assert body == {
         "user_id": "u-default",
         "app_id": "app-default",
         "agent_id": "agent-1",
         "session_id": "session-1",
         "feedback": "great recall",
+        "messages": [{"role": "user", "content": "That recall was useful.", "timestamp": None}],
     }
 
 

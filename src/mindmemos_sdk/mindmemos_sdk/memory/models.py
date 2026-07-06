@@ -297,9 +297,12 @@ def build_feedback_body(
 ) -> dict[str, Any]:
     """Build a memory feedback request body.
 
-    Explicit feedback text is expected to include messages context; leaving
+    Explicit feedback text requires messages context; leaving
     ``feedback`` empty requests implicit feedback processing.
     """
+    if feedback is not None and messages is None:
+        raise ValueError("explicit feedback requires messages context")
+
     body: dict[str, Any] = {}
     if user_id:
         body["user_id"] = user_id

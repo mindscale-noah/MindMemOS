@@ -344,7 +344,9 @@ uv run mindmemos memory search "咖啡偏好" --top-k 5
 uv run mindmemos memory get --top-k 10
 uv run mindmemos memory update <memory_id> --content "我现在更喜欢拿铁"
 uv run mindmemos memory delete <memory_id>
-uv run mindmemos memory feedback --text "刚才召回的偏好不准确"
+uv run mindmemos memory feedback --text "刚才召回的偏好不准确" \
+  --messages-json '[{"role":"user","content":"刚才召回的偏好不准确"}]'
+uv run mindmemos memory feedback  # 基于最近添加记录的隐式反馈
 uv run mindmemos memory dreaming
 ```
 
