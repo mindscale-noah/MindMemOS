@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from ..typing import (
     AddMode,
     DialogueMessage,
+    FeedbackRecalledMemory,
     FileMessage,
     MemoryAddEventItem,
     MemorySearchItem,
@@ -236,7 +237,7 @@ class FeedbackRequest(ActorIdentityRequest):
     messages: list[DialogueMessage | UrlMessage | FileMessage | TextMessage] = Field(default_factory=list)
     """Full dialogue context for explicit feedback. May be empty for implicit feedback."""
 
-    recalled_memories: list[MemorySearchItem] = Field(default_factory=list)
+    recalled_memories: list[FeedbackRecalledMemory] = Field(default_factory=list)
     """Memories retrieved during explicit feedback. May be empty; the planner decides whether to search."""
 
     mode: Literal["sync", "async"] = "sync"
