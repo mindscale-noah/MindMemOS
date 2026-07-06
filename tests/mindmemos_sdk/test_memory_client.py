@@ -6,7 +6,7 @@ import json
 
 import httpx
 import pytest
-from mindmemos_sdk.errors import ApiError, AuthRequiredError, MindMemOSSDKError, TransportError
+from mindmemos_sdk.errors import ApiError, AuthRequiredError, InvalidRequestError, MindMemOSSDKError, TransportError
 from mindmemos_sdk.memory import (
     DialogueMessage,
     FileMessage,
@@ -354,14 +354,14 @@ def test_feedback_omits_none_text():
 def test_feedback_rejects_explicit_text_without_messages():
     client = MemoryClient(_transport(lambda request: httpx.Response(500)))
 
-    with pytest.raises(MindMemOSSDKError, match="explicit feedback requires non-empty messages context"):
+    with pytest.raises(InvalidRequestError, match="explicit feedback requires non-empty messages context"):
         client.feedback(feedback="great recall")
 
 
 def test_feedback_rejects_explicit_text_with_empty_messages():
     client = MemoryClient(_transport(lambda request: httpx.Response(500)))
 
-    with pytest.raises(MindMemOSSDKError, match="explicit feedback requires non-empty messages context"):
+    with pytest.raises(InvalidRequestError, match="explicit feedback requires non-empty messages context"):
         client.feedback(feedback="great recall", messages=[])
 
 
@@ -471,7 +471,7 @@ def test_add_requires_user_id():
 
 def test_add_rejects_empty_messages():
     client = MemoryClient(_transport(lambda r: httpx.Response(200, json={"code": "ok"})), default_user_id="u")
-    with pytest.raises(MindMemOSSDKError):
+    with pytest.raises(InvalidRequestError):
         client.add(messages=[])
 
 

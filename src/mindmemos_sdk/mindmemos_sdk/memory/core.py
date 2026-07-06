@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from ..errors import MindMemOSSDKError
+from ..errors import InvalidRequestError, MindMemOSSDKError
 from ..transport import Envelope
 from .models import (
     AddMode,
@@ -74,7 +74,7 @@ class MemoryCore:
         task_id: str | None = None,
     ) -> MemoryRequest[AddResult]:
         if not messages:
-            raise MindMemOSSDKError("`messages` must be a non-empty list.")
+            raise InvalidRequestError("`messages` must be a non-empty list.")
         return MemoryRequest(
             path="/v1/memory/add",
             body=build_add_body(
@@ -162,7 +162,7 @@ class MemoryCore:
         session_id: str | None = None,
     ) -> MemoryRequest[StatusResult]:
         if feedback is not None and not messages:
-            raise MindMemOSSDKError("explicit feedback requires non-empty messages context.")
+            raise InvalidRequestError("explicit feedback requires non-empty messages context.")
 
         return MemoryRequest(
             path="/v1/memory/feedback",
