@@ -295,7 +295,11 @@ def build_feedback_body(
     agent_id: str | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build a memory feedback request body."""
+    """Build a memory feedback request body.
+
+    Explicit feedback text is expected to include messages context; leaving
+    ``feedback`` empty requests implicit feedback processing.
+    """
     body: dict[str, Any] = {}
     if user_id:
         body["user_id"] = user_id

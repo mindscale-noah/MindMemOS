@@ -133,11 +133,23 @@ mindmemos memory delete mem_123 --yes
 
 | Option | Meaning |
 |---|---|
-| `--text TEXT` | explicit feedback text; omit to let the server analyze recent adds |
+| `--text TEXT` | explicit feedback text; requires message context |
+| `--messages-json '[...]'` | JSON array of messages from the feedback round |
+| `--messages-json-file PATH` | read feedback messages from a file (`-` = stdin) |
+| `--recalled-memories-json '[...]'` | optional JSON array of memories recalled in that round |
+| `--recalled-memories-json-file PATH` | read recalled memories from a file (`-` = stdin) |
 | `--user-id`, `--app-id`, `--agent-id`, `--session-id` | scoping |
 
 ```bash
-mindmemos memory feedback --text "the lunch recommendation was wrong; user dislikes spicy food"
+mindmemos memory feedback \
+  --text "the lunch recommendation was wrong; user dislikes spicy food" \
+  --messages-json '[{"role":"user","content":"I do not like spicy food."}]'
+
+mindmemos memory feedback \
+  --text "the coffee preference was wrong" \
+  --messages-json-file turn.json \
+  --recalled-memories-json '[{"id":"mem_123","memory":"User prefers hot coffee."}]'
+
 mindmemos memory feedback   # omit --text: server analyzes recent adds
 ```
 
@@ -174,7 +186,7 @@ operation by intent:
 | "What do I already know about X?" — pull context before answering | **`search`** | Relevance-ranked. `fast` for latency-sensitive recall; `agentic` when the answer requires reasoning across several memories; add `--rerank` when precision matters more than speed. |
 | "Show me everything in this project / a slice of it" | **`get`** | Filter/enumerate without a query; for inspection, audits, dashboards. |
 | "That stored memory is wrong / stale" | **`update`** (fix one) or **`delete`** (remove one) | Targeted by `memory_id`, which you get from `search`/`get`. |
-| "Tell the system how it did" — the recalled/produced memory was right or wrong | **`feedback`** | Signals to reinforce or correct memory quality; with no `--text`, the server analyzes recent adds itself. Use after an interaction whose outcome reveals memory quality. |
+| "Tell the system how it did" — the recalled/produced memory was right or wrong | **`feedback`** | Explicit `--text` feedback must include `--messages-json` or `--messages-json-file`; with no `--text`, the server analyzes recent adds itself. Use after an interaction whose outcome reveals memory quality. |
 | "Consolidate in the background" — compress, link, reorganize accumulated memory | **`dreaming`** | An offline maintenance pass with no inputs. Run periodically (e.g. scheduled), not per-turn. |
 
 Rules of thumb:

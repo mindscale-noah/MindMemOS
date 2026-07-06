@@ -11,6 +11,7 @@ from mindmemos_sdk.memory import (
     DialogueMessage,
     FileMessage,
     MemoryClient,
+    MemorySearchHit,
     TextMessage,
     UrlMessage,
 )
@@ -361,6 +362,28 @@ def test_feedback_sends_explicit_text():
     result = client.feedback(feedback="great recall")
     assert captured["body"] == {"feedback": "great recall"}
     assert result.message == "thanks"
+
+
+def test_feedback_sends_explicit_context():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"code": "ok", "data": None})
+
+    client = MemoryClient(_transport(handler))
+    client.feedback(
+        feedback="that coffee preference was wrong",
+        messages=[DialogueMessage(role="user", content="I prefer iced coffee.")],
+        recalled_memories=[MemorySearchHit(id="m1", memory="User prefers hot coffee.")],
+    )
+
+    body = captured["body"]
+    assert body["feedback"] == "that coffee preference was wrong"
+    assert body["messages"][0]["role"] == "user"
+    assert body["messages"][0]["content"] == "I prefer iced coffee."
+    assert body["recalled_memories"][0]["id"] == "m1"
+    assert body["recalled_memories"][0]["memory"] == "User prefers hot coffee."
 
 
 def test_feedback_sends_actor_identity():

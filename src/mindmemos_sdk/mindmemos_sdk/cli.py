@@ -207,6 +207,22 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
         dest="feedback",
         help="Explicit feedback text. If omitted, the server analyzes recent adds.",
     )
+    feedback.add_argument(
+        "--messages-json",
+        help="JSON array of messages that produced the explicit feedback.",
+    )
+    feedback.add_argument(
+        "--messages-json-file",
+        help="Path to a JSON file containing explicit feedback messages (`-` = stdin).",
+    )
+    feedback.add_argument(
+        "--recalled-memories-json",
+        help="JSON array of memories recalled in the feedback round.",
+    )
+    feedback.add_argument(
+        "--recalled-memories-json-file",
+        help="Path to a JSON file containing recalled memories (`-` = stdin).",
+    )
     feedback.add_argument("--user-id", help="Override configured user id.")
     feedback.add_argument("--app-id", help="Request app id.")
     feedback.add_argument("--agent-id", help="Request agent id.")
@@ -605,34 +621,13 @@ def _handle_memory_add(args: argparse.Namespace) -> int:
 
 def _parse_add_messages(args: argparse.Namespace) -> list[DialogueMessage | dict[str, Any]] | None:
     """Parse memory add input as a single text message or JSON message list."""
-    if args.messages_json and args.messages_json_file:
-        print("mindmemos memory add: use only one of --messages-json or --messages-json-file.")
-        return None
-
-    if args.messages_json or args.messages_json_file:
-        if args.messages_json_file:
-            if args.messages_json_file == "-":
-                raw = sys.stdin.read()
-            else:
-                try:
-                    raw = Path(args.messages_json_file).read_text(encoding="utf-8")
-                except OSError as exc:
-                    print(f"mindmemos memory add: failed to read --messages-json-file: {exc}")
-                    return None
-        else:
-            raw = args.messages_json
-
-        try:
-            messages = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            source = "--messages-json-file" if args.messages_json_file else "--messages-json"
-            print(f"mindmemos memory add: invalid {source}: {exc}")
-            return None
-        if not isinstance(messages, list) or not messages:
-            print("mindmemos memory add: messages JSON must be a non-empty JSON array.")
-            return None
-        if not all(isinstance(message, dict) for message in messages):
-            print("mindmemos memory add: every messages JSON item must be a JSON object.")
+    if args.messages_json is not None or args.messages_json_file is not None:
+        messages = _parse_message_json_options(
+            command="memory add",
+            messages_json=args.messages_json,
+            messages_json_file=args.messages_json_file,
+        )
+        if messages is _JSON_PARSE_ERROR:
             return None
         return messages
 
@@ -640,6 +635,69 @@ def _parse_add_messages(args: argparse.Namespace) -> list[DialogueMessage | dict
         print("mindmemos memory add: either --content or --messages-json is required.")
         return None
     return [DialogueMessage(role=args.role, content=args.content, timestamp=_now_millis())]
+
+
+def _parse_message_json_options(
+    *,
+    command: str,
+    messages_json: str | None,
+    messages_json_file: str | None,
+) -> list[dict[str, Any]] | object:
+    value = _parse_json_array_from_options(
+        command=command,
+        inline_json=messages_json,
+        file_path=messages_json_file,
+        inline_option="--messages-json",
+        file_option="--messages-json-file",
+    )
+    if value is _JSON_PARSE_ERROR:
+        return _JSON_PARSE_ERROR
+    if not value:
+        print(f"mindmemos {command}: messages JSON must be a non-empty JSON array.")
+        return _JSON_PARSE_ERROR
+    if not all(isinstance(message, dict) for message in value):
+        print(f"mindmemos {command}: every messages JSON item must be a JSON object.")
+        return _JSON_PARSE_ERROR
+    return value
+
+
+def _parse_json_array_from_options(
+    *,
+    command: str,
+    inline_json: str | None,
+    file_path: str | None,
+    inline_option: str,
+    file_option: str,
+) -> list[Any] | object:
+    if inline_json is not None and file_path is not None:
+        print(f"mindmemos {command}: use only one of {inline_option} or {file_option}.")
+        return _JSON_PARSE_ERROR
+    if inline_json is None and file_path is None:
+        return _JSON_PARSE_ERROR
+
+    if file_path is not None:
+        if file_path == "-":
+            raw = sys.stdin.read()
+        else:
+            try:
+                raw = Path(file_path).read_text(encoding="utf-8")
+            except OSError as exc:
+                print(f"mindmemos {command}: failed to read {file_option}: {exc}")
+                return _JSON_PARSE_ERROR
+        source = file_option
+    else:
+        raw = inline_json or ""
+        source = inline_option
+
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"mindmemos {command}: invalid {source}: {exc}")
+        return _JSON_PARSE_ERROR
+    if not isinstance(value, list):
+        print(f"mindmemos {command}: {source} must be a JSON array.")
+        return _JSON_PARSE_ERROR
+    return value
 
 
 def _parse_json_object(raw: str | None, *, command: str, option: str) -> dict[str, Any] | None | object:
@@ -727,6 +785,45 @@ def _handle_memory_delete(args: argparse.Namespace) -> int:
 
 
 def _handle_memory_feedback(args: argparse.Namespace) -> int:
+    messages: list[dict[str, Any]] | None = None
+    recalled_memories: list[dict[str, Any]] | None = None
+    has_messages_input = args.messages_json is not None or args.messages_json_file is not None
+    has_recalled_input = args.recalled_memories_json is not None or args.recalled_memories_json_file is not None
+
+    if args.feedback:
+        if not has_messages_input:
+            print(
+                "mindmemos memory feedback: --text requires --messages-json or --messages-json-file; "
+                "omit --text to run implicit feedback."
+            )
+            return 2
+        parsed_messages = _parse_message_json_options(
+            command="memory feedback",
+            messages_json=args.messages_json,
+            messages_json_file=args.messages_json_file,
+        )
+        if parsed_messages is _JSON_PARSE_ERROR:
+            return 2
+        messages = parsed_messages
+
+        if has_recalled_input:
+            parsed_recalled = _parse_json_array_from_options(
+                command="memory feedback",
+                inline_json=args.recalled_memories_json,
+                file_path=args.recalled_memories_json_file,
+                inline_option="--recalled-memories-json",
+                file_option="--recalled-memories-json-file",
+            )
+            if parsed_recalled is _JSON_PARSE_ERROR:
+                return 2
+            if not all(isinstance(memory, dict) for memory in parsed_recalled):
+                print("mindmemos memory feedback: every recalled memories JSON item must be a JSON object.")
+                return 2
+            recalled_memories = parsed_recalled
+    elif has_messages_input or has_recalled_input:
+        print("mindmemos memory feedback: context options require --text; omit them to run implicit feedback.")
+        return 2
+
     client = _build_client()
     if client is None:
         return 1
@@ -739,6 +836,8 @@ def _handle_memory_feedback(args: argparse.Namespace) -> int:
                     app_id=args.app_id,
                     agent_id=args.agent_id,
                     session_id=args.session_id,
+                    messages=messages,
+                    recalled_memories=recalled_memories,
                 )
             )
     except MindMemOSSDKError as exc:
