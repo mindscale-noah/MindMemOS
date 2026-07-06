@@ -91,8 +91,8 @@ class MemoryLineage(BaseModel):
     """Current memory IDs that descend from this archived memory."""
 
 
-class FeedbackRecalledMemory(BaseModel):
-    """Memory recalled during an explicit feedback round."""
+class MemorySearchItem(BaseModel):
+    """Memory item returned by search and read APIs."""
 
     id: str
     """Memory ID."""
@@ -103,8 +103,8 @@ class FeedbackRecalledMemory(BaseModel):
     memory_type: MemoryType | str = "fact"
     """Standard displayed memory type."""
 
-    last_update_at: str | None = None
-    """Latest create/update time formatted as %Y-%m-%d %H:%M:%S, when known."""
+    last_update_at: str
+    """Latest create/update time formatted as %Y-%m-%d %H:%M:%S."""
 
     event_time: str | None = None
     """Business event time formatted as %Y-%m-%d %H:%M:%S; distinct from DB update time."""
@@ -114,13 +114,6 @@ class FeedbackRecalledMemory(BaseModel):
 
     lineage: MemoryLineage | None = None
     """Version lineage metadata populated by vanilla search."""
-
-
-class MemorySearchItem(FeedbackRecalledMemory):
-    """Memory item returned by search and read APIs."""
-
-    last_update_at: str
-    """Latest create/update time formatted as %Y-%m-%d %H:%M:%S."""
 
 
 class AddPipelineInput(BaseModel):
@@ -286,7 +279,7 @@ class FeedbackPipelineInput(BaseModel):
     messages: list[DialogueMessage | UrlMessage | FileMessage | TextMessage] = Field(default_factory=list)
     """Full conversation context for explicit feedback, supplied by the caller."""
 
-    recalled_memories: list[FeedbackRecalledMemory] = Field(default_factory=list)
+    recalled_memories: list[MemorySearchItem] = Field(default_factory=list)
     """Memories actually recalled in the explicit feedback round, supplied by the caller."""
 
     mode: Literal["sync", "async"] = "sync"

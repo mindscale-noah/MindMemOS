@@ -10,7 +10,6 @@ from ...components.feedback import DefaultExplicitFeedbackPlanner, ExplicitFeedb
 from ...typing import (
     FeedbackPipelineInput,
     FeedbackPipelineResult,
-    FeedbackRecalledMemory,
     MemoryRequestContext,
     MemorySearchItem,
     SearchPipelineInput,
@@ -62,10 +61,8 @@ class ExplicitFeedbackHandler:
         return self._search
 
 
-def _merge_memories(
-    existing: list[FeedbackRecalledMemory], supplemental: list[MemorySearchItem]
-) -> list[FeedbackRecalledMemory]:
+def _merge_memories(existing: list[MemorySearchItem], supplemental: list[MemorySearchItem]) -> list[MemorySearchItem]:
     by_id = {memory.id: memory for memory in existing}
     for memory in supplemental:
-        by_id.setdefault(memory.id, FeedbackRecalledMemory.model_validate(memory.model_dump(mode="json")))
+        by_id.setdefault(memory.id, memory)
     return list(by_id.values())

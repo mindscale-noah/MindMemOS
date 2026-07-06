@@ -383,8 +383,42 @@ def test_feedback_sends_explicit_context():
     assert body["feedback"] == "that coffee preference was wrong"
     assert body["messages"][0]["role"] == "user"
     assert body["messages"][0]["content"] == "I prefer iced coffee."
-    assert body["recalled_memories"][0]["id"] == "m1"
-    assert body["recalled_memories"][0]["memory"] == "User prefers hot coffee."
+    assert body["recalled_memories"][0] == {
+        "id": "m1",
+        "memory": "User prefers hot coffee.",
+        "memory_type": "fact",
+        "last_update_at": "",
+        "event_time": None,
+        "source_timestamp": None,
+        "lineage": None,
+    }
+
+
+def test_feedback_normalizes_raw_recalled_memory_context():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"code": "ok", "data": None})
+
+    client = MemoryClient(_transport(handler))
+    client.feedback(
+        feedback="that coffee preference was wrong",
+        messages=[{"role": "user", "content": "I prefer iced coffee."}],
+        recalled_memories=[{"id": "m1", "memory": "User prefers hot coffee."}],
+    )
+
+    assert captured["body"]["recalled_memories"] == [
+        {
+            "id": "m1",
+            "memory": "User prefers hot coffee.",
+            "memory_type": "fact",
+            "last_update_at": "",
+            "event_time": None,
+            "source_timestamp": None,
+            "lineage": None,
+        }
+    ]
 
 
 def test_feedback_sends_actor_identity():

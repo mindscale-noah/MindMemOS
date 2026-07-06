@@ -167,6 +167,29 @@ def serialize_messages(messages: list[Message | dict[str, Any]]) -> list[dict[st
     return result
 
 
+def serialize_feedback_recalled_memories(
+    memories: list[MemorySearchHit | dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Serialize feedback recalled memories to the backend search-item shape.
+
+    The feedback planner only needs ``id`` and ``memory``, but the HTTP API
+    reuses the search-item DTO. Fill optional context fields so SDK/CLI callers
+    can pass the smaller feedback shape documented for explicit feedback.
+    """
+    result: list[dict[str, Any]] = []
+    for memory in memories:
+        item = memory.model_dump(mode="json") if isinstance(memory, BaseModel) else dict(memory)
+        if item.get("memory_type") is None:
+            item["memory_type"] = "fact"
+        if item.get("last_update_at") is None:
+            item["last_update_at"] = ""
+        item.setdefault("event_time", None)
+        item.setdefault("source_timestamp", None)
+        item.setdefault("lineage", None)
+        result.append(item)
+    return result
+
+
 def build_add_body(
     *,
     user_id: str,
@@ -316,7 +339,5 @@ def build_feedback_body(
     if messages is not None:
         body["messages"] = serialize_messages(messages)
     if recalled_memories is not None:
-        body["recalled_memories"] = [
-            item.model_dump() if isinstance(item, BaseModel) else item for item in recalled_memories
-        ]
+        body["recalled_memories"] = serialize_feedback_recalled_memories(recalled_memories)
     return body
