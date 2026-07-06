@@ -96,6 +96,9 @@ mindmemos memory add --content "prefers dark mode" --async
 
 ### `memory search` — recall by relevance
 
+Use before answering or acting when the agent needs prior user preferences,
+project facts, decisions, or past experience related to the current request.
+
 | Option | Meaning |
 |---|---|
 | `query` (positional) | search text |
@@ -115,6 +118,9 @@ mindmemos memory search "notes" --filter '{"memory_type":"semantic"}'
 
 ### `memory get` — list / filter (no query)
 
+Use for inspection, audits, dashboards, or manual curation when you need to
+enumerate stored memories rather than search by semantic relevance.
+
 Returns memories in the current project, optionally filtered. Carries **no**
 actor identity — project scope comes from the API key.
 
@@ -124,12 +130,29 @@ mindmemos memory get --filter '{"app_id":"openclaw"}' --top-k 20
 
 ### `memory update` / `memory delete` — correct by id
 
+Use `memory update` when a specific memory id is known and the stored content
+should be rewritten because it is stale, incomplete, or partially wrong.
+
+Use `memory delete` when a specific memory id is known and the memory should be
+removed because it is invalid, duplicated, sensitive, or no longer appropriate.
+
 ```bash
 mindmemos memory update mem_123 --content "allergic to peanuts and shellfish"
 mindmemos memory delete mem_123 --yes
 ```
 
 ### `memory feedback` — reinforce / correct memory quality
+
+Use feedback after an outcome reveals whether recalled memory was helpful,
+missing, stale, or wrong; choose explicit or implicit mode based on whether the
+caller can provide the interaction context.
+
+Feedback has two modes:
+
+| Mode | When to use | Required context |
+|---|---|---|
+| Explicit feedback (`--text`) | Use when the user or host has a concrete correction or quality signal about a specific interaction, such as "that recalled preference was wrong." | Must include `--messages-json` or `--messages-json-file`; include recalled memories when available. |
+| Implicit feedback (no `--text`) | Use when the service should mine recent add records and interaction traces for feedback signals without a caller-written correction. | No messages are passed on the CLI; the server derives context from recent records. |
 
 | Option | Meaning |
 |---|---|
@@ -154,6 +177,9 @@ mindmemos memory feedback   # omit --text: server analyzes recent adds
 ```
 
 ### `memory dreaming` — consolidation pass
+
+Use as a scheduled or background maintenance step to consolidate, merge,
+compress, or reorganize accumulated memories outside the hot request path.
 
 | Option | Meaning |
 |---|---|
@@ -185,8 +211,10 @@ operation by intent:
 | "Remember this" — a new fact, preference, or conversation turn surfaced | **`add`** | Server extracts durable facts and dedups/merges against existing memory. Prefer passing real conversation messages over hand-written summaries. |
 | "What do I already know about X?" — pull context before answering | **`search`** | Relevance-ranked. `fast` for latency-sensitive recall; `agentic` when the answer requires reasoning across several memories; add `--rerank` when precision matters more than speed. |
 | "Show me everything in this project / a slice of it" | **`get`** | Filter/enumerate without a query; for inspection, audits, dashboards. |
-| "That stored memory is wrong / stale" | **`update`** (fix one) or **`delete`** (remove one) | Targeted by `memory_id`, which you get from `search`/`get`. |
-| "Tell the system how it did" — the recalled/produced memory was right or wrong | **`feedback`** | Explicit `--text` feedback must include `--messages-json` or `--messages-json-file`; with no `--text`, the server analyzes recent adds itself. Use after an interaction whose outcome reveals memory quality. |
+| "This stored memory is stale or partly wrong" | **`update`** | Rewrite one known `memory_id` while keeping the memory as the corrected canonical record. |
+| "This stored memory should not exist" | **`delete`** | Remove one known `memory_id` when the memory is invalid, duplicated, sensitive, or inappropriate to keep. |
+| "The last recall was wrong/helpful/missing something" — the caller can provide the interaction context | **explicit `feedback --text`** | Pass `--messages-json` or `--messages-json-file`; pass recalled memories too when available so the planner can target the right memory. |
+| "Review recent memory operations for quality signals" — no explicit correction text is available | **implicit `feedback`** | Omit `--text`; the server analyzes recent add records and traces itself. |
 | "Consolidate in the background" — compress, link, reorganize accumulated memory | **`dreaming`** | An offline maintenance pass with no inputs. Run periodically (e.g. scheduled), not per-turn. |
 
 Rules of thumb:
