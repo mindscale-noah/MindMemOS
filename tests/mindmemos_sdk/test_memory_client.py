@@ -354,8 +354,15 @@ def test_feedback_omits_none_text():
 def test_feedback_rejects_explicit_text_without_messages():
     client = MemoryClient(_transport(lambda request: httpx.Response(500)))
 
-    with pytest.raises(ValueError, match="explicit feedback requires messages context"):
+    with pytest.raises(MindMemOSSDKError, match="explicit feedback requires non-empty messages context"):
         client.feedback(feedback="great recall")
+
+
+def test_feedback_rejects_explicit_text_with_empty_messages():
+    client = MemoryClient(_transport(lambda request: httpx.Response(500)))
+
+    with pytest.raises(MindMemOSSDKError, match="explicit feedback requires non-empty messages context"):
+        client.feedback(feedback="great recall", messages=[])
 
 
 def test_feedback_sends_explicit_context():

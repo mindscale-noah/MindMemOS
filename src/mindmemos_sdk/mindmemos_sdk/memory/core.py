@@ -161,6 +161,9 @@ class MemoryCore:
         agent_id: str | None = None,
         session_id: str | None = None,
     ) -> MemoryRequest[StatusResult]:
+        if feedback is not None and not messages:
+            raise MindMemOSSDKError("explicit feedback requires non-empty messages context.")
+
         return MemoryRequest(
             path="/v1/memory/feedback",
             body=build_feedback_body(
