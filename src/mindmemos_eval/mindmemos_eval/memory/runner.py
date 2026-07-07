@@ -370,6 +370,7 @@ async def run_benchmark_matrix(
     if reuse_path:
         existing = _load_existing_identity(reuse_path, benchmark=benchmark_names[0])
         identities = [existing]
+        setattr(args, "_reused_key_file", reuse_path)
         logger.info(
             "reusing existing api key",
             project_id=existing.project_id,
@@ -423,7 +424,7 @@ async def run_benchmark_matrix(
             key_id=identity.key_id,
             project_id=identity.project_id,
             memory_algorithm=identity.memory_algorithm,
-            api_key_file=str(args.api_key_output),
+            api_key_file=str(getattr(args, "_reused_key_file", args.api_key_output)),
             request_ids=ctx.request_ids,
             request_metadata=ctx.request_metadata,
             eval_result=eval_result,

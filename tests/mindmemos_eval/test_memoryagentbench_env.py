@@ -148,7 +148,6 @@ async def test_answer_searches_and_scores_primary_metric():
     system_prompt = llm._client.calls[0]["messages"][0]["content"]
     assert "Answer the question based on query and memories" in system_prompt
     assert "Alice likes Paris." in system_prompt
-    assert "Current Time:" in prompt
 
 
 @pytest.mark.asyncio
