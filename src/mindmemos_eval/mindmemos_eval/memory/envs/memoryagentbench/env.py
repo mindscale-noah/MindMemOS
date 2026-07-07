@@ -562,11 +562,6 @@ class MemoryAgentBenchEnv:
 
     @staticmethod
     def _format_hit(hit: MemorySearchHit) -> str:
-        if hit.event_time or hit.source_timestamp:
-            return (
-                f"[event_time: {hit.event_time or 'unknown time'}; "
-                f"source_timestamp: {hit.source_timestamp or 'unknown time'}] {hit.memory}"
-            )
         return hit.memory
 
     def build_answer_messages(self, query: str, memories: list[str]) -> list[dict[str, Any]]:
@@ -575,7 +570,7 @@ class MemoryAgentBenchEnv:
         system_prompt = f"You are a helpful AI. Answer the question based on query and memories.\n{memories_str}\n"
         return [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query + "\n\nCurrent Time: " + time.strftime("%Y-%m-%d %H:%M:%S")},
+            {"role": "user", "content": query},
         ]
 
     async def answer(self, user_id: str, question: MemoryAgentBenchQuestion) -> MemoryAgentBenchAnswer:

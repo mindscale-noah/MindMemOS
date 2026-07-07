@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from mindmemos_sdk.memory import AsyncMemoryClient
@@ -12,6 +14,7 @@ from mindmemos_sdk.transport import AsyncHttpTransport
 
 from mindmemos_eval.memory.envs.locomo import LocomoAdapter
 from mindmemos_eval.memory.envs.longmemeval.adapter import LongMemEvalAdapter
+from mindmemos_eval.memory.envs.memoryagentbench.adapter import MemoryAgentBenchAdapter
 from mindmemos_eval.memory.envs.personamem import PersonaMemAdapter
 
 from ..llm import LLMClient, LLMConfig
@@ -19,6 +22,30 @@ from .base import BenchmarkAdapter, BenchmarkSpec, RunContext, RunnerConfig
 from .config import _merged_runner_config, _option, load_benchmark_specs, validate_memory_algorithm
 from .identity import RunIdentity, new_identity, write_api_keys
 from .manifest import BenchmarkRunManifest, write_manifests
+
+logger = logging.getLogger("mindmemos_eval.memory.runner")
+
+
+def _load_existing_identity(path: str, *, benchmark: str) -> RunIdentity:
+    """Load the first enabled api_key entry from an existing api_keys YAML."""
+    import yaml
+
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    entries = raw.get("api_keys") or []
+    for entry in entries:
+        if not entry.get("enabled", True):
+            continue
+        return RunIdentity(
+            benchmark=benchmark,
+            run_id="",
+            key_id=str(entry.get("key_id", "")),
+            api_key=str(entry.get("api_key", "")),
+            project_id=str(entry.get("project_id", "")),
+            memory_algorithm=str(entry.get("memory_algorithm", "")),
+            profile=None,
+            project_override_config=entry.get("project_override_config"),
+        )
+    raise ValueError(f"No enabled api_key found in {path}")
 
 
 def add_memory_args(parser: argparse.ArgumentParser) -> None:
@@ -151,6 +178,15 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--reuse-api-key",
+        metavar="PATH",
+        default=None,
+        help="Path to an existing api_keys YAML file. When set, skips generating fresh identities and reuses the "
+        "first api_key entry from this file instead. Use with --no-add to rerun evaluation against previously "
+        "added memories without overwriting the server's api_keys.yaml.",
+    )
+
+    parser.add_argument(
         "--llm-model",
         metavar="MODEL",
         help="Default LLM model name used when answer or judge specific models are not set.",
@@ -271,6 +307,7 @@ def default_adapters() -> dict[str, BenchmarkAdapter]:
     return {
         "locomo": LocomoAdapter(),
         "longmemeval": LongMemEvalAdapter(),
+        "memoryagentbench": MemoryAgentBenchAdapter(),
         "personamem": PersonaMemAdapter(),
         "persona": NotImplementedAdapter("persona"),
     }
@@ -329,16 +366,26 @@ async def run_benchmark_matrix(
     if missing_adapters:
         raise ValueError(f"benchmark adapter(s) not registered: {', '.join(missing_adapters)}")
 
-    identities = [
-        new_identity(
-            name,
-            specs[name].memory_algorithm,
-            profile=specs[name].profile,
-            project_override_config=specs[name].project_override_config,
+    reuse_path = _option(args, "reuse_api_key")
+    if reuse_path:
+        existing = _load_existing_identity(reuse_path, benchmark=benchmark_names[0])
+        identities = [existing]
+        logger.info(
+            "reusing existing api key",
+            project_id=existing.project_id,
+            api_key=existing.api_key[:40],
         )
-        for name in benchmark_names
-    ]
-    write_api_keys(args.api_key_output, identities)
+    else:
+        identities = [
+            new_identity(
+                name,
+                specs[name].memory_algorithm,
+                profile=specs[name].profile,
+                project_override_config=specs[name].project_override_config,
+            )
+            for name in benchmark_names
+        ]
+        write_api_keys(args.api_key_output, identities)
 
     manifests: list[BenchmarkRunManifest] = []
     for identity in identities:
