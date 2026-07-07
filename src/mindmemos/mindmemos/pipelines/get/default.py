@@ -7,7 +7,11 @@ from ...typing import (
     FieldCondition,
     GetPipelineInput,
     GetPipelineResult,
+    MemoryListPipelineInput,
+    MemoryListPipelineResult,
     MemoryRequestContext,
+    MemoryScrollPipelineInput,
+    MemoryScrollPipelineResult,
     MemorySearchItem,
     MemoryView,
     SearchFilter,
@@ -40,6 +44,46 @@ class DefaultGetPipeline(MemoryDbPipelineMixin):
         return GetPipelineResult(
             status="ok",
             memories=[_to_memory_search_item(memory) for memory in memories],
+            message=None,
+        )
+
+    async def list(self, inp: MemoryListPipelineInput, context: MemoryRequestContext) -> MemoryListPipelineResult:
+        """List active memories with management-style page/page_size metadata."""
+
+        filters = _active_filter(inp)
+        offset = (inp.page - 1) * inp.page_size
+        read_limit = offset + inp.page_size + 1
+        memories, _ = await self.db_reader.list_memories(
+            context,
+            filters=filters,
+            limit=read_limit,
+        )
+        page_memories = memories[offset : offset + inp.page_size]
+        total = await self.db_reader.count_memories(context, filters=filters) if inp.include_total else None
+        has_more = (inp.page * inp.page_size < total) if total is not None else len(memories) > offset + inp.page_size
+        return MemoryListPipelineResult(
+            status="ok",
+            memories=[_to_memory_search_item(memory) for memory in page_memories],
+            page=inp.page,
+            page_size=inp.page_size,
+            total=total,
+            has_more=has_more,
+            message=None,
+        )
+
+    async def scroll(self, inp: MemoryScrollPipelineInput, context: MemoryRequestContext) -> MemoryScrollPipelineResult:
+        """Scroll active memories using an opaque storage cursor."""
+
+        memories, next_cursor = await self.db_reader.list_memories(
+            context,
+            filters=_active_filter(inp),
+            limit=inp.limit,
+            cursor=inp.cursor,
+        )
+        return MemoryScrollPipelineResult(
+            status="ok",
+            memories=[_to_memory_search_item(memory) for memory in memories],
+            next_cursor=str(next_cursor) if next_cursor is not None else None,
             message=None,
         )
 

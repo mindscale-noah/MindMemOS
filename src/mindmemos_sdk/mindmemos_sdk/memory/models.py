@@ -138,6 +138,29 @@ class GetResult(BaseModel):
     memories: list[MemorySearchHit] = Field(default_factory=list)
 
 
+class MemoryPageResult(BaseModel):
+    """Typed result of ``MemoryClient.list``."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    request_id: str | None = None
+    memories: list[MemorySearchHit] = Field(default_factory=list)
+    page: int = 1
+    page_size: int = 20
+    total: int | None = None
+    has_more: bool = False
+
+
+class MemoryScrollResult(BaseModel):
+    """Typed result of ``MemoryClient.scroll``."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    request_id: str | None = None
+    memories: list[MemorySearchHit] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
 class StatusResult(BaseModel):
     """Typed result of the status-only memory ops (update / delete / feedback /
     dreaming).
@@ -250,6 +273,59 @@ def build_get_body(
         body["filters"] = filters
     if top_k is not None:
         body["top_k"] = top_k
+    return body
+
+
+def build_list_body(
+    *,
+    filters: dict[str, Any] | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    include_total: bool = True,
+    user_id: str | None = None,
+    app_id: str | None = None,
+    agent_id: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Build a memory list request body without empty optional fields."""
+    body: dict[str, Any] = {"page": page, "page_size": page_size, "include_total": include_total}
+    if filters:
+        body["filters"] = filters
+    if user_id:
+        body["user_id"] = user_id
+    if app_id:
+        body["app_id"] = app_id
+    if agent_id:
+        body["agent_id"] = agent_id
+    if session_id:
+        body["session_id"] = session_id
+    return body
+
+
+def build_scroll_body(
+    *,
+    filters: dict[str, Any] | None = None,
+    limit: int = 100,
+    cursor: str | None = None,
+    user_id: str | None = None,
+    app_id: str | None = None,
+    agent_id: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Build a memory scroll request body without empty optional fields."""
+    body: dict[str, Any] = {"limit": limit}
+    if filters:
+        body["filters"] = filters
+    if cursor:
+        body["cursor"] = cursor
+    if user_id:
+        body["user_id"] = user_id
+    if app_id:
+        body["app_id"] = app_id
+    if agent_id:
+        body["agent_id"] = agent_id
+    if session_id:
+        body["session_id"] = session_id
     return body
 
 

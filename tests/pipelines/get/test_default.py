@@ -2,10 +2,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from mindmemos.typing.memory import MemoryRequestContext, MemoryView, SearchFilter
-from mindmemos.typing.service import GetPipelineInput
-
 from mindmemos.pipelines.get import DefaultGetPipeline
+from mindmemos.typing.memory import MemoryRequestContext, MemoryView, SearchFilter
+from mindmemos.typing.service import GetPipelineInput, MemoryListPipelineInput, MemoryScrollPipelineInput
 
 
 def make_context() -> MemoryRequestContext:
@@ -22,7 +21,8 @@ def make_context() -> MemoryRequestContext:
 class FakeReader:
     def __init__(self, memories: list[MemoryView]) -> None:
         self.memories = memories
-        self.calls: list[tuple[str, SearchFilter | None, int]] = []
+        self.calls: list[tuple[str, SearchFilter | None, int, Any | None]] = []
+        self.count_calls: list[tuple[str, SearchFilter | None]] = []
 
     async def list_memories(
         self,
@@ -32,8 +32,20 @@ class FakeReader:
         limit: int = 50,
         cursor: Any | None = None,
     ) -> tuple[list[MemoryView], Any | None]:
-        self.calls.append((ctx.project_id, filters, limit))
-        return self.memories, None
+        self.calls.append((ctx.project_id, filters, limit, cursor))
+        start = int(cursor) if cursor is not None else 0
+        end = start + limit
+        next_cursor = str(end) if end < len(self.memories) else None
+        return self.memories[start:end], next_cursor
+
+    async def count_memories(
+        self,
+        ctx: MemoryRequestContext,
+        *,
+        filters: SearchFilter | None = None,
+    ) -> int:
+        self.count_calls.append((ctx.project_id, filters))
+        return len(self.memories)
 
 
 class FakeWriter:
@@ -59,9 +71,10 @@ async def test_get_returns_hydrated_memory_items() -> None:
     result = await pipeline.get(GetPipelineInput(top_k=5), make_context())
 
     assert len(reader.calls) == 1
-    project_id, sent_filter, limit = reader.calls[0]
+    project_id, sent_filter, limit, cursor = reader.calls[0]
     assert project_id == "proj-1"
     assert limit == 5
+    assert cursor is None
     # An "active" status condition is always appended to the parsed filter.
     assert any(cond.field == "status" and cond.value == "active" for cond in sent_filter.must)
     assert result.status == "ok"
@@ -111,3 +124,81 @@ async def test_get_returns_ok_with_empty_list_when_nothing_matches() -> None:
     assert result.status == "ok"
     assert result.memories == []
     assert result.message is None
+
+
+@pytest.mark.asyncio
+async def test_list_returns_page_metadata_and_total() -> None:
+    memories = [
+        MemoryView(
+            memory_id=f"mem-{index}",
+            project_id="proj-1",
+            content=f"Memory {index}",
+            mem_type="fact",
+            status="active",
+            created_at=datetime(2026, 1, index, tzinfo=UTC),
+        )
+        for index in range(1, 6)
+    ]
+    reader = FakeReader(memories)
+    pipeline = DefaultGetPipeline(db_reader=reader, db_writer=FakeWriter())
+
+    result = await pipeline.list(MemoryListPipelineInput(page=2, page_size=2, include_total=True), make_context())
+
+    assert [item.id for item in result.memories] == ["mem-3", "mem-4"]
+    assert result.page == 2
+    assert result.page_size == 2
+    assert result.total == 5
+    assert result.has_more is True
+    assert reader.calls[0][2] == 5
+    assert len(reader.count_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_can_skip_total_count() -> None:
+    reader = FakeReader(
+        [
+            MemoryView(
+                memory_id=f"mem-{index}",
+                project_id="proj-1",
+                content=f"Memory {index}",
+                mem_type="fact",
+                status="active",
+                created_at=datetime(2026, 1, index, tzinfo=UTC),
+            )
+            for index in range(1, 4)
+        ]
+    )
+    pipeline = DefaultGetPipeline(db_reader=reader, db_writer=FakeWriter())
+
+    result = await pipeline.list(MemoryListPipelineInput(page=1, page_size=2, include_total=False), make_context())
+
+    assert [item.id for item in result.memories] == ["mem-1", "mem-2"]
+    assert result.total is None
+    assert result.has_more is True
+    assert reader.count_calls == []
+
+
+@pytest.mark.asyncio
+async def test_scroll_returns_next_cursor() -> None:
+    reader = FakeReader(
+        [
+            MemoryView(
+                memory_id=f"mem-{index}",
+                project_id="proj-1",
+                content=f"Memory {index}",
+                mem_type="fact",
+                status="active",
+                created_at=datetime(2026, 1, index, tzinfo=UTC),
+            )
+            for index in range(1, 5)
+        ]
+    )
+    pipeline = DefaultGetPipeline(db_reader=reader, db_writer=FakeWriter())
+
+    first = await pipeline.scroll(MemoryScrollPipelineInput(limit=2), make_context())
+    second = await pipeline.scroll(MemoryScrollPipelineInput(limit=2, cursor=first.next_cursor), make_context())
+
+    assert [item.id for item in first.memories] == ["mem-1", "mem-2"]
+    assert first.next_cursor == "2"
+    assert [item.id for item in second.memories] == ["mem-3", "mem-4"]
+    assert second.next_cursor is None

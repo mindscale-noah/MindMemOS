@@ -237,6 +237,72 @@ class GetPipelineResult(BaseModel):
     """Failure reason when get cannot be completed."""
 
 
+class MemoryListPipelineInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, Any] | None = None
+    """Public filter DSL; None returns project-scoped memories."""
+
+    page: int = Field(default=1, ge=1)
+    """1-based page number for management-style pagination."""
+
+    page_size: int = Field(default=20, ge=1)
+    """Number of memories returned per page."""
+
+    include_total: bool = True
+    """Whether to calculate the total matching memory count."""
+
+
+class MemoryListPipelineResult(BaseModel):
+    status: ServiceResultStatus = "ok"
+    """Service completion status."""
+
+    memories: list[MemorySearchItem]
+    """Returned memories."""
+
+    page: int
+    """1-based page number echoed from the request."""
+
+    page_size: int
+    """Page size echoed from the request."""
+
+    total: int | None = None
+    """Total matching memories when requested."""
+
+    has_more: bool = False
+    """Whether another page is available."""
+
+    message: str | None = None
+    """Failure reason when list cannot be completed."""
+
+
+class MemoryScrollPipelineInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, Any] | None = None
+    """Public filter DSL; None returns project-scoped memories."""
+
+    limit: int = Field(default=100, ge=1)
+    """Maximum memories returned from this cursor position."""
+
+    cursor: str | None = None
+    """Opaque cursor returned by the previous scroll page."""
+
+
+class MemoryScrollPipelineResult(BaseModel):
+    status: ServiceResultStatus = "ok"
+    """Service completion status."""
+
+    memories: list[MemorySearchItem]
+    """Returned memories."""
+
+    next_cursor: str | None = None
+    """Cursor for the next page, or None when the scan is complete."""
+
+    message: str | None = None
+    """Failure reason when scroll cannot be completed."""
+
+
 class DeletePipelineInput(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 

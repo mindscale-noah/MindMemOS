@@ -191,6 +191,11 @@ class MemoryRepository(CollectionRepository):
             project_id, filter_=filter_, limit=limit, cursor=cursor, with_vectors=with_vectors
         )
 
+    async def count(self, project_id: str, *, filter_: qmodels.Filter | None = None) -> int:
+        """Count memories in one project."""
+
+        return await self._count_scoped(project_id, filter_=filter_)
+
     def _point(self, point: MemoryPoint) -> qmodels.PointStruct:
         return qmodels.PointStruct(
             id=point.memory_id,

@@ -80,6 +80,15 @@ class CollectionRepository:
             with_vectors=with_vectors,
         )
 
+    async def _count_scoped(self, project_id: str, *, filter_: qmodels.Filter | None = None) -> int:
+        """Count points inside one project."""
+
+        return await self._engine.count(
+            self.collection,
+            count_filter=self._engine.project_filter(project_id, filter_=filter_),
+            exact=True,
+        )
+
     def _dense_point(self, point_id: str, vector: list[float] | None, payload: dict[str, Any]) -> qmodels.PointStruct:
         """Build a point carrying a single dense vector (zero-filled when absent)."""
 

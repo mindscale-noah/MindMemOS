@@ -185,6 +185,22 @@ class QdrantEngine:
         )
         return [self.record_from(record) for record in records], next_offset
 
+    async def count(
+        self,
+        collection: str,
+        *,
+        count_filter: qmodels.Filter | None = None,
+        exact: bool = True,
+    ) -> int:
+        """Count points in a collection with an already-built filter."""
+
+        result = await self._client.count(
+            collection_name=collection,
+            count_filter=count_filter,
+            exact=exact,
+        )
+        return int(result.count)
+
     async def query(
         self,
         collection: str,

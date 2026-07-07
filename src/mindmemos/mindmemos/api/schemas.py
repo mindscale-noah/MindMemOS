@@ -192,6 +192,39 @@ class GetRequest(BaseModel):
     """Maximum memories to return. None uses the reader default page size."""
 
 
+class MemoryPageRequest(ActorIdentityRequest):
+    """HTTP body for ``POST /v1/memory/list``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, Any] | None = None
+    """Custom structured filter DSL parsed by ``mappers.api.parse_search_dsl``."""
+
+    page: int = Field(default=1, ge=1)
+    """1-based page number."""
+
+    page_size: int = Field(default=20, ge=1)
+    """Number of memories returned per page."""
+
+    include_total: bool = True
+    """Whether to calculate and return total matching memories."""
+
+
+class MemoryScrollRequest(ActorIdentityRequest):
+    """HTTP body for ``POST /v1/memory/scroll``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, Any] | None = None
+    """Custom structured filter DSL parsed by ``mappers.api.parse_search_dsl``."""
+
+    limit: int = Field(default=100, ge=1)
+    """Maximum memories returned from this cursor position."""
+
+    cursor: NonEmptyStr | None = None
+    """Opaque cursor returned by the previous scroll response."""
+
+
 class DeleteRequest(BaseModel):
     """HTTP body for ``POST /v1/memory/delete``.
 
@@ -280,6 +313,21 @@ class MemoryListData(BaseModel):
     """
 
     memories: list[MemorySearchItem] = Field(default_factory=list)
+
+
+class MemoryPageData(MemoryListData):
+    """``data`` payload for ``POST /v1/memory/list``."""
+
+    page: int
+    page_size: int
+    total: int | None = None
+    has_more: bool = False
+
+
+class MemoryScrollData(MemoryListData):
+    """``data`` payload for ``POST /v1/memory/scroll``."""
+
+    next_cursor: str | None = None
 
 
 class ApiResponse(BaseModel, Generic[T]):

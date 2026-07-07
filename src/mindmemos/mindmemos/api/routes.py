@@ -14,6 +14,8 @@ from .deps import require_scopes
 from .mappers import (
     to_add_api_response,
     to_memory_list_api_response,
+    to_memory_page_api_response,
+    to_memory_scroll_api_response,
     to_status_api_response,
 )
 from .schemas import (
@@ -26,6 +28,10 @@ from .schemas import (
     FeedbackRequest,
     GetRequest,
     MemoryListData,
+    MemoryPageData,
+    MemoryPageRequest,
+    MemoryScrollData,
+    MemoryScrollRequest,
     SearchRequest,
     UpdateRequest,
 )
@@ -40,6 +46,8 @@ router = APIRouter(
 AddResponse = ApiResponse[AddData]
 GetResponse = ApiResponse[MemoryListData]
 SearchResponse = ApiResponse[MemoryListData]
+ListResponse = ApiResponse[MemoryPageData]
+ScrollResponse = ApiResponse[MemoryScrollData]
 DeleteResponse = ApiResponse[None]
 UpdateResponse = ApiResponse[None]
 FeedbackResponse = ApiResponse[None]
@@ -66,6 +74,26 @@ async def get_memory(
 ) -> GetResponse:
     result = await service.get(auth, payload)
     return to_memory_list_api_response(result, auth.request_id)
+
+
+@router.post("/list", response_model=ListResponse)
+async def list_memory(
+    payload: MemoryPageRequest,
+    auth: AuthContext = Depends(require_scopes(SCOPE_MEM_READ)),
+    service: MemoryService = Depends(get_memory_service),
+) -> ListResponse:
+    result = await service.list(auth, payload)
+    return to_memory_page_api_response(result, auth.request_id)
+
+
+@router.post("/scroll", response_model=ScrollResponse)
+async def scroll_memory(
+    payload: MemoryScrollRequest,
+    auth: AuthContext = Depends(require_scopes(SCOPE_MEM_READ)),
+    service: MemoryService = Depends(get_memory_service),
+) -> ScrollResponse:
+    result = await service.scroll(auth, payload)
+    return to_memory_scroll_api_response(result, auth.request_id)
 
 
 @router.post("/delete", response_model=DeleteResponse)

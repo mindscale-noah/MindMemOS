@@ -1,9 +1,11 @@
 """Memory HTTP business logic."""
 
-from typing import Literal
+from contextlib import nullcontext
+from typing import Any, Literal
 from uuid import uuid4
 
-from ...config import get_config
+from ...config import bind_config_overrides, get_config, get_config_overrides
+from ...errors import ConfigNotInitializedError
 from ...logging import get_logger, traced
 from ...pipelines import create_pipeline
 from ...pipelines.add import AddPipeline
@@ -15,6 +17,7 @@ from ...pipelines.memory_db import MemoryOperationRecorder, suppress_recording_e
 from ...pipelines.search import SearchPipeline
 from ...pipelines.skill import SkillVersionStore, get_skill_version_store
 from ...pipelines.update import DefaultUpdatePipeline, UpdatePipeline
+from ...provider_bindings import ProviderBindingResolver, get_provider_binding_resolver
 from ...typing import (
     AddPipelineAsyncResult,
     AddPipelineSyncResult,
@@ -22,6 +25,8 @@ from ...typing import (
     DreamingPipelineResult,
     FeedbackPipelineResult,
     GetPipelineResult,
+    MemoryListPipelineResult,
+    MemoryScrollPipelineResult,
     SearchPipelineResult,
     SkillBinding,
     SkillContext,
@@ -35,7 +40,9 @@ from ..mappers import (
     to_dreaming_pipeline_input,
     to_feedback_pipeline_input,
     to_get_pipeline_input,
+    to_memory_list_pipeline_input,
     to_memory_request_context,
+    to_memory_scroll_pipeline_input,
     to_search_pipeline_input,
     to_update_pipeline_input,
 )
@@ -46,6 +53,8 @@ from ..schemas import (
     DreamingRequest,
     FeedbackRequest,
     GetRequest,
+    MemoryPageRequest,
+    MemoryScrollRequest,
     SearchRequest,
     UpdateRequest,
 )
@@ -78,6 +87,7 @@ class MemoryService:
         dreaming_pipeline_name: str | None = None,
         operation_recorder: MemoryOperationRecorder | None = None,
         skill_store: SkillVersionStore | None = None,
+        provider_binding_resolver: ProviderBindingResolver | None = None,
     ) -> None:
         self._add = add_pipeline
         if search_pipeline is None and search_pipeline_name is None:
@@ -108,6 +118,7 @@ class MemoryService:
         self._recorder = operation_recorder or MemoryOperationRecorder()
         self._skill_store = skill_store if skill_store is not None else get_skill_version_store()
         self._algorithm_add_pipelines: dict[str, AddPipeline] = {}
+        self._provider_binding_resolver = provider_binding_resolver
 
     def _pipeline(self, attr: str):
         pipeline = getattr(self, attr)
@@ -133,6 +144,24 @@ class MemoryService:
             return self._add, self._pipeline_names["_add"][1]
         return self._add_pipeline_for_algorithm(auth.memory_algorithm)
 
+    async def _provider_config_context(self, ctx):
+        """Return a temporary config binding that includes dynamic provider overrides."""
+
+        try:
+            resolver = self._provider_binding_resolver or get_provider_binding_resolver()
+            dynamic_project_config = await resolver.resolve(ctx)
+        except ConfigNotInitializedError:
+            return nullcontext()
+        if not dynamic_project_config:
+            return nullcontext()
+        overrides = get_config_overrides()
+        tenant_config = overrides.tenant_config if overrides is not None else None
+        project_config = _deep_merge_dicts(
+            overrides.project_config if overrides is not None else None,
+            dynamic_project_config,
+        )
+        return bind_config_overrides(tenant_config=tenant_config, project_config=project_config)
+
     @traced("memory_service.add")
     async def add(
         self,
@@ -151,7 +180,29 @@ class MemoryService:
         payload = to_add_pipeline_input(request)
         add_record_id = str(uuid4())
         request_submitted_at = utcnow()
-        skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
+            return await self._add_with_context(
+                pipeline,
+                payload,
+                ctx,
+                request,
+                add_record_id,
+                request_submitted_at,
+                skill_bindings,
+            )
+
+    async def _add_with_context(
+        self,
+        pipeline: AddPipeline,
+        payload,
+        ctx,
+        request: AddRequest,
+        add_record_id: str,
+        request_submitted_at,
+        skill_bindings,
+    ):
         try:
             if payload.mode == "async":
                 record_metadata = {
@@ -237,6 +288,11 @@ class MemoryService:
         pipeline = self._pipeline("_search")
         if pipeline is None:
             raise NotImplementedError("search pipeline implementation is not wired yet")
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            return await self._search_with_context(pipeline, payload, ctx)
+
+    async def _search_with_context(self, pipeline: SearchPipeline, payload, ctx) -> SearchPipelineResult:
         request_submitted_at = utcnow()
         try:
             result = await pipeline.search(payload, ctx)
@@ -276,8 +332,36 @@ class MemoryService:
         pipeline = self._pipeline("_get")
         if pipeline is None:
             raise NotImplementedError("get pipeline implementation is not wired yet")
-        return await pipeline.get(to_get_pipeline_input(request), to_memory_request_context(auth))
+        ctx = to_memory_request_context(auth)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            return await pipeline.get(to_get_pipeline_input(request), ctx)
 
+    @traced("memory_service.list")
+    async def list(self, auth: AuthContext, request: MemoryPageRequest) -> MemoryListPipelineResult:
+        """Run the paged memory list pipeline."""
+
+        annotate_request_trace(auth)
+        pipeline = self._pipeline("_get")
+        if pipeline is None:
+            raise NotImplementedError("get pipeline implementation is not wired yet")
+        ctx = to_memory_request_context(auth, request)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            return await pipeline.list(to_memory_list_pipeline_input(request), ctx)
+
+    @traced("memory_service.scroll")
+    async def scroll(self, auth: AuthContext, request: MemoryScrollRequest) -> MemoryScrollPipelineResult:
+        """Run the cursor memory scroll pipeline."""
+
+        annotate_request_trace(auth)
+        pipeline = self._pipeline("_get")
+        if pipeline is None:
+            raise NotImplementedError("get pipeline implementation is not wired yet")
+        ctx = to_memory_request_context(auth, request)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            return await pipeline.scroll(to_memory_scroll_pipeline_input(request), ctx)
 
     @traced("memory_service.delete")
     async def delete(self, auth: AuthContext, request: DeleteRequest) -> DeletePipelineResult:
@@ -289,7 +373,10 @@ class MemoryService:
         pipeline = self._pipeline("_delete")
         if pipeline is None:
             raise NotImplementedError("delete pipeline implementation is not wired yet")
-        return await pipeline.delete(to_delete_pipeline_input(request), to_memory_request_context(auth))
+        ctx = to_memory_request_context(auth)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            return await pipeline.delete(to_delete_pipeline_input(request), ctx)
 
     @traced("memory_service.update")
     async def update(self, auth: AuthContext, request: UpdateRequest) -> UpdatePipelineResult:
@@ -301,7 +388,10 @@ class MemoryService:
         pipeline = self._pipeline("_update")
         if pipeline is None:
             raise NotImplementedError("update pipeline implementation is not wired yet")
-        return await pipeline.update(to_update_pipeline_input(request), to_memory_request_context(auth))
+        ctx = to_memory_request_context(auth)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            return await pipeline.update(to_update_pipeline_input(request), ctx)
 
     @traced("memory_service.feedback")
     async def feedback(self, auth: AuthContext, request: FeedbackRequest) -> FeedbackPipelineResult:
@@ -315,9 +405,11 @@ class MemoryService:
             raise NotImplementedError("feedback pipeline implementation is not wired yet")
         ctx = to_memory_request_context(auth, request, require_user_id=True)
         payload = to_feedback_pipeline_input(request)
-        if payload.mode == "async":
-            return await pipeline.feedback_async(payload, ctx)
-        return await pipeline.feedback_sync(payload, ctx)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            if payload.mode == "async":
+                return await pipeline.feedback_async(payload, ctx)
+            return await pipeline.feedback_sync(payload, ctx)
 
     @traced("memory_service.dream")
     async def dream(self, auth: AuthContext, request: DreamingRequest) -> DreamingPipelineResult:
@@ -331,9 +423,11 @@ class MemoryService:
             raise NotImplementedError("dreaming pipeline implementation is not wired yet")
         payload = to_dreaming_pipeline_input(request)
         ctx = to_memory_request_context(auth, request)
-        if payload.mode == "sync":
-            return await pipeline.dream_sync(payload, ctx)
-        return await pipeline.dream(payload, ctx)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            if payload.mode == "sync":
+                return await pipeline.dream_sync(payload, ctx)
+            return await pipeline.dream(payload, ctx)
 
 
 _service: MemoryService | None = None
@@ -367,3 +461,14 @@ def get_memory_service() -> MemoryService:
         )
         _service_key = service_key
     return _service
+
+
+def _deep_merge_dicts(base: dict[str, Any] | None, override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base or {})
+    for key, value in override.items():
+        current = result.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            result[key] = _deep_merge_dicts(current, value)
+        else:
+            result[key] = value
+    return result
