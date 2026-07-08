@@ -54,6 +54,7 @@ class MemoryAgentBenchAdapter:
             or "fast"
         )
         top_k = search_params["top_k"] if "top_k" in search_params else runner.top_k
+        rerank = search_params["rerank"] if "rerank" in search_params else runner.rerank
 
         env = MemoryAgentBenchEnv(
             memory,
@@ -61,6 +62,7 @@ class MemoryAgentBenchAdapter:
             sub_dataset=sub_dataset,
             top_k=None if top_k is None else int(top_k),
             search_strategy=public_search_strategy,
+            rerank=bool(rerank),
             chunk_size=chunk_size,
         )
         run = await env.run_dataset(

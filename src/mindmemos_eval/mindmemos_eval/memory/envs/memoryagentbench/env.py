@@ -488,6 +488,7 @@ class MemoryAgentBenchEnv:
         sub_dataset: str = "",
         top_k: int = 50,
         search_strategy: str = "agentic",
+        rerank: bool = False,
         chunk_size: int = 4096,
         answer_system_prompt: str = MEMORYAGENTBENCH_SYSTEM_PROMPT,
     ) -> None:
@@ -496,6 +497,7 @@ class MemoryAgentBenchEnv:
         self._sub_dataset = sub_dataset.strip()
         self._top_k = top_k
         self._search_strategy = search_strategy
+        self._rerank = rerank
         self._chunk_size = chunk_size
         self._answer_system_prompt = answer_system_prompt
         self.primary_metric = primary_metric_for_sub_dataset(self._sub_dataset) if self._sub_dataset else ""
@@ -581,6 +583,7 @@ class MemoryAgentBenchEnv:
             user_id=user_id,
             top_k=self._top_k,
             search_strategy=self._search_strategy,
+            rerank=self._rerank,
             session_id=user_id,
         )
         memories = [self._format_hit(hit) for hit in search.memories]
