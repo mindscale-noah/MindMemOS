@@ -280,7 +280,6 @@ class RequestIdMemoryClient:
         return result
 
 
-
 class NotImplementedAdapter:
     """Placeholder adapter for planned benchmark datasets."""
 
@@ -368,6 +367,8 @@ async def run_benchmark_matrix(
 
     reuse_path = _option(args, "reuse_api_key")
     if reuse_path:
+        if len(benchmark_names) != 1:
+            raise ValueError("--reuse-api-key can only be used with exactly one benchmark")
         existing = _load_existing_identity(reuse_path, benchmark=benchmark_names[0])
         identities = [existing]
         setattr(args, "_reused_key_file", reuse_path)
