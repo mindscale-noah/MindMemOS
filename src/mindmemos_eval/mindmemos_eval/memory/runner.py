@@ -373,9 +373,9 @@ async def run_benchmark_matrix(
         identities = [existing]
         setattr(args, "_reused_key_file", reuse_path)
         logger.info(
-            "reusing existing api key",
-            project_id=existing.project_id,
-            api_key=existing.api_key[:40],
+            "reusing existing api key project_id=%s api_key_prefix=%s",
+            existing.project_id,
+            existing.api_key[:40],
         )
     else:
         identities = [
