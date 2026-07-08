@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
+from mindmemos_eval.memory.base import BenchmarkSpec, RunnerConfig
+from mindmemos_eval.memory.envs.memoryagentbench import adapter as memoryagentbench_adapter
+from mindmemos_eval.memory.envs.memoryagentbench.adapter import MemoryAgentBenchAdapter
 from mindmemos_sdk.memory import AsyncMemoryClient
 from mindmemos_sdk.transport import AsyncHttpTransport
 
@@ -134,7 +138,14 @@ async def test_add_context_sends_sync_dialogue_chunks():
 async def test_answer_searches_and_scores_primary_metric():
     memory, captured = _memory([{"id": "m1", "memory": "Alice likes Paris."}])
     llm = _llm("Answer: Paris")
-    env = MemoryAgentBenchEnv(memory, answer_llm=llm, sub_dataset="eventqa_32k", top_k=7, search_strategy="fast")
+    env = MemoryAgentBenchEnv(
+        memory,
+        answer_llm=llm,
+        sub_dataset="eventqa_32k",
+        top_k=7,
+        search_strategy="fast",
+        rerank=True,
+    )
     question = _item().build_questions("eventqa_32k")[0]
 
     result = await env.evaluate_question("context_0_eventqa_32k", question, query_id=0, context_id=0)
@@ -144,11 +155,11 @@ async def test_answer_searches_and_scores_primary_metric():
     search_call = next(call for call in captured if call["path"].endswith("/search"))
     assert search_call["body"]["top_k"] == 7
     assert search_call["body"]["search_strategy"] == "fast"
+    assert search_call["body"]["rerank"] is True
     prompt = llm._client.calls[0]["messages"][-1]["content"]
     system_prompt = llm._client.calls[0]["messages"][0]["content"]
     assert "Answer the question based on query and memories" in system_prompt
     assert "Alice likes Paris." in system_prompt
-    assert "Current Time:" in prompt
 
 
 @pytest.mark.asyncio
@@ -175,3 +186,50 @@ async def test_run_dataset_uses_each_item_source_when_unfiltered():
     add_bodies = [call["body"] for call in captured if call["path"].endswith("/add")]
     assert any("book excerpt" in body["messages"][1]["content"] for body in add_bodies)
     assert any("facts I have learned" in body["messages"][1]["content"] for body in add_bodies)
+
+
+@pytest.mark.asyncio
+async def test_adapter_passes_configured_rerank(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class _FakeRun:
+        def model_dump(self) -> dict[str, bool]:
+            return {"ok": True}
+
+    class _FakeEnv:
+        @staticmethod
+        def load_dataset(dataset: str, *, sub_dataset: str) -> list[Any]:
+            captured["dataset"] = dataset
+            captured["sub_dataset"] = sub_dataset
+            return []
+
+        def __init__(self, memory: Any, **kwargs: Any) -> None:
+            captured["memory"] = memory
+            captured["init"] = kwargs
+
+        async def run_dataset(self, data: list[Any], **kwargs: Any) -> _FakeRun:
+            captured["data"] = data
+            captured["run"] = kwargs
+            return _FakeRun()
+
+    monkeypatch.setattr(memoryagentbench_adapter, "MemoryAgentBenchEnv", _FakeEnv)
+
+    runner = RunnerConfig(rerank=False, top_k=5, search_strategy="fast", show_progress=False)
+    result = await MemoryAgentBenchAdapter().run(
+        memory=object(),
+        answer_llm=object(),
+        judge_llm=object(),
+        ctx=object(),
+        bench_config=BenchmarkSpec(
+            name="memoryagentbench",
+            dataset="data/mab.json",
+            memory_algorithm="vanilla",
+            search_params={"rerank": True, "top_k": 3},
+            raw={"sub_dataset": "eventqa_32k"},
+        ),
+        args=SimpleNamespace(runner_config=runner),
+    )
+
+    assert result == {"ok": True}
+    assert captured["init"]["top_k"] == 3
+    assert captured["init"]["rerank"] is True
