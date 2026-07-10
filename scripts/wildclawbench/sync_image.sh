@@ -38,7 +38,7 @@ BASE_URL="${BASE_URL:-http://host.docker.internal:8001}"
 USER_ID="${USER_ID:-wildclawbench}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINDMEMOS_REPO="${MINDMEMOS_REPO:-$(cd "$script_dir/.." && pwd)}"
+MINDMEMOS_REPO="${MINDMEMOS_REPO:-$(cd "$script_dir/../.." && pwd)}"
 
 api_key=""
 while [[ $# -gt 0 ]]; do
