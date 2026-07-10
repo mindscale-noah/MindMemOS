@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install/refresh the custom "serpapi" OpenClaw web-search plugin
-# (plugins/openclaw-serpapi-plugin) into the WildClawBench eval image, enable
+# (resources/memory/wildclawbench/openclaw-serpapi-plugin) into the
+# WildClawBench eval image, enable
 # it, and point tools.web.search.provider at it. Idempotent: safe to re-run
 # any time the plugin source changes, or if you're rebuilding the image from
 # scratch and need search working.
@@ -19,25 +20,29 @@
 #      that flag prevents the gateway from ever auto-loading the plugin, so
 #      web_search silently fails with "no provider is available" forever,
 #      even though `openclaw plugins list` shows it as enabled. See
-#      plugins/openclaw-serpapi-plugin/README.md for the full story.
+#      resources/memory/wildclawbench/openclaw-serpapi-plugin/README.md for the full story.
 #   3. `tools.web.search.provider` must be explicitly set to "serpapi", or
 #      OpenClaw falls back to auto-detect (and may pick nothing, or warn
 #      about an invalid provider id left over from an earlier Brave setup).
 #
 # Usage:
-#   bash scripts/wildclawbench/install_serpapi_plugin.sh
+#   SERPAPI_BASE_URL="https://<private-compatible-endpoint>" \
+#     bash scripts/wildclawbench/install_serpapi_plugin.sh
 #
 # Optional env overrides:
-#   IMAGE          eval image tag  (default: wildclawbench-mindmemos:v1.3)
-#   MINDMEMOS_REPO repo root       (default: this script's repo root)
+#   IMAGE            eval image tag  (default: wildclawbench-mindmemos:v1.3)
+#   MINDMEMOS_REPO   repo root       (default: this script's repo root)
+# Required env:
+#   SERPAPI_BASE_URL SerpApi-compatible endpoint base URL. Keep this out of git.
 
 set -euo pipefail
 
 IMAGE="${IMAGE:-wildclawbench-mindmemos:v1.3}"
+: "${SERPAPI_BASE_URL:?set SERPAPI_BASE_URL to your SerpApi-compatible endpoint base URL}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MINDMEMOS_REPO="${MINDMEMOS_REPO:-$(cd "$script_dir/../.." && pwd)}"
-plugin_src="$MINDMEMOS_REPO/plugins/openclaw-serpapi-plugin"
+plugin_src="$MINDMEMOS_REPO/resources/memory/wildclawbench/openclaw-serpapi-plugin"
 
 [[ -d "$plugin_src" ]] || { echo "ERROR: not found: $plugin_src" >&2; exit 2; }
 
@@ -60,6 +65,9 @@ echo "==> [3/6] copying plugin source into a staging dir and installing with --f
 # --force matters here: this must work both on a fresh image (nothing
 # installed yet) and when re-running after the plugin already exists
 # (openclaw plugins install refuses with "delete it first" otherwise).
+# Remove previous staging/install dirs first: older builds may have hashed dist
+# filenames, and --force does not reliably delete stale files.
+docker exec "$cname" rm -rf "$CONTAINER_STAGING_DIR" "$CONTAINER_INSTALLED_DIR"
 # Install from a separate staging dir, not directly into extensions/serpapi,
 # so `openclaw plugins install` (which also links the openclaw peerDependency)
 # is what actually places the files -- copying straight into extensions/
@@ -79,6 +87,7 @@ echo "==> [4/6] fixing ownership and enabling the plugin"
 docker exec "$cname" chown -R root:root "$CONTAINER_INSTALLED_DIR"
 docker exec "$cname" openclaw config set plugins.entries.serpapi.enabled true
 docker exec "$cname" openclaw config set plugins.entries.serpapi.config.webSearch.apiKey '${BRAVE_API_KEY}'
+docker exec "$cname" openclaw config set plugins.entries.serpapi.config.webSearch.baseUrl "$SERPAPI_BASE_URL"
 docker exec "$cname" openclaw config set tools.web.search.provider serpapi
 
 echo "==> [5/6] validating config"
@@ -104,5 +113,6 @@ if [[ -n "$backup_tag" ]]; then
 fi
 
 echo "OK: $IMAGE now has the serpapi web-search plugin installed and enabled."
-echo "    Remember: BRAVE_API_KEY in WildClawBench's .env must hold your yibu key"
+echo "    Remember: BRAVE_API_KEY in WildClawBench's .env must hold your SerpApi-compatible key"
+echo "    SERPAPI_BASE_URL was written into the image config as the SerpApi-compatible endpoint."
 echo "    (this is the delivery channel the plugin reads from -- see the plugin's README)."

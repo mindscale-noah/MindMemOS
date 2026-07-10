@@ -1,7 +1,7 @@
 {
   "name": "openclaw-serpapi-plugin",
   "version": "1.0.0",
-  "description": "OpenClaw SerpApi (via yibu) web-search provider plugin.",
+  "description": "OpenClaw SerpApi-compatible web-search provider plugin.",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",

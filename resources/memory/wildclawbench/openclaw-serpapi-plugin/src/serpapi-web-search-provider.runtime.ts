@@ -26,7 +26,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
 /**
- * SerpApi (yibu) Search HTTP runtime. It resolves credentials, enforces
+ * SerpApi-compatible Search HTTP runtime. It resolves credentials, enforces
  * endpoint safety, applies caching, and maps SerpApi organic_results into the
  * OpenClaw web-search result shape. This is a deliberately smaller surface
  * than Brave's runtime (no llm-context mode, no Brave-specific country/
@@ -39,7 +39,7 @@ type AnyConfig = Record<string, any> | undefined;
 type Diagnostics = { enabled?: boolean } | undefined;
 type EndpointMode = "selfHosted" | "strict";
 
-const DEFAULT_SERPAPI_BASE_URL = "https://yibuapi.com";
+const DEFAULT_SERPAPI_BASE_URL = "https://serpapi.com";
 const SERPAPI_SEARCH_ENDPOINT_PATH = "/serpapi/search";
 const serpapiHttpLogger = createSubsystemLogger("serpapi/http");
 
@@ -68,7 +68,9 @@ function resolveSerpapiBaseUrl(serpapiConfig: AnyConfig): string {
     readConfiguredSecretString(
       serpapiConfig?.baseUrl,
       "plugins.entries.serpapi.config.webSearch.baseUrl",
-    )?.replace(/\/+$/u, "") || DEFAULT_SERPAPI_BASE_URL
+    )?.replace(/\/+$/u, "") ||
+    readProviderEnvValue(["SERPAPI_BASE_URL"])?.replace(/\/+$/u, "") ||
+    DEFAULT_SERPAPI_BASE_URL
   );
 }
 
@@ -119,8 +121,8 @@ function missingSerpapiKeyPayload(): Record<string, unknown> {
   return {
     error: "missing_serpapi_api_key",
     message:
-      "web_search (serpapi) needs a SerpApi (yibu) API key. Set BRAVE_API_KEY in the Gateway environment, or configure plugins.entries.serpapi.config.webSearch.apiKey.",
-    docs: "https://yibuapi.apifox.cn/394660230e0",
+      "web_search (serpapi) needs a SerpApi-compatible API key. Set BRAVE_API_KEY in the Gateway environment, or configure plugins.entries.serpapi.config.webSearch.apiKey.",
+    docs: "https://serpapi.com/search-api",
   };
 }
 
@@ -173,15 +175,15 @@ async function runSerpapiWebSearch(params: RunParams): Promise<Array<Record<stri
         ok: response.ok,
         durationMs: Date.now() - startedAt,
       });
-      await assertOkOrThrowProviderError(response, "SerpApi (yibu) error");
-      return readProviderJsonResponse(response, "SerpApi (yibu) error");
+      await assertOkOrThrowProviderError(response, "SerpApi error");
+      return readProviderJsonResponse(response, "SerpApi error");
     },
   );
   return mapSerpapiResults(data);
 }
 
 /**
- * Execute one SerpApi (yibu) search request. Brave-only args (country,
+ * Execute one SerpApi-compatible search request. Brave-only args (country,
  * language, freshness, ui_lang, etc.) are accepted but ignored -- SerpApi
  * has no equivalent concepts in this minimal integration.
  */

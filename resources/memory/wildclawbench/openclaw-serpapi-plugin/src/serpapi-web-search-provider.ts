@@ -7,7 +7,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
- * SerpApi (yibu) web-search provider factory. It builds the agent tool
+ * SerpApi-compatible web-search provider factory. It builds the agent tool
  * definition and lazy-loads HTTP execution only when a search is run.
  */
 
@@ -79,7 +79,7 @@ function createSerpapiToolDefinition(searchConfig: any, config: unknown) {
   const diagnosticsEnabled = isDiagnosticFlagEnabled("serpapi.http", config);
   return {
     description:
-      "Search the web using SerpApi (routed through yibu). Returns titles, URLs, and snippets for fast research.",
+      "Search the web using a SerpApi-compatible provider. Returns titles, URLs, and snippets for fast research.",
     parameters: SerpapiSearchSchema,
     execute: async (args: unknown) => {
       const { executeSerpapiSearch } = await loadSerpapiWebSearchRuntime();
@@ -88,7 +88,7 @@ function createSerpapiToolDefinition(searchConfig: any, config: unknown) {
   };
 }
 
-/** Create the runtime SerpApi (yibu) provider descriptor. */
+/** Create the runtime SerpApi-compatible provider descriptor. */
 export function createSerpapiWebSearchProvider() {
   return {
     ...buildSerpapiWebSearchProviderBase(),

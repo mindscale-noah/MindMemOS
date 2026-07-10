@@ -12,7 +12,7 @@
 # Usage:
 #   WILDCLAWBENCH_DIR=/Users/chenliang/WildClawBench \
 #   MINDMEMOS_PROJECT_ID=proj_wildclawbench_20260706_112221 \
-#   bash scripts/wildclawbench/run_serial.sh --category all --model yibu/gpt-4.1-mini --models-config my_api.json
+#   bash scripts/wildclawbench/run_serial.sh --category all --model custom/gpt-4.1-mini --models-config my_api.json
 
 set -euo pipefail
 
