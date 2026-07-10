@@ -1,0 +1,29 @@
+{
+  "name": "openclaw-serpapi-plugin",
+  "version": "1.0.0",
+  "description": "OpenClaw SerpApi (via yibu) web-search provider plugin.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.6.6"
+    },
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ]
+  },
+  "files": [
+    "dist/**",
+    "openclaw.plugin.json"
+  ],
+  "peerDependencies": {
+    "openclaw": ">=2026.6.6"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  }
+}

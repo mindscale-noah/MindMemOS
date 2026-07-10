@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Install/refresh the custom "serpapi" OpenClaw web-search plugin
+# (plugins/openclaw-serpapi-plugin) into the WildClawBench eval image, enable
+# it, and point tools.web.search.provider at it. Idempotent: safe to re-run
+# any time the plugin source changes, or if you're rebuilding the image from
+# scratch and need search working.
+#
+# This is independent of scripts/wildclawbench/sync_image.sh, which only
+# touches mindmemos_sdk and the mindmemos-memory plugin -- it has no idea
+# this plugin exists, and running it will NOT remove or break this one
+# (they live in separate ~/.openclaw/extensions/<id>/ directories).
+#
+# Why this needs its own script instead of just `openclaw plugins install`:
+#   1. Freshly copied plugin files are owned by the host user (not root),
+#      and OpenClaw's plugin loader silently blocks any plugin file not
+#      owned by root as "suspicious ownership" -- must chown after copying.
+#   2. The plugin manifest must NOT carry `"activation": {"onStartup": false}`
+#      (copied from the original Brave plugin this was derived from) --
+#      that flag prevents the gateway from ever auto-loading the plugin, so
+#      web_search silently fails with "no provider is available" forever,
+#      even though `openclaw plugins list` shows it as enabled. See
+#      plugins/openclaw-serpapi-plugin/README.md for the full story.
+#   3. `tools.web.search.provider` must be explicitly set to "serpapi", or
+#      OpenClaw falls back to auto-detect (and may pick nothing, or warn
+#      about an invalid provider id left over from an earlier Brave setup).
+#
+# Usage:
+#   bash scripts/wildclawbench/install_serpapi_plugin.sh
+#
+# Optional env overrides:
+#   IMAGE          eval image tag  (default: wildclawbench-mindmemos:v1.3)
+#   MINDMEMOS_REPO repo root       (default: this script's repo root)
+
+set -euo pipefail
+
+IMAGE="${IMAGE:-wildclawbench-mindmemos:v1.3}"
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MINDMEMOS_REPO="${MINDMEMOS_REPO:-$(cd "$script_dir/.." && pwd)}"
+plugin_src="$MINDMEMOS_REPO/plugins/openclaw-serpapi-plugin"
+
+[[ -d "$plugin_src" ]] || { echo "ERROR: not found: $plugin_src" >&2; exit 2; }
+
+CONTAINER_INSTALLED_DIR="/root/.openclaw/extensions/serpapi"
+CONTAINER_STAGING_DIR="/workspace/openclaw-serpapi-plugin-src"
+
+cname="wildclaw-serpapi-install-$$"
+cleanup() { docker rm -f "$cname" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+echo "==> [1/5] starting temp container from $IMAGE"
+docker run -dit --name "$cname" "$IMAGE" sleep infinity >/dev/null
+
+echo "==> [2/5] copying plugin source into a staging dir and installing with --force"
+# --force matters here: this must work both on a fresh image (nothing
+# installed yet) and when re-running after the plugin already exists
+# (openclaw plugins install refuses with "delete it first" otherwise).
+# Install from a separate staging dir, not directly into extensions/serpapi,
+# so `openclaw plugins install` (which also links the openclaw peerDependency)
+# is what actually places the files -- copying straight into extensions/
+# would make this step a no-op on re-runs and skip that linking.
+docker exec "$cname" mkdir -p "$CONTAINER_STAGING_DIR"
+docker cp "$plugin_src/." "$cname:$CONTAINER_STAGING_DIR/"
+docker exec "$cname" openclaw plugins install "$CONTAINER_STAGING_DIR" --force
+
+echo "==> [3/5] fixing ownership and enabling the plugin"
+# openclaw plugins install copies files preserving the host user's ownership,
+# which OpenClaw's loader then blocks as "suspicious ownership" -- must chown
+# the actual installed location (not the staging dir) after install.
+docker exec "$cname" chown -R root:root "$CONTAINER_INSTALLED_DIR"
+docker exec "$cname" openclaw config set plugins.entries.serpapi.enabled true
+docker exec "$cname" openclaw config set plugins.entries.serpapi.config.webSearch.apiKey '${BRAVE_API_KEY}'
+docker exec "$cname" openclaw config set tools.web.search.provider serpapi
+
+echo "==> [4/5] validating config"
+docker exec "$cname" openclaw config validate
+
+echo "==> [5/5] backing up current $IMAGE, then committing over it"
+backup_tag="${IMAGE}-backup-$(date +%Y%m%d%H%M%S)"
+if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  docker tag "$IMAGE" "$backup_tag"
+  echo "    backed up existing image as $backup_tag"
+else
+  backup_tag=""
+  echo "    no existing $IMAGE found, nothing to back up"
+fi
+
+docker commit "$cname" "$IMAGE" >/dev/null
+
+cleanup
+
+if [[ -n "$backup_tag" ]]; then
+  docker rmi "$backup_tag" >/dev/null
+  echo "    sync succeeded, removed backup $backup_tag"
+fi
+
+echo "OK: $IMAGE now has the serpapi web-search plugin installed and enabled."
+echo "    Remember: BRAVE_API_KEY in WildClawBench's .env must hold your yibu key"
+echo "    (this is the delivery channel the plugin reads from -- see the plugin's README)."

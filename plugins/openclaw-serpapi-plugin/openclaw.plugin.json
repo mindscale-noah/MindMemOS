@@ -1,0 +1,75 @@
+{
+  "id": "serpapi",
+  "name": "SerpApi (yibu)",
+  "description": "OpenClaw SerpApi web-search provider plugin, routed through the yibu gateway.",
+  "setup": {
+    "providers": [
+      {
+        "id": "serpapi",
+        "authMethods": [
+          "api-key"
+        ],
+        "envVars": [
+          "BRAVE_API_KEY"
+        ]
+      }
+    ]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "SerpApi (yibu) API Key",
+      "help": "SerpApi key routed through yibu (fallback: BRAVE_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "sk-..."
+    },
+    "webSearch.mode": {
+      "label": "SerpApi Search Mode",
+      "help": "SerpApi search mode: web."
+    },
+    "webSearch.baseUrl": {
+      "label": "SerpApi Base URL",
+      "help": "SerpApi-compatible API base URL. Defaults to https://yibuapi.com."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": [
+      "serpapi"
+    ]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": [
+      "tools.web.search.apiKey"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": [
+              "string",
+              "object"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "web",
+              "llm-context"
+            ]
+          },
+          "baseUrl": {
+            "type": [
+              "string",
+              "object"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

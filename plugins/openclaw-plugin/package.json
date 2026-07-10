@@ -43,7 +43,7 @@
       "minHostVersion": ">=2026.6.6"
     },
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.js"
     ],
     "runtimeExtensions": [
       "./dist/index.js"
