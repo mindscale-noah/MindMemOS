@@ -19,6 +19,7 @@
   },
   "files": [
     "dist",
+    "src",
     "openclaw.plugin.json",
     "README.md"
   ],
@@ -43,7 +44,7 @@
       "minHostVersion": ">=2026.6.6"
     },
     "extensions": [
-      "./dist/index.js"
+      "./src/index.ts"
     ],
     "runtimeExtensions": [
       "./dist/index.js"
