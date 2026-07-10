@@ -36,7 +36,7 @@ set -euo pipefail
 IMAGE="${IMAGE:-wildclawbench-mindmemos:v1.3}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINDMEMOS_REPO="${MINDMEMOS_REPO:-$(cd "$script_dir/.." && pwd)}"
+MINDMEMOS_REPO="${MINDMEMOS_REPO:-$(cd "$script_dir/../.." && pwd)}"
 plugin_src="$MINDMEMOS_REPO/plugins/openclaw-serpapi-plugin"
 
 [[ -d "$plugin_src" ]] || { echo "ERROR: not found: $plugin_src" >&2; exit 2; }

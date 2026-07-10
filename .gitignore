@@ -50,6 +50,12 @@ results/
 node_modules/
 plugins/openclaw-plugin/dist/
 *.tsbuildinfo
+
+# openclaw-serpapi-plugin/dist is hand-adapted compiled JS with no build step
+# to regenerate it (see plugins/openclaw-serpapi-plugin/README.md) -- it IS
+# the source, so it must be committed despite the global dist/ rule above.
+!plugins/openclaw-serpapi-plugin/dist/
+!plugins/openclaw-serpapi-plugin/dist/**
 /results/
 /tmp/
 /data/
