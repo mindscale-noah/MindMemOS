@@ -3,9 +3,14 @@
   "version": "1.0.0",
   "description": "OpenClaw SerpApi (via yibu) web-search provider plugin.",
   "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
   "openclaw": {
     "extensions": [
-      "./dist/index.js"
+      "./src/index.ts"
     ],
     "compat": {
       "pluginApi": ">=2026.6.6"
@@ -15,7 +20,8 @@
     ]
   },
   "files": [
-    "dist/**",
+    "dist",
+    "src",
     "openclaw.plugin.json"
   ],
   "peerDependencies": {
@@ -25,5 +31,10 @@
     "openclaw": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "openclaw": "^2026.6.6",
+    "typescript": "^5.9.3"
   }
 }

@@ -48,10 +48,15 @@ cname="wildclaw-serpapi-install-$$"
 cleanup() { docker rm -f "$cname" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-echo "==> [1/5] starting temp container from $IMAGE"
+echo "==> [1/6] building plugin from local TypeScript source ($plugin_src)"
+# dist/ is a git-ignored build artifact (tsc -> dist/), so a fresh clone has
+# no dist/ yet; compile it here before staging into the container.
+( cd "$plugin_src" && npm install --silent && npm run build --silent )
+
+echo "==> [2/6] starting temp container from $IMAGE"
 docker run -dit --name "$cname" "$IMAGE" sleep infinity >/dev/null
 
-echo "==> [2/5] copying plugin source into a staging dir and installing with --force"
+echo "==> [3/6] copying plugin source into a staging dir and installing with --force"
 # --force matters here: this must work both on a fresh image (nothing
 # installed yet) and when re-running after the plugin already exists
 # (openclaw plugins install refuses with "delete it first" otherwise).
@@ -60,10 +65,14 @@ echo "==> [2/5] copying plugin source into a staging dir and installing with --f
 # is what actually places the files -- copying straight into extensions/
 # would make this step a no-op on re-runs and skip that linking.
 docker exec "$cname" mkdir -p "$CONTAINER_STAGING_DIR"
-docker cp "$plugin_src/." "$cname:$CONTAINER_STAGING_DIR/"
+# Exclude the local node_modules/ (393M+ after `npm install` above): the
+# container has its own global openclaw that `plugins install` links as the
+# peerDependency, and copying node_modules in would bloat the committed image.
+tar -C "$plugin_src" --exclude=node_modules --exclude=.git -cf - . \
+  | docker exec -i "$cname" tar -C "$CONTAINER_STAGING_DIR" -xf -
 docker exec "$cname" openclaw plugins install "$CONTAINER_STAGING_DIR" --force
 
-echo "==> [3/5] fixing ownership and enabling the plugin"
+echo "==> [4/6] fixing ownership and enabling the plugin"
 # openclaw plugins install copies files preserving the host user's ownership,
 # which OpenClaw's loader then blocks as "suspicious ownership" -- must chown
 # the actual installed location (not the staging dir) after install.
@@ -72,10 +81,10 @@ docker exec "$cname" openclaw config set plugins.entries.serpapi.enabled true
 docker exec "$cname" openclaw config set plugins.entries.serpapi.config.webSearch.apiKey '${BRAVE_API_KEY}'
 docker exec "$cname" openclaw config set tools.web.search.provider serpapi
 
-echo "==> [4/5] validating config"
+echo "==> [5/6] validating config"
 docker exec "$cname" openclaw config validate
 
-echo "==> [5/5] backing up current $IMAGE, then committing over it"
+echo "==> [6/6] backing up current $IMAGE, then committing over it"
 backup_tag="${IMAGE}-backup-$(date +%Y%m%d%H%M%S)"
 if docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker tag "$IMAGE" "$backup_tag"
