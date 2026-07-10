@@ -2,7 +2,7 @@ import { createWebSearchProviderContractFields } from "openclaw/plugin-sdk/provi
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
- * Shared SerpApi (yibu) provider metadata and credential lookup. Contract
+ * Shared SerpApi-compatible provider metadata and credential lookup. Contract
  * tests and runtime provider creation both use this lightweight descriptor.
  */
 
@@ -45,14 +45,14 @@ export function resolveConfiguredSerpapiCredential(config: unknown): unknown {
 export function buildSerpapiWebSearchProviderBase() {
   return {
     id: "serpapi",
-    label: "SerpApi (yibu)",
-    hint: "Google-style organic results via yibu SerpApi gateway",
+    label: "SerpApi",
+    hint: "Google-style organic results via a SerpApi-compatible gateway",
     onboardingScopes: ["text-inference"],
-    credentialLabel: "SerpApi (yibu) API key",
+    credentialLabel: "SerpApi-compatible API key",
     envVars: ["BRAVE_API_KEY"],
     placeholder: "sk-...",
-    signupUrl: "https://yibuapi.com/pricing",
-    docsUrl: "https://yibuapi.apifox.cn/394660230e0",
+    signupUrl: "https://serpapi.com/pricing",
+    docsUrl: "https://serpapi.com/search-api",
     autoDetectOrder: 10,
     credentialPath: SERPAPI_CREDENTIAL_PATH,
     ...createWebSearchProviderContractFields({

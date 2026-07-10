@@ -1,7 +1,7 @@
 {
   "id": "serpapi",
-  "name": "SerpApi (yibu)",
-  "description": "OpenClaw SerpApi web-search provider plugin, routed through the yibu gateway.",
+  "name": "SerpApi",
+  "description": "OpenClaw SerpApi-compatible web-search provider plugin.",
   "setup": {
     "providers": [
       {
@@ -17,8 +17,8 @@
   },
   "uiHints": {
     "webSearch.apiKey": {
-      "label": "SerpApi (yibu) API Key",
-      "help": "SerpApi key routed through yibu (fallback: BRAVE_API_KEY env var).",
+      "label": "SerpApi API Key",
+      "help": "SerpApi-compatible API key (fallback: BRAVE_API_KEY env var).",
       "sensitive": true,
       "placeholder": "sk-..."
     },
@@ -28,7 +28,7 @@
     },
     "webSearch.baseUrl": {
       "label": "SerpApi Base URL",
-      "help": "SerpApi-compatible API base URL. Defaults to https://yibuapi.com."
+      "help": "SerpApi-compatible API base URL. Prefer setting this explicitly; runtime fallback env var: SERPAPI_BASE_URL."
     }
   },
   "contracts": {

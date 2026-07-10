@@ -1,16 +1,16 @@
 # openclaw-serpapi-plugin
 
-An OpenClaw web-search provider plugin (`id: serpapi`) that calls yibu's
-SerpApi-compatible endpoint (`GET https://yibuapi.com/serpapi/search`)
-instead of Brave.
+An OpenClaw web-search provider plugin (`id: serpapi`) that calls a
+SerpApi-compatible endpoint (`GET {baseUrl}/serpapi/search`) instead of
+Brave.
 
 ## Why this exists
 
 The WildClawBench eval image's `brave` web-search plugin requires a paid
-Brave Search API key, which wasn't set up. Rather than pay for Brave, this
-plugin reuses the already-provisioned yibu gateway key (the same one used
-for agent model inference) to provide equivalent web-search capability for
-the `04_Search_Retrieval` task category.
+Brave Search API key, which may not be available in every environment. This
+plugin lets the eval image use an already-provisioned SerpApi-compatible
+gateway to provide equivalent web-search capability for the
+`04_Search_Retrieval` task category.
 
 The original `brave` plugin is left untouched and disabled in the eval
 image — this is a fully separate, additional plugin, not a patched Brave.
@@ -43,13 +43,26 @@ container env var literally named `BRAVE_API_KEY` (there's no generic
 mechanism to forward a custom-named secret into task containers). Rather
 than patch WildClawBench's own source — which would be lost on a fresh
 `git clone` / update — this plugin reuses that exact variable name as its
-delivery channel. The value it contains is a yibu API key, not a real
-Brave key; see the comment above `BRAVE_API_KEY=` in WildClawBench's
-`.env` for the same note.
+delivery channel. The value it contains should be the API key for the
+configured SerpApi-compatible gateway, not necessarily a real Brave key.
 
 ## Installing / rebuilding this into the eval image
 
-Use [scripts/wildclawbench/install_serpapi_plugin.sh](../../scripts/wildclawbench/install_serpapi_plugin.sh).
-It is idempotent and independent of [scripts/wildclawbench/sync_image.sh](../../scripts/wildclawbench/sync_image.sh)
+Install with an explicit SerpApi-compatible endpoint. Do not commit the real
+endpoint value to the repository:
+
+```bash
+SERPAPI_BASE_URL="https://<private-compatible-endpoint>" \
+  bash scripts/wildclawbench/install_serpapi_plugin.sh
+```
+
+Use [scripts/wildclawbench/install_serpapi_plugin.sh](../../../../scripts/wildclawbench/install_serpapi_plugin.sh).
+It is idempotent and independent of [scripts/wildclawbench/sync_image.sh](../../../../scripts/wildclawbench/sync_image.sh)
 (that script only touches `mindmemos_sdk` and the `mindmemos-memory`
 plugin — it does not know about this one).
+
+The plugin resolves the endpoint in this order:
+
+1. `plugins.entries.serpapi.config.webSearch.baseUrl`
+2. `SERPAPI_BASE_URL`
+3. neutral public default
