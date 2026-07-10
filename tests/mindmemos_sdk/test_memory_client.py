@@ -393,6 +393,22 @@ def test_delete_sends_memory_id():
     assert result.code == "ok"
 
 
+def test_delete_can_send_hard_delete_flag():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"code": "ok", "data": None})
+
+    client = MemoryClient(_transport(handler))
+    result = client.delete("m1", hard=True)
+
+    assert captured["url"] == "https://api.test/v1/memory/delete"
+    assert captured["body"] == {"memory_id": "m1", "hard": True}
+    assert result.code == "ok"
+
+
 def test_delete_soft_error_raises_api_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"code": "error", "message": "memory not found", "data": None})

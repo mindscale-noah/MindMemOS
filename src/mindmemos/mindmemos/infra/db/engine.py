@@ -91,6 +91,16 @@ class QdrantEngine:
 
         return self._cfg
 
+    async def collection_exists(self, collection: str) -> bool:
+        """Return whether a physical Qdrant collection exists."""
+
+        return bool(await self._client.collection_exists(collection))
+
+    async def collection_names(self) -> list[str]:
+        """Return all physical Qdrant collection names."""
+
+        return [item.name for item in (await self._client.get_collections()).collections]
+
     async def ensure_collection(self, spec: QdrantCollectionSpec) -> None:
         """Create one collection and its payload indexes (no ``auto_create`` gate).
 

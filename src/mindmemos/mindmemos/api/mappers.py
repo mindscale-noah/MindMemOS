@@ -157,7 +157,7 @@ def to_delete_pipeline_input(req: DeleteRequest) -> DeletePipelineInput:
 def to_update_pipeline_input(req: UpdateRequest) -> UpdatePipelineInput:
     """Build update pipeline input from a public update request."""
 
-    return UpdatePipelineInput.model_validate(req.model_dump(by_alias=True))
+    return UpdatePipelineInput.model_validate(req.model_dump(by_alias=True, exclude=set(_ACTOR_FIELDS)))
 
 
 def to_feedback_pipeline_input(req: FeedbackRequest) -> FeedbackPipelineInput:
@@ -182,6 +182,7 @@ def to_memory_request_context(
     | DreamingRequest
     | MemoryPageRequest
     | MemoryScrollRequest
+    | UpdateRequest
     | None = None,
     *,
     require_user_id: bool = False,

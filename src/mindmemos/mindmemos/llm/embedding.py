@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from opentelemetry import trace
 
 from ..config import get_config
-from ..errors import ConfigNotInitializedError, EmbeddingDimensionError
+from ..errors import ApiError, ConfigNotInitializedError, EmbeddingDimensionError
 from ..logging import add_span_event, get_logger, traced, traced_awaitable
 from ..typing import EmbeddingResponse
 from .router import dump_response, get_response_value, litellm_response_headers, usage_tokens
@@ -23,15 +23,22 @@ logger = get_logger(__name__)
 def _resolved_expected_dim() -> int | None:
     """Resolve the collection dimension every embedding must match.
 
-    Returns ``database.qdrant.vector_size`` when config is bound, or ``None``
-    when config is uninitialized (e.g. unit tests without a config context),
-    in which case dimension validation is skipped.
+    Dynamic provider binding can bind a project-specific embedding dimension
+    while the base Qdrant config remains read-only. In that mode, prefer the
+    request-scoped embedding endpoint dimension. Static mode keeps the original
+    global ``database.qdrant.vector_size`` behavior.
     """
 
     try:
-        return get_config().database.qdrant.vector_size
+        cfg = get_config()
     except ConfigNotInitializedError:
         return None
+    if cfg.provider_binding.enabled:
+        for endpoint in cfg.embed_model_router.endpoints:
+            dimensions = getattr(endpoint, "dimensions", None)
+            if isinstance(dimensions, int) and dimensions > 0:
+                return dimensions
+    return cfg.database.qdrant.vector_size
 
 
 def _input_stats(text: str | list[str]) -> dict[str, int]:
@@ -141,7 +148,11 @@ class EmbedClient:
                 latency_ms=round((perf_counter() - start) * 1000, 2),
                 error=str(exc),
             )
-            raise
+            raise ApiError(
+                f"Embedding provider request failed: {_compact_error(exc)}",
+                code="embedding.provider_request_failed",
+                status_code=502,
+            ) from exc
         embeddings: list[list[float]] = []
         for item in getattr(resp, "data", []) or []:
             if isinstance(item, dict):
@@ -174,3 +185,8 @@ class EmbedClient:
             usage=usage,
             raw_response=dump_response(resp),
         )
+
+
+def _compact_error(exc: Exception) -> str:
+    message = str(exc).replace("\n", " ").strip()
+    return message[:500] if message else exc.__class__.__name__

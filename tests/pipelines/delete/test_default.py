@@ -56,6 +56,18 @@ async def test_delete_archives_existing_memory() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_hard_deletes_existing_memory() -> None:
+    writer = FakeWriter(changed=True)
+    pipeline = DefaultDeletePipeline(db_reader=FakeReader(), db_writer=writer)
+
+    result = await pipeline.delete(DeletePipelineInput(memory_id="mem-1", hard=True), make_context())
+
+    assert writer.calls == [("proj-1", "mem-1", True, "strong")]
+    assert result.status == "ok"
+    assert result.message is None
+
+
+@pytest.mark.asyncio
 async def test_delete_returns_error_when_memory_is_missing() -> None:
     pipeline = DefaultDeletePipeline(db_reader=FakeReader(), db_writer=FakeWriter(changed=False))
 

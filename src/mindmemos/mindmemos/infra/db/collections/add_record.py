@@ -6,6 +6,7 @@ from typing import Any
 
 from qdrant_client import models as qmodels
 
+from ..filters import ADD_RECORD_PAYLOAD_INDEX_SCHEMA
 from ..models import AddRecordPoint, QdrantRecord
 from .base import CollectionRepository
 
@@ -20,9 +21,9 @@ class AddRecordRepository(CollectionRepository):
     async def upsert(self, points: list[AddRecordPoint]) -> None:
         """Upsert many add-record points."""
 
-        await self._engine.upsert(
-            self.collection,
-            [self._payload_point(point.add_record_id, point.payload) for point in points],
+        await self._upsert_payload_points_by_project(
+            [(point.add_record_id, point.payload) for point in points],
+            payload_indexes=list(ADD_RECORD_PAYLOAD_INDEX_SCHEMA),
         )
 
     async def get(self, project_id: str, add_record_id: str) -> QdrantRecord | None:
@@ -32,8 +33,7 @@ class AddRecordRepository(CollectionRepository):
         trace once its skill content is registered (design §2.1).
         """
 
-        records = await self._engine.retrieve(self.collection, [add_record_id])
-        return self._engine.first_project_match(records, project_id)
+        return await self._get_one_scoped(project_id, add_record_id)
 
     async def retrieve(self, project_id: str, add_record_ids: list[str]) -> list[QdrantRecord]:
         """Retrieve many add-records by id, keeping only records in ``project_id``."""
@@ -63,13 +63,7 @@ class AddRecordRepository(CollectionRepository):
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll add-record points across projects for internal workers."""
 
-        return await self._engine.scroll(
-            self.collection,
-            scroll_filter=filter_,
-            limit=limit,
-            offset=cursor,
-            order_by=order_by,
-        )
+        return await self._scroll_payload_global(filter_=filter_, limit=limit, cursor=cursor, order_by=order_by)
 
     async def patch(self, project_id: str, add_record_id: str, payload: dict[str, Any]) -> None:
         """Set payload fields after project ownership is checked."""
@@ -77,4 +71,4 @@ class AddRecordRepository(CollectionRepository):
         record = await self.get(project_id, add_record_id)
         if record is None:
             return
-        await self._engine.set_payload(self.collection, add_record_id, payload)
+        await self._engine.set_payload(self.collection_for_project(project_id), add_record_id, payload)

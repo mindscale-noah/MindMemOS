@@ -175,6 +175,12 @@ class QdrantStore:
         if not self._cfg.auto_create:
             return
         for spec in all_collection_specs(self._cfg):
+            if self._cfg.project_collection_namespace_enabled and spec.name in {
+                self._cfg.memory_collection,
+                self._cfg.entity_collection,
+                self._cfg.source_collection,
+            }:
+                continue
             if spec.name == self._cfg.provider_binding_collection and not _provider_binding_enabled():
                 continue
             await self._engine.ensure_collection(spec)

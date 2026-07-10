@@ -21,6 +21,15 @@ ServiceResultStatus = Literal["ok", "error", "queued"]
 SearchPipelineStrategy = Literal["default", "vanilla", "schema"]
 
 
+class AddStreamCancelled(Exception):
+    """Raised when a streaming add request is cancelled before memory persistence."""
+
+    def __init__(self, stage: str, message: str = "add stream cancelled") -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.message = message
+
+
 def _utc_millis() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
 
@@ -115,6 +124,21 @@ class MemorySearchItem(BaseModel):
     lineage: MemoryLineage | None = None
     """Version lineage metadata populated by vanilla search."""
 
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    """Business metadata for management views."""
+
+    status: str | None = None
+    """Lifecycle status for management views."""
+
+    entity_id: str | None = None
+    """Schema entity id for management views."""
+
+    entity_type: str | None = None
+    """Schema entity type for management views."""
+
+    property_name: str | None = None
+    """Schema property name for management views."""
+
 
 class AddPipelineInput(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -141,6 +165,9 @@ class AddPipelineInput(BaseModel):
 
     metadata: dict = Field(default_factory=dict)
     """Business extension metadata."""
+
+    prompt_language: Literal["EN", "ZH"] | None = None
+    """Optional request-level prompt language for extraction."""
 
     @property
     def timestamp(self) -> int:
@@ -252,6 +279,9 @@ class MemoryListPipelineInput(BaseModel):
     include_total: bool = True
     """Whether to calculate the total matching memory count."""
 
+    include_inactive: bool = False
+    """Whether management list responses include non-active memories."""
+
 
 class MemoryListPipelineResult(BaseModel):
     status: ServiceResultStatus = "ok"
@@ -309,6 +339,9 @@ class DeletePipelineInput(BaseModel):
     id: str = Field(alias="memory_id")
     """Memory ID."""
 
+    hard: bool = False
+    """Whether to physically delete the memory instead of archiving it."""
+
 
 class DeletePipelineResult(BaseModel):
     status: ServiceResultStatus
@@ -324,8 +357,14 @@ class UpdatePipelineInput(BaseModel):
     id: str = Field(alias="memory_id")
     """Memory ID."""
 
-    content: str
+    content: str | None = None
     """New content for the target memory."""
+
+    metadata_patch: dict[str, Any] = Field(default_factory=dict)
+    """Optional metadata fields merged into the memory metadata."""
+
+    status: Literal["active", "archived", "delete"] | None = None
+    """Optional lifecycle status patch."""
 
 
 class UpdatePipelineResult(BaseModel):

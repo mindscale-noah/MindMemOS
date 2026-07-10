@@ -198,10 +198,10 @@ class MemoryCore:
             parse=parse_status_result,
         )
 
-    def delete(self, memory_id: str) -> MemoryRequest[StatusResult]:
+    def delete(self, memory_id: str, *, hard: bool | None = None) -> MemoryRequest[StatusResult]:
         return MemoryRequest(
             path="/v1/memory/delete",
-            body=build_delete_body(memory_id=memory_id),
+            body=build_delete_body(memory_id=memory_id, hard=hard),
             parse=parse_status_result,
         )
 

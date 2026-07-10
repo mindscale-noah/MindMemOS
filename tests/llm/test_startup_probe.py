@@ -61,6 +61,22 @@ async def test_validate_probe_raises_when_provider_returns_wrong_dimension(monke
 
 
 @pytest.mark.asyncio
+async def test_embed_uses_dynamic_provider_binding_dimensions_when_enabled() -> None:
+    try:
+        init_config(config_path="config/mindmemos/dev.example.yaml")
+        cfg = get_config()
+        cfg.provider_binding.enabled = True
+        dynamic_dim = 2048 if cfg.database.qdrant.vector_size != 2048 else 1024
+        cfg.embed_model_router.endpoints[0].dimensions = dynamic_dim
+
+        response = await EmbedClient(FixedDimEmbedRouter(dim=dynamic_dim)).embed(task="memory.add.entity", text="hello")
+
+        assert len(response.embeddings[0]) == dynamic_dim
+    finally:
+        reset_config()
+
+
+@pytest.mark.asyncio
 async def test_validate_skips_probe_when_no_endpoints_configured(monkeypatch) -> None:
     def boom():
         raise AssertionError("get_embed_client must not be called when no endpoints configured")

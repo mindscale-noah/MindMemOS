@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from mindmemos.typing.service import (
     AddPipelineAsyncResult,
     AddPipelineInput,
     AddPipelineSyncResult,
+    AddStreamCancelled,
     DreamingPipelineInput,
     DreamingPipelineResult,
     FeedbackPipelineInput,
@@ -85,6 +87,37 @@ class FakeAddPipeline:
         return False
 
 
+class FakeStreamingAddPipeline(FakeAddPipeline):
+    async def add_sync_stream(
+        self,
+        inp: AddPipelineInput,
+        context: MemoryRequestContext,
+        *,
+        add_record_id: str | None = None,
+        progress=None,
+        cancel_check=None,
+    ):
+        self.sync_calls.append(
+            {
+                "inp": inp,
+                "ctx": context,
+                "add_record_id": add_record_id,
+            }
+        )
+        if progress is not None:
+            await progress("llm_extracting", "extracting", 40)
+        return AddPipelineSyncResult(
+            status="ok",
+            memories=[
+                MemoryAddEventItem(
+                    operation="add",
+                    memory_id="mem-1",
+                    content=inp.messages[0].content,
+                )
+            ],
+        )
+
+
 class FailingAddPipeline(FakeAddPipeline):
     async def add_sync(
         self,
@@ -94,6 +127,56 @@ class FailingAddPipeline(FakeAddPipeline):
         add_record_id: str | None = None,
     ) -> AddPipelineSyncResult:
         raise RuntimeError("add failed")
+
+
+class SlowStreamingAddPipeline(FakeStreamingAddPipeline):
+    async def add_sync_stream(
+        self,
+        inp: AddPipelineInput,
+        context: MemoryRequestContext,
+        *,
+        add_record_id: str | None = None,
+        progress=None,
+        cancel_check=None,
+    ):
+        self.sync_calls.append(
+            {
+                "inp": inp,
+                "ctx": context,
+                "add_record_id": add_record_id,
+            }
+        )
+        await asyncio.sleep(0.05)
+        return AddPipelineSyncResult(
+            status="ok",
+            memories=[
+                MemoryAddEventItem(
+                    operation="add",
+                    memory_id="mem-1",
+                    content=inp.messages[0].content,
+                )
+            ],
+        )
+
+
+class CancellingStreamingAddPipeline(FakeStreamingAddPipeline):
+    async def add_sync_stream(
+        self,
+        inp: AddPipelineInput,
+        context: MemoryRequestContext,
+        *,
+        add_record_id: str | None = None,
+        progress=None,
+        cancel_check=None,
+    ):
+        self.sync_calls.append(
+            {
+                "inp": inp,
+                "ctx": context,
+                "add_record_id": add_record_id,
+            }
+        )
+        raise AddStreamCancelled("memory_planning", "cancelled by user")
 
 
 class FakeAsyncAddPipeline(FakeAddPipeline):
@@ -175,6 +258,7 @@ class FakeDreamingPipeline:
 class FakeRecorder:
     add_calls: list[dict] = field(default_factory=list)
     failed_calls: list[dict] = field(default_factory=list)
+    cancelled_calls: list[dict] = field(default_factory=list)
     search_calls: list[dict] = field(default_factory=list)
 
     async def record_add_input(
@@ -205,6 +289,9 @@ class FakeRecorder:
 
     async def mark_add_failed(self, ctx, add_record_id, error) -> None:
         self.failed_calls.append({"ctx": ctx, "add_record_id": add_record_id, "error": error})
+
+    async def mark_add_cancelled(self, ctx, add_record_id, reason) -> None:
+        self.cancelled_calls.append({"ctx": ctx, "add_record_id": add_record_id, "reason": reason})
 
     async def record_search(self, inp, result, *, ctx, request_submitted_at, task_completed_at) -> None:
         self.search_calls.append(
@@ -351,6 +438,83 @@ async def test_memory_service_records_add_result_for_schema_add_pipeline() -> No
     call = recorder.add_calls[0]
     assert call["status"] == "processing"
     assert pipeline.sync_calls[0]["add_record_id"] == call["add_record_id"]
+
+
+@pytest.mark.asyncio
+async def test_add_request_prompt_language_reaches_add_pipeline() -> None:
+    recorder = FakeRecorder()
+    pipeline = FakeAddPipeline()
+    service = make_service(
+        add_pipeline=pipeline,
+        add_pipeline_name="schema_add",
+        operation_recorder=recorder,
+    )
+
+    await service.add(make_context(), add_request().model_copy(update={"prompt_language": "ZH"}))
+
+    assert pipeline.sync_calls[0]["inp"].prompt_language == "ZH"
+    assert recorder.add_calls[0]["inp"].prompt_language == "ZH"
+
+
+@pytest.mark.asyncio
+async def test_memory_service_streams_schema_add_progress_and_completion() -> None:
+    recorder = FakeRecorder()
+    pipeline = FakeStreamingAddPipeline()
+    service = make_service(
+        add_pipeline=pipeline,
+        add_pipeline_name="schema_add",
+        operation_recorder=recorder,
+    )
+
+    events = [event async for event in service.add_stream(make_context(), add_request())]
+
+    assert [event["event"] for event in events] == ["progress", "progress", "completed"]
+    assert events[0]["stage"] == "accepted"
+    assert events[1]["stage"] == "llm_extracting"
+    assert events[-1]["data"]["memories"][0]["memory_id"] == "mem-1"
+    assert len(recorder.add_calls) == 1
+    assert recorder.add_calls[0]["status"] == "processing"
+    assert pipeline.sync_calls[0]["add_record_id"] == recorder.add_calls[0]["add_record_id"]
+
+
+@pytest.mark.asyncio
+async def test_memory_service_streams_heartbeat_while_schema_add_is_idle() -> None:
+    recorder = FakeRecorder()
+    pipeline = SlowStreamingAddPipeline()
+    service = make_service(
+        add_pipeline=pipeline,
+        add_pipeline_name="schema_add",
+        operation_recorder=recorder,
+    )
+    service.stream_heartbeat_seconds = 0.01
+
+    events = [event async for event in service.add_stream(make_context(), add_request())]
+
+    assert events[0]["event"] == "progress"
+    assert events[-1]["event"] == "completed"
+    heartbeat_events = [event for event in events if event["event"] == "heartbeat"]
+    assert heartbeat_events
+    assert heartbeat_events[0]["stage"] == "waiting"
+    assert heartbeat_events[0]["message_i18n"]["zh"] == "记忆提取仍在进行，请稍候"
+    assert events[-1]["data"]["memories"][0]["memory_id"] == "mem-1"
+
+
+@pytest.mark.asyncio
+async def test_memory_service_records_cancelled_add_for_streaming_schema_pipeline() -> None:
+    recorder = FakeRecorder()
+    pipeline = CancellingStreamingAddPipeline()
+    service = make_service(
+        add_pipeline=pipeline,
+        add_pipeline_name="schema_add",
+        operation_recorder=recorder,
+    )
+
+    events = [event async for event in service.add_stream(make_context(), add_request())]
+
+    assert [event["event"] for event in events] == ["progress", "cancelled"]
+    assert len(recorder.cancelled_calls) == 1
+    assert recorder.cancelled_calls[0]["add_record_id"] == recorder.add_calls[0]["add_record_id"]
+    assert recorder.cancelled_calls[0]["reason"] == "cancelled by user"
 
 
 @pytest.mark.asyncio

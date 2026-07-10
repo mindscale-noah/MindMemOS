@@ -3,13 +3,15 @@ from types import SimpleNamespace
 
 import mindmemos.pipelines.add.schema.schema_add as schema_add
 import pytest
+from mindmemos.components.chunker import episodes_chunker
+from mindmemos.components.extractor.schema import _runtime_clients
 from mindmemos.typing.memory import EntityView, MemoryRequestContext, MemoryView
 from mindmemos.typing.memory_db import MemoryDbMutationResult, MemoryDbWriteResult
 from mindmemos.typing.service import AddPipelineInput
 from qdrant_client import models as qmodels
 
 from mindmemos.components.memory_modeling.schema import EntityManager, EntityType
-from mindmemos.config import init_config, reset_config
+from mindmemos.config import bind_config_overrides, get_config, init_config, reset_config
 from mindmemos.infra import db
 from mindmemos.llm import ChatResponse, EmbeddingResponse
 from mindmemos.pipelines.add import SchemaAddPipeline
@@ -131,6 +133,20 @@ class RecordingFakeEmbed(FakeEmbed):
 
     async def embed(self, task, text, **kwargs):
         self.calls.append(SimpleNamespace(task=task, text=text))
+        return await super().embed(task, text, **kwargs)
+
+
+class RequestScopedLLM(FakeLLM):
+    async def chat(self, task, messages, format_parser=None, **kwargs):
+        if not get_config().chat_model_router.endpoints:
+            raise RuntimeError("No chat model endpoint configured")
+        return await super().chat(task, messages, format_parser=format_parser, **kwargs)
+
+
+class RequestScopedEmbed(FakeEmbed):
+    async def embed(self, task, text, **kwargs):
+        if not get_config().embed_model_router.endpoints:
+            raise RuntimeError("No embed model endpoint configured")
         return await super().embed(task, text, **kwargs)
 
 
@@ -571,6 +587,97 @@ def config_context():
 
 
 @pytest.mark.asyncio
+async def test_schema_add_pipeline_resolves_request_scoped_clients_when_provider_binding_enabled(monkeypatch):
+    cfg = get_config()
+    cfg.provider_binding.enabled = True
+    cfg.chat_model_router.endpoints.clear()
+    cfg.embed_model_router.endpoints.clear()
+    monkeypatch.setattr(_runtime_clients, "get_llm_client", lambda: RequestScopedLLM())
+    monkeypatch.setattr(_runtime_clients, "get_embed_client", lambda: RequestScopedEmbed())
+    monkeypatch.setattr(episodes_chunker, "get_llm_client", lambda: RequestScopedLLM())
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    reader = MemoryDbReader(clients=clients)
+    pipeline = SchemaAddPipeline(
+        db_reader=reader,
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    assert pipeline.llm_client is None
+    assert pipeline.embed_client is None
+    assert pipeline.chunker.llm_client is None
+    assert pipeline.extractor.llm_client is None
+    assert pipeline.planner.llm_client is None
+    assert pipeline.planner.embed_client is None
+
+    with bind_config_overrides(
+        project_config={
+            "chat_model_router": {
+                "endpoints": [
+                    {
+                        "model": "openai/request-chat",
+                        "api_key": "sk-request",
+                        "api_base": "https://example.test/v1",
+                    }
+                ]
+            },
+            "embed_model_router": {
+                "endpoints": [
+                    {
+                        "model": "openai/request-embed",
+                        "api_key": "sk-request",
+                        "api_base": "https://example.test/v1",
+                        "dimensions": 3,
+                    }
+                ]
+            },
+        }
+    ):
+        result = await pipeline.add_sync(
+            AddPipelineInput(
+                mode="sync",
+                timestamp=1770000000000,
+                force_generation=True,
+                messages=[{"role": "user", "content": "I like Qdrant for vector search."}],
+            ),
+            make_context(),
+        )
+
+    assert result.status == "ok"
+    assert writer.calls
+
+
+def test_schema_add_pipeline_keeps_eager_clients_when_provider_binding_disabled(monkeypatch):
+    cfg = get_config()
+    cfg.provider_binding.enabled = False
+    llm = RequestScopedLLM()
+    embed = RequestScopedEmbed()
+    monkeypatch.setattr(_runtime_clients, "get_llm_client", lambda: llm)
+    monkeypatch.setattr(_runtime_clients, "get_embed_client", lambda: embed)
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    reader = MemoryDbReader(clients=clients)
+
+    pipeline = SchemaAddPipeline(
+        db_reader=reader,
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    assert pipeline.llm_client is llm
+    assert pipeline.embed_client is embed
+    assert pipeline.chunker.llm_client is llm
+    assert pipeline.extractor.llm_client is llm
+    assert pipeline.planner.llm_client is llm
+    assert pipeline.planner.embed_client is embed
+
+
+@pytest.mark.asyncio
 async def test_schema_add_pipeline_writes_entity_and_property_vectors():
     writer = FakeWriter()
     qdrant = FakeQdrant()
@@ -858,6 +965,43 @@ async def test_schema_add_buffer_orders_by_added_time_not_event_time():
     assert [record.payload["event_timestamp_ms"] for record in records] == [1770000000000, 1770000000000]
     assert all(before <= record.payload["added_at"] <= after for record in records)
     assert records[0].buffer_sequence < records[1].buffer_sequence
+
+
+@pytest.mark.asyncio
+async def test_schema_add_buffer_preserves_prompt_language():
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    buffer = AddRecordBuffer(clients=clients)
+    inp = AddPipelineInput(
+        mode="sync",
+        prompt_language="ZH",
+        messages=[{"role": "user", "content": "Prefer stable algorithms."}],
+    )
+
+    await buffer.append(make_context(), inp, force_generation=True)
+
+    records = await buffer.list_buffered(make_context(), limit=10)
+    assert records[0].payload["prompt_language"] == "ZH"
+    assert schema_add._reconstruct_input_from_records(records).prompt_language == "ZH"
+
+
+def test_schema_add_prompt_language_for_records_prefers_explicit_request(monkeypatch):
+    records = [
+        schema_add.BufferedAddRecord(
+            add_record_id="record-1",
+            payload={
+                "prompt_language": "ZH",
+                "messages": [{"role": "user", "content": "Prefer stable algorithms."}],
+            },
+        )
+    ]
+    monkeypatch.setattr(
+        schema_add,
+        "detect_prompt_language",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("language should not be auto-detected")),
+    )
+
+    assert schema_add._prompt_language_for_records(records, "Prefer stable algorithms.") == "ZH"
 
 
 @pytest.mark.asyncio

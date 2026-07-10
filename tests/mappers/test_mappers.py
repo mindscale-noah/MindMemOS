@@ -118,6 +118,8 @@ def test_service_add_input_rejects_removed_add_options(field_name: str, value: o
 def test_memory_id_aliases_keep_delete_update_api_compatible() -> None:
     assert DeletePipelineInput(memory_id="mem-3").id == "mem-3"
     assert DeletePipelineInput(id="mem-4").id == "mem-4"
+    assert DeletePipelineInput(memory_id="mem-3").hard is False
+    assert DeletePipelineInput(memory_id="mem-3", hard=True).hard is True
     assert UpdatePipelineInput(memory_id="mem-5", content="updated").id == "mem-5"
     assert UpdatePipelineInput(id="mem-6", content="updated").id == "mem-6"
 

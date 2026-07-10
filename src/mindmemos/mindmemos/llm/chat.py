@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 
+from ..errors import ApiError
 from ..logging import add_span_event, get_logger, traced
 from ..typing import ChatResponse, Usage
 from .router import dump_response, get_response_value, litellm_response_headers, usage_tokens
@@ -95,7 +96,11 @@ class LLMClient:
                     latency_ms=round((perf_counter() - start) * 1000, 2),
                     error=str(exc),
                 )
-                raise
+                raise ApiError(
+                    f"LLM provider request failed: {_compact_error(exc)}",
+                    code="llm.provider_request_failed",
+                    status_code=502,
+                ) from exc
             usage = usage_tokens(getattr(resp, "usage", None))
             headers = litellm_response_headers(resp)
             model_name = get_response_value(resp, "model", target) or target
@@ -184,3 +189,8 @@ def _annotate_llm_usage_span(*, task: str, model: str, usage: Usage) -> None:
     span.set_attribute("llm.usage.prompt_tokens", int(usage.prompt_tokens or 0))
     span.set_attribute("llm.usage.completion_tokens", int(usage.completion_tokens or 0))
     span.set_attribute("llm.usage.total_tokens", int(usage.total_tokens or 0))
+
+
+def _compact_error(exc: Exception) -> str:
+    message = str(exc).replace("\n", " ").strip()
+    return message[:500] if message else exc.__class__.__name__

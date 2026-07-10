@@ -90,6 +90,8 @@ class DefaultGetPipeline(MemoryDbPipelineMixin):
 
 def _active_filter(inp: GetPipelineInput) -> SearchFilter:
     base = parse_search_dsl(inp.filters)
+    if getattr(inp, "include_inactive", False):
+        return base
     return SearchFilter(
         must=[
             *base.must,
@@ -109,4 +111,9 @@ def _to_memory_search_item(memory: MemoryView) -> MemorySearchItem:
         last_update_at=format_datetime(updated_at),
         event_time=format_memory_event_time(memory),
         source_timestamp=format_source_timestamp(memory),
+        metadata=dict(memory.metadata or {}),
+        status=memory.status,
+        entity_id=memory.entity_id,
+        entity_type=memory.entity_type,
+        property_name=memory.property_name,
     )

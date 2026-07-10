@@ -27,7 +27,7 @@ class DefaultDeletePipeline(MemoryDbPipelineMixin):
         Returns:
             An ok result when the memory was archived, otherwise an error result.
         """
-        command = MemoryDbDeleteCommand(memory_id=inp.id)
+        command = MemoryDbDeleteCommand(memory_id=inp.id, hard=inp.hard)
         write_result = await self.db_writer.apply_mutation_plan(
             context,
             MemoryDbMutationPlan(memory_deletes=[command]),

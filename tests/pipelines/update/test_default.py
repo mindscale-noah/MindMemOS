@@ -73,6 +73,29 @@ async def test_update_patches_existing_memory() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_allows_status_only_patch_without_content() -> None:
+    memory = MemoryView(
+        memory_id="mem-1",
+        project_id="proj-1",
+        content="old content",
+        mem_type="fact",
+        status="active",
+    )
+    reader = FakeReader(memory)
+    writer = FakeWriter()
+    pipeline = DefaultUpdatePipeline(db_reader=reader, db_writer=writer)
+
+    result = await pipeline.update(UpdatePipelineInput(memory_id="mem-1", status="archived"), make_context())
+
+    assert result.status == "ok"
+    assert len(writer.update_calls) == 1
+    _project_id, command = writer.update_calls[0]
+    assert command.memory_id == "mem-1"
+    assert command.content is None
+    assert command.status == "archived"
+
+
+@pytest.mark.asyncio
 async def test_update_returns_error_when_memory_is_missing() -> None:
     reader = FakeReader(None)
     writer = FakeWriter()

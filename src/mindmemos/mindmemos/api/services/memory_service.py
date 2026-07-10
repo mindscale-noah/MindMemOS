@@ -1,5 +1,7 @@
 """Memory HTTP business logic."""
 
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import nullcontext
 from typing import Any, Literal
 from uuid import uuid4
@@ -21,6 +23,7 @@ from ...provider_bindings import ProviderBindingResolver, get_provider_binding_r
 from ...typing import (
     AddPipelineAsyncResult,
     AddPipelineSyncResult,
+    AddStreamCancelled,
     DeletePipelineResult,
     DreamingPipelineResult,
     FeedbackPipelineResult,
@@ -192,6 +195,192 @@ class MemoryService:
                 request_submitted_at,
                 skill_bindings,
             )
+
+    @traced("memory_service.add_stream")
+    async def add_stream(
+        self,
+        auth: AuthContext,
+        request: AddRequest,
+        *,
+        cancel_check: Callable[[], Awaitable[bool]] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Run sync add while streaming progress events."""
+
+        annotate_request_trace(auth)
+        pipeline, _add_pipeline_name = self._add_pipeline_for_auth(auth)
+        if pipeline is None:
+            raise NotImplementedError("add pipeline implementation is not wired yet")
+        ctx = to_memory_request_context(auth, request, require_user_id=True)
+        payload = to_add_pipeline_input(request)
+        if payload.mode != "sync":
+            yield {
+                "event": "error",
+                "stage": "accepted",
+                "message": "streaming add only supports sync mode",
+            }
+            return
+
+        add_record_id = str(uuid4())
+        request_submitted_at = utcnow()
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
+            yield {
+                "event": "progress",
+                "stage": "accepted",
+                "message": "Add request accepted.",
+                "percent": 1,
+            }
+            await suppress_recording_errors(
+                self._recorder.record_add_input(
+                    payload,
+                    ctx=ctx,
+                    request_submitted_at=request_submitted_at,
+                    add_record_id=add_record_id,
+                    status="processing",
+                    skill_bindings=skill_bindings,
+                    score=request.score,
+                    task_id=request.task_id,
+                ),
+                operation="add",
+            )
+
+            if hasattr(pipeline, "add_sync_stream"):
+                async for event in self._stream_pipeline_add(
+                    pipeline,
+                    payload,
+                    ctx,
+                    add_record_id=add_record_id,
+                    cancel_check=cancel_check,
+                ):
+                    yield event
+                return
+
+            try:
+                result = await pipeline.add_sync(payload, ctx, add_record_id=add_record_id)
+            except Exception as exc:
+                await suppress_recording_errors(
+                    self._recorder.mark_add_failed(ctx, add_record_id, str(exc)),
+                    operation="add",
+                )
+                yield {"event": "error", "stage": "error", "message": str(exc)}
+                return
+            yield {
+                "event": "completed",
+                "stage": "completed",
+                "message": "Add completed.",
+                "data": {"memories": [memory.model_dump(mode="json") for memory in result.memories]},
+            }
+
+    async def _stream_pipeline_add(
+        self,
+        pipeline: AddPipeline,
+        payload,
+        ctx,
+        *,
+        add_record_id: str,
+        cancel_check: Callable[[], Awaitable[bool]] | None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+        async def progress(
+            stage: str,
+            message: str,
+            percent: int | None = None,
+            data: dict[str, Any] | None = None,
+        ) -> None:
+            event: dict[str, Any] = {
+                "event": "progress",
+                "stage": stage,
+                "message": message,
+            }
+            if percent is not None:
+                event["percent"] = percent
+            if data:
+                message_i18n = data.get("message_i18n")
+                if isinstance(message_i18n, dict):
+                    event["message_i18n"] = message_i18n
+                remaining_data = {key: value for key, value in data.items() if key != "message_i18n"}
+                if remaining_data:
+                    event["data"] = remaining_data
+            await queue.put(event)
+
+        async def run_pipeline() -> None:
+            try:
+                result_or_stream = pipeline.add_sync_stream(
+                    payload,
+                    ctx,
+                    add_record_id=add_record_id,
+                    progress=progress,
+                    cancel_check=cancel_check,
+                )
+                if hasattr(result_or_stream, "__aiter__"):
+                    async for event in result_or_stream:
+                        await queue.put(event)
+                else:
+                    result = await result_or_stream
+                    await queue.put(
+                        {
+                            "event": "completed",
+                            "stage": "completed",
+                            "message": "Add completed.",
+                            "data": {
+                                "memories": [
+                                    memory.model_dump(mode="json") for memory in result.memories
+                                ]
+                            },
+                        }
+                    )
+            except AddStreamCancelled as exc:
+                await suppress_recording_errors(
+                    self._recorder.mark_add_cancelled(ctx, add_record_id, exc.message),
+                    operation="add",
+                )
+                await queue.put(
+                    {
+                        "event": "cancelled",
+                        "stage": exc.stage,
+                        "message": exc.message,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                await suppress_recording_errors(
+                    self._recorder.mark_add_failed(ctx, add_record_id, str(exc)),
+                    operation="add",
+                )
+                await queue.put({"event": "error", "stage": "error", "message": str(exc)})
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(run_pipeline())
+        heartbeat_seconds = getattr(self, "stream_heartbeat_seconds", 10.0)
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                except asyncio.TimeoutError:
+                    yield {
+                        "event": "heartbeat",
+                        "stage": "waiting",
+                        "message": "Memory extraction is still running.",
+                        "message_i18n": {
+                            "zh": "记忆提取仍在进行，请稍候",
+                            "en": "Memory extraction is still running.",
+                        },
+                    }
+                    continue
+                if item is None:
+                    break
+                yield item
+        finally:
+            if not task.done():
+                def _consume_task_result(done_task: asyncio.Task) -> None:
+                    try:
+                        done_task.exception()
+                    except asyncio.CancelledError:
+                        pass
+
+                task.add_done_callback(_consume_task_result)
 
     async def _add_with_context(
         self,
@@ -388,7 +577,7 @@ class MemoryService:
         pipeline = self._pipeline("_update")
         if pipeline is None:
             raise NotImplementedError("update pipeline implementation is not wired yet")
-        ctx = to_memory_request_context(auth)
+        ctx = to_memory_request_context(auth, request)
         config_ctx = await self._provider_config_context(ctx)
         with config_ctx:
             return await pipeline.update(to_update_pipeline_input(request), ctx)

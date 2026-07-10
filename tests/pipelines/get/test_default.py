@@ -89,6 +89,31 @@ async def test_get_returns_hydrated_memory_items() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_projects_schema_scope_fields_for_management_lists() -> None:
+    memory = MemoryView(
+        memory_id="mem-schema",
+        project_id="proj-1",
+        content="Use 2-opt after nearest-neighbor seeding.",
+        mem_type="fact",
+        status="active",
+        created_at=datetime(2026, 1, 1, 8, 30, tzinfo=UTC),
+        property_name="good_algorithm",
+        entity_id="entity-1",
+        entity_type="llm4ad_memory_card",
+        metadata={"entity_name": "TSP local search"},
+    )
+    pipeline = DefaultGetPipeline(db_reader=FakeReader([memory]), db_writer=FakeWriter())
+
+    result = await pipeline.list(MemoryListPipelineInput(page=1, page_size=20), make_context())
+
+    assert result.memories[0].id == "mem-schema"
+    assert result.memories[0].property_name == "good_algorithm"
+    assert result.memories[0].entity_id == "entity-1"
+    assert result.memories[0].entity_type == "llm4ad_memory_card"
+    assert result.memories[0].metadata["entity_name"] == "TSP local search"
+
+
+@pytest.mark.asyncio
 async def test_get_prefers_resolved_event_date_over_source_time() -> None:
     memory = MemoryView(
         memory_id="mem-1",

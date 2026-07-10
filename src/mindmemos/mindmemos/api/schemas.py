@@ -113,6 +113,9 @@ class AddRequest(ActorIdentityRequest):
     metadata: dict[str, Any] = Field(default_factory=dict)
     """Business extension metadata."""
 
+    prompt_language: Literal["EN", "ZH"] | None = None
+    """Optional request-level prompt language for extraction."""
+
     skill_context: list[SkillContext] | None = None
     """Skill references hit in this turn, excluding full text, used for trace binding.
 
@@ -209,6 +212,9 @@ class MemoryPageRequest(ActorIdentityRequest):
     include_total: bool = True
     """Whether to calculate and return total matching memories."""
 
+    include_inactive: bool = False
+    """Whether management list responses include non-active memories."""
+
 
 class MemoryScrollRequest(ActorIdentityRequest):
     """HTTP body for ``POST /v1/memory/scroll``."""
@@ -237,12 +243,16 @@ class DeleteRequest(BaseModel):
     id: NonEmptyStr = Field(alias="memory_id")
     """Memory ID"""
 
+    hard: bool = False
+    """Whether to physically delete the memory instead of archiving it."""
 
-class UpdateRequest(BaseModel):
+
+class UpdateRequest(ActorIdentityRequest):
     """HTTP body for ``POST /v1/memory/update``.
 
-    Mirrors :class:`mindmemos.typing.service.UpdatePipelineInput`. No actor identity.
-    Converted by ``api.mappers.to_update_pipeline_input``.
+    Mirrors :class:`mindmemos.typing.service.UpdatePipelineInput` plus optional
+    actor identity for dynamic provider binding. Converted by
+    ``api.mappers.to_update_pipeline_input``.
     """
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -250,8 +260,14 @@ class UpdateRequest(BaseModel):
     id: NonEmptyStr = Field(alias="memory_id")
     """Memory ID"""
 
-    content: NonEmptyStr
+    content: NonEmptyStr | None = None
     """Replacement content for the specified memory id."""
+
+    metadata_patch: dict[str, Any] = Field(default_factory=dict)
+    """Optional metadata fields merged into the memory metadata."""
+
+    status: Literal["active", "archived", "delete"] | None = None
+    """Optional lifecycle status patch."""
 
 
 class FeedbackRequest(ActorIdentityRequest):

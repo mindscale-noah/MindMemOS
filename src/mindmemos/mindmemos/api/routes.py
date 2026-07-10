@@ -8,7 +8,10 @@ input via the typed request body, delegate to the service, wrap the result in
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends
+from starlette.responses import StreamingResponse
 
 from .deps import require_scopes
 from .mappers import (
@@ -64,6 +67,31 @@ async def add_memory(
 ) -> AddResponse:
     result = await service.add(auth, payload)
     return to_add_api_response(result, auth.request_id)
+
+
+@router.post("/add/stream")
+async def add_memory_stream(
+    payload: AddRequest,
+    auth: AuthContext = Depends(require_scopes(SCOPE_MEM_WRITE)),
+    service: MemoryService = Depends(get_memory_service),
+) -> StreamingResponse:
+    """Stream sync add progress as Server-Sent Events."""
+
+    async def stream():
+        async for item in service.add_stream(auth, payload, cancel_check=None):
+            event_name = str(item.get("event") or "progress")
+            data = {key: value for key, value in item.items() if key != "event"}
+            yield f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/get", response_model=GetResponse)
