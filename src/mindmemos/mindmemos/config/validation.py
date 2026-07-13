@@ -250,10 +250,8 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     ),
     RangeRule("algo_config.dreaming.lookback_days", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.dreaming.max_memories_per_scope", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.dreaming.min_scope_updates", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.dreaming.min_cluster_size", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.dreaming.concurrency", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.dreaming.scope_batch_size", min_value=1, support="positive integer >= 1"),
     RangeRule(
         "algo_config.dreaming.max_scopes_per_run",
         min_value=1,
