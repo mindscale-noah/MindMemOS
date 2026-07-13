@@ -68,17 +68,30 @@ uv run python -m mindmemos_eval.cli memory \
 
 ### Evaluation of Persona Memory
 
-MindMemOS achieves state-of-the-art on PersonaMem through higher-order property modeling and discovery, leading the current SOTA by approximately **2 points** in overall accuracy.
+MindMemOS-schema achieves state-of-the-art on PersonaMem with an overall accuracy of **70.6%**, leading the current SOTA by approximately **3 points**.
 
 * Benchmark: [PersonaMem](https://arxiv.org/abs/2505.15998), a persona-centric memory benchmark focused on user profiling and preference understanding, evaluating recall, tracking, revisiting, suggestion, recommendation, and generalization of user traits.
-* Note: All results are from local runs of open-source code (memory model and answer model: gpt-4.1-mini).
+* Note: All results are from local runs of open-source code (memory model and answer model: gpt-4.1-mini). Baseline metrics are cited from the [EverMemOS](https://arxiv.org/abs/2507.00221) paper.
 
 | Method              | Recall Sha. | Recall Men. (Ack. Latest) | Track Evo. | Revisit | Suggest | Recommend | Generalize | Overall          |
 | :------------------ | :---------: | :-----------------------: | :--------: | :-----: | :-----: | :-------: | :--------: | :--------------: |
 | MemOS               | 74.42% (96/129) | 82.35% (14/17) | 61.87% (86/139) | 77.78% (77/99) | 44.09% (41/93) | 67.27% (37/55) | 84.21% (48/57) | 67.74% (399/589) |
 | EverMemOS           | 74.42% (96/129) | 64.71% (11/17) | 64.03% (89/139) | 85.86% (85/99) | 35.48% (33/93) | 65.45% (36/55) | 84.21% (48/57) | 67.57% (398/589) |
 | MemU                | 64.34% (83/129) | 64.71% (11/17) | 66.20% (92/139) | 87.88% (87/99) | 31.18% (29/93) | 67.27% (37/55) | 84.21% (48/57) | 65.70% (387/589) |
-| **MindMemOS-schema** | 73.64% (95/129) | **82.35%** (14/17) | **67.63%** (94/139) | 85.86% (85/99) | 35.48% (33/93) | **80.00%** (44/55) | 78.95% (45/57) | **69.61% (410/589)** |
+| **MindMemOS-schema** | **81.4% (105/129)** | 64.7% (11/17) | 64.7% (90/139) | 82.8% (82/99) | **47.3% (44/93)** | **76.4% (42/55)** | 73.7% (42/57) | **70.6% (416/589)** |
+
+Evaluation config: [`config/mindmemos_eval/memory_evaluation_personamem.example.yaml`](config/mindmemos_eval/memory_evaluation_personamem.example.yaml)
+
+```bash
+cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml config/mindmemos_eval/memory_evaluation_personamem.yaml
+# fill in API keys, then run:
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
+  --benchmark-list personamem \
+  --algorithm schema \
+  --manifest-output output/personamem_manifest.jsonl \
+  --api-key-output config/mindmemos/api_keys.yaml
+```
 
 ### Evaluation of Dreaming
 

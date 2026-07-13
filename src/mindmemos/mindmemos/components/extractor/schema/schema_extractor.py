@@ -101,6 +101,7 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
         prompt_set: AddPromptSet | None = None,
     ) -> dict[str, Any]:
         prompts = prompt_set or self.prompt_set
+
         prompt = (
             prompts.entity_generation.replace("{entity_schema}", str(entity_schema))
             .replace("{dialogue_timestamp}", dialogue_timestamp)
@@ -118,6 +119,7 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
             if not isinstance(raw_memory, dict):
                 raw_memory = {"entities": [], "edges": []}
             last_memory = raw_memory
+
             validation_error = self.validate_memory(raw_memory)
             if not validation_error and has_unique_entity_names(raw_memory):
                 return raw_memory

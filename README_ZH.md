@@ -65,17 +65,30 @@ uv run python -m mindmemos_eval.cli memory \
 
 ### Evaluation of Persona Memory
 
-MindMemOS 通过高阶属性建模与发现，在 PersonaMem 基准上达到 SOTA，Overall 准确率领先当前 SOTA 约 **2 个百分点**。
+MindMemOS-schema 在 PersonaMem 基准上达到 SOTA，Overall 准确率 **70.6%**，领先当前 SOTA 约 **3 个百分点**。
 
 * Benchmark：[PersonaMem](https://arxiv.org/abs/2505.15998)，以用户画像与喜好理解为中心的记忆基准，评测对用户特征的召回、追踪、重访、建议、推荐与泛化能力。
-* Note：所有实验结果来源于开源代码本地运行（记忆模型、回答模型均为 gpt-4.1-mini）。
+* Note：所有实验结果来源于开源代码本地运行（记忆模型、回答模型均为 gpt-4.1-mini）。Baseline 指标引用自 [EverMemOS](https://arxiv.org/abs/2507.00221) 论文。
 
 | Method              | Recall Sha. | Recall Men. (Ack. Latest) | Track Evo. | Revisit | Suggest | Recommend | Generalize | Overall          |
 | :------------------ | :---------: | :-----------------------: | :--------: | :-----: | :-----: | :-------: | :--------: | :--------------: |
 | MemOS               | 74.42% (96/129) | 82.35% (14/17) | 61.87% (86/139) | 77.78% (77/99) | 44.09% (41/93) | 67.27% (37/55) | 84.21% (48/57) | 67.74% (399/589) |
 | EverMemOS           | 74.42% (96/129) | 64.71% (11/17) | 64.03% (89/139) | 85.86% (85/99) | 35.48% (33/93) | 65.45% (36/55) | 84.21% (48/57) | 67.57% (398/589) |
 | MemU                | 64.34% (83/129) | 64.71% (11/17) | 66.20% (92/139) | 87.88% (87/99) | 31.18% (29/93) | 67.27% (37/55) | 84.21% (48/57) | 65.70% (387/589) |
-| **MindMemOS-schema** | 73.64% (95/129) | **82.35%** (14/17) | **67.63%** (94/139) | 85.86% (85/99) | 35.48% (33/93) | **80.00%** (44/55) | 78.95% (45/57) | **69.61% (410/589)** |
+| **MindMemOS-schema** | **81.4% (105/129)** | 64.7% (11/17) | 64.7% (90/139) | 82.8% (82/99) | **47.3% (44/93)** | **76.4% (42/55)** | 73.7% (42/57) | **70.6% (416/589)** |
+
+评测配置：[`config/mindmemos_eval/memory_evaluation_personamem.example.yaml`](config/mindmemos_eval/memory_evaluation_personamem.example.yaml)
+
+```bash
+cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml config/mindmemos_eval/memory_evaluation_personamem.yaml
+# 填入 API key 后执行：
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
+  --benchmark-list personamem \
+  --algorithm schema \
+  --manifest-output output/personamem_manifest.jsonl \
+  --api-key-output config/mindmemos/api_keys.yaml
+```
 
 
 ### Evaluation of Dreaming

@@ -63,6 +63,7 @@ class SchemaHigherOrderGenerator:
         raw_entity: dict[str, Any],
         context: MemoryRequestContext,
         created_at: datetime,
+        episode_time: str = "",
         request_metadata: dict[str, Any],
         prompt_set: AddPromptSet | None = None,
     ) -> tuple[list[MemoryWrite], list[str], list[SchemaMemoryUpdate]]:
@@ -130,6 +131,7 @@ class SchemaHigherOrderGenerator:
             current_higher_order=current_higher_order,
             context=context,
             created_at=created_at,
+            episode_time=episode_time,
             request_metadata=request_metadata,
         )
 
@@ -204,6 +206,7 @@ class SchemaHigherOrderGenerator:
         current_higher_order: dict[str, list[dict[str, Any]]],
         context: MemoryRequestContext,
         created_at: datetime,
+        episode_time: str = "",
         request_metadata: dict[str, Any],
     ) -> tuple[list[MemoryWrite], list[str], list[SchemaMemoryUpdate]]:
         memories: list[MemoryWrite] = []
@@ -214,7 +217,7 @@ class SchemaHigherOrderGenerator:
                 continue
             prop_name = str(item.get("property_name") or "")
             action = item.get("action", "no_action")
-            value = str(item.get("value") or "")
+            value = str(item.get("value") or "")[:1500]
             if prop_name not in higher_order_names or action not in {"update", "add", "create"} or not value:
                 continue
 
@@ -222,14 +225,21 @@ class SchemaHigherOrderGenerator:
             if action == "update" and latest:
                 if value.strip() == str(latest.get("value") or "").strip():
                     continue
-            target_uid = str(latest["uid"]) if action == "update" and latest and latest.get("uid") else None
+
+            if action == "update" and latest and latest.get("uid"):
+                target_uid = str(latest["uid"])
+            elif action in {"add", "create"} and latest and latest.get("uid"):
+                target_uid = None
+                archive_ids.append(str(latest["uid"]))
+            else:
+                target_uid = None
 
             memory = self.memory_factory(
                 entity_write=entity_write,
                 prop={
                     "property_name": prop_name,
                     "value": value,
-                    "time": created_at.strftime("%Y-%m-%d"),
+                    "time": (episode_time.split(" ")[0] if episode_time else created_at.strftime("%Y-%m-%d")),
                     "operation": "set",
                 },
                 context=context,

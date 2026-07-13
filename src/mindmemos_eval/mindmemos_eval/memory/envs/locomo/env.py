@@ -97,6 +97,7 @@ Return only the final answer inside <answer> and </answer>. Keep it brief, but i
 numbers, dates, places, teams, programming languages, image captions, and meal names.
 """
 
+# Schema answer prompt, kept verbatim from the memos-fix reference so scores stay comparable.
 LOCOMO_SCHEMA_ANSWER_PROMPT_EN = """
 You are an intelligent memory assistant answering questions based on structured personal memory records organized by person and topic.
 
@@ -347,30 +348,8 @@ def build_answer_context(memories: list[str], question: str = "") -> str:
     return "\n".join(lines)
 
 
-def build_schema_answer_context(memories: list[str]) -> str:
-    """Format retrieved structured entity slices for the schema answer prompt.
-
-    Schema mode uses simple zero-indexed numbering without timestamp prefixes
-    or focus-name annotations — the entity structure already carries attribution.
-    """
-    if not memories:
-        return "No relevant memories."
-    return "\n".join(f"{i}. {memory}" for i, memory in enumerate(memories))
-
-
-def build_answer_prompt(
-    memories: list[str],
-    question: str,
-    template: str | None = None,
-    *,
-    schema_mode: bool = False,
-) -> str:
-    """Build the LoCoMo answer prompt (vanilla flat-memory or schema mode)."""
-    if schema_mode:
-        context = build_schema_answer_context(memories)
-        selected_template = template or LOCOMO_SCHEMA_ANSWER_PROMPT_EN
-        return selected_template.replace("{context}", context).replace("{question}", question)
-
+def build_answer_prompt(memories: list[str], question: str, template: str | None = None) -> str:
+    """Build the LoCoMo answer prompt with grounding rules for flat memories (verbatim port)."""
     context = build_answer_context(memories, question=question)
     selected_template = template or LOCOMO_ANSWER_PROMPT_EN
     prompt = (
@@ -379,10 +358,21 @@ def build_answer_prompt(
         .replace("{conversation_memories}", context)
         .replace("{question}", question)
     )
-    # Only reached in vanilla mode — schema_mode returns early above.
     if "{grounding_rules}" not in selected_template and "# CRITICAL REQUIREMENTS" in selected_template:
         prompt = prompt.replace("# CRITICAL REQUIREMENTS", LOCOMO_ANSWER_GROUNDING_RULES + "\n# CRITICAL REQUIREMENTS")
     return prompt
+
+
+def build_schema_answer_prompt(memories: list[str], question: str, template: str) -> str:
+    """Build the answer prompt for schema mode with simple numbered concatenation."""
+    lines = ["Reference memories:"]
+    if not memories:
+        lines.append("No relevant memories.")
+    else:
+        for index, memory in enumerate(memories):
+            lines.append(f"{index}. {memory}")
+    context = "\n".join(lines)
+    return template.replace("{context}", context).replace("{question}", question)
 
 
 # Message / timestamp helpers
@@ -617,7 +607,7 @@ class LocomoEnv:
         top_k: int | None = 50,
         search_strategy: str = "agentic",
         rerank: bool = False,
-        answer_template: str | None = None,
+        answer_template: str = LOCOMO_ANSWER_PROMPT_EN,
         schema_mode: bool = False,
     ) -> None:
         """Handle init."""
@@ -627,13 +617,8 @@ class LocomoEnv:
         self._top_k = top_k
         self._search_strategy = search_strategy
         self._rerank = rerank
+        self._answer_template = answer_template
         self._schema_mode = schema_mode
-        if answer_template is not None:
-            self._answer_template = answer_template
-        elif schema_mode:
-            self._answer_template = LOCOMO_SCHEMA_ANSWER_PROMPT_EN
-        else:
-            self._answer_template = LOCOMO_ANSWER_PROMPT_EN
 
     async def add_session(
         self,
@@ -724,7 +709,10 @@ class LocomoEnv:
             memories = [_format_memory_for_answering(hit) for hit in search.memories]
         search_time = time.time() - start
 
-        prompt = build_answer_prompt(memories, question, self._answer_template, schema_mode=self._schema_mode)
+        if self._schema_mode:
+            prompt = build_schema_answer_prompt(memories, question, self._answer_template)
+        else:
+            prompt = build_answer_prompt(memories, question, self._answer_template)
         full_response = (await self._answer_llm.complete([{"role": "user", "content": prompt}])).content
         answer_text, chain_of_thought = _extract_answer(full_response)
         return LocomoAnswer(

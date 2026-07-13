@@ -54,6 +54,20 @@ def _episode_input_messages_exclusion_filter() -> SearchFilter:
     )
 
 
+def _higher_order_exclusion_filter(entity_manager: EntityManager | None) -> SearchFilter | None:
+    """Build a filter that excludes higher-order properties from property store search."""
+    if not entity_manager:
+        return None
+    ho_names: set[str] = set()
+    for et in entity_manager.list_types():
+        ho_names |= entity_manager.get_higher_order_property_names(et)
+    if not ho_names:
+        return None
+    return SearchFilter(
+        must_not=[FieldCondition(field="property_name", op="any", values=sorted(ho_names))]
+    )
+
+
 def _exclude_episode_input_messages(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         result
@@ -591,6 +605,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         property_search_filter = combine_search_filters(
             build_entity_type_filter(entity_types),
             _episode_input_messages_exclusion_filter(),
+            _higher_order_exclusion_filter(self.entity_manager),
             search_filter,
         )
 

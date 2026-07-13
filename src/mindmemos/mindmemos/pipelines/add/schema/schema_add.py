@@ -126,6 +126,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             split_on_user_speaker=chunker_cfg.split_on_user_speaker,
             boundary_prompt=self.prompt_set.conv_boundary_detection,
             resplit_prompt=self.prompt_set.conv_forced_resplit,
+            streaming_window_size=chunker_cfg.streaming_window_size,
         )
         self._buffer_limit = chunker_cfg.max_buffer_size
         self._min_episode_length = chunker_cfg.min_episode_length
@@ -500,7 +501,14 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         return events, dispatched
 
     async def _chunk_episodes(self, context: MemoryRequestContext, *, force: bool) -> list[_EpisodeTask]:
-        """Split buffered records into episode generation tasks."""
+        """Split buffered records into episode generation tasks.
+
+        Uses a streaming window approach: entries are processed in windows of
+        ``streaming_window_size``.  For each non-final window only completed
+        episodes (boundaries that do not touch the window tail) are kept.  The
+        remaining messages carry over into the next window.  The final window
+        (when *force* is True) keeps all boundaries so every message is consumed.
+        """
         records = await self.add_buffer.list_buffered(context, limit=self._buffer_limit)
         entries = add_record_ops.to_chunker_entries(records)
         if len(entries) < self._min_episode_length:
@@ -516,51 +524,73 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         request_prompts = get_add_prompts(detected_lang)
 
         detect_force = force or add_record_ops.force_generation(records)
-        boundaries = await traced_awaitable(
-            "schema_add.chunk_episodes.detect_boundaries",
-            self.chunker.detect_boundaries(
-                entries,
-                force=detect_force,
-                boundary_prompt=request_prompts.conv_boundary_detection,
-                resplit_prompt=request_prompts.conv_forced_resplit,
-            ),
-            attributes={
-                "project_id": context.project_id,
-                "entry_count": len(entries),
-                "force": detect_force,
-                "chunker.mode": self.chunker.mode,
-                "chunker.max_messages": self.chunker.max_messages,
-            },
-            record_result=True,
-            tracer_name=__name__,
-        )
-        if not boundaries and len(entries) >= self.chunker.max_messages:
-            boundaries = [EpisodeBoundary(start_idx=0, end_idx=self.chunker.max_messages - 1)]
-        if not boundaries:
-            await self.add_buffer.mark_split_attempted(context, records)
-            return []
+        window_size = self.chunker.streaming_window_size
 
         tasks: list[_EpisodeTask] = []
-        chunk_count = len(boundaries)
         queued_record_ids: set[str] = set()
-        for chunk_index, boundary in enumerate(boundaries):
-            episode_records = records[boundary.start_idx : boundary.end_idx + 1]
-            if not episode_records:
-                continue
-            episode_id = str(uuid4())
-            await self.add_buffer.mark_episode_queued(context, episode_records, episode_id=episode_id)
-            queued_record_ids.update(record.add_record_id for record in episode_records)
-            tasks.append(
-                _EpisodeTask(
-                    episode_id=episode_id,
-                    records=episode_records,
-                    chunk_index=chunk_index,
-                    chunk_count=chunk_count,
-                    start_idx=boundary.start_idx,
-                    end_idx=boundary.end_idx,
-                    title=boundary.title,
-                )
+        global_offset = 0
+
+        while global_offset < len(entries):
+            window_entries = entries[global_offset : global_offset + window_size]
+            is_final_window = global_offset + len(window_entries) >= len(entries)
+            window_force = detect_force and is_final_window
+
+            boundaries = await traced_awaitable(
+                "schema_add.chunk_episodes.detect_boundaries",
+                self.chunker.detect_boundaries(
+                    window_entries,
+                    force=window_force,
+                    boundary_prompt=request_prompts.conv_boundary_detection,
+                    resplit_prompt=request_prompts.conv_forced_resplit,
+                ),
+                attributes={
+                    "project_id": context.project_id,
+                    "entry_count": len(window_entries),
+                    "force": window_force,
+                    "chunker.mode": self.chunker.mode,
+                    "chunker.max_messages": self.chunker.max_messages,
+                    "window_offset": global_offset,
+                    "total_entries": len(entries),
+                },
+                record_result=True,
+                tracer_name=__name__,
             )
+
+            if not boundaries and window_force and len(window_entries) >= self._min_episode_length:
+                boundaries = [EpisodeBoundary(start_idx=0, end_idx=len(window_entries) - 1)]
+
+            if not boundaries:
+                if len(window_entries) >= window_size:
+                    boundaries = [EpisodeBoundary(start_idx=0, end_idx=len(window_entries) - 1)]
+                else:
+                    break
+
+            for boundary in boundaries:
+                global_start = boundary.start_idx + global_offset
+                global_end = boundary.end_idx + global_offset
+                episode_records = records[global_start : global_end + 1]
+                if not episode_records:
+                    continue
+                episode_id = str(uuid4())
+                await self.add_buffer.mark_episode_queued(context, episode_records, episode_id=episode_id)
+                queued_record_ids.update(record.add_record_id for record in episode_records)
+                tasks.append(
+                    _EpisodeTask(
+                        episode_id=episode_id,
+                        records=episode_records,
+                        chunk_index=len(tasks),
+                        chunk_count=0,
+                        start_idx=global_start,
+                        end_idx=global_end,
+                        title=boundary.title,
+                    )
+                )
+
+            global_offset += boundaries[-1].end_idx + 1
+
+        for task in tasks:
+            task.chunk_count = len(tasks)
+
         remaining_records = [record for record in records if record.add_record_id not in queued_record_ids]
         if remaining_records:
             await self.add_buffer.mark_split_attempted(context, remaining_records)
@@ -819,6 +849,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             context=episode_context,
             request_metadata=add_record_ops.metadata(records),
             created_at=added_at,
+            episode_time=dialogue_timestamp,
             prompt_set=request_prompts,
         )
 

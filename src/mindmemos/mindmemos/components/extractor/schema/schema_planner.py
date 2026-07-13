@@ -129,6 +129,7 @@ class SchemaAddPlanner:
         context: MemoryRequestContext,
         request_metadata: dict[str, Any],
         created_at: datetime,
+        episode_time: str = "",
         prompt_set: AddPromptSet | None = None,
     ) -> tuple[MemoryDbWritePlan, list[MemoryAddEventItem], list[str], list[SchemaMemoryUpdate]]:
         """Build a complete database write plan from extracted schema entities."""
@@ -203,6 +204,7 @@ class SchemaAddPlanner:
                     entity_write=entity_write,
                     context=context,
                     created_at=created_at,
+                    episode_time=episode_time,
                     request_metadata=request_metadata,
                     prompt_set=prompts,
                 )
@@ -264,6 +266,7 @@ class SchemaAddPlanner:
         entity_write: EntityWrite,
         context: MemoryRequestContext,
         created_at: datetime,
+        episode_time: str = "",
         request_metadata: dict[str, Any],
         prompt_set: AddPromptSet | None = None,
     ) -> tuple[list[MemoryWrite], list[str], list[MemoryWrite], list[str], list[SchemaMemoryUpdate]]:
@@ -280,6 +283,7 @@ class SchemaAddPlanner:
             raw_entity=entity,
             context=context,
             created_at=created_at,
+            episode_time=episode_time,
             request_metadata=request_metadata,
             prompt_set=prompt_set,
         )
@@ -529,12 +533,16 @@ class SchemaAddPlanner:
         """Find an entity by exact name through dense recall plus name filtering."""
         if not query_vector:
             return None
+        filters: SearchFilter | None = None
+        if context.user_id:
+            filters = SearchFilter(must=[FieldCondition(field="user_id", op="match", value=context.user_id)])
         for attempt in range(self.secondary_search_retries):
             try:
                 result = await self.db_reader.search_entities_dense(
                     context,
                     query=f"name: {name}",
                     query_vector=query_vector,
+                    filters=filters,
                     limit=self.secondary_search_limit,
                 )
                 for hit in result.hits:
@@ -962,7 +970,13 @@ class SchemaAddPlanner:
         """Recall existing entities that are semantically close to a new entity."""
         if not query_vector:
             return []
-        filters = SearchFilter(must_not=[FieldCondition(field="entity_type", op="match", value="episodes")])
+        must: list[FieldCondition] = []
+        if context.user_id:
+            must.append(FieldCondition(field="user_id", op="match", value=context.user_id))
+        filters = SearchFilter(
+            must=must,
+            must_not=[FieldCondition(field="entity_type", op="match", value="episodes")],
+        )
         result = await self.db_reader.search_entities_dense(
             context,
             query=entity_embedding_text(entity),
@@ -1002,11 +1016,16 @@ class SchemaAddPlanner:
         if not query_vector or self.episode_edge_top_k <= 0:
             return []
         try:
+            episode_must: list[FieldCondition] = [
+                FieldCondition(field="entity_type", op="match", value="episodes"),
+            ]
+            if context.user_id:
+                episode_must.append(FieldCondition(field="user_id", op="match", value=context.user_id))
             result = await self.db_reader.search_entities_dense(
                 context,
                 query=episode_write.description or episode_write.entity_name,
                 query_vector=query_vector,
-                filters=SearchFilter(must=[FieldCondition(field="entity_type", op="match", value="episodes")]),
+                filters=SearchFilter(must=episode_must),
                 limit=self.episode_edge_top_k,
             )
             candidates = [

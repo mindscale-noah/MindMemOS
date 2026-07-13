@@ -1,43 +1,126 @@
 runner:
   base_url: http://127.0.0.1:8000
-  timeout_seconds: 1800
-  max_conv_concurrency: 2
-  max_qa_concurrency: 4
-  max_search_concurrency: 4
-  max_score_concurrency: 2
+  timeout_seconds: 18000
+  max_conv_concurrency: 20
+  max_qa_concurrency: 20
+  max_search_concurrency: 20
+  max_score_concurrency: 20
   add: true
   score: true
   show_progress: true
   llm:
     model: gpt-4.1-mini
-    api_key: your-api-key
-    base_url: https://your-base-url/v1
+    api_key: sk-YOUR_API_KEY
+    base_url: http://YOUR_LLM_HOST:8015/v1
     temperature: 0.0
     max_tokens:
-    timeout: 60
+    timeout: 180
   answer_llm:
     model: gpt-4.1-mini
-    api_key: your-api-key
-    base_url: https://your-base-url/v1
+    api_key: sk-YOUR_API_KEY
+    base_url: http://YOUR_LLM_HOST:8015/v1
   judge_llm:
     model: gpt-4o-mini
-    api_key: your-api-key
-    base_url: https://your-base-url/v1
+    api_key: sk-YOUR_API_KEY
+    base_url: http://YOUR_LLM_HOST:8015/v1
 
 benchmarks:
   locomo:
     dataset: datasets/locomo/locomo10.json
-    default_algorithm: vanilla
-  longmemeval:
-    dataset: resources/memory/dataset/longmemeval_smoke.json
-    default_algorithm: vanilla
+    default_algorithm: schema
   personamem:
     dataset: resources/memory/dataset/questions_32k.csv
     context_dataset: resources/memory/dataset/shared_contexts_32k.jsonl
-    benchmark_version: v1
-    context_size: 32k
-    evaluation_mode: memory_rag
-    default_algorithm: vanilla
+    default_algorithm: schema
+    project_override_config:
+      algo_config:
+        common:
+          prompt_language: EN
+        add:
+          schema:
+            entity_modeling_path: config/presets/entity_modeling_persona.json
+            extraction:
+              enable_schema_selection: true
+              use_search_fields: true
+              search_fields_max: 12
+              episode_search_fields_augment: true
+              episode_augment_count: 4
+            merge:
+              enable_entity_merge_decision: true
+              entity_recall_top_k: 15
+              max_merge_retries: 8
+              use_property_merge: false
+              secondary_search_limit: 30
+              secondary_search_retries: 50
+            higher_order:
+              enabled: true
+              top_k: 10
+              min_evidence_count: 2
+            episode_edge:
+              top_k: 10
+            chunker:
+              split_mode: llm
+              min_episode_length: 1
+              max_episode_length: 50
+              max_buffer_size: 1000
+              split_on_user_speaker: true
+              max_minutes_from_first: 30
+            drain:
+              episode_generation_max_retries: 50
+        search:
+          request_top_k_max: 100
+          schema_search:
+            entity:
+              recall_size: 300
+              rrf_k: 60
+              top_k: 25
+              top_n: 16
+              use_reranker: true
+              max_rerank_candidates: 100
+              use_maxsim_rescore: false
+              maxsim_weight: 0.3
+              search_field_overfetch_factor: 3
+            property:
+              recall_size: 60
+              rrf_k: 60
+              top_k: 40
+              top_n: 16
+              alloc_min_factor: 0.5
+              alloc_max_factor: 1.5
+              use_property_extension: true
+              extension_step: 3
+              higher_order_ratio: 0.3
+            dual_path:
+              enabled: true
+              property_recall_size: 300
+              property_rrf_k: 80
+              property_top_k: 80
+              property_top_n: 25
+            entity_weights:
+              force_balanced_split: true
+              episode_weight: 0.6
+              non_episode_weight: 0.4
+            edge:
+              top_k: 100
+              min_relevance_score: 0.1
+            multi_hop: 2
+            use_entity_agent_search: true
+            current_time_mode: unknown
+            min_time_window_days: 30
+            include_edges: false
+            output_max_edge_num: 10
+          agentic:
+            max_rounds: 3
+            top_k_per_round: 25
+            top_n_per_round: 16
+            num_hops: 2
+            use_rerank: true
+            use_relevance_filter: false
+            use_property_filter: false
+            current_time_mode: unknown
+            min_time_window_days: 30
+            include_edges: false
+            output_max_edge_num: 10
 
 execution_params:
   personamem:
@@ -49,7 +132,7 @@ algorithm_profiles:
     search_params:
       public_search_strategy: fast
       top_k: 50
-      rerank: false
+      rerank: true
     project_override_config:
       algo_config:
         common:
@@ -71,27 +154,24 @@ algorithm_profiles:
             template_tokens: 1000
             recall_budget: 2000
             output_headroom: 4000
-            enable_entities: true
+            enable_entities: false
         search:
           request_top_k_max: 100
           vanilla:
             recall_size: 50
             use_reranker: true
-            graph_enabled: true
+            graph_enabled: false
             graph_seed_memory_limit: 5
             graph_related_per_seed: 3
             graph_max_candidates: 10
             graph_decay: 0.5
             graph_score: 0.01
-          rerank:
-            max_query_length: 200
-            max_doc_length: 2000
 
   schema:
     memory_algorithm: schema
     search_params:
       public_search_strategy: agentic
-      top_k: 50
+      top_k: 100
       rerank: false
       agentic: true
     project_override_config:
@@ -100,11 +180,11 @@ algorithm_profiles:
           prompt_language: EN
         add:
           schema:
-            entity_modeling_path: config/presets/entity_modeling_locomo.json
+            entity_modeling_path: config/presets/entity_modeling_persona.json
             extraction:
               enable_schema_selection: true
               use_search_fields: true
-              search_fields_max: 10
+              search_fields_max: 12
               episode_search_fields_augment: true
               episode_augment_count: 4
             merge:
@@ -113,7 +193,7 @@ algorithm_profiles:
               max_merge_retries: 8
               use_property_merge: false
               secondary_search_limit: 30
-              secondary_search_retries: 3
+              secondary_search_retries: 50
             higher_order:
               enabled: true
               top_k: 10
@@ -128,11 +208,9 @@ algorithm_profiles:
               split_on_user_speaker: true
               max_minutes_from_first: 30
             drain:
-              episode_generation_max_retries: 3
+              episode_generation_max_retries: 50
         search:
           request_top_k_max: 100
-          rerank:
-            enabled: false
           schema_search:
             entity:
               recall_size: 800
@@ -153,7 +231,7 @@ algorithm_profiles:
               alloc_max_factor: 1.5
               use_property_extension: true
               extension_step: 3
-              higher_order_ratio: 0.0
+              higher_order_ratio: 0.3
             dual_path:
               enabled: true
               property_recall_size: 300
@@ -165,22 +243,10 @@ algorithm_profiles:
               episode_weight: 0.7
               non_episode_weight: 0.3
             edge:
-              top_k: 50
+              top_k: 100
               min_relevance_score: 0.1
             multi_hop: 2
             use_entity_agent_search: true
-            current_time_mode: unknown
-            min_time_window_days: 30
-            include_edges: false
-            output_max_edge_num: 10
-          agentic:
-            max_rounds: 3
-            top_k_per_round: 40
-            top_n_per_round: 16
-            num_hops: 2
-            use_rerank: true
-            use_relevance_filter: false
-            use_property_filter: false
             current_time_mode: unknown
             min_time_window_days: 30
             include_edges: false

@@ -26,3 +26,6 @@ class EpisodesChunkerConfig:
 
     max_minutes_from_first: int = field(default=30)
     """Rule mode cuts when a message is farther than this from episode start."""
+
+    streaming_window_size: int = 15
+    """Streaming mode window size: max messages per LLM boundary detection call."""

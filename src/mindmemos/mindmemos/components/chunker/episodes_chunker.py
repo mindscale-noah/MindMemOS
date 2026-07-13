@@ -39,6 +39,7 @@ class EpisodesChunker:
         split_on_user_speaker: bool = True,
         boundary_prompt: str = CONV_BOUNDARY_DETECTION_PROMPT,
         resplit_prompt: str | None = None,
+        streaming_window_size: int = 15,
     ) -> None:
         self.mode = mode
         self.llm_client = llm_client
@@ -47,6 +48,7 @@ class EpisodesChunker:
         self.split_on_user_speaker = split_on_user_speaker
         self.boundary_prompt = boundary_prompt
         self.resplit_prompt = resplit_prompt
+        self.streaming_window_size = streaming_window_size
 
     async def detect_boundaries(
         self,
