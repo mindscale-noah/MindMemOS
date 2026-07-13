@@ -104,6 +104,20 @@ uv run python -m mindmemos_eval.cli memory \
 | Ours (Vanilla) | gpt-4.1-mini | - | gpt-4.1-mini | 83.00% | | - | 10.75% | | - | 46.88% | | - |
 | **Ours (Vanilla + Dreaming)** | **gpt-4.1-mini** | **-** | **gpt-4.1-mini** | **88.75%** | **+5.75%** 🟢 | **-27.5%** | **14.00%** | **+3.25%** 🟢 | **-28.3%** | **51.38%** | **+4.50%** 🟢 | **-27.9%** |
 
+### Evaluation of Skill Evolution
+
+MindMemOS 通过 Skill 自演进，在 SpreadsheetBench-Verified 上将任务成功率提升到 **57.2%**，相比 No-skill 提升 **+5.9 个百分点**，相比未演进的 Init-skill 提升 **+9.2 个百分点**。
+
+* Benchmark：[SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz)，SpreadsheetBench 的 400 题 verified 子集，覆盖多种真实 spreadsheet 操作任务。
+* Note：MindMemOS-Unsup. 仅使用执行轨迹演进；MindMemOS-Sup. 额外使用任务分数作为监督信号。
+
+| Method | Success Rate | Time / Task (s) | Agent Tokens | Evolve Tokens |
+|--------|:------------:|:---------------:|:------------:|:-------------:|
+| No-skill | 51.3% ± 0.8% | 11.227 | 10.4M | - |
+| Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
+| **MindMemOS-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
+| **MindMemOS-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
+
 ## Core Features
 
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。

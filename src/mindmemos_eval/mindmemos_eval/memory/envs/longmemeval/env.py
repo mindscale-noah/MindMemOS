@@ -28,6 +28,7 @@ from tqdm.auto import tqdm
 
 from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.scorer import ScoreResult
+from mindmemos_eval.memory.tokens import aggregate_stage_metrics, completion_stage_metrics
 
 LONGMEMEVAL_ANSWER_PROMPT = """
 You answer LongMemEval questions using only the retrieved memories.
@@ -366,20 +367,50 @@ def build_judge_prompt(sample: Mapping[str, Any], question: Mapping[str, Any], h
 class LongMemEvalJudgeScorer:
     """LLM judge used by LongMemEval scoring."""
 
-    def __init__(self, llm: LLMClient) -> None:
+    def __init__(self, llm: LLMClient, judge_runs: int = 1) -> None:
         self._llm = llm
+        self._judge_runs = max(1, int(judge_runs))
 
     async def score(self, sample: Mapping[str, Any], question: Mapping[str, Any], hypothesis: str) -> ScoreResult:
         """Judge one hypothesis against the gold answer."""
         content = build_judge_prompt(sample, question, hypothesis)
-        raw = (await self._llm.complete([{"role": "user", "content": content}], max_tokens=10)).content
-        lowered = raw.strip().lower()
-        passed = "yes" in lowered
+        vote_count = 0
+        run_payloads: list[dict[str, Any]] = []
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_tokens = 0
+
+        for run_index in range(self._judge_runs):
+            completion = await self._llm.complete([{"role": "user", "content": content}], max_tokens=10)
+            raw = completion.content
+            lowered = raw.strip().lower()
+            passed = "yes" in lowered
+
+            vote_count += int(passed)
+            run_payloads.append(
+                {
+                    "run_index": run_index,
+                    "label": raw.strip(),
+                    "passed": passed,
+                }
+            )
+            total_prompt_tokens += completion.prompt_tokens
+            total_completion_tokens += completion.completion_tokens
+            total_tokens += completion.total_tokens
+
+        passed = vote_count > (self._judge_runs // 2)
         return ScoreResult(
             score=1.0 if passed else 0.0,
             passed=passed,
-            reason=raw.strip() or ("yes" if passed else "no"),
-            raw={"label": raw.strip()},
+            reason=f"majority_vote:{vote_count}/{self._judge_runs}",
+            raw={
+                "judge_runs": self._judge_runs,
+                "passed_votes": vote_count,
+                "runs": run_payloads,
+            },
+            prompt_tokens=total_prompt_tokens,
+            completion_tokens=total_completion_tokens,
+            total_tokens=total_tokens,
         )
 
 
@@ -398,6 +429,9 @@ class LongMemEvalAnswer(BaseModel):
     memories: list[str] = Field(default_factory=list)
     search_time: float = 0.0
     prompt: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 class LongMemEvalQAResult(BaseModel):
@@ -417,6 +451,14 @@ class LongMemEvalQAResult(BaseModel):
     search_time: float = 0.0
     score: ScoreResult | None = None
     abstention: bool = False
+    answer_llm_calls: int = 0
+    answer_prompt_tokens: int = 0
+    answer_completion_tokens: int = 0
+    answer_total_tokens: int = 0
+    judge_llm_calls: int = 0
+    judge_prompt_tokens: int = 0
+    judge_completion_tokens: int = 0
+    judge_total_tokens: int = 0
 
 
 class LongMemEvalAddSummary(BaseModel):
@@ -474,6 +516,7 @@ class LongMemEvalRunResult(BaseModel):
     correct: int = 0
     abstention_total: int = 0
     abstention_correct: int = 0
+    judge_runs_used: int = 1
 
     @property
     def accuracy(self) -> float:
@@ -509,6 +552,16 @@ class LongMemEvalRunResult(BaseModel):
             return 0.0
         return sum(bucket.accuracy for bucket in buckets.values()) / len(buckets)
 
+    def token_usage(self) -> dict[str, int]:
+        """Aggregate answer/judge LLM token usage across all questions.
+
+        Search is excluded here: ``SearchResult`` never carries per-call token
+        usage, so this online path can only ever report zero. Search token
+        accounting comes from the offline ClickHouse trace aggregation instead.
+        """
+        qa_results = [qa for sample in self.samples for qa in sample.qa_results]
+        return aggregate_stage_metrics(qa_results, "answer", "judge")
+
     def official_metrics(self) -> dict[str, Any]:
         """Return the benchmark-facing summary metrics."""
         buckets = self.by_type()
@@ -530,6 +583,8 @@ class LongMemEvalRunResult(BaseModel):
             "total_questions": self.total_questions,
             "correct": self.correct,
             "abstention_total": self.abstention_total,
+            "judge_runs_used": self.judge_runs_used,
+            **self.token_usage(),
             "abstention_correct": self.abstention_correct,
         }
 
@@ -605,11 +660,12 @@ class LongMemEvalEnv:
         top_k: int | None = 50,
         search_strategy: str = "fast",
         rerank: bool = False,
+        judge_runs: int = 1,
     ) -> None:
         """Create a new LongMemEval environment."""
         self._memory = memory
         self._answer_llm = answer_llm
-        self._judge_scorer = judge_scorer or LongMemEvalJudgeScorer(judge_llm or answer_llm)
+        self._judge_scorer = judge_scorer or LongMemEvalJudgeScorer(judge_llm or answer_llm, judge_runs=judge_runs)
         self._top_k = top_k
         self._search_strategy = search_strategy
         self._rerank = rerank
@@ -714,8 +770,10 @@ class LongMemEvalEnv:
         memories = [_format_memory_for_answering(hit) for hit in search.memories]
         search_time = time.time() - start
         prompt = build_answer_prompt(memories, sample, question)
-        full_response = (await self._answer_llm.complete([{"role": "user", "content": prompt}])).content
+        answer_completion = await self._answer_llm.complete([{"role": "user", "content": prompt}])
+        full_response = answer_completion.content
         hypothesis, chain_of_thought = _extract_answer(full_response)
+        answer_metrics = completion_stage_metrics("answer", answer_completion)
         return LongMemEvalAnswer(
             question_id=_question_id(sample, question, 0, 0),
             question_type=_question_type(question, sample),
@@ -727,6 +785,9 @@ class LongMemEvalEnv:
             memories=memories,
             search_time=search_time,
             prompt=prompt,
+            prompt_tokens=answer_metrics["answer_prompt_tokens"],
+            completion_tokens=answer_metrics["answer_completion_tokens"],
+            total_tokens=answer_metrics["answer_total_tokens"],
         )
 
     async def judge(self, sample: Mapping[str, Any], question: Mapping[str, Any], hypothesis: str) -> ScoreResult:
@@ -757,6 +818,14 @@ class LongMemEvalEnv:
             search_time=answer.search_time,
             score=score_result,
             abstention=_is_abstention_question(answer.question_id),
+            answer_llm_calls=1,
+            answer_prompt_tokens=answer.prompt_tokens,
+            answer_completion_tokens=answer.completion_tokens,
+            answer_total_tokens=answer.total_tokens,
+            judge_llm_calls=(score_result.raw.get("judge_runs", 1) if score_result is not None else 0),
+            judge_prompt_tokens=score_result.prompt_tokens if score_result else 0,
+            judge_completion_tokens=score_result.completion_tokens if score_result else 0,
+            judge_total_tokens=score_result.total_tokens if score_result else 0,
         )
 
     @staticmethod
@@ -789,17 +858,18 @@ class LongMemEvalEnv:
         score_sem = asyncio.Semaphore(max_score_concurrency or max_qa_concurrency)
         sample_sem = asyncio.Semaphore(max_sample_concurrency)
 
-        total_sessions = (
+        total_questions = sum(len(_normalize_questions(sample, idx)) for idx, sample in enumerate(data))
+        pbar_sessions = (
             sum(min(len(_normalize_sessions(sample)), session_limit) for sample in data)
             if add and session_limit is not None
             else sum(len(_normalize_sessions(sample)) for sample in data)
             if add
             else 0
         )
-        total_questions = sum(len(_normalize_questions(sample, idx)) for idx, sample in enumerate(data))
+        pbar_questions = total_questions
 
         add_pbar = (
-            tqdm(total=total_sessions, desc="Adding memories (session)", unit="session", position=0)
+            tqdm(total=pbar_sessions, desc="Adding memories (session)", unit="session", position=0)
             if show_progress and add
             else None
         )
@@ -807,12 +877,13 @@ class LongMemEvalEnv:
             tqdm(total=len(data), desc="Evaluating samples", unit="sample", position=1) if show_progress else None
         )
         qa_pbar = (
-            tqdm(total=total_questions, desc="Answering questions", unit="q", position=2) if show_progress else None
+            tqdm(total=pbar_questions, desc="Answering questions", unit="q", position=2) if show_progress else None
         )
 
         async def run_sample(sample_index: int, sample: Mapping[str, Any]) -> LongMemEvalSampleResult:
+            sample_id = self._sample_id(sample, sample_index)
+
             async with sample_sem:
-                sample_id = self._sample_id(sample, sample_index)
                 user_id = f"lme_{sample_id}"
                 on_session_done = add_pbar.update if add_pbar is not None else None
                 add_summary = (
@@ -850,12 +921,20 @@ class LongMemEvalEnv:
                         search_time=answer.search_time,
                         score=score_result,
                         abstention=_is_abstention_question(answer.question_id),
+                        answer_llm_calls=1,
+                        answer_prompt_tokens=answer.prompt_tokens,
+                        answer_completion_tokens=answer.completion_tokens,
+                        answer_total_tokens=answer.total_tokens,
+                        judge_llm_calls=(score_result.raw.get("judge_runs", 1) if score_result is not None else 0),
+                        judge_prompt_tokens=score_result.prompt_tokens if score_result else 0,
+                        judge_completion_tokens=score_result.completion_tokens if score_result else 0,
+                        judge_total_tokens=score_result.total_tokens if score_result else 0,
                     )
 
                 qa_results = await asyncio.gather(*(run_question(question) for question in qa_rows)) if qa_rows else []
                 if sample_pbar is not None:
                     sample_pbar.update()
-                return LongMemEvalSampleResult(
+                result = LongMemEvalSampleResult(
                     sample_idx=sample_index,
                     sample_id=sample_id,
                     user_id=user_id,
@@ -863,6 +942,7 @@ class LongMemEvalEnv:
                     qa_results=list(qa_results),
                     add_summary=add_summary,
                 )
+                return result
 
         try:
             samples = await asyncio.gather(*(run_sample(index, sample) for index, sample in enumerate(data)))
@@ -872,8 +952,8 @@ class LongMemEvalEnv:
                     pbar.close()
 
         samples = list(samples)
-        # total_questions 来自第 799 行，是全部问题数（不过滤）
-        # 现在计算有评分和正确的数量
+        # total_questions counts every question, unfiltered (computed above).
+        # Tally how many were actually scored and how many were correct.
         scored_correct = 0
         abstention_total = 0
         abstention_correct = 0
@@ -888,10 +968,11 @@ class LongMemEvalEnv:
 
         run = LongMemEvalRunResult(
             samples=samples,
-            total_questions=total_questions,  # ✅ 使用第 799 行的全部问题数
+            total_questions=total_questions,  # unfiltered question count
             correct=scored_correct,
             abstention_total=abstention_total,
             abstention_correct=abstention_correct,
+            judge_runs_used=getattr(self._judge_scorer, "_judge_runs", 1),
         )
         if print_report:
             print(run.format_report(), flush=True)

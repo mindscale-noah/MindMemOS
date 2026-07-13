@@ -57,6 +57,7 @@ class LocomoAdapter:
             search_strategy=public_search_strategy,
             rerank=bool(rerank),
             **answer_template_kwargs,
+            judge_runs=runner.judge_runs,
         )
         run = await env.run_dataset(
             data,
@@ -68,4 +69,6 @@ class LocomoAdapter:
             score=runner.score,
             show_progress=runner.show_progress,
         )
-        return run.model_dump()
+        result = run.model_dump()
+        result["metrics"] = run.official_metrics()
+        return result
