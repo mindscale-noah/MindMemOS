@@ -41,6 +41,8 @@ class EpisodesChunker:
         resplit_prompt: str | None = None,
         streaming_window_size: int = 15,
     ) -> None:
+        if streaming_window_size < 1:
+            raise ValueError(f"streaming_window_size must be >= 1, got {streaming_window_size}")
         self.mode = mode
         self.llm_client = llm_client
         self.max_messages = max_messages

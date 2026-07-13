@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
-import random
 import re
 import time
 from collections import defaultdict
@@ -27,7 +26,6 @@ PERSONAMEM_OFFICIAL_INSTRUCTION = (
     "(a), (b), (c), or (d) after the special token <final_answer>."
 )
 PERSONAMEM_ANSWER_MAX_RETRIES = 3
-PERSONAMEM_ANSWER_OPTIONS = ("a", "b", "c", "d")
 PERSONAMEM_COT_PROMPT = """You are an intelligent memory assistant. Your task is to select the most appropriate response to the user based on memories.
 
 # CONTEXT:
@@ -625,6 +623,7 @@ class PersonaMemEnv:
         search_strategy: str = "fast",
         rerank: bool = False,
         add_batch_size: int = 20,
+        run_id: str = "",
     ) -> None:
         self._memory = memory
         self._answer_llm = answer_llm
@@ -635,6 +634,13 @@ class PersonaMemEnv:
         self._search_strategy = search_strategy
         self._rerank = rerank
         self._add_batch_size = add_batch_size
+        self._run_id = run_id
+
+    def _scope_key(self, scope: PersonaMemScope) -> tuple[str, str]:
+        """Return (user_id, session_id) scoped to this run, isolating reuse of the same project."""
+        if not self._run_id:
+            return scope.user_id, scope.session_id
+        return f"{scope.user_id}-{self._run_id}", f"{scope.session_id}-{self._run_id}"
 
     @staticmethod
     def load_items(path: str | Path) -> list[PersonaMemItem]:
@@ -650,6 +656,16 @@ class PersonaMemEnv:
     ) -> PersonaMemBuildSummary:
         """Add context[start_index:scope.end_index) to this scope's memory store."""
         started = time.monotonic()
+        if scope.end_index < 0 or scope.end_index > len(context):
+            raise ValueError(
+                f"invalid end_index {scope.end_index} for context "
+                f"{scope.shared_context_id!r} with {len(context)} messages"
+            )
+        if start_index < 0 or start_index > scope.end_index:
+            raise ValueError(
+                f"invalid start_index {start_index} for scope "
+                f"{scope.shared_context_id!r} end_index {scope.end_index}"
+            )
         segment = context[start_index:scope.end_index]
         # Session-aware timestamps aligned with UMM (inference_mem.build_session_timestamp_map):
         # - system messages start new sessions
@@ -671,10 +687,11 @@ class PersonaMemEnv:
         try:
             for start in range(0, len(messages), self._add_batch_size):
                 batch = messages[start : start + self._add_batch_size]
+                user_id, session_id = self._scope_key(scope)
                 await self._memory.add(
                     batch,
-                    user_id=scope.user_id,
-                    session_id=scope.session_id,
+                    user_id=user_id,
+                    session_id=session_id,
                     mode="sync",
                     metadata={
                         "benchmark": "personamem",
@@ -718,14 +735,15 @@ class PersonaMemEnv:
         if self._evaluation_mode == "memory_rag":
             search_started = time.monotonic()
             try:
+                user_id, session_id = self._scope_key(item.scope)
                 search = await self._memory.search(
                     item.question,
-                    user_id=item.scope.user_id,
-                    session_id=item.scope.session_id,
+                    user_id=user_id,
+                    session_id=session_id,
                     top_k=self._top_k,
                     search_strategy=self._search_strategy,
                     rerank=self._rerank,
-                    filters={"user_id": item.scope.user_id},
+                    filters={"user_id": user_id},
                 )
                 memories = [hit.memory for hit in search.memories if hit.memory]
             except Exception as exc:  # noqa: BLE001 - failures remain in the official denominator
@@ -780,12 +798,10 @@ class PersonaMemEnv:
                 break
         answer_elapsed = time.monotonic() - answer_started
 
-        # All retries exhausted without a parseable answer: random guess
-        if extracted_option is None:
-            extracted_option = random.choice(PERSONAMEM_ANSWER_OPTIONS)
-
         correct = item.correct_answer.lower().strip("() ")
-        is_correct = extracted_option == correct
+        if extracted_option is None:
+            is_correct = False
+            extracted_option = ""
         return PersonaMemQAResult(
             item=item,
             retrieved_memories=memories,

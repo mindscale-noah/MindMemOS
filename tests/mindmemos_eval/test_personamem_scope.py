@@ -35,9 +35,9 @@ def _item(index: int, ctx_id: str, end_index: int, persona_id: str = "0") -> Per
 # ---------- build_personamem_scope: session_id isolation ----------
 
 
-def test_scope_user_id_derived_from_persona():
+def test_scope_user_id_derived_from_shared_context():
     scope = build_personamem_scope("ctx-A", 5, "3")
-    assert scope.user_id == "personamem-3"
+    assert scope.user_id == "personamem-ctx-A"
 
 
 def test_scope_session_id_derived_from_shared_context():
@@ -45,20 +45,23 @@ def test_scope_session_id_derived_from_shared_context():
     assert scope.session_id == "personamem-ctx-A"
 
 
-def test_same_persona_different_contexts_share_user_id():
-    """Two contexts of the same persona share user_id but have different session_ids."""
+def test_different_contexts_are_independent_scopes():
+    """Each shared_context is an independent memory scope — user_id and session_id are both context-scoped."""
     scope1 = build_personamem_scope("ctx-A", 5, "3")
     scope2 = build_personamem_scope("ctx-B", 10, "3")
-    assert scope1.user_id == scope2.user_id == "personamem-3"
-    assert scope1.session_id != scope2.session_id
+    assert scope1.user_id == "personamem-ctx-A"
+    assert scope2.user_id == "personamem-ctx-B"
+    assert scope1.user_id != scope2.user_id
     assert scope1.session_id == "personamem-ctx-A"
     assert scope2.session_id == "personamem-ctx-B"
+    assert scope1.session_id != scope2.session_id
 
 
-def test_different_personas_different_user_ids():
+def test_same_context_same_user_id_regardless_of_persona():
+    """user_id is derived from shared_context_id only, not persona_id."""
     scope1 = build_personamem_scope("ctx-A", 5, "3")
     scope2 = build_personamem_scope("ctx-A", 5, "7")
-    assert scope1.user_id != scope2.user_id
+    assert scope1.user_id == scope2.user_id == "personamem-ctx-A"
 
 
 def test_scope_id_unique_per_context_and_end_index():
@@ -69,12 +72,13 @@ def test_scope_id_unique_per_context_and_end_index():
     assert scope1.scope_id != scope3.scope_id
 
 
-def test_37_contexts_produce_37_distinct_session_ids():
-    """The benchmark has 37 shared_contexts; each must map to a unique session_id."""
-    session_ids = {f"personamem-ctx-{i:02d}" for i in range(37)}
+def test_37_contexts_produce_37_distinct_user_and_session_ids():
+    """Each of the 37 shared_contexts must map to a unique user_id and session_id."""
+    expected_ids = {f"personamem-ctx-{i:02d}" for i in range(37)}
     scopes = [build_personamem_scope(f"ctx-{i:02d}", 100, "0") for i in range(37)]
-    assert {s.session_id for s in scopes} == session_ids
-    assert len({s.session_id for s in scopes}) == 37
+    assert {s.session_id for s in scopes} == expected_ids
+    assert {s.user_id for s in scopes} == expected_ids
+    assert len({s.user_id for s in scopes}) == 37
 
 
 # ---------- _extract_predicted_option ----------

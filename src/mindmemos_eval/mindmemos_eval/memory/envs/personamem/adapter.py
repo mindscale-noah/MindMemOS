@@ -65,6 +65,8 @@ class PersonaMemAdapter:
         top_k = search_params["top_k"] if "top_k" in search_params else runner.top_k
         rerank = search_params["rerank"] if "rerank" in search_params else runner.rerank
         add_batch_size = int(bench_config.execution_params.get("add_batch_size", 20))
+        if add_batch_size < 1:
+            raise ValueError(f"add_batch_size must be >= 1, got {add_batch_size}")
         env = PersonaMemEnv(
             memory,
             answer_llm=answer_llm,
@@ -75,6 +77,7 @@ class PersonaMemAdapter:
             search_strategy=public_search_strategy,
             rerank=bool(rerank),
             add_batch_size=add_batch_size,
+            run_id=ctx.identity.run_id,
         )
         run = await env.run_dataset(
             items,

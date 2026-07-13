@@ -20,7 +20,7 @@ from ....typing import (
     SearchFilter,
     combine_search_filters,
 )
-from ...memory_modeling.schema import EntityManager, PropertyEntry, TemporalEntity
+from ...memory_modeling.schema import EntityManager, PropertyEntry, TemporalEntity, get_entity_manager
 from ...text import SparseVectorEncoder, TextPreprocessor
 from ..entity_recall import (
     EntityRecall,
@@ -605,7 +605,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         property_search_filter = combine_search_filters(
             build_entity_type_filter(entity_types),
             _episode_input_messages_exclusion_filter(),
-            _higher_order_exclusion_filter(self.entity_manager),
+            _higher_order_exclusion_filter(get_entity_manager(project_id=ctx.project_id)),
             search_filter,
         )
 

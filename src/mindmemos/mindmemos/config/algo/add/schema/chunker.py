@@ -29,3 +29,9 @@ class EpisodesChunkerConfig:
 
     streaming_window_size: int = 15
     """Streaming mode window size: max messages per LLM boundary detection call."""
+
+    def __post_init__(self) -> None:
+        if self.streaming_window_size < 1:
+            raise ValueError(
+                f"streaming_window_size must be >= 1, got {self.streaming_window_size}"
+            )
