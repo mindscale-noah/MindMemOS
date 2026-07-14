@@ -270,8 +270,25 @@ async def test_dreaming_skips_done_add_records_when_clustering_hot_memories():
     assert scope.add_record_ids == ("add-m2",)
     query, params = reader.neo4j_read_calls[0]
     assert "ORDER BY coalesce(neighbor.update_at, neighbor.created_at) DESC" in query
-    assert "LIMIT $entity_memory_limit" in query
-    assert params["entity_memory_limit"] == pipe._cfg.max_entity_memory_count
+    assert "LIMIT $entity_probe_limit" in query
+    assert params["entity_probe_limit"] == pipe._cfg.max_entity_memory_count + 1
+
+
+@pytest.mark.asyncio
+async def test_dreaming_skips_entity_clusters_over_memory_limit():
+    memories = [
+        memory("m1", content="Alice likes green tea"),
+        memory("m2", content="Alice likes black tea"),
+        memory("m3", content="Alice likes jasmine tea"),
+    ]
+    pipe, reader, _writer = pipeline(memories=memories, action=ConsolidationAction())
+    pipe._cfg.max_entity_memory_count = 2
+
+    clusters = await pipe._cluster_hot_memories(ctx())
+
+    assert clusters == []
+    _query, params = reader.neo4j_read_calls[0]
+    assert params["entity_probe_limit"] == 3
 
 
 @pytest.mark.asyncio
