@@ -120,6 +120,8 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
         run_id = str(uuid4())
 
         clusters = await self._cluster_hot_memories(context)
+        if self._cfg.max_scopes_per_run is not None:
+            clusters = clusters[: self._cfg.max_scopes_per_run]
         summary = {"scopes": len(clusters), "clusters": 0, "actions": 0, "add_records_done": 0}
         archived_memory_ids: set[str] = set()
         marked_add_record_ids: set[str] = set()
@@ -652,7 +654,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             await self._write_new_memories(context, all_creates, cluster_memories)
 
         for update in actions.updates:
-            if update.memory_id not in mem_by_id:
+            if update.memory_id not in mem_by_id or update.memory_id in archived_memory_ids:
                 continue
             metadata_patch = dict(update.metadata_patch)
             await self._apply_memory_updates(
@@ -697,8 +699,15 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             )
             archived_memory_ids.add(archive.memory_id)
 
-        link_relationships = [self._relationship_from_link(context, link, mem_by_id) for link in actions.links]
-        link_relationships = [r for r in link_relationships if r is not None]
+        link_relationships = []
+        for link in actions.links:
+            if link.source_kind == "Memory" and link.source_id in archived_memory_ids:
+                continue
+            if link.target_kind == "Memory" and link.target_id in archived_memory_ids:
+                continue
+            rel = self._relationship_from_link(context, link, mem_by_id)
+            if rel is not None:
+                link_relationships.append(rel)
         if link_relationships:
             await self._apply_write_plan(context, MemoryDbWritePlan(relationships=link_relationships))
 

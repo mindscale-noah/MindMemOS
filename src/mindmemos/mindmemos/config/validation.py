@@ -252,6 +252,7 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("algo_config.dreaming.max_memories_per_scope", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.dreaming.min_cluster_size", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.dreaming.concurrency", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.dreaming.max_entity_memory_count", min_value=1, support="positive integer >= 1"),
     RangeRule(
         "algo_config.dreaming.max_scopes_per_run",
         min_value=1,
