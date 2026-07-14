@@ -4,20 +4,32 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from mindmemos.config import DreamingConfig, TextProcessingConfig
+from mindmemos.infra.db import QdrantRecord
 from mindmemos.pipelines.dreaming.default import DefaultDreamingPipeline
 from mindmemos.typing.activity import ActivityScope, RecentActivityBundle, WrittenMemoryRef
 from mindmemos.typing.algo import ConsolidationAction, ConsolidationCreate, ConsolidationLink, ConsolidationMerge
 from mindmemos.typing.memory import GraphNeighborScope, MemoryRequestContext, MemoryView
 from mindmemos.typing.service import DreamingPipelineInput
 
-from mindmemos.config import DreamingConfig, TextProcessingConfig
-from mindmemos.infra.db import QdrantRecord
-
 
 class FakeReader:
     def __init__(self, memories: list[MemoryView]) -> None:
         self.memories = memories
         self.add_record_payloads: dict[str, dict] = {}
+        self.neo4j_read_calls: list[tuple[str, dict]] = []
+        self._clients = SimpleNamespace(neo4j=SimpleNamespace(run_read=self._run_neo4j_read))
+
+    async def _run_neo4j_read(self, query: str, **params):
+        self.neo4j_read_calls.append((query, params))
+        return [
+            {
+                "entity_id": "entity-1",
+                "entity_name": "Alice",
+                "entity_type": "person",
+                "memory_ids": [memory.memory_id for memory in self.memories],
+            }
+        ]
 
     async def get_memories(self, _ctx, memory_ids: list[str]) -> list[MemoryView]:
         requested = set(memory_ids)
@@ -239,7 +251,7 @@ async def test_dreaming_archives_exact_duplicates_before_llm_actions():
 
 
 @pytest.mark.asyncio
-async def test_dreaming_skips_done_add_records_when_selecting_hot_scopes():
+async def test_dreaming_skips_done_add_records_when_clustering_hot_memories():
     memories = [
         memory("m1", content="Alice likes tea", created_offset=1),
         memory("m2", content="Alice likes coffee", created_offset=2),
@@ -250,11 +262,16 @@ async def test_dreaming_skips_done_add_records_when_selecting_hot_scopes():
         "add-m2": {"consolidation_status": "pending"},
     }
 
-    scopes = await pipe._select_hot_scopes(ctx())
+    clusters = await pipe._cluster_hot_memories(ctx())
 
-    assert len(scopes) == 1
-    assert scopes[0].primary_memory_id == "m2"
-    assert scopes[0].add_record_ids == ("add-m2",)
+    assert len(clusters) == 1
+    scope, _memories = clusters[0]
+    assert scope.primary_memory_id == "m2"
+    assert scope.add_record_ids == ("add-m2",)
+    query, params = reader.neo4j_read_calls[0]
+    assert "ORDER BY coalesce(neighbor.update_at, neighbor.created_at) DESC" in query
+    assert "LIMIT $entity_memory_limit" in query
+    assert params["entity_memory_limit"] == pipe._cfg.max_entity_memory_count
 
 
 @pytest.mark.asyncio

@@ -28,8 +28,7 @@ class DreamingConfig:
     """Clusters smaller than this value skip consolidation LLM calls."""
 
     max_entity_memory_count: int = field(default=50)
-    """Entities with more active memories than this threshold are treated as
-    noise and excluded from entity grouping."""
+    """Maximum number of active memories selected for each entity cluster."""
 
     concurrency: int = field(default=8)
     """Maximum number of unique dreaming clusters processed concurrently."""

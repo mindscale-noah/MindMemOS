@@ -189,7 +189,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
         1. Collect hot seed memories (pending consolidation).
         2. One Cypher query: get all ``Memory -> Entity`` edges for hot seeds
            and their 1-hop entity neighbors.
-        3. Filter out high-frequency noise entities.
+        3. Limit the memories selected for each entity.
         4. Group memories by entity — each entity becomes one cluster.
         5. Assemble each cluster into a ConsolidationScope.
         """
@@ -231,34 +231,38 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
           AND seed.memory_id IN $seed_ids
           AND coalesce(seed.status, 'active') = 'active'
         MATCH (seed)-[:MENTIONS]->(e:Entity {project_id: $project_id})
-        MATCH (e)<-[:MENTIONS]-(neighbor:Memory {project_id: $project_id})
-        WHERE coalesce(neighbor.status, 'active') = 'active'
+        WITH DISTINCT e
+        CALL {
+            WITH e
+            MATCH (e)<-[:MENTIONS]-(neighbor:Memory {project_id: $project_id})
+            WHERE coalesce(neighbor.status, 'active') = 'active'
+            WITH DISTINCT neighbor
+            ORDER BY coalesce(neighbor.update_at, neighbor.created_at) DESC,
+                     neighbor.memory_id ASC
+            LIMIT $entity_memory_limit
+            RETURN collect(neighbor.memory_id) AS memory_ids
+        }
         RETURN e.entity_id AS entity_id,
                e.entity_name AS entity_name,
                e.entity_type AS entity_type,
-               collect(DISTINCT neighbor.memory_id) AS memory_ids
+               memory_ids
         """
         rows = await self.db_reader._clients.neo4j.run_read(
             query,
             project_id=context.project_id,
             seed_ids=list(seed_memory_ids),
+            entity_memory_limit=self._cfg.max_entity_memory_count,
         )
 
         if not rows:
             return []
 
-        # Step 3: filter noise entities (too many associated memories)
+        # Step 3: build the entity clusters returned by the bounded query
         entity_clusters: list[dict] = []
         for row in rows:
             eid = str(row["entity_id"])
             mem_ids = [str(m) for m in (row.get("memory_ids") or []) if m]
             if len(mem_ids) < self._cfg.min_cluster_size:
-                continue
-            if len(mem_ids) > self._cfg.max_entity_memory_count:
-                logger.info(
-                    "filtered noise entity %s (%d memories, threshold=%d)",
-                    eid, len(mem_ids), self._cfg.max_entity_memory_count,
-                )
                 continue
             entity_clusters.append({
                 "entity_id": eid,
