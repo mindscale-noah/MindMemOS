@@ -3,6 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from mindmemos.components.memory_modeling.schema import TemporalEntity
+from mindmemos.components.searcher.schema import SchemaSearchExpander
+from mindmemos.config import init_config
+from mindmemos.config.algo.search.schema import (
+    DualPathConfig,
+    EdgeSearchConfig,
+    PropertySearchConfig,
+    SchemaSearchConfig,
+)
 from mindmemos.typing.llm import EmbeddingResponse, RerankHit, RerankResponse
 from mindmemos.typing.memory import (
     EntityView,
@@ -13,14 +22,13 @@ from mindmemos.typing.memory import (
 )
 from mindmemos.typing.memory_db import MemoryDbSearchHit, MemoryDbSearchQuery, MemoryDbSearchResult
 
-from mindmemos.components.memory_modeling.schema import TemporalEntity
-from mindmemos.components.searcher.schema import SchemaSearchExpander
-from mindmemos.config.algo.search.schema import (
-    DualPathConfig,
-    EdgeSearchConfig,
-    PropertySearchConfig,
-    SchemaSearchConfig,
-)
+
+@pytest.fixture(scope="module", autouse=True)
+def _init_config():
+    try:
+        init_config("dev")
+    except FileNotFoundError:
+        init_config("product")
 
 
 def make_context() -> MemoryRequestContext:

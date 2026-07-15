@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from mindmemos.components.feedback import ImplicitFeedbackActionPlanner, ImplicitFeedbackSignalDetector
 from mindmemos.infra.db.models import QdrantRecord
 from mindmemos.pipelines.feedback.default import DefaultFeedbackPipeline
 from mindmemos.pipelines.feedback.implicit import ImplicitFeedbackHandler, ImplicitFeedbackRecordCollector
@@ -25,8 +26,6 @@ from mindmemos.typing.service import (
     SearchPipelineInput,
     SearchPipelineResult,
 )
-
-from mindmemos.components.feedback import ImplicitFeedbackActionPlanner, ImplicitFeedbackSignalDetector
 
 
 def make_context() -> MemoryRequestContext:

@@ -90,7 +90,6 @@ from mindmemos_eval.memory.envs.personamem import (
     build_personamem_scope,
     calculate_personamem_metrics,
     convert_personamem_system_messages,
-    extract_personamem_answer,
     load_personamem_questions,
 )
 
@@ -250,7 +249,6 @@ __all__ = [
     "build_personamem_scope",
     "calculate_personamem_metrics",
     "convert_personamem_system_messages",
-    "extract_personamem_answer",
     "load_personamem_questions",
     "MemoryAgentBenchEnv",
     "MemoryAgentBenchItem",

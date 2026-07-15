@@ -10,6 +10,7 @@ import asyncio
 import time as _time
 from typing import Any
 
+from ....config import get_config
 from ....config.algo.search import SchemaSearchConfig
 from ....llm import EmbedClient, RerankClient
 from ....logging import get_logger
@@ -63,9 +64,7 @@ def _higher_order_exclusion_filter(entity_manager: EntityManager | None) -> Sear
         ho_names |= entity_manager.get_higher_order_property_names(et)
     if not ho_names:
         return None
-    return SearchFilter(
-        must_not=[FieldCondition(field="property_name", op="any", values=sorted(ho_names))]
-    )
+    return SearchFilter(must_not=[FieldCondition(field="property_name", op="any", values=sorted(ho_names))])
 
 
 def _exclude_episode_input_messages(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -100,7 +99,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         text_preprocessor: TextPreprocessor | None = None,
         sparse_encoder: SparseVectorEncoder | None = None,
         entity_manager: EntityManager | None = None,
-        config: SchemaSearchConfig,
+        config: SchemaSearchConfig | None = None,
     ) -> None:
         self.db_reader = db_reader
         self.embed_client = embed_client
@@ -108,7 +107,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         self.text_preprocessor = text_preprocessor
         self.sparse_encoder = sparse_encoder
         self.entity_manager = entity_manager
-        self.config = config
+        self._explicit_config = config
 
         self._entity_fusion = SchemaSearchEntityFusionManager(entity_manager=entity_manager)
         self._entity_recall = EntityRecall(
@@ -130,6 +129,12 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         if entity_manager:
             self._entity_weights = schema_search_load_entity_weights(entity_manager)
 
+    @property
+    def config(self) -> SchemaSearchConfig:
+        if self._explicit_config is not None:
+            return self._explicit_config
+        return get_config().algo_config.search.schema_search
+
     async def search(
         self,
         ctx: MemoryRequestContext,
@@ -149,6 +154,10 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         hops = num_hops or self.config.multi_hop
         prop_filter = property_filter or {}
 
+        _project_em = get_entity_manager(project_id=ctx.project_id)
+        _project_weights = schema_search_load_entity_weights(_project_em) if _project_em else {}
+        _project_fusion = SchemaSearchEntityFusionManager(entity_manager=_project_em)
+
         entity_results = await self._search_from_entity_store(
             ctx,
             query,
@@ -158,6 +167,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
             use_reranker=use_reranker,
             top_k=top_k,
             top_n=top_n,
+            entity_weights=_project_weights,
         )
 
         if self.config.use_entity_agent_search and entity_results:
@@ -167,6 +177,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
                 query,
                 entity_results,
                 prop_filter,
+                entity_manager=_project_em,
             )
             _shrink_a1_elapsed = _time.monotonic() - _shrink_a1_t0
             logger.info("multi_hop_shrink_done", count=len(entity_results), wall_time_s=round(_shrink_a1_elapsed, 2))
@@ -249,6 +260,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
                         query,
                         new_entities,
                         prop_filter,
+                        entity_manager=_project_em,
                     )
                     logger.info(
                         "multi_hop_expand_shrink",
@@ -275,13 +287,14 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
                     query,
                     entity_types=entity_types,
                     search_filter=search_filter,
+                    entity_fusion=_project_fusion,
                 )
                 logger.info("property_store_done", count=len(property_results))
             except Exception:
                 logger.warning("property_store_failed", exc_info=True)
 
         if property_results:
-            output_entities = self._entity_fusion.fuse_entities(all_entities, property_results)
+            output_entities = _project_fusion.fuse_entities(all_entities, property_results)
             logger.info(
                 "fusion_done", before=len(all_entities), property=len(property_results), after=len(output_entities)
             )
@@ -319,12 +332,14 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         query: str,
         entities: list[TemporalEntity],
         prop_filter: dict[str, list[str]],
+        entity_manager: EntityManager | None = None,
     ) -> list[TemporalEntity]:
         """Shrink entity properties using a dynamic per-entity budget."""
         if not entities:
             return []
 
         _shrink_t0 = _time.monotonic()
+        _em = entity_manager if entity_manager is not None else self.entity_manager
 
         base_top_m = self.config.property.top_n
         min_factor = self.config.property.alloc_min_factor
@@ -374,7 +389,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
                         rerank_client=self.rerank_client,
                         text_preprocessor=self.text_preprocessor,
                         sparse_encoder=self.sparse_encoder,
-                        entity_manager=self.entity_manager,
+                        entity_manager=_em,
                         top_m=budget,
                         hybrid_config={
                             "recall_size": self.config.property.recall_size,
@@ -437,6 +452,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         use_reranker: bool | None = None,
         search_filter: SearchFilter | None = None,
         entity_search_filter: SearchFilter | None = None,
+        entity_weights: dict[str, float] | None = None,
     ) -> list[TemporalEntity]:
         """Hybrid entity-level retrieval: vector + BM25 -> RRF -> rerank -> hydrate.
 
@@ -447,6 +463,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         recall_size = self.config.entity.recall_size
         rrf_k = self.config.entity.rrf_k
         should_use_reranker = self.config.entity.use_reranker if use_reranker is None else use_reranker
+        _weights = entity_weights if entity_weights is not None else self._entity_weights
 
         if self.config.entity_weights.force_balanced_split:
             return await self._balanced_entity_search(
@@ -460,6 +477,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
                 top_k=entity_top_k,
                 top_n=entity_top_n,
                 use_reranker=should_use_reranker,
+                entity_weights=_weights,
             )
 
         type_filter = build_entity_type_filter(entity_types)
@@ -487,8 +505,8 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
 
         entities = await self._hydrate_entities(ctx, rrf_results, memory_filters=search_filter)
 
-        if self._entity_weights:
-            entities = schema_search_apply_weights_to_ranked(entities, self._entity_weights)
+        if _weights:
+            entities = schema_search_apply_weights_to_ranked(entities, _weights)
 
         return entities
 
@@ -505,8 +523,10 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         use_reranker: bool | None = None,
         search_filter: SearchFilter | None = None,
         entity_search_filter: SearchFilter | None = None,
+        entity_weights: dict[str, float] | None = None,
     ) -> list[TemporalEntity]:
         """Balanced split retrieval: episode entities and non-episode entities are searched separately."""
+        _weights = entity_weights if entity_weights is not None else self._entity_weights
         ep_weight = self.config.entity_weights.episode_weight
         non_ep_weight = self.config.entity_weights.non_episode_weight
         should_use_reranker = self.config.entity.use_reranker if use_reranker is None else use_reranker
@@ -570,8 +590,8 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         non_ep_entities = await self._hydrate_entities(ctx, non_ep_rrf, memory_filters=search_filter)
 
         # Apply entity type weights to non-episode path
-        if self._entity_weights:
-            non_ep_entities = schema_search_apply_weights_to_ranked(non_ep_entities, self._entity_weights)
+        if _weights:
+            non_ep_entities = schema_search_apply_weights_to_ranked(non_ep_entities, _weights)
 
         # Merge: non-episode first (higher precision), then episodes
         merged = non_ep_entities + ep_entities
@@ -593,10 +613,13 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         *,
         entity_types: list[str] | None = None,
         search_filter: SearchFilter | None = None,
+        entity_fusion: SchemaSearchEntityFusionManager | None = None,
     ) -> list[TemporalEntity]:
         """Property-level hybrid retrieval: vector + BM25 -> RRF -> rerank -> assemble to entities."""
         if not self.config.dual_path.enabled:
             return []
+
+        _fusion = entity_fusion if entity_fusion is not None else self._entity_fusion
 
         prop_recall_size = self.config.dual_path.property_recall_size
         prop_rrf_k = self.config.dual_path.property_rrf_k
@@ -664,7 +687,7 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         else:
             rrf_results = rrf_results[:prop_top_n]
 
-        assembled = self._entity_fusion.assemble_entity_from_properties(rrf_results)
+        assembled = _fusion.assemble_entity_from_properties(rrf_results)
 
         logger.info(
             "property_store_search",

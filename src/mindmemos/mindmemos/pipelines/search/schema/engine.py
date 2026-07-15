@@ -45,8 +45,8 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
     ) -> None:
         super().__init__(**kwargs)
         cfg = get_config()
-        self._search_config = search_config or cfg.algo_config.search
-        self._schema_config = self._search_config.schema_search
+        self._explicit_search_config = search_config
+        self._schema_config = (search_config or cfg.algo_config.search).schema_search
         self._llm = llm_client or get_llm_client()
         self._embed_client = embed_client or get_embed_client()
         self._rerank_client = rerank_client if rerank_client is not None else _optional_rerank_client()
@@ -61,8 +61,6 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
             rerank_client=self._rerank_client,
             text_preprocessor=self._text_preprocessor,
             sparse_encoder=self._sparse_encoder,
-            entity_manager=self._entity_manager,
-            config=self._search_config.schema_search,
         )
         self._query_builder = SchemaSearchQueryBuilder(
             llm=self._llm,
@@ -71,6 +69,14 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
             current_time_mode=self._schema_config.current_time_mode,
             min_time_window_days=self._schema_config.min_time_window_days,
         )
+
+    def _get_search_config(self) -> SearchConfig:
+        if self._explicit_search_config is not None:
+            return self._explicit_search_config
+        return get_config().algo_config.search
+
+    def _get_schema_search_config(self):
+        return self._get_search_config().schema_search
 
     async def search_candidates(
         self,
@@ -81,6 +87,8 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
     ) -> list[MemorySearchItem]:
         """Search schema entities and project them to public memory items."""
 
+        schema_cfg = self._get_schema_search_config()
+
         detected_lang = detect_prompt_language(
             inp.query,
             fallback=get_config().algo_config.common.prompt_language,
@@ -88,12 +96,12 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
         request_prompts = get_search_prompts(detected_lang)
 
         parsed_filters = parse_schema_search_filters(inp.filters, context)
-        property_filter = self._query_builder.all_property_filter()
+        project_em = get_entity_manager(project_id=context.project_id)
+        project_entity_schema = project_em.get_all_dicts() if project_em else []
+        property_filter = self._query_builder.all_property_filter(entity_schema=project_entity_schema)
         initial_time_window = None
         if not parsed_filters.has_time_filter:
-            initial_time_window = await self._query_builder.extract_time_from_query(
-                inp.query, prompts=request_prompts
-            )
+            initial_time_window = await self._query_builder.extract_time_from_query(inp.query, prompts=request_prompts)
         entities = await self._expander.search(
             ctx=parsed_filters.context,
             query=inp.query,
@@ -102,7 +110,7 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
             time_window=initial_time_window,
             search_filter=parsed_filters.memory_filter,
             entity_search_filter=parsed_filters.entity_filter,
-            num_hops=options.num_hops if options and options.num_hops is not None else self._schema_config.multi_hop,
+            num_hops=options.num_hops if options and options.num_hops is not None else schema_cfg.multi_hop,
             use_reranker=options.use_reranker if options else None,
             top_k=options.recall_top_k if options else None,
             top_n=options.result_top_n if options and options.result_top_n is not None else inp.top_k,
@@ -116,9 +124,9 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
             MemorySearchItem(
                 id=entity.entity_id,
                 memory=entity.format_entity_prompt(
-                    ignore_edge_num=self._schema_config.output_max_edge_num,
+                    ignore_edge_num=schema_cfg.output_max_edge_num,
                     include_description=False,
-                    include_edges=self._schema_config.include_edges,
+                    include_edges=schema_cfg.include_edges,
                 ),
                 memory_type="fact",
                 last_update_at="",
@@ -143,7 +151,7 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
         top_k = _memory_fallback_top_k(inp, options)
         query = MemoryDbSearchQuery(
             query=inp.query,
-            top_k=top_k or self._search_config.default.top_k,
+            top_k=top_k or self._get_search_config().default.top_k,
             filters=filters,
             mode="bm25",
             ranking="score",

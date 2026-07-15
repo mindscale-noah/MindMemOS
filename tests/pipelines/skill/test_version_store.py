@@ -11,16 +11,15 @@ import uuid
 import pytest
 import pytest_asyncio
 from mindmemos.components.skill import compute_content_hash, serialize_bundle
-from mindmemos.infra.db.models import AddRecordPoint
-from mindmemos.infra.db.qdrant import QdrantStore
-from mindmemos.pipelines.skill import SkillVersionStore
-from mindmemos.typing.skill import SkillContext, SkillOrigin, SkillSyncRequestItem, SkillVersionStatus
-from qdrant_client import AsyncQdrantClient
-
 from mindmemos.config import QdrantConfig
 from mindmemos.errors import SkillBundleError, SkillNotFoundError, SkillVersionNotFoundError
 from mindmemos.infra.db import SkillVersionRepository
+from mindmemos.infra.db.models import AddRecordPoint
+from mindmemos.infra.db.qdrant import QdrantStore
 from mindmemos.mappers import to_skill_version_point
+from mindmemos.pipelines.skill import SkillVersionStore
+from mindmemos.typing.skill import SkillContext, SkillOrigin, SkillSyncRequestItem, SkillVersionStatus
+from qdrant_client import AsyncQdrantClient
 
 PROJECT = "proj"
 

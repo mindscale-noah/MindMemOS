@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-import pytest
-
 from mindmemos_eval.memory.envs.personamem.env import (
     PersonaMemItem,
     PersonaMemScope,
@@ -99,12 +95,19 @@ def test_extract_pattern2_after_token_no_closing_tag():
     assert _extract_predicted_option("<final_answer> the answer is (b)") == "b"
 
 
-def test_extract_pattern3_before_token():
-    assert _extract_predicted_option("(c) because blah <final_answer>") == "c"
+def test_extract_pattern3_option_adjacent_before_tag():
+    assert _extract_predicted_option("(c)<final_answer>") == "c"
+    assert _extract_predicted_option("c <final_answer>") == "c"
 
 
-def test_extract_pattern4_no_token():
-    assert _extract_predicted_option("I choose (d)") == "d"
+def test_extract_reasoning_text_before_tag_not_mistaken_for_answer():
+    """(c) separated from <final_answer> by other text is reasoning, not an answer."""
+    assert _extract_predicted_option("(c) because blah <final_answer>") is None
+
+
+def test_extract_no_tag_no_guess():
+    """Without <final_answer>, return None — don't guess from reasoning text."""
+    assert _extract_predicted_option("I choose (d)") is None
 
 
 def test_extract_empty_response():

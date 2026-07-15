@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from typing import Any
 
 import httpx
 import pytest
+from mindmemos_eval.memory.base import BenchmarkSpec, RunContext, RunnerConfig
+from mindmemos_eval.memory.envs.locomo.adapter import LocomoAdapter
+from mindmemos_eval.memory.identity import new_identity
 from mindmemos_sdk.memory import AsyncMemoryClient
 from mindmemos_sdk.transport import AsyncHttpTransport
 
@@ -258,3 +262,77 @@ async def test_run_dataset_no_score_prints_skip_note(capsys):
     assert run.total_questions == 0
     assert run.is_scored() is False
     assert "scoring skipped" in capsys.readouterr().out
+
+
+def test_conv_user_id_isolated_by_run_id():
+    """run_id suffixes the conversation identity so a --reuse-api-key re-run over
+    the same project does not collide with a previous run's memory; an absent
+    run_id keeps the bare conv_{idx} for backward compatibility."""
+    memory, _ = _memory([])
+    env = LocomoEnv(memory, answer_llm=_llm("x"), run_id="run-xyz")
+    assert env._conv_user_id(0) == "conv_0-run-xyz"
+    assert env._conv_user_id(3) == "conv_3-run-xyz"
+
+    bare_memory, _ = _memory([])
+    bare_env = LocomoEnv(bare_memory, answer_llm=_llm("x"))
+    assert bare_env._conv_user_id(0) == "conv_0"
+
+
+@pytest.mark.asyncio
+async def test_add_conversation_user_id_carries_run_id():
+    """The add (write) path issues user_id/session_id suffixed with run_id."""
+    memory, captured = _memory([])
+    env = LocomoEnv(memory, answer_llm=_llm("x"), run_id="run-xyz")
+
+    await env.add_conversation(_conv_item(), idx=0)
+
+    assert captured[0]["body"]["user_id"] == "conv_0-run-xyz"
+    assert captured[0]["body"]["session_id"] == "conv_0-run-xyz"
+    assert captured[1]["body"]["user_id"] == "conv_0-run-xyz"
+
+
+@pytest.mark.asyncio
+async def test_adapter_binds_env_to_run_id(monkeypatch):
+    """LocomoAdapter must pass ctx.identity.run_id into LocomoEnv. Regression: the
+    adapter used to ``del ctx`` and never pass run_id, so the env stayed bound to a
+    fixed conv_{idx} and --reuse-api-key re-runs read/wrote stale memory."""
+    from mindmemos_eval.memory.envs.locomo import adapter as locomo_adapter_mod
+
+    captured: dict[str, Any] = {}
+
+    class _FakeRun:
+        def model_dump(self) -> dict[str, Any]:
+            return {"conversations": []}
+
+        def official_metrics(self) -> dict[str, Any]:
+            return {}
+
+    class _FakeEnv:
+        def __init__(self, memory: Any, **kwargs: Any) -> None:
+            captured["kwargs"] = kwargs
+
+        @staticmethod
+        def load_dataset(path: str) -> list[dict[str, Any]]:
+            return [_conv_item()]
+
+        async def run_dataset(self, data: list[dict[str, Any]], **kwargs: Any) -> Any:
+            return _FakeRun()
+
+    monkeypatch.setattr(locomo_adapter_mod, "LocomoEnv", _FakeEnv)
+
+    identity = new_identity("locomo", "vanilla")
+    ctx = RunContext(identity=identity)
+    bench_config = BenchmarkSpec(name="locomo", dataset="ignored", memory_algorithm="vanilla")
+    args = argparse.Namespace(runner_config=RunnerConfig())
+
+    adapter = LocomoAdapter()
+    await adapter.run(
+        memory=object(),
+        answer_llm=_llm("x"),
+        judge_llm=_llm("x"),
+        ctx=ctx,
+        bench_config=bench_config,
+        args=args,
+    )
+
+    assert captured["kwargs"]["run_id"] == identity.run_id

@@ -23,3 +23,14 @@ class SchemaAddExtractionConfig:
 
     episode_augment_count: int = field(default=4)
     """Maximum number of LLM-generated supplemental episode search fields."""
+
+    max_entities_per_conversation: int = field(default=200)
+    """Hard cap on the number of entities processed from a single conversation."""
+
+    max_entity_resolve_concurrency: int = field(default=10)
+    """Maximum concurrent entity resolve / property tasks inside one add request."""
+
+    max_properties_per_entity: int = field(default=15)
+    """Hard cap on properties processed per entity. Each property becomes a memory point with its own
+    embedding + write, so this bounds per-entity fan-out (and, via the entity cap, total fan-out).
+    Properties beyond this limit are dropped. Must be >= 1; defaults to ~12 schema properties + headroom."""

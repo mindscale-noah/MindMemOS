@@ -2,11 +2,6 @@ import asyncio
 
 import pytest
 import pytest_asyncio
-from mindmemos.infra.db.filters import build_filter, match_any, match_value
-from qdrant_client import AsyncQdrantClient
-from qdrant_client import models as qmodels
-from qdrant_client.http.exceptions import ResponseHandlingException
-
 from mindmemos.config import QdrantConfig
 from mindmemos.infra.db import (
     AddRecordPoint,
@@ -16,6 +11,10 @@ from mindmemos.infra.db import (
     SearchRecordPoint,
     SparseVectorData,
 )
+from mindmemos.infra.db.filters import build_filter, match_any, match_value
+from qdrant_client import AsyncQdrantClient
+from qdrant_client import models as qmodels
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 
 class ConcurrencyTrackingQdrantClient:

@@ -59,21 +59,41 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 
 ---
 
+## Dataset Download
+
+The benchmark datasets referenced in the example config are **not** included in this repository.
+Download them from the respective benchmark authors (LoCoMo, LongMemEval, PersonaMem) and place
+them at the paths shown in ``config/mindmemos_eval/memory_evaluation_locomo.example.yaml``.
+
+Copy the example config and adjust LLM keys before running:
+```bash
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+```
+
+---
+
 ## Smoke Test (recommended first)
 
 Use `--limit 2` to minimize data volume and verify the full pipeline end-to-end:
 
 ```bash
 uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo,longmemeval,personamem \
   --manifest-output reports/smoke_vanilla.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml \
+  --api-key-output config/mindmemos/eval_api_keys.yaml \
   --algorithm vanilla \
   --limit 2 \
   --session-limit 2 \
   --judge-runs 1
 ```
+
+> **Warning**: ``--api-key-output`` writes a **fresh** ``api_keys.yaml`` with only the generated
+> benchmark identities. Do NOT point it at the server's live key file
+> (``config/mindmemos/api_keys.yaml``) unless you are running in an isolated environment.
+> Use a separate path (e.g. ``config/mindmemos/eval_api_keys.yaml``) and point the server at
+> that file for the duration of the evaluation, or merge the generated keys into the server's
+> key file manually.
 
 ---
 
@@ -85,11 +105,27 @@ All three benchmarks are executed sequentially in a single command to avoid `api
 
 ```bash
 caffeinate -si uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo,longmemeval,personamem \
   --manifest-output reports/vanilla_run.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml \
+  --api-key-output config/mindmemos/eval_api_keys.yaml \
   --algorithm vanilla \
+  --judge-runs 1
+```
+
+### Skip the add stage (data already ingested)
+
+When re-running evaluation against previously added memories, use ``--reuse-api-key`` to
+avoid regenerating (and overwriting) API keys:
+
+```bash
+caffeinate -si uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list locomo,longmemeval,personamem \
+  --manifest-output reports/vanilla_run_retry.jsonl \
+  --reuse-api-key config/mindmemos/eval_api_keys.yaml \
+  --algorithm vanilla \
+  --no-add \
   --judge-runs 1
 ```
 
@@ -97,12 +133,6 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 
 ```bash
 --benchmark-list locomo,longmemeval
-```
-
-### Skip the add stage (data already ingested)
-
-```bash
---no-add
 ```
 
 ### Skip the judge stage (generate answers only)
@@ -129,11 +159,12 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 | `--algorithm` | Algorithm profile: `vanilla` or `schema` |
 | `--limit N` | Max items per benchmark (conversations for LoCoMo, samples for LongMemEval, questions for PersonaMem) |
 | `--session-limit N` | LongMemEval only — add at most N sessions per sample; useful for smoke tests |
-| `--judge-runs N` | Run judge N times per question, decide by majority vote; default 1; EverMemOS paper uses 3. The N runs execute sequentially per question, so judge-stage latency scales roughly linearly with N |
+| `--judge-runs N` | Run judge N times per question, decide by majority vote; default 1. The N runs execute sequentially per question, so judge-stage latency scales roughly linearly with N. Not applicable to PersonaMem (deterministic scoring) |
 | `--no-add` | Skip memory ingestion (reuse data already in Qdrant) |
 | `--no-score` | Skip judge/scoring stage |
 | `--manifest-output` | JSONL file where eval results are written; required for metrics collection |
-| `--api-key-output` | Path where generated API keys are written; must match the server's `auth.api_key_file` |
+| `--api-key-output` | Path where **fresh** API keys are generated. Writes a complete file — do NOT point at the server's live key file. Use a separate path and configure the server to use it for the eval run |
+| `--reuse-api-key` | Path to an existing API key file from a prior run. Use with `--no-add` to rerun evaluation without regenerating keys or overwriting the key file |
 
 ---
 

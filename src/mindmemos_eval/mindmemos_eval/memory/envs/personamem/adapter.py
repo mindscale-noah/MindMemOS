@@ -8,6 +8,7 @@ from typing import Any
 from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.base import BenchmarkSpec, RunContext
 from mindmemos_eval.memory.config import _merged_runner_config, _option, resolve_public_search_strategy
+
 from .env import PersonaMemContextStore, PersonaMemEnv
 
 
@@ -34,8 +35,7 @@ class PersonaMemAdapter:
         evaluation_mode = str(bench_config.raw.get("evaluation_mode") or "memory_rag")
         if evaluation_mode not in {"memory_rag", "official_full_context"}:
             raise ValueError(
-                f"personamem evaluation_mode must be 'memory_rag' or 'official_full_context', "
-                f"got: {evaluation_mode}"
+                f"personamem evaluation_mode must be 'memory_rag' or 'official_full_context', got: {evaluation_mode}"
             )
 
         runner = getattr(args, "runner_config", None)

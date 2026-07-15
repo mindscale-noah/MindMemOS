@@ -1,9 +1,8 @@
 import pytest
-from mindmemos.typing.memory import MemoryRequestContext
-from mindmemos.typing.service import DeletePipelineInput
-
 from mindmemos.pipelines.delete import DefaultDeletePipeline
 from mindmemos.typing import MemoryDbDeleteCommand, MemoryDbMutationResult, MemoryDbWriteResult
+from mindmemos.typing.memory import MemoryRequestContext
+from mindmemos.typing.service import DeletePipelineInput
 
 
 def make_context() -> MemoryRequestContext:

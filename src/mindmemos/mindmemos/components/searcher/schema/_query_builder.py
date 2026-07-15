@@ -36,11 +36,14 @@ class SchemaSearchQueryBuilder:
         user_query: str,
         *,
         prompts: SearchPromptSet | None = None,
+        entity_schema: list[dict[str, Any]] | None = None,
     ) -> dict[str, list[str]]:
         """Use the LLM to select relevant entity types and properties."""
 
+        schema = entity_schema if entity_schema is not None else self._entity_schema
+
         entity_all_props: dict[str, list[str]] = {}
-        for entity_info in self._entity_schema:
+        for entity_info in schema:
             entity_type = entity_info.get("entity_type", "")
             all_props = list(entity_info.get("static_property", {}).keys()) + list(
                 entity_info.get("dynamic_property", {}).keys()
@@ -48,7 +51,7 @@ class SchemaSearchQueryBuilder:
             entity_all_props[entity_type] = all_props
 
         prompts_to_use = prompts or self._prompts
-        non_episode_schema = [e for e in self._entity_schema if e.get("entity_type") != "episodes"]
+        non_episode_schema = [e for e in schema if e.get("entity_type") != "episodes"]
         prompt = prompts_to_use.property_filter_selection.replace("{query}", user_query).replace(
             "{entity_schema}",
             str(non_episode_schema),
@@ -76,11 +79,13 @@ class SchemaSearchQueryBuilder:
             logger.error("schema_search_property_filter_failed", error=str(exc))
             return {}
 
-    def all_property_filter(self) -> dict[str, list[str]]:
+    def all_property_filter(self, *, entity_schema: list[dict[str, Any]] | None = None) -> dict[str, list[str]]:
         """Return all entity types and all their properties."""
 
+        schema = entity_schema if entity_schema is not None else self._entity_schema
+
         result: dict[str, list[str]] = {}
-        for entity_info in self._entity_schema:
+        for entity_info in schema:
             entity_type = entity_info.get("entity_type", "")
             all_props = list(entity_info.get("static_property", {}).keys()) + list(
                 entity_info.get("dynamic_property", {}).keys()

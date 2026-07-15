@@ -38,12 +38,19 @@ MindMemOS is an open-source long-term memory system for AI agents and applicatio
 
 ## Benchmark
 
+> **Dataset preparation**: LoCoMo, LongMemEval, and PersonaMem datasets are not included in this
+> repository. Download them from the respective official benchmark sources and place them at the
+> paths configured in the example config files:
+> * LoCoMo → `datasets/locomo/locomo10.json`
+> * LongMemEval → `resources/memory/dataset/longmemeval_smoke.json`
+> * PersonaMem → `resources/memory/dataset/questions_32k.csv` and `resources/memory/dataset/shared_contexts_32k.jsonl`
+
 ### Evaluation of Conversational Memory
 
 MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive benchmark for long-term memory systems, with an overall score of **93.64**.
 
-* Benchmark: [LoCoMo](https://arxiv.org/abs/2402.09542), the most mainstream and fiercely contested benchmark for long-term memory systems, focused on factual memory retention and joint analysis, covering single-hop, multi-hop, temporal, and open-domain question answering.
-* Note: Answer model: gpt-4.1-mini. Baseline metrics are cited from the [EverMemOS](https://arxiv.org/abs/2507.00221) paper.
+* Benchmark: LoCoMo, the most mainstream and fiercely contested benchmark for long-term memory systems, focused on factual memory retention and joint analysis, covering single-hop, multi-hop, temporal, and open-domain question answering.
+* Note: Answer model: gpt-4.1-mini. Comparison method metrics are cited from the EverMemOS paper.
 
 | Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
 | :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |
@@ -57,21 +64,21 @@ Evaluation config: [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml
 
 ```bash
 cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
-# fill in API keys, then run:
+# fill in API keys, then run (the server must read this eval key file during the run):
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo \
   --algorithm schema \
   --manifest-output output/locomo_manifest.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml
+  --api-key-output config/mindmemos/eval_api_keys.yaml
 ```
 
 ### Evaluation of Persona Memory
 
 MindMemOS-schema achieves state-of-the-art on PersonaMem with an overall accuracy of **70.6%**, leading the current SOTA by approximately **3 points**.
 
-* Benchmark: [PersonaMem](https://arxiv.org/abs/2505.15998), a persona-centric memory benchmark focused on user profiling and preference understanding, evaluating recall, tracking, revisiting, suggestion, recommendation, and generalization of user traits.
-* Note: All results are from local runs of open-source code (memory model and answer model: gpt-4.1-mini). Baseline metrics are cited from the [EverMemOS](https://arxiv.org/abs/2507.00221) paper.
+* Benchmark: PersonaMem, a persona-centric memory benchmark focused on user profiling and preference understanding, evaluating recall, tracking, revisiting, suggestion, recommendation, and generalization of user traits.
+* Note: All results are from local runs of open-source code (memory model and answer model: gpt-4.1-mini).
 
 | Method              | Recall Sha. | Recall Men. (Ack. Latest) | Track Evo. | Revisit | Suggest | Recommend | Generalize | Overall          |
 | :------------------ | :---------: | :-----------------------: | :--------: | :-----: | :-----: | :-------: | :--------: | :--------------: |
@@ -84,13 +91,13 @@ Evaluation config: [`config/mindmemos_eval/memory_evaluation_personamem.example.
 
 ```bash
 cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml config/mindmemos_eval/memory_evaluation_personamem.yaml
-# fill in API keys, then run:
+# fill in API keys, then run (the server must read this eval key file during the run):
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
   --benchmark-list personamem \
   --algorithm schema \
   --manifest-output output/personamem_manifest.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml
+  --api-key-output config/mindmemos/eval_api_keys.yaml
 ```
 
 ### Evaluation of Dreaming

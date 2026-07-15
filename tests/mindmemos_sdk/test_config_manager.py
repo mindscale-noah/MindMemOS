@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from mindmemos_sdk.errors import ConfigNotFoundError, ConfigValidationError
-
 from mindmemos_sdk.config import ConfigManager, mask_secret
+from mindmemos_sdk.errors import ConfigNotFoundError, ConfigValidationError
 
 
 @pytest.fixture

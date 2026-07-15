@@ -8,6 +8,7 @@ from typing import Any
 from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.base import BenchmarkSpec, RunContext
 from mindmemos_eval.memory.config import _merged_runner_config, _option, resolve_public_search_strategy
+
 from .env import LOCOMO_SCHEMA_ANSWER_PROMPT_EN, LocomoEnv
 
 
@@ -27,7 +28,6 @@ class LocomoAdapter:
         args: argparse.Namespace,
     ) -> dict[str, Any]:
         """Run LoCoMo using the existing eval environment."""
-        del ctx
         runner = getattr(args, "runner_config", None)
         if runner is None:
             runner = _merged_runner_config(args)
@@ -58,6 +58,7 @@ class LocomoAdapter:
             rerank=bool(rerank),
             **answer_template_kwargs,
             judge_runs=runner.judge_runs,
+            run_id=ctx.identity.run_id,
         )
         run = await env.run_dataset(
             data,

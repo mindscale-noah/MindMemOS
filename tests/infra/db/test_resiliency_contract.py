@@ -1,13 +1,12 @@
 import asyncio
 
 import pytest
+from mindmemos.config import Neo4jConfig, QdrantConfig
 from mindmemos.infra.db.neo4j import Neo4jStore
 from mindmemos.infra.db.qdrant import QdrantStore
 from mindmemos.infra.retry import retry_delay
 from neo4j.exceptions import TransientError
 from qdrant_client.http.exceptions import ResponseHandlingException
-
-from mindmemos.config import Neo4jConfig, QdrantConfig
 
 
 class _QdrantFailingRetrieveClient:

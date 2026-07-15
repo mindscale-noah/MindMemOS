@@ -11,18 +11,18 @@ runner:
   llm:
     model: gpt-4.1-mini
     api_key: sk-YOUR_API_KEY
-    base_url: http://YOUR_LLM_HOST:8015/v1
+    base_url: https://YOUR_LLM_HOST/v1
     temperature: 0.0
     max_tokens:
     timeout: 180
   answer_llm:
     model: gpt-4.1-mini
     api_key: sk-YOUR_API_KEY
-    base_url: http://YOUR_LLM_HOST:8015/v1
+    base_url: https://YOUR_LLM_HOST/v1
   judge_llm:
     model: gpt-4o-mini
     api_key: sk-YOUR_API_KEY
-    base_url: http://YOUR_LLM_HOST:8015/v1
+    base_url: https://YOUR_LLM_HOST/v1
 
 benchmarks:
   locomo:
@@ -98,6 +98,9 @@ algorithm_profiles:
               search_fields_max: 12
               episode_search_fields_augment: true
               episode_augment_count: 4
+              max_entities_per_conversation: 200
+              max_entity_resolve_concurrency: 10
+              max_properties_per_entity: 15
             merge:
               enable_entity_merge_decision: true
               entity_recall_top_k: 15
@@ -105,6 +108,8 @@ algorithm_profiles:
               use_property_merge: false
               secondary_search_limit: 30
               secondary_search_retries: 50
+              secondary_search_retry_backoff_base: 0.2
+              secondary_search_retry_backoff_max: 5.0
             higher_order:
               enabled: true
               top_k: 10
@@ -120,6 +125,8 @@ algorithm_profiles:
               max_minutes_from_first: 30
             drain:
               episode_generation_max_retries: 50
+              episode_retry_backoff_base: 1.0
+              episode_retry_backoff_max: 30.0
         search:
           request_top_k_max: 100
           schema_search:

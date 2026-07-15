@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from mindmemos.components.chunker.vanilla.compactor import LongTurnCompactor
 from mindmemos.components.chunker.vanilla.turn_grouper import _estimate_tokens
-from mindmemos.typing.algo import Turn, TurnCompactionSummary, TurnMessageRef
-
 from mindmemos.config import VanillaAddConfig
+from mindmemos.typing.algo import Turn, TurnCompactionSummary, TurnMessageRef
 
 
 def _ref(text: str, role: str = "user") -> TurnMessageRef:

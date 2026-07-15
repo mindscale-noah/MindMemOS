@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from mindmemos.config import TextProcessingConfig
 from mindmemos.pipelines.search.default import DefaultSearchEngine
 from mindmemos.typing.memory import (
     FieldCondition,
@@ -10,8 +11,6 @@ from mindmemos.typing.memory import (
 )
 from mindmemos.typing.memory_db import MemoryDbSearchHit, MemoryDbSearchResult
 from mindmemos.typing.service import SearchPipelineInput
-
-from mindmemos.config import TextProcessingConfig
 
 
 def make_context() -> MemoryRequestContext:

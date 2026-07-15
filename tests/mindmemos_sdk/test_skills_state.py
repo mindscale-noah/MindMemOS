@@ -6,6 +6,7 @@ import json
 
 import pytest
 from mindmemos.components.skill import bundle as server_bundle
+from mindmemos_sdk.config import ConfigManager
 from mindmemos_sdk.errors import SkillBundleError, SkillRegistryError
 from mindmemos_sdk.skills import bundle as sdk_bundle
 from mindmemos_sdk.skills.history import SkillHistoryStore
@@ -17,8 +18,6 @@ from mindmemos_sdk.skills.models import (
     SkillVersionStatus,
 )
 from mindmemos_sdk.skills.registry import SkillRegistry
-
-from mindmemos_sdk.config import ConfigManager
 
 
 def test_bundle_hash_matches_server_for_canonical_cases():

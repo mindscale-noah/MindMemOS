@@ -57,21 +57,38 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 
 ---
 
+## 数据集下载
+
+示例配置中引用的 benchmark 数据集**不在**本仓库中，需自行从各 benchmark 作者（LoCoMo、LongMemEval、PersonaMem）处获取，并按 ``config/mindmemos_eval/memory_evaluation_locomo.example.yaml`` 中的路径放置。
+
+复制示例配置并填入 LLM key：
+```bash
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+```
+
+---
+
 ## 快速冒烟测试（推荐先跑）
 
 用 `--limit 2` 把数据量砍到最小，验证全链路是否跑通：
 
 ```bash
 uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo,longmemeval,personamem \
   --manifest-output reports/smoke_vanilla.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml \
+  --api-key-output config/mindmemos/eval_api_keys.yaml \
   --algorithm vanilla \
   --limit 2 \
   --session-limit 2 \
   --judge-runs 1
 ```
+
+> **警告**：``--api-key-output`` 会**完整写入**一个新的 ``api_keys.yaml`` 文件，
+> 仅包含本次生成的 benchmark 身份。请勿直接指向服务端正在使用的
+> ``config/mindmemos/api_keys.yaml``（除非是隔离环境）。
+> 建议使用独立路径（如 ``config/mindmemos/eval_api_keys.yaml``），
+> 然后将服务端配置指向该文件，或手动将生成的 key 合并到服务端文件中。
 
 ---
 
@@ -83,10 +100,10 @@ uv run python -m mindmemos_eval.cli memory \
 
 ```bash
 caffeinate -si uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo,longmemeval,personamem \
   --manifest-output reports/vanilla_run.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml \
+  --api-key-output config/mindmemos/eval_api_keys.yaml \
   --algorithm vanilla \
   --judge-runs 1
 ```
@@ -98,10 +115,19 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 --benchmark-list locomo,longmemeval
 ```
 
-### 跳过 add 阶段（数据已入库时）
+### 跳过 add 阶段（数据已入库，重新评测）
+
+用 ``--reuse-api-key`` 复用上次生成的 key，避免覆盖：
 
 ```bash
---no-add
+caffeinate -si uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list locomo,longmemeval,personamem \
+  --manifest-output reports/vanilla_run_retry.jsonl \
+  --reuse-api-key config/mindmemos/eval_api_keys.yaml \
+  --algorithm vanilla \
+  --no-add \
+  --judge-runs 1
 ```
 
 ### 跳过 judge 阶段（只要答案不打分）
@@ -128,11 +154,12 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 | `--algorithm` | 算法 profile，当前支持 `vanilla` / `schema` |
 | `--limit N` | 每个 benchmark 最多处理 N 条（locomo=N 个对话，longmemeval=N 个 sample，personamem=N 道题） |
 | `--session-limit N` | LongMemEval 每个 sample 最多 add 前 N 个 session，用于加速冒烟测试 |
-| `--judge-runs N` | 每道题独立跑 N 次 judge，取多数票；默认 1；EverMemOS 论文用 3。这 N 次是**串行**跑的，judge 阶段耗时基本随 N 线性增长 |
+| `--judge-runs N` | 每道题独立跑 N 次 judge，取多数票；默认 1。这 N 次是**串行**跑的，judge 阶段耗时基本随 N 线性增长。PersonaMem 不适用（确定性判分） |
 | `--no-add` | 跳过 add 阶段（数据已在 Qdrant 中时使用） |
 | `--no-score` | 跳过 judge 阶段 |
 | `--manifest-output` | 评测结果写入的 JSONL 文件，供后续 metrics 统计使用 |
-| `--api-key-output` | 本次 run 生成的 API key 写入路径，需与 server 的 `auth.api_key_file` 一致 |
+| `--api-key-output` | **全新写入** API key 文件，仅含本次生成的 key。勿直接覆盖服务端正在使用的文件；建议用独立路径（如 `eval_api_keys.yaml`） |
+| `--reuse-api-key` | 复用已有 API key 文件，配合 `--no-add` 重新评测时可避免覆盖 key 文件 |
 
 ---
 

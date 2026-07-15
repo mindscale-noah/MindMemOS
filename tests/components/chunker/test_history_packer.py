@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from mindmemos.components.chunker.vanilla.history_packer import HistoryPacker
+from mindmemos.config import VanillaAddConfig
 from mindmemos.typing.algo import (
     Chunk,
     HistoryPack,
     Turn,
     TurnMessageRef,
 )
-
-from mindmemos.config import VanillaAddConfig
 
 
 def _ref(text: str) -> TurnMessageRef:

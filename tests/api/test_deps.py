@@ -1,5 +1,4 @@
 from mindmemos.api.deps import resolve_api_key
-
 from mindmemos.config import init_config, reset_config
 
 

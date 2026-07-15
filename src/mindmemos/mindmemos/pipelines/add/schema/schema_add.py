@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -98,12 +99,13 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         prompt_language: str | None = None,
         prompt_set: AddPromptSet | None = None,
         search_field_extractor: SchemaSearchFieldExtractor | None = None,
+        consistency: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.llm_client = llm_client or get_llm_client()
         self.embed_client = embed_client or get_embed_client()
-        self.entity_manager = entity_manager or get_entity_manager()
+        self.entity_manager = entity_manager  # May be None; resolved per-request from context.project_id
         algo_cfg = get_config().algo_config
         schema_cfg = algo_cfg.add.schema
         extraction_cfg = schema_cfg.extraction
@@ -130,8 +132,10 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         )
         self._buffer_limit = chunker_cfg.max_buffer_size
         self._min_episode_length = chunker_cfg.min_episode_length
-        self._consistency = _default_consistency()
+        self._explicit_consistency = consistency
         self._episode_max_retries = schema_cfg.drain.episode_generation_max_retries
+        self._episode_retry_backoff_base = schema_cfg.drain.episode_retry_backoff_base
+        self._episode_retry_backoff_max = schema_cfg.drain.episode_retry_backoff_max
         self._cleanup_processed_buffer = schema_cfg.drain.cleanup_processed_buffer
         self.enable_schema_selection = (
             extraction_cfg.enable_schema_selection if enable_schema_selection is None else enable_schema_selection
@@ -168,6 +172,9 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             else higher_order_min_evidence_count
         )
         self.episode_edge_top_k = schema_cfg.episode_edge.top_k if episode_edge_top_k is None else episode_edge_top_k
+        self._max_entity_resolve_concurrency = extraction_cfg.max_entity_resolve_concurrency
+        self._max_entities_per_conversation = extraction_cfg.max_entities_per_conversation
+        self._max_properties_per_entity = extraction_cfg.max_properties_per_entity
         self._processing_by_key: dict[str, bool] = defaultdict(bool)
         self._process_lock_by_key: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.extractor = SchemaAddExtractor(
@@ -193,7 +200,17 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             higher_order_top_k=self.higher_order_top_k,
             higher_order_min_evidence_count=self.higher_order_min_evidence_count,
             episode_edge_top_k=self.episode_edge_top_k,
+            max_entity_resolve_concurrency=self._max_entity_resolve_concurrency,
+            max_entities_per_conversation=self._max_entities_per_conversation,
+            max_properties_per_entity=self._max_properties_per_entity,
+            secondary_search_retry_backoff_base=merge_cfg.secondary_search_retry_backoff_base,
+            secondary_search_retry_backoff_max=merge_cfg.secondary_search_retry_backoff_max,
         )
+
+    def _get_consistency(self) -> str:
+        if self._explicit_consistency is not None:
+            return self._explicit_consistency
+        return _default_consistency()
 
     @traced("add_pipeline.sync", record_args=False)
     async def add_sync(
@@ -222,7 +239,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         )
         events = await self._ensure_drain_and_wait(
             context,
-            consistency=self._consistency,
+            consistency=self._get_consistency(),
             force=True,
         )
         result = AddPipelineSyncResult(status="ok", memories=events)
@@ -309,7 +326,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                 continue
             loop_events, loop_dispatched = await self._process_loop(
                 drain_context,
-                consistency=consistency or self._consistency,
+                consistency=consistency or self._get_consistency(),
                 force=force,
                 trigger_record_id=trigger_record_id,
             )
@@ -349,7 +366,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         return await self._execute_episode_task(
             _EpisodeTask(episode_id=episode_id, records=records),
             context=context,
-            consistency=consistency or self._consistency,
+            consistency=consistency or self._get_consistency(),
             trigger_record_id=trigger_record_id,
         )
 
@@ -417,7 +434,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                 "context": context.model_dump(mode="json"),
                 "input": inp.model_dump(mode="json", by_alias=True),
                 "force": force,
-                "consistency": self._consistency,
+                "consistency": self._get_consistency(),
                 "trigger_record_id": trigger_record_id,
                 "record_metadata": record_metadata,
             },
@@ -717,12 +734,19 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                 return episode_events
             except Exception as exc:
                 if attempt < self._episode_max_retries - 1:
+                    delay = min(
+                        self._episode_retry_backoff_base * (2**attempt),
+                        self._episode_retry_backoff_max,
+                    )
+                    jitter = delay * random.random()
                     logger.warning(
                         "episode memory generation failed; retrying",
                         attempt=attempt + 1,
                         episode_id=task.episode_id,
+                        delay=round(jitter, 2),
                         exc_info=True,
                     )
+                    await asyncio.sleep(jitter)
                 else:
                     error_msg = str(exc)
                     logger.error(
@@ -781,6 +805,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         added_at = add_record_ops.records_added_datetime(records)
         dialogue_timestamp = add_record_ops.dialogue_timestamp(event_at)
 
+        project_em = get_entity_manager(project_id=context.project_id)
+
         objectify_task = asyncio.create_task(
             self.extractor.objectify_conversation(conversation_text, dialogue_timestamp, prompt_set=request_prompts)
         )
@@ -791,7 +817,9 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         )
         schema_selection_task = asyncio.create_task(
             self.extractor.select_schema(
-                conversation_text, self.extractor.schema_for_generation(), prompt_set=request_prompts
+                conversation_text,
+                self.extractor.schema_for_generation(entity_manager=project_em),
+                prompt_set=request_prompts,
             )
         )
 
@@ -801,6 +829,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             dialogue_timestamp=dialogue_timestamp,
             conversation_text=conversation_text,
             prompt_set=request_prompts,
+            entity_manager=project_em,
         )
 
         _raw_before_prepare = raw_memory.get("entities", [])

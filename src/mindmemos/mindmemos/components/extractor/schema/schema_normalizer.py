@@ -33,7 +33,7 @@ class SchemaExtractionNormalizer(SchemaExtractionNormalizerProtocol):
         raw_memory["entities"] = prepared_entities
         return raw_memory
 
-    def validate(self, raw_memory: dict[str, Any]) -> str | None:
+    def validate(self, raw_memory: dict[str, Any], *, entity_manager: Any = None) -> str | None:
         """Validate raw schema extraction output and repair safe schema mismatches."""
 
         if not raw_memory or "entities" not in raw_memory:
@@ -50,9 +50,10 @@ class SchemaExtractionNormalizer(SchemaExtractionNormalizerProtocol):
         if missing:
             return f"Edge references entities not in entity list: {sorted(missing)}"
 
-        valid_types = set(self.entity_manager.list_types())
+        em = entity_manager or self.entity_manager
+        valid_types = set(em.list_types())
         type_properties: dict[str, set[str]] = {}
-        for schema_item in self.entity_manager.get_all_dicts():
+        for schema_item in em.get_all_dicts():
             entity_type = schema_item.get("entity_type")
             if not entity_type:
                 continue

@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from tqdm.auto import tqdm
 
 from mindmemos_eval.memory.scorer import ScoreResult
+
 from .projects import ProjectKey
 
 logger = logging.getLogger("mindmemos_eval.memory.memoryarena")

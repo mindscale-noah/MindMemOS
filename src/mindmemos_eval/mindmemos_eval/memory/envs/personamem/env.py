@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from tqdm.auto import tqdm
 
 from mindmemos_eval.llm import LLMClient
-from mindmemos_eval.memory.tokens import completion_stage_metrics, stage_metrics
+from mindmemos_eval.memory.tokens import stage_metrics
 
 PERSONAMEM_OFFICIAL_REPOSITORY = "https://github.com/bowen-upenn/PersonaMem"
 PERSONAMEM_OFFICIAL_PROTOCOL_COMMIT = "caaae44b3f236b8751d499a770e94e5aecffcff1"
@@ -447,7 +447,12 @@ def convert_personamem_system_messages(messages: Sequence[Mapping[str, Any]]) ->
 
 
 def _extract_predicted_option(response: str) -> str | None:
-    """Extract a single predicted option (a/b/c/d) from response, or None if not found."""
+    """Extract a single predicted option (a/b/c/d) from response, or None if not found.
+
+    Only accepts responses that include a ``<final_answer>`` tag. Responses without
+    the tag trigger a retry — we never guess from reasoning text that happens to
+    mention option letters.
+    """
     if not response:
         return None
     lowered = response.lower()
@@ -457,44 +462,23 @@ def _extract_predicted_option(response: str) -> str | None:
     if fa_match:
         return fa_match.group(1)
 
-    # Pattern 2: content after <final_answer> token
+    # Pattern 2: option immediately after <final_answer> token
     if "<final_answer>" in lowered:
         after = lowered.split("<final_answer>")[-1]
         opts = re.findall(r"\(([a-d])\)", after)
         if not opts:
             opts = re.findall(r"\b([a-d])\b", after)
         if opts:
-            return opts[-1]
+            return opts[0]
 
-    # Pattern 3: content before <final_answer> token (LLM put option before token)
-    if "<final_answer>" in lowered:
-        before = lowered.split("<final_answer>")[0]
-        opts = re.findall(r"\(([a-d])\)", before)
-        if opts:
-            return opts[-1]
-        opts = re.findall(r"\b([a-d])\b", before)
-        if opts:
-            return opts[-1]
-
-    # Pattern 4: no <final_answer> token, scan whole response, take last option mention
-    opts = re.findall(r"\(([a-d])\)", lowered)
-    if opts:
-        return opts[-1]
-    opts = re.findall(r"\b([a-d])\b", lowered)
-    if opts:
-        return opts[-1]
+    # Pattern 3: option immediately before <final_answer> token, e.g. "(c)<final_answer>"
+    # Only match when the option is adjacent to the tag — NOT arbitrary reasoning text
+    # that happens to contain option letters earlier in the response.
+    fa_before_match = re.search(r"\(?([a-d])\)?\s*<final_answer>", lowered)
+    if fa_before_match:
+        return fa_before_match.group(1)
 
     return None
-
-
-def extract_personamem_answer(response: str, correct_answer: str) -> tuple[bool, str]:
-    """Apply the official PersonaMem v1 option extraction and correctness rule."""
-
-    correct = correct_answer.lower().strip("() ")
-    predicted_option = _extract_predicted_option(response)
-    if predicted_option is None:
-        return False, response.strip() or ""
-    return predicted_option == correct, predicted_option
 
 
 def calculate_personamem_metrics(
@@ -574,10 +558,7 @@ def _build_session_timestamp_map_ms(context: list[dict[str, Any]]) -> dict[int, 
     """
     from datetime import datetime, timedelta, timezone
 
-    session_starts = [
-        i for i, m in enumerate(context)
-        if str(m.get("role") or "") == "system"
-    ]
+    session_starts = [i for i, m in enumerate(context) if str(m.get("role") or "") == "system"]
     if not session_starts or session_starts[0] != 0:
         session_starts.insert(0, 0)
 
@@ -663,10 +644,9 @@ class PersonaMemEnv:
             )
         if start_index < 0 or start_index > scope.end_index:
             raise ValueError(
-                f"invalid start_index {start_index} for scope "
-                f"{scope.shared_context_id!r} end_index {scope.end_index}"
+                f"invalid start_index {start_index} for scope {scope.shared_context_id!r} end_index {scope.end_index}"
             )
-        segment = context[start_index:scope.end_index]
+        segment = context[start_index : scope.end_index]
         # Session-aware timestamps aligned with UMM (inference_mem.build_session_timestamp_map):
         # - system messages start new sessions
         # - session 0 starts 2026-01-01 UTC, subsequent sessions start on next month's 1st
@@ -802,6 +782,8 @@ class PersonaMemEnv:
         if extracted_option is None:
             is_correct = False
             extracted_option = ""
+        else:
+            is_correct = extracted_option == correct
         return PersonaMemQAResult(
             item=item,
             retrieved_memories=memories,
@@ -843,9 +825,7 @@ class PersonaMemEnv:
         started = time.monotonic()
 
         # Group by shared_context_id -> end_index.
-        by_context: dict[str, dict[int, list[PersonaMemItem]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
+        by_context: dict[str, dict[int, list[PersonaMemItem]]] = defaultdict(lambda: defaultdict(list))
         for item in items:
             by_context[item.scope.shared_context_id][item.scope.end_index].append(item)
 
@@ -866,6 +846,7 @@ class PersonaMemEnv:
                     result = await self._answer_item(item, build_error=build_error)
                     qa_pbar.update()
                     return result
+
             async def _run_context(
                 ctx_id: str,
                 boundaries: dict[int, list[PersonaMemItem]],
@@ -880,15 +861,11 @@ class PersonaMemEnv:
                         boundary_items = boundaries[end_index]
                         scope = boundary_items[0].scope
                         if add and build_error is None:
-                            summary = await self._build_scope_segment(
-                                scope, context=context, start_index=prev_end
-                            )
+                            summary = await self._build_scope_segment(scope, context=context, start_index=prev_end)
                             if summary.error is not None:
                                 build_error = summary.error
                         else:
-                            summary = PersonaMemBuildSummary(
-                                scope=scope, start_index=prev_end, error=build_error
-                            )
+                            summary = PersonaMemBuildSummary(scope=scope, start_index=prev_end, error=build_error)
                         summaries.append(summary)
                         build_pbar.update()
                         prev_end = end_index
@@ -917,20 +894,6 @@ class PersonaMemEnv:
 
             results = list(await asyncio.gather(*(_answer_full(item) for item in items)))
             qa_pbar.close()
-        build_errors = {summary.scope.scope_id: summary.error for summary in build_summaries}
-        qa_sem = asyncio.Semaphore(max_qa_concurrency)
-        qa_pbar = tqdm(
-            total=len(items),
-            disable=not show_progress,
-            desc="Evaluating PersonaMem",
-            unit="question",
-        )
-
-        async def _answer(item: PersonaMemItem) -> PersonaMemQAResult:
-            async with qa_sem:
-                result = await self._answer_item(item, build_error=build_errors.get(item.scope.scope_id))
-                qa_pbar.update()
-            return result
 
         results.sort(key=lambda result: result.item.index)
         total_elapsed = time.monotonic() - started

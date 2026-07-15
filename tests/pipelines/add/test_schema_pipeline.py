@@ -1,19 +1,20 @@
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import mindmemos.pipelines.add.schema.schema_add as schema_add
 import pytest
-from mindmemos.typing.memory import EntityView, MemoryRequestContext, MemoryView
-from mindmemos.typing.memory_db import MemoryDbMutationResult, MemoryDbWriteResult
-from mindmemos.typing.service import AddPipelineInput
-from qdrant_client import models as qmodels
-
+from mindmemos.components.extractor.schema import _schema_higher_order
 from mindmemos.components.memory_modeling.schema import EntityManager, EntityType
 from mindmemos.config import init_config, reset_config
 from mindmemos.infra import db
 from mindmemos.llm import ChatResponse, EmbeddingResponse
 from mindmemos.pipelines.add import SchemaAddPipeline
 from mindmemos.pipelines.memory_db import AddRecordBuffer, MemoryDbReader, buffer_key
+from mindmemos.typing.memory import EntityView, MemoryRequestContext, MemoryView
+from mindmemos.typing.memory_db import MemoryDbMutationResult, MemoryDbWriteResult
+from mindmemos.typing.service import AddPipelineInput
+from qdrant_client import models as qmodels
 
 LOCOMO_CAROLINE_MELANIE_D1_11_TO_D1_18 = [
     (
@@ -79,6 +80,38 @@ class FakeLLM:
             content = '{"action":"create"}'
         parsed = format_parser(content) if format_parser else None
         return ChatResponse(finish_reason="stop", content=content, parsed=parsed)
+
+
+class ManyPropertiesLLM(FakeLLM):
+    """FakeLLM whose generated entity emits more properties than the per-entity cap."""
+
+    async def chat(self, task, messages, format_parser=None, **kwargs):
+        if task == "memory.add.entity_generation":
+            properties = [
+                {
+                    "property_name": f"p{i}",
+                    "value": f"As of 2026-05-28, User fact number {i}.",
+                    "time": "2026-05-28",
+                }
+                for i in range(20)
+            ]
+            content = json.dumps(
+                {
+                    "message_mapping": {},
+                    "entities": [
+                        {
+                            "name": "User",
+                            "entity_type": "person",
+                            "description": "Primary user.",
+                            "properties": properties,
+                        }
+                    ],
+                    "edges": [],
+                }
+            )
+            parsed = format_parser(content) if format_parser else None
+            return ChatResponse(finish_reason="stop", content=content, parsed=parsed)
+        return await super().chat(task, messages, format_parser=format_parser, **kwargs)
 
 
 class RecordingConversationTextLLM(FakeLLM):
@@ -635,6 +668,40 @@ async def test_schema_add_pipeline_writes_entity_and_property_vectors():
     assert result.memories[0].memory_type == "profile"
     assert qdrant.add_records == {}
     assert all(payload["buffer_status"] == "processed" for payload in qdrant.schema_buffer_records.values())
+
+
+@pytest.mark.asyncio
+async def test_schema_add_pipeline_caps_properties_per_entity():
+    """Properties beyond max_properties_per_entity are dropped before writing/embedding."""
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    reader = MemoryDbReader(clients=clients)
+    pipeline = SchemaAddPipeline(
+        db_reader=reader,
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        llm_client=ManyPropertiesLLM(),
+        embed_client=FakeEmbed(),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    result = await pipeline.add_sync(
+        AddPipelineInput(
+            mode="sync",
+            timestamp=1770000000000,
+            force_generation=True,
+            messages=[{"role": "user", "content": "I like Qdrant for vector search."}],
+        ),
+        make_context(),
+    )
+
+    assert result.status == "ok"
+    _, plan, _ = writer.calls[0]
+    property_names = {memory.property_name for memory in plan.memories}
+    # 20 properties emitted, capped to 15 (default max_properties_per_entity): p0..p14 kept, p15..p19 dropped
+    assert {f"p{i}" for i in range(15)} <= property_names
+    assert not ({f"p{i}" for i in range(15, 20)} & property_names)
 
 
 @pytest.mark.asyncio
@@ -1221,7 +1288,7 @@ async def test_schema_add_pipeline_property_merge_archives_existing_and_writes_m
 
 
 @pytest.mark.asyncio
-async def test_schema_add_pipeline_higher_order_runs_for_updated_entity():
+async def test_schema_add_pipeline_higher_order_runs_for_updated_entity(monkeypatch):
     writer = FakeWriter()
     qdrant = FakeQdrant()
     clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
@@ -1270,6 +1337,10 @@ async def test_schema_add_pipeline_higher_order_runs_for_updated_entity():
         "order": 2,
         "desc": "Higher order user preference summary.",
     }
+    # Higher-order generation resolves the project entity manager via the global accessor in
+    # _schema_higher_order (not the injected manager), so patch it to return the test manager
+    # that has preference_summary registered.
+    monkeypatch.setattr(_schema_higher_order, "get_entity_manager", lambda *args, **kwargs: manager)
     pipeline = SchemaAddPipeline(
         db_reader=reader,
         db_writer=writer,

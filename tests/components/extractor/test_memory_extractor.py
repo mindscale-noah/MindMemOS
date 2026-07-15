@@ -1,22 +1,21 @@
 from types import SimpleNamespace
 
 import pytest
-from mindmemos.components.extractor.vanilla.memory import (
-    _envelope_prompt_messages,
-    _normalize_extraction_payload,
-)
-from mindmemos.typing.algo import ExtractionEnvelope, TurnMessageRef
-from mindmemos.typing.llm import ChatResponse
-from mindmemos.typing.memory import MemoryRequestContext
-from mindmemos.typing.service import AddPipelineInput
-
 from mindmemos.components.chunker import MessageSegmenter
 from mindmemos.components.extractor.vanilla import (
     MemoryExtractionResult,
     VanillaMemoryExtractor,
 )
+from mindmemos.components.extractor.vanilla.memory import (
+    _envelope_prompt_messages,
+    _normalize_extraction_payload,
+)
 from mindmemos.components.text import TextPreprocessor
 from mindmemos.config import TextProcessingConfig
+from mindmemos.typing.algo import ExtractionEnvelope, TurnMessageRef
+from mindmemos.typing.llm import ChatResponse
+from mindmemos.typing.memory import MemoryRequestContext
+from mindmemos.typing.service import AddPipelineInput
 
 
 def make_context() -> MemoryRequestContext:

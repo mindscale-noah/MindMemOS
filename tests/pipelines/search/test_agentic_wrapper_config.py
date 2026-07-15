@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+from mindmemos.config.algo.search import AgenticConfig
 from mindmemos.pipelines.search.agentic.wrapper import _agentic_config_with_max_rounds
 from omegaconf import OmegaConf
-
-from mindmemos.config.algo.search import AgenticConfig
 
 
 def test_agentic_config_with_max_rounds_supports_dataclass_config() -> None:

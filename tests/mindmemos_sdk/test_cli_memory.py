@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 
 import pytest
+from mindmemos_sdk.memory import AddResult, DialogueMessage, GetResult, MemorySearchHit, SearchResult, StatusResult
 from mindmemos_sdk.skills import RollbackPlan, SkillDiffResult, SkillRecord
 from mindmemos_sdk.skills.models import HashState, LocalSkillVersion, SkillOrigin, SkillVersionStatus
 
 from mindmemos_sdk import cli
-from mindmemos_sdk.memory import AddResult, DialogueMessage, GetResult, MemorySearchHit, SearchResult, StatusResult
 
 
 class _FakeMemory:
@@ -552,9 +552,7 @@ def test_memory_get_passes_filter_and_top_k(fake_client):
     fake_client(GetResult(memories=[MemorySearchHit(id="m1", memory="cat")]))
     rc = _run(["memory", "get", "--filter", '{"app_id": "a1"}', "--top-k", "3"])
     assert rc == 0
-    assert fake_client.holder["client"].memory.calls == [
-        ("get", (), {"filters": {"app_id": "a1"}, "top_k": 3})
-    ]
+    assert fake_client.holder["client"].memory.calls == [("get", (), {"filters": {"app_id": "a1"}, "top_k": 3})]
 
 
 def test_memory_get_invalid_filter_json_fails_fast(capsys):

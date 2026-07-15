@@ -11,7 +11,6 @@ from datetime import timedelta
 from itertools import groupby
 from typing import Any
 
-from ...logging import get_logger
 from ...components.activity import RecentActivityCollector
 from ...components.feedback import (
     FeedbackRoundCompactor,
@@ -20,6 +19,7 @@ from ...components.feedback import (
     ImplicitFeedbackSignalDetector,
 )
 from ...infra.db import DatabaseClients, match_value, resolve_database_clients
+from ...logging import get_logger
 from ...typing import (
     ActivityMessage,
     ActivityScope,
@@ -83,7 +83,7 @@ class ImplicitFeedbackHandler:
             signal_count += len(result.signals)
             logger.info(
                 "feedback.implicit.detect",
-                session=f"{idx+1}/{len(sessions)}",
+                session=f"{idx + 1}/{len(sessions)}",
                 rounds=len(material.rounds),
                 memories=len(material.memories),
                 signals=len(result.signals),

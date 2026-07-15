@@ -691,6 +691,7 @@ class LocomoEnv:
         answer_template: str = LOCOMO_ANSWER_PROMPT_EN,
         schema_mode: bool = False,
         judge_runs: int = 1,
+        run_id: str = "",
     ) -> None:
         """Handle init."""
         self._memory = memory
@@ -701,6 +702,12 @@ class LocomoEnv:
         self._rerank = rerank
         self._answer_template = answer_template
         self._schema_mode = schema_mode
+        self._run_id = run_id
+
+    def _conv_user_id(self, idx: int) -> str:
+        """Return a conversation-scoped user_id, isolated by run_id when set."""
+        base = f"conv_{idx}"
+        return f"{base}-{self._run_id}" if self._run_id else base
 
     async def add_session(
         self,
@@ -742,7 +749,7 @@ class LocomoEnv:
     ) -> LocomoAddSummary:
         """Add all sessions in one LoCoMo conversation."""
         conversation = item["conversation"]
-        user_id = f"conv_{idx}"
+        user_id = self._conv_user_id(idx)
         session_keys = self._session_keys(conversation)
 
         added = 0
@@ -864,8 +871,7 @@ class LocomoEnv:
 
         total_sessions = sum(len(self._session_keys(it["conversation"])) for it in data) if add else 0
         total_questions = sum(
-            len([q for q in it.get("qa", []) if not (skip_category_5 and q.get("category") == 5)])
-            for it in data
+            len([q for q in it.get("qa", []) if not (skip_category_5 and q.get("category") == 5)]) for it in data
         )
 
         add_pbar = (
@@ -874,9 +880,7 @@ class LocomoEnv:
             else None
         )
         conv_pbar = (
-            tqdm(total=len(data), desc="对话测评 (conversation)", unit="conv", position=1)
-            if show_progress
-            else None
+            tqdm(total=len(data), desc="对话测评 (conversation)", unit="conv", position=1) if show_progress else None
         )
         qa_pbar = (
             tqdm(total=total_questions, desc="回答问题 (question)", unit="q", position=2) if show_progress else None
@@ -884,7 +888,7 @@ class LocomoEnv:
 
         async def run_conversation(idx: int, item: dict[str, Any]) -> LocomoConversationResult:
             async with conv_sem:
-                user_id = f"conv_{idx}"
+                user_id = self._conv_user_id(idx)
                 on_session_done = add_pbar.update if add_pbar is not None else None
                 add_summary = await self.add_conversation(item, idx, on_session_done=on_session_done) if add else None
 

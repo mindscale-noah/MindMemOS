@@ -4,14 +4,13 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from mindmemos.config import DreamingConfig, TextProcessingConfig
+from mindmemos.infra.db import QdrantRecord
 from mindmemos.pipelines.dreaming.default import DefaultDreamingPipeline
 from mindmemos.typing.activity import ActivityScope, RecentActivityBundle, WrittenMemoryRef
 from mindmemos.typing.algo import ConsolidationAction, ConsolidationCreate, ConsolidationLink, ConsolidationMerge
 from mindmemos.typing.memory import GraphNeighborScope, MemoryRequestContext, MemoryView
 from mindmemos.typing.service import DreamingPipelineInput
-
-from mindmemos.config import DreamingConfig, TextProcessingConfig
-from mindmemos.infra.db import QdrantRecord
 
 
 class FakeReader:

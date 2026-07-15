@@ -35,12 +35,18 @@
 
 ## Benchmark
 
+> **数据集准备**：LoCoMo、LongMemEval、PersonaMem 数据集不在本仓库中，
+> 请从各 benchmark 官方渠道下载，按示例配置中的路径放置：
+> * LoCoMo → `datasets/locomo/locomo10.json`
+> * LongMemEval → `resources/memory/dataset/longmemeval_smoke.json`
+> * PersonaMem → `resources/memory/dataset/questions_32k.csv` 和 `resources/memory/dataset/shared_contexts_32k.jsonl`
+
 ### Evaluation of Conversational Memory
 
 MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 SOTA，Overall 得分 **93.64**。
 
-* Benchmark：[LoCoMo](https://arxiv.org/abs/2402.09542)，记忆系统最主流、竞争最激烈的基准，聚焦事实记忆与联合分析，覆盖 single-hop、multi-hop、temporal 和 open-domain 问答。
-* Note：回复模型为 gpt-4.1-mini。Baseline 指标引用自 [EverMemOS](https://arxiv.org/abs/2507.00221) 论文。
+* Benchmark：LoCoMo，记忆系统最主流、竞争最激烈的基准，聚焦事实记忆与联合分析，覆盖 single-hop、multi-hop、temporal 和 open-domain 问答。
+* Note：回复模型为 gpt-4.1-mini。对比方法指标引用自 EverMemOS 论文。
 
 | Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
 | :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |
@@ -54,21 +60,21 @@ MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 
 
 ```bash
 cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
-# 填入 API key 后执行：
+# 填入 API key 后执行（评测期间服务端需读取此 eval key 文件）：
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo \
   --algorithm schema \
   --manifest-output output/locomo_manifest.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml
+  --api-key-output config/mindmemos/eval_api_keys.yaml
 ```
 
 ### Evaluation of Persona Memory
 
 MindMemOS-schema 在 PersonaMem 基准上达到 SOTA，Overall 准确率 **70.6%**，领先当前 SOTA 约 **3 个百分点**。
 
-* Benchmark：[PersonaMem](https://arxiv.org/abs/2505.15998)，以用户画像与喜好理解为中心的记忆基准，评测对用户特征的召回、追踪、重访、建议、推荐与泛化能力。
-* Note：所有实验结果来源于开源代码本地运行（记忆模型、回答模型均为 gpt-4.1-mini）。Baseline 指标引用自 [EverMemOS](https://arxiv.org/abs/2507.00221) 论文。
+* Benchmark：PersonaMem，以用户画像与喜好理解为中心的记忆基准，评测对用户特征的召回、追踪、重访、建议、推荐与泛化能力。
+* Note：所有实验结果来源于开源代码本地运行（记忆模型、回答模型均为 gpt-4.1-mini）。
 
 | Method              | Recall Sha. | Recall Men. (Ack. Latest) | Track Evo. | Revisit | Suggest | Recommend | Generalize | Overall          |
 | :------------------ | :---------: | :-----------------------: | :--------: | :-----: | :-----: | :-------: | :--------: | :--------------: |
@@ -81,13 +87,13 @@ MindMemOS-schema 在 PersonaMem 基准上达到 SOTA，Overall 准确率 **70.6%
 
 ```bash
 cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml config/mindmemos_eval/memory_evaluation_personamem.yaml
-# 填入 API key 后执行：
+# 填入 API key 后执行（评测期间服务端需读取此 eval key 文件）：
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
   --benchmark-list personamem \
   --algorithm schema \
   --manifest-output output/personamem_manifest.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml
+  --api-key-output config/mindmemos/eval_api_keys.yaml
 ```
 
 
