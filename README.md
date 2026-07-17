@@ -64,7 +64,9 @@ Evaluation config: [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml
 
 ```bash
 cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
-# fill in API keys, then run (the server must read this eval key file during the run):
+# fill in API keys, then run. Start the server first — make sure its api_key_file
+# config points to the eval key file this eval command will generate:
+#   api_key_file: config/mindmemos/eval_api_keys.yaml
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo \
@@ -91,7 +93,9 @@ Evaluation config: [`config/mindmemos_eval/memory_evaluation_personamem.example.
 
 ```bash
 cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml config/mindmemos_eval/memory_evaluation_personamem.yaml
-# fill in API keys, then run (the server must read this eval key file during the run):
+# fill in API keys, then run. Start the server first — make sure its api_key_file
+# config points to the eval key file this eval command will generate:
+#   api_key_file: config/mindmemos/eval_api_keys.yaml
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
   --benchmark-list personamem \
