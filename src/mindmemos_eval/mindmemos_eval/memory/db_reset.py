@@ -27,7 +27,7 @@ logger = logging.getLogger("mindmemos_eval.memory.db_reset")
 DEFAULT_QDRANT_URL = "http://localhost:6333"
 DEFAULT_NEO4J_URI = "bolt://localhost:7687"
 DEFAULT_NEO4J_USERNAME = "neo4j"
-DEFAULT_NEO4J_PASSWORD = "mindmemos_dev_password"
+DEFAULT_NEO4J_PASSWORD = ""  # dev — set MINDMEMOS_NEO4J_PASSWORD in your environment
 DEFAULT_NEO4J_DATABASE = "neo4j"
 
 # Must match the server's QdrantConfig defaults (config/app.py) so eval clears the
@@ -152,17 +152,28 @@ async def _reset_qdrant(cfg: ResetConfig, project_id: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     try:
         for collection in cfg.collections:
-            deleted: int
+            counted_before: int | None = None
             try:
                 counted = await client.count(collection_name=collection, count_filter=filter_, exact=True)
-                deleted = counted.count
+                counted_before = counted.count
             except Exception:  # noqa: BLE001 - collection may not exist yet
-                deleted = -1
+                pass
+
+            deleted_ok = True
             try:
                 await client.delete(collection_name=collection, points_selector=selector)
             except Exception as exc:  # noqa: BLE001 - collection may not exist yet
                 logger.warning("qdrant_reset_skipped collection=%s error=%s", collection, exc)
-                deleted = 0
+                deleted_ok = False
+
+            if deleted_ok and counted_before is not None:
+                deleted = counted_before
+            elif deleted_ok:
+                deleted = 0  # delete succeeded but count failed — report 0 conservatively
+            elif counted_before is not None:
+                deleted = counted_before  # delete failed — still report how many were there
+            else:
+                deleted = -1
             counts[f"qdrant:{collection}"] = deleted
     finally:
         await client.close()
