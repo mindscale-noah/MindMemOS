@@ -42,7 +42,7 @@ MindMemOS is an open-source long-term memory system for AI agents and applicatio
 
 MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive benchmark for long-term memory systems, with an overall score of **93.64**.
 
-* Benchmark: [LoCoMo](https://arxiv.org/abs/2402.09542), the most mainstream and fiercely contested benchmark for long-term memory systems, focused on factual memory retention and joint analysis, covering single-hop, multi-hop, temporal, and open-domain question answering.
+* Benchmark: [LoCoMo](https://arxiv.org/abs/2402.17753), the most mainstream and fiercely contested benchmark for long-term memory systems, focused on factual memory retention and joint analysis, covering single-hop, multi-hop, temporal, and open-domain question answering.
 * Note: Answer model: gpt-4.1-mini. Baseline metrics are cited from the [EverMemOS](https://arxiv.org/abs/2601.02163) paper.
 
 | Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
@@ -72,7 +72,7 @@ uv run python -m mindmemos_eval.cli memory \
 
 MindMemOS achieves state-of-the-art on PersonaMem through higher-order property modeling and discovery, leading the current SOTA by approximately **2 points** in overall accuracy.
 
-* Benchmark: [PersonaMem](https://arxiv.org/abs/2505.15998), a persona-centric memory benchmark focused on user profiling and preference understanding, evaluating recall, tracking, revisiting, suggestion, recommendation, and generalization of user traits.
+* Benchmark: [PersonaMem](https://arxiv.org/abs/2504.14225), a persona-centric memory benchmark focused on user profiling and preference understanding, evaluating recall, tracking, revisiting, suggestion, recommendation, and generalization of user traits.
 * Note: All results are from local runs of open-source code (memory model and answer model: gpt-4.1-mini).
 
 | Method              | Recall Sha. | Recall Men. (Ack. Latest) | Track Evo. | Revisit | Suggest | Recommend | Generalize | Overall          |
