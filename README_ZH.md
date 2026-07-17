@@ -40,7 +40,7 @@
 MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 SOTA，Overall 得分 **93.64**。
 
 * Benchmark：[LoCoMo](https://arxiv.org/abs/2402.09542)，记忆系统最主流、竞争最激烈的基准，聚焦事实记忆与联合分析，覆盖 single-hop、multi-hop、temporal 和 open-domain 问答。
-* Note：回复模型为 gpt-4.1-mini。Baseline 指标引用自 [EverMemOS](https://arxiv.org/abs/2507.00221) 论文。
+* Note：回复模型为 gpt-4.1-mini。Baseline 指标引用自 [EverMemOS](https://arxiv.org/abs/2601.02163) 论文。
 
 | Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
 | :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |

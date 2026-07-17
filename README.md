@@ -43,7 +43,7 @@ MindMemOS is an open-source long-term memory system for AI agents and applicatio
 MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive benchmark for long-term memory systems, with an overall score of **93.64**.
 
 * Benchmark: [LoCoMo](https://arxiv.org/abs/2402.09542), the most mainstream and fiercely contested benchmark for long-term memory systems, focused on factual memory retention and joint analysis, covering single-hop, multi-hop, temporal, and open-domain question answering.
-* Note: Answer model: gpt-4.1-mini. Baseline metrics are cited from the [EverMemOS](https://arxiv.org/abs/2507.00221) paper.
+* Note: Answer model: gpt-4.1-mini. Baseline metrics are cited from the [EverMemOS](https://arxiv.org/abs/2601.02163) paper.
 
 | Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
 | :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |
