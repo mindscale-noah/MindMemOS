@@ -63,7 +63,13 @@ with MindMemOSClient(
     client.memory.delete("mem_123")
 
     # 4) Quality lifecycle
-    client.memory.feedback(feedback="lunch rec was wrong; user dislikes spicy food")
+    client.memory.feedback(
+        feedback="lunch rec was wrong; user dislikes spicy food",
+        messages=[
+            DialogueMessage(role="user", content="I do not like spicy food."),
+            DialogueMessage(role="assistant", content="Sorry, I will avoid spicy lunch recommendations."),
+        ],
+    )
     client.memory.dreaming()        # background consolidation, no inputs
 ```
 
@@ -77,7 +83,8 @@ Useful memory kwargs:
 
 - `add(..., mode="sync"|"async", metadata={...}, skill_context=[...], score=0.8, task_id="...")`
 - `search(..., search_strategy="fast"|"agentic", rerank=True, score_threshold=0.5, filters={...})`
-- `feedback(feedback="...", mode="sync"|"async", messages=[...], recalled_memories=[...])`
+- `feedback(feedback="...", mode="sync"|"async", messages=[...], recalled_memories=[...])`;
+  explicit feedback text requires `messages`, while omitting `feedback` runs implicit feedback from recent adds.
 - `dreaming(mode="async"|"sync")`
 
 Error handling — all API/SDK failures raise `MindMemOSSDKError` (subclasses:
@@ -115,7 +122,10 @@ async def main():
         await memory.get(filters={"app_id": "my-agent"}, top_k=20)
         await memory.update("mem_123", "prefers aisle seats")
         await memory.delete("mem_123")
-        await memory.feedback(feedback="seat preference was recalled correctly")
+        await memory.feedback(
+            feedback="seat preference was recalled correctly",
+            messages=[{"role": "user", "content": "Please book me a window seat next time."}],
+        )
         await memory.dreaming(mode="async")
 
 asyncio.run(main())

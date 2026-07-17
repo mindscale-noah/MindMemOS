@@ -180,7 +180,11 @@ class MemoryClient:
         agent_id: str | None = None,
         session_id: str | None = None,
     ) -> StatusResult:
-        """Trigger the feedback workflow."""
+        """Trigger the feedback workflow.
+
+        Explicit feedback text requires messages context. Omit ``feedback`` to
+        run implicit feedback from recent add records.
+        """
         request = self._core.feedback(
             feedback=feedback,
             mode=mode,

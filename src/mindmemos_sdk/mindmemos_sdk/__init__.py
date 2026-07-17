@@ -6,6 +6,7 @@ from .errors import (
     ApiError,
     AuthRequiredError,
     ConfigError,
+    InvalidRequestError,
     MindMemOSSDKError,
     TransportError,
 )
@@ -40,10 +41,11 @@ __all__ = [
     "UrlMessage",
     "FileMessage",
     "MindMemOSSDKError",
+    "InvalidRequestError",
     "ConfigError",
     "AuthRequiredError",
     "TransportError",
     "ApiError",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.4"
