@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from ....config import get_config
 from ....llm import EmbedClient, LLMClient
 from ....logging import get_logger
 from ....prompts import AddPromptSet
@@ -30,7 +29,7 @@ from ....typing import (
     SearchFilter,
 )
 from ...memory_modeling.schema import Edge, get_entity_manager, memory_timestamp
-from ...text import SparseVectorEncoder, get_text_preprocessor
+from ...text import SparseVectorEncoder, TextPreprocessor
 from ._schema_higher_order import SchemaHigherOrderGenerator
 from ._schema_merge_policy import SchemaMergePolicy
 from ._schema_property_similarity import SchemaPropertySimilaritySearcher
@@ -78,6 +77,8 @@ class SchemaAddPlanner:
         higher_order_top_k: int,
         higher_order_min_evidence_count: int,
         episode_edge_top_k: int,
+        text_preprocessor: TextPreprocessor,
+        sparse_encoder: SparseVectorEncoder,
         max_entity_resolve_concurrency: int = 10,
         max_entities_per_conversation: int = 200,
         max_properties_per_entity: int = 15,
@@ -105,9 +106,8 @@ class SchemaAddPlanner:
         self.max_properties_per_entity = max_properties_per_entity
         self.secondary_search_retry_backoff_base = secondary_search_retry_backoff_base
         self.secondary_search_retry_backoff_max = secondary_search_retry_backoff_max
-        text_cfg = get_config().algo_config.text_processing
-        self._text_preprocessor = get_text_preprocessor()
-        self._sparse_encoder = SparseVectorEncoder(text_cfg)
+        self._text_preprocessor = text_preprocessor
+        self._sparse_encoder = sparse_encoder
         self._merge_policy = SchemaMergePolicy()
         self._property_similarity = SchemaPropertySimilaritySearcher(
             db_reader=self.db_reader,
@@ -116,7 +116,6 @@ class SchemaAddPlanner:
         self._higher_order_generator = SchemaHigherOrderGenerator(
             llm_client=self.llm_client,
             db_reader=self.db_reader,
-            entity_manager=self.entity_manager,
             prompt_set=self.prompt_set,
             embed_texts=self._embed_texts,
             list_entity_memories=self._list_entity_memories,

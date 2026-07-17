@@ -47,7 +47,6 @@ class SchemaHigherOrderGenerator:
 
     llm_client: LLMClient
     db_reader: Any
-    entity_manager: Any
     prompt_set: AddPromptSet
     embed_texts: EmbedTexts
     list_entity_memories: ListEntityMemories

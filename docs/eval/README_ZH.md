@@ -22,10 +22,10 @@ uv run uvicorn mindmemos.api.app:app --host 127.0.0.1 --port 8000
 
 ### 3. 配置 LLM API Key
 
-评测时，`add` 阶段的 LLM 调用由 **server** 自己完成，使用 `config/mindmemos/dev.yaml` 里的 key；`answer` 和 `judge` 阶段由 **eval 进程**直接调用，使用 `config/mindmemos_eval/memory_evaluation.yaml` 里的 key。两套 key 相互独立，需要分别配置。
+评测时，`add` 阶段的 LLM 调用由 **server** 自己完成，使用 `config/mindmemos/dev.yaml` 里的 key；`answer` 和 `judge` 阶段由 **eval 进程**直接调用，使用 `config/mindmemos_eval/memory_evaluation_locomo.example.yaml`（或 `memory_evaluation_personamem.example.yaml`） 里的 key。两套 key 相互独立，需要分别配置。
 
 ```yaml
-# config/mindmemos_eval/memory_evaluation.yaml
+# config/mindmemos_eval/memory_evaluation_locomo.yaml
 runner:
   llm:
     model: gpt-4.1-mini
@@ -108,6 +108,13 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
   --judge-runs 1
 ```
 
+> **add 前清库**：add 阶段开始前，eval 进程会按本次 run 的 `project_id` 直接清空 Qdrant 和
+> Neo4j 中对应的数据，确保每次 run 从干净状态开始（每次 run 都有独立的 `project_id`）。这要求
+> eval 进程能访问 Qdrant 和 Neo4j；用与服务端相同的环境变量配置（`MINDMEMOS_QDRANT_URL`、
+> `MINDMEMOS_NEO4J_URI`、`MINDMEMOS_NEO4J_USERNAME`、`MINDMEMOS_NEO4J_PASSWORD`、
+> `MINDMEMOS_NEO4J_DATABASE`），或用 `--qdrant-url` / `--neo4j-*` 参数。`--no-add` 跳过清库、
+> 复用已有数据；`--skip-clean` 跳过清库但仍执行 add。
+
 ### 只跑部分 benchmark
 
 ```bash
@@ -115,20 +122,25 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 --benchmark-list locomo,longmemeval
 ```
 
-### 跳过 add 阶段（数据已入库，重新评测）
+### 复用已入库的数据（跳过 add 阶段）
 
-用 ``--reuse-api-key`` 复用上次生成的 key，避免覆盖：
+重新评测**同一 project** 上一次已入库的数据时，组合使用 ``--reuse-api-key``（复用上次的
+api_key/project_id）和 ``--no-add``（跳过 add 阶段**以及** add 前的清库，保留下来的数据可直接复用）。
+``--reuse-api-key`` 一次只复用一个 project，因此只传一个 benchmark：
 
 ```bash
 caffeinate -si uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
-  --benchmark-list locomo,longmemeval,personamem \
+  --benchmark-list locomo \
   --manifest-output reports/vanilla_run_retry.jsonl \
   --reuse-api-key config/mindmemos/eval_api_keys.yaml \
   --algorithm vanilla \
   --no-add \
   --judge-runs 1
 ```
+
+> 搭配 ``--reuse-api-key`` 时**不需要** ``--api-key-output``（不会生成新身份）。要复用另一个
+> benchmark 的数据，把 ``--reuse-api-key`` 指向含该 benchmark key 的文件，并单独传该 benchmark。
 
 ### 跳过 judge 阶段（只要答案不打分）
 
@@ -155,11 +167,12 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 | `--limit N` | 每个 benchmark 最多处理 N 条（locomo=N 个对话，longmemeval=N 个 sample，personamem=N 道题） |
 | `--session-limit N` | LongMemEval 每个 sample 最多 add 前 N 个 session，用于加速冒烟测试 |
 | `--judge-runs N` | 每道题独立跑 N 次 judge，取多数票；默认 1。这 N 次是**串行**跑的，judge 阶段耗时基本随 N 线性增长。PersonaMem 不适用（确定性判分） |
-| `--no-add` | 跳过 add 阶段（数据已在 Qdrant 中时使用） |
+| `--no-add` | 跳过 add 阶段**以及** add 前的清库；复用该 project 已在 Qdrant/Neo4j 中的数据 |
 | `--no-score` | 跳过 judge 阶段 |
 | `--manifest-output` | 评测结果写入的 JSONL 文件，供后续 metrics 统计使用 |
-| `--api-key-output` | **全新写入** API key 文件，仅含本次生成的 key。勿直接覆盖服务端正在使用的文件；建议用独立路径（如 `eval_api_keys.yaml`） |
-| `--reuse-api-key` | 复用已有 API key 文件，配合 `--no-add` 重新评测时可避免覆盖 key 文件 |
+| `--api-key-output` | **全新写入** API key 文件，仅含本次生成的 key。勿直接覆盖服务端正在使用的文件。fresh run 必填；搭配 `--reuse-api-key` 时可选（不使用） |
+| `--reuse-api-key` | 复用已有 API key 文件（即上次的 api_key/project_id）；配合 `--no-add` 重新评测其数据。一次只能复用一个 benchmark |
+| `--skip-clean` | 跳过 add 前清空该 run 的 `project_id`（Qdrant/Neo4j）。`--no-add` 从不清库；本参数用于跳过清库但仍执行 add |
 
 ---
 

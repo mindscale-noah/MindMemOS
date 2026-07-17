@@ -45,8 +45,8 @@
 
 MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 SOTA，Overall 得分 **93.64**。
 
-* Benchmark：LoCoMo，记忆系统最主流、竞争最激烈的基准，聚焦事实记忆与联合分析，覆盖 single-hop、multi-hop、temporal 和 open-domain 问答。
-* Note：回复模型为 gpt-4.1-mini。对比方法指标引用自 EverMemOS 论文。
+* Benchmark：[LoCoMo](https://arxiv.org/abs/2402.17753)，记忆系统最主流、竞争最激烈的基准，聚焦事实记忆与联合分析，覆盖 single-hop、multi-hop、temporal 和 open-domain 问答。
+* Note：回复模型为 gpt-4.1-mini。对比方法指标引用自 [EverMemOS](https://arxiv.org/abs/2601.02163) 论文。
 
 | Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
 | :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |
@@ -73,7 +73,7 @@ uv run python -m mindmemos_eval.cli memory \
 
 MindMemOS-schema 在 PersonaMem 基准上达到 SOTA，Overall 准确率 **70.6%**，领先当前 SOTA 约 **3 个百分点**。
 
-* Benchmark：PersonaMem，以用户画像与喜好理解为中心的记忆基准，评测对用户特征的召回、追踪、重访、建议、推荐与泛化能力。
+* Benchmark：[PersonaMem](https://arxiv.org/abs/2504.14225)，以用户画像与喜好理解为中心的记忆基准，评测对用户特征的召回、追踪、重访、建议、推荐与泛化能力。
 * Note：所有实验结果来源于开源代码本地运行（记忆模型、回答模型均为 gpt-4.1-mini）。
 
 | Method              | Recall Sha. | Recall Men. (Ack. Latest) | Track Evo. | Revisit | Suggest | Recommend | Generalize | Overall          |

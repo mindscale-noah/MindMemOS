@@ -80,33 +80,59 @@ def test_37_contexts_produce_37_distinct_user_and_session_ids():
 # ---------- _extract_predicted_option ----------
 
 
-def test_extract_pattern1_with_closing_tag():
+def test_extract_accepts_parenthesized_option_in_tag():
     assert _extract_predicted_option("<final_answer>(a)</final_answer>") == "a"
     assert _extract_predicted_option("<final_answer>(b)</final_answer>") == "b"
+    assert _extract_predicted_option("<final_answer>(d)</final_answer>") == "d"
+
+
+def test_extract_accepts_bare_option_in_tag():
     assert _extract_predicted_option("<final_answer>c</final_answer>") == "c"
 
 
-def test_extract_pattern1_rejects_word_after_tag():
-    # apple should NOT be matched as 'a' (would have been a false positive without closing-tag requirement)
+def test_extract_accepts_surrounding_whitespace_in_tag():
+    assert _extract_predicted_option("<final_answer>  (a)  </final_answer>") == "a"
+    assert _extract_predicted_option("<final_answer>\n(b)\n</final_answer>") == "b"
+
+
+def test_extract_rejects_word_after_option_in_tag():
+    # "apple" must NOT be matched as 'a'.
     assert _extract_predicted_option("<final_answer>apple</final_answer>") is None
 
 
-def test_extract_pattern2_after_token_no_closing_tag():
-    assert _extract_predicted_option("<final_answer> the answer is (b)") == "b"
+def test_extract_rejects_reasoning_inside_tag():
+    # The two reported silent-misparse regressions: the first option letter
+    # appearing inside the tag must NOT be read as the answer.
+    assert _extract_predicted_option(
+        "<final_answer>This is a difficult choice; option c is best</final_answer>"
+    ) is None
+    assert _extract_predicted_option(
+        "<final_answer>Between (b) and (c), I choose (c)</final_answer>"
+    ) is None
 
 
-def test_extract_pattern3_option_adjacent_before_tag():
-    assert _extract_predicted_option("(c)<final_answer>") == "c"
-    assert _extract_predicted_option("c <final_answer>") == "c"
+def test_extract_rejects_trailing_punctuation_in_tag():
+    assert _extract_predicted_option("<final_answer>(a).</final_answer>") is None
+    assert _extract_predicted_option("<final_answer>a.</final_answer>") is None
 
 
-def test_extract_reasoning_text_before_tag_not_mistaken_for_answer():
+def test_extract_rejects_option_before_tag():
+    # An option placed before/outside the tag is not the tag's content.
+    assert _extract_predicted_option("(c)<final_answer>") is None
+    assert _extract_predicted_option("c <final_answer>") is None
+
+
+def test_extract_rejects_option_after_open_tag_without_close():
+    assert _extract_predicted_option("<final_answer> the answer is (b)") is None
+
+
+def test_extract_rejects_reasoning_text_before_tag():
     """(c) separated from <final_answer> by other text is reasoning, not an answer."""
     assert _extract_predicted_option("(c) because blah <final_answer>") is None
 
 
 def test_extract_no_tag_no_guess():
-    """Without <final_answer>, return None — don't guess from reasoning text."""
+    """Without <final_answer>, return None - don't guess from reasoning text."""
     assert _extract_predicted_option("I choose (d)") is None
 
 

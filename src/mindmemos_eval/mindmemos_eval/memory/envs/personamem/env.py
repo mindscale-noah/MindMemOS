@@ -446,39 +446,34 @@ def convert_personamem_system_messages(messages: Sequence[Mapping[str, Any]]) ->
     return converted
 
 
+_FINAL_ANSWER_RE = re.compile(
+    # The answer must be the sole content of a closed <final_answer>...</final_answer>
+    # tag. Tag content (ignoring surrounding whitespace) must be exactly "(a)".."(d)"
+    # or "a".."d". Anything else - reasoning inside the tag, a missing closing tag, an
+    # option placed before/outside the tag, trailing punctuation, multiple options -
+    # is unparseable and triggers a retry. Guessing from text that merely mentions
+    # option letters silently mis-scores the benchmark: "Between (b) and (c), I choose
+    # (c)" must NOT read as "b"; "This is a difficult choice; option c is best" must
+    # NOT read as "a".
+    r"<final_answer>\s*\(?([a-d])\)?\s*</final_answer>",
+)
+
+
 def _extract_predicted_option(response: str) -> str | None:
     """Extract a single predicted option (a/b/c/d) from response, or None if not found.
 
-    Only accepts responses that include a ``<final_answer>`` tag. Responses without
-    the tag trigger a retry — we never guess from reasoning text that happens to
-    mention option letters.
+    Strict format check: the answer must be the sole content of a closed
+    ``<final_answer>(a)</final_answer>`` tag. Tag content, ignoring surrounding
+    whitespace, must be exactly ``(a)``..``(d)`` or ``a``..``d``. Any other shape
+    returns ``None`` so the caller retries and, after ``PERSONAMEM_ANSWER_MAX_RETRIES``
+    attempts, records the question as wrong rather than silently mis-scoring it.
     """
     if not response:
         return None
-    lowered = response.lower()
-
-    # Pattern 1: <final_answer>(X)</final_answer> (strict, requires closing tag)
-    fa_match = re.search(r"<final_answer>\s*\(?([a-d])\)?\s*</final_answer>", lowered)
-    if fa_match:
-        return fa_match.group(1)
-
-    # Pattern 2: option immediately after <final_answer> token
-    if "<final_answer>" in lowered:
-        after = lowered.split("<final_answer>")[-1]
-        opts = re.findall(r"\(([a-d])\)", after)
-        if not opts:
-            opts = re.findall(r"\b([a-d])\b", after)
-        if opts:
-            return opts[0]
-
-    # Pattern 3: option immediately before <final_answer> token, e.g. "(c)<final_answer>"
-    # Only match when the option is adjacent to the tag — NOT arbitrary reasoning text
-    # that happens to contain option letters earlier in the response.
-    fa_before_match = re.search(r"\(?([a-d])\)?\s*<final_answer>", lowered)
-    if fa_before_match:
-        return fa_before_match.group(1)
-
-    return None
+    match = _FINAL_ANSWER_RE.search(response.lower())
+    if not match:
+        return None
+    return match.group(1)
 
 
 def calculate_personamem_metrics(
@@ -604,7 +599,6 @@ class PersonaMemEnv:
         search_strategy: str = "fast",
         rerank: bool = False,
         add_batch_size: int = 20,
-        run_id: str = "",
     ) -> None:
         self._memory = memory
         self._answer_llm = answer_llm
@@ -615,13 +609,16 @@ class PersonaMemEnv:
         self._search_strategy = search_strategy
         self._rerank = rerank
         self._add_batch_size = add_batch_size
-        self._run_id = run_id
 
     def _scope_key(self, scope: PersonaMemScope) -> tuple[str, str]:
-        """Return (user_id, session_id) scoped to this run, isolating reuse of the same project."""
-        if not self._run_id:
-            return scope.user_id, scope.session_id
-        return f"{scope.user_id}-{self._run_id}", f"{scope.session_id}-{self._run_id}"
+        """Return (user_id, session_id) for this scope.
+
+        Run-to-run isolation is handled at the project_id level (each run gets its
+        own project_id via --api-key-output / --reuse-api-key). user_id/session_id
+        stay stable so that --reuse-api-key + --no-add can read memories added by
+        a prior run of the same project.
+        """
+        return scope.user_id, scope.session_id
 
     @staticmethod
     def load_items(path: str | Path) -> list[PersonaMemItem]:

@@ -15,7 +15,7 @@ from ..typing import Usage
 
 litellm.drop_params = True  # Let litellm drop optional params unsupported by a provider.
 litellm.suppress_debug_info = True
-litellm.set_verbose = True  # Emit per-attempt retry logs so failed-first-call errors surface.
+# litellm.set_verbose = True  # Re-enable for per-attempt retry logs when debugging.
 litellm.turn_off_message_logging = True
 logging.getLogger("LiteLLM").setLevel(logging.INFO)  # Let verbose retry logs through.
 for _logger_name in ("LiteLLM Router", "LiteLLM Proxy"):

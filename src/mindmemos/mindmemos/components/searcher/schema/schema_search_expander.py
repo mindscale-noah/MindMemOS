@@ -115,14 +115,14 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
             embed_client=embed_client,
             text_preprocessor=text_preprocessor,
             sparse_encoder=sparse_encoder,
-            rrf_k=config.entity.rrf_k,
+            rrf_k=self.config.entity.rrf_k,
         )
         self._property_recall = PropertyRecall(
             db_reader=db_reader,
             embed_client=embed_client,
             text_preprocessor=text_preprocessor,
             sparse_encoder=sparse_encoder,
-            rrf_k=config.dual_path.property_rrf_k,
+            rrf_k=self.config.dual_path.property_rrf_k,
         )
 
         self._entity_weights: dict[str, float] = {}

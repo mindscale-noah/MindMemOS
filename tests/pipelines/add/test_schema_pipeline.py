@@ -6,7 +6,7 @@ import mindmemos.pipelines.add.schema.schema_add as schema_add
 import pytest
 from mindmemos.components.extractor.schema import _schema_higher_order
 from mindmemos.components.memory_modeling.schema import EntityManager, EntityType
-from mindmemos.config import init_config, reset_config
+from mindmemos.config import get_config, init_config, reset_config
 from mindmemos.infra import db
 from mindmemos.llm import ChatResponse, EmbeddingResponse
 from mindmemos.pipelines.add import SchemaAddPipeline
@@ -663,7 +663,8 @@ async def test_schema_add_pipeline_writes_entity_and_property_vectors():
         ":input_messages:On 2026-05-28, the user said they like Qdrant for vector search." in text
         for text in property_embed_call.text
     )
-    assert result.memories[0].content == "As of 2026-05-28, User likes Qdrant for vector search."
+    assert "As of 2026-05-28, User likes Qdrant for vector search." in result.memories[0].content
+    assert "Entity: User (Type: person)" in result.memories[0].content
     assert result.memories[0].mem_type == "profile"
     assert result.memories[0].memory_type == "profile"
     assert qdrant.add_records == {}
@@ -699,9 +700,14 @@ async def test_schema_add_pipeline_caps_properties_per_entity():
     assert result.status == "ok"
     _, plan, _ = writer.calls[0]
     property_names = {memory.property_name for memory in plan.memories}
-    # 20 properties emitted, capped to 15 (default max_properties_per_entity): p0..p14 kept, p15..p19 dropped
-    assert {f"p{i}" for i in range(15)} <= property_names
-    assert not ({f"p{i}" for i in range(15, 20)} & property_names)
+    # 20 properties emitted, capped to 15 (default max_properties_per_entity).
+    # Non-schema property names (p0..p19) are rewritten to "default_property" by the
+    # normalizer, so we verify the cap by counting default_property memories on the person
+    # entity instead of checking for the raw p0..p14 names.
+    default_count = sum(
+        1 for m in plan.memories if m.property_name == "default_property" and m.entity_type == "person"
+    )
+    assert default_count == 15, f"cap should keep 15, got {default_count}"
 
 
 @pytest.mark.asyncio
@@ -1201,7 +1207,7 @@ async def test_schema_add_pipeline_forces_split_when_llm_returns_no_boundary_at_
             mode="async",
             timestamp=1770000000000,
             messages=[
-                {"role": "user", "content": f"message {index}"} for index in range(pipeline.chunker.max_messages)
+                {"role": "user", "content": f"message {index}"} for index in range(get_config().algo_config.add.schema.chunker.max_episode_length)
             ],
         ),
         make_context(),
@@ -1401,3 +1407,94 @@ async def test_schema_add_pipeline_marks_episode_failed_when_generation_fails():
     assert stored_record["status"] == "error"
     assert stored_record["buffer_status"] == "failed"
     assert stored_record["error"] == "entity generation failed"
+
+
+@pytest.mark.asyncio
+async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_error(monkeypatch):
+    """P1 fix: when a parallel schema-selection task fails, the still-running
+    objectify/description tasks are cancelled (not orphaned) and the original
+    exception propagates unwrapped instead of an ExceptionGroup, so the outer
+    episode-retry loop keeps its semantics.
+
+    Bypasses SchemaAddPipeline.__init__ to test ``_generate_episode_memory``'s
+    TaskGroup behavior in isolation; the test constructs its own ``rt`` with a
+    ``TrackingExtractor`` and passes it directly, so full pipeline init is not needed.
+    """
+    import asyncio
+
+    import mindmemos.pipelines.add.schema.schema_add as schema_add_mod
+    from mindmemos.pipelines.add.schema.schema_add import SchemaAddPipeline
+
+    started: set[str] = set()
+    finished: set[str] = set()
+    both_started = asyncio.Event()
+
+    def _mark_started(name: str) -> None:
+        started.add(name)
+        if {"objectify", "description"} <= started:
+            both_started.set()
+
+    class TrackingExtractor:
+        def schema_for_generation(self, *, entity_manager):
+            return entity_manager
+
+        async def select_schema(self, conversation_text, schema, *, prompt_set):
+            # Wait until the sibling tasks have actually started their slow
+            # LLM calls before failing, so cancellation (not scheduling order)
+            # is what prevents them from finishing.
+            await both_started.wait()
+            raise RuntimeError("schema selection failed")
+
+        async def objectify_conversation(self, conversation_text, dialogue_timestamp, *, prompt_set):
+            _mark_started("objectify")
+            try:
+                await asyncio.sleep(0.3)
+            except asyncio.CancelledError:
+                raise
+            finished.add("objectify")
+            return "objectified"
+
+        async def generate_episode_description(self, conversation_text, dialogue_timestamp, *, prompt_set):
+            _mark_started("description")
+            try:
+                await asyncio.sleep(0.3)
+            except asyncio.CancelledError:
+                raise
+            finished.add("description")
+            return {"title": "t", "content": "c"}
+
+    pipeline = SchemaAddPipeline.__new__(SchemaAddPipeline)
+    rt = SimpleNamespace(
+        extractor=TrackingExtractor(),
+        use_search_fields=False,
+        project_em=object(),
+    )
+
+    monkeypatch.setattr(
+        schema_add_mod,
+        "add_record_ops",
+        SimpleNamespace(
+            to_conversation_text=lambda records: "hello world",
+            context=lambda records, ctx: ctx,
+            records_datetime=lambda records: "2026-05-28 10:00:00",
+            records_added_datetime=lambda records: datetime(2026, 5, 28, tzinfo=UTC),
+            dialogue_timestamp=lambda event_at: "2026-05-28 10:00:00",
+        ),
+    )
+    monkeypatch.setattr(schema_add_mod, "detect_prompt_language", lambda text, fallback="en": "en")
+    monkeypatch.setattr(schema_add_mod, "get_add_prompts", lambda lang: SimpleNamespace())
+    monkeypatch.setattr(schema_add_mod, "get_entity_manager", lambda *, project_id: object())
+
+    with pytest.raises(RuntimeError, match="schema selection failed"):
+        await pipeline._generate_episode_memory(
+            [SimpleNamespace()],
+            context=make_context(),
+            consistency="fast",
+            rt=rt,
+        )
+
+    # Give any stranded (non-cancelled) tasks time to finish so the
+    # assertion reliably distinguishes "cancelled" from "orphaned".
+    await asyncio.sleep(0.5)
+    assert {"objectify", "description"} <= started
+    assert finished == set()

@@ -58,7 +58,6 @@ class LocomoAdapter:
             rerank=bool(rerank),
             **answer_template_kwargs,
             judge_runs=runner.judge_runs,
-            run_id=ctx.identity.run_id,
         )
         run = await env.run_dataset(
             data,

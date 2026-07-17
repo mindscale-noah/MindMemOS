@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from mindmemos.components.memory_modeling.schema import TemporalEntity
 from mindmemos.components.searcher.schema import SchemaSearchExpander
-from mindmemos.config import init_config
+from mindmemos.config import init_config, reset_config
 from mindmemos.config.algo.search.schema import (
     DualPathConfig,
     EdgeSearchConfig,
@@ -25,10 +25,11 @@ from mindmemos.typing.memory_db import MemoryDbSearchHit, MemoryDbSearchQuery, M
 
 @pytest.fixture(scope="module", autouse=True)
 def _init_config():
+    init_config(config_path="config/mindmemos/dev.example.yaml")
     try:
-        init_config("dev")
-    except FileNotFoundError:
-        init_config("product")
+        yield
+    finally:
+        reset_config()
 
 
 def make_context() -> MemoryRequestContext:

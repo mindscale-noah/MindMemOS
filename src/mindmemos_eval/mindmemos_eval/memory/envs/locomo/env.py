@@ -691,7 +691,6 @@ class LocomoEnv:
         answer_template: str = LOCOMO_ANSWER_PROMPT_EN,
         schema_mode: bool = False,
         judge_runs: int = 1,
-        run_id: str = "",
     ) -> None:
         """Handle init."""
         self._memory = memory
@@ -702,12 +701,15 @@ class LocomoEnv:
         self._rerank = rerank
         self._answer_template = answer_template
         self._schema_mode = schema_mode
-        self._run_id = run_id
 
     def _conv_user_id(self, idx: int) -> str:
-        """Return a conversation-scoped user_id, isolated by run_id when set."""
-        base = f"conv_{idx}"
-        return f"{base}-{self._run_id}" if self._run_id else base
+        """Return a conversation-scoped user_id for this conversation.
+
+        Run-to-run isolation is handled at the project_id level (each run gets its
+        own project_id). user_id stays stable so that --reuse-api-key + --no-add can
+        read memories added by a prior run of the same project.
+        """
+        return f"conv_{idx}"
 
     async def add_session(
         self,
