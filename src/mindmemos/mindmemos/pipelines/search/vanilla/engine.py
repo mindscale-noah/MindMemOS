@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC
 
 from ....components.text import SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
+from ....components.searcher.dedup import dedup_by_text_similarity
 from ....config import TextProcessingConfig, get_config
 from ....config.algo.search import VanillaSearchConfig
 from ....llm import EmbedClient, get_embed_client
@@ -139,13 +140,16 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
         hits = await self._with_graph_related_hits(result.hits, filters, context)
         ranked_hits = _rank_by_score(hits)
         lineage_by_id, derived_to_by_id = await self._lineage_for_existing_hits(ranked_hits, context)
-        return [
+        candidates = [
             _to_memory_search_item(
                 hit,
                 lineage=_lineage_for_hit(hit, lineage_by_id=lineage_by_id, derived_to_by_id=derived_to_by_id),
             )
             for hit in ranked_hits
         ]
+        if self._search_config.dedup_enabled:
+            candidates = dedup_by_text_similarity(candidates, threshold=self._search_config.dedup_threshold)
+        return candidates
 
     async def _encode_dense(self, query: str) -> list[float] | None:
         """Generate a dense embedding; return None when unavailable."""

@@ -68,6 +68,63 @@ def new_identity(
     )
 
 
+def load_reused_identity(
+    path: str | Path,
+    benchmark: str,
+    memory_algorithm: str,
+    *,
+    profile: str | None = None,
+    project_override_config: dict[str, Any] | None = None,
+) -> RunIdentity:
+    """Rebuild a prior run identity from an existing ``api_keys`` YAML file.
+
+    Used by ``--reuse-identity`` to skip the add stage and search against the
+    memories a previous run already ingested. Matches the entry whose ``key_id``
+    was minted for this ``benchmark`` and ``memory_algorithm``.
+    """
+    target = Path(path)
+    if not target.exists():
+        raise FileNotFoundError(
+            f"cannot reuse identity: api-key file not found at {target}; run an add pass first"
+        )
+    payload = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+    entries = payload.get("api_keys") or []
+    key_prefix = f"key_{benchmark}_{memory_algorithm}_"
+    project_prefix = f"proj_{benchmark}_{memory_algorithm}_"
+    matches = [entry for entry in entries if str(entry.get("key_id", "")).startswith(key_prefix)]
+    if not matches:
+        raise ValueError(
+            f"cannot reuse identity: no api_keys entry for benchmark '{benchmark}' "
+            f"and algorithm '{memory_algorithm}' in {target}; run an add pass first"
+        )
+    if len(matches) > 1:
+        raise ValueError(
+            f"cannot reuse identity: multiple api_keys entries for benchmark '{benchmark}' "
+            f"and algorithm '{memory_algorithm}' in {target}; expected exactly one"
+        )
+    entry = matches[0]
+    required = ("key_id", "api_key", "project_id")
+    missing = [name for name in required if not entry.get(name)]
+    if missing:
+        raise ValueError(f"cannot reuse identity: api_keys entry is missing {', '.join(missing)}")
+    project_id = str(entry["project_id"])
+    if not project_id.startswith(project_prefix):
+        raise ValueError(
+            f"cannot reuse identity: project_id does not match expected prefix {project_prefix!r}"
+        )
+    run_id = project_id[len(project_prefix):]
+    return RunIdentity(
+        benchmark=benchmark,
+        run_id=run_id,
+        key_id=str(entry["key_id"]),
+        api_key=str(entry["api_key"]),
+        project_id=project_id,
+        memory_algorithm=str(entry.get("memory_algorithm") or memory_algorithm),
+        profile=profile,
+        project_override_config=entry.get("project_override_config") or project_override_config,
+    )
+
+
 def write_api_keys(path: str | Path, identities: list[RunIdentity]) -> None:
     """Write generated identities to an ``api_keys`` YAML file atomically."""
     target = Path(path)

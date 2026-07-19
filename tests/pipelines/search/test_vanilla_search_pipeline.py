@@ -204,6 +204,36 @@ def make_engine(reader: FakeReader, search_config: VanillaSearchConfig | None = 
     )
 
 
+@pytest.mark.asyncio
+async def test_vanilla_dedup_keeps_highest_scored_copy():
+    first = MemoryDbSearchHit(
+        memory_id="low",
+        score=0.6,
+        memory=memory("low", "User joined an advanced investment course online."),
+        source="rrf",
+        rank=2,
+    )
+    second = MemoryDbSearchHit(
+        memory_id="high",
+        score=0.9,
+        memory=memory("high", "User joined an advanced investment course online."),
+        source="rrf",
+        rank=1,
+    )
+    distinct = MemoryDbSearchHit(
+        memory_id="distinct",
+        score=0.5,
+        memory=memory("distinct", "User enjoys hiking on weekends."),
+        source="rrf",
+        rank=3,
+    )
+    reader = FakeReader([first, second, distinct])
+
+    result = await make_engine(reader).search_candidates(SearchPipelineInput(query="course"), make_context())
+
+    assert [item.id for item in result] == ["high", "distinct"]
+
+
 def make_graph_engine(reader: FakeReader) -> VanillaSearchEngine:
     return make_engine(
         reader,

@@ -156,6 +156,7 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("algo_config.add.schema.chunker.max_minutes_from_first", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.add.schema.drain.episode_generation_max_retries", min_value=0, support="non-negative integer"),
     RangeRule("algo_config.search.request_top_k_max", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.search.vanilla.dedup_threshold", min_value=0, max_value=1, support="0 <= value <= 1"),
     RangeRule("algo_config.search.default.top_k", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.search.vanilla.recall_size", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.search.vanilla.graph_seed_memory_limit", min_value=1, support="positive integer >= 1"),

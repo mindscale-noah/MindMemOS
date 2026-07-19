@@ -45,6 +45,9 @@ scripts/locomo/locomo_eval.env
 # Eval / run outputs
 data/
 results/
+outputs/
+docs/paper/
+resources/memory/
 
 # Node / openclaw plugin build artifacts
 node_modules/

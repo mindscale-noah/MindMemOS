@@ -10,6 +10,7 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -25,7 +26,45 @@ PERSONAMEM_OFFICIAL_INSTRUCTION = (
     "Find the most appropriate model response and give your final answer "
     "(a), (b), (c), or (d) after the special token <final_answer>."
 )
+PERSONAMEM_ANSWER_MAX_RETRIES = 3
+PERSONAMEM_ANSWER_OPTIONS = ("a", "b", "c", "d")
+# Question-type-agnostic prompt: one prompt for every question, never reads the
+# dataset's ``question_type`` label. Reasoning depth is adaptive (the model does
+# only the analysis a question needs).
+PERSONAMEM_UNIFIED_PROMPT = """You are a memory assistant. Select the single best response — (a), (b), (c), or (d) — using ONLY the retrieved memories. Memories may be noisy or incomplete and are prefixed with their event date (YYYY-MM-DD); treat those dates as the authoritative timeline.
+
+UNIVERSAL RULES (apply to every question):
+1. Evidence only. Never use outside knowledge or pick an option because it sounds plausible.
+2. Recall beats generic. Prefer an option that references a specific stored detail the user did NOT just say, over one that merely validates the current message ("That's great!").
+3. Preserve attitude in BOTH directions. If memories show the user disliked, abandoned, or was discouraged by something, positive reframings are WRONG — and if they show the user liked or benefited, negative reframings are WRONG.
+4. Match intensity. Do not inflate or deflate: "didn't resonate" ≠ "stopped entirely"; "enjoyed" ≠ "life-changing"; "overwhelming" ≠ "challenging". Choose the option whose strength mirrors the memory's own words.
+5. Verify claims literally. For the leading options, locate the option's key noun/verb/phrase in a memory. Topical relevance is not verification.
+6. Separate the user's personal reaction from environmental description ("the atmosphere was vibrant" is scene, not the user's attitude).
+
+HOW TO REASON — do ONLY what the question needs, and keep it brief:
+- Change over time (how a preference evolved): list the relevant events in date order and keep EVERY documented stage in sequence — do not collapse, soften, or inflate them. Eliminate an option only on a polarity or chronological-order conflict, NOT merely for naming fewer stages.
+- Trying / suggesting something new: first note which activities the memories show the user has ALREADY done and how they reacted. If the question asks for something new or unexperienced, exclude anything already done; otherwise prefer the option best aligned with the user's demonstrated values and past positive experiences, and reject generic encouragement.
+- Recommendation or ideas: extract the user's 2–3 SPECIFIC sub-interests from memory first (e.g. "attachment theory", not "likes books"), then score options against those, not against the question's surface adjectives.
+- Fact or reason recall: find the one memory that answers it, prefer the option that surfaces a stored detail the user did not just restate, and confirm its polarity matches.
+
+Reason concisely — a couple of lines for a simple recall; a short dated list or activity inventory only when the question needs it. Do not pad with exhaustive tables. Then end with EXACTLY one line:
+<final_answer>(a)</final_answer> or <final_answer>(b)</final_answer> or <final_answer>(c)</final_answer> or <final_answer>(d)</final_answer>
+
+---
+
+## Reference Memories
+Each memory may be prefixed with its event date as `(YYYY-MM-DD)`; use these dates as the authoritative timeline.
+{context}
+
+## Question
+{question}
+
+---
+
+Now reason briefly as instructed, then give your final answer:
+"""
 PersonaMemEvaluationMode = Literal["memory_rag", "official_full_context"]
+
 
 _REQUIRED_QUESTION_FIELDS = {
     "persona_id",
@@ -89,6 +128,8 @@ class PersonaMemAnswer(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    llm_calls: int = 0
+    parse_failed: bool = False
     elapsed_seconds: float = 0.0
 
 
@@ -101,6 +142,38 @@ class PersonaMemQAResult(BaseModel):
     search_elapsed_seconds: float = 0.0
     answer: PersonaMemAnswer | None = None
     error: str | None = None
+
+
+@dataclass
+class _PersonaMemLiveProgress:
+    """Mutable console-only counters for completed PersonaMem questions."""
+
+    total: int
+    completed: int = 0
+    correct: int = 0
+    parse_failed: int = 0
+    search_failed: int = 0
+    answer_failed: int = 0
+
+    def record(self, result: PersonaMemQAResult) -> None:
+        """Include one completed question in the live display counters."""
+        self.completed += 1
+        self.correct += int(bool(result.answer and result.answer.is_correct))
+        self.parse_failed += int(bool(result.answer and result.answer.parse_failed))
+        self.search_failed += int(bool(result.error and result.error.startswith("search failed:")))
+        self.answer_failed += int(bool(result.error and result.error.startswith("answer failed:")))
+
+    def postfix(self) -> dict[str, int | str]:
+        """Render the current counters for ``tqdm.set_postfix``."""
+        completed = self.completed or 1
+        return {
+            "correct": self.correct,
+            "acc_done": f"{self.correct / completed:.4f}",
+            "acc_all": f"{self.correct / self.total:.4f}" if self.total else "0.0000",
+            "parse_fail": self.parse_failed,
+            "search_fail": self.search_failed,
+            "answer_fail": self.answer_failed,
+        }
 
 
 class PersonaMemRunResult(BaseModel):
@@ -242,27 +315,42 @@ def build_personamem_items(rows: Sequence[Mapping[str, Any]]) -> list[PersonaMem
     return items
 
 
+def _format_memory_with_date(memory: str, event_time: str | None) -> str:
+    """Prefix a retrieved memory with its event date so the CoT timeline can use it.
+
+    ``event_time`` from the backend looks like ``"2026-05-03 00:00:00"``; only the
+    date part is prepended (``"(2026-05-03) <memory>"``). When it is missing or
+    unparseable the memory is returned unchanged so answering never breaks.
+    """
+    if not event_time:
+        return memory
+    date_part = event_time.strip().split(" ", 1)[0]
+    if not date_part:
+        return memory
+    return f"({date_part}) {memory}"
+
+
 def build_personamem_prompt(
     item: PersonaMemItem,
     *,
     retrieved_memories: Sequence[str] | None = None,
     visible_context: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build either the official full-context prompt or the memory-RAG adaptation."""
+    """Build either the official full-context prompt or the memory-RAG adaptation.
+
+    The memory-RAG path uses a single question-type-agnostic prompt for every
+    question; the dataset's ``question_type`` label is never read.
+    """
     query = f"{item.question}\n\n{PERSONAMEM_OFFICIAL_INSTRUCTION}\n\n{item.all_options}"
     if visible_context is not None:
         return [dict(message) for message in visible_context] + [{"role": "user", "content": query}]
 
     memories = list(retrieved_memories or [])
-    memory_text = "\n".join(f"[{index}] {text}" for index, text in enumerate(memories, start=1))
-    context = (
-        "Use the retrieved user memories below to select the most appropriate response.\n\n"
-        f"Retrieved memories:\n{memory_text or '(none)'}"
-    )
-    return [
-        {"role": "system", "content": context},
-        {"role": "user", "content": query},
-    ]
+    memory_lines = [f"[{index}] {text}" for index, text in enumerate(memories, start=1)]
+    memory_text = "\n".join(memory_lines) if memory_lines else "(none)"
+
+    prompt_text = PERSONAMEM_UNIFIED_PROMPT.format(context=memory_text, question=query)
+    return [{"role": "user", "content": prompt_text}]
 
 
 def convert_personamem_system_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -285,30 +373,34 @@ def convert_personamem_system_messages(messages: Sequence[Mapping[str, Any]]) ->
     return converted
 
 
+def _extract_predicted_option(response: str) -> str | None:
+    """Extract the final option explicitly following a final-answer token."""
+    if not response:
+        return None
+
+    segments = re.findall(
+        r"<final_answer>(.*?)(?:</final_answer>|(?=<final_answer>)|$)",
+        response,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for segment in reversed(segments):
+        parenthesized = re.findall(r"\(([a-d])\)", segment, flags=re.IGNORECASE)
+        if parenthesized:
+            return parenthesized[-1].lower()
+        direct = re.fullmatch(r"\s*(?:the\s+answer\s+is\s+)?([a-d])\s*", segment, flags=re.IGNORECASE)
+        if direct:
+            return direct.group(1).lower()
+    return None
+
+
 def extract_personamem_answer(response: str, correct_answer: str) -> tuple[bool, str]:
     """Apply the official PersonaMem v1 option extraction and correctness rule."""
 
-    def _extract_only_options(text: str) -> set[str]:
-        lowered = text.lower()
-        in_parens = re.findall(r"\(([a-d])\)", lowered)
-        if in_parens:
-            return set(in_parens)
-        return set(re.findall(r"\b([a-d])\b", lowered))
-
     correct = correct_answer.lower().strip("() ")
-    full_response = response
-    predicted = response.strip()
-    if "<final_answer>" in predicted:
-        predicted = predicted.split("<final_answer>")[-1].strip()
-    if predicted.endswith("</final_answer>"):
-        predicted = predicted[: -len("</final_answer>")].strip()
-
-    predicted_options = _extract_only_options(predicted)
-    if predicted_options == {correct}:
-        return True, predicted
-    if _extract_only_options(full_response) == {correct}:
-        return True, predicted
-    return False, predicted
+    predicted_option = _extract_predicted_option(response)
+    if predicted_option is None:
+        return False, response.strip() or ""
+    return predicted_option == correct, predicted_option
 
 
 def calculate_personamem_metrics(
@@ -355,7 +447,8 @@ def calculate_personamem_metrics(
         "scope_violation_count": 0,
         "search_failure_count": search_failure_count,
         "answer_failure_count": answer_failure_count,
-        "answer_llm_calls": len(answers),
+        "answer_llm_calls": sum(answer.llm_calls for answer in answers),
+        "answer_parse_failure_count": sum(1 for answer in answers if answer.parse_failed),
         "answer_prompt_tokens": sum(answer.prompt_tokens for answer in answers),
         "answer_completion_tokens": sum(answer.completion_tokens for answer in answers),
         "answer_total_tokens": sum(answer.total_tokens for answer in answers),
@@ -364,6 +457,54 @@ def calculate_personamem_metrics(
         "answer_elapsed_seconds": answer_elapsed,
         "total_elapsed_seconds": total_elapsed_seconds,
     }
+
+
+_PERSONAMEM_EPOCH_MS = 1767225600000  # 2026-01-01 00:00:00 UTC
+
+
+def _build_session_timestamp_map_ms(context: list[dict[str, Any]]) -> dict[int, int]:
+    """Build {global_index -> timestamp_ms} aligned with UMM's build_session_timestamp_map.
+
+    - Session boundaries: system messages in context.
+    - Session 0 starts at 2026-01-01 UTC; each subsequent session starts on the
+      1st of the month following the previous session's last day.
+    - Within a session, each user+assistant turn advances 1 day; messages in the
+      same turn share the same timestamp.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    session_starts = [
+        i for i, m in enumerate(context)
+        if str(m.get("role") or "") == "system"
+    ]
+    if not session_starts or session_starts[0] != 0:
+        session_starts.insert(0, 0)
+
+    def _next_month_first(dt: datetime) -> datetime:
+        if dt.month == 12:
+            return datetime(dt.year + 1, 1, 1, tzinfo=dt.tzinfo)
+        return datetime(dt.year, dt.month + 1, 1, tzinfo=dt.tzinfo)
+
+    ts_map: dict[int, datetime] = {}
+    next_base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for sess_idx, start in enumerate(session_starts):
+        end = session_starts[sess_idx + 1] if sess_idx + 1 < len(session_starts) else len(context)
+        base = next_base
+        day_offset = 0
+        prev_role: str | None = None
+        for i in range(start, end):
+            role = str(context[i].get("role") or "")
+            if role == "system":
+                ts_map[i] = base + timedelta(days=day_offset)
+                continue
+            if role == "user" and prev_role in ("assistant", None):
+                if prev_role is not None:
+                    day_offset += 1
+            ts_map[i] = base + timedelta(days=day_offset)
+            prev_role = role
+        next_base = _next_month_first(base + timedelta(days=day_offset))
+
+    return {i: int(dt.timestamp() * 1000) for i, dt in ts_map.items()}
 
 
 class PersonaMemEnv:
@@ -400,14 +541,21 @@ class PersonaMemEnv:
     async def _build_scope(self, scope: PersonaMemScope) -> PersonaMemBuildSummary:
         started = time.monotonic()
         visible = self._context_store.visible(scope)
+        # Session-aware timestamps aligned with UMM (build_session_timestamp_map):
+        # system messages start new sessions; session 0 starts 2026-01-01 UTC and
+        # subsequent sessions start on next month's 1st; within a session each
+        # user+assistant turn = 1 day. ``visible`` is the context[:end_index] prefix,
+        # so its positions align 1:1 with the full-context global indices.
+        ts_map = _build_session_timestamp_map_ms(self._context_store.load(scope.shared_context_id))
         messages = [
             {
                 "role": str(message.get("role") or "user"),
                 "content": str(message.get("content") or ""),
-                "timestamp": 1767225600000 + index * 60000,
+                "timestamp": ts_map.get(index, _PERSONAMEM_EPOCH_MS),
             }
             for index, message in enumerate(visible)
-            if str(message.get("content") or "").strip()
+            if str(message.get("role") or "") != "system"
+            and str(message.get("content") or "").strip()
         ]
         added_messages = 0
         add_calls = 0
@@ -465,8 +613,14 @@ class PersonaMemEnv:
                     top_k=self._top_k,
                     search_strategy=self._search_strategy,
                     rerank=self._rerank,
+                    # Actor user_id does not constrain vanilla recall; this filter does.
+                    filters={"user_id": item.scope.user_id},
                 )
-                memories = [hit.memory for hit in search.memories if hit.memory]
+                memories = [
+                    _format_memory_with_date(hit.memory, hit.event_time)
+                    for hit in search.memories
+                    if hit.memory
+                ]
             except Exception as exc:  # noqa: BLE001 - failures remain in the official denominator
                 return PersonaMemQAResult(
                     item=item,
@@ -476,36 +630,73 @@ class PersonaMemEnv:
             search_elapsed = time.monotonic() - search_started
             prompt = build_personamem_prompt(item, retrieved_memories=memories)
         else:
-            prompt = build_personamem_prompt(item, visible_context=self._context_store.visible(item.scope))
+            prompt = build_personamem_prompt(
+                item, visible_context=self._context_store.visible(item.scope)
+            )
 
         if "o" in self._answer_llm.config.model:
             prompt = convert_personamem_system_messages(prompt)
 
         answer_started = time.monotonic()
-        try:
-            completion = await self._answer_llm.complete(prompt)
-        except Exception as exc:  # noqa: BLE001 - failures remain in the official denominator
-            return PersonaMemQAResult(
-                item=item,
-                retrieved_memories=memories,
-                prompt=prompt,
-                search_elapsed_seconds=search_elapsed,
-                error=f"answer failed: {type(exc).__name__}: {exc}",
-            )
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_tokens = 0
+        last_completion_content = ""
+        final_prompt = prompt
+        extracted_option: str | None = None
+        llm_calls = 0
+        for attempt in range(PERSONAMEM_ANSWER_MAX_RETRIES):
+            attempt_prompt = prompt
+            if attempt > 0:
+                reminder = (
+                    "Your previous response did not contain a parseable answer option. "
+                    "Please re-answer and provide your final answer in the EXACT format: "
+                    "<final_answer>(a)</final_answer> or <final_answer>(b)</final_answer> "
+                    "or <final_answer>(c)</final_answer> or <final_answer>(d)</final_answer>."
+                )
+                attempt_prompt = list(prompt) + [
+                    {"role": "assistant", "content": last_completion_content},
+                    {"role": "user", "content": reminder},
+                ]
+            final_prompt = attempt_prompt
+            try:
+                completion = await self._answer_llm.complete(attempt_prompt)
+            except Exception as exc:  # noqa: BLE001 - failures remain in the official denominator
+                return PersonaMemQAResult(
+                    item=item,
+                    retrieved_memories=memories,
+                    prompt=attempt_prompt,
+                    search_elapsed_seconds=search_elapsed,
+                    error=f"answer failed: {type(exc).__name__}: {exc}",
+                )
+            llm_calls += 1
+            total_prompt_tokens += int(completion.prompt_tokens or 0)
+            total_completion_tokens += int(completion.completion_tokens or 0)
+            total_tokens += int(completion.total_tokens or 0)
+            last_completion_content = completion.content or ""
+            extracted_option = _extract_predicted_option(last_completion_content)
+            if extracted_option is not None:
+                break
         answer_elapsed = time.monotonic() - answer_started
-        is_correct, extracted = extract_personamem_answer(completion.content, item.correct_answer)
+
+        parse_failed = extracted_option is None
+        extracted = extracted_option or ""
+        correct = item.correct_answer.lower().strip("() ")
+        is_correct = bool(extracted_option) and extracted_option == correct
         return PersonaMemQAResult(
             item=item,
             retrieved_memories=memories,
-            prompt=prompt,
+            prompt=final_prompt,
             search_elapsed_seconds=search_elapsed,
             answer=PersonaMemAnswer(
-                response=completion.content,
+                response=last_completion_content,
                 extracted_answer=extracted,
                 is_correct=is_correct,
-                prompt_tokens=completion.prompt_tokens,
-                completion_tokens=completion.completion_tokens,
-                total_tokens=completion.total_tokens,
+                prompt_tokens=total_prompt_tokens,
+                completion_tokens=total_completion_tokens,
+                total_tokens=total_tokens,
+                llm_calls=llm_calls,
+                parse_failed=parse_failed,
                 elapsed_seconds=answer_elapsed,
             ),
         )
@@ -547,11 +738,16 @@ class PersonaMemEnv:
         build_errors = {summary.scope.scope_id: summary.error for summary in build_summaries}
         qa_sem = asyncio.Semaphore(max_qa_concurrency)
         qa_pbar = tqdm(total=len(items), disable=not show_progress, desc="Evaluating PersonaMem", unit="question")
+        live_progress = _PersonaMemLiveProgress(total=len(items))
+        live_progress_lock = asyncio.Lock()
 
         async def _answer(item: PersonaMemItem) -> PersonaMemQAResult:
             async with qa_sem:
                 result = await self._answer_item(item, build_error=build_errors.get(item.scope.scope_id))
-                qa_pbar.update()
+                async with live_progress_lock:
+                    live_progress.record(result)
+                    qa_pbar.update()
+                    qa_pbar.set_postfix(live_progress.postfix())
                 return result
 
         results = list(await asyncio.gather(*(_answer(item) for item in items)))

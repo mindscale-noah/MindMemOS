@@ -224,6 +224,8 @@ algo_config:
       hybrid_prefetch_factor: 3
       hybrid_prefetch_min: 30
       use_reranker: true
+      dedup_enabled: true
+      dedup_threshold: 0.6
       graph_enabled: true
       shared_entity_graph_enabled: true
       graph_seed_memory_limit: 5

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,7 +18,7 @@ from mindmemos_eval.memory.envs.personamem import PersonaMemAdapter
 from ..llm import LLMClient, LLMConfig
 from .base import BenchmarkAdapter, BenchmarkSpec, RunContext, RunnerConfig
 from .config import _merged_runner_config, _option, load_benchmark_specs, validate_memory_algorithm
-from .identity import RunIdentity, new_identity, write_api_keys
+from .identity import RunIdentity, load_reused_identity, new_identity, write_api_keys
 from .manifest import BenchmarkRunManifest, write_manifests
 
 
@@ -130,6 +131,16 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Whether to execute the memory ingestion stage before answering; use --add or --no-add.",
+    )
+    parser.add_argument(
+        "--reuse-identity",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Reuse the prior run identity (project/api_key) from --api-key-output instead of minting a "
+            "new one, so a --no-add search pass hits memories a previous run already ingested. The file "
+            "must contain exactly one entry for this benchmark and algorithm."
+        ),
     )
     parser.add_argument(
         "--score",
@@ -266,6 +277,7 @@ def default_adapters() -> dict[str, BenchmarkAdapter]:
         "locomo": LocomoAdapter(),
         "longmemeval": LongMemEvalAdapter(),
         "personamem": PersonaMemAdapter(),
+        "personamem_subset": PersonaMemAdapter(),
         "persona": NotImplementedAdapter("persona"),
     }
 
@@ -312,6 +324,13 @@ async def run_benchmark_matrix(
         memory_algorithm_override=_option(args, "memory_algorithm"),
     )
     runner = _merged_runner_config(args)
+    reuse_identity = bool(_option(args, "reuse_identity"))
+    requested_add = _option(args, "add")
+    if reuse_identity and requested_add is True:
+        raise ValueError("--reuse-identity cannot be combined with --add; use --no-add or omit --add")
+    if reuse_identity and requested_add is None:
+        args.add = False
+        runner = replace(runner, add=False)
     setattr(args, "runner_config", runner)
     benchmark_names = _parse_benchmark_list(args.benchmark_list)
     registry = adapters or default_adapters()
@@ -323,16 +342,37 @@ async def run_benchmark_matrix(
     if missing_adapters:
         raise ValueError(f"benchmark adapter(s) not registered: {', '.join(missing_adapters)}")
 
-    identities = [
-        new_identity(
-            name,
-            specs[name].memory_algorithm,
-            profile=specs[name].profile,
-            project_override_config=specs[name].project_override_config,
-        )
-        for name in benchmark_names
-    ]
-    write_api_keys(args.api_key_output, identities)
+    if _option(args, "reuse_identity"):
+        identities = []
+        for name in benchmark_names:
+            spec = specs[name]
+            # A benchmark may reuse another benchmark's already-built project via
+            # ``reuse_identity_as`` (e.g. a question subset answering over the full
+            # run's memories). Identity/project come from the alias; the run still
+            # uses this benchmark's own dataset/adapter.
+            lookup_name = str(spec.raw.get("reuse_identity_as") or name)
+            identity = load_reused_identity(
+                args.api_key_output,
+                lookup_name,
+                spec.memory_algorithm,
+                profile=spec.profile,
+                project_override_config=spec.project_override_config,
+            )
+            if lookup_name != name:
+                identity = replace(identity, benchmark=name)
+            identities.append(identity)
+        # Do not rewrite api-key output: the server is already serving these keys.
+    else:
+        identities = [
+            new_identity(
+                name,
+                specs[name].memory_algorithm,
+                profile=specs[name].profile,
+                project_override_config=specs[name].project_override_config,
+            )
+            for name in benchmark_names
+        ]
+        write_api_keys(args.api_key_output, identities)
 
     manifests: list[BenchmarkRunManifest] = []
     for identity in identities:

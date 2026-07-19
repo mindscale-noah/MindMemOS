@@ -32,6 +32,12 @@ class VanillaSearchConfig:
     ``max_doc_length``) and applied by the shared rerank client, not duplicated here.
     """
 
+    dedup_enabled: bool = field(default=True)
+    """Whether to fold near-duplicate vanilla candidates before final filtering."""
+
+    dedup_threshold: float = field(default=0.6)
+    """Token-set similarity threshold for vanilla candidate de-duplication."""
+
     graph_enabled: bool = field(default=False)
     """Whether to supplement vanilla search with Neo4j one-hop related memories."""
 
