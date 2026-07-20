@@ -20,7 +20,7 @@ from mindmemos_eval.memory.envs.personamem import PersonaMemAdapter
 from ..llm import LLMClient, LLMConfig
 from .base import BenchmarkAdapter, BenchmarkSpec, RunContext, RunnerConfig
 from .config import _merged_runner_config, _option, load_benchmark_specs, validate_memory_algorithm
-from .db_reset import ResetConfig, resolve_collections, reset_project
+from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_collections
 from .identity import RunIdentity, new_identity, write_api_keys
 from .manifest import BenchmarkRunManifest, write_manifests
 
@@ -36,6 +36,7 @@ def _load_existing_identity(path: str, *, benchmark: str) -> RunIdentity:
     (each run gets its own project_id, and the add stage clears it first).
     """
     import secrets
+
     import yaml
 
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -486,13 +487,36 @@ async def run_benchmark_matrix(
         else:
             memory, transport = await memory_client_factory(identity)
 
-        wrapped_memory = RequestIdMemoryClient(memory, ctx)
-        answer_llm = answer_llm_factory() if answer_llm_factory else _build_llm_client(runner, prefix="answer")
-        judge_llm = judge_llm_factory() if judge_llm_factory else _build_llm_client(runner, prefix="judge")
-        if runner.add and not skip_clean:
-            logger.info("resetting project before add project_id=%s", identity.project_id)
-            await reset_project(reset_cfg, identity.project_id)
         try:
+            wrapped_memory = RequestIdMemoryClient(memory, ctx)
+            answer_llm = answer_llm_factory() if answer_llm_factory else _build_llm_client(runner, prefix="answer")
+            judge_llm = judge_llm_factory() if judge_llm_factory else _build_llm_client(runner, prefix="judge")
+            if runner.add and not skip_clean:
+                logger.info(
+                    "project_reset_started benchmark=%s project_id=%s",
+                    identity.benchmark,
+                    identity.project_id,
+                )
+                try:
+                    reset_counts = await reset_project(reset_cfg, identity.project_id)
+                except ProjectResetError as exc:
+                    logger.critical(
+                        "benchmark_aborted_database_reset_failed "
+                        "benchmark=%s project_id=%s store=%s operation=%s resource=%s reason=%s",
+                        identity.benchmark,
+                        exc.project_id,
+                        exc.store,
+                        exc.operation,
+                        exc.resource,
+                        exc.reason,
+                    )
+                    raise
+                logger.info(
+                    "project_reset_succeeded benchmark=%s project_id=%s counts=%s",
+                    identity.benchmark,
+                    identity.project_id,
+                    reset_counts,
+                )
             eval_result = await adapter.run(
                 memory=wrapped_memory,
                 answer_llm=answer_llm,

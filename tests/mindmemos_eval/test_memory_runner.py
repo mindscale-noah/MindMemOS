@@ -270,6 +270,77 @@ async def test_fresh_run_requires_api_key_output(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reset_failure_aborts_benchmark_and_closes_transport(tmp_path, monkeypatch, caplog):
+    from mindmemos_eval.memory import runner as runner_mod
+    from mindmemos_eval.memory.db_reset import ProjectResetError
+
+    config_path = tmp_path / "memory_eval.yaml"
+    _write_config(config_path)
+    manifest_path = tmp_path / "manifest.jsonl"
+    adapter_calls: list[str] = []
+
+    class _Adapter:
+        name = "locomo"
+
+        async def run(self, **_kwargs):
+            adapter_calls.append("run")
+            return {"ok": True}
+
+    class _Transport:
+        closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    transport = _Transport()
+
+    async def memory_client_factory(_identity):
+        return object(), transport
+
+    async def fail_reset(_cfg, project_id):
+        raise ProjectResetError(
+            project_id=project_id,
+            store="qdrant",
+            operation="delete",
+            resource="memory_item_v1",
+            reason="PermissionError: unauthorized",
+        )
+
+    monkeypatch.setattr(runner_mod, "reset_project", fail_reset)
+    args = SimpleNamespace(
+        benchmark_config=str(config_path),
+        benchmark_list="locomo",
+        manifest_output=str(manifest_path),
+        api_key_output=str(tmp_path / "api_keys.yaml"),
+        reuse_api_key=None,
+        add=True,
+        skip_clean=False,
+    )
+
+    with (
+        caplog.at_level("CRITICAL", logger="mindmemos_eval.memory.runner"),
+        pytest.raises(ProjectResetError, match="unauthorized"),
+    ):
+        await run_benchmark_matrix(
+            args,
+            adapters={"locomo": _Adapter()},
+            memory_client_factory=memory_client_factory,
+            answer_llm_factory=lambda: object(),
+            judge_llm_factory=lambda: object(),
+        )
+
+    assert adapter_calls == []
+    assert transport.closed is True
+    assert not manifest_path.exists()
+    assert any(
+        "benchmark_aborted_database_reset_failed" in record.message
+        and "qdrant" in record.message
+        and "memory_item_v1" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_reset_project_clears_qdrant_and_neo4j(monkeypatch):
     from mindmemos_eval.memory import db_reset
 
@@ -285,15 +356,16 @@ async def test_reset_project_clears_qdrant_and_neo4j(monkeypatch):
 
     qdrant_deletes: list[tuple] = []
 
-    class _Count:
-        count = 2
-
     class _FakeQdrant:
-        async def count(self, *, collection_name, count_filter, exact):
-            return _Count()
+        def __init__(self):
+            self.counts = iter((2, 0))
 
-        async def delete(self, *, collection_name, points_selector):
+        async def count(self, *, collection_name, count_filter, exact):
+            return SimpleNamespace(count=next(self.counts))
+
+        async def delete(self, *, collection_name, points_selector, wait):
             qdrant_deletes.append((collection_name, points_selector))
+            assert wait is True
 
         async def close(self):
             pass
@@ -303,16 +375,25 @@ async def test_reset_project_clears_qdrant_and_neo4j(monkeypatch):
     neo4j_queries: list[str] = []
 
     class _Rec:
+        def __init__(self, total):
+            self.total = total
+
         def __getitem__(self, key):
-            return 4
+            return self.total
 
     class _Result:
-        records = [_Rec()]
+        def __init__(self, total):
+            self.records = [_Rec(total)]
 
     class _Driver:
+        def __init__(self):
+            self.counts = iter((4, 0))
+
         async def execute_query(self, query, params, *, routing_=None, database_=None):
             neo4j_queries.append(query)
-            return _Result()
+            if "RETURN count" in query:
+                return _Result(next(self.counts))
+            return _Result(0)
 
         async def close(self):
             pass
@@ -343,8 +424,93 @@ async def test_reset_project_clears_qdrant_and_neo4j(monkeypatch):
     assert coll == "memory_item_v1"
     assert selector.filter.must[0].key == "project_id"
     assert selector.filter.must[0].match.value == "proj-123"
-    assert any("RETURN count" in q for q in neo4j_queries)
+    assert sum("RETURN count" in q for q in neo4j_queries) == 2
     assert any("DETACH DELETE" in q for q in neo4j_queries)
+
+
+@pytest.mark.asyncio
+async def test_reset_project_raises_when_qdrant_delete_fails(monkeypatch):
+    from mindmemos_eval.memory import db_reset
+
+    cfg = db_reset.ResetConfig(collections=("memory_item_v1",))
+    closed = False
+
+    class _FakeQdrant:
+        async def count(self, *, collection_name, count_filter, exact):
+            return SimpleNamespace(count=2)
+
+        async def delete(self, *, collection_name, points_selector, wait):
+            raise PermissionError("unauthorized")
+
+        async def close(self):
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr(db_reset, "AsyncQdrantClient", lambda **_kwargs: _FakeQdrant())
+
+    with pytest.raises(db_reset.ProjectResetError) as exc_info:
+        await db_reset.reset_project(cfg, "proj-123")
+
+    exc = exc_info.value
+    assert exc.store == "qdrant"
+    assert exc.operation == "delete"
+    assert exc.resource == "memory_item_v1"
+    assert "unauthorized" in exc.reason
+    assert closed is True
+
+
+@pytest.mark.asyncio
+async def test_reset_project_raises_when_qdrant_still_contains_project_data(monkeypatch):
+    from mindmemos_eval.memory import db_reset
+
+    cfg = db_reset.ResetConfig(collections=("memory_item_v1",))
+
+    class _FakeQdrant:
+        def __init__(self):
+            self.counts = iter((2, 1))
+
+        async def count(self, *, collection_name, count_filter, exact):
+            return SimpleNamespace(count=next(self.counts))
+
+        async def delete(self, *, collection_name, points_selector, wait):
+            pass
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(db_reset, "AsyncQdrantClient", lambda **_kwargs: _FakeQdrant())
+
+    with pytest.raises(db_reset.ProjectResetError) as exc_info:
+        await db_reset.reset_project(cfg, "proj-123")
+
+    exc = exc_info.value
+    assert exc.operation == "verify_empty"
+    assert exc.resource == "memory_item_v1"
+    assert "1 project-scoped points remain" in exc.reason
+
+
+def test_memory_cli_returns_one_when_database_reset_fails(monkeypatch):
+    from mindmemos_eval.memory.db_reset import ProjectResetError
+
+    from mindmemos_eval import cli
+
+    class _Parser:
+        def parse_args(self, _argv):
+            return SimpleNamespace(command="memory")
+
+    async def fail_run(_args):
+        raise ProjectResetError(
+            project_id="proj-123",
+            store="neo4j",
+            operation="verify_empty",
+            resource="neo4j",
+            reason="1 project-scoped node remains after delete",
+        )
+
+    monkeypatch.setattr(cli, "build_arg_parser", lambda: _Parser())
+    monkeypatch.setattr(cli, "run_benchmark_matrix", fail_run)
+
+    assert cli.main([]) == 1
 
 
 
