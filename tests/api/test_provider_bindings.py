@@ -131,6 +131,33 @@ async def test_provider_binding_resolver_picks_most_specific_matching_scope() ->
     assert result == user_session.routers
 
 
+@pytest.mark.asyncio
+async def test_provider_binding_resolver_hydrates_memory_gateway_at_request_time(monkeypatch) -> None:
+    routers = router_config()
+    for router_name in ("chat_model_router", "embed_model_router"):
+        endpoint = routers[router_name]["endpoints"][0]
+        endpoint["api_base"] = "http://gateway:9090/litellm_memory_proxy/team-1/{userId}/v1"
+        endpoint["api_key"] = "EMPTY"
+    record = ProviderBindingRecord(
+        binding_id="memory-binding",
+        project_id="proj-1",
+        scope=ProviderBindingScope(user_id="user-1"),
+        routers=routers,
+    )
+    monkeypatch.setenv("MINDMEMOS_GATEWAY_SERVICE_TOKEN", "memory-service-token")
+    resolver = ProviderBindingResolver(store=FakeStore([record]), enabled=True)
+
+    result = await resolver.resolve(make_context(user_id="user-1"))
+
+    assert result is not None
+    for router_name in ("chat_model_router", "embed_model_router"):
+        endpoint = result[router_name]["endpoints"][0]
+        assert endpoint["api_base"] == "http://gateway:9090/litellm_memory_proxy/team-1/user-1/v1"
+        assert endpoint["api_key"] == "memory-service-token"
+    assert record.routers["chat_model_router"]["endpoints"][0]["api_base"].endswith("/{userId}/v1")
+    assert record.routers["chat_model_router"]["endpoints"][0]["api_key"] == "EMPTY"
+
+
 def test_provider_binding_patch_allows_runtime_config_changes() -> None:
     old = router_config()
     new = router_config()

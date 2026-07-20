@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -20,6 +21,7 @@ logger = get_logger(__name__)
 
 SCOPE_FIELDS = ("user_id", "app_id", "session_id", "agent_id")
 IMMUTABLE_EMBEDDING_ENDPOINT_FIELDS = ("model", "dimensions")
+MEMORY_GATEWAY_ROUTE_MARKER = "/litellm_memory_proxy/"
 
 
 class ProviderBindingScope(BaseModel):
@@ -195,7 +197,7 @@ class ProviderBindingResolver:
         if not candidates:
             return None
         selected = max(candidates, key=lambda record: (record.scope.specificity(), record.binding_id))
-        return selected.routers
+        return _hydrate_memory_gateway_routers(selected.routers, ctx)
 
 
 def validate_provider_binding_patch(
@@ -245,6 +247,37 @@ def _router_endpoints(routers: dict[str, Any], router_name: str) -> list[dict[st
     router = routers.get(router_name) or {}
     endpoints = router.get("endpoints") or []
     return [endpoint for endpoint in endpoints if isinstance(endpoint, dict)]
+
+
+def _hydrate_memory_gateway_routers(routers: dict[str, Any], ctx: MemoryRequestContext) -> dict[str, Any]:
+    """Inject request-only identity and credentials for LLM4AD's memory gateway."""
+
+    hydrated = deepcopy(routers)
+    memory_endpoints = [
+        endpoint
+        for router_name in ("chat_model_router", "embed_model_router", "rerank_model_router")
+        for endpoint in _router_endpoints(hydrated, router_name)
+        if MEMORY_GATEWAY_ROUTE_MARKER in str(endpoint.get("api_base") or "")
+    ]
+    if not memory_endpoints:
+        return hydrated
+
+    if not ctx.user_id:
+        raise BadRequestError(
+            "memory gateway route requires a user_id",
+            code="provider_binding.memory_gateway_user_required",
+        )
+    service_token = os.getenv("MINDMEMOS_GATEWAY_SERVICE_TOKEN", "").strip()
+    if not service_token:
+        raise BadRequestError(
+            "MINDMEMOS_GATEWAY_SERVICE_TOKEN is not configured",
+            code="provider_binding.memory_gateway_token_missing",
+        )
+
+    for endpoint in memory_endpoints:
+        endpoint["api_base"] = str(endpoint["api_base"]).replace("{userId}", ctx.user_id)
+        endpoint["api_key"] = service_token
+    return hydrated
 
 
 def provider_binding_id(project_id: str, scope: ProviderBindingScope) -> str:
