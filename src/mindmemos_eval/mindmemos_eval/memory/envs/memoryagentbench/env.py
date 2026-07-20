@@ -488,6 +488,7 @@ class MemoryAgentBenchEnv:
         sub_dataset: str = "",
         top_k: int = 50,
         search_strategy: str = "agentic",
+        rerank: bool = False,
         chunk_size: int = 4096,
         answer_system_prompt: str = MEMORYAGENTBENCH_SYSTEM_PROMPT,
     ) -> None:
@@ -496,6 +497,7 @@ class MemoryAgentBenchEnv:
         self._sub_dataset = sub_dataset.strip()
         self._top_k = top_k
         self._search_strategy = search_strategy
+        self._rerank = rerank
         self._chunk_size = chunk_size
         self._answer_system_prompt = answer_system_prompt
         self.primary_metric = primary_metric_for_sub_dataset(self._sub_dataset) if self._sub_dataset else ""
@@ -562,11 +564,6 @@ class MemoryAgentBenchEnv:
 
     @staticmethod
     def _format_hit(hit: MemorySearchHit) -> str:
-        if hit.event_time or hit.source_timestamp:
-            return (
-                f"[event_time: {hit.event_time or 'unknown time'}; "
-                f"source_timestamp: {hit.source_timestamp or 'unknown time'}] {hit.memory}"
-            )
         return hit.memory
 
     def build_answer_messages(self, query: str, memories: list[str]) -> list[dict[str, Any]]:
@@ -575,7 +572,7 @@ class MemoryAgentBenchEnv:
         system_prompt = f"You are a helpful AI. Answer the question based on query and memories.\n{memories_str}\n"
         return [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query + "\n\nCurrent Time: " + time.strftime("%Y-%m-%d %H:%M:%S")},
+            {"role": "user", "content": query},
         ]
 
     async def answer(self, user_id: str, question: MemoryAgentBenchQuestion) -> MemoryAgentBenchAnswer:
@@ -586,6 +583,7 @@ class MemoryAgentBenchEnv:
             user_id=user_id,
             top_k=self._top_k,
             search_strategy=self._search_strategy,
+            rerank=self._rerank,
             session_id=user_id,
         )
         memories = [self._format_hit(hit) for hit in search.memories]

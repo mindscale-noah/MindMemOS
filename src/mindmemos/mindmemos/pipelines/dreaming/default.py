@@ -37,10 +37,9 @@ from ...typing.activity import ActivityScope
 from ...typing.algo import ConsolidationAction
 from ...typing.memory import (
     REL_NEXT_IN_PROPERTY_TIMELINE,
-    REL_RELATED_TO,
+    REL_RELATES_TO,
     GraphNodeRef,
     GraphRelationship,
-    MemoryEdgeFilter,
     MemoryRequestContext,
     MemoryView,
     MemoryWrite,
@@ -51,7 +50,6 @@ from ..base import MemoryDbPipelineMixin
 from ..registry import register
 
 MEMORY_DREAMING_TOPIC = "memory.dreaming"
-DREAMING_MUTATION_SOURCE = "dreaming"
 logger = get_logger(__name__)
 
 
@@ -61,16 +59,12 @@ class ConsolidationScope:
 
     entity_id: str | None
     property_name: str | None
-    root_id: str | None
     score: int
     seed_memory_ids: tuple[str, ...] = field(default_factory=tuple)
     add_record_ids: tuple[str, ...] = field(default_factory=tuple)
-    relation: str | None = None
-    subject: str | None = None
     graph_entity_id: str | None = None
     graph_entity_name: str | None = None
     primary_memory_id: str | None = None
-    graph_source: str | None = None
 
 
 @register(type="dreaming", name="default_dreaming")
@@ -125,15 +119,16 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
     async def _consolidate_memory(self, context: MemoryRequestContext) -> dict[str, int]:
         run_id = str(uuid4())
 
-        scopes = await self._select_hot_scopes(context)
-        cluster_scopes = await self._dedupe_cluster_scopes(context, scopes)
-        summary = {"scopes": len(scopes), "clusters": 0, "actions": 0, "add_records_done": 0}
+        clusters = await self._cluster_hot_memories(context)
+        if self._cfg.max_scopes_per_run is not None:
+            clusters = clusters[: self._cfg.max_scopes_per_run]
+        summary = {"scopes": len(clusters), "clusters": 0, "actions": 0, "add_records_done": 0}
         archived_memory_ids: set[str] = set()
         marked_add_record_ids: set[str] = set()
         state_lock = asyncio.Lock()
         sem = asyncio.Semaphore(max(1, int(self._cfg.concurrency or 1)))
 
-        async def _process_scope(scope: ConsolidationScope, memories: list[MemoryView]) -> None:
+        async def _process_cluster(scope: ConsolidationScope, memories: list[MemoryView]) -> None:
             if len(memories) < self._cfg.min_cluster_size:
                 async with state_lock:
                     summary["add_records_done"] += await self._mark_scope_add_records_done(
@@ -157,7 +152,6 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             issue_groups = await self._call_relation_detection_llm(self._build_cluster_context(scope, memories))
 
             # ── LLM #2: focused action planning for each detected issue group ──
-            action_count = 0
             if issue_groups is not None:
                 issue_group_list = self._aggregate_detected_issue_groups(issue_groups, memories, scope)
                 for issue_group in issue_group_list:
@@ -170,11 +164,8 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
                     if not group_action_count:
                         continue
                     async with state_lock:
-                        await self._apply_actions(context, actions, memories, archived_memory_ids, run_id, scope)
+                        await self._apply_actions(context, actions, memories, archived_memory_ids)
                         summary["actions"] += group_action_count
-                    action_count += group_action_count
-
-            await self._mark_cluster_consolidated(context, memories, run_id, scope, action_count)
             async with state_lock:
                 summary["add_records_done"] += await self._mark_scope_add_records_done(
                     context, scope, run_id, marked_add_record_ids
@@ -184,33 +175,25 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
 
         async def _wrapped(scope: ConsolidationScope, memories: list[MemoryView]) -> None:
             async with sem:
-                await _process_scope(scope, memories)
+                await _process_cluster(scope, memories)
 
-        await asyncio.gather(*[_wrapped(scope, memories) for scope, memories in cluster_scopes])
+        await asyncio.gather(*[_wrapped(scope, memories) for scope, memories in clusters])
         return summary
 
-    async def _dedupe_cluster_scopes(
+    async def _cluster_hot_memories(
         self,
         context: MemoryRequestContext,
-        scopes: list[ConsolidationScope],
     ) -> list[tuple[ConsolidationScope, list[MemoryView]]]:
-        unique: dict[tuple[str, ...], tuple[ConsolidationScope, list[MemoryView]]] = {}
-        for scope in scopes:
-            memories = self._dedupe_memories(await self._hydrate_scope_memories(context, scope))
-            cluster_key = tuple(sorted(memory.memory_id for memory in memories if memory.memory_id))
-            if not cluster_key:
-                cluster_key = tuple(sorted(mid for mid in scope.seed_memory_ids if mid))
-            existing = unique.get(cluster_key)
-            if existing is None:
-                unique[cluster_key] = (scope, memories)
-                continue
-            merged_scope = _merge_scope_add_records(existing[0], scope)
-            unique[cluster_key] = (merged_scope, existing[1])
-        return list(unique.values())
+        """Per-entity grouping over hot memories with noise filtering.
 
-    # -- scope selection -----------------------------------------------------
-
-    async def _select_hot_scopes(self, context: MemoryRequestContext) -> list[ConsolidationScope]:
+        1. Collect hot seed memories (pending consolidation).
+        2. One Cypher query: get all ``Memory -> Entity`` edges for hot seeds
+           and their 1-hop entity neighbors.
+        3. Filter out high-frequency noise entities.
+        4. Group memories by entity — each entity becomes one cluster.
+        5. Assemble each cluster into a ConsolidationScope.
+        """
+        # Step 1: collect hot seed memories (same as before)
         seed_add_records_by_memory_id: dict[str, set[str]] = {}
         bundle = await self._get_activity_collector().collect(
             ActivityScope(
@@ -236,12 +219,134 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
                 continue
             seed_add_records_by_memory_id.setdefault(written.memory_id, set()).update(add_record_ids)
 
-        scopes = await self._select_graph_seed_scopes(
-            context, tuple(seed_add_records_by_memory_id), seed_add_records_by_memory_id
+        seed_memory_ids = tuple(seed_add_records_by_memory_id.keys())
+        if not seed_memory_ids:
+            return []
+
+        # Step 2: one Cypher query — for each hot seed, find its entities
+        # and all neighbor memories that share those entities (1-hop).
+        query = """
+        MATCH (seed:Memory)
+        WHERE seed.project_id = $project_id
+          AND seed.memory_id IN $seed_ids
+          AND coalesce(seed.status, 'active') = 'active'
+        MATCH (seed)-[:MENTIONS]->(e:Entity {project_id: $project_id})
+        WITH DISTINCT e
+        CALL {
+            WITH e
+            MATCH (e)<-[:MENTIONS]-(neighbor:Memory {project_id: $project_id})
+            WHERE coalesce(neighbor.status, 'active') = 'active'
+            WITH DISTINCT neighbor
+            ORDER BY coalesce(neighbor.update_at, neighbor.created_at) DESC,
+                     neighbor.memory_id ASC
+            LIMIT $entity_probe_limit
+            RETURN collect(neighbor.memory_id) AS memory_ids
+        }
+        RETURN e.entity_id AS entity_id,
+               e.entity_name AS entity_name,
+               e.entity_type AS entity_type,
+               memory_ids
+        """
+        rows = await self.db_reader._clients.neo4j.run_read(
+            query,
+            project_id=context.project_id,
+            seed_ids=list(seed_memory_ids),
+            entity_probe_limit=self._cfg.max_entity_memory_count + 1,
         )
-        scopes.sort(key=lambda s: s.score, reverse=True)
-        max_scopes = _optional_positive_int(self._cfg.max_scopes_per_run)
-        return scopes[:max_scopes] if max_scopes is not None else scopes
+
+        if not rows:
+            return []
+
+        # Step 3: filter noise entities (too many associated memories)
+        entity_clusters: list[dict] = []
+        for row in rows:
+            eid = str(row["entity_id"])
+            mem_ids = [str(m) for m in (row.get("memory_ids") or []) if m]
+            if len(mem_ids) < self._cfg.min_cluster_size:
+                continue
+            if len(mem_ids) > self._cfg.max_entity_memory_count:
+                logger.info(
+                    "filtered noise entity %s (%d memories, threshold=%d)",
+                    eid,
+                    len(mem_ids),
+                    self._cfg.max_entity_memory_count,
+                )
+                continue
+            entity_clusters.append({
+                "entity_id": eid,
+                "entity_name": str(row.get("entity_name") or ""),
+                "entity_type": str(row.get("entity_type") or ""),
+                "memory_ids": mem_ids,
+            })
+
+        if not entity_clusters:
+            return []
+
+        # Step 4: deduplicate clusters with identical memory_ids
+        seen: set[frozenset[str]] = set()
+        unique_clusters: list[dict] = []
+        for cluster in sorted(entity_clusters, key=lambda c: len(c["memory_ids"]), reverse=True):
+            key = frozenset(cluster["memory_ids"])
+            if key not in seen:
+                seen.add(key)
+                unique_clusters.append(cluster)
+
+        # Step 5: assemble each cluster into a ConsolidationScope
+        scopes_and_ids: list[tuple[ConsolidationScope, list[str]]] = []
+        all_memory_ids: set[str] = set()
+        for cluster in unique_clusters:
+            mem_ids = cluster["memory_ids"]
+            # Primary = first seed memory in the cluster (by add-record count)
+            primary_memory_id = max(
+                mem_ids,
+                key=lambda mid: len(seed_add_records_by_memory_id.get(mid, set())),
+            )
+
+            # Build add_record_ids from seed memories
+            component_add_record_ids: set[str] = set()
+            for mid in mem_ids:
+                if mid in seed_add_records_by_memory_id:
+                    component_add_record_ids.update(seed_add_records_by_memory_id[mid])
+
+            scope = ConsolidationScope(
+                entity_id=cluster["entity_id"],
+                property_name=cluster["entity_type"] or None,
+                score=len(mem_ids),
+                seed_memory_ids=tuple(mem_ids),
+                add_record_ids=tuple(sorted(component_add_record_ids)),
+                graph_entity_id=cluster["entity_id"],
+                graph_entity_name=cluster["entity_name"] or None,
+                primary_memory_id=primary_memory_id,
+            )
+            scopes_and_ids.append((scope, mem_ids))
+            all_memory_ids.update(mem_ids)
+
+        # Batch read all memories from Qdrant in one call
+        memory_view_map: dict[str, MemoryView] = {}
+        if all_memory_ids and hasattr(self.db_reader, "get_memories"):
+            for mv in await self.db_reader.get_memories(context, list(all_memory_ids)):
+                if mv.status == "active":
+                    memory_view_map[mv.memory_id] = mv
+
+        # Distribute memories to each scope
+        result: list[tuple[ConsolidationScope, list[MemoryView]]] = []
+        for scope, mem_ids in scopes_and_ids:
+            primary_id = scope.primary_memory_id or (
+                scope.seed_memory_ids[0] if scope.seed_memory_ids else None
+            )
+            recalled = [memory_view_map[mid] for mid in mem_ids if mid in memory_view_map]
+            memories = sorted(
+                recalled,
+                key=lambda m: (
+                    m.memory_id == primary_id,
+                    m.memory_id in scope.seed_memory_ids,
+                    _memory_effective_time(m),
+                ),
+                reverse=True,
+            )[: self._cfg.max_memories_per_scope]
+            result.append((scope, memories))
+
+        return result
 
     async def _pending_consolidation_add_record_ids(
         self,
@@ -265,112 +370,6 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
         if self._activity_collector is None:
             self._activity_collector = RecentActivityCollector(self.db_reader._clients.qdrant)
         return self._activity_collector
-
-    async def _select_graph_seed_scopes(
-        self,
-        context: MemoryRequestContext,
-        seed_memory_ids: tuple[str, ...],
-        seed_add_records_by_memory_id: dict[str, set[str]],
-    ) -> list[ConsolidationScope]:
-        if not seed_memory_ids or not hasattr(self.db_reader, "list_memory_neighbor_scopes"):
-            return []
-
-        batch_size = self._cfg.scope_batch_size
-        seed_list = list(seed_memory_ids)
-        all_neighbor_scopes: list = []
-
-        for batch_start in range(0, len(seed_list), batch_size):
-            batch = seed_list[batch_start:batch_start + batch_size]
-            try:
-                batch_scopes = await self.db_reader.list_memory_neighbor_scopes(
-                    context,
-                    batch,
-                    edge_filter=MemoryEdgeFilter(rel_types=("RELATED_TO",)),
-                    limit_per_entity=self._cfg.max_memories_per_scope,
-                    limit_direct_per_memory=self._cfg.max_memories_per_scope,
-                    attach_direct_neighbors_to_entity_scopes=True,
-                )
-                all_neighbor_scopes.extend(batch_scopes)
-            except Exception:
-                logger.warning(
-                    "dreaming graph scope recall batch failed",
-                    project_id=context.project_id,
-                    batch_size=len(batch),
-                    batch_start=batch_start,
-                    exc_info=True,
-                )
-                continue
-
-        if not all_neighbor_scopes:
-            return []
-
-        seed_data: dict[str, dict[str, Any]] = {}
-        for graph_scope in all_neighbor_scopes:
-            sid = graph_scope.seed_memory_id
-            if not sid:
-                continue
-            data = seed_data.setdefault(
-                sid,
-                {"memory_ids": set(), "entity_ids": [], "entity_types": [], "entity_names": [], "sources": []},
-            )
-            data["memory_ids"].update(graph_scope.memory_ids)
-            if graph_scope.source and graph_scope.source not in data["sources"]:
-                data["sources"].append(graph_scope.source)
-            if graph_scope.entity_id and graph_scope.entity_id not in data["entity_ids"]:
-                data["entity_ids"].append(graph_scope.entity_id)
-                data["entity_types"].append(graph_scope.entity_type or "")
-                data["entity_names"].append(graph_scope.entity_name or "")
-
-        scopes: list[ConsolidationScope] = []
-        for sid, data in seed_data.items():
-            unique_ids = tuple(dict.fromkeys([sid, *data["memory_ids"]]))
-            if len(unique_ids) < self._cfg.min_scope_updates:
-                continue
-            score = len(unique_ids) + 20
-            if any(mid != sid for mid in unique_ids):
-                score += 10
-            entity_str = ",".join(data["entity_ids"][:5])
-            scopes.append(
-                ConsolidationScope(
-                    entity_id=f"graph:{entity_str}" if entity_str else "graph:",
-                    property_name=",".join(data["entity_types"][:5]) if data["entity_types"] else None,
-                    root_id=None,
-                    score=score,
-                    seed_memory_ids=unique_ids,
-                    add_record_ids=tuple(sorted(seed_add_records_by_memory_id.get(sid, set()))),
-                    graph_entity_id=entity_str if entity_str else None,
-                    graph_entity_name=",".join(data["entity_names"][:5]) if data["entity_names"] else None,
-                    primary_memory_id=sid,
-                    graph_source=",".join(data["sources"][:5]) if data["sources"] else None,
-                )
-            )
-        return scopes
-
-    # -- memory recall --------------------------------------------------------
-
-    async def _hydrate_scope_memories(
-        self, context: MemoryRequestContext, scope: ConsolidationScope
-    ) -> list[MemoryView]:
-        recalled: dict[str, MemoryView] = {}
-        if scope.seed_memory_ids and hasattr(self.db_reader, "get_memories"):
-            for memory in await self.db_reader.get_memories(context, list(scope.seed_memory_ids)):
-                if memory.status == "active":
-                    recalled[memory.memory_id] = memory
-        primary_id = scope.primary_memory_id or (scope.seed_memory_ids[0] if scope.seed_memory_ids else None)
-        return sorted(
-            recalled.values(),
-            key=lambda m: (m.memory_id == primary_id, m.memory_id in scope.seed_memory_ids, _memory_effective_time(m)),
-            reverse=True,
-        )[: self._cfg.max_memories_per_scope]
-
-    def _dedupe_memories(self, memories: list[MemoryView]) -> list[MemoryView]:
-        seen: set[str] = set()
-        result: list[MemoryView] = []
-        for m in memories:
-            if m.memory_id not in seen:
-                seen.add(m.memory_id)
-                result.append(m)
-        return result
 
     # -- exact-duplicate removal ----------------------------------------------
 
@@ -452,7 +451,6 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             f"Scope graph_entity_id: {scope.graph_entity_id or 'none'}",
             f"Scope graph_entity_name: {scope.graph_entity_name or 'none'}",
             f"Primary recent memory_id: {scope.primary_memory_id or 'none'}",
-            f"Scope hot score: {scope.score}",
             "",
         ]
         primary_id = scope.primary_memory_id or (scope.seed_memory_ids[0] if scope.seed_memory_ids else None)
@@ -466,15 +464,10 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
                     f"    entity_id: {mem.entity_id or ''}",
                     f"    entity_type: {mem.entity_type or ''}",
                     f"    property_name: {mem.property_name or ''}",
-                    f"    root_id: {mem.root_id}",
-                    f"    parent_ids: {mem.parent_ids}",
                     f"    effective_time: {_format_memory_time(_memory_effective_time(mem))}",
                     f"    validate_from: {mem.validate_from}",
                     f"    validate_to: {mem.validate_to}",
                     f"    source_timestamp_ms: {mem.metadata.get('source_timestamp_ms')}",
-                    f"    created_at: {mem.created_at}",
-                    f"    update_at: {mem.update_at}",
-                    f"    metadata: {mem.metadata}",
                     "",
                 ]
             )
@@ -490,7 +483,6 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
         issue_memory_ids = [mid for mid in issue_group.memory_ids if mid in mem_by_id]
         issue_memories = [mem_by_id[mid] for mid in issue_memory_ids]
         sorted_memories = sorted(issue_memories, key=_memory_effective_time, reverse=True)
-        latest_id = sorted_memories[0].memory_id if sorted_memories else ""
         lines: list[str] = [
             "Focused memory issue group:",
             f"  scope_entity: {scope.graph_entity_name or scope.entity_id or 'none'}",
@@ -499,7 +491,6 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             f"  predicate_hint: {issue_group.predicate_hint or ''}",
             f"  confidence: {issue_group.confidence}",
             f"  reason: {issue_group.reason}",
-            f"  latest_memory_id_by_effective_time: {latest_id}",
             "  memories:",
         ]
         for mem in sorted_memories:
@@ -509,9 +500,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
                     f"      content: {mem.content}",
                     f"      effective_time: {_format_memory_time(_memory_effective_time(mem))}",
                     f"      value_hint: {issue_group.value_hints.get(mem.memory_id, '')}",
-                    f"      related_memory_ids: {mem.metadata.get('related_memory_ids') or []}",
                     f"      has_update_intent: {_has_seed_update_intent(mem)}",
-                    f"      extractor_confidence: {mem.metadata.get('extractor_confidence')}",
                 ]
             )
         lines.append("")
@@ -660,15 +649,13 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
         actions,
         cluster_memories,
         archived_memory_ids,
-        run_id,
-        scope,
     ) -> None:
         now = datetime.now(UTC)
         mem_by_id = {m.memory_id: m for m in cluster_memories}
         created_by_source_set: dict[tuple[str, ...], str] = {}
 
-        creates = [self._memory_from_create(context, c, now, mem_by_id, run_id, scope) for c in actions.creates]
-        merge_creates = [self._memory_from_merge(context, m, now, mem_by_id, run_id, scope) for m in actions.merges]
+        creates = [self._memory_from_create(context, c, now, mem_by_id) for c in actions.creates]
+        merge_creates = [self._memory_from_merge(context, m, now, mem_by_id) for m in actions.merges]
         all_creates = [m for m in [*creates, *merge_creates] if m is not None]
 
         for merge, memory in zip(actions.merges, merge_creates, strict=False):
@@ -679,14 +666,9 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             await self._write_new_memories(context, all_creates, cluster_memories)
 
         for update in actions.updates:
-            if update.memory_id not in mem_by_id:
+            if update.memory_id not in mem_by_id or update.memory_id in archived_memory_ids:
                 continue
             metadata_patch = dict(update.metadata_patch)
-            if update.quality_signal:
-                metadata_patch["quality_signal"] = update.quality_signal
-            if update.reason:
-                metadata_patch["quality_reason"] = update.reason
-            metadata_patch.update(_dreaming_metadata_patch(run_id, scope, now, action_count=1))
             await self._apply_memory_updates(
                 context,
                 [
@@ -729,27 +711,19 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             )
             archived_memory_ids.add(archive.memory_id)
 
-        link_relationships = [self._relationship_from_link(context, link, mem_by_id) for link in actions.links]
-        link_relationships = [r for r in link_relationships if r is not None]
+        link_relationships = []
+        for link in actions.links:
+            if link.source_kind == "Memory" and link.source_id in archived_memory_ids:
+                continue
+            if link.target_kind == "Memory" and link.target_id in archived_memory_ids:
+                continue
+            rel = self._relationship_from_link(context, link, mem_by_id)
+            if rel is not None:
+                link_relationships.append(rel)
         if link_relationships:
             await self._apply_write_plan(context, MemoryDbWritePlan(relationships=link_relationships))
 
     # -- marking helpers ------------------------------------------------------
-
-    async def _mark_cluster_consolidated(self, context, memories, run_id, scope, action_count) -> None:
-        now = datetime.now(UTC)
-        patch = _dreaming_metadata_patch(run_id, scope, now, action_count=action_count)
-        for mem in memories:
-            await self._apply_memory_updates(
-                context,
-                [
-                    MemoryDbUpdateCommand(
-                        memory_id=mem.memory_id,
-                        metadata_patch=patch,
-                        consistency=self._consistency,
-                    )
-                ],
-            )
 
     async def _mark_scope_add_records_done(self, context, scope, run_id, marked_add_record_ids) -> int:
         if not scope.add_record_ids:
@@ -774,7 +748,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
 
     # -- memory / entity / vector helpers -------------------------------------
 
-    def _memory_from_create(self, context, create, now, mem_by_id, run_id, scope) -> MemoryWrite | None:
+    def _memory_from_create(self, context, create, now, mem_by_id) -> MemoryWrite | None:
         if not create.content.strip():
             return None
         evidence = [mem_by_id[mid] for mid in create.evidence_memory_ids if mid in mem_by_id]
@@ -801,7 +775,6 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
                 **dict(create.metadata),
                 "dreaming_reason": create.reason,
                 "evidence_memory_ids": list(create.evidence_memory_ids),
-                **_dreaming_metadata_patch(run_id, scope, now, action_count=1),
             },
             validate_from=_latest_validate_from(evidence),
             created_at=now,
@@ -812,7 +785,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             entity_type=entity_type,
         )
 
-    def _memory_from_merge(self, context, merge, now, mem_by_id, run_id, scope) -> MemoryWrite | None:
+    def _memory_from_merge(self, context, merge, now, mem_by_id) -> MemoryWrite | None:
         if not merge.target_content.strip() or len(merge.source_memory_ids) < 2:
             return None
         sources = [mem_by_id[mid] for mid in merge.source_memory_ids if mid in mem_by_id]
@@ -836,7 +809,6 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             metadata={
                 "merge_reason": merge.merge_reason,
                 "source_memory_ids": list(merge.source_memory_ids),
-                **_dreaming_metadata_patch(run_id, scope, now, action_count=1),
             },
             validate_from=_latest_validate_from(sources),
             created_at=now,
@@ -882,7 +854,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
                                 project_id=context.project_id,
                                 node_id=source_id,
                             ),
-                            rel_type=REL_RELATED_TO,
+                            rel_type=REL_RELATES_TO,
                             project_id=context.project_id,
                             relation_type="dreaming_evidence",
                             metadata={"source": "dreaming"},
@@ -929,7 +901,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
         return GraphRelationship(
             source=GraphNodeRef(kind=link.source_kind, project_id=context.project_id, node_id=link.source_id),
             target=GraphNodeRef(kind=link.target_kind, project_id=context.project_id, node_id=link.target_id),
-            rel_type=REL_RELATED_TO,
+            rel_type=REL_RELATES_TO,
             project_id=context.project_id,
             relation_type=link.relation_type,
             property_name=link.property_name,
@@ -1009,49 +981,6 @@ def _latest_by_scope(memories: list[MemoryView]) -> dict[tuple[str | None, str |
         if mt > et:
             latest[key] = m
     return latest
-
-
-def _merge_scope_add_records(primary: ConsolidationScope, duplicate: ConsolidationScope) -> ConsolidationScope:
-    add_record_ids = tuple(sorted(set(primary.add_record_ids) | set(duplicate.add_record_ids)))
-    seed_memory_ids = tuple(dict.fromkeys([*primary.seed_memory_ids, *duplicate.seed_memory_ids]))
-    return primary.__class__(
-        entity_id=primary.entity_id,
-        property_name=primary.property_name,
-        root_id=primary.root_id,
-        score=max(primary.score, duplicate.score),
-        seed_memory_ids=seed_memory_ids,
-        add_record_ids=add_record_ids,
-        relation=primary.relation,
-        subject=primary.subject,
-        graph_entity_id=primary.graph_entity_id,
-        graph_entity_name=primary.graph_entity_name,
-        primary_memory_id=primary.primary_memory_id,
-        graph_source=primary.graph_source,
-    )
-
-
-def _dreaming_metadata_patch(
-    run_id: str, scope: ConsolidationScope, now: datetime, *, action_count: int
-) -> dict[str, Any]:
-    return {
-        "last_updated_by": DREAMING_MUTATION_SOURCE,
-        "dreaming": {
-            "last_consolidated_at": now.isoformat(),
-            "last_run_id": run_id,
-            "last_action_count": action_count,
-            "scope": {
-                "entity_id": scope.entity_id,
-                "property_name": scope.property_name,
-                "root_id": scope.root_id,
-                "relation": scope.relation,
-                "subject": scope.subject,
-                "graph_entity_id": scope.graph_entity_id,
-                "graph_entity_name": scope.graph_entity_name,
-                "primary_memory_id": scope.primary_memory_id,
-                "graph_source": scope.graph_source,
-            },
-        },
-    }
 
 
 def _default_consistency() -> str:

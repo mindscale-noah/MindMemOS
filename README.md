@@ -95,6 +95,20 @@ MindMemOS achieves state-of-the-art on PersonaMem through higher-order property 
 | Ours (Vanilla) | gpt-4.1-mini | - | gpt-4.1-mini | 83.00% | | - | 10.75% | | - | 46.88% | | - |
 | **Ours (Vanilla + Dreaming)** | **gpt-4.1-mini** | **-** | **gpt-4.1-mini** | **88.75%** | **+5.75%** 🟢 | **-27.5%** | **14.00%** | **+3.25%** 🟢 | **-28.3%** | **51.38%** | **+4.50%** 🟢 | **-27.9%** |
 
+### Evaluation of Skill Evolution
+
+With Skill self-evolution, MindMemOS improves task success rate on SpreadsheetBench-Verified to **57.2%**, a **+5.9 point** gain over No-skill and a **+9.2 point** gain over the unevolved Init-skill.
+
+* Benchmark: [SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz), a 400-task verified subset of SpreadsheetBench covering diverse real spreadsheet operations.
+* Note: MindMemOS-Unsup. evolves using execution traces only; MindMemOS-Sup. additionally uses task scores as supervision.
+
+| Method | Success Rate | Time / Task (s) | Agent Tokens | Evolve Tokens |
+|--------|:------------:|:---------------:|:------------:|:-------------:|
+| No-skill | 51.3% ± 0.8% | 11.227 | 10.4M | - |
+| Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
+| **MindMemOS-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
+| **MindMemOS-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
+
 ## Core Features
 
 - **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable user assets that can move across OpenClaw, Hermes, Claude Code, OpenHands, and other agent frameworks.
@@ -348,7 +362,9 @@ Manage memories:
 uv run mindmemos memory get --top-k 10
 uv run mindmemos memory update <memory_id> --content "我现在更喜欢拿铁"
 uv run mindmemos memory delete <memory_id>
-uv run mindmemos memory feedback --text "刚才召回的偏好不准确"
+uv run mindmemos memory feedback --text "刚才召回的偏好不准确" \
+  --messages-json '[{"role":"user","content":"刚才召回的偏好不准确"}]'
+uv run mindmemos memory feedback  # implicit feedback from recent adds
 uv run mindmemos memory dreaming
 ```
 

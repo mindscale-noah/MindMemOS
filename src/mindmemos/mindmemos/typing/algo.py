@@ -258,7 +258,6 @@ class ConsolidationUpdate(BaseModel):
 
     memory_id: str
     content: str | None = None
-    quality_signal: Literal["reinforce", "low_value", "conflict", "stale", "canonical", "ambiguous"] | None = None
     reinforcement_count: int | None = None
     metadata_patch: dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
