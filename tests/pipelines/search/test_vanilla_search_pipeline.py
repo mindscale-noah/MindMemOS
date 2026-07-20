@@ -3,7 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 from mindmemos.components.searcher.final_filter import SearchFinalFilter
-from mindmemos.config import TextProcessingConfig, VanillaSearchConfig
+from mindmemos.config import (
+    TextProcessingConfig,
+    VanillaSearchConfig,
+    bind_config_overrides,
+    init_config,
+    reset_config,
+)
 from mindmemos.pipelines.search.pipeline import SearchPipelineImpl
 from mindmemos.pipelines.search.vanilla import VanillaSearchEngine
 from mindmemos.typing.llm import EmbeddingResponse
@@ -853,3 +859,77 @@ async def test_search_pipeline_lazy_loads_vanilla_engine_and_final_filters(monke
     assert result.status == "ok"
     assert [item.id for item in result.memories] == ["mem-1"]
     assert isinstance(pipeline._engines["vanilla"], VanillaSearchEngine)
+
+
+@pytest.mark.asyncio
+async def test_cached_vanilla_engine_uses_each_project_search_config(monkeypatch) -> None:
+    try:
+        init_config(config_path="config/mindmemos/dev.example.yaml")
+        monkeypatch.setattr(
+            "mindmemos.pipelines.search.vanilla.engine.get_embed_client",
+            lambda: FakeEmbedClient(),
+        )
+        reader = FakeReader(
+            [
+                MemoryDbSearchHit(
+                    memory_id="mem-1",
+                    score=0.9,
+                    memory=memory("mem-1", "Kai uses Qdrant for vector search."),
+                    source="rrf",
+                    rank=1,
+                ),
+                MemoryDbSearchHit(
+                    memory_id="mem-2",
+                    score=0.8,
+                    memory=memory("mem-2", "Kai uses Qdrant for vector search."),
+                    source="rrf",
+                    rank=2,
+                ),
+            ]
+        )
+        pipeline = SearchPipelineImpl(
+            db_reader=reader,
+            db_writer=SimpleNamespace(),
+            final_filter=SearchFinalFilter(),
+        )
+        request = SearchPipelineInput(
+            query="Qdrant",
+            search_pipeline="vanilla",
+            top_k=2,
+            rerank=False,
+        )
+
+        with bind_config_overrides(
+            project_config={
+                "algo_config": {
+                    "search": {
+                        "vanilla": {
+                            "dedup_enabled": True,
+                            "dedup_threshold": 0.0,
+                        }
+                    }
+                }
+            }
+        ):
+            project_a = await pipeline.search(request, make_context())
+
+        cached_engine = pipeline._engines["vanilla"]
+        with bind_config_overrides(
+            project_config={
+                "algo_config": {
+                    "search": {
+                        "vanilla": {
+                            "dedup_enabled": False,
+                            "dedup_threshold": 1.0,
+                        }
+                    }
+                }
+            }
+        ):
+            project_b = await pipeline.search(request, make_context())
+
+        assert pipeline._engines["vanilla"] is cached_engine
+        assert [item.id for item in project_a.memories] == ["mem-1"]
+        assert [item.id for item in project_b.memories] == ["mem-1", "mem-2"]
+    finally:
+        reset_config()

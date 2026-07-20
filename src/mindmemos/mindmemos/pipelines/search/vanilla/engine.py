@@ -58,13 +58,13 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
         super().__init__(**kwargs)
 
         cfg = None
-        if text_config is None or search_config is None or embed_client is None:
+        if text_config is None or embed_client is None:
             cfg = get_config()
 
         text_cfg = text_config or cfg.algo_config.text_processing
         self._text_preprocessor = text_preprocessor or get_text_preprocessor(text_cfg)
         self._sparse_encoder = sparse_encoder or SparseVectorEncoder(text_cfg)
-        self._search_config: VanillaSearchConfig = search_config or cfg.algo_config.search.vanilla
+        self._search_config_override = search_config
 
         self._embed_client: EmbedClient | None = embed_client
         if self._embed_client is None:
@@ -74,6 +74,13 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
                 logger.debug("vanilla_search_embed_unavailable")
 
         logger.debug("vanilla_search_initialized", has_embed=self._embed_client is not None)
+
+    @property
+    def _search_config(self) -> VanillaSearchConfig:
+        """Return an explicit override or the current request's effective config."""
+        if self._search_config_override is not None:
+            return self._search_config_override
+        return get_config().algo_config.search.vanilla
 
     @traced("search.vanilla")
     async def search_candidates(
