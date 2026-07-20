@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import re
 
-from ...logging import get_logger
-from ...typing import MemorySearchItem
+from ....logging import get_logger
+from ....typing import MemorySearchItem
 
 logger = get_logger(__name__)
 

@@ -1,7 +1,7 @@
 """Tests for near-duplicate folding of search candidates."""
 
 import pytest
-from mindmemos.components.searcher.dedup import dedup_by_text_similarity
+from mindmemos.components.searcher.vanilla import dedup_by_text_similarity
 from mindmemos.components.searcher.final_filter import SearchFinalFilter
 from mindmemos.typing.service import MemorySearchItem
 

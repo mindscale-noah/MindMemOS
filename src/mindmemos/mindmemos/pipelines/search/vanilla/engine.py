@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC
 
 from ....components.text import SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
-from ....components.searcher.dedup import dedup_by_text_similarity
+from ....components.searcher.vanilla import dedup_by_text_similarity
 from ....config import TextProcessingConfig, get_config
 from ....config.algo.search import VanillaSearchConfig
 from ....llm import EmbedClient, get_embed_client
