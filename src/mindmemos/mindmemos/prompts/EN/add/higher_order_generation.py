@@ -62,9 +62,10 @@ Entity Description: {entity_description}
 Rules for the updates array:
 - Only include properties where you have a concrete action (create/update/add). Omit properties with no change — an empty updates array is perfectly valid if no higher-order trait needs updating.
 - action must be one of: "update", "add"
-- "update": REPLACE the latest version — use when refining, correcting, or incorporating new evidence into the same conclusion. The new value should be a concise, self-contained rewrite, NOT an append to the old text. If no previous version exists, this behaves the same as "add".
-- "add": add a new version ALONGSIDE existing ones — use when the conclusion has fundamentally shifted (e.g., a value orientation reversed, a new independent pattern emerged), or when this property has no prior value. Previous versions are preserved as history.
+- "update": REPLACE the latest version — use when refining, correcting, or incorporating new evidence into the same conclusion. The new value should be a concise, self-contained rewrite, NOT an append to the old text. If no previous version exists, this behaves the same as "add". THIS IS THE DEFAULT AND PREFERRED ACTION for any property that already has a value.
+- "add": add a new version — ONLY use when the conclusion has fundamentally reversed (e.g., a value orientation flipped), or a completely independent new pattern emerged that is unrelated to the existing value. This should be RARE (less than 10% of actions). When uncertain between "update" and "add", always choose "update".
 - For "create", "update", and "add": value MUST follow the format: "{{conclusion}}. Evidence: {{evidence_with_dates}}. Confidence: {{high|medium}}."
 - IMPORTANT: "update" means REWRITE, not APPEND. Write a clean, complete value from scratch. Do not copy-paste the old value and add a sentence — synthesize all evidence into a fresh, concise statement.
+- IMPORTANT: value MUST be under 200 words. State the conclusion in 1-2 sentences, cite at most 3-4 key evidence items with dates, then confidence. Synthesize — do not enumerate every data point.
 - time field uses the date of the most recent supporting evidence
 """

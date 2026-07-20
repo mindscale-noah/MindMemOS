@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 
 import pytest
+from mindmemos.components.extractor.vanilla import (
+    VanillaMemoryExtractor,
+)
 from mindmemos.components.extractor.vanilla.memory import (
     _boundary_confidence,
     _boundary_guidance,
@@ -16,10 +19,6 @@ from mindmemos.typing.algo import (
     TurnMessageRef,
 )
 from mindmemos.typing.memory import MemoryRequestContext, PreprocessedText
-
-from mindmemos.components.extractor.vanilla import (
-    VanillaMemoryExtractor,
-)
 
 
 def _ctx() -> MemoryRequestContext:

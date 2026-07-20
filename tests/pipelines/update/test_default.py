@@ -1,9 +1,8 @@
 import pytest
-from mindmemos.typing.memory import MemoryRequestContext, MemoryView
-from mindmemos.typing.service import UpdatePipelineInput
-
 from mindmemos.pipelines.update import DefaultUpdatePipeline
 from mindmemos.typing import MemoryDbMutationResult, MemoryDbUpdateCommand, MemoryDbWriteResult
+from mindmemos.typing.memory import MemoryRequestContext, MemoryView
+from mindmemos.typing.service import UpdatePipelineInput
 
 
 def make_context() -> MemoryRequestContext:

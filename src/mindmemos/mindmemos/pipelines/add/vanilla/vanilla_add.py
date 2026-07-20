@@ -111,8 +111,8 @@ class VanillaAddPipeline(MemoryDbPipelineMixin):
             sparse_encoder=self._sparse_encoder,
         )
         self._safety_gate = safety_gate or AddSafetyGate()
-        self._consistency = consistency or _default_consistency()
-        self._vanilla_add_config = vanilla_add_config or _default_vanilla_add_config()
+        self._explicit_consistency = consistency
+        self._explicit_vanilla_add_config = vanilla_add_config
 
         vectorizer = MemoryVectorizer(
             sparse_encoder=self._sparse_encoder,
@@ -130,6 +130,16 @@ class VanillaAddPipeline(MemoryDbPipelineMixin):
             llm_client=resolved_llm,
         )
 
+    def _get_consistency(self) -> Consistency:
+        if self._explicit_consistency is not None:
+            return self._explicit_consistency
+        return _default_consistency()
+
+    def _get_vanilla_add_config(self) -> VanillaAddConfig:
+        if self._explicit_vanilla_add_config is not None:
+            return self._explicit_vanilla_add_config
+        return _default_vanilla_add_config()
+
     @traced("add.vanilla_add.sync")
     async def add_sync(
         self,
@@ -143,8 +153,8 @@ class VanillaAddPipeline(MemoryDbPipelineMixin):
         plan, events, update_commands = await self._builder.build(
             inp,
             context,
-            consistency=self._consistency,
-            config=self._vanilla_add_config,
+            consistency=self._get_consistency(),
+            config=self._get_vanilla_add_config(),
         )
         mutation_plan = MemoryDbMutationPlan.from_write_plan(plan)
         mutation_plan.memory_updates.extend(update_commands)
@@ -152,7 +162,7 @@ class VanillaAddPipeline(MemoryDbPipelineMixin):
             write_result = await self.db_writer.apply_mutation_plan(
                 context,
                 mutation_plan,
-                consistency=self._consistency,
+                consistency=self._get_consistency(),
             )
             if write_result.graph_pending:
                 logger.warning(

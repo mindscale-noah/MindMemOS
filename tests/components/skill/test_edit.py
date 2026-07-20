@@ -6,7 +6,6 @@ import json
 
 import pytest
 from mindmemos.components.skill import apply_edit_ops, apply_patch_ops, format_numbered, parse_edit_ops
-
 from mindmemos.errors import SkillEditError
 
 # Lines (1-based): 1 "# Title", 2 "", 3 "Alpha line.", 4 "Beta line.", 5 "Gamma line."

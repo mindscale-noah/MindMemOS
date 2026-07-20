@@ -5,12 +5,11 @@ from unittest.mock import AsyncMock
 
 import mindmemos.pipelines.add.vanilla.vanilla_add as vanilla_mod
 import pytest
+from mindmemos.config import TextProcessingConfig, VanillaAddConfig
 from mindmemos.pipelines.add.default import DefaultAddPipeline
+from mindmemos.pipelines.add.vanilla import VanillaAddPipeline
 from mindmemos.typing.memory import MemoryRequestContext
 from mindmemos.typing.service import AddPipelineInput
-
-from mindmemos.config import TextProcessingConfig, VanillaAddConfig
-from mindmemos.pipelines.add.vanilla import VanillaAddPipeline
 
 
 def make_context() -> MemoryRequestContext:
@@ -153,7 +152,6 @@ async def test_add_async_message_round_trips_through_worker_deserialization(monk
     import json
 
     import mindmemos.workers.memory_add as memory_add_mod
-
     from mindmemos.infra.kafka import ConsumedMessage
 
     captured_value: dict = {}

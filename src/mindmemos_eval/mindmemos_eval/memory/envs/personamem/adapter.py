@@ -8,6 +8,7 @@ from typing import Any
 from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.base import BenchmarkSpec, RunContext
 from mindmemos_eval.memory.config import _merged_runner_config, _option, resolve_public_search_strategy
+
 from .env import PersonaMemContextStore, PersonaMemEnv
 
 
@@ -34,13 +35,20 @@ class PersonaMemAdapter:
         evaluation_mode = str(bench_config.raw.get("evaluation_mode") or "memory_rag")
         if evaluation_mode not in {"memory_rag", "official_full_context"}:
             raise ValueError(
-                f"personamem evaluation_mode must be 'memory_rag' or 'official_full_context', "
-                f"got: {evaluation_mode}"
+                f"personamem evaluation_mode must be 'memory_rag' or 'official_full_context', got: {evaluation_mode}"
             )
 
         runner = getattr(args, "runner_config", None)
         if runner is None:
             runner = _merged_runner_config(args)
+
+        if evaluation_mode == "memory_rag" and not runner.add:
+            raise ValueError(
+                "personamem memory_rag mode does not support --no-add (add=false): "
+                "zero-leakage relies on incremental per-boundary ingestion, and skipping "
+                "add lets early-boundary questions retrieve future messages. Keep add=true, "
+                "or switch evaluation_mode to official_full_context to answer without memory."
+            )
 
         items = PersonaMemEnv.load_items(bench_config.dataset)
         limit = bench_config.limit if bench_config.limit is not None else _option(args, "limit")
@@ -56,7 +64,9 @@ class PersonaMemAdapter:
         )
         top_k = search_params["top_k"] if "top_k" in search_params else runner.top_k
         rerank = search_params["rerank"] if "rerank" in search_params else runner.rerank
-        add_batch_size = int(bench_config.execution_params.get("add_batch_size", 50))
+        add_batch_size = int(bench_config.execution_params.get("add_batch_size", 20))
+        if add_batch_size < 1:
+            raise ValueError(f"add_batch_size must be >= 1, got {add_batch_size}")
         env = PersonaMemEnv(
             memory,
             answer_llm=answer_llm,

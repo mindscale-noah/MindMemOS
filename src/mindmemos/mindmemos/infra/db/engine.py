@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
+import grpc
 from qdrant_client import AsyncQdrantClient
 from qdrant_client import models as qmodels
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
@@ -349,6 +350,12 @@ def _is_retryable_qdrant_error(exc: Exception) -> bool:
         return True
     if isinstance(exc, UnexpectedResponse):
         return exc.status_code is None or exc.status_code == 408 or exc.status_code == 429 or exc.status_code >= 500
+    if isinstance(exc, grpc.aio.AioRpcError):
+        return exc.code() in (
+            grpc.StatusCode.DEADLINE_EXCEEDED,
+            grpc.StatusCode.UNAVAILABLE,
+            grpc.StatusCode.RESOURCE_EXHAUSTED,
+        )
     return _is_http_transport_error(exc)
 
 

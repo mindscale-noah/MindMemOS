@@ -1,5 +1,4 @@
 import pytest
-
 from mindmemos.infra.db import (
     NEO4J_SCHEMA_STATEMENTS,
     GraphRelationship,

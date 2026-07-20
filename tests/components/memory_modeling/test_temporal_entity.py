@@ -1,8 +1,7 @@
 from datetime import UTC, datetime
 
-from mindmemos.typing.memory import REL_RELATED_TO, EntityView, MemoryView
-
 from mindmemos.components.memory_modeling.schema import Edge, EntityManager, TemporalEntity
+from mindmemos.typing.memory import REL_RELATED_TO, EntityView, MemoryView
 
 
 def test_temporal_entity_keeps_independent_property_timelines(tmp_path) -> None:

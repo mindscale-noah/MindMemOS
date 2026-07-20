@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from mindmemos.components.chunker.vanilla.turn_grouper import TurnGrouper, _estimate_tokens
-from mindmemos.typing.memory import DialogueMessage, TextMessage
-
 from mindmemos.config import VanillaAddConfig
+from mindmemos.typing.memory import DialogueMessage, TextMessage
 
 
 def _dm(role: str, content: str, timestamp: int | None = None) -> DialogueMessage:

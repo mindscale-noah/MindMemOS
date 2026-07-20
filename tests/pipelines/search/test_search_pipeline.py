@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -44,7 +43,6 @@ class ExplodingAgenticWrapper:
         raise AssertionError("agentic wrapper should not run for non-agentic search")
 
 
-
 @pytest.mark.asyncio
 async def test_search_pipeline_uses_selected_engine_without_agentic_wrapper() -> None:
     engine = FakeEngine()
@@ -60,7 +58,6 @@ async def test_search_pipeline_uses_selected_engine_without_agentic_wrapper() ->
 
     assert result.memories[0].id == "mem-1"
     assert engine.inputs[0].agentic is False
-
 
 
 @pytest.mark.asyncio

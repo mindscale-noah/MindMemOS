@@ -73,9 +73,16 @@ class SearchFinalFilter:
         return _truncate(result, top_k)
 
     def _ensure_rerank_client(self) -> RerankClient | None:
-        if self._rerank_client is None and self._rerank_client_factory is not None:
-            self._rerank_client = self._rerank_client_factory()
-        return self._rerank_client
+        # Never cache the factory result: this filter is held by a process-wide
+        # singleton (SearchPipelineImpl._final_filter), and rerank clients are
+        # project-scoped (resolved per request via get_config()). Caching would pin
+        # the first project's client for all subsequent projects. An explicitly
+        # injected client (tests) still wins and is returned as-is.
+        if self._rerank_client is not None:
+            return self._rerank_client
+        if self._rerank_client_factory is not None:
+            return self._rerank_client_factory()
+        return None
 
 
 def _truncate(candidates: list[MemorySearchItem], top_k: int | None) -> list[MemorySearchItem]:

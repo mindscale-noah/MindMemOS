@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from ....config import get_config
 from ....llm import EmbedClient, LLMClient
 from ....logging import get_logger
 from ....prompts import AddPromptSet
@@ -28,8 +28,8 @@ from ....typing import (
     MemoryWrite,
     SearchFilter,
 )
-from ...memory_modeling.schema import Edge, memory_timestamp
-from ...text import SparseVectorEncoder, get_text_preprocessor
+from ...memory_modeling.schema import Edge, get_entity_manager, memory_timestamp
+from ...text import SparseVectorEncoder, TextPreprocessor
 from ._schema_higher_order import SchemaHigherOrderGenerator
 from ._schema_merge_policy import SchemaMergePolicy
 from ._schema_property_similarity import SchemaPropertySimilaritySearcher
@@ -77,6 +77,13 @@ class SchemaAddPlanner:
         higher_order_top_k: int,
         higher_order_min_evidence_count: int,
         episode_edge_top_k: int,
+        text_preprocessor: TextPreprocessor,
+        sparse_encoder: SparseVectorEncoder,
+        max_entity_resolve_concurrency: int = 10,
+        max_entities_per_conversation: int = 200,
+        max_properties_per_entity: int = 15,
+        secondary_search_retry_backoff_base: float = 0.2,
+        secondary_search_retry_backoff_max: float = 5.0,
     ) -> None:
         self.llm_client = llm_client
         self.embed_client = embed_client
@@ -94,9 +101,13 @@ class SchemaAddPlanner:
         self.higher_order_top_k = higher_order_top_k
         self.higher_order_min_evidence_count = higher_order_min_evidence_count
         self.episode_edge_top_k = episode_edge_top_k
-        text_cfg = get_config().algo_config.text_processing
-        self._text_preprocessor = get_text_preprocessor()
-        self._sparse_encoder = SparseVectorEncoder(text_cfg)
+        self.max_entity_resolve_concurrency = max_entity_resolve_concurrency
+        self.max_entities_per_conversation = max_entities_per_conversation
+        self.max_properties_per_entity = max_properties_per_entity
+        self.secondary_search_retry_backoff_base = secondary_search_retry_backoff_base
+        self.secondary_search_retry_backoff_max = secondary_search_retry_backoff_max
+        self._text_preprocessor = text_preprocessor
+        self._sparse_encoder = sparse_encoder
         self._merge_policy = SchemaMergePolicy()
         self._property_similarity = SchemaPropertySimilaritySearcher(
             db_reader=self.db_reader,
@@ -105,7 +116,6 @@ class SchemaAddPlanner:
         self._higher_order_generator = SchemaHigherOrderGenerator(
             llm_client=self.llm_client,
             db_reader=self.db_reader,
-            entity_manager=self.entity_manager,
             prompt_set=self.prompt_set,
             embed_texts=self._embed_texts,
             list_entity_memories=self._list_entity_memories,
@@ -129,6 +139,7 @@ class SchemaAddPlanner:
         context: MemoryRequestContext,
         request_metadata: dict[str, Any],
         created_at: datetime,
+        episode_time: str = "",
         prompt_set: AddPromptSet | None = None,
     ) -> tuple[MemoryDbWritePlan, list[MemoryAddEventItem], list[str], list[SchemaMemoryUpdate]]:
         """Build a complete database write plan from extracted schema entities."""
@@ -146,26 +157,38 @@ class SchemaAddPlanner:
         pending_archives: list[str] = []
         pending_updates: list[SchemaMemoryUpdate] = []
 
-        extraction_entities = list(merge_context.raw_entities) + [merge_context.episode_entity]
+        raw_entity_list = list(merge_context.raw_entities)
+        if len(raw_entity_list) > self.max_entities_per_conversation:
+            logger.warning(
+                "entity_count_exceeds_limit",
+                count=len(raw_entity_list),
+                limit=self.max_entities_per_conversation,
+            )
+            raw_entity_list = raw_entity_list[: self.max_entities_per_conversation]
+
+        extraction_entities = raw_entity_list + [merge_context.episode_entity]
         entity_embedding_texts = [entity_embedding_text(entity) for entity in extraction_entities]
         entity_vectors = await self._embed_texts("memory.add.entity", entity_embedding_texts)
         entity_vector_by_name = {
             entity.get("name", ""): vector for entity, vector in zip(extraction_entities, entity_vectors, strict=True)
         }
 
-        resolve_tasks = [
-            self._resolve_entity_write(
-                entity,
-                context=context,
-                created_at=created_at,
-                query_vector=entity_vector_by_name.get(entity.get("name", "")) or [],
-                request_metadata=request_metadata,
-                prompt_set=prompts,
-            )
-            for entity in merge_context.raw_entities
-        ]
+        resolve_sem = asyncio.Semaphore(self.max_entity_resolve_concurrency)
+
+        async def _resolve_one(entity: dict[str, Any]) -> EntityWrite:
+            async with resolve_sem:
+                return await self._resolve_entity_write(
+                    entity,
+                    context=context,
+                    created_at=created_at,
+                    query_vector=entity_vector_by_name.get(entity.get("name", "")) or [],
+                    request_metadata=request_metadata,
+                    prompt_set=prompts,
+                )
+
+        resolve_tasks = [_resolve_one(entity) for entity in raw_entity_list]
         entity_write_results = await asyncio.gather(*resolve_tasks, return_exceptions=True)
-        for entity, result in zip(merge_context.raw_entities, entity_write_results, strict=True):
+        for entity, result in zip(raw_entity_list, entity_write_results, strict=True):
             if isinstance(result, Exception):
                 logger.error("entity_resolve_failed", entity_name=entity.get("name"), error=str(result))
                 continue
@@ -191,22 +214,25 @@ class SchemaAddPlanner:
             )
         )
 
+        async def _process_one(entity: dict[str, Any], entity_write: EntityWrite):
+            async with resolve_sem:
+                return await self._process_entity_properties(
+                    entity=entity,
+                    entity_write=entity_write,
+                    context=context,
+                    created_at=created_at,
+                    episode_time=episode_time,
+                    request_metadata=request_metadata,
+                    prompt_set=prompts,
+                )
+
         prop_tasks = []
         prop_entity_writes = []
         for entity in extraction_entities:
             entity_write = entity_by_name.get(entity.get("name", ""))
             if entity_write is None:
                 continue
-            prop_tasks.append(
-                self._process_entity_properties(
-                    entity=entity,
-                    entity_write=entity_write,
-                    context=context,
-                    created_at=created_at,
-                    request_metadata=request_metadata,
-                    prompt_set=prompts,
-                )
-            )
+            prop_tasks.append(_process_one(entity, entity_write))
             prop_entity_writes.append(entity_write)
 
         prop_results = await asyncio.gather(*prop_tasks, return_exceptions=True)
@@ -264,12 +290,26 @@ class SchemaAddPlanner:
         entity_write: EntityWrite,
         context: MemoryRequestContext,
         created_at: datetime,
+        episode_time: str = "",
         request_metadata: dict[str, Any],
         prompt_set: AddPromptSet | None = None,
     ) -> tuple[list[MemoryWrite], list[str], list[MemoryWrite], list[str], list[SchemaMemoryUpdate]]:
+        raw_properties = entity.get("properties", [])
+        if len(raw_properties) > self.max_properties_per_entity:
+            logger.warning(
+                "property_count_exceeds_limit",
+                entity_name=entity_write.entity_name,
+                count=len(raw_properties),
+                limit=self.max_properties_per_entity,
+            )
+            raw_properties = raw_properties[: self.max_properties_per_entity]
+        # Shallow-copy so both the property-write path and higher-order generation see the
+        # capped properties, without mutating the extractor's original entity dict.
+        capped_entity = {**entity, "properties": raw_properties}
+
         entity_memories, archive_ids, entity_updates = await self._apply_property_operations(
             entity_write=entity_write,
-            properties=entity.get("properties", []),
+            properties=raw_properties,
             context=context,
             created_at=created_at,
             request_metadata=request_metadata,
@@ -277,9 +317,10 @@ class SchemaAddPlanner:
         )
         higher_memories, higher_archives, higher_updates = await self._higher_order_generator.generate(
             entity_write=entity_write,
-            raw_entity=entity,
+            raw_entity=capped_entity,
             context=context,
             created_at=created_at,
+            episode_time=episode_time,
             request_metadata=request_metadata,
             prompt_set=prompt_set,
         )
@@ -529,12 +570,16 @@ class SchemaAddPlanner:
         """Find an entity by exact name through dense recall plus name filtering."""
         if not query_vector:
             return None
+        filters: SearchFilter | None = None
+        if context.user_id:
+            filters = SearchFilter(must=[FieldCondition(field="user_id", op="match", value=context.user_id)])
         for attempt in range(self.secondary_search_retries):
             try:
                 result = await self.db_reader.search_entities_dense(
                     context,
                     query=f"name: {name}",
                     query_vector=query_vector,
+                    filters=filters,
                     limit=self.secondary_search_limit,
                 )
                 for hit in result.hits:
@@ -542,7 +587,11 @@ class SchemaAddPlanner:
                         if entity_type is None or hit.entity.entity_type == entity_type:
                             return hit.entity
                 if attempt < self.secondary_search_retries - 1:
-                    await asyncio.sleep(0.2)
+                    delay = min(
+                        self.secondary_search_retry_backoff_base * (2**attempt),
+                        self.secondary_search_retry_backoff_max,
+                    )
+                    await asyncio.sleep(delay * random.random())
             except Exception:
                 logger.warning("entity name search failed", attempt=attempt + 1, exc_info=True)
         return None
@@ -557,6 +606,7 @@ class SchemaAddPlanner:
         prompt_set: AddPromptSet | None = None,
     ) -> EntityWrite:
         """Build an update EntityWrite and merge the description with the LLM."""
+        em = get_entity_manager(project_id=context.project_id)
         description = await self._llm_description_update(
             entity_name=target.entity_name,
             entity_type=target.entity_type or "",
@@ -586,7 +636,7 @@ class SchemaAddPlanner:
             entity_name=target.entity_name,
             entity_type=target.entity_type or new_entity.get("entity_type"),
             description=description,
-            schema_version=self.entity_manager.file_path.name,
+            schema_version=em.file_path.name,
             metadata=metadata,
             created_at=target.created_at or created_at,
             update_at=created_at,
@@ -962,7 +1012,13 @@ class SchemaAddPlanner:
         """Recall existing entities that are semantically close to a new entity."""
         if not query_vector:
             return []
-        filters = SearchFilter(must_not=[FieldCondition(field="entity_type", op="match", value="episodes")])
+        must: list[FieldCondition] = []
+        if context.user_id:
+            must.append(FieldCondition(field="user_id", op="match", value=context.user_id))
+        filters = SearchFilter(
+            must=must,
+            must_not=[FieldCondition(field="entity_type", op="match", value="episodes")],
+        )
         result = await self.db_reader.search_entities_dense(
             context,
             query=entity_embedding_text(entity),
@@ -1002,11 +1058,16 @@ class SchemaAddPlanner:
         if not query_vector or self.episode_edge_top_k <= 0:
             return []
         try:
+            episode_must: list[FieldCondition] = [
+                FieldCondition(field="entity_type", op="match", value="episodes"),
+            ]
+            if context.user_id:
+                episode_must.append(FieldCondition(field="user_id", op="match", value=context.user_id))
             result = await self.db_reader.search_entities_dense(
                 context,
                 query=episode_write.description or episode_write.entity_name,
                 query_vector=query_vector,
-                filters=SearchFilter(must=[FieldCondition(field="entity_type", op="match", value="episodes")]),
+                filters=SearchFilter(must=episode_must),
                 limit=self.episode_edge_top_k,
             )
             candidates = [
@@ -1209,6 +1270,7 @@ class SchemaAddPlanner:
         request_metadata: dict[str, Any],
     ) -> EntityWrite:
         """Build an EntityWrite for a newly created entity."""
+        em = get_entity_manager(project_id=context.project_id)
         entity_id = str(uuid4())
         metadata = base_metadata(request_metadata)
         metadata.update(
@@ -1233,7 +1295,7 @@ class SchemaAddPlanner:
             entity_name=str(entity.get("name") or entity_id),
             entity_type=entity.get("entity_type"),
             description=entity.get("description"),
-            schema_version=self.entity_manager.file_path.name,
+            schema_version=em.file_path.name,
             metadata=metadata,
             created_at=created_at,
         )
@@ -1248,6 +1310,7 @@ class SchemaAddPlanner:
         prompt_set: AddPromptSet | None = None,
     ) -> EntityWrite:
         """Build an update EntityWrite from an existing entity view and a raw entity."""
+        em = get_entity_manager(project_id=context.project_id)
         description = await self._llm_description_update(
             entity_name=target.entity_name,
             entity_type=target.entity_type or "",
@@ -1277,7 +1340,7 @@ class SchemaAddPlanner:
             entity_name=target.entity_name,
             entity_type=target.entity_type or new_entity.get("entity_type"),
             description=description,
-            schema_version=self.entity_manager.file_path.name,
+            schema_version=em.file_path.name,
             metadata=metadata,
             created_at=target.created_at or created_at,
             update_at=created_at,

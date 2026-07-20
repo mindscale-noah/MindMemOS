@@ -11,7 +11,6 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from mindmemos.api.internal_routes import router
-
 from mindmemos.config import init_config, reset_config
 from mindmemos.errors import ApiError
 from mindmemos.infra.db import QdrantRecord

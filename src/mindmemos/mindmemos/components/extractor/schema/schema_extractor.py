@@ -99,8 +99,10 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
         dialogue_timestamp: str,
         conversation_text: str,
         prompt_set: AddPromptSet | None = None,
+        entity_manager: Any = None,
     ) -> dict[str, Any]:
         prompts = prompt_set or self.prompt_set
+
         prompt = (
             prompts.entity_generation.replace("{entity_schema}", str(entity_schema))
             .replace("{dialogue_timestamp}", dialogue_timestamp)
@@ -118,7 +120,8 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
             if not isinstance(raw_memory, dict):
                 raw_memory = {"entities": [], "edges": []}
             last_memory = raw_memory
-            validation_error = self.validate_memory(raw_memory)
+
+            validation_error = self.validate_memory(raw_memory, entity_manager=entity_manager)
             if not validation_error and has_unique_entity_names(raw_memory):
                 return raw_memory
             prompt += (
@@ -178,12 +181,13 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
             logger.warning("episode description generation failed; using original conversation", exc_info=True)
         return conversation_text
 
-    def schema_for_generation(self) -> list[dict[str, Any]]:
-        schema = copy.deepcopy(self.entity_manager.get_all_dicts())
+    def schema_for_generation(self, *, entity_manager: Any = None) -> list[dict[str, Any]]:
+        em = entity_manager or self.entity_manager
+        schema = copy.deepcopy(em.get_all_dicts())
         return strip_for_generation(schema)
 
     def prepare_raw_memory(self, raw_memory: dict[str, Any], dialogue_timestamp: str) -> dict[str, Any]:
         return self.normalizer.normalize(raw_memory, dialogue_timestamp)
 
-    def validate_memory(self, raw_memory: dict[str, Any]) -> str | None:
-        return self.normalizer.validate(raw_memory)
+    def validate_memory(self, raw_memory: dict[str, Any], *, entity_manager: Any = None) -> str | None:
+        return self.normalizer.validate(raw_memory, entity_manager=entity_manager)

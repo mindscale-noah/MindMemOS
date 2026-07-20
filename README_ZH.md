@@ -35,17 +35,21 @@
 
 ## Benchmark
 
+> **数据集准备**：LoCoMo、LongMemEval、PersonaMem 数据集不在本仓库中，
+> 请从各 benchmark 官方渠道下载，按示例配置中的路径放置：
+> * LoCoMo → `datasets/locomo/locomo10.json`
+> * LongMemEval → `resources/memory/dataset/longmemeval_smoke.json`
+> * PersonaMem → `resources/memory/dataset/questions_32k.csv` 和 `resources/memory/dataset/shared_contexts_32k.jsonl`
+
 ### Evaluation of Conversational Memory
 
 MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 SOTA，Overall 得分 **93.64**。
 
-* Benchmark：[LoCoMo](https://arxiv.org/abs/2402.09542)，记忆系统最主流、竞争最激烈的基准，聚焦事实记忆与联合分析，覆盖 single-hop、multi-hop、temporal 和 open-domain 问答。
-* Note：回复模型为 gpt-4.1-mini。Baseline 指标引用自 [EverMemOS](https://arxiv.org/abs/2507.00221) 论文。
+* Benchmark：[LoCoMo](https://arxiv.org/abs/2402.17753)，记忆系统最主流、竞争最激烈的基准，聚焦事实记忆与联合分析，覆盖 single-hop、multi-hop、temporal 和 open-domain 问答。
+* Note：回复模型为 gpt-4.1-mini。对比方法指标引用自 [EverMemOS](https://arxiv.org/abs/2601.02163) 论文。
 
 | Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
 | :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |
-| MemoryOS            |    67.30   |   59.34   |  42.26   |    59.03    |   60.11   |
-| Mem0                |    68.97   |   61.70   |  58.26   |    50.00    |   64.20   |
 | MemU                |    74.91   |   72.34   |  43.61   |    54.17    |   66.67   |
 | MemOS               |    85.37   |   79.43   |  75.08   |    64.58    |   80.76   |
 | Zep                 |    90.84   |   81.91   |  77.26   |    75.00    |   85.22   |
@@ -56,20 +60,22 @@ MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 
 
 ```bash
 cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
-# 填入 API key 后执行：
+# 填入 API key 后执行，执行前先启动 server，并确保 server 的 api_key_file
+# 配置指向 eval 将会生成的 key 文件：
+#   api_key_file: eval_api_keys.yaml
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo \
   --algorithm schema \
   --manifest-output output/locomo_manifest.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml
+  --api-key-output config/mindmemos/eval_api_keys.yaml
 ```
 
 ### Evaluation of Persona Memory
 
-MindMemOS 通过高阶属性建模与发现，在 PersonaMem 基准上达到 SOTA，Overall 准确率领先当前 SOTA 约 **2 个百分点**。
+MindMemOS-schema 在 PersonaMem 基准上达到 SOTA，Overall 准确率 **70.6%**，领先当前 SOTA 约 **3 个百分点**。
 
-* Benchmark：[PersonaMem](https://arxiv.org/abs/2505.15998)，以用户画像与喜好理解为中心的记忆基准，评测对用户特征的召回、追踪、重访、建议、推荐与泛化能力。
+* Benchmark：[PersonaMem](https://arxiv.org/abs/2504.14225)，以用户画像与喜好理解为中心的记忆基准，评测对用户特征的召回、追踪、重访、建议、推荐与泛化能力。
 * Note：所有实验结果来源于开源代码本地运行（记忆模型、回答模型均为 gpt-4.1-mini）。
 
 | Method              | Recall Sha. | Recall Men. (Ack. Latest) | Track Evo. | Revisit | Suggest | Recommend | Generalize | Overall          |
@@ -77,7 +83,22 @@ MindMemOS 通过高阶属性建模与发现，在 PersonaMem 基准上达到 SOT
 | MemOS               | 74.42% (96/129) | 82.35% (14/17) | 61.87% (86/139) | 77.78% (77/99) | 44.09% (41/93) | 67.27% (37/55) | 84.21% (48/57) | 67.74% (399/589) |
 | EverMemOS           | 74.42% (96/129) | 64.71% (11/17) | 64.03% (89/139) | 85.86% (85/99) | 35.48% (33/93) | 65.45% (36/55) | 84.21% (48/57) | 67.57% (398/589) |
 | MemU                | 64.34% (83/129) | 64.71% (11/17) | 66.20% (92/139) | 87.88% (87/99) | 31.18% (29/93) | 67.27% (37/55) | 84.21% (48/57) | 65.70% (387/589) |
-| **MindMemOS-schema** | 73.64% (95/129) | **82.35%** (14/17) | **67.63%** (94/139) | 85.86% (85/99) | 35.48% (33/93) | **80.00%** (44/55) | 78.95% (45/57) | **69.61% (410/589)** |
+| **MindMemOS-schema** | **81.4% (105/129)** | 64.7% (11/17) | 64.7% (90/139) | 82.8% (82/99) | **47.3% (44/93)** | **76.4% (42/55)** | 73.7% (42/57) | **70.6% (416/589)** |
+
+评测配置：[`config/mindmemos_eval/memory_evaluation_personamem.example.yaml`](config/mindmemos_eval/memory_evaluation_personamem.example.yaml)
+
+```bash
+cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml config/mindmemos_eval/memory_evaluation_personamem.yaml
+# 填入 API key 后执行，执行前先启动 server，并确保 server 的 api_key_file
+# 配置指向 eval 将会生成的 key 文件：
+#   api_key_file: eval_api_keys.yaml
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
+  --benchmark-list personamem \
+  --algorithm schema \
+  --manifest-output output/personamem_manifest.jsonl \
+  --api-key-output config/mindmemos/eval_api_keys.yaml
+```
 
 
 ### Evaluation of Dreaming

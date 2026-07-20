@@ -13,9 +13,18 @@ from pathlib import Path
 
 import pytest
 import yaml
+from mindmemos.components.chunker import MessageSegmenter
+from mindmemos.components.extractor.vanilla import (
+    MemoryExtractionResult,
+    VanillaMemoryExtractor,
+    parse_memory_extraction_json,
+)
 from mindmemos.components.extractor.vanilla.memory import (
     _envelope_prompt_messages,
 )
+from mindmemos.components.text import TextPreprocessor
+from mindmemos.config import TextProcessingConfig, VanillaAddConfig
+from mindmemos.pipelines.add.vanilla import VanillaAddPipeline
 from mindmemos.typing.algo import ExtractionEnvelope, TurnMessageRef
 from mindmemos.typing.llm import ChatResponse, EmbeddingResponse
 from mindmemos.typing.memory import (
@@ -28,16 +37,6 @@ from mindmemos.typing.memory import (
 )
 from mindmemos.typing.memory_db import MemoryDbSearchResult, MemoryDbWriteResult
 from mindmemos.typing.service import AddPipelineInput
-
-from mindmemos.components.chunker import MessageSegmenter
-from mindmemos.components.extractor.vanilla import (
-    MemoryExtractionResult,
-    VanillaMemoryExtractor,
-    parse_memory_extraction_json,
-)
-from mindmemos.components.text import TextPreprocessor
-from mindmemos.config import TextProcessingConfig, VanillaAddConfig
-from mindmemos.pipelines.add.vanilla import VanillaAddPipeline
 
 # ---------------------------------------------------------------------------
 # Skip guard

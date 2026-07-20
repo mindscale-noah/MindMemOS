@@ -3,16 +3,16 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
-from mindmemos.typing.memory import MemoryRequestContext, MemoryView
-from mindmemos.typing.memory_db import MemoryDbSearchHit, MemoryDbSearchResult
-from mindmemos.typing.service import SearchPipelineInput
-
 from mindmemos.components.memory_modeling.schema import TemporalEntity
 from mindmemos.config import init_config, reset_config
 from mindmemos.config.algo.search import SearchConfig
 from mindmemos.pipelines.search.schema import SchemaSearchEngine
+from mindmemos.typing.memory import MemoryRequestContext, MemoryView
+from mindmemos.typing.memory_db import MemoryDbSearchHit, MemoryDbSearchResult
+from mindmemos.typing.service import SearchPipelineInput
 
 
 def make_context() -> MemoryRequestContext:
@@ -36,7 +36,7 @@ class FakeQueryBuilder:
         self.current_time_mode = current_time_mode
         self.min_time_window_days = min_time_window_days
 
-    def all_property_filter(self) -> dict[str, list[str]]:
+    def all_property_filter(self, *, entity_schema: list[dict[str, Any]] | None = None) -> dict[str, list[str]]:
         return {"person": ["preference"]}
 
     async def extract_time_from_query(self, query: str, **kwargs):

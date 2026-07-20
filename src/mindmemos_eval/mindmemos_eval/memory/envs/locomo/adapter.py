@@ -9,7 +9,7 @@ from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.base import BenchmarkSpec, RunContext
 from mindmemos_eval.memory.config import _merged_runner_config, _option, resolve_public_search_strategy
 
-from .env import LocomoEnv
+from .env import LOCOMO_SCHEMA_ANSWER_PROMPT_EN, LocomoEnv
 
 
 class LocomoAdapter:
@@ -28,7 +28,6 @@ class LocomoAdapter:
         args: argparse.Namespace,
     ) -> dict[str, Any]:
         """Run LoCoMo using the existing eval environment."""
-        del ctx
         runner = getattr(args, "runner_config", None)
         if runner is None:
             runner = _merged_runner_config(args)
@@ -46,6 +45,10 @@ class LocomoAdapter:
         )
         top_k = search_params["top_k"] if "top_k" in search_params else runner.top_k
         rerank = search_params["rerank"] if "rerank" in search_params else runner.rerank
+        answer_template_kwargs: dict[str, Any] = {}
+        if bench_config.memory_algorithm == "schema":
+            answer_template_kwargs["answer_template"] = LOCOMO_SCHEMA_ANSWER_PROMPT_EN
+            answer_template_kwargs["schema_mode"] = True
         env = LocomoEnv(
             memory,
             answer_llm=answer_llm,
@@ -53,6 +56,7 @@ class LocomoAdapter:
             top_k=None if top_k is None else int(top_k),
             search_strategy=public_search_strategy,
             rerank=bool(rerank),
+            **answer_template_kwargs,
             judge_runs=runner.judge_runs,
         )
         run = await env.run_dataset(

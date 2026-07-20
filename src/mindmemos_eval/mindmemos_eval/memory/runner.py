@@ -20,6 +20,7 @@ from mindmemos_eval.memory.envs.personamem import PersonaMemAdapter
 from ..llm import LLMClient, LLMConfig
 from .base import BenchmarkAdapter, BenchmarkSpec, RunContext, RunnerConfig
 from .config import _merged_runner_config, _option, load_benchmark_specs, validate_memory_algorithm
+from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_collections
 from .identity import RunIdentity, new_identity, write_api_keys
 from .manifest import BenchmarkRunManifest, write_manifests
 
@@ -27,7 +28,15 @@ logger = logging.getLogger("mindmemos_eval.memory.runner")
 
 
 def _load_existing_identity(path: str, *, benchmark: str) -> RunIdentity:
-    """Load the first enabled api_key entry from an existing api_keys YAML."""
+    """Load the first enabled api_key entry from an existing api_keys YAML.
+
+    Reuses the api_key/project_id from the prior run so ``--no-add`` can read its
+    memories. A fresh ``run_id`` is generated as a run label only - it no longer
+    participates in memory scoping, which is now handled at the project_id level
+    (each run gets its own project_id, and the add stage clears it first).
+    """
+    import secrets
+
     import yaml
 
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -35,9 +44,10 @@ def _load_existing_identity(path: str, *, benchmark: str) -> RunIdentity:
     for entry in entries:
         if not entry.get("enabled", True):
             continue
+        suffix = f"{datetime.now(UTC):%Y%m%d_%H%M%S}_{secrets.token_hex(4)}"
         return RunIdentity(
             benchmark=benchmark,
-            run_id="",
+            run_id=suffix,
             key_id=str(entry.get("key_id", "")),
             api_key=str(entry.get("api_key", "")),
             project_id=str(entry.get("project_id", "")),
@@ -70,9 +80,10 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--api-key-output",
-        required=True,
+        required=False,
         metavar="PATH",
-        help="Path to the generated api_keys YAML consumed by the FastAPI server; it should match the server auth.api_key_file.",
+        help="Path to the generated api_keys YAML consumed by the FastAPI server; it should match the server "
+        "auth.api_key_file. Required for fresh runs; optional (unused) when --reuse-api-key is set.",
     )
     parser.add_argument(
         "--algorithm",
@@ -184,6 +195,61 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         help="Path to an existing api_keys YAML file. When set, skips generating fresh identities and reuses the "
         "first api_key entry from this file instead. Use with --no-add to rerun evaluation against previously "
         "added memories without overwriting the server's api_keys.yaml.",
+    )
+
+    parser.add_argument(
+        "--qdrant-url",
+        metavar="URL",
+        default=None,
+        help="Qdrant HTTP endpoint for the add-stage project cleanup. Defaults to $MINDMEMOS_QDRANT_URL or "
+        "http://localhost:6333. Only used when the add stage runs (not with --no-add).",
+    )
+    parser.add_argument(
+        "--qdrant-api-key",
+        metavar="KEY",
+        default=None,
+        help="Qdrant API key for project cleanup; usually unset for local dev. Defaults to $MINDMEMOS_QDRANT_API_KEY.",
+    )
+    parser.add_argument(
+        "--neo4j-uri",
+        metavar="URI",
+        default=None,
+        help="Neo4j Bolt URI for the add-stage project cleanup. Defaults to $MINDMEMOS_NEO4J_URI or "
+        "bolt://localhost:7687.",
+    )
+    parser.add_argument(
+        "--neo4j-username",
+        metavar="USER",
+        default=None,
+        help="Neo4j username for project cleanup. Defaults to $MINDMEMOS_NEO4J_USERNAME or neo4j.",
+    )
+    parser.add_argument(
+        "--neo4j-password",
+        metavar="PASSWORD",
+        default=None,
+        help="Neo4j password for project cleanup. Defaults to $MINDMEMOS_NEO4J_PASSWORD.",
+    )
+    parser.add_argument(
+        "--neo4j-database",
+        metavar="NAME",
+        default=None,
+        help="Neo4j database for project cleanup. Defaults to $MINDMEMOS_NEO4J_DATABASE or neo4j.",
+    )
+    parser.add_argument(
+        "--skip-clean",
+        action="store_true",
+        default=False,
+        help="Skip clearing the run's project_id from Qdrant/Neo4j before the add stage. By default the add stage "
+        "starts from a clean project; --no-add never clears.",
+    )
+
+    parser.add_argument(
+        "--server-config",
+        metavar="PATH",
+        default=None,
+        help="Path to the MindMemOS server yaml config (e.g. config/mindmemos/dev.yaml). Used to read the actual "
+        "Qdrant collection names so the add-stage cleanup clears exactly what the server writes, even when "
+        "collections are renamed away from the _v1 defaults. When omitted, the default collection names are used.",
     )
 
     parser.add_argument(
@@ -339,6 +405,20 @@ def _build_llm_client(config: RunnerConfig, *, prefix: str) -> LLMClient:
     )
 
 
+def _build_reset_config(args: argparse.Namespace) -> ResetConfig:
+    """Build a :class:`ResetConfig` from CLI overrides, falling back to env-var defaults."""
+    env = ResetConfig()  # picks up MINDMEMOS_* env vars
+    return ResetConfig(
+        qdrant_url=_option(args, "qdrant_url") or env.qdrant_url,
+        qdrant_api_key=_option(args, "qdrant_api_key") or env.qdrant_api_key,
+        neo4j_uri=_option(args, "neo4j_uri") or env.neo4j_uri,
+        neo4j_username=_option(args, "neo4j_username") or env.neo4j_username,
+        neo4j_password=_option(args, "neo4j_password") or env.neo4j_password,
+        neo4j_database=_option(args, "neo4j_database") or env.neo4j_database,
+        collections=resolve_collections(_option(args, "server_config")),
+    )
+
+
 async def run_benchmark_matrix(
     args: argparse.Namespace,
     *,
@@ -378,6 +458,8 @@ async def run_benchmark_matrix(
             existing.api_key[:40],
         )
     else:
+        if not _option(args, "api_key_output"):
+            raise ValueError("--api-key-output is required for fresh runs (omit it only with --reuse-api-key)")
         identities = [
             new_identity(
                 name,
@@ -388,6 +470,9 @@ async def run_benchmark_matrix(
             for name in benchmark_names
         ]
         write_api_keys(args.api_key_output, identities)
+
+    reset_cfg = _build_reset_config(args)
+    skip_clean = bool(_option(args, "skip_clean"))
 
     manifests: list[BenchmarkRunManifest] = []
     for identity in identities:
@@ -402,10 +487,36 @@ async def run_benchmark_matrix(
         else:
             memory, transport = await memory_client_factory(identity)
 
-        wrapped_memory = RequestIdMemoryClient(memory, ctx)
-        answer_llm = answer_llm_factory() if answer_llm_factory else _build_llm_client(runner, prefix="answer")
-        judge_llm = judge_llm_factory() if judge_llm_factory else _build_llm_client(runner, prefix="judge")
         try:
+            wrapped_memory = RequestIdMemoryClient(memory, ctx)
+            answer_llm = answer_llm_factory() if answer_llm_factory else _build_llm_client(runner, prefix="answer")
+            judge_llm = judge_llm_factory() if judge_llm_factory else _build_llm_client(runner, prefix="judge")
+            if runner.add and not skip_clean:
+                logger.info(
+                    "project_reset_started benchmark=%s project_id=%s",
+                    identity.benchmark,
+                    identity.project_id,
+                )
+                try:
+                    reset_counts = await reset_project(reset_cfg, identity.project_id)
+                except ProjectResetError as exc:
+                    logger.critical(
+                        "benchmark_aborted_database_reset_failed "
+                        "benchmark=%s project_id=%s store=%s operation=%s resource=%s reason=%s",
+                        identity.benchmark,
+                        exc.project_id,
+                        exc.store,
+                        exc.operation,
+                        exc.resource,
+                        exc.reason,
+                    )
+                    raise
+                logger.info(
+                    "project_reset_succeeded benchmark=%s project_id=%s counts=%s",
+                    identity.benchmark,
+                    identity.project_id,
+                    reset_counts,
+                )
             eval_result = await adapter.run(
                 memory=wrapped_memory,
                 answer_llm=answer_llm,
