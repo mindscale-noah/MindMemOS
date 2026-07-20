@@ -441,7 +441,7 @@ def calculate_personamem_metrics(
     # from the offline ClickHouse trace aggregation instead.
     token_metrics = stage_metrics(
         "answer",
-        llm_calls=len(answers),
+        llm_calls=sum(answer.llm_calls for answer in answers),
         prompt_tokens=sum(answer.prompt_tokens for answer in answers),
         completion_tokens=sum(answer.completion_tokens for answer in answers),
         total_tokens=sum(answer.total_tokens for answer in answers),
