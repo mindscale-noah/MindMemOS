@@ -62,7 +62,7 @@ MindMemOS-schema 在主流记忆系统竞争最激烈的 LoCoMo 基准上达到 
 cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
 # 填入 API key 后执行，执行前先启动 server，并确保 server 的 api_key_file
 # 配置指向 eval 将会生成的 key 文件：
-#   api_key_file: config/mindmemos/eval_api_keys.yaml
+#   api_key_file: eval_api_keys.yaml
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo \
@@ -91,7 +91,7 @@ MindMemOS-schema 在 PersonaMem 基准上达到 SOTA，Overall 准确率 **70.6%
 cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml config/mindmemos_eval/memory_evaluation_personamem.yaml
 # 填入 API key 后执行，执行前先启动 server，并确保 server 的 api_key_file
 # 配置指向 eval 将会生成的 key 文件：
-#   api_key_file: config/mindmemos/eval_api_keys.yaml
+#   api_key_file: eval_api_keys.yaml
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
   --benchmark-list personamem \

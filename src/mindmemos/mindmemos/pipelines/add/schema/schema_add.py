@@ -568,8 +568,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         """
         events: list[MemoryAddEventItem] = []
         dispatched = 0
-        rt = self._resolve_add_runtime(context)
         try:
+            rt = self._resolve_add_runtime(context)
             while True:
                 # Phase 1: Chunking
                 episode_tasks = await self._chunk_episodes(context, force=force, rt=rt)

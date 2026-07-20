@@ -1031,6 +1031,41 @@ async def test_schema_add_async_appends_buffer_and_publishes_drain_task(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_schema_add_runtime_resolution_failure_releases_processing_state(monkeypatch):
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    pipeline = SchemaAddPipeline(
+        db_reader=MemoryDbReader(clients=clients),
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        llm_client=FakeLLM(),
+        embed_client=FakeEmbed(),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+    ctx = make_context()
+    key = buffer_key(ctx)
+
+    def fail_runtime_resolution(_context):
+        raise RuntimeError("runtime initialization failed")
+
+    monkeypatch.setattr(pipeline, "_resolve_add_runtime", fail_runtime_resolution)
+
+    assert await pipeline._try_start_loop(ctx) is True
+    with pytest.raises(RuntimeError, match="runtime initialization failed"):
+        await pipeline._process_loop(
+            ctx,
+            consistency="strong",
+            force=True,
+            inline=True,
+        )
+
+    assert pipeline._processing_by_key[key] is False
+    assert await pipeline._try_start_loop(ctx) is True
+    await pipeline._finish_processing(ctx)
+
+
+@pytest.mark.asyncio
 async def test_schema_add_episode_kafka_dispatch_uses_buffer_key(monkeypatch):
     writer = FakeWriter()
     qdrant = FakeQdrant()
