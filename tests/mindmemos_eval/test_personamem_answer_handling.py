@@ -95,6 +95,10 @@ def test_accepts_option_after_final_answer_token_without_closing_tag() -> None:
     assert _extract_predicted_option("<final_answer> (a)") == "a"
 
 
+def test_rejects_multiple_options_inside_final_answer_tag() -> None:
+    assert _extract_predicted_option("<final_answer>(a) or (c)</final_answer>") is None
+
+
 def test_rejects_unformatted_option_letters_in_prose() -> None:
     assert _extract_predicted_option("The answer is c, and that is a fact.") is None
 
@@ -124,7 +128,7 @@ async def test_memory_rag_search_filters_to_the_current_scope_user() -> None:
 
 @pytest.mark.asyncio
 async def test_retry_records_final_prompt_and_actual_llm_usage() -> None:
-    llm = _FakeAnswerLlm(["I choose c", "<final_answer>(a)</final_answer>"])
+    llm = _FakeAnswerLlm(["I considered (a) and (c).", "<final_answer>(a)</final_answer>"])
 
     result = await _env(llm)._answer_item(_item(), build_error=None)
 
@@ -134,6 +138,38 @@ async def test_retry_records_final_prompt_and_actual_llm_usage() -> None:
     assert result.answer.total_tokens == 10
     assert len(result.prompt) == 3
     assert "previous response" in result.prompt[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_official_fallback_accepts_one_untagged_option_without_retry() -> None:
+    env = _env(_FakeAnswerLlm(["The answer is (a)."]))
+    result = await env.run_dataset(
+        [_item()],
+        show_progress=False,
+    )
+
+    answer = result.qa_results[0].answer
+    assert answer is not None
+    assert answer.extracted_answer == "a"
+    assert answer.is_correct is True
+    assert answer.llm_calls == 1
+    assert answer.parse_failed is False
+    assert answer.format_compliant is False
+    assert result.metrics["answer_parse_failure_count"] == 0
+    assert result.metrics["answer_format_failure_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tagged_answer_is_reported_as_format_compliant() -> None:
+    result = await _env(_FakeAnswerLlm(["<final_answer>(a)</final_answer>"])).run_dataset(
+        [_item()],
+        show_progress=False,
+    )
+
+    answer = result.qa_results[0].answer
+    assert answer is not None
+    assert answer.format_compliant is True
+    assert result.metrics["answer_format_failure_count"] == 0
 
 
 @pytest.mark.asyncio

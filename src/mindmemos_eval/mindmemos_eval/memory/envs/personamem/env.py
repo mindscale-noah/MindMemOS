@@ -131,6 +131,7 @@ class PersonaMemAnswer(BaseModel):
     total_tokens: int = 0
     llm_calls: int = 0
     parse_failed: bool = False
+    format_compliant: bool = False
     elapsed_seconds: float = 0.0
 
 
@@ -384,21 +385,41 @@ def _extract_predicted_option(response: str) -> str | None:
         response,
         flags=re.IGNORECASE | re.DOTALL,
     )
-    for segment in reversed(segments):
-        parenthesized = re.findall(r"\(([a-d])\)", segment, flags=re.IGNORECASE)
-        if parenthesized:
-            return parenthesized[-1].lower()
-        direct = re.fullmatch(r"\s*(?:the\s+answer\s+is\s+)?([a-d])\s*", segment, flags=re.IGNORECASE)
-        if direct:
-            return direct.group(1).lower()
+    if not segments:
+        return None
+
+    segment = segments[-1]
+    parenthesized = set(re.findall(r"\(([a-d])\)", segment, flags=re.IGNORECASE))
+    if len(parenthesized) == 1:
+        return next(iter(parenthesized)).lower()
+    if parenthesized:
+        return None
+
+    direct = re.fullmatch(r"\s*(?:the\s+answer\s+is\s+)?([a-d])\s*", segment, flags=re.IGNORECASE)
+    if direct:
+        return direct.group(1).lower()
     return None
+
+
+def _extract_official_option(response: str) -> tuple[str | None, bool]:
+    """Return the official PersonaMem option and strict-format compliance."""
+    tagged_option = _extract_predicted_option(response)
+    if tagged_option is not None:
+        return tagged_option, True
+
+    lowered = response.lower()
+    parenthesized = set(re.findall(r"\(([a-d])\)", lowered))
+    options = parenthesized or set(re.findall(r"\b([a-d])\b", lowered))
+    if len(options) == 1:
+        return next(iter(options)), False
+    return None, False
 
 
 def extract_personamem_answer(response: str, correct_answer: str) -> tuple[bool, str]:
     """Apply the official PersonaMem v1 option extraction and correctness rule."""
 
     correct = correct_answer.lower().strip("() ")
-    predicted_option = _extract_predicted_option(response)
+    predicted_option, _ = _extract_official_option(response)
     if predicted_option is None:
         return False, response.strip() or ""
     return predicted_option == correct, predicted_option
@@ -460,6 +481,7 @@ def calculate_personamem_metrics(
         "search_failure_count": search_failure_count,
         "answer_failure_count": answer_failure_count,
         "answer_parse_failure_count": sum(1 for answer in answers if answer.parse_failed),
+        "answer_format_failure_count": sum(1 for answer in answers if not answer.format_compliant),
         **token_metrics,
         "build_elapsed_seconds": build_elapsed,
         "search_elapsed_seconds": search_elapsed,
@@ -653,6 +675,7 @@ class PersonaMemEnv:
         last_completion_content = ""
         final_prompt = prompt
         extracted_option: str | None = None
+        format_compliant = False
         llm_calls = 0
         for attempt in range(PERSONAMEM_ANSWER_MAX_RETRIES):
             attempt_prompt = prompt
@@ -682,6 +705,7 @@ class PersonaMemEnv:
                         total_tokens=total_tokens,
                         llm_calls=llm_calls,
                         parse_failed=False,
+                        format_compliant=False,
                         elapsed_seconds=time.monotonic() - answer_started,
                     )
                 return PersonaMemQAResult(
@@ -697,7 +721,7 @@ class PersonaMemEnv:
             total_completion_tokens += int(completion.completion_tokens or 0)
             total_tokens += int(completion.total_tokens or 0)
             last_completion_content = completion.content or ""
-            extracted_option = _extract_predicted_option(last_completion_content)
+            extracted_option, format_compliant = _extract_official_option(last_completion_content)
             if extracted_option is not None:
                 break
         answer_elapsed = time.monotonic() - answer_started
@@ -720,6 +744,7 @@ class PersonaMemEnv:
                 total_tokens=total_tokens,
                 llm_calls=llm_calls,
                 parse_failed=parse_failed,
+                format_compliant=format_compliant,
                 elapsed_seconds=answer_elapsed,
             ),
         )
