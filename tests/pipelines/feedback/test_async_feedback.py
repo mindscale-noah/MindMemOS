@@ -5,11 +5,10 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
+from mindmemos.infra.kafka import ConsumedMessage
 from mindmemos.pipelines.feedback.default import MEMORY_FEEDBACK_TOPIC, DefaultFeedbackPipeline
 from mindmemos.typing.memory import MemoryRequestContext
 from mindmemos.typing.service import FeedbackPipelineInput, FeedbackPipelineResult
-
-from mindmemos.infra.kafka import ConsumedMessage
 from mindmemos.workers import memory_feedback
 
 

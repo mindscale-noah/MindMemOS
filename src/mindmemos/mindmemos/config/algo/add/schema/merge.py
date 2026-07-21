@@ -26,3 +26,9 @@ class SchemaAddMergeConfig:
 
     secondary_search_retries: int = field(default=3)
     """Retry count for entity-name fallback search."""
+
+    secondary_search_retry_backoff_base: float = field(default=0.2)
+    """Base seconds for exponential backoff between secondary search retries."""
+
+    secondary_search_retry_backoff_max: float = field(default=5.0)
+    """Maximum seconds between secondary search retries."""

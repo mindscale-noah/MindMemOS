@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 from mindmemos.api.schemas import AddRequest, AuthContext
+from mindmemos.api.services import memory_service
+from mindmemos.config import init_config, reset_config
 from mindmemos.pipelines.delete.default import DefaultDeletePipeline
 from mindmemos.pipelines.feedback.default import DefaultFeedbackPipeline
 from mindmemos.pipelines.get.default import DefaultGetPipeline
@@ -11,9 +13,6 @@ from mindmemos.pipelines.search.pipeline import SearchPipelineImpl
 from mindmemos.pipelines.update.default import DefaultUpdatePipeline
 from mindmemos.typing.memory import DialogueMessage, MemoryRequestContext
 from mindmemos.typing.service import AddPipelineInput, AddPipelineSyncResult, MemoryAddEventItem
-
-from mindmemos.api.services import memory_service
-from mindmemos.config import init_config, reset_config
 
 
 def test_get_memory_service_wires_configured_non_algorithm_pipelines() -> None:

@@ -7,9 +7,11 @@ import asyncio
 
 try:
     from .memory import add_memory_args, run_benchmark_matrix
+    from .memory.db_reset import ProjectResetError
     from .skills import add_skill_args, run_skill_benchmark
 except ImportError:  # pragma: no cover - used when running this file directly
     from mindmemos_eval.memory import add_memory_args, run_benchmark_matrix
+    from mindmemos_eval.memory.db_reset import ProjectResetError
     from mindmemos_eval.skills import add_skill_args, run_skill_benchmark
 
 
@@ -31,7 +33,10 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     args = build_arg_parser().parse_args(argv)
     if args.command == "memory":
-        asyncio.run(run_benchmark_matrix(args))
+        try:
+            asyncio.run(run_benchmark_matrix(args))
+        except ProjectResetError:
+            return 1
         return 0
     if args.command == "skill":
         return run_skill_benchmark(args)

@@ -14,6 +14,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from mindmemos.components.skill import deserialize_bundle, serialize_bundle
+from mindmemos.config import QdrantConfig, SkillEvolutionConfig
+from mindmemos.infra.db import SkillVersionRepository
 from mindmemos.infra.db.models import AddRecordPoint
 from mindmemos.infra.db.qdrant import QdrantStore
 from mindmemos.pipelines.skill import SkillVersionStore
@@ -21,9 +23,6 @@ from mindmemos.pipelines.skill.evolution import SkillEvolver
 from mindmemos.prompts.EN.skills import REWRITE_SKILL_SYSTEM, rewrite_skill_user
 from mindmemos.typing.skill import SkillVersionStatus
 from qdrant_client import AsyncQdrantClient
-
-from mindmemos.config import QdrantConfig, SkillEvolutionConfig
-from mindmemos.infra.db import SkillVersionRepository
 
 PROJECT = "proj"
 BASE_TIME = datetime(2026, 1, 1, tzinfo=UTC)

@@ -2,8 +2,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
-from qdrant_client import AsyncQdrantClient
-
 from mindmemos.config import QdrantConfig
 from mindmemos.infra.db import SkillVersionRepository
 from mindmemos.mappers import (
@@ -21,6 +19,7 @@ from mindmemos.typing import (
     SkillVersion,
     SkillVersionStatus,
 )
+from qdrant_client import AsyncQdrantClient
 
 PROJECT = "proj"
 

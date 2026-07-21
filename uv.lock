@@ -1374,6 +1374,7 @@ source = { editable = "src/mindmemos_eval" }
 dependencies = [
     { name = "datasets" },
     { name = "mindmemos-sdk" },
+    { name = "neo4j" },
     { name = "nltk" },
     { name = "openai" },
     { name = "openpyxl" },
@@ -1390,6 +1391,7 @@ dependencies = [
 requires-dist = [
     { name = "datasets", specifier = ">=5.0.0" },
     { name = "mindmemos-sdk", editable = "src/mindmemos_sdk" },
+    { name = "neo4j", specifier = ">=6.2.0" },
     { name = "nltk", specifier = ">=3.9.4" },
     { name = "openai", specifier = ">=2.37.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },

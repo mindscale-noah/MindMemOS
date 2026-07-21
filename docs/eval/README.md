@@ -23,11 +23,11 @@ uv run uvicorn mindmemos.api.app:app --host 127.0.0.1 --port 8000
 ### 3. Configure LLM API keys
 
 The **add** stage LLM calls are made by the **server** using the keys in `config/mindmemos/dev.yaml`.
-The **answer** and **judge** stage LLM calls are made directly by the **eval process** using the keys in `config/mindmemos_eval/memory_evaluation.yaml`.
+The **answer** and **judge** stage LLM calls are made directly by the **eval process** using the keys in `config/mindmemos_eval/memory_evaluation_locomo.example.yaml` (or `memory_evaluation_personamem.example.yaml`).
 These two key sets are completely independent and must be configured separately.
 
 ```yaml
-# config/mindmemos_eval/memory_evaluation.yaml
+# config/mindmemos_eval/memory_evaluation_locomo.yaml
 runner:
   llm:
     model: gpt-4.1-mini
@@ -59,21 +59,41 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 
 ---
 
+## Dataset Download
+
+The benchmark datasets referenced in the example config are **not** included in this repository.
+Download them from the respective benchmark authors (LoCoMo, LongMemEval, PersonaMem) and place
+them at the paths shown in ``config/mindmemos_eval/memory_evaluation_locomo.example.yaml``.
+
+Copy the example config and adjust LLM keys before running:
+```bash
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+```
+
+---
+
 ## Smoke Test (recommended first)
 
 Use `--limit 2` to minimize data volume and verify the full pipeline end-to-end:
 
 ```bash
 uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo,longmemeval,personamem \
   --manifest-output reports/smoke_vanilla.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml \
+  --api-key-output config/mindmemos/eval_api_keys.yaml \
   --algorithm vanilla \
   --limit 2 \
   --session-limit 2 \
   --judge-runs 1
 ```
+
+> **Warning**: ``--api-key-output`` writes a **fresh** ``api_keys.yaml`` with only the generated
+> benchmark identities. Do NOT point it at the server's live key file
+> (``config/mindmemos/api_keys.yaml``) unless you are running in an isolated environment.
+> Use a separate path (e.g. ``config/mindmemos/eval_api_keys.yaml``) and point the server at
+> that file for the duration of the evaluation, or merge the generated keys into the server's
+> key file manually.
 
 ---
 
@@ -85,24 +105,48 @@ All three benchmarks are executed sequentially in a single command to avoid `api
 
 ```bash
 caffeinate -si uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo,longmemeval,personamem \
   --manifest-output reports/vanilla_run.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml \
+  --api-key-output config/mindmemos/eval_api_keys.yaml \
   --algorithm vanilla \
   --judge-runs 1
 ```
+
+> **Pre-add cleanup**: before the add stage the eval process clears the run's
+> `project_id` directly from Qdrant and Neo4j, so each run starts from a clean project
+> (each run gets its own `project_id`). This requires Qdrant and Neo4j reachable from the
+> eval process; configure them via the same env vars as the server (`MINDMEMOS_QDRANT_URL`,
+> `MINDMEMOS_NEO4J_URI`, `MINDMEMOS_NEO4J_USERNAME`, `MINDMEMOS_NEO4J_PASSWORD`,
+> `MINDMEMOS_NEO4J_DATABASE`) or the `--qdrant-url` / `--neo4j-*` flags. `--no-add` skips
+> cleanup and reuses existing data; `--skip-clean` skips cleanup while still adding.
+
+### Reuse previously added memories (skip the add stage)
+
+When re-running evaluation against memories already ingested by a prior run of the **same
+project**, combine ``--reuse-api-key`` (reuse that run's api_key/project_id) with
+``--no-add`` (skip the add stage *and* the pre-add cleanup, so the prior memories stay in
+place). ``--reuse-api-key`` reuses exactly one project, so pass a single benchmark:
+
+```bash
+caffeinate -si uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list locomo \
+  --manifest-output reports/vanilla_run_retry.jsonl \
+  --reuse-api-key config/mindmemos/eval_api_keys.yaml \
+  --algorithm vanilla \
+  --no-add \
+  --judge-runs 1
+```
+
+> ``--api-key-output`` is **not** needed with ``--reuse-api-key`` (no fresh identities are
+> generated). To rerun a different benchmark's memories, point ``--reuse-api-key`` at the
+> file containing that benchmark's key and pass that benchmark alone.
 
 ### Run a subset of benchmarks
 
 ```bash
 --benchmark-list locomo,longmemeval
-```
-
-### Skip the add stage (data already ingested)
-
-```bash
---no-add
 ```
 
 ### Skip the judge stage (generate answers only)
@@ -129,11 +173,13 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 | `--algorithm` | Algorithm profile: `vanilla` or `schema` |
 | `--limit N` | Max items per benchmark (conversations for LoCoMo, samples for LongMemEval, questions for PersonaMem) |
 | `--session-limit N` | LongMemEval only — add at most N sessions per sample; useful for smoke tests |
-| `--judge-runs N` | Run judge N times per question, decide by majority vote; default 1; EverMemOS paper uses 3. The N runs execute sequentially per question, so judge-stage latency scales roughly linearly with N |
-| `--no-add` | Skip memory ingestion (reuse data already in Qdrant) |
+| `--judge-runs N` | Run judge N times per question, decide by majority vote; default 1. The N runs execute sequentially per question, so judge-stage latency scales roughly linearly with N. Not applicable to PersonaMem (deterministic scoring) |
+| `--no-add` | Skip memory ingestion **and** the pre-add cleanup; reuse memories already in Qdrant/Neo4j for this project |
 | `--no-score` | Skip judge/scoring stage |
 | `--manifest-output` | JSONL file where eval results are written; required for metrics collection |
-| `--api-key-output` | Path where generated API keys are written; must match the server's `auth.api_key_file` |
+| `--api-key-output` | Path where **fresh** API keys are generated. Writes a complete file — do NOT point at the server's live key file. Required for fresh runs; optional (unused) with `--reuse-api-key` |
+| `--reuse-api-key` | Path to an existing API key file from a prior run. Reuses that run's api_key/project_id; use with `--no-add` to rerun against its memories. Only one benchmark per invocation |
+| `--skip-clean` | Skip clearing the run's `project_id` from Qdrant/Neo4j before add. `--no-add` never clears; this flag skips cleanup while still adding |
 
 ---
 

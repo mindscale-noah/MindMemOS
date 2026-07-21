@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -17,7 +18,7 @@ from ....components.extractor.schema import (
     build_episode_entity,
 )
 from ....components.memory_modeling.schema import EntityManager, get_entity_manager
-from ....components.text import detect_prompt_language
+from ....components.text import SparseVectorEncoder, detect_prompt_language, get_text_preprocessor
 from ....config import get_config
 from ....infra.kafka import get_producer
 from ....llm import EmbedClient, LLMClient, get_embed_client, get_llm_client
@@ -67,6 +68,33 @@ class _EpisodeTask:
     title: str = ""
 
 
+@dataclass(slots=True)
+class _SchemaAddRuntime:
+    """Per-drain-loop resolved schema-add deps.
+
+    Built from the request-scoped config (ContextVar) once per ``_process_loop`` call
+    and never cached on the singleton pipeline instance, so one project's config can
+    never leak into another. Mirrors the entity_manager per-request resolution pattern.
+    """
+
+    schema_cfg: Any
+    project_em: Any
+    chunker: EpisodesChunker
+    extractor: SchemaAddExtractor
+    planner: SchemaAddPlanner
+    search_field_extractor: SchemaSearchFieldExtractor
+    use_search_fields: bool
+    search_fields_max: int
+    episode_search_fields_augment: bool
+    episode_augment_count: int
+
+
+def _override(explicit: Any, default: Any) -> Any:
+    """Return the explicit override when provided, else the (request-scoped) default."""
+
+    return explicit if explicit is not None else default
+
+
 @register(type="add", name="schema_add")
 class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
     """Schema-driven add pipeline migrated from the original algorithm."""
@@ -98,100 +126,167 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         prompt_language: str | None = None,
         prompt_set: AddPromptSet | None = None,
         search_field_extractor: SchemaSearchFieldExtractor | None = None,
+        extractor: SchemaAddExtractor | None = None,
+        planner: SchemaAddPlanner | None = None,
+        consistency: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        self.llm_client = llm_client or get_llm_client()
-        self.embed_client = embed_client or get_embed_client()
-        self.entity_manager = entity_manager or get_entity_manager()
-        algo_cfg = get_config().algo_config
-        schema_cfg = algo_cfg.add.schema
-        extraction_cfg = schema_cfg.extraction
-        merge_cfg = schema_cfg.merge
-        higher_order_cfg = schema_cfg.higher_order
-        chunker_cfg = schema_cfg.chunker
-        self.prompt_set = prompt_set or get_add_prompts(prompt_language or algo_cfg.common.prompt_language)
-        self.search_field_extractor = search_field_extractor or SchemaSearchFieldExtractor(
-            llm_client=self.llm_client,
-            prompt_set=self.prompt_set,
-        )
+        # This pipeline is held by a process-wide singleton (MemoryService.
+        # _algorithm_add_pipelines), so it MUST stay project-agnostic: all
+        # project-scoped deps (LLM/embed clients, entity manager, prompts, chunker,
+        # extractor, planner, search-field extractor, text preprocessor, sparse
+        # encoder, and every algo parameter) are resolved per drain loop from the
+        # request-scoped ContextVar config (see get_config() and _resolve_add_runtime).
+        # The explicit injections/overrides below are for tests only; production
+        # leaves them None so each request reads its own project's config.
         self.add_buffer = add_buffer or AddRecordBuffer()
         self._recorder = recorder or MemoryOperationRecorder()
         self.recorder = self._recorder
-        self.chunker = chunker or EpisodesChunker(
-            mode=chunker_cfg.split_mode,
-            llm_client=self.llm_client,
-            max_messages=chunker_cfg.max_episode_length,
-            max_minutes_from_first=chunker_cfg.max_minutes_from_first,
-            split_on_user_speaker=chunker_cfg.split_on_user_speaker,
-            boundary_prompt=self.prompt_set.conv_boundary_detection,
-            resplit_prompt=self.prompt_set.conv_forced_resplit,
-        )
-        self._buffer_limit = chunker_cfg.max_buffer_size
-        self._min_episode_length = chunker_cfg.min_episode_length
-        self._consistency = _default_consistency()
-        self._episode_max_retries = schema_cfg.drain.episode_generation_max_retries
-        self._cleanup_processed_buffer = schema_cfg.drain.cleanup_processed_buffer
-        self.enable_schema_selection = (
-            extraction_cfg.enable_schema_selection if enable_schema_selection is None else enable_schema_selection
-        )
-        self.enable_entity_merge_decision = (
-            merge_cfg.enable_entity_merge_decision
-            if enable_entity_merge_decision is None
-            else enable_entity_merge_decision
-        )
-        self.entity_recall_top_k = merge_cfg.entity_recall_top_k if entity_recall_top_k is None else entity_recall_top_k
-        self.max_merge_retries = merge_cfg.max_merge_retries if max_merge_retries is None else max_merge_retries
-        self.use_property_merge = merge_cfg.use_property_merge if use_property_merge is None else use_property_merge
-        self.secondary_search_limit = (
-            merge_cfg.secondary_search_limit if secondary_search_limit is None else secondary_search_limit
-        )
-        self.secondary_search_retries = (
-            merge_cfg.secondary_search_retries if secondary_search_retries is None else secondary_search_retries
-        )
-        self.use_search_fields = extraction_cfg.use_search_fields if use_search_fields is None else use_search_fields
-        self.search_fields_max = extraction_cfg.search_fields_max if search_fields_max is None else search_fields_max
-        self.episode_search_fields_augment = (
-            extraction_cfg.episode_search_fields_augment
-            if episode_search_fields_augment is None
-            else episode_search_fields_augment
-        )
-        self.episode_augment_count = (
-            extraction_cfg.episode_augment_count if episode_augment_count is None else episode_augment_count
-        )
-        self.higher_order_enabled = higher_order_cfg.enabled if higher_order_enabled is None else higher_order_enabled
-        self.higher_order_top_k = higher_order_cfg.top_k if higher_order_top_k is None else higher_order_top_k
-        self.higher_order_min_evidence_count = (
-            higher_order_cfg.min_evidence_count
-            if higher_order_min_evidence_count is None
-            else higher_order_min_evidence_count
-        )
-        self.episode_edge_top_k = schema_cfg.episode_edge.top_k if episode_edge_top_k is None else episode_edge_top_k
         self._processing_by_key: dict[str, bool] = defaultdict(bool)
         self._process_lock_by_key: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self.extractor = SchemaAddExtractor(
-            llm_client=self.llm_client,
-            prompt_set=self.prompt_set,
-            entity_manager=self.entity_manager,
-            enable_schema_selection=self.enable_schema_selection,
+        self._explicit_consistency = consistency
+        self._explicit_llm = llm_client
+        self._explicit_embed = embed_client
+        self._explicit_entity_manager = entity_manager
+        self._explicit_chunker = chunker
+        self._explicit_extractor = extractor
+        self._explicit_planner = planner
+        self._explicit_search_field_extractor = search_field_extractor
+        self._explicit_prompts = prompt_set
+        self._explicit_prompt_language = prompt_language
+        # Algo overrides (None -> use the request-scoped config value at drain time).
+        self._explicit_enable_schema_selection = enable_schema_selection
+        self._explicit_enable_entity_merge_decision = enable_entity_merge_decision
+        self._explicit_entity_recall_top_k = entity_recall_top_k
+        self._explicit_max_merge_retries = max_merge_retries
+        self._explicit_use_property_merge = use_property_merge
+        self._explicit_secondary_search_limit = secondary_search_limit
+        self._explicit_secondary_search_retries = secondary_search_retries
+        self._explicit_use_search_fields = use_search_fields
+        self._explicit_search_fields_max = search_fields_max
+        self._explicit_episode_search_fields_augment = episode_search_fields_augment
+        self._explicit_episode_augment_count = episode_augment_count
+        self._explicit_higher_order_enabled = higher_order_enabled
+        self._explicit_higher_order_top_k = higher_order_top_k
+        self._explicit_higher_order_min_evidence_count = higher_order_min_evidence_count
+        self._explicit_episode_edge_top_k = episode_edge_top_k
+
+    def _get_consistency(self) -> str:
+        if self._explicit_consistency is not None:
+            return self._explicit_consistency
+        return _default_consistency()
+
+    def _get_schema_add_config(self):
+        return get_config().algo_config.add.schema
+
+    def _resolve_add_runtime(self, context: MemoryRequestContext) -> _SchemaAddRuntime:
+        """Resolve all project-scoped deps from the request-scoped config (ContextVar).
+
+        Built once per drain loop (per ``_process_loop`` call) and never cached on this
+        singleton pipeline instance, so the first project's config can never leak into
+        another project. Mirrors the entity_manager per-request resolution pattern.
+        """
+        schema_cfg = self._get_schema_add_config()
+        llm_client = self._explicit_llm or get_llm_client()
+        embed_client = self._explicit_embed or get_embed_client()
+        project_em = self._explicit_entity_manager or get_entity_manager(project_id=context.project_id)
+        text_preprocessor = get_text_preprocessor()
+        sparse_encoder = SparseVectorEncoder(get_config().algo_config.text_processing)
+        prompt_language = self._explicit_prompt_language or get_config().algo_config.common.prompt_language
+        prompts = self._explicit_prompts or get_add_prompts(prompt_language)
+
+        chunker = self._explicit_chunker or EpisodesChunker(
+            mode=schema_cfg.chunker.split_mode,
+            llm_client=llm_client,
+            max_messages=schema_cfg.chunker.max_episode_length,
+            max_minutes_from_first=schema_cfg.chunker.max_minutes_from_first,
+            split_on_user_speaker=schema_cfg.chunker.split_on_user_speaker,
+            boundary_prompt=prompts.conv_boundary_detection,
+            resplit_prompt=prompts.conv_forced_resplit,
+            streaming_window_size=schema_cfg.chunker.streaming_window_size,
         )
-        self.planner = SchemaAddPlanner(
-            llm_client=self.llm_client,
-            embed_client=self.embed_client,
+
+        enable_schema_selection = _override(
+            self._explicit_enable_schema_selection, schema_cfg.extraction.enable_schema_selection
+        )
+        extractor = self._explicit_extractor or SchemaAddExtractor(
+            llm_client=llm_client,
+            prompt_set=prompts,
+            entity_manager=project_em,
+            enable_schema_selection=enable_schema_selection,
+        )
+
+        enable_entity_merge_decision = _override(
+            self._explicit_enable_entity_merge_decision, schema_cfg.merge.enable_entity_merge_decision
+        )
+        entity_recall_top_k = _override(self._explicit_entity_recall_top_k, schema_cfg.merge.entity_recall_top_k)
+        max_merge_retries = _override(self._explicit_max_merge_retries, schema_cfg.merge.max_merge_retries)
+        use_property_merge = _override(self._explicit_use_property_merge, schema_cfg.merge.use_property_merge)
+        secondary_search_limit = _override(
+            self._explicit_secondary_search_limit, schema_cfg.merge.secondary_search_limit
+        )
+        secondary_search_retries = _override(
+            self._explicit_secondary_search_retries, schema_cfg.merge.secondary_search_retries
+        )
+        higher_order_enabled = _override(self._explicit_higher_order_enabled, schema_cfg.higher_order.enabled)
+        higher_order_top_k = _override(self._explicit_higher_order_top_k, schema_cfg.higher_order.top_k)
+        higher_order_min_evidence_count = _override(
+            self._explicit_higher_order_min_evidence_count, schema_cfg.higher_order.min_evidence_count
+        )
+        episode_edge_top_k = _override(self._explicit_episode_edge_top_k, schema_cfg.episode_edge.top_k)
+
+        planner = self._explicit_planner or SchemaAddPlanner(
+            llm_client=llm_client,
+            embed_client=embed_client,
             db_reader=self.db_reader,
             db_writer=self.db_writer,
-            entity_manager=self.entity_manager,
-            prompt_set=self.prompt_set,
-            enable_entity_merge_decision=self.enable_entity_merge_decision,
-            entity_recall_top_k=self.entity_recall_top_k,
-            max_merge_retries=self.max_merge_retries,
-            use_property_merge=self.use_property_merge,
-            secondary_search_limit=self.secondary_search_limit,
-            secondary_search_retries=self.secondary_search_retries,
-            higher_order_enabled=self.higher_order_enabled,
-            higher_order_top_k=self.higher_order_top_k,
-            higher_order_min_evidence_count=self.higher_order_min_evidence_count,
-            episode_edge_top_k=self.episode_edge_top_k,
+            entity_manager=project_em,
+            prompt_set=prompts,
+            enable_entity_merge_decision=enable_entity_merge_decision,
+            entity_recall_top_k=entity_recall_top_k,
+            max_merge_retries=max_merge_retries,
+            use_property_merge=use_property_merge,
+            secondary_search_limit=secondary_search_limit,
+            secondary_search_retries=secondary_search_retries,
+            higher_order_enabled=higher_order_enabled,
+            higher_order_top_k=higher_order_top_k,
+            higher_order_min_evidence_count=higher_order_min_evidence_count,
+            episode_edge_top_k=episode_edge_top_k,
+            max_entity_resolve_concurrency=schema_cfg.extraction.max_entity_resolve_concurrency,
+            max_entities_per_conversation=schema_cfg.extraction.max_entities_per_conversation,
+            max_properties_per_entity=schema_cfg.extraction.max_properties_per_entity,
+            secondary_search_retry_backoff_base=schema_cfg.merge.secondary_search_retry_backoff_base,
+            secondary_search_retry_backoff_max=schema_cfg.merge.secondary_search_retry_backoff_max,
+            text_preprocessor=text_preprocessor,
+            sparse_encoder=sparse_encoder,
+        )
+
+        search_field_extractor = self._explicit_search_field_extractor or SchemaSearchFieldExtractor(
+            llm_client=llm_client,
+            prompt_set=prompts,
+        )
+
+        use_search_fields = _override(self._explicit_use_search_fields, schema_cfg.extraction.use_search_fields)
+        search_fields_max = _override(self._explicit_search_fields_max, schema_cfg.extraction.search_fields_max)
+        episode_search_fields_augment = _override(
+            self._explicit_episode_search_fields_augment, schema_cfg.extraction.episode_search_fields_augment
+        )
+        episode_augment_count = _override(
+            self._explicit_episode_augment_count, schema_cfg.extraction.episode_augment_count
+        )
+
+        return _SchemaAddRuntime(
+            schema_cfg=schema_cfg,
+            project_em=project_em,
+            chunker=chunker,
+            extractor=extractor,
+            planner=planner,
+            search_field_extractor=search_field_extractor,
+            use_search_fields=use_search_fields,
+            search_fields_max=search_fields_max,
+            episode_search_fields_augment=episode_search_fields_augment,
+            episode_augment_count=episode_augment_count,
         )
 
     @traced("add_pipeline.sync", record_args=False)
@@ -221,7 +316,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         )
         events = await self._ensure_drain_and_wait(
             context,
-            consistency=self._consistency,
+            consistency=self._get_consistency(),
             force=True,
         )
         result = AddPipelineSyncResult(status="ok", memories=events)
@@ -308,7 +403,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                 continue
             loop_events, loop_dispatched = await self._process_loop(
                 drain_context,
-                consistency=consistency or self._consistency,
+                consistency=consistency or self._get_consistency(),
                 force=force,
                 trigger_record_id=trigger_record_id,
             )
@@ -348,8 +443,9 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         return await self._execute_episode_task(
             _EpisodeTask(episode_id=episode_id, records=records),
             context=context,
-            consistency=consistency or self._consistency,
+            consistency=consistency or self._get_consistency(),
             trigger_record_id=trigger_record_id,
+            rt=self._resolve_add_runtime(context),
         )
 
     # Internal: drain orchestration
@@ -416,7 +512,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                 "context": context.model_dump(mode="json"),
                 "input": inp.model_dump(mode="json", by_alias=True),
                 "force": force,
-                "consistency": self._consistency,
+                "consistency": self._get_consistency(),
                 "trigger_record_id": trigger_record_id,
                 "record_metadata": record_metadata,
             },
@@ -473,16 +569,17 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         events: list[MemoryAddEventItem] = []
         dispatched = 0
         try:
+            rt = self._resolve_add_runtime(context)
             while True:
                 # Phase 1: Chunking
-                episode_tasks = await self._chunk_episodes(context, force=force)
+                episode_tasks = await self._chunk_episodes(context, force=force, rt=rt)
                 if not episode_tasks:
                     break
 
                 # Phase 2: Dispatch
                 dispatched += len(episode_tasks)
                 round_events = await (
-                    self._dispatch_episodes_inline(episode_tasks, context=context, consistency=consistency)
+                    self._dispatch_episodes_inline(episode_tasks, context=context, consistency=consistency, rt=rt)
                     if inline
                     else self._dispatch_episodes_kafka(
                         episode_tasks,
@@ -499,11 +596,20 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             await self._finish_processing(context)
         return events, dispatched
 
-    async def _chunk_episodes(self, context: MemoryRequestContext, *, force: bool) -> list[_EpisodeTask]:
-        """Split buffered records into episode generation tasks."""
-        records = await self.add_buffer.list_buffered(context, limit=self._buffer_limit)
+    async def _chunk_episodes(
+        self, context: MemoryRequestContext, *, force: bool, rt: _SchemaAddRuntime
+    ) -> list[_EpisodeTask]:
+        """Split buffered records into episode generation tasks.
+
+        Uses a streaming window approach: entries are processed in windows of
+        ``streaming_window_size``.  For each non-final window only completed
+        episodes (boundaries that do not touch the window tail) are kept.  The
+        remaining messages carry over into the next window.  The final window
+        (when *force* is True) keeps all boundaries so every message is consumed.
+        """
+        records = await self.add_buffer.list_buffered(context, limit=rt.schema_cfg.chunker.max_buffer_size)
         entries = add_record_ops.to_chunker_entries(records)
-        if len(entries) < self._min_episode_length:
+        if len(entries) < rt.schema_cfg.chunker.min_episode_length:
             if records:
                 await self.add_buffer.mark_split_attempted(context, records)
             return []
@@ -516,51 +622,73 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         request_prompts = get_add_prompts(detected_lang)
 
         detect_force = force or add_record_ops.force_generation(records)
-        boundaries = await traced_awaitable(
-            "schema_add.chunk_episodes.detect_boundaries",
-            self.chunker.detect_boundaries(
-                entries,
-                force=detect_force,
-                boundary_prompt=request_prompts.conv_boundary_detection,
-                resplit_prompt=request_prompts.conv_forced_resplit,
-            ),
-            attributes={
-                "project_id": context.project_id,
-                "entry_count": len(entries),
-                "force": detect_force,
-                "chunker.mode": self.chunker.mode,
-                "chunker.max_messages": self.chunker.max_messages,
-            },
-            record_result=True,
-            tracer_name=__name__,
-        )
-        if not boundaries and len(entries) >= self.chunker.max_messages:
-            boundaries = [EpisodeBoundary(start_idx=0, end_idx=self.chunker.max_messages - 1)]
-        if not boundaries:
-            await self.add_buffer.mark_split_attempted(context, records)
-            return []
+        window_size = rt.chunker.streaming_window_size
 
         tasks: list[_EpisodeTask] = []
-        chunk_count = len(boundaries)
         queued_record_ids: set[str] = set()
-        for chunk_index, boundary in enumerate(boundaries):
-            episode_records = records[boundary.start_idx : boundary.end_idx + 1]
-            if not episode_records:
-                continue
-            episode_id = str(uuid4())
-            await self.add_buffer.mark_episode_queued(context, episode_records, episode_id=episode_id)
-            queued_record_ids.update(record.add_record_id for record in episode_records)
-            tasks.append(
-                _EpisodeTask(
-                    episode_id=episode_id,
-                    records=episode_records,
-                    chunk_index=chunk_index,
-                    chunk_count=chunk_count,
-                    start_idx=boundary.start_idx,
-                    end_idx=boundary.end_idx,
-                    title=boundary.title,
-                )
+        global_offset = 0
+
+        while global_offset < len(entries):
+            window_entries = entries[global_offset : global_offset + window_size]
+            is_final_window = global_offset + len(window_entries) >= len(entries)
+            window_force = detect_force and is_final_window
+
+            boundaries = await traced_awaitable(
+                "schema_add.chunk_episodes.detect_boundaries",
+                rt.chunker.detect_boundaries(
+                    window_entries,
+                    force=window_force,
+                    boundary_prompt=request_prompts.conv_boundary_detection,
+                    resplit_prompt=request_prompts.conv_forced_resplit,
+                ),
+                attributes={
+                    "project_id": context.project_id,
+                    "entry_count": len(window_entries),
+                    "force": window_force,
+                    "chunker.mode": rt.chunker.mode,
+                    "chunker.max_messages": rt.chunker.max_messages,
+                    "window_offset": global_offset,
+                    "total_entries": len(entries),
+                },
+                record_result=True,
+                tracer_name=__name__,
             )
+
+            if not boundaries and window_force and len(window_entries) >= rt.schema_cfg.chunker.min_episode_length:
+                boundaries = [EpisodeBoundary(start_idx=0, end_idx=len(window_entries) - 1)]
+
+            if not boundaries:
+                if len(window_entries) >= window_size:
+                    boundaries = [EpisodeBoundary(start_idx=0, end_idx=len(window_entries) - 1)]
+                else:
+                    break
+
+            for boundary in boundaries:
+                global_start = boundary.start_idx + global_offset
+                global_end = boundary.end_idx + global_offset
+                episode_records = records[global_start : global_end + 1]
+                if not episode_records:
+                    continue
+                episode_id = str(uuid4())
+                await self.add_buffer.mark_episode_queued(context, episode_records, episode_id=episode_id)
+                queued_record_ids.update(record.add_record_id for record in episode_records)
+                tasks.append(
+                    _EpisodeTask(
+                        episode_id=episode_id,
+                        records=episode_records,
+                        chunk_index=len(tasks),
+                        chunk_count=0,
+                        start_idx=global_start,
+                        end_idx=global_end,
+                        title=boundary.title,
+                    )
+                )
+
+            global_offset += boundaries[-1].end_idx + 1
+
+        for task in tasks:
+            task.chunk_count = len(tasks)
+
         remaining_records = [record for record in records if record.add_record_id not in queued_record_ids]
         if remaining_records:
             await self.add_buffer.mark_split_attempted(context, remaining_records)
@@ -605,11 +733,14 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         *,
         context: MemoryRequestContext,
         consistency: str,
+        rt: _SchemaAddRuntime,
     ) -> list[MemoryAddEventItem]:
         """Execute episode generation tasks in the current process."""
         events: list[MemoryAddEventItem] = []
         for task in tasks:
-            task_events = await self._execute_episode_task(task, context=context, consistency=consistency)
+            task_events = await self._execute_episode_task(
+                task, context=context, consistency=consistency, rt=rt
+            )
             events.extend(task_events)
         return events
 
@@ -622,8 +753,11 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         context: MemoryRequestContext,
         consistency: str,
         trigger_record_id: str | None = None,
+        rt: _SchemaAddRuntime | None = None,
     ) -> list[MemoryAddEventItem]:
         """Trace and execute one episode generation task."""
+        if rt is None:
+            rt = self._resolve_add_runtime(context)
         return await traced_awaitable(
             "schema_add.episode_chunk",
             self._execute_episode_task_inner(
@@ -631,6 +765,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                 context=context,
                 consistency=consistency,
                 trigger_record_id=trigger_record_id,
+                rt=rt,
             ),
             attributes={
                 "project_id": context.project_id,
@@ -654,13 +789,17 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         context: MemoryRequestContext,
         consistency: str,
         trigger_record_id: str | None = None,
+        rt: _SchemaAddRuntime | None = None,
     ) -> list[MemoryAddEventItem]:
-        for attempt in range(self._episode_max_retries):
+        if rt is None:
+            rt = self._resolve_add_runtime(context)
+        for attempt in range(rt.schema_cfg.drain.episode_generation_max_retries):
             try:
                 episode_events = await self._generate_episode_memory(
                     task.records,
                     context=context,
                     consistency=consistency,
+                    rt=rt,
                 )
                 await self.add_buffer.mark_processed(
                     context,
@@ -668,7 +807,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                     episode_id=task.episode_id,
                     events=_events_to_payload(episode_events),
                 )
-                if self._cleanup_processed_buffer:
+                if rt.schema_cfg.drain.cleanup_processed_buffer:
                     try:
                         await self.add_buffer.delete_processed(context, task.records)
                     except Exception:
@@ -686,13 +825,20 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                 )
                 return episode_events
             except Exception as exc:
-                if attempt < self._episode_max_retries - 1:
+                if attempt < rt.schema_cfg.drain.episode_generation_max_retries - 1:
+                    delay = min(
+                        rt.schema_cfg.drain.episode_retry_backoff_base * (2**attempt),
+                        rt.schema_cfg.drain.episode_retry_backoff_max,
+                    )
+                    jitter = delay * random.random()
                     logger.warning(
                         "episode memory generation failed; retrying",
                         attempt=attempt + 1,
                         episode_id=task.episode_id,
+                        delay=round(jitter, 2),
                         exc_info=True,
                     )
+                    await asyncio.sleep(jitter)
                 else:
                     error_msg = str(exc)
                     logger.error(
@@ -734,8 +880,11 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         *,
         context: MemoryRequestContext,
         consistency: str,
+        rt: _SchemaAddRuntime | None = None,
     ) -> list[MemoryAddEventItem]:
         """Generate schema entities, vectors, and write events for one episode."""
+        if rt is None:
+            rt = self._resolve_add_runtime(context)
         conversation_text = add_record_ops.to_conversation_text(records)
         if not conversation_text.strip():
             return []
@@ -751,58 +900,84 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         added_at = add_record_ops.records_added_datetime(records)
         dialogue_timestamp = add_record_ops.dialogue_timestamp(event_at)
 
-        objectify_task = asyncio.create_task(
-            self.extractor.objectify_conversation(conversation_text, dialogue_timestamp, prompt_set=request_prompts)
-        )
-        description_task = asyncio.create_task(
-            self.extractor.generate_episode_description(
-                conversation_text, dialogue_timestamp, prompt_set=request_prompts
-            )
-        )
-        schema_selection_task = asyncio.create_task(
-            self.extractor.select_schema(
-                conversation_text, self.extractor.schema_for_generation(), prompt_set=request_prompts
-            )
-        )
+        project_em = rt.project_em
 
-        selected_schema = await schema_selection_task
-        raw_memory = await self.extractor.extract_memory(
-            entity_schema=selected_schema,
-            dialogue_timestamp=dialogue_timestamp,
-            conversation_text=conversation_text,
-            prompt_set=request_prompts,
-        )
+        # Kick off the three independent LLM calls together, but guard them
+        # with a TaskGroup. Schema selection is awaited first, so if it (or
+        # the synchronous extract/prepare steps that follow) raises, the
+        # still-running objectify/description tasks are cancelled instead of
+        # being left as orphans. Without this, the outer episode-retry loop
+        # would spawn a fresh trio on top of the stranded ones, multiplying
+        # LLM calls and piling up concurrency during backend outages.
+        try:
+            async with asyncio.TaskGroup() as tg:
+                objectify_task = tg.create_task(
+                    rt.extractor.objectify_conversation(
+                        conversation_text, dialogue_timestamp, prompt_set=request_prompts
+                    )
+                )
+                description_task = tg.create_task(
+                    rt.extractor.generate_episode_description(
+                        conversation_text, dialogue_timestamp, prompt_set=request_prompts
+                    )
+                )
+                schema_selection_task = tg.create_task(
+                    rt.extractor.select_schema(
+                        conversation_text,
+                        rt.extractor.schema_for_generation(entity_manager=project_em),
+                        prompt_set=request_prompts,
+                    )
+                )
 
-        _raw_before_prepare = raw_memory.get("entities", [])
-        logger.info(
-            "schema_add drain: BEFORE prepare_raw_memory: %d entities, types=%s",
-            len(_raw_before_prepare),
-            [e.get("entity_type") for e in _raw_before_prepare],
-        )
+                selected_schema = await schema_selection_task
+                raw_memory = await rt.extractor.extract_memory(
+                    entity_schema=selected_schema,
+                    dialogue_timestamp=dialogue_timestamp,
+                    conversation_text=conversation_text,
+                    prompt_set=request_prompts,
+                    entity_manager=project_em,
+                )
 
-        raw_memory = self.extractor.prepare_raw_memory(raw_memory, dialogue_timestamp)
+                _raw_before_prepare = raw_memory.get("entities", [])
+                logger.info(
+                    "schema_add drain: BEFORE prepare_raw_memory: %d entities, types=%s",
+                    len(_raw_before_prepare),
+                    [e.get("entity_type") for e in _raw_before_prepare],
+                )
 
-        _raw_entities = raw_memory.get("entities", [])
-        _entity_types = [e.get("entity_type") for e in _raw_entities]
-        logger.info(
-            "schema_add drain: AFTER prepare_raw_memory: %d entities, types=%s, selected_schema_types=%s",
-            len(_raw_entities),
-            _entity_types,
-            [s.get("entity_type") for s in selected_schema],
-        )
+                raw_memory = rt.extractor.prepare_raw_memory(raw_memory, dialogue_timestamp)
 
-        objectified_content = await objectify_task
-        episode_description = await description_task
+                _raw_entities = raw_memory.get("entities", [])
+                _entity_types = [e.get("entity_type") for e in _raw_entities]
+                logger.info(
+                    "schema_add drain: AFTER prepare_raw_memory: %d entities, types=%s, selected_schema_types=%s",
+                    len(_raw_entities),
+                    _entity_types,
+                    [s.get("entity_type") for s in selected_schema],
+                )
+
+                objectified_content = await objectify_task
+                episode_description = await description_task
+        except BaseExceptionGroup as group_exc:
+            # TaskGroup wraps task failures into an ExceptionGroup. Unwrap to
+            # the first real error so the outer retry loop keeps its original
+            # exception/message semantics. A pure-cancellation group (only
+            # CancelledError) is re-raised unchanged so cooperative shutdown
+            # is not mistaken for a retryable failure.
+            _cancelled, rest = group_exc.split(asyncio.CancelledError)
+            if rest is not None and rest.exceptions:
+                raise rest.exceptions[0] from None
+            raise
         episode_search_fields = (
-            await self.search_field_extractor.extract_search_fields(
+            await rt.search_field_extractor.extract_search_fields(
                 entities=raw_memory.get("entities", []),
                 context_text=conversation_text,
-                max_fields=self.search_fields_max,
-                augment=self.episode_search_fields_augment,
-                augment_count=self.episode_augment_count,
+                max_fields=rt.search_fields_max,
+                augment=rt.episode_search_fields_augment,
+                augment_count=rt.episode_augment_count,
                 prompt_set=request_prompts,
             )
-            if self.use_search_fields
+            if rt.use_search_fields
             else []
         )
         episode_entity = build_episode_entity(
@@ -812,23 +987,24 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             search_fields=episode_search_fields,
         )
 
-        plan, events, pending_archives, pending_updates = await self.planner.build_write_plan(
+        plan, events, pending_archives, pending_updates = await rt.planner.build_write_plan(
             raw_entities=raw_memory.get("entities", []),
             raw_edges=raw_memory.get("edges", []),
             episode_entity=episode_entity,
             context=episode_context,
             request_metadata=add_record_ops.metadata(records),
             created_at=added_at,
+            episode_time=dialogue_timestamp,
             prompt_set=request_prompts,
         )
 
         entity_updates = _split_entity_updates(plan)
-        memory_update_commands = await self.planner.build_memory_update_commands(
+        memory_update_commands = await rt.planner.build_memory_update_commands(
             episode_context,
             pending_updates,
             consistency=consistency,
         )
-        memory_delete_commands = self.planner.build_archive_memory_commands(pending_archives, consistency=consistency)
+        memory_delete_commands = rt.planner.build_archive_memory_commands(pending_archives, consistency=consistency)
         mutation_plan = MemoryDbMutationPlan.from_write_plan(plan)
         mutation_plan.entity_updates.extend(_to_entity_update_commands(entity_updates, consistency=consistency))
         mutation_plan.memory_updates.extend(memory_update_commands)
@@ -839,7 +1015,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             consistency=consistency,
         )
         update_results = write_result.mutations[: len(memory_update_commands)]
-        update_events = self.planner.memory_update_events(pending_updates, update_results)
+        update_events = rt.planner.memory_update_events(pending_updates, update_results)
         return events + update_events
 
 

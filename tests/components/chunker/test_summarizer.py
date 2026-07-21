@@ -8,9 +8,8 @@ from types import SimpleNamespace
 import pytest
 from mindmemos.components.chunker.vanilla.summarizer import LongTurnSummarizer
 from mindmemos.components.chunker.vanilla.turn_grouper import _estimate_tokens
-from mindmemos.typing.algo import TurnCompactionSummary
-
 from mindmemos.config import VanillaAddConfig
+from mindmemos.typing.algo import TurnCompactionSummary
 
 
 class _FakeLlmClient:

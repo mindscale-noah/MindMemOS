@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 import pytest
-
 from mindmemos.components.chunker import EpisodesChunker
 
 

@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import hashlib
 import json
 import re
 import time
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,10 +26,166 @@ PERSONAMEM_OFFICIAL_INSTRUCTION = (
     "(a), (b), (c), or (d) after the special token <final_answer>."
 )
 PERSONAMEM_ANSWER_MAX_RETRIES = 3
-PERSONAMEM_ANSWER_OPTIONS = ("a", "b", "c", "d")
-# Question-type-agnostic prompt: one prompt for every question, never reads the
-# dataset's ``question_type`` label. Reasoning depth is adaptive (the model does
-# only the analysis a question needs).
+PERSONAMEM_COT_PROMPT = """You are an intelligent memory assistant. Your task is to select the most appropriate response to the user based on memories.
+
+# CONTEXT:
+You have access to structured temporal memories from conversations that may be relevant to answering the question.
+
+# INSTRUCTIONS:
+Your goal is to synthesize information from all relevant memories to select the correct answer.
+You MUST follow a structured Chain-of-Thought process to ensure no details are missed.
+Actively look for connections between people, places, and events to build a complete picture.
+It is CRITICAL that you move beyond simple fact extraction and perform logical inference. When the evidence strongly suggests a connection, you must state that connection.
+
+# CRITICAL REQUIREMENTS:
+1. Answer based ONLY on evidence in the memories. Never guess or use general knowledge.
+2. **Memory recall trumps generic validation.** Prefer options that demonstrate recall of stored memories ("I remember you mentioned…", referencing specific details from past conversations) over options that merely acknowledge what the user just said ("That's great!", "Sounds like you're exploring!"). Apply this bright-line test: Does the option reference ANY specific detail not already present in the user's current message? If NO → it is generic. When a memory-recall option exists alongside a generic one, strongly prefer the memory-recall option.
+3. **Faithfully preserve attitude polarity in BOTH directions.** If memories record that the user disliked, abandoned, or was discouraged by something, options reframing this as positive are WRONG. Equally: if memories record that the user liked or found something beneficial, options reframing this as negative are WRONG. When truly uncertain, mark as "unclear" rather than picking a direction.
+4. **Distinguish the user's personal reaction from environmental descriptions.** "The atmosphere was vibrant" describes the setting. "Felt overwhelmed and discouraged" describes the user's reaction. Only the user's personal reaction determines attitude polarity.
+5. **Intensity fidelity mapping**: Memory language maps to specific intensity levels. Do NOT inflate or deflate:
+   - "didn't resonate" / "wasn't drawn to" = mild disinterest ≠ "stopped engaging entirely" (complete cessation)
+   - "disliked" / "found it a chore" = active negative ≠ "hesitated" / "was unsure" (mere uncertainty)
+   - "found it beneficial" / "enjoyed" = positive ≠ "was life-changing" / "transformed"
+   - "overwhelming" = negative-strong ≠ "challenging" (neutral/mild)
+   - "renewed interest" / "rekindled" = return to positive ≠ "became obsessed" (extreme)
+   Match the option whose intensity CLOSEST mirrors the memory's own words.
+6. **Verbatim anchoring for claim verification.** When checking whether an option is supported by memory, locate the EXACT noun, verb, or phrase from the option in the memory text. "Sounds like something the user would like" is NEVER sufficient. If the option says "competitive rankings" you must find "competitive rankings" or a near-exact synonym in memory. Topical relevance alone is not verification.
+
+# RESPONSE FORMAT (You MUST follow this structure):
+
+## STEP 1: QUESTION ANALYSIS
+- Question scenario: [select exactly one:
+  `preference evolution` | `trying a new activity` | `novelty suggestion` | `fact-or-reason query` | `recommendation` | `generalization`
+
+  Classification rules — apply in order, first match wins:
+  1. If options describe multi-stage sequences ("initially X → then Y → now Z") OR the question asks how a preference changed over time → `preference evolution`
+  2. If the question asks "should I try X?" — HOLD classification until after reading memories in Step 2. If memories contain structurally analogous past experiences (similar behavioral tensions: structure-vs-freedom, solo-vs-social, competitive-vs-relaxed, large-scale-vs-intimate) → `generalization`. Otherwise → `trying a new activity`
+  3. If the question **explicitly** asks for something the user has NOT experienced ("haven't tried", "brand new", "recommend something different") → `novelty suggestion`
+  4. If the question asks about a specific fact, reason for a change, or how the user felt → `fact-or-reason query`
+  5. If the question asks for a recommendation, suggestion, or ideas → `recommendation`
+  ]
+- What the question is really asking: [one-sentence paraphrase — preserve full semantic units, not keyword fragments]
+
+## STEP 2: RELEVANT MEMORIES EXTRACTION WITH VERBATIM ANCHORING
+
+**2A. Activities Inventory** (ONLY for "trying a new activity", "novelty suggestion", or "generalization" scenarios — skip otherwise):
+- Activity: [name] | Reaction: [exact words from memory] | Date: [date] | Memory index: [N]
+
+**2B. Memory Extraction:**
+For EACH relevant memory, extract the user's personal reaction by **copying the memory's exact words verbatim**. Do NOT paraphrase.
+- Memory [N] (Date: [date]): [content summary]
+  - Verbatim quote: "[exact words from memory]"
+  - Attitude: [positive / negative / mixed / unclear]
+  - Polarity proof: [quote the specific word(s) — e.g., "beneficial" = positive, "tedious" = negative]
+  - Environmental vs. personal: [note if relevant]
+
+**2C. Generalization Classification Check** (ONLY if classification was held in Step 1):
+Check for structural analogies across memories:
+- Structure vs. freedom, solo vs. social, competitive vs. relaxed, large-scale vs. intimate, routine vs. novelty, teamwork/collaboration patterns
+If found → classify as `generalization`. Otherwise → `trying a new activity`.
+
+## STEP 3: CROSS-MEMORY LINKING & TEMPORAL TRACKING
+[For simple fact-or-reason queries with a single relevant memory, skip to STEP 4.]
+
+**Date-sorted timeline table:**
+| # | Date | Event/Activity | Verbatim quote of user's attitude | Polarity |
+|---|------|---------------|-----------------------------------|----------|
+| 1 | [EARLIEST] | ... | "..." | pos/neg/mixed |
+| 2 | [next] | ... | "..." | pos/neg/mixed |
+
+**INITIAL ATTITUDE ANCHOR** (for preference evolution): Read ONLY Row 1. Write: "Initial attitude toward [topic] was: '[verbatim quote from Row 1]' → [polarity]."
+Do NOT back-project later experiences onto Row 1.
+
+**Phase count**: Total documented polarity phases = [N].
+
+**Trajectory shape**: List ALL phases from the table in order. Rules:
+- Do NOT collapse phases (e.g., "disliked → tried again → liked" must NOT become "disliked → liked")
+- Do NOT soften language ("disliked" must NOT become "hesitated")
+- Do NOT inflate language ("didn't resonate as much" must NOT become "stopped engaging entirely")
+- If a phase is unclear, write "unclear" — do NOT guess a direction.
+
+**For generalization scenarios — ABSTRACT PATTERN EXTRACTION** (mandatory):
+Synthesize across memories: "The user tends to [abstract pattern] — evidence: [cite 2+ memories]."
+Then: "The new scenario involves [tension type]. Past evidence shows the user [reacted how] to the same tension in [different domain]."
+
+## STEP 4: SCENARIO-SPECIFIC OPTION ANALYSIS
+
+**CLAIM VERIFICATION TABLE (mandatory for ALL options):**
+For each option, extract its specific factual claim(s) and verify against memory:
+
+| Option | Specific claim (exact words) | Found in memory? (quote verbatim or "NOT FOUND") | Match quality |
+|--------|------------------------------|--------------------------------------------------|---------------|
+| (a) | "[claim]" | "[memory quote]" or "NOT FOUND" | Exact / Synonym / Different concept / NOT FOUND |
+| (b) | ... | ... | ... |
+| ... | ... | ... | ... |
+
+Match quality: Exact > Synonym > Different concept = NOT FOUND (both = no support).
+
+**Then apply scenario-specific logic:**
+
+**Preference evolution:**
+1. **Initial attitude gate**: Compare each option's stated initial attitude against your INITIAL ATTITUDE ANCHOR. Any polarity mismatch → ELIMINATE.
+2. **Phase completeness**: If an option has fewer phases than your timeline → ELIMINATE (it omits documented phases).
+3. **Intensity fidelity**: Compare option language against memory language using the intensity mapping in Critical Requirement 5.
+4. **Temporal order**: Phases must appear in correct chronological order.
+
+**Trying a new activity:**
+- Verify cited past experiences exist in STEP 2A and are genuinely relevant.
+- Priority: (1) aligned with stated preference domain and values; (2) concrete reasoning from real past experience; (3) does not force-fit unrelated activities.
+
+**Novelty suggestion:**
+- If explicitly requiring something unexperienced: exclude options describing activities in STEP 2A.
+- Among genuinely new options, pick the best match to demonstrated interests.
+
+**Fact-or-reason query:**
+- Select the option with the strongest verbatim match from the claim verification table.
+- Distinguish "facts the user stated in this question" from "stored facts the user did NOT state this time." The correct option surfaces the latter.
+- Verify attitude polarity matches the memory.
+
+**Recommendation:**
+- Extract the user's top 2–3 core sub-interests from memories BEFORE evaluating options. Be specific:
+  - NOT "likes books" → YES "interested in attachment theory and psychological aspects of love"
+  - NOT "likes cooking" → YES "values cultural exchange through food and family bonding"
+- **Surface keyword warning**: The question's framing words ("retreat," "cultural," "creative") are scene-setting. Score options against your extracted sub-interests, not the question's adjectives.
+- Verify specific claims in options via the claim verification table.
+
+**Generalization:**
+- Score each option against the ABSTRACT BEHAVIORAL PATTERN and STRUCTURAL ANALOGY from Step 3.
+- The correct option applies the user's documented behavioral pattern to the new scenario via structural analogy.
+- Options offering generic encouragement or balanced hedging without referencing the user's documented patterns are usually wrong.
+
+## STEP 5: FINAL SELECTION
+
+For each option, assign: **ELIMINATE** (hard evidence against), **WEAK**, **MODERATE**, or **STRONG**.
+
+**Final verification:**
+1. For each specific claim in my chosen option: can I point to EXACT words in a memory? [cite them]
+2. Does my chosen option's attitude polarity match the memory's documented attitude?
+3. In preference evolution: does my chosen option's initial polarity match my INITIAL ATTITUDE ANCHOR? [compare side by side]
+4. In generalization: does my chosen option reference the abstract behavioral pattern, or does it give generic advice?
+5. Memory-recall accuracy check: If the chosen option claims to recall something ("I remember you mentioned X"), verify X matches memory with correct polarity and detail.
+
+Final choice: [option] — because [one sentence citing specific memory evidence with a verbatim quote]
+
+Provide your final answer:
+<final_answer>(a)</final_answer> or <final_answer>(b)</final_answer> or <final_answer>(c)</final_answer> or <final_answer>(d)</final_answer>
+
+---
+
+## Reference Memories
+{context}
+
+## Question
+{question}
+
+---
+
+Now, follow the Chain-of-Thought process above to answer the question:
+"""
+# Vanilla search recalls flat memories; a lighter, question-type-agnostic prompt
+# answers better than the schema-oriented Chain-of-Thought scaffold. Selected per
+# run by memory_algorithm (see ``personamem_answer_prompt``): schema -> CoT,
+# vanilla -> unified.
 PERSONAMEM_UNIFIED_PROMPT = """You are a memory assistant. Select the single best response — (a), (b), (c), or (d) — using ONLY the retrieved memories. Memories may be noisy or incomplete and are prefixed with their event date (YYYY-MM-DD); treat those dates as the authoritative timeline.
 
 UNIVERSAL RULES (apply to every question):
@@ -64,8 +218,14 @@ Each memory may be prefixed with its event date as `(YYYY-MM-DD)`; use these dat
 
 Now reason briefly as instructed, then give your final answer:
 """
-PersonaMemEvaluationMode = Literal["memory_rag", "official_full_context"]
 
+
+def personamem_answer_prompt(memory_algorithm: str) -> str:
+    """Select the answer prompt for a run: schema uses CoT, vanilla uses unified."""
+    return PERSONAMEM_COT_PROMPT if memory_algorithm == "schema" else PERSONAMEM_UNIFIED_PROMPT
+
+
+PersonaMemEvaluationMode = Literal["memory_rag", "official_full_context"]
 
 _REQUIRED_QUESTION_FIELDS = {
     "persona_id",
@@ -110,9 +270,10 @@ class PersonaMemItem(BaseModel):
 
 
 class PersonaMemBuildSummary(BaseModel):
-    """Build outcome for one unique visible-context scope."""
+    """Build outcome for one incremental context segment [start_index, end_index)."""
 
     scope: PersonaMemScope
+    start_index: int = 0
     total_messages: int = 0
     added_messages: int = 0
     add_calls: int = 0
@@ -129,9 +290,6 @@ class PersonaMemAnswer(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
-    llm_calls: int = 0
-    parse_failed: bool = False
-    format_compliant: bool = False
     elapsed_seconds: float = 0.0
 
 
@@ -144,38 +302,6 @@ class PersonaMemQAResult(BaseModel):
     search_elapsed_seconds: float = 0.0
     answer: PersonaMemAnswer | None = None
     error: str | None = None
-
-
-@dataclass
-class _PersonaMemLiveProgress:
-    """Mutable console-only counters for completed PersonaMem questions."""
-
-    total: int
-    completed: int = 0
-    correct: int = 0
-    parse_failed: int = 0
-    search_failed: int = 0
-    answer_failed: int = 0
-
-    def record(self, result: PersonaMemQAResult) -> None:
-        """Include one completed question in the live display counters."""
-        self.completed += 1
-        self.correct += int(bool(result.answer and result.answer.is_correct))
-        self.parse_failed += int(bool(result.answer and result.answer.parse_failed))
-        self.search_failed += int(bool(result.error and result.error.startswith("search failed:")))
-        self.answer_failed += int(bool(result.error and result.error.startswith("answer failed:")))
-
-    def postfix(self) -> dict[str, int | str]:
-        """Render the current counters for ``tqdm.set_postfix``."""
-        completed = self.completed or 1
-        return {
-            "correct": self.correct,
-            "acc_done": f"{self.correct / completed:.4f}",
-            "acc_all": f"{self.correct / self.total:.4f}" if self.total else "0.0000",
-            "parse_fail": self.parse_failed,
-            "search_fail": self.search_failed,
-            "answer_fail": self.answer_failed,
-        }
 
 
 class PersonaMemRunResult(BaseModel):
@@ -262,18 +388,24 @@ def load_personamem_questions(path: str | Path) -> list[dict[str, str]]:
         return [dict(row) for row in reader]
 
 
-def build_personamem_scope(shared_context_id: str, end_index: int) -> PersonaMemScope:
-    """Create a stable, isolated memory scope from the official visibility boundary."""
-    raw = f"{shared_context_id}\0{end_index}"
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+def build_personamem_scope(shared_context_id: str, end_index: int, persona_id: str) -> PersonaMemScope:
+    """Create an isolated memory scope keyed by shared_context.
+
+    Both ``user_id`` and ``session_id`` are derived from
+    ``shared_context_id`` so that each of the 37 shared contexts is a
+    fully independent memory scope.  Previously ``user_id`` was derived
+    from ``persona_id`` (only 20 unique values), which caused the two
+    contexts of the same persona to share a single user-level memory
+    store — the shared-prefix messages were ingested twice and entity
+    modelling merged facts from both contexts.
+    """
     scope_id = f"{shared_context_id}:{end_index}"
-    user_id = f"personamem-{digest}"
     return PersonaMemScope(
         shared_context_id=shared_context_id,
         end_index=end_index,
         scope_id=scope_id,
-        user_id=user_id,
-        session_id=user_id,
+        user_id=f"personamem-{shared_context_id}",
+        session_id=f"personamem-{shared_context_id}",
     )
 
 
@@ -283,7 +415,7 @@ def build_personamem_items(rows: Sequence[Mapping[str, Any]]) -> list[PersonaMem
     for index, row in enumerate(rows):
         shared_context_id = str(row["shared_context_id"])
         end_index = int(row["end_index_in_shared_context"])
-        scope = build_personamem_scope(shared_context_id, end_index)
+        scope = build_personamem_scope(shared_context_id, end_index, str(row["persona_id"]))
         metadata = {
             key: value
             for key, value in row.items()
@@ -317,32 +449,14 @@ def build_personamem_items(rows: Sequence[Mapping[str, Any]]) -> list[PersonaMem
     return items
 
 
-def _format_memory_with_date(memory: str, event_time: str | None) -> str:
-    """Prefix a retrieved memory with its event date so the CoT timeline can use it.
-
-    ``event_time`` from the backend looks like ``"2026-05-03 00:00:00"``; only the
-    date part is prepended (``"(2026-05-03) <memory>"``). When it is missing or
-    unparseable the memory is returned unchanged so answering never breaks.
-    """
-    if not event_time:
-        return memory
-    date_part = event_time.strip().split(" ", 1)[0]
-    if not date_part:
-        return memory
-    return f"({date_part}) {memory}"
-
-
 def build_personamem_prompt(
     item: PersonaMemItem,
     *,
     retrieved_memories: Sequence[str] | None = None,
     visible_context: Sequence[Mapping[str, Any]] | None = None,
+    answer_prompt: str = PERSONAMEM_COT_PROMPT,
 ) -> list[dict[str, Any]]:
-    """Build either the official full-context prompt or the memory-RAG adaptation.
-
-    The memory-RAG path uses a single question-type-agnostic prompt for every
-    question; the dataset's ``question_type`` label is never read.
-    """
+    """Build either the official full-context prompt or the memory-RAG adaptation."""
     query = f"{item.question}\n\n{PERSONAMEM_OFFICIAL_INSTRUCTION}\n\n{item.all_options}"
     if visible_context is not None:
         return [dict(message) for message in visible_context] + [{"role": "user", "content": query}]
@@ -350,9 +464,10 @@ def build_personamem_prompt(
     memories = list(retrieved_memories or [])
     memory_lines = [f"[{index}] {text}" for index, text in enumerate(memories, start=1)]
     memory_text = "\n".join(memory_lines) if memory_lines else "(none)"
-
-    prompt_text = PERSONAMEM_UNIFIED_PROMPT.format(context=memory_text, question=query)
-    return [{"role": "user", "content": prompt_text}]
+    prompt_text = answer_prompt.format(context=memory_text, question=query)
+    return [
+        {"role": "user", "content": prompt_text},
+    ]
 
 
 def convert_personamem_system_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -375,54 +490,34 @@ def convert_personamem_system_messages(messages: Sequence[Mapping[str, Any]]) ->
     return converted
 
 
+_FINAL_ANSWER_RE = re.compile(
+    # The answer must be the sole content of a closed <final_answer>...</final_answer>
+    # tag. Tag content (ignoring surrounding whitespace) must be exactly "(a)".."(d)"
+    # or "a".."d". Anything else - reasoning inside the tag, a missing closing tag, an
+    # option placed before/outside the tag, trailing punctuation, multiple options -
+    # is unparseable and triggers a retry. Guessing from text that merely mentions
+    # option letters silently mis-scores the benchmark: "Between (b) and (c), I choose
+    # (c)" must NOT read as "b"; "This is a difficult choice; option c is best" must
+    # NOT read as "a".
+    r"<final_answer>\s*\(?([a-d])\)?\s*</final_answer>",
+)
+
+
 def _extract_predicted_option(response: str) -> str | None:
-    """Extract the final option explicitly following a final-answer token."""
+    """Extract a single predicted option (a/b/c/d) from response, or None if not found.
+
+    Strict format check: the answer must be the sole content of a closed
+    ``<final_answer>(a)</final_answer>`` tag. Tag content, ignoring surrounding
+    whitespace, must be exactly ``(a)``..``(d)`` or ``a``..``d``. Any other shape
+    returns ``None`` so the caller retries and, after ``PERSONAMEM_ANSWER_MAX_RETRIES``
+    attempts, records the question as wrong rather than silently mis-scoring it.
+    """
     if not response:
         return None
-
-    segments = re.findall(
-        r"<final_answer>(.*?)(?:</final_answer>|(?=<final_answer>)|$)",
-        response,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if not segments:
+    match = _FINAL_ANSWER_RE.search(response.lower())
+    if not match:
         return None
-
-    segment = segments[-1]
-    parenthesized = set(re.findall(r"\(([a-d])\)", segment, flags=re.IGNORECASE))
-    if len(parenthesized) == 1:
-        return next(iter(parenthesized)).lower()
-    if parenthesized:
-        return None
-
-    direct = re.fullmatch(r"\s*(?:the\s+answer\s+is\s+)?([a-d])\s*", segment, flags=re.IGNORECASE)
-    if direct:
-        return direct.group(1).lower()
-    return None
-
-
-def _extract_official_option(response: str) -> tuple[str | None, bool]:
-    """Return the official PersonaMem option and strict-format compliance."""
-    tagged_option = _extract_predicted_option(response)
-    if tagged_option is not None:
-        return tagged_option, True
-
-    lowered = response.lower()
-    parenthesized = set(re.findall(r"\(([a-d])\)", lowered))
-    options = parenthesized or set(re.findall(r"\b([a-d])\b", lowered))
-    if len(options) == 1:
-        return next(iter(options)), False
-    return None, False
-
-
-def extract_personamem_answer(response: str, correct_answer: str) -> tuple[bool, str]:
-    """Apply the official PersonaMem v1 option extraction and correctness rule."""
-
-    correct = correct_answer.lower().strip("() ")
-    predicted_option, _ = _extract_official_option(response)
-    if predicted_option is None:
-        return False, response.strip() or ""
-    return predicted_option == correct, predicted_option
+    return match.group(1)
 
 
 def calculate_personamem_metrics(
@@ -462,7 +557,7 @@ def calculate_personamem_metrics(
     # from the offline ClickHouse trace aggregation instead.
     token_metrics = stage_metrics(
         "answer",
-        llm_calls=sum(answer.llm_calls for answer in answers),
+        llm_calls=len(answers),
         prompt_tokens=sum(answer.prompt_tokens for answer in answers),
         completion_tokens=sum(answer.completion_tokens for answer in answers),
         total_tokens=sum(answer.total_tokens for answer in answers),
@@ -480,8 +575,6 @@ def calculate_personamem_metrics(
         "scope_violation_count": 0,
         "search_failure_count": search_failure_count,
         "answer_failure_count": answer_failure_count,
-        "answer_parse_failure_count": sum(1 for answer in answers if answer.parse_failed),
-        "answer_format_failure_count": sum(1 for answer in answers if not answer.format_compliant),
         **token_metrics,
         "build_elapsed_seconds": build_elapsed,
         "search_elapsed_seconds": search_elapsed,
@@ -491,20 +584,6 @@ def calculate_personamem_metrics(
 
 
 _PERSONAMEM_EPOCH_MS = 1767225600000  # 2026-01-01 00:00:00 UTC
-_PERSONAMEM_PROFILE_PREFIX = "current user persona:"
-
-
-def _first_visible_personamem_profile(
-    messages: Sequence[Mapping[str, Any]],
-) -> tuple[int, str] | None:
-    """Return the first visible benchmark persona and its context index."""
-    for index, message in enumerate(messages):
-        if str(message.get("role") or "").strip().lower() != "system":
-            continue
-        content = str(message.get("content") or "").strip()
-        if content.lower().startswith(_PERSONAMEM_PROFILE_PREFIX):
-            return index, content
-    return None
 
 
 def _build_session_timestamp_map_ms(context: list[dict[str, Any]]) -> dict[int, int]:
@@ -518,10 +597,7 @@ def _build_session_timestamp_map_ms(context: list[dict[str, Any]]) -> dict[int, 
     """
     from datetime import datetime, timedelta, timezone
 
-    session_starts = [
-        i for i, m in enumerate(context)
-        if str(m.get("role") or "") == "system"
-    ]
+    session_starts = [i for i, m in enumerate(context) if str(m.get("role") or "") == "system"]
     if not session_starts or session_starts[0] != 0:
         session_starts.insert(0, 0)
 
@@ -566,7 +642,8 @@ class PersonaMemEnv:
         top_k: int = 50,
         search_strategy: str = "fast",
         rerank: bool = False,
-        add_batch_size: int = 50,
+        add_batch_size: int = 20,
+        memory_algorithm: str = "vanilla",
     ) -> None:
         self._memory = memory
         self._answer_llm = answer_llm
@@ -577,76 +654,81 @@ class PersonaMemEnv:
         self._search_strategy = search_strategy
         self._rerank = rerank
         self._add_batch_size = add_batch_size
+        self._answer_prompt = personamem_answer_prompt(memory_algorithm)
+
+    def _scope_key(self, scope: PersonaMemScope) -> tuple[str, str]:
+        """Return (user_id, session_id) for this scope.
+
+        Run-to-run isolation is handled at the project_id level (each run gets its
+        own project_id via --api-key-output / --reuse-api-key). user_id/session_id
+        stay stable so that --reuse-api-key + --no-add can read memories added by
+        a prior run of the same project.
+        """
+        return scope.user_id, scope.session_id
 
     @staticmethod
     def load_items(path: str | Path) -> list[PersonaMemItem]:
         """Load official question rows as normalized benchmark items."""
         return build_personamem_items(load_personamem_questions(path))
 
-    async def _build_scope(self, scope: PersonaMemScope) -> PersonaMemBuildSummary:
+    async def _build_scope_segment(
+        self,
+        scope: PersonaMemScope,
+        *,
+        context: list[dict[str, Any]],
+        start_index: int,
+    ) -> PersonaMemBuildSummary:
+        """Add context[start_index:scope.end_index) to this scope's memory store."""
         started = time.monotonic()
-        visible = self._context_store.visible(scope)
-        # Session-aware timestamps aligned with UMM (build_session_timestamp_map):
-        # system messages start new sessions; session 0 starts 2026-01-01 UTC and
-        # subsequent sessions start on next month's 1st; within a session each
-        # user+assistant turn = 1 day. ``visible`` is the context[:end_index] prefix,
-        # so its positions align 1:1 with the full-context global indices.
-        ts_map = _build_session_timestamp_map_ms(self._context_store.load(scope.shared_context_id))
+        if scope.end_index < 0 or scope.end_index > len(context):
+            raise ValueError(
+                f"invalid end_index {scope.end_index} for context "
+                f"{scope.shared_context_id!r} with {len(context)} messages"
+            )
+        if start_index < 0 or start_index > scope.end_index:
+            raise ValueError(
+                f"invalid start_index {start_index} for scope {scope.shared_context_id!r} end_index {scope.end_index}"
+            )
+        segment = context[start_index : scope.end_index]
+        # Session-aware timestamps aligned with UMM (inference_mem.build_session_timestamp_map):
+        # - system messages start new sessions
+        # - session 0 starts 2026-01-01 UTC, subsequent sessions start on next month's 1st
+        # - within a session, each user+assistant turn = 1 day (same turn shares a timestamp)
+        ts_map = _build_session_timestamp_map_ms(context)
+
         messages = [
             {
                 "role": str(message.get("role") or "user"),
                 "content": str(message.get("content") or ""),
-                "timestamp": ts_map.get(index, _PERSONAMEM_EPOCH_MS),
+                "timestamp": ts_map.get(start_index + index, _PERSONAMEM_EPOCH_MS),
             }
-            for index, message in enumerate(visible)
-            if str(message.get("role") or "") != "system"
-            and str(message.get("content") or "").strip()
+            for index, message in enumerate(segment)
+            if str(message.get("content") or "").strip()
         ]
-        profile = _first_visible_personamem_profile(visible)
-        total_messages = len(messages) + int(profile is not None)
-        scope_metadata = {
-            "benchmark": "personamem",
-            "shared_context_id": scope.shared_context_id,
-            "end_index_in_shared_context": scope.end_index,
-        }
         added_messages = 0
         add_calls = 0
         try:
-            if profile is not None:
-                profile_index, profile_content = profile
-                await self._memory.add(
-                    [
-                        {
-                            "role": "user",
-                            "content": profile_content,
-                            "timestamp": ts_map.get(profile_index, _PERSONAMEM_EPOCH_MS),
-                        }
-                    ],
-                    user_id=scope.user_id,
-                    session_id=scope.session_id,
-                    mode="sync",
-                    metadata={
-                        **scope_metadata,
-                        "source": "personamem_persona",
-                        "content_type": "profile",
-                    },
-                )
-                add_calls += 1
-                added_messages += 1
             for start in range(0, len(messages), self._add_batch_size):
                 batch = messages[start : start + self._add_batch_size]
+                user_id, session_id = self._scope_key(scope)
                 await self._memory.add(
                     batch,
-                    user_id=scope.user_id,
-                    session_id=scope.session_id,
+                    user_id=user_id,
+                    session_id=session_id,
                     mode="sync",
-                    metadata=scope_metadata,
+                    metadata={
+                        "benchmark": "personamem",
+                        "shared_context_id": scope.shared_context_id,
+                        "end_index_in_shared_context": scope.end_index,
+                        "start_index_in_shared_context": start_index,
+                    },
                 )
                 add_calls += 1
                 added_messages += len(batch)
             return PersonaMemBuildSummary(
                 scope=scope,
-                total_messages=total_messages,
+                start_index=start_index,
+                total_messages=len(messages),
                 added_messages=added_messages,
                 add_calls=add_calls,
                 elapsed_seconds=time.monotonic() - started,
@@ -654,7 +736,8 @@ class PersonaMemEnv:
         except Exception as exc:  # noqa: BLE001 - one bad scope must not discard the full run
             return PersonaMemBuildSummary(
                 scope=scope,
-                total_messages=total_messages,
+                start_index=start_index,
+                total_messages=len(messages),
                 added_messages=added_messages,
                 add_calls=add_calls,
                 elapsed_seconds=time.monotonic() - started,
@@ -675,21 +758,17 @@ class PersonaMemEnv:
         if self._evaluation_mode == "memory_rag":
             search_started = time.monotonic()
             try:
+                user_id, session_id = self._scope_key(item.scope)
                 search = await self._memory.search(
                     item.question,
-                    user_id=item.scope.user_id,
-                    session_id=item.scope.session_id,
+                    user_id=user_id,
+                    session_id=session_id,
                     top_k=self._top_k,
                     search_strategy=self._search_strategy,
                     rerank=self._rerank,
-                    # Actor user_id does not constrain vanilla recall; this filter does.
-                    filters={"user_id": item.scope.user_id},
+                    filters={"user_id": user_id},
                 )
-                memories = [
-                    _format_memory_with_date(hit.memory, hit.event_time)
-                    for hit in search.memories
-                    if hit.memory
-                ]
+                memories = [hit.memory for hit in search.memories if hit.memory]
             except Exception as exc:  # noqa: BLE001 - failures remain in the official denominator
                 return PersonaMemQAResult(
                     item=item,
@@ -697,11 +776,11 @@ class PersonaMemEnv:
                     error=f"search failed: {type(exc).__name__}: {exc}",
                 )
             search_elapsed = time.monotonic() - search_started
-            prompt = build_personamem_prompt(item, retrieved_memories=memories)
-        else:
             prompt = build_personamem_prompt(
-                item, visible_context=self._context_store.visible(item.scope)
+                item, retrieved_memories=memories, answer_prompt=self._answer_prompt
             )
+        else:
+            prompt = build_personamem_prompt(item, visible_context=self._context_store.visible(item.scope))
 
         if "o" in self._answer_llm.config.model:
             prompt = convert_personamem_system_messages(prompt)
@@ -711,10 +790,7 @@ class PersonaMemEnv:
         total_completion_tokens = 0
         total_tokens = 0
         last_completion_content = ""
-        final_prompt = prompt
         extracted_option: str | None = None
-        format_compliant = False
-        llm_calls = 0
         for attempt in range(PERSONAMEM_ANSWER_MAX_RETRIES):
             attempt_prompt = prompt
             if attempt > 0:
@@ -728,61 +804,43 @@ class PersonaMemEnv:
                     {"role": "assistant", "content": last_completion_content},
                     {"role": "user", "content": reminder},
                 ]
-            final_prompt = attempt_prompt
             try:
                 completion = await self._answer_llm.complete(attempt_prompt)
             except Exception as exc:  # noqa: BLE001 - failures remain in the official denominator
-                partial_answer = None
-                if llm_calls:
-                    partial_answer = PersonaMemAnswer(
-                        response=last_completion_content,
-                        extracted_answer="",
-                        is_correct=False,
-                        prompt_tokens=total_prompt_tokens,
-                        completion_tokens=total_completion_tokens,
-                        total_tokens=total_tokens,
-                        llm_calls=llm_calls,
-                        parse_failed=False,
-                        format_compliant=False,
-                        elapsed_seconds=time.monotonic() - answer_started,
-                    )
                 return PersonaMemQAResult(
                     item=item,
                     retrieved_memories=memories,
                     prompt=attempt_prompt,
                     search_elapsed_seconds=search_elapsed,
-                    answer=partial_answer,
                     error=f"answer failed: {type(exc).__name__}: {exc}",
                 )
-            llm_calls += 1
             total_prompt_tokens += int(completion.prompt_tokens or 0)
             total_completion_tokens += int(completion.completion_tokens or 0)
             total_tokens += int(completion.total_tokens or 0)
             last_completion_content = completion.content or ""
-            extracted_option, format_compliant = _extract_official_option(last_completion_content)
+            extracted_option = _extract_predicted_option(last_completion_content)
             if extracted_option is not None:
                 break
         answer_elapsed = time.monotonic() - answer_started
 
-        parse_failed = extracted_option is None
-        extracted = extracted_option or ""
         correct = item.correct_answer.lower().strip("() ")
-        is_correct = bool(extracted_option) and extracted_option == correct
+        if extracted_option is None:
+            is_correct = False
+            extracted_option = ""
+        else:
+            is_correct = extracted_option == correct
         return PersonaMemQAResult(
             item=item,
             retrieved_memories=memories,
-            prompt=final_prompt,
+            prompt=prompt,
             search_elapsed_seconds=search_elapsed,
             answer=PersonaMemAnswer(
                 response=last_completion_content,
-                extracted_answer=extracted,
+                extracted_answer=extracted_option,
                 is_correct=is_correct,
                 prompt_tokens=total_prompt_tokens,
                 completion_tokens=total_completion_tokens,
                 total_tokens=total_tokens,
-                llm_calls=llm_calls,
-                parse_failed=parse_failed,
-                format_compliant=format_compliant,
                 elapsed_seconds=answer_elapsed,
             ),
         )
@@ -797,51 +855,92 @@ class PersonaMemEnv:
         score: bool = True,
         show_progress: bool = True,
     ) -> PersonaMemRunResult:
-        """Build unique official scopes, answer questions, and score deterministically."""
+        """Interleave incremental context builds with boundary-scoped answering.
+
+        Questions are grouped by ``shared_context_id``. Each shared context is
+        an independent memory scope (isolated by ``session_id``): a question in
+        one context cannot retrieve memories from another context, even for
+        the same persona. Within each context, boundaries are processed in
+        ascending ``end_index`` order: the segment up to each boundary is
+        added first, then the boundary's questions are answered, and only
+        then are later messages added. Each question therefore sees exactly
+        the officially visible prefix ``[0, end_index)`` of its own context.
+        """
         del score  # PersonaMem scoring is deterministic and always accompanies an answer.
         started = time.monotonic()
-        scopes = {item.scope.scope_id: item.scope for item in items}
+
+        # Group by shared_context_id -> end_index.
+        by_context: dict[str, dict[int, list[PersonaMemItem]]] = defaultdict(lambda: defaultdict(list))
+        for item in items:
+            by_context[item.scope.shared_context_id][item.scope.end_index].append(item)
 
         build_summaries: list[PersonaMemBuildSummary] = []
+        results: list[PersonaMemQAResult] = []
 
         if self._evaluation_mode == "memory_rag":
-            build_sem = asyncio.Semaphore(max_build_concurrency)
+            segment_total = sum(len(boundaries) for boundaries in by_context.values())
+            context_sem = asyncio.Semaphore(max_build_concurrency)
+            qa_sem = asyncio.Semaphore(max_qa_concurrency)
             build_pbar = tqdm(
-                total=len(scopes),
-                disable=not show_progress,
-                desc="Building PersonaMem scopes",
-                unit="scope",
+                total=segment_total, disable=not show_progress, desc="Building PersonaMem segments", unit="segment"
             )
+            qa_pbar = tqdm(total=len(items), disable=not show_progress, desc="Evaluating PersonaMem", unit="question")
 
-            async def _build(scope: PersonaMemScope) -> PersonaMemBuildSummary:
-                async with build_sem:
-                    if add:
-                        summary = await self._build_scope(scope)
-                    else:
-                        summary = PersonaMemBuildSummary(scope=scope)
-                    build_pbar.update()
-                return summary
-
-            build_summaries = list(await asyncio.gather(*(_build(scope) for scope in scopes.values())))
-            build_pbar.close()
-
-        build_errors = {summary.scope.scope_id: summary.error for summary in build_summaries}
-        qa_sem = asyncio.Semaphore(max_qa_concurrency)
-        qa_pbar = tqdm(total=len(items), disable=not show_progress, desc="Evaluating PersonaMem", unit="question")
-        live_progress = _PersonaMemLiveProgress(total=len(items))
-        live_progress_lock = asyncio.Lock()
-
-        async def _answer(item: PersonaMemItem) -> PersonaMemQAResult:
-            async with qa_sem:
-                result = await self._answer_item(item, build_error=build_errors.get(item.scope.scope_id))
-                async with live_progress_lock:
-                    live_progress.record(result)
+            async def _answer(item: PersonaMemItem, build_error: str | None) -> PersonaMemQAResult:
+                async with qa_sem:
+                    result = await self._answer_item(item, build_error=build_error)
                     qa_pbar.update()
-                    qa_pbar.set_postfix(live_progress.postfix())
-                return result
+                    return result
 
-        results = list(await asyncio.gather(*(_answer(item) for item in items)))
-        qa_pbar.close()
+            async def _run_context(
+                ctx_id: str,
+                boundaries: dict[int, list[PersonaMemItem]],
+            ) -> tuple[list[PersonaMemBuildSummary], list[PersonaMemQAResult]]:
+                async with context_sem:
+                    context = self._context_store.load(ctx_id)
+                    summaries: list[PersonaMemBuildSummary] = []
+                    ctx_results: list[PersonaMemQAResult] = []
+                    build_error: str | None = None
+                    prev_end = 0
+                    for end_index in sorted(boundaries.keys()):
+                        boundary_items = boundaries[end_index]
+                        scope = boundary_items[0].scope
+                        if add and build_error is None:
+                            summary = await self._build_scope_segment(scope, context=context, start_index=prev_end)
+                            if summary.error is not None:
+                                build_error = summary.error
+                        else:
+                            summary = PersonaMemBuildSummary(scope=scope, start_index=prev_end, error=build_error)
+                        summaries.append(summary)
+                        build_pbar.update()
+                        prev_end = end_index
+                        ctx_results.extend(
+                            await asyncio.gather(*(_answer(item, build_error) for item in boundary_items))
+                        )
+                    return summaries, ctx_results
+
+            context_outputs = await asyncio.gather(
+                *(_run_context(ctx_id, boundaries) for ctx_id, boundaries in by_context.items())
+            )
+            build_pbar.close()
+            qa_pbar.close()
+            for summaries, ctx_results in context_outputs:
+                build_summaries.extend(summaries)
+                results.extend(ctx_results)
+        else:
+            qa_sem = asyncio.Semaphore(max_qa_concurrency)
+            qa_pbar = tqdm(total=len(items), disable=not show_progress, desc="Evaluating PersonaMem", unit="question")
+
+            async def _answer_full(item: PersonaMemItem) -> PersonaMemQAResult:
+                async with qa_sem:
+                    result = await self._answer_item(item, build_error=None)
+                    qa_pbar.update()
+                    return result
+
+            results = list(await asyncio.gather(*(_answer_full(item) for item in items)))
+            qa_pbar.close()
+
+        results.sort(key=lambda result: result.item.index)
         total_elapsed = time.monotonic() - started
         protocol = f"personamem-v1-{'memory-rag' if self._evaluation_mode == 'memory_rag' else 'official-full-context'}"
         metrics = calculate_personamem_metrics(results, build_summaries, total_elapsed_seconds=total_elapsed)

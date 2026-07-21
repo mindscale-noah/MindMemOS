@@ -70,7 +70,7 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
         text_cfg = text_config or cfg.algo_config.text_processing
         self._text_preprocessor = text_preprocessor or get_text_preprocessor(text_cfg)
         self._sparse_encoder = sparse_encoder or SparseVectorEncoder(text_cfg)
-        self._search_config_override = search_config
+        self._explicit_search_config: VanillaSearchConfig | None = search_config
 
         self._embed_client: EmbedClient | None = embed_client
         if self._embed_client is None:
@@ -81,11 +81,9 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
 
         logger.debug("vanilla_search_initialized", has_embed=self._embed_client is not None)
 
-    @property
-    def _search_config(self) -> VanillaSearchConfig:
-        """Return an explicit override or the current request's effective config."""
-        if self._search_config_override is not None:
-            return self._search_config_override
+    def _get_vanilla_search_config(self) -> VanillaSearchConfig:
+        if self._explicit_search_config is not None:
+            return self._explicit_search_config
         return get_config().algo_config.search.vanilla
 
     @traced("search.vanilla")
@@ -98,6 +96,7 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
     ) -> list[MemorySearchItem]:
         """Search memories via hybrid dense+sparse retrieval and return candidates."""
 
+        scfg = self._get_vanilla_search_config()
         preprocessed = self._text_preprocessor.preprocess_query(inp.query, include_entities=False)
         if not preprocessed.tokens:
             return []
@@ -108,10 +107,9 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
         )
 
         filters = _request_filter(inp, context)
-        search_config = self._search_config
         request_top_k = options.result_top_n if options and options.result_top_n is not None else inp.top_k
         configured_recall_size = (
-            options.recall_top_k if options and options.recall_top_k is not None else search_config.recall_size
+            options.recall_top_k if options and options.recall_top_k is not None else scfg.recall_size
         )
         recall_size = configured_recall_size if request_top_k is None else max(configured_recall_size, request_top_k)
         recall_size = min(recall_size, VANILLA_RECALL_SIZE_MAX)
@@ -125,12 +123,12 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
                 ranking="hybrid",
             )
             prefetch_limit = max(
-                recall_size * search_config.hybrid_prefetch_factor,
-                search_config.hybrid_prefetch_min,
+                recall_size * scfg.hybrid_prefetch_factor,
+                scfg.hybrid_prefetch_min,
             )
             prefetch_limit = min(
                 prefetch_limit,
-                search_config.hybrid_prefetch_max,
+                scfg.hybrid_prefetch_max,
                 VANILLA_HYBRID_PREFETCH_MAX,
             )
             result = await self.db_reader.search_hybrid(
@@ -167,13 +165,13 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
             )
             for hit in ranked_hits
         ]
-        if search_config.dedup_enabled:
+        if scfg.dedup_enabled:
             candidates = await vanilla_dedup_executor.run(
                 dedup_by_text_similarity,
                 candidates,
-                threshold=search_config.dedup_threshold,
+                threshold=scfg.dedup_threshold,
                 group_keys=[_dedup_group_for_hit(hit) for hit in ranked_hits],
-                max_candidates=min(search_config.dedup_max_candidates, VANILLA_DEDUP_MAX_CANDIDATES),
+                max_candidates=min(scfg.dedup_max_candidates, VANILLA_DEDUP_MAX_CANDIDATES),
             )
         return candidates
 
@@ -200,12 +198,11 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
     ) -> list[MemoryDbSearchHit]:
         """Append Neo4j one-hop related memories, hydrating them through Qdrant batch read."""
 
-        if not (self._search_config.graph_enabled or self._search_config.shared_entity_graph_enabled) or not hits:
+        scfg = self._get_vanilla_search_config()
+        if not (scfg.graph_enabled or scfg.shared_entity_graph_enabled) or not hits:
             return hits
 
-        seed_ids = _dedupe_ids(
-            hit.memory_id for hit in hits[: max(0, self._search_config.graph_seed_memory_limit)] if hit.memory_id
-        )
+        seed_ids = _dedupe_ids(hit.memory_id for hit in hits[: max(0, scfg.graph_seed_memory_limit)] if hit.memory_id)
         if not seed_ids:
             return hits
 
@@ -221,7 +218,7 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
                     existing_ids=existing_ids,
                 )
             )
-            max_candidates = max(0, self._search_config.graph_max_candidates)
+            max_candidates = max(0, scfg.graph_max_candidates)
             remaining_candidates = max(0, max_candidates - len(related_by_id))
             for memory_id, candidate in (
                 await self._graph_candidates_by_shared_entity(
@@ -264,8 +261,8 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
                     memory_id=memory.memory_id,
                     score=_graph_score(
                         seed_scores.get(graph_candidate.seed_memory_id),
-                        decay=self._search_config.graph_decay,
-                        fallback=self._search_config.graph_score,
+                        decay=scfg.graph_decay,
+                        fallback=scfg.graph_score,
                     ),
                     memory=memory,
                     source=graph_candidate.source,
@@ -308,13 +305,14 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
         *,
         existing_ids: set[str],
     ) -> dict[str, _GraphCandidate]:
-        if not self._search_config.graph_enabled:
+        scfg = self._get_vanilla_search_config()
+        if not scfg.graph_enabled:
             return {}
         related = await self.db_reader.get_related_memory_ids(
             context,
             seed_ids,
-            limit_per_memory=max(0, self._search_config.graph_related_per_seed),
-            max_candidates=max(0, self._search_config.graph_max_candidates),
+            limit_per_memory=max(0, scfg.graph_related_per_seed),
+            max_candidates=max(0, scfg.graph_max_candidates),
         )
         candidates: dict[str, _GraphCandidate] = {}
         for item in _normalize_related_items(related):
@@ -342,14 +340,15 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
         existing_ids: set[str],
         max_candidates: int,
     ) -> dict[str, _GraphCandidate]:
-        if not self._search_config.shared_entity_graph_enabled or max_candidates <= 0:
+        scfg = self._get_vanilla_search_config()
+        if not scfg.shared_entity_graph_enabled or max_candidates <= 0:
             return {}
         scopes = await self.db_reader.list_memories_by_shared_entities(
             context,
             seed_ids,
             include_seed=False,
             active_only=True,
-            limit_per_entity=max(0, self._search_config.shared_entity_graph_limit_per_entity),
+            limit_per_entity=max(0, scfg.shared_entity_graph_limit_per_entity),
         )
 
         candidates: dict[str, _GraphCandidate] = {}

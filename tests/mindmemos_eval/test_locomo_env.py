@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from typing import Any
 
 import httpx
 import pytest
+from mindmemos_eval.memory.base import BenchmarkSpec, RunContext, RunnerConfig
+from mindmemos_eval.memory.envs.locomo.adapter import LocomoAdapter
+from mindmemos_eval.memory.identity import new_identity
 from mindmemos_sdk.memory import AsyncMemoryClient
 from mindmemos_sdk.transport import AsyncHttpTransport
 
@@ -258,3 +262,75 @@ async def test_run_dataset_no_score_prints_skip_note(capsys):
     assert run.total_questions == 0
     assert run.is_scored() is False
     assert "scoring skipped" in capsys.readouterr().out
+
+
+def test_conv_user_id_stable_across_runs():
+    """user_id is a stable conv_{idx} with no run suffix; run-to-run isolation is
+    handled at the project_id level (each run gets its own project_id, and the add
+    stage clears it first), so --reuse-api-key + --no-add reads a prior run's memory."""
+    memory, _ = _memory([])
+    env = LocomoEnv(memory, answer_llm=_llm("x"))
+    assert env._conv_user_id(0) == "conv_0"
+    assert env._conv_user_id(3) == "conv_3"
+
+
+@pytest.mark.asyncio
+async def test_add_conversation_user_id_stable():
+    """The add (write) path issues a stable user_id/session_id (no run suffix), so a
+    reuse run reading the same project sees the same identity."""
+    memory, captured = _memory([])
+    env = LocomoEnv(memory, answer_llm=_llm("x"))
+
+    await env.add_conversation(_conv_item(), idx=0)
+
+    assert captured[0]["body"]["user_id"] == "conv_0"
+    assert captured[0]["body"]["session_id"] == "conv_0"
+    assert captured[1]["body"]["user_id"] == "conv_0"
+
+
+@pytest.mark.asyncio
+async def test_adapter_does_not_bind_run_id(monkeypatch):
+    """LocomoAdapter must NOT bind the env to a run_id; user_id stays a stable conv_{idx}
+    and run-to-run isolation is handled at the project_id level (each run gets its own
+    project_id, and the add stage clears it first), so --reuse-api-key + --no-add can
+    read a prior run's memory."""
+    from mindmemos_eval.memory.envs.locomo import adapter as locomo_adapter_mod
+
+    captured: dict[str, Any] = {}
+
+    class _FakeRun:
+        def model_dump(self) -> dict[str, Any]:
+            return {"conversations": []}
+
+        def official_metrics(self) -> dict[str, Any]:
+            return {}
+
+    class _FakeEnv:
+        def __init__(self, memory: Any, **kwargs: Any) -> None:
+            captured["kwargs"] = kwargs
+
+        @staticmethod
+        def load_dataset(path: str) -> list[dict[str, Any]]:
+            return [_conv_item()]
+
+        async def run_dataset(self, data: list[dict[str, Any]], **kwargs: Any) -> Any:
+            return _FakeRun()
+
+    monkeypatch.setattr(locomo_adapter_mod, "LocomoEnv", _FakeEnv)
+
+    identity = new_identity("locomo", "vanilla")
+    ctx = RunContext(identity=identity)
+    bench_config = BenchmarkSpec(name="locomo", dataset="ignored", memory_algorithm="vanilla")
+    args = argparse.Namespace(runner_config=RunnerConfig())
+
+    adapter = LocomoAdapter()
+    await adapter.run(
+        memory=object(),
+        answer_llm=_llm("x"),
+        judge_llm=_llm("x"),
+        ctx=ctx,
+        bench_config=bench_config,
+        args=args,
+    )
+
+    assert "run_id" not in captured["kwargs"]

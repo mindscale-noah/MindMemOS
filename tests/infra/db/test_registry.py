@@ -2,13 +2,12 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from mindmemos.pipelines.memory_db.add_record_store import AddRecordStore
-from mindmemos.pipelines.memory_db.reader import MemoryDbReader
-from mindmemos.pipelines.memory_db.writer import MemoryDbWriter
-
 from mindmemos.config import init_config, reset_config
 from mindmemos.infra.db import close_database_clients, get_database_clients, reset_database_clients
 from mindmemos.infra.db import registry as db_registry
+from mindmemos.pipelines.memory_db.add_record_store import AddRecordStore
+from mindmemos.pipelines.memory_db.reader import MemoryDbReader
+from mindmemos.pipelines.memory_db.writer import MemoryDbWriter
 
 
 @pytest.fixture(autouse=True)

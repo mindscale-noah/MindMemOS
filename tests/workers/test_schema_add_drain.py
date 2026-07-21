@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 import mindmemos.workers.schema_add_drain as schema_add_drain
 import pytest
-
 from mindmemos.infra.kafka import ConsumedMessage
 
 

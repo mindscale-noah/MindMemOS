@@ -1,10 +1,9 @@
 from datetime import UTC, datetime
 
 import pytest
-from mindmemos.typing.memory import FieldCondition, MemoryRequestContext, SearchFilter
-
 from mindmemos.errors import InvalidFilterError
 from mindmemos.mappers import parse_schema_search_filters
+from mindmemos.typing.memory import FieldCondition, MemoryRequestContext, SearchFilter
 
 
 def make_context() -> MemoryRequestContext:

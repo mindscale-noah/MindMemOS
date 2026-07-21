@@ -175,6 +175,7 @@ algo_config:
         max_buffer_size: 1000
         split_on_user_speaker: true
         max_minutes_from_first: 30
+        streaming_window_size: 15
       drain:
         episode_generation_max_retries: 3
     vanilla:

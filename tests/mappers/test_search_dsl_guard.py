@@ -11,7 +11,9 @@ Two invariants are protected here:
 from datetime import UTC, datetime
 
 import pytest
+from mindmemos.errors import InvalidFilterError
 from mindmemos.infra.db.filters import FILTERABLE_MEMORY_FIELDS
+from mindmemos.mappers import parse_search_dsl, search_filter_to_qdrant
 from mindmemos.typing.memory import (
     DSL_DATETIME_FIELDS,
     DSL_FILTERABLE_MEMORY_FIELDS,
@@ -20,9 +22,6 @@ from mindmemos.typing.memory import (
     SearchFilter,
 )
 from qdrant_client import models as qmodels
-
-from mindmemos.errors import InvalidFilterError
-from mindmemos.mappers import parse_search_dsl, search_filter_to_qdrant
 
 # Fields the user explicitly removed from the public surface. They must never be
 # accepted by the DSL even though some are indexed in the payload schema.
