@@ -110,6 +110,37 @@ def test_keeps_identical_text_from_current_and_archived_lineage_groups():
     assert [entry.id for entry in kept] == ["current", "archived"]
 
 
+def test_keeps_long_facts_differing_only_by_a_number():
+    # Same sentence apart from the count; token overlap alone (~0.86) would
+    # wrongly fold the distinct fact, so the numeric guard must keep both.
+    first = "User has 2 cats and enjoys taking them to the park every weekend"
+    second = "User has 3 cats and enjoys taking them to the park every weekend"
+
+    kept = dedup_by_text_similarity([item("1", first), item("2", second)], threshold=0.6)
+
+    assert [entry.id for entry in kept] == ["1", "2"]
+
+
+def test_keeps_facts_differing_only_by_embedded_version_or_id():
+    # Digits embedded in longer tokens (SKU-1234, v2) still discriminate.
+    first = "User deployed release SKU-1234 to the production cluster last Tuesday"
+    second = "User deployed release SKU-1235 to the production cluster last Tuesday"
+
+    kept = dedup_by_text_similarity([item("1", first), item("2", second)], threshold=0.6)
+
+    assert [entry.id for entry in kept] == ["1", "2"]
+
+
+def test_folds_restatement_when_numbers_match():
+    # Matching numbers plus high overlap is still a genuine restatement to fold.
+    first = "User has 2 cats and enjoys taking them to the park every weekend"
+    second = "User has 2 cats and loves taking them to the park every weekend"
+
+    kept = dedup_by_text_similarity([item("1", first), item("2", second)], threshold=0.6)
+
+    assert [entry.id for entry in kept] == ["1"]
+
+
 def test_near_dedup_token_fingerprint_is_bounded():
     text = " ".join(f"token{index}" for index in range(600))
 
