@@ -36,15 +36,18 @@ def _item(question_id: str = "question-1") -> PersonaMemItem:
 
 
 class _FakeAnswerLlm:
-    def __init__(self, responses: list[str]) -> None:
+    def __init__(self, responses: list[str | Exception]) -> None:
         self.config = SimpleNamespace(model="test-model")
         self._responses = iter(responses)
         self.prompts: list[list[dict[str, object]]] = []
 
     async def complete(self, prompt):
         self.prompts.append(prompt)
+        response = next(self._responses)
+        if isinstance(response, Exception):
+            raise response
         return LLMCompletion(
-            content=next(self._responses),
+            content=response,
             prompt_tokens=2,
             completion_tokens=3,
             total_tokens=5,
@@ -131,6 +134,43 @@ async def test_retry_records_final_prompt_and_actual_llm_usage() -> None:
     assert result.answer.total_tokens == 10
     assert len(result.prompt) == 3
     assert "previous response" in result.prompt[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_retry_failure_preserves_usage_from_successful_completions() -> None:
+    result = await _env(_FakeAnswerLlm(["no answer", ConnectionError("offline")])).run_dataset(
+        [_item()],
+        show_progress=False,
+    )
+
+    qa_result = result.qa_results[0]
+    assert qa_result.error == "answer failed: ConnectionError: offline"
+    assert qa_result.answer is not None
+    assert qa_result.answer.response == "no answer"
+    assert qa_result.answer.extracted_answer == ""
+    assert qa_result.answer.is_correct is False
+    assert qa_result.answer.parse_failed is False
+    assert qa_result.answer.llm_calls == 1
+    assert qa_result.answer.total_tokens == 5
+    assert result.metrics["answer_llm_calls"] == 1
+    assert result.metrics["answer_total_tokens"] == 5
+    assert result.metrics["answer_failure_count"] == 1
+    assert result.metrics["answer_parse_failure_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_initial_answer_failure_has_no_usage_to_preserve() -> None:
+    result = await _env(_FakeAnswerLlm([ConnectionError("offline")])).run_dataset(
+        [_item()],
+        show_progress=False,
+    )
+
+    qa_result = result.qa_results[0]
+    assert qa_result.error == "answer failed: ConnectionError: offline"
+    assert qa_result.answer is None
+    assert result.metrics["answer_llm_calls"] == 0
+    assert result.metrics["answer_total_tokens"] == 0
+    assert result.metrics["answer_failure_count"] == 1
 
 
 @pytest.mark.asyncio

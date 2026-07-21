@@ -671,11 +671,25 @@ class PersonaMemEnv:
             try:
                 completion = await self._answer_llm.complete(attempt_prompt)
             except Exception as exc:  # noqa: BLE001 - failures remain in the official denominator
+                partial_answer = None
+                if llm_calls:
+                    partial_answer = PersonaMemAnswer(
+                        response=last_completion_content,
+                        extracted_answer="",
+                        is_correct=False,
+                        prompt_tokens=total_prompt_tokens,
+                        completion_tokens=total_completion_tokens,
+                        total_tokens=total_tokens,
+                        llm_calls=llm_calls,
+                        parse_failed=False,
+                        elapsed_seconds=time.monotonic() - answer_started,
+                    )
                 return PersonaMemQAResult(
                     item=item,
                     retrieved_memories=memories,
                     prompt=attempt_prompt,
                     search_elapsed_seconds=search_elapsed,
+                    answer=partial_answer,
                     error=f"answer failed: {type(exc).__name__}: {exc}",
                 )
             llm_calls += 1

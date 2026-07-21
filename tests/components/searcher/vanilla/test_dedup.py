@@ -1,5 +1,6 @@
 """Tests for near-duplicate folding of search candidates."""
 
+from mindmemos.components.searcher.vanilla import _dedup as dedup_module
 from mindmemos.components.searcher.vanilla import dedup_by_text_similarity
 from mindmemos.typing.service import MemorySearchItem
 
@@ -83,3 +84,54 @@ def test_keeps_short_distinct_cjk_facts_with_generic_overlap():
     kept = dedup_by_text_similarity([item("1", first), item("2", second)], threshold=0.6)
 
     assert [entry.id for entry in kept] == ["1", "2"]
+
+
+def test_folds_duplicates_only_within_the_same_actor_group():
+    candidates = [item("alice-1", _COURSE_A), item("bob", _COURSE_A), item("alice-2", _COURSE_A)]
+
+    kept = dedup_by_text_similarity(
+        candidates,
+        threshold=0.6,
+        group_keys=[("alice", "current"), ("bob", "current"), ("alice", "current")],
+    )
+
+    assert [entry.id for entry in kept] == ["alice-1", "bob"]
+
+
+def test_keeps_identical_text_from_current_and_archived_lineage_groups():
+    candidates = [item("current", _COURSE_A), item("archived", _COURSE_A)]
+
+    kept = dedup_by_text_similarity(
+        candidates,
+        threshold=0.6,
+        group_keys=[("alice", "current"), ("alice", "archived")],
+    )
+
+    assert [entry.id for entry in kept] == ["current", "archived"]
+
+
+def test_near_dedup_token_fingerprint_is_bounded():
+    text = " ".join(f"token{index}" for index in range(600))
+
+    assert len(dedup_module._tokens(text)) == 512
+
+
+def test_short_text_classification_is_cached_per_candidate(monkeypatch):
+    original = dedup_module._is_short_for_near_dedup
+    calls = 0
+
+    def counting_is_short(text, tokens):
+        nonlocal calls
+        calls += 1
+        return original(text, tokens)
+
+    monkeypatch.setattr(dedup_module, "_is_short_for_near_dedup", counting_is_short)
+    candidates = [
+        item(str(index), " ".join(f"group{index}token{token}" for token in range(10)))
+        for index in range(4)
+    ]
+
+    kept = dedup_by_text_similarity(candidates, threshold=1.0)
+
+    assert len(kept) == len(candidates)
+    assert calls == len(candidates)

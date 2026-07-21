@@ -1,3 +1,6 @@
+import asyncio
+import threading
+import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -12,6 +15,7 @@ from mindmemos.config import (
 )
 from mindmemos.pipelines.search.pipeline import SearchPipelineImpl
 from mindmemos.pipelines.search.vanilla import VanillaSearchEngine
+from mindmemos.pipelines.search.vanilla import engine as vanilla_engine_module
 from mindmemos.typing.llm import EmbeddingResponse
 from mindmemos.typing.memory import (
     FieldCondition,
@@ -238,6 +242,108 @@ async def test_vanilla_dedup_keeps_highest_scored_copy():
     result = await make_engine(reader).search_candidates(SearchPipelineInput(query="course"), make_context())
 
     assert [item.id for item in result] == ["high", "distinct"]
+
+
+@pytest.mark.asyncio
+async def test_vanilla_dedup_keeps_same_text_for_different_users():
+    first = MemoryDbSearchHit(
+        memory_id="alice",
+        score=0.9,
+        memory=memory("alice", "User joined an advanced investment course online.", user_id="alice"),
+        source="rrf",
+        rank=1,
+    )
+    second = MemoryDbSearchHit(
+        memory_id="bob",
+        score=0.8,
+        memory=memory("bob", "User joined an advanced investment course online.", user_id="bob"),
+        source="rrf",
+        rank=2,
+    )
+    reader = FakeReader([first, second])
+
+    result = await make_engine(reader).search_candidates(SearchPipelineInput(query="course"), make_context())
+
+    assert [item.id for item in result] == ["alice", "bob"]
+
+
+@pytest.mark.asyncio
+async def test_vanilla_dedup_keeps_same_text_for_current_and_archived_lineage():
+    current = MemoryDbSearchHit(
+        memory_id="current",
+        score=0.9,
+        memory=memory("current", "User joined an advanced investment course online.", user_id="alice"),
+        source="rrf",
+        rank=1,
+    )
+    archived = MemoryDbSearchHit(
+        memory_id="archived",
+        score=0.8,
+        memory=memory(
+            "archived",
+            "User joined an advanced investment course online.",
+            user_id="alice",
+            status="archived",
+        ),
+        source="lineage_archived",
+        rank=2,
+    )
+    reader = FakeReader([current, archived])
+
+    result = await make_engine(reader).search_candidates(SearchPipelineInput(query="course"), make_context())
+
+    assert [item.id for item in result] == ["current", "archived"]
+    assert [item.lineage.role for item in result if item.lineage is not None] == ["current", "archived"]
+
+
+@pytest.mark.asyncio
+async def test_vanilla_dedup_does_not_block_the_event_loop(monkeypatch):
+    dedup_started = threading.Event()
+    release_dedup = threading.Event()
+    dedup_finished = threading.Event()
+
+    def blocking_dedup(candidates, **kwargs):
+        dedup_started.set()
+        if not release_dedup.wait(timeout=1):
+            raise TimeoutError("test did not release dedup")
+        dedup_finished.set()
+        return candidates
+
+    monkeypatch.setattr(vanilla_engine_module, "dedup_by_text_similarity", blocking_dedup)
+    hit = MemoryDbSearchHit(
+        memory_id="one",
+        score=0.9,
+        memory=memory("one", "User joined an advanced investment course online."),
+        source="rrf",
+        rank=1,
+    )
+    heartbeat_ran_during_dedup = False
+
+    async def heartbeat():
+        nonlocal heartbeat_ran_during_dedup
+        await asyncio.sleep(0.02)
+        heartbeat_ran_during_dedup = dedup_started.is_set() and not dedup_finished.is_set()
+
+    def release_after_dedup_starts():
+        if dedup_started.wait(timeout=1):
+            time.sleep(0.2)
+            release_dedup.set()
+
+    release_thread = threading.Thread(target=release_after_dedup_starts, daemon=True)
+    release_thread.start()
+    try:
+        await asyncio.gather(
+            make_engine(FakeReader([hit])).search_candidates(
+                SearchPipelineInput(query="course"),
+                make_context(),
+            ),
+            heartbeat(),
+        )
+    finally:
+        release_dedup.set()
+        release_thread.join(timeout=1)
+
+    assert heartbeat_ran_during_dedup is True
 
 
 def make_graph_engine(reader: FakeReader) -> VanillaSearchEngine:

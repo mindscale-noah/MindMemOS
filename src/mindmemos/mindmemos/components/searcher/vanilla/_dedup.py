@@ -18,22 +18,29 @@ overlap) from merely related but distinct memories (low overlap).
 from __future__ import annotations
 
 import re
+from collections.abc import Hashable, Sequence
 
 from ....logging import get_logger
 from ....typing import MemorySearchItem
 
 logger = get_logger(__name__)
 
-_WORD_TOKEN = re.compile(r"[0-9a-z]{2,}")
 _CJK_TOKEN = re.compile(r"[㐀-䶿一-鿿]")
+_WORD_OR_CJK_TOKEN = re.compile(r"[0-9a-z]{2,}|[㐀-䶿一-鿿]")
 _MIN_TOKENS_FOR_NEAR_DEDUP = 5
 _MIN_CJK_CHARACTERS_FOR_NEAR_DEDUP = 10
+_MAX_TOKENS_FOR_NEAR_DEDUP = 512
 
 
 def _tokens(text: str) -> frozenset[str]:
-    """Extract word tokens plus individual CJK characters for overlap."""
+    """Extract a bounded word/CJK token fingerprint for overlap."""
     lowered = text.lower()
-    return frozenset(_WORD_TOKEN.findall(lowered)) | frozenset(_CJK_TOKEN.findall(lowered))
+    tokens: set[str] = set()
+    for match in _WORD_OR_CJK_TOKEN.finditer(lowered):
+        tokens.add(match.group())
+        if len(tokens) >= _MAX_TOKENS_FOR_NEAR_DEDUP:
+            break
+    return frozenset(tokens)
 
 
 def _is_short_for_near_dedup(text: str, tokens: frozenset[str]) -> bool:
@@ -53,51 +60,72 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     """Token-set Jaccard similarity; 0.0 when both sides are empty."""
     if not a and not b:
         return 0.0
-    union = a | b
-    if not union:
+    intersection_size = len(a & b)
+    union_size = len(a) + len(b) - intersection_size
+    if not union_size:
         return 0.0
-    return len(a & b) / len(union)
+    return intersection_size / union_size
 
 
 def dedup_by_text_similarity(
     candidates: list[MemorySearchItem],
     *,
     threshold: float = 0.6,
+    group_keys: Sequence[Hashable] | None = None,
 ) -> list[MemorySearchItem]:
-    """Greedily fold near-duplicate memories, preserving input order.
+    """Greedily fold near-duplicate memories within each group, preserving order.
 
     A candidate is kept when its token set is less than ``threshold`` Jaccard
-    similar to every already-kept candidate; otherwise it is dropped as a
-    near-duplicate of the earlier one. Recall order is preserved so a later
-    rerank still decides the final ranking.
+    similar to every already-kept candidate in the same group; otherwise it is
+    dropped as a near-duplicate of the earlier one. When ``group_keys`` is
+    omitted, all candidates belong to one group, preserving the legacy behavior.
+    Recall order is preserved so a later rerank still decides the final ranking.
 
-    ``threshold`` of 1.0 folds only token-identical long memories; lower values
-    fold looser paraphrases. Exact duplicate texts always fold. Near-duplicate
-    folding is skipped for short memories to avoid dropping facts that differ in
-    a single salient token.
+    ``threshold`` of 1.0 folds long memories with identical bounded token
+    fingerprints; lower values fold looser paraphrases. Exact duplicate texts
+    always fold. Near-duplicate folding is skipped for short memories to avoid
+    dropping facts that differ in a single salient token.
     """
+    if group_keys is None:
+        resolved_group_keys: Sequence[Hashable] = [None] * len(candidates)
+    elif len(group_keys) != len(candidates):
+        raise ValueError("group_keys must contain one entry per candidate")
+    else:
+        resolved_group_keys = group_keys
+
     if len(candidates) <= 1:
         return list(candidates)
 
     kept: list[MemorySearchItem] = []
     kept_tokens: list[frozenset[str]] = []
-    kept_texts: set[str] = set()
-    for candidate in candidates:
+    kept_is_short: list[bool] = []
+    kept_group_keys: list[Hashable] = []
+    kept_texts: set[tuple[Hashable, str]] = set()
+    for candidate, group_key in zip(candidates, resolved_group_keys, strict=True):
         normalized_text = _normalized_text(candidate.memory)
-        if normalized_text in kept_texts:
+        grouped_text = (group_key, normalized_text)
+        if grouped_text in kept_texts:
             continue
 
         tokens = _tokens(candidate.memory)
         is_short = _is_short_for_near_dedup(candidate.memory, tokens)
         if not is_short and any(
-            not _is_short_for_near_dedup(previous_candidate.memory, previous_tokens)
+            previous_group_key == group_key
+            and not previous_is_short
             and _jaccard(tokens, previous_tokens) >= threshold
-            for previous_candidate, previous_tokens in zip(kept, kept_tokens, strict=True)
+            for previous_tokens, previous_is_short, previous_group_key in zip(
+                kept_tokens,
+                kept_is_short,
+                kept_group_keys,
+                strict=True,
+            )
         ):
             continue
         kept.append(candidate)
         kept_tokens.append(tokens)
-        kept_texts.add(normalized_text)
+        kept_is_short.append(is_short)
+        kept_group_keys.append(group_key)
+        kept_texts.add(grouped_text)
 
     dropped = len(candidates) - len(kept)
     if dropped:

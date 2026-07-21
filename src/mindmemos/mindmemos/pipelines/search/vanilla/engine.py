@@ -155,7 +155,12 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
             for hit in ranked_hits
         ]
         if self._search_config.dedup_enabled:
-            candidates = dedup_by_text_similarity(candidates, threshold=self._search_config.dedup_threshold)
+            candidates = await asyncio.to_thread(
+                dedup_by_text_similarity,
+                candidates,
+                threshold=self._search_config.dedup_threshold,
+                group_keys=[_dedup_group_for_hit(hit) for hit in ranked_hits],
+            )
         return candidates
 
     async def _encode_dense(self, query: str) -> list[float] | None:
@@ -432,6 +437,12 @@ def _lineage_for_hit(
         derived_from_memory_ids=lineage_by_id.get(hit.memory_id, []),
         derived_to_memory_ids=derived_to_by_id.get(hit.memory_id, []),
     )
+
+
+def _dedup_group_for_hit(hit: MemoryDbSearchHit) -> tuple[str | None, str]:
+    memory = hit.memory
+    lineage_role = "archived" if hit.source == "lineage_archived" else "current"
+    return (memory.user_id if memory else None, lineage_role)
 
 
 def _to_memory_search_item(hit: MemoryDbSearchHit, *, lineage: MemoryLineage | None = None) -> MemorySearchItem:
