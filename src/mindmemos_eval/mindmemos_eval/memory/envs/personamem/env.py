@@ -491,6 +491,20 @@ def calculate_personamem_metrics(
 
 
 _PERSONAMEM_EPOCH_MS = 1767225600000  # 2026-01-01 00:00:00 UTC
+_PERSONAMEM_PROFILE_PREFIX = "current user persona:"
+
+
+def _first_visible_personamem_profile(
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[int, str] | None:
+    """Return the first visible benchmark persona and its context index."""
+    for index, message in enumerate(messages):
+        if str(message.get("role") or "").strip().lower() != "system":
+            continue
+        content = str(message.get("content") or "").strip()
+        if content.lower().startswith(_PERSONAMEM_PROFILE_PREFIX):
+            return index, content
+    return None
 
 
 def _build_session_timestamp_map_ms(context: list[dict[str, Any]]) -> dict[int, int]:
@@ -588,9 +602,37 @@ class PersonaMemEnv:
             if str(message.get("role") or "") != "system"
             and str(message.get("content") or "").strip()
         ]
+        profile = _first_visible_personamem_profile(visible)
+        total_messages = len(messages) + int(profile is not None)
+        scope_metadata = {
+            "benchmark": "personamem",
+            "shared_context_id": scope.shared_context_id,
+            "end_index_in_shared_context": scope.end_index,
+        }
         added_messages = 0
         add_calls = 0
         try:
+            if profile is not None:
+                profile_index, profile_content = profile
+                await self._memory.add(
+                    [
+                        {
+                            "role": "user",
+                            "content": profile_content,
+                            "timestamp": ts_map.get(profile_index, _PERSONAMEM_EPOCH_MS),
+                        }
+                    ],
+                    user_id=scope.user_id,
+                    session_id=scope.session_id,
+                    mode="sync",
+                    metadata={
+                        **scope_metadata,
+                        "source": "personamem_persona",
+                        "content_type": "profile",
+                    },
+                )
+                add_calls += 1
+                added_messages += 1
             for start in range(0, len(messages), self._add_batch_size):
                 batch = messages[start : start + self._add_batch_size]
                 await self._memory.add(
@@ -598,17 +640,13 @@ class PersonaMemEnv:
                     user_id=scope.user_id,
                     session_id=scope.session_id,
                     mode="sync",
-                    metadata={
-                        "benchmark": "personamem",
-                        "shared_context_id": scope.shared_context_id,
-                        "end_index_in_shared_context": scope.end_index,
-                    },
+                    metadata=scope_metadata,
                 )
                 add_calls += 1
                 added_messages += len(batch)
             return PersonaMemBuildSummary(
                 scope=scope,
-                total_messages=len(messages),
+                total_messages=total_messages,
                 added_messages=added_messages,
                 add_calls=add_calls,
                 elapsed_seconds=time.monotonic() - started,
@@ -616,7 +654,7 @@ class PersonaMemEnv:
         except Exception as exc:  # noqa: BLE001 - one bad scope must not discard the full run
             return PersonaMemBuildSummary(
                 scope=scope,
-                total_messages=len(messages),
+                total_messages=total_messages,
                 added_messages=added_messages,
                 add_calls=add_calls,
                 elapsed_seconds=time.monotonic() - started,

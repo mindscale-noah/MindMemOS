@@ -15,7 +15,7 @@
 **Files:**
 - Create: `tests/mindmemos_eval/test_personamem_profile_ingestion.py`
 
-- [ ] **Step 1: Write the failing repeated-profile test**
+- [x] **Step 1: Write the failing repeated-profile test**
 
 Create recording fakes for the memory client and context store. Build a scope containing the same `Current user persona:` at two session boundaries plus three conversation messages. Assert:
 
@@ -35,11 +35,11 @@ assert summary.added_messages == 4
 assert summary.add_calls == 2
 ```
 
-- [ ] **Step 2: Write the no-profile compatibility test**
+- [x] **Step 2: Write the no-profile compatibility test**
 
 Use a non-profile system marker followed by one user message. Assert that only the user message is submitted, ordinary metadata has no profile keys, and the summary is one message/one call.
 
-- [ ] **Step 3: Run the new tests and verify RED**
+- [x] **Step 3: Run the new tests and verify RED**
 
 Run: `uv run pytest -q tests/mindmemos_eval/test_personamem_profile_ingestion.py`
 
@@ -51,7 +51,7 @@ Expected: the repeated-profile test fails because current `_build_scope` filters
 - Modify: `src/mindmemos_eval/mindmemos_eval/memory/envs/personamem/env.py:500-630`
 - Test: `tests/mindmemos_eval/test_personamem_profile_ingestion.py`
 
-- [ ] **Step 1: Add a profile selector**
+- [x] **Step 1: Add a profile selector**
 
 ```python
 _PERSONAMEM_PROFILE_PREFIX = "current user persona:"
@@ -71,7 +71,7 @@ def _first_visible_personamem_profile(
 
 This deliberately selects only the first matching visible profile and ignores unrelated system markers.
 
-- [ ] **Step 2: Submit the profile separately before conversation batches**
+- [x] **Step 2: Submit the profile separately before conversation batches**
 
 Create shared scope metadata once. Before the conversation loop submit:
 
@@ -100,13 +100,13 @@ if profile is not None:
 
 Set `total_messages` to `len(messages) + int(profile is not None)`. Keep conversation metadata equal to `scope_metadata` so profile labels never leak into conversation batches.
 
-- [ ] **Step 3: Run the new tests and verify GREEN**
+- [x] **Step 3: Run the new tests and verify GREEN**
 
 Run: `uv run pytest -q tests/mindmemos_eval/test_personamem_profile_ingestion.py`
 
 Expected: all tests pass.
 
-- [ ] **Step 4: Run PersonaMem regression tests**
+- [x] **Step 4: Run PersonaMem regression tests**
 
 Run:
 
@@ -116,7 +116,7 @@ uv run pytest -q tests/mindmemos_eval/test_personamem_profile_ingestion.py tests
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Run static verification**
+- [x] **Step 5: Run static verification**
 
 Run:
 
@@ -127,6 +127,6 @@ git diff --check
 
 Expected: Ruff and diff checks pass.
 
-- [ ] **Step 6: Commit the implementation**
+- [x] **Step 6: Commit the implementation**
 
 Stage only the PersonaMem environment and profile-ingestion test, then create a Lore-format commit recording the non-extractable-system constraint and verification evidence. Do not stage `config/mindmemos/api_keys.yaml`, `reports/`, or unrelated existing edits.
