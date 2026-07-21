@@ -9,6 +9,12 @@ from typing import Any
 from omegaconf.errors import ConfigAttributeError, MissingMandatoryValue
 
 from ..errors import InvalidConfigError, MissingConfigValueError
+from .algo.search.vanilla.vanilla import (
+    VANILLA_DEDUP_MAX_CANDIDATES,
+    VANILLA_HYBRID_PREFETCH_FACTOR_MAX,
+    VANILLA_HYBRID_PREFETCH_MAX,
+    VANILLA_RECALL_SIZE_MAX,
+)
 
 
 @dataclass(frozen=True)
@@ -65,8 +71,21 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("database.qdrant.batch_upsert_flush_interval_ms", min_value=0, support="non-negative integer"),
     RangeRule("database.qdrant.batch_upsert_max_queue_size", min_value=1, support="positive integer >= 1"),
     RangeRule("database.qdrant.batch_upsert_max_inflight_batches", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.vanilla.hybrid_prefetch_factor", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.vanilla.hybrid_prefetch_min", min_value=1, support="positive integer >= 1"),
+    RangeRule(
+        "algo_config.search.vanilla.hybrid_prefetch_factor",
+        min_value=1,
+        max_value=VANILLA_HYBRID_PREFETCH_FACTOR_MAX,
+    ),
+    RangeRule(
+        "algo_config.search.vanilla.hybrid_prefetch_min",
+        min_value=1,
+        max_value=VANILLA_HYBRID_PREFETCH_MAX,
+    ),
+    RangeRule(
+        "algo_config.search.vanilla.hybrid_prefetch_max",
+        min_value=1,
+        max_value=VANILLA_HYBRID_PREFETCH_MAX,
+    ),
     RangeRule("database.neo4j.max_connection_lifetime", min_value=0, include_min=False, support="positive number"),
     RangeRule("database.neo4j.max_connection_pool_size", min_value=1, support="positive integer >= 1"),
     RangeRule("database.neo4j.connection_acquisition_timeout", min_value=0, include_min=False, support="positive number"),
@@ -156,9 +175,24 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("algo_config.add.schema.chunker.max_minutes_from_first", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.add.schema.drain.episode_generation_max_retries", min_value=0, support="non-negative integer"),
     RangeRule("algo_config.search.request_top_k_max", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.vanilla.dedup_threshold", min_value=0, max_value=1, support="0 <= value <= 1"),
+    RangeRule(
+        "algo_config.search.vanilla.dedup_threshold",
+        min_value=0,
+        max_value=1,
+        include_min=False,
+        support="0 < value <= 1; use dedup_enabled: false to disable de-duplication",
+    ),
     RangeRule("algo_config.search.default.top_k", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.vanilla.recall_size", min_value=1, support="positive integer >= 1"),
+    RangeRule(
+        "algo_config.search.vanilla.recall_size",
+        min_value=1,
+        max_value=VANILLA_RECALL_SIZE_MAX,
+    ),
+    RangeRule(
+        "algo_config.search.vanilla.dedup_max_candidates",
+        min_value=1,
+        max_value=VANILLA_DEDUP_MAX_CANDIDATES,
+    ),
     RangeRule("algo_config.search.vanilla.graph_seed_memory_limit", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.search.vanilla.graph_related_per_seed", min_value=1, support="positive integer >= 1"),
     RangeRule(
@@ -439,6 +473,13 @@ def _validate_schema_add(schema_add: Any) -> None:
 
 
 def _validate_search(search: Any) -> None:
+    vanilla = search.vanilla
+    if vanilla.hybrid_prefetch_min > vanilla.hybrid_prefetch_max:
+        raise InvalidConfigError(
+            "algo_config.search.vanilla.hybrid_prefetch_min",
+            support="<= algo_config.search.vanilla.hybrid_prefetch_max",
+        )
+
     schema = search.schema_search
     if schema.property.alloc_max_factor < schema.property.alloc_min_factor:
         raise InvalidConfigError(

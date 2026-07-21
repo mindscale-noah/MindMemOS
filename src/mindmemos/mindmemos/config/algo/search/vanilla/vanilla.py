@@ -2,6 +2,11 @@
 
 from dataclasses import dataclass, field
 
+VANILLA_RECALL_SIZE_MAX = 100
+VANILLA_HYBRID_PREFETCH_FACTOR_MAX = 10
+VANILLA_HYBRID_PREFETCH_MAX = 300
+VANILLA_DEDUP_MAX_CANDIDATES = 128
+
 
 @dataclass
 class VanillaSearchConfig:
@@ -25,6 +30,9 @@ class VanillaSearchConfig:
     hybrid_prefetch_min: int = field(default=30)
     """Floor for dense/sparse prefetch counts in hybrid RRF search."""
 
+    hybrid_prefetch_max: int = field(default=VANILLA_HYBRID_PREFETCH_MAX)
+    """Hard ceiling for dense/sparse prefetch counts in hybrid RRF search."""
+
     use_reranker: bool = field(default=True)
     """Whether final reranking is allowed for vanilla search candidates.
 
@@ -37,6 +45,9 @@ class VanillaSearchConfig:
 
     dedup_threshold: float = field(default=0.6)
     """Token-set similarity threshold for vanilla candidate de-duplication."""
+
+    dedup_max_candidates: int = field(default=VANILLA_DEDUP_MAX_CANDIDATES)
+    """Maximum leading candidates eligible for pairwise approximate de-duplication."""
 
     graph_enabled: bool = field(default=False)
     """Whether to supplement vanilla search with Neo4j one-hop related memories."""

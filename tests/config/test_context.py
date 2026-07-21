@@ -75,3 +75,27 @@ def test_bind_config_overrides_rejects_invalid_project_config() -> None:
                 pass
     finally:
         reset_config()
+
+
+@pytest.mark.parametrize("override_name", ["project_config", "tenant_config"])
+def test_bind_config_overrides_rejects_zero_dedup_threshold(override_name: str) -> None:
+    try:
+        init_config(config_path="config/mindmemos/dev.example.yaml")
+
+        with pytest.raises(InvalidConfigError, match="algo_config.search.vanilla.dedup_threshold"):
+            with bind_config_overrides(
+                **{
+                    override_name: {
+                        "algo_config": {
+                            "search": {
+                                "vanilla": {
+                                    "dedup_threshold": 0,
+                                }
+                            }
+                        }
+                    }
+                }
+            ):
+                pass
+    finally:
+        reset_config()

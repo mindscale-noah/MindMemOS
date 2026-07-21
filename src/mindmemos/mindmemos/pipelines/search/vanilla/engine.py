@@ -7,9 +7,15 @@ from dataclasses import dataclass
 from datetime import UTC
 
 from ....components.searcher.vanilla import dedup_by_text_similarity
+from ....components.searcher.vanilla._executor import vanilla_dedup_executor
 from ....components.text import SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
 from ....config import TextProcessingConfig, get_config
 from ....config.algo.search import VanillaSearchConfig
+from ....config.algo.search.vanilla.vanilla import (
+    VANILLA_DEDUP_MAX_CANDIDATES,
+    VANILLA_HYBRID_PREFETCH_MAX,
+    VANILLA_RECALL_SIZE_MAX,
+)
 from ....llm import EmbedClient, get_embed_client
 from ....logging import get_logger, traced
 from ....mappers import parse_search_dsl
@@ -102,11 +108,13 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
         )
 
         filters = _request_filter(inp, context)
+        search_config = self._search_config
         request_top_k = options.result_top_n if options and options.result_top_n is not None else inp.top_k
         configured_recall_size = (
-            options.recall_top_k if options and options.recall_top_k is not None else self._search_config.recall_size
+            options.recall_top_k if options and options.recall_top_k is not None else search_config.recall_size
         )
         recall_size = configured_recall_size if request_top_k is None else max(configured_recall_size, request_top_k)
+        recall_size = min(recall_size, VANILLA_RECALL_SIZE_MAX)
 
         if dense_vector is not None:
             query = MemoryDbSearchQuery(
@@ -117,8 +125,13 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
                 ranking="hybrid",
             )
             prefetch_limit = max(
-                recall_size * self._search_config.hybrid_prefetch_factor,
-                self._search_config.hybrid_prefetch_min,
+                recall_size * search_config.hybrid_prefetch_factor,
+                search_config.hybrid_prefetch_min,
+            )
+            prefetch_limit = min(
+                prefetch_limit,
+                search_config.hybrid_prefetch_max,
+                VANILLA_HYBRID_PREFETCH_MAX,
             )
             result = await self.db_reader.search_hybrid(
                 context,
@@ -154,12 +167,13 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
             )
             for hit in ranked_hits
         ]
-        if self._search_config.dedup_enabled:
-            candidates = await asyncio.to_thread(
+        if search_config.dedup_enabled:
+            candidates = await vanilla_dedup_executor.run(
                 dedup_by_text_similarity,
                 candidates,
-                threshold=self._search_config.dedup_threshold,
+                threshold=search_config.dedup_threshold,
                 group_keys=[_dedup_group_for_hit(hit) for hit in ranked_hits],
+                max_candidates=min(search_config.dedup_max_candidates, VANILLA_DEDUP_MAX_CANDIDATES),
             )
         return candidates
 

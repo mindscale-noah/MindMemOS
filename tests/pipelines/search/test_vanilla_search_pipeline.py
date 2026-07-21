@@ -484,6 +484,73 @@ async def test_vanilla_search_threads_rrf_prefetch_limits() -> None:
     assert reader_factor.calls[0].dense_limit == 60
     assert reader_factor.calls[0].sparse_limit == 60
 
+    # configured ceiling dominates: max(100 * 3, 30) is capped at 250
+    reader_cap = FakeReader([])
+    await make_engine(
+        reader_cap,
+        VanillaSearchConfig(recall_size=100, hybrid_prefetch_max=250),
+    ).search_candidates(
+        SearchPipelineInput(query="qdrant memory", top_k=2),
+        make_context(),
+    )
+    assert reader_cap.calls[0].dense_limit == 250
+    assert reader_cap.calls[0].sparse_limit == 250
+
+
+@pytest.mark.asyncio
+async def test_vanilla_search_enforces_runtime_recall_and_prefetch_caps() -> None:
+    reader = FakeReader([])
+    engine = make_engine(
+        reader,
+        VanillaSearchConfig(
+            recall_size=500,
+            hybrid_prefetch_factor=50,
+            hybrid_prefetch_min=500,
+            hybrid_prefetch_max=500,
+        ),
+    )
+
+    await engine.search_candidates(
+        SearchPipelineInput(query="qdrant memory", top_k=500),
+        make_context(),
+    )
+
+    call = reader.calls[0]
+    assert call.req.top_k == 100
+    assert call.dense_limit == 300
+    assert call.sparse_limit == 300
+
+
+@pytest.mark.parametrize(("configured_cap", "expected_cap"), [(17, 17), (500, 128)])
+@pytest.mark.asyncio
+async def test_vanilla_search_passes_dedup_candidate_cap(monkeypatch, configured_cap: int, expected_cap: int) -> None:
+    recorded_kwargs = {}
+
+    class RecordingDedupExecutor:
+        async def run(self, func, candidates, **kwargs):
+            recorded_kwargs.update(kwargs)
+            return func(candidates, **kwargs)
+
+    monkeypatch.setattr(vanilla_engine_module, "vanilla_dedup_executor", RecordingDedupExecutor())
+    reader = FakeReader(
+        [
+            MemoryDbSearchHit(
+                memory_id="one",
+                score=0.9,
+                memory=memory("one", "User joined an advanced investment course online."),
+                source="rrf",
+                rank=1,
+            )
+        ]
+    )
+
+    await make_engine(reader, VanillaSearchConfig(dedup_max_candidates=configured_cap)).search_candidates(
+        SearchPipelineInput(query="course", top_k=1),
+        make_context(),
+    )
+
+    assert recorded_kwargs["max_candidates"] == expected_cap
+
 
 @pytest.mark.asyncio
 async def test_vanilla_search_appends_archived_lineage_candidates() -> None:
@@ -1011,7 +1078,7 @@ async def test_cached_vanilla_engine_uses_each_project_search_config(monkeypatch
                     "search": {
                         "vanilla": {
                             "dedup_enabled": True,
-                            "dedup_threshold": 0.0,
+                            "dedup_threshold": 0.6,
                         }
                     }
                 }

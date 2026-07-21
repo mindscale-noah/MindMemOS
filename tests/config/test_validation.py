@@ -83,3 +83,53 @@ algo_config:
             init_config(config_path=config_path)
     finally:
         reset_config()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("dedup_threshold", 0),
+        ("recall_size", 101),
+        ("hybrid_prefetch_factor", 11),
+        ("hybrid_prefetch_min", 301),
+        ("hybrid_prefetch_max", 301),
+        ("dedup_max_candidates", 129),
+    ],
+)
+def test_vanilla_search_rejects_unsafe_limits(tmp_path, field: str, value: int) -> None:
+    config_path = tmp_path / "dev.yaml"
+    config_path.write_text(
+        f"""
+algo_config:
+  search:
+    vanilla:
+      {field}: {value}
+""",
+        encoding="utf-8",
+    )
+
+    try:
+        with pytest.raises(InvalidConfigError, match=field):
+            init_config(config_path=config_path)
+    finally:
+        reset_config()
+
+
+def test_vanilla_search_prefetch_min_must_not_exceed_max(tmp_path) -> None:
+    config_path = tmp_path / "dev.yaml"
+    config_path.write_text(
+        """
+algo_config:
+  search:
+    vanilla:
+      hybrid_prefetch_min: 101
+      hybrid_prefetch_max: 100
+""",
+        encoding="utf-8",
+    )
+
+    try:
+        with pytest.raises(InvalidConfigError, match="hybrid_prefetch_min"):
+            init_config(config_path=config_path)
+    finally:
+        reset_config()

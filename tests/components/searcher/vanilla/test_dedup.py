@@ -135,3 +135,35 @@ def test_short_text_classification_is_cached_per_candidate(monkeypatch):
 
     assert len(kept) == len(candidates)
     assert calls == len(candidates)
+
+
+def test_approximate_comparisons_are_limited_to_leading_candidates(monkeypatch):
+    comparisons = 0
+    original = dedup_module._jaccard
+
+    def counting_jaccard(left, right):
+        nonlocal comparisons
+        comparisons += 1
+        return original(left, right)
+
+    monkeypatch.setattr(dedup_module, "_jaccard", counting_jaccard)
+    candidates = [
+        item(str(index), " ".join(f"candidate{index}token{token}" for token in range(10))) for index in range(3)
+    ]
+
+    kept = dedup_by_text_similarity(candidates, threshold=0.6, max_candidates=2)
+
+    assert [entry.id for entry in kept] == ["0", "1", "2"]
+    assert comparisons == 1
+
+
+def test_exact_duplicate_in_uncompared_tail_is_still_folded():
+    candidates = [
+        item("0", _COURSE_A),
+        item("1", _COMMUNITY),
+        item("2", _COURSE_A),
+    ]
+
+    kept = dedup_by_text_similarity(candidates, threshold=0.6, max_candidates=2)
+
+    assert [entry.id for entry in kept] == ["0", "1"]

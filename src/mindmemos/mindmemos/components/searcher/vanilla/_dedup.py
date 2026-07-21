@@ -72,6 +72,7 @@ def dedup_by_text_similarity(
     *,
     threshold: float = 0.6,
     group_keys: Sequence[Hashable] | None = None,
+    max_candidates: int | None = None,
 ) -> list[MemorySearchItem]:
     """Greedily fold near-duplicate memories within each group, preserving order.
 
@@ -84,7 +85,10 @@ def dedup_by_text_similarity(
     ``threshold`` of 1.0 folds long memories with identical bounded token
     fingerprints; lower values fold looser paraphrases. Exact duplicate texts
     always fold. Near-duplicate folding is skipped for short memories to avoid
-    dropping facts that differ in a single salient token.
+    dropping facts that differ in a single salient token. When
+    ``max_candidates`` is set, only that leading window participates in
+    approximate comparisons; exact duplicate folding still covers the full
+    candidate list.
     """
     if group_keys is None:
         resolved_group_keys: Sequence[Hashable] = [None] * len(candidates)
@@ -97,14 +101,20 @@ def dedup_by_text_similarity(
         return list(candidates)
 
     kept: list[MemorySearchItem] = []
-    kept_tokens: list[frozenset[str]] = []
-    kept_is_short: list[bool] = []
-    kept_group_keys: list[Hashable] = []
+    approximate_tokens: list[frozenset[str]] = []
+    approximate_is_short: list[bool] = []
+    approximate_group_keys: list[Hashable] = []
     kept_texts: set[tuple[Hashable, str]] = set()
-    for candidate, group_key in zip(candidates, resolved_group_keys, strict=True):
+    for index, (candidate, group_key) in enumerate(zip(candidates, resolved_group_keys, strict=True)):
         normalized_text = _normalized_text(candidate.memory)
         grouped_text = (group_key, normalized_text)
         if grouped_text in kept_texts:
+            continue
+
+        approximate_enabled = max_candidates is None or index < max_candidates
+        if not approximate_enabled:
+            kept.append(candidate)
+            kept_texts.add(grouped_text)
             continue
 
         tokens = _tokens(candidate.memory)
@@ -114,17 +124,17 @@ def dedup_by_text_similarity(
             and not previous_is_short
             and _jaccard(tokens, previous_tokens) >= threshold
             for previous_tokens, previous_is_short, previous_group_key in zip(
-                kept_tokens,
-                kept_is_short,
-                kept_group_keys,
+                approximate_tokens,
+                approximate_is_short,
+                approximate_group_keys,
                 strict=True,
             )
         ):
             continue
         kept.append(candidate)
-        kept_tokens.append(tokens)
-        kept_is_short.append(is_short)
-        kept_group_keys.append(group_key)
+        approximate_tokens.append(tokens)
+        approximate_is_short.append(is_short)
+        approximate_group_keys.append(group_key)
         kept_texts.add(grouped_text)
 
     dropped = len(candidates) - len(kept)
