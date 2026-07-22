@@ -339,10 +339,6 @@ class DeletePipelineInput(BaseModel):
     id: str = Field(alias="memory_id")
     """Memory ID."""
 
-    hard: bool = False
-    """Legacy compatibility flag. Memory deletion is always archive-only."""
-
-
 class DeletePipelineResult(BaseModel):
     status: ServiceResultStatus
     """Delete status."""
@@ -363,7 +359,7 @@ class UpdatePipelineInput(BaseModel):
     metadata_patch: dict[str, Any] = Field(default_factory=dict)
     """Optional metadata fields merged into the memory metadata."""
 
-    status: Literal["active", "archived", "delete"] | None = None
+    status: Literal["active", "archived"] | None = None
     """Optional lifecycle status patch."""
 
 

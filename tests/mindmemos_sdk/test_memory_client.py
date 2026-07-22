@@ -394,7 +394,7 @@ def test_delete_sends_memory_id():
     assert result.code == "ok"
 
 
-def test_delete_can_send_hard_delete_flag():
+def test_delete_sends_only_memory_id():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -403,10 +403,10 @@ def test_delete_can_send_hard_delete_flag():
         return httpx.Response(200, json={"code": "ok", "data": None})
 
     client = MemoryClient(_transport(handler))
-    result = client.delete("m1", hard=True)
+    result = client.delete("m1")
 
     assert captured["url"] == "https://api.test/v1/memory/delete"
-    assert captured["body"] == {"memory_id": "m1", "hard": True}
+    assert captured["body"] == {"memory_id": "m1"}
     assert result.code == "ok"
 
 

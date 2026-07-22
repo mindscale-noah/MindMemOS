@@ -30,7 +30,7 @@ class DefaultUpdatePipeline(MemoryDbPipelineMixin):
         """
         memory = await self.db_reader.get_memory(context, inp.id)
         if memory is None:
-            return UpdatePipelineResult(status="error", message=str(MemoryNotFoundError(inp.id)))
+            raise MemoryNotFoundError(inp.id)
         if memory.status != "active" and inp.status != "active":
             return UpdatePipelineResult(
                 status="error",

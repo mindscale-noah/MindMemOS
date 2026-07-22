@@ -292,10 +292,10 @@ class FakeWriter:
         mutations = []
         for command in plan.memory_updates:
             self.updated.append(command)
-            mutations.append(MemoryDbMutationResult(memory_id=f"{command.memory_id}-new", changed=True, hard=False))
+            mutations.append(MemoryDbMutationResult(memory_id=f"{command.memory_id}-new", changed=True))
         for command in plan.memory_deletes:
             self.deleted.append(command.memory_id)
-            mutations.append(MemoryDbMutationResult(memory_id=command.memory_id, changed=True, hard=command.hard))
+            mutations.append(MemoryDbMutationResult(memory_id=command.memory_id, changed=True))
         return MemoryDbWriteResult(
             memory_ids=[memory.memory_id for memory in write_plan.memories],
             entity_ids=[entity.entity_id for entity in write_plan.entities],
@@ -312,11 +312,11 @@ class FakeWriter:
 
     async def update_memory(self, ctx, req):
         self.updated.append(req)
-        return SimpleNamespace(status="ok", memory_id=f"{req.memory_id}-new", changed=True, hard=False)
+        return SimpleNamespace(status="ok", memory_id=f"{req.memory_id}-new", changed=True)
 
     async def delete_memory(self, ctx, req):
         self.deleted.append(req.memory_id)
-        return SimpleNamespace(status="ok", memory_id=req.memory_id, changed=True, hard=req.hard)
+        return SimpleNamespace(status="ok", memory_id=req.memory_id, changed=True)
 
 
 class FakeRecorder:
@@ -737,7 +737,10 @@ async def test_schema_add_pipeline_writes_entity_and_property_vectors():
         ":input_messages:On 2026-05-28, the user said they like Qdrant for vector search." in text
         for text in property_embed_call.text
     )
-    assert result.memories[0].content == "As of 2026-05-28, User likes Qdrant for vector search."
+    assert result.memories[0].content == (
+        "Entity: User (Type: person)\n"
+        "   Property 'preference': As of 2026-05-28, User likes Qdrant for vector search."
+    )
     assert result.memories[0].mem_type == "profile"
     assert result.memories[0].memory_type == "profile"
     assert qdrant.add_records == {}

@@ -1136,7 +1136,6 @@ class SchemaAddPlanner:
         return [
             MemoryDbDeleteCommand(
                 memory_id=memory_id,
-                hard=False,
                 reason="schema_add_property_merge",
                 consistency=consistency,
             )

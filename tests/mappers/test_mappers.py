@@ -115,13 +115,19 @@ def test_service_add_input_rejects_removed_add_options(field_name: str, value: o
         )
 
 
-def test_memory_id_aliases_keep_delete_update_api_compatible() -> None:
+def test_memory_id_aliases_keep_strict_delete_update_api_compatible() -> None:
     assert DeletePipelineInput(memory_id="mem-3").id == "mem-3"
     assert DeletePipelineInput(id="mem-4").id == "mem-4"
-    assert DeletePipelineInput(memory_id="mem-3").hard is False
-    assert DeletePipelineInput(memory_id="mem-3", hard=True).hard is True
+    with pytest.raises(ValueError):
+        DeletePipelineInput(memory_id="mem-3", hard=True)
     assert UpdatePipelineInput(memory_id="mem-5", content="updated").id == "mem-5"
     assert UpdatePipelineInput(id="mem-6", content="updated").id == "mem-6"
+
+
+def test_update_rejects_delete_status() -> None:
+    """Lifecycle updates use active/archive; delete goes through delete pipeline."""
+    with pytest.raises(ValueError):
+        UpdatePipelineInput(memory_id="mem-5", status="delete")
 
 
 def test_get_pipeline_input_takes_filters_not_memory_id() -> None:

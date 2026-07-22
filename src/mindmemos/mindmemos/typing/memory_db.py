@@ -171,8 +171,6 @@ class MemoryDbMemoryDeleteCommand(BaseModel):
     """
 
     memory_id: str
-    hard: bool = False
-    """Legacy compatibility flag; the writer always archives."""
     reason: str = "user_request"
     consistency: ConsistencyMode = "strong"
 
@@ -402,9 +400,6 @@ class MemoryDbMutationResult(BaseModel):
     status: str = "ok"
     memory_id: str
     changed: bool = True
-    hard: bool = False
-
-
 class MemoryDbWriteSummary(BaseModel):
     """Purpose: Summarize a completed write plan dispatch at the DB boundary.
 

@@ -7,7 +7,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from ...config import bind_config_overrides, get_config, get_config_overrides
-from ...errors import ConfigNotInitializedError
+from ...errors import ConfigNotInitializedError, MemoryNotFoundError, ResourceNotFoundError
 from ...logging import get_logger, traced
 from ...pipelines import create_pipeline
 from ...pipelines.add import AddPipeline
@@ -561,7 +561,10 @@ class MemoryService:
         ctx = to_memory_request_context(auth)
         config_ctx = await self._provider_config_context(ctx)
         with config_ctx:
-            return await pipeline.delete(to_delete_pipeline_input(request), ctx)
+            try:
+                return await pipeline.delete(to_delete_pipeline_input(request), ctx)
+            except MemoryNotFoundError as exc:
+                raise ResourceNotFoundError(str(exc), code="memory.not_found") from exc
 
     @traced("memory_service.update")
     async def update(self, auth: AuthContext, request: UpdateRequest) -> UpdatePipelineResult:
@@ -576,7 +579,10 @@ class MemoryService:
         ctx = to_memory_request_context(auth, request)
         config_ctx = await self._provider_config_context(ctx)
         with config_ctx:
-            return await pipeline.update(to_update_pipeline_input(request), ctx)
+            try:
+                return await pipeline.update(to_update_pipeline_input(request), ctx)
+            except MemoryNotFoundError as exc:
+                raise ResourceNotFoundError(str(exc), code="memory.not_found") from exc
 
     @traced("memory_service.feedback")
     async def feedback(self, auth: AuthContext, request: FeedbackRequest) -> FeedbackPipelineResult:

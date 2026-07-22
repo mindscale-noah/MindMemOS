@@ -1,4 +1,6 @@
 import pytest
+from pydantic import ValidationError
+from mindmemos.errors import MemoryNotFoundError
 from mindmemos.typing.memory import MemoryRequestContext
 from mindmemos.typing.service import DeletePipelineInput
 
@@ -34,12 +36,12 @@ class FakeWriter:
     async def apply_mutation_plan(self, ctx: MemoryRequestContext, plan) -> MemoryDbWriteResult:
         mutations = []
         for command in plan.memory_deletes:
-            self.calls.append((ctx.project_id, command.memory_id, command.hard, command.consistency))
+            self.calls.append((ctx.project_id, command.memory_id, command.consistency))
             mutations.append(MemoryDbMutationResult(memory_id=command.memory_id, changed=self.changed))
         return MemoryDbWriteResult(mutations=mutations)
 
     async def delete_memory(self, ctx: MemoryRequestContext, command: MemoryDbDeleteCommand) -> FakeMutationResult:
-        self.calls.append((ctx.project_id, command.memory_id, command.hard, command.consistency))
+        self.calls.append((ctx.project_id, command.memory_id, command.consistency))
         return FakeMutationResult(changed=self.changed)
 
 
@@ -50,28 +52,19 @@ async def test_delete_archives_existing_memory() -> None:
 
     result = await pipeline.delete(DeletePipelineInput(memory_id="mem-1"), make_context())
 
-    assert writer.calls == [("proj-1", "mem-1", False, "strong")]
+    assert writer.calls == [("proj-1", "mem-1", "strong")]
     assert result.status == "ok"
     assert result.message is None
 
 
-@pytest.mark.asyncio
-async def test_delete_hard_request_remains_compatible_and_archives_existing_memory() -> None:
-    writer = FakeWriter(changed=True)
-    pipeline = DefaultDeletePipeline(db_reader=FakeReader(), db_writer=writer)
-
-    result = await pipeline.delete(DeletePipelineInput(memory_id="mem-1", hard=True), make_context())
-
-    assert writer.calls == [("proj-1", "mem-1", False, "strong")]
-    assert result.status == "ok"
-    assert result.message is None
+def test_delete_rejects_hard_flag() -> None:
+    with pytest.raises(ValidationError):
+        DeletePipelineInput(memory_id="mem-1", hard=True)
 
 
 @pytest.mark.asyncio
 async def test_delete_returns_error_when_memory_is_missing() -> None:
     pipeline = DefaultDeletePipeline(db_reader=FakeReader(), db_writer=FakeWriter(changed=False))
 
-    result = await pipeline.delete(DeletePipelineInput(memory_id="missing"), make_context())
-
-    assert result.status == "error"
-    assert result.message == "memory not found: missing"
+    with pytest.raises(MemoryNotFoundError, match="memory not found: missing"):
+        await pipeline.delete(DeletePipelineInput(memory_id="missing"), make_context())
