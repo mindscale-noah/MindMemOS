@@ -625,14 +625,14 @@ async def test_soft_delete_missing_memory_does_not_create_graph_node():
 
 
 @pytest.mark.asyncio
-async def test_hard_delete_request_archives_without_physical_deletes():
+async def test_delete_archives_without_physical_deletes():
     qdrant = FakeQdrant(record=SimpleNamespace(payload={"metadata": {}}))
     neo4j = FakeNeo4j()
     writer = MemoryDbWriter(clients=SimpleNamespace(qdrant=qdrant, neo4j=neo4j))
 
     result = await writer.delete_memory(
         make_context(),
-        MemoryDbDeleteCommand(memory_id="mem-1", hard=True),
+        MemoryDbDeleteCommand(memory_id="mem-1"),
     )
 
     assert result.changed is True

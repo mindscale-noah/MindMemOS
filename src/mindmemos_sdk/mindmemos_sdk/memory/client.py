@@ -214,11 +214,9 @@ class MemoryClient:
     def delete(
         self,
         memory_id: str,
-        *,
-        hard: bool | None = None,
     ) -> StatusResult:
         """Delete one memory by id."""
-        request = self._core.delete(memory_id, hard=hard)
+        request = self._core.delete(memory_id)
         envelope = self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
 

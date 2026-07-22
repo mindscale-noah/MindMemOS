@@ -28,8 +28,6 @@ class DefaultDeletePipeline(MemoryDbPipelineMixin):
         Returns:
             An ok result when the memory was archived, otherwise an error result.
         """
-        # Keep accepting the legacy ``hard`` request flag, but never let it
-        # reach the storage boundary: memory deletion is archive-only.
         command = MemoryDbDeleteCommand(memory_id=inp.id)
         write_result = await self.db_writer.apply_mutation_plan(
             context,
@@ -39,5 +37,5 @@ class DefaultDeletePipeline(MemoryDbPipelineMixin):
         if result is None:
             return DeletePipelineResult(status="error", message=f"memory delete not applied: {inp.id}")
         if not result.changed:
-            return DeletePipelineResult(status="error", message=str(MemoryNotFoundError(inp.id)))
+            raise MemoryNotFoundError(inp.id)
         return DeletePipelineResult(status="ok", message=None)

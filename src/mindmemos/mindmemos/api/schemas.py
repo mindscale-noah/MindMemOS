@@ -243,10 +243,6 @@ class DeleteRequest(BaseModel):
     id: NonEmptyStr = Field(alias="memory_id")
     """Memory ID"""
 
-    hard: bool = False
-    """Legacy compatibility flag. Memory deletion is always archive-only."""
-
-
 class UpdateRequest(ActorIdentityRequest):
     """HTTP body for ``POST /v1/memory/update``.
 
@@ -266,7 +262,7 @@ class UpdateRequest(ActorIdentityRequest):
     metadata_patch: dict[str, Any] = Field(default_factory=dict)
     """Optional metadata fields merged into the memory metadata."""
 
-    status: Literal["active", "archived", "delete"] | None = None
+    status: Literal["active", "archived"] | None = None
     """Optional lifecycle status patch."""
 
 

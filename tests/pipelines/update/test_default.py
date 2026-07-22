@@ -1,4 +1,5 @@
 import pytest
+from mindmemos.errors import MemoryNotFoundError
 from mindmemos.typing.memory import MemoryRequestContext, MemoryView
 from mindmemos.typing.service import UpdatePipelineInput
 
@@ -101,11 +102,9 @@ async def test_update_returns_error_when_memory_is_missing() -> None:
     writer = FakeWriter()
     pipeline = DefaultUpdatePipeline(db_reader=reader, db_writer=writer)
 
-    result = await pipeline.update(UpdatePipelineInput(memory_id="missing", content="new content"), make_context())
-
     assert writer.update_calls == []
-    assert result.status == "error"
-    assert result.message == "memory not found: missing"
+    with pytest.raises(MemoryNotFoundError, match="memory not found: missing"):
+        await pipeline.update(UpdatePipelineInput(memory_id="missing", content="new content"), make_context())
 
 
 @pytest.mark.asyncio

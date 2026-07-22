@@ -334,12 +334,9 @@ def build_update_body(*, memory_id: str, content: str) -> dict[str, Any]:
     return {"memory_id": memory_id, "content": content}
 
 
-def build_delete_body(*, memory_id: str, hard: bool | None = None) -> dict[str, Any]:
+def build_delete_body(*, memory_id: str) -> dict[str, Any]:
     """Build a memory delete request body."""
-    body: dict[str, Any] = {"memory_id": memory_id}
-    if hard is not None:
-        body["hard"] = hard
-    return body
+    return {"memory_id": memory_id}
 
 
 def build_dreaming_body(
