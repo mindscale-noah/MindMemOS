@@ -182,6 +182,63 @@ Provide your final answer:
 
 Now, follow the Chain-of-Thought process above to answer the question:
 """
+# Vanilla search recalls flat memories; a lighter, question-type-agnostic prompt
+# answers better than the schema-oriented Chain-of-Thought scaffold. Selected per
+# run by memory_algorithm (see ``personamem_answer_prompt``): schema -> CoT,
+# vanilla -> unified.
+PERSONAMEM_UNIFIED_PROMPT = """You are a memory assistant. Select the single best response — (a), (b), (c), or (d) — using ONLY the retrieved memories. Memories may be noisy or incomplete and are prefixed with their event date (YYYY-MM-DD); treat those dates as the authoritative timeline.
+
+UNIVERSAL RULES (apply to every question):
+1. Evidence only. Never use outside knowledge or pick an option because it sounds plausible.
+2. Recall beats generic. Prefer an option that references a specific stored detail the user did NOT just say, over one that merely validates the current message ("That's great!").
+3. Preserve attitude in BOTH directions. If memories show the user disliked, abandoned, or was discouraged by something, positive reframings are WRONG — and if they show the user liked or benefited, negative reframings are WRONG.
+4. Match intensity. Do not inflate or deflate: "didn't resonate" ≠ "stopped entirely"; "enjoyed" ≠ "life-changing"; "overwhelming" ≠ "challenging". Choose the option whose strength mirrors the memory's own words.
+5. Verify claims literally. For the leading options, locate the option's key noun/verb/phrase in a memory. Topical relevance is not verification.
+6. Separate the user's personal reaction from environmental description ("the atmosphere was vibrant" is scene, not the user's attitude).
+
+HOW TO REASON — do ONLY what the question needs, and keep it brief:
+- Change over time (how a preference evolved): list the relevant events in date order and keep EVERY documented stage in sequence — do not collapse, soften, or inflate them. Eliminate an option only on a polarity or chronological-order conflict, NOT merely for naming fewer stages.
+- Trying / suggesting something new: first note which activities the memories show the user has ALREADY done and how they reacted. If the question asks for something new or unexperienced, exclude anything already done; otherwise prefer the option best aligned with the user's demonstrated values and past positive experiences, and reject generic encouragement.
+- Recommendation or ideas: extract the user's 2–3 SPECIFIC sub-interests from memory first (e.g. "attachment theory", not "likes books"), then score options against those, not against the question's surface adjectives.
+- Fact or reason recall: find the one memory that answers it, prefer the option that surfaces a stored detail the user did not just restate, and confirm its polarity matches.
+
+Reason concisely — a couple of lines for a simple recall; a short dated list or activity inventory only when the question needs it. Do not pad with exhaustive tables. Then end with EXACTLY one line:
+<final_answer>(a)</final_answer> or <final_answer>(b)</final_answer> or <final_answer>(c)</final_answer> or <final_answer>(d)</final_answer>
+
+---
+
+## Reference Memories
+Each memory may be prefixed with its event date as `(YYYY-MM-DD)`; use these dates as the authoritative timeline.
+{context}
+
+## Question
+{question}
+
+---
+
+Now reason briefly as instructed, then give your final answer:
+"""
+
+
+def personamem_answer_prompt(memory_algorithm: str) -> str:
+    """Select the answer prompt for a run: schema uses CoT, vanilla uses unified."""
+    return PERSONAMEM_COT_PROMPT if memory_algorithm == "schema" else PERSONAMEM_UNIFIED_PROMPT
+
+
+def _format_memory_with_date(memory: str, event_time: str | None) -> str:
+    """Prefix a retrieved memory with its event date (YYYY-MM-DD); unchanged if missing.
+
+    ``event_time`` from the backend looks like ``"2026-05-03 00:00:00"``; only the
+    date part is prepended (``"(2026-05-03) <memory>"``) so the unified prompt's
+    timeline reasoning has an authoritative date. Missing/unparseable time is
+    returned unchanged so answering never breaks.
+    """
+    if not event_time:
+        return memory
+    date_part = event_time.strip().split(" ", 1)[0]
+    return f"({date_part}) {memory}" if date_part else memory
+
+
 PersonaMemEvaluationMode = Literal["memory_rag", "official_full_context"]
 
 _REQUIRED_QUESTION_FIELDS = {
@@ -411,6 +468,7 @@ def build_personamem_prompt(
     *,
     retrieved_memories: Sequence[str] | None = None,
     visible_context: Sequence[Mapping[str, Any]] | None = None,
+    answer_prompt: str = PERSONAMEM_COT_PROMPT,
 ) -> list[dict[str, Any]]:
     """Build either the official full-context prompt or the memory-RAG adaptation."""
     query = f"{item.question}\n\n{PERSONAMEM_OFFICIAL_INSTRUCTION}\n\n{item.all_options}"
@@ -420,7 +478,7 @@ def build_personamem_prompt(
     memories = list(retrieved_memories or [])
     memory_lines = [f"[{index}] {text}" for index, text in enumerate(memories, start=1)]
     memory_text = "\n".join(memory_lines) if memory_lines else "(none)"
-    prompt_text = PERSONAMEM_COT_PROMPT.format(context=memory_text, question=query)
+    prompt_text = answer_prompt.format(context=memory_text, question=query)
     return [
         {"role": "user", "content": prompt_text},
     ]
@@ -599,6 +657,7 @@ class PersonaMemEnv:
         search_strategy: str = "fast",
         rerank: bool = False,
         add_batch_size: int = 20,
+        memory_algorithm: str = "vanilla",
     ) -> None:
         self._memory = memory
         self._answer_llm = answer_llm
@@ -609,6 +668,10 @@ class PersonaMemEnv:
         self._search_strategy = search_strategy
         self._rerank = rerank
         self._add_batch_size = add_batch_size
+        self._answer_prompt = personamem_answer_prompt(memory_algorithm)
+        # The unified (vanilla) prompt reasons over dated memories; the schema CoT
+        # path is left byte-identical to develop (no date prefix).
+        self._prefix_memory_dates = memory_algorithm != "schema"
 
     def _scope_key(self, scope: PersonaMemScope) -> tuple[str, str]:
         """Return (user_id, session_id) for this scope.
@@ -722,7 +785,11 @@ class PersonaMemEnv:
                     rerank=self._rerank,
                     filters={"user_id": user_id},
                 )
-                memories = [hit.memory for hit in search.memories if hit.memory]
+                memories = [
+                    _format_memory_with_date(hit.memory, hit.event_time) if self._prefix_memory_dates else hit.memory
+                    for hit in search.memories
+                    if hit.memory
+                ]
             except Exception as exc:  # noqa: BLE001 - failures remain in the official denominator
                 return PersonaMemQAResult(
                     item=item,
@@ -730,7 +797,9 @@ class PersonaMemEnv:
                     error=f"search failed: {type(exc).__name__}: {exc}",
                 )
             search_elapsed = time.monotonic() - search_started
-            prompt = build_personamem_prompt(item, retrieved_memories=memories)
+            prompt = build_personamem_prompt(
+                item, retrieved_memories=memories, answer_prompt=self._answer_prompt
+            )
         else:
             prompt = build_personamem_prompt(item, visible_context=self._context_store.visible(item.scope))
 

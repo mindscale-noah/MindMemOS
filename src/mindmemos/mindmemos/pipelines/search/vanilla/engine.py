@@ -6,9 +6,16 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC
 
+from ....components.searcher.vanilla import dedup_by_text_similarity
+from ....components.searcher.vanilla._executor import vanilla_dedup_executor
 from ....components.text import SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
 from ....config import TextProcessingConfig, get_config
 from ....config.algo.search import VanillaSearchConfig
+from ....config.algo.search.vanilla.vanilla import (
+    VANILLA_DEDUP_MAX_CANDIDATES,
+    VANILLA_HYBRID_PREFETCH_MAX,
+    VANILLA_RECALL_SIZE_MAX,
+)
 from ....llm import EmbedClient, get_embed_client
 from ....logging import get_logger, traced
 from ....mappers import parse_search_dsl
@@ -57,7 +64,7 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
         super().__init__(**kwargs)
 
         cfg = None
-        if text_config is None or search_config is None or embed_client is None:
+        if text_config is None or embed_client is None:
             cfg = get_config()
 
         text_cfg = text_config or cfg.algo_config.text_processing
@@ -105,6 +112,7 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
             options.recall_top_k if options and options.recall_top_k is not None else scfg.recall_size
         )
         recall_size = configured_recall_size if request_top_k is None else max(configured_recall_size, request_top_k)
+        recall_size = min(recall_size, VANILLA_RECALL_SIZE_MAX)
 
         if dense_vector is not None:
             query = MemoryDbSearchQuery(
@@ -117,6 +125,11 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
             prefetch_limit = max(
                 recall_size * scfg.hybrid_prefetch_factor,
                 scfg.hybrid_prefetch_min,
+            )
+            prefetch_limit = min(
+                prefetch_limit,
+                scfg.hybrid_prefetch_max,
+                VANILLA_HYBRID_PREFETCH_MAX,
             )
             result = await self.db_reader.search_hybrid(
                 context,
@@ -145,13 +158,22 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
         hits = await self._with_graph_related_hits(result.hits, filters, context)
         ranked_hits = _rank_by_score(hits)
         lineage_by_id, derived_to_by_id = await self._lineage_for_existing_hits(ranked_hits, context)
-        return [
+        candidates = [
             _to_memory_search_item(
                 hit,
                 lineage=_lineage_for_hit(hit, lineage_by_id=lineage_by_id, derived_to_by_id=derived_to_by_id),
             )
             for hit in ranked_hits
         ]
+        if scfg.dedup_enabled:
+            candidates = await vanilla_dedup_executor.run(
+                dedup_by_text_similarity,
+                candidates,
+                threshold=scfg.dedup_threshold,
+                group_keys=[_dedup_group_for_hit(hit) for hit in ranked_hits],
+                max_candidates=min(scfg.dedup_max_candidates, VANILLA_DEDUP_MAX_CANDIDATES),
+            )
+        return candidates
 
     async def _encode_dense(self, query: str) -> list[float] | None:
         """Generate a dense embedding; return None when unavailable."""
@@ -428,6 +450,12 @@ def _lineage_for_hit(
         derived_from_memory_ids=lineage_by_id.get(hit.memory_id, []),
         derived_to_memory_ids=derived_to_by_id.get(hit.memory_id, []),
     )
+
+
+def _dedup_group_for_hit(hit: MemoryDbSearchHit) -> tuple[str | None, str]:
+    memory = hit.memory
+    lineage_role = "archived" if hit.source == "lineage_archived" else "current"
+    return (memory.user_id if memory else None, lineage_role)
 
 
 def _to_memory_search_item(hit: MemoryDbSearchHit, *, lineage: MemoryLineage | None = None) -> MemorySearchItem:

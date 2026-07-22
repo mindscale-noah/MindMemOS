@@ -224,7 +224,11 @@ algo_config:
       recall_size: 20
       hybrid_prefetch_factor: 3
       hybrid_prefetch_min: 30
+      hybrid_prefetch_max: 300
       use_reranker: true
+      dedup_enabled: true
+      dedup_threshold: 0.6
+      dedup_max_candidates: 128
       graph_enabled: true
       shared_entity_graph_enabled: true
       graph_seed_memory_limit: 5

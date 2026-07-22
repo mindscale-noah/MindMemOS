@@ -1,3 +1,4 @@
+import pytest
 from mindmemos.config import (
     bind_config_overrides,
     get_config,
@@ -7,6 +8,7 @@ from mindmemos.config import (
     update_config,
 )
 from mindmemos.config import context as config_context
+from mindmemos.errors import InvalidConfigError
 
 
 def test_get_config_falls_back_to_global_config_when_request_context_is_empty() -> None:
@@ -50,5 +52,50 @@ def test_bind_config_overrides_restores_previous_context() -> None:
 
         assert get_config().pipelines["get"] == "outer_get"
         assert get_config_overrides().project_config == {"pipelines": {"get": "outer_get"}}
+    finally:
+        reset_config()
+
+
+def test_bind_config_overrides_rejects_invalid_project_config() -> None:
+    try:
+        init_config(config_path="config/mindmemos/dev.example.yaml")
+
+        with pytest.raises(InvalidConfigError, match="algo_config.search.vanilla.dedup_threshold"):
+            with bind_config_overrides(
+                project_config={
+                    "algo_config": {
+                        "search": {
+                            "vanilla": {
+                                "dedup_threshold": -1.0,
+                            }
+                        }
+                    }
+                }
+            ):
+                pass
+    finally:
+        reset_config()
+
+
+@pytest.mark.parametrize("override_name", ["project_config", "tenant_config"])
+def test_bind_config_overrides_rejects_zero_dedup_threshold(override_name: str) -> None:
+    try:
+        init_config(config_path="config/mindmemos/dev.example.yaml")
+
+        with pytest.raises(InvalidConfigError, match="algo_config.search.vanilla.dedup_threshold"):
+            with bind_config_overrides(
+                **{
+                    override_name: {
+                        "algo_config": {
+                            "search": {
+                                "vanilla": {
+                                    "dedup_threshold": 0,
+                                }
+                            }
+                        }
+                    }
+                }
+            ):
+                pass
     finally:
         reset_config()

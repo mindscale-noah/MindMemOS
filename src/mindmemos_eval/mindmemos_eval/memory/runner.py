@@ -374,6 +374,7 @@ def default_adapters() -> dict[str, BenchmarkAdapter]:
         "longmemeval": LongMemEvalAdapter(),
         "memoryagentbench": MemoryAgentBenchAdapter(),
         "personamem": PersonaMemAdapter(),
+        "personamem_subset": PersonaMemAdapter(),
         "persona": NotImplementedAdapter("persona"),
     }
 
@@ -445,8 +446,8 @@ async def run_benchmark_matrix(
     if missing_adapters:
         raise ValueError(f"benchmark adapter(s) not registered: {', '.join(missing_adapters)}")
 
-    reuse_path = _option(args, "reuse_api_key")
-    if reuse_path:
+    if _option(args, "reuse_api_key"):
+        reuse_path = _option(args, "reuse_api_key")
         if len(benchmark_names) != 1:
             raise ValueError("--reuse-api-key can only be used with exactly one benchmark")
         existing = _load_existing_identity(reuse_path, benchmark=benchmark_names[0])

@@ -77,6 +77,7 @@ class PersonaMemAdapter:
             search_strategy=public_search_strategy,
             rerank=bool(rerank),
             add_batch_size=add_batch_size,
+            memory_algorithm=bench_config.memory_algorithm,
         )
         run = await env.run_dataset(
             items,
