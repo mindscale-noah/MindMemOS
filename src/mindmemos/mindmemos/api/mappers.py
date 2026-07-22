@@ -29,7 +29,11 @@ from ..typing import (
     FeedbackPipelineResult,
     GetPipelineInput,
     GetPipelineResult,
+    MemoryListPipelineInput,
+    MemoryListPipelineResult,
     MemoryRequestContext,
+    MemoryScrollPipelineInput,
+    MemoryScrollPipelineResult,
     SearchPipelineInput,
     SearchPipelineResult,
     UpdatePipelineInput,
@@ -45,6 +49,10 @@ from .schemas import (
     FeedbackRequest,
     GetRequest,
     MemoryListData,
+    MemoryPageData,
+    MemoryPageRequest,
+    MemoryScrollData,
+    MemoryScrollRequest,
     SearchRequest,
     UpdateRequest,
 )
@@ -52,6 +60,9 @@ from .schemas import (
 # Actor identity fields carried by request models but owned by MemoryRequestContext.
 _ACTOR_FIELDS = ("user_id", "app_id", "session_id", "agent_id")
 _SKILL_FIELDS = ("skill_context", "score", "task_id")
+MAX_MEMORY_PAGE_SIZE = 100
+MAX_MEMORY_LIST_OFFSET = 10000
+MAX_MEMORY_SCROLL_LIMIT = 500
 
 
 def to_add_pipeline_input(req: AddRequest) -> AddPipelineInput:
@@ -73,12 +84,17 @@ def to_add_pipeline_input(req: AddRequest) -> AddPipelineInput:
     )
 
 
-def to_search_pipeline_input(req: SearchRequest, *, search_pipeline: str) -> SearchPipelineInput:
+def to_search_pipeline_input(
+    req: SearchRequest,
+    *,
+    search_pipeline: str | None = None,
+    search_pipline: str | None = None,
+) -> SearchPipelineInput:
     """Build pure search pipeline input from a public search request."""
 
     _validate_request_top_k(req.top_k)
     data = req.model_dump(by_alias=True, exclude=set(_ACTOR_FIELDS) | {"search_strategy"})
-    data["search_pipeline"] = search_pipeline
+    data["search_pipeline"] = search_pipeline or search_pipline
     data["agentic"] = req.search_strategy == "agentic"
     return SearchPipelineInput.model_validate(data)
 
@@ -100,6 +116,38 @@ def to_get_pipeline_input(req: GetRequest) -> GetPipelineInput:
     return GetPipelineInput.model_validate(req.model_dump(by_alias=True))
 
 
+def to_memory_list_pipeline_input(req: MemoryPageRequest) -> MemoryListPipelineInput:
+    """Build paged memory list pipeline input from a public list request."""
+
+    _validate_memory_page(req.page, req.page_size)
+    return MemoryListPipelineInput.model_validate(req.model_dump(by_alias=True, exclude=set(_ACTOR_FIELDS)))
+
+
+def to_memory_scroll_pipeline_input(req: MemoryScrollRequest) -> MemoryScrollPipelineInput:
+    """Build cursor memory scroll pipeline input from a public scroll request."""
+
+    if req.limit > MAX_MEMORY_SCROLL_LIMIT:
+        raise BadRequestError(
+            f"limit must be <= {MAX_MEMORY_SCROLL_LIMIT}; value={req.limit}",
+            code="memory.scroll_limit_too_large",
+        )
+    return MemoryScrollPipelineInput.model_validate(req.model_dump(by_alias=True, exclude=set(_ACTOR_FIELDS)))
+
+
+def _validate_memory_page(page: int, page_size: int) -> None:
+    if page_size > MAX_MEMORY_PAGE_SIZE:
+        raise BadRequestError(
+            f"page_size must be <= {MAX_MEMORY_PAGE_SIZE}; value={page_size}",
+            code="memory.page_size_too_large",
+        )
+    offset = (page - 1) * page_size
+    if offset > MAX_MEMORY_LIST_OFFSET:
+        raise BadRequestError(
+            f"(page - 1) * page_size must be <= {MAX_MEMORY_LIST_OFFSET}; value={offset}",
+            code="memory.page_offset_too_large",
+        )
+
+
 def to_delete_pipeline_input(req: DeleteRequest) -> DeletePipelineInput:
     """Build delete pipeline input from a public delete request."""
 
@@ -109,7 +157,7 @@ def to_delete_pipeline_input(req: DeleteRequest) -> DeletePipelineInput:
 def to_update_pipeline_input(req: UpdateRequest) -> UpdatePipelineInput:
     """Build update pipeline input from a public update request."""
 
-    return UpdatePipelineInput.model_validate(req.model_dump(by_alias=True))
+    return UpdatePipelineInput.model_validate(req.model_dump(by_alias=True, exclude=set(_ACTOR_FIELDS)))
 
 
 def to_feedback_pipeline_input(req: FeedbackRequest) -> FeedbackPipelineInput:
@@ -128,7 +176,14 @@ def to_dreaming_pipeline_input(req: DreamingRequest) -> DreamingPipelineInput:
 
 def to_memory_request_context(
     auth: AuthContext,
-    identity: AddRequest | SearchRequest | FeedbackRequest | DreamingRequest | None = None,
+    identity: AddRequest
+    | SearchRequest
+    | FeedbackRequest
+    | DreamingRequest
+    | MemoryPageRequest
+    | MemoryScrollRequest
+    | UpdateRequest
+    | None = None,
     *,
     require_user_id: bool = False,
 ) -> MemoryRequestContext:
@@ -186,6 +241,40 @@ def to_memory_list_api_response(
         message=getattr(result, "message", None) or "",
         request_id=request_id,
         data=MemoryListData(memories=result.memories),
+    )
+
+
+def to_memory_page_api_response(
+    result: MemoryListPipelineResult,
+    request_id: str | None,
+) -> ApiResponse[MemoryPageData]:
+    """Convert a paged list pipeline result into an HTTP response envelope."""
+
+    return ApiResponse[MemoryPageData](
+        code=result.status,
+        message=result.message or "",
+        request_id=request_id,
+        data=MemoryPageData(
+            memories=result.memories,
+            page=result.page,
+            page_size=result.page_size,
+            total=result.total,
+            has_more=result.has_more,
+        ),
+    )
+
+
+def to_memory_scroll_api_response(
+    result: MemoryScrollPipelineResult,
+    request_id: str | None,
+) -> ApiResponse[MemoryScrollData]:
+    """Convert a cursor scroll pipeline result into an HTTP response envelope."""
+
+    return ApiResponse[MemoryScrollData](
+        code=result.status,
+        message=result.message or "",
+        request_id=request_id,
+        data=MemoryScrollData(memories=result.memories, next_cursor=result.next_cursor),
     )
 
 

@@ -12,6 +12,8 @@ from .models import (
     AddResult,
     FeedbackMode,
     GetResult,
+    MemoryPageResult,
+    MemoryScrollResult,
     MemorySearchHit,
     Message,
     SearchResult,
@@ -113,6 +115,56 @@ class AsyncMemoryClient:
         envelope = await self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
 
+    async def list(
+        self,
+        *,
+        filters: dict[str, Any] | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        include_total: bool = True,
+        user_id: str | None = None,
+        app_id: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> MemoryPageResult:
+        """List memories using page/page_size pagination."""
+        request = self._core.list(
+            filters=filters,
+            page=page,
+            page_size=page_size,
+            include_total=include_total,
+            user_id=user_id,
+            app_id=app_id,
+            agent_id=agent_id,
+            session_id=session_id,
+        )
+        envelope = await self._transport.post_envelope(request.path, json=request.body)
+        return request.parse(envelope)
+
+    async def scroll(
+        self,
+        *,
+        filters: dict[str, Any] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+        user_id: str | None = None,
+        app_id: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> MemoryScrollResult:
+        """Scroll memories using an opaque cursor."""
+        request = self._core.scroll(
+            filters=filters,
+            limit=limit,
+            cursor=cursor,
+            user_id=user_id,
+            app_id=app_id,
+            agent_id=agent_id,
+            session_id=session_id,
+        )
+        envelope = await self._transport.post_envelope(request.path, json=request.body)
+        return request.parse(envelope)
+
     async def update(
         self,
         memory_id: str,
@@ -126,9 +178,11 @@ class AsyncMemoryClient:
     async def delete(
         self,
         memory_id: str,
+        *,
+        hard: bool | None = None,
     ) -> StatusResult:
         """Delete one memory by id."""
-        request = self._core.delete(memory_id)
+        request = self._core.delete(memory_id, hard=hard)
         envelope = await self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
 

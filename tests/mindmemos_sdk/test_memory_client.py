@@ -293,6 +293,74 @@ def test_get_omits_empty_optional_fields():
     assert captured["body"] == {}
 
 
+def test_list_sends_page_params_and_returns_page_metadata():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "code": "ok",
+                "request_id": "req-list",
+                "data": {
+                    "memories": [{"id": "m1", "memory": "cat", "last_update_at": "2026-06-11 00:00:00"}],
+                    "page": 2,
+                    "page_size": 20,
+                    "total": 41,
+                    "has_more": True,
+                },
+            },
+        )
+
+    client = MemoryClient(_transport(handler), default_user_id="u_1")
+    result = client.list(page=2, page_size=20, include_total=True, user_id="u_1", session_id="s_1")
+
+    assert captured["url"] == "https://api.test/v1/memory/list"
+    assert captured["body"] == {
+        "page": 2,
+        "page_size": 20,
+        "include_total": True,
+        "user_id": "u_1",
+        "session_id": "s_1",
+    }
+    assert result.request_id == "req-list"
+    assert result.page == 2
+    assert result.page_size == 20
+    assert result.total == 41
+    assert result.has_more is True
+    assert result.memories[0].id == "m1"
+
+
+def test_scroll_sends_cursor_and_returns_next_cursor():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "code": "ok",
+                "request_id": "req-scroll",
+                "data": {
+                    "memories": [{"id": "m2", "memory": "dog", "last_update_at": "2026-06-12 00:00:00"}],
+                    "next_cursor": "cursor-2",
+                },
+            },
+        )
+
+    client = MemoryClient(_transport(handler), default_user_id="u_1")
+    result = client.scroll(limit=50, cursor="cursor-1", user_id="u_1")
+
+    assert captured["url"] == "https://api.test/v1/memory/scroll"
+    assert captured["body"] == {"limit": 50, "cursor": "cursor-1", "user_id": "u_1"}
+    assert result.request_id == "req-scroll"
+    assert result.next_cursor == "cursor-2"
+    assert result.memories[0].id == "m2"
+
+
 def test_update_sends_body_and_returns_status():
     captured = {}
 
@@ -323,6 +391,22 @@ def test_delete_sends_memory_id():
 
     assert captured["url"] == "https://api.test/v1/memory/delete"
     assert captured["body"] == {"memory_id": "m1"}
+    assert result.code == "ok"
+
+
+def test_delete_can_send_hard_delete_flag():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"code": "ok", "data": None})
+
+    client = MemoryClient(_transport(handler))
+    result = client.delete("m1", hard=True)
+
+    assert captured["url"] == "https://api.test/v1/memory/delete"
+    assert captured["body"] == {"memory_id": "m1", "hard": True}
     assert result.code == "ok"
 
 

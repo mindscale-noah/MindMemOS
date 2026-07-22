@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -51,8 +52,21 @@ from ._schema_utils import (
     schema_memory_type,
 )
 from ._schema_write_plan import SchemaWritePlanBuilder
+from ._runtime_clients import resolve_embed_client, resolve_llm_client
 
 logger = get_logger(__name__)
+ProgressReporter = Callable[[str, str, int | None, dict[str, Any] | None], Awaitable[None]]
+
+
+async def _report_progress(
+    progress: ProgressReporter | None,
+    stage: str,
+    message: str,
+    percent: int | None = None,
+    data: dict[str, Any] | None = None,
+) -> None:
+    if progress is not None:
+        await progress(stage, message, percent, data)
 
 
 class SchemaAddPlanner:
@@ -61,8 +75,8 @@ class SchemaAddPlanner:
     def __init__(
         self,
         *,
-        llm_client: LLMClient,
-        embed_client: EmbedClient,
+        llm_client: LLMClient | None,
+        embed_client: EmbedClient | None,
         db_reader: Any,
         db_writer: Any,
         entity_manager: Any,
@@ -130,9 +144,17 @@ class SchemaAddPlanner:
         request_metadata: dict[str, Any],
         created_at: datetime,
         prompt_set: AddPromptSet | None = None,
+        progress: ProgressReporter | None = None,
     ) -> tuple[MemoryDbWritePlan, list[MemoryAddEventItem], list[str], list[SchemaMemoryUpdate]]:
         """Build a complete database write plan from extracted schema entities."""
         prompts = prompt_set or self.prompt_set
+        await _report_progress(
+            progress,
+            "memory_planning",
+            "Planning memory structure.",
+            60,
+            {"message_i18n": {"zh": "正在整理记忆结构", "en": "Planning memory structure"}},
+        )
         merge_context = await self._merge_policy.prepare(
             raw_entities=raw_entities,
             raw_edges=raw_edges,
@@ -148,6 +170,13 @@ class SchemaAddPlanner:
 
         extraction_entities = list(merge_context.raw_entities) + [merge_context.episode_entity]
         entity_embedding_texts = [entity_embedding_text(entity) for entity in extraction_entities]
+        await _report_progress(
+            progress,
+            "embedding",
+            "Generating entity embeddings.",
+            72,
+            {"message_i18n": {"zh": "正在生成实体向量", "en": "Generating entity embeddings"}},
+        )
         entity_vectors = await self._embed_texts("memory.add.entity", entity_embedding_texts)
         entity_vector_by_name = {
             entity.get("name", ""): vector for entity, vector in zip(extraction_entities, entity_vectors, strict=True)
@@ -209,6 +238,13 @@ class SchemaAddPlanner:
             )
             prop_entity_writes.append(entity_write)
 
+        await _report_progress(
+            progress,
+            "memory_planning",
+            "Processing memory properties.",
+            78,
+            {"message_i18n": {"zh": "正在处理记忆属性", "en": "Processing memory properties"}},
+        )
         prop_results = await asyncio.gather(*prop_tasks, return_exceptions=True)
         for entity_write, result in zip(prop_entity_writes, prop_results, strict=True):
             if isinstance(result, Exception):
@@ -239,10 +275,24 @@ class SchemaAddPlanner:
                 )
 
         relationships.extend(edge_relationships(merge_context.raw_edges, entity_by_name, context.project_id))
+        await _report_progress(
+            progress,
+            "relationship_building",
+            "Building memory relationships.",
+            84,
+            {"message_i18n": {"zh": "正在建立记忆关系", "en": "Building memory relationships"}},
+        )
         episode_edge_relationships = await episode_edge_task
         relationships.extend(episode_edge_relationships)
         relationships = dedupe_entity_relationships(relationships)
         merge_context.pending_archives = list(pending_archives)
+        await _report_progress(
+            progress,
+            "embedding",
+            "Generating memory vectors.",
+            86,
+            {"message_i18n": {"zh": "正在生成记忆向量", "en": "Generating memory vectors"}},
+        )
         plan = await self._write_plan_builder.build(
             memories=memories,
             entities=entities,
@@ -365,7 +415,7 @@ class SchemaAddPlanner:
 
         for attempt in range(self.max_merge_retries):
             try:
-                response = await self.llm_client.chat(
+                response = await resolve_llm_client(self.llm_client).chat(
                     task="memory.add.entity_merge",
                     messages=[{"role": "user", "content": prompt}],
                     format_parser=parse_json_object,
@@ -618,7 +668,7 @@ class SchemaAddPlanner:
             .replace("{latest_properties}", latest_props_text)
         )
         try:
-            response = await self.llm_client.chat(
+            response = await resolve_llm_client(self.llm_client).chat(
                 task="memory.add.description_update",
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -741,7 +791,7 @@ class SchemaAddPlanner:
         )
 
         try:
-            response = await self.llm_client.chat(
+            response = await resolve_llm_client(self.llm_client).chat(
                 task="memory.add.property_merge",
                 messages=[{"role": "user", "content": prompt}],
                 format_parser=parse_json_object,
@@ -931,7 +981,7 @@ class SchemaAddPlanner:
             "{context_text}", context_text
         )
         try:
-            response = await self.llm_client.chat(
+            response = await resolve_llm_client(self.llm_client).chat(
                 task="memory.add.property_delete",
                 messages=[{"role": "user", "content": prompt}],
                 format_parser=parse_json_object,
@@ -1030,7 +1080,7 @@ class SchemaAddPlanner:
             .replace("{candidate_episodes}", format_candidate_episodes(candidates))
         )
         try:
-            response = await self.llm_client.chat(
+            response = await resolve_llm_client(self.llm_client).chat(
                 task="memory.add.episode_edge",
                 messages=[{"role": "user", "content": prompt}],
                 format_parser=parse_json_object,
@@ -1336,7 +1386,7 @@ class SchemaAddPlanner:
     async def _embed_texts(self, task: str, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        response = await self.embed_client.embed(task=task, text=texts)
+        response = await resolve_embed_client(self.embed_client).embed(task=task, text=texts)
         return response.embeddings
 
 

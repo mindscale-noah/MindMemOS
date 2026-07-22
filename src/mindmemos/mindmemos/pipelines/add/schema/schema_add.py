@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -16,17 +17,19 @@ from ....components.extractor.schema import (
     SchemaSearchFieldExtractor,
     build_episode_entity,
 )
+from ....components.extractor.schema._runtime_clients import initial_embed_client, initial_llm_client
 from ....components.memory_modeling.schema import EntityManager, get_entity_manager
 from ....components.text import detect_prompt_language
 from ....config import get_config
 from ....infra.kafka import get_producer
-from ....llm import EmbedClient, LLMClient, get_embed_client, get_llm_client
+from ....llm import EmbedClient, LLMClient
 from ....logging import get_logger, traced, traced_awaitable
 from ....prompts import AddPromptSet, get_add_prompts
 from ....typing import (
     AddPipelineAsyncResult,
     AddPipelineInput,
     AddPipelineSyncResult,
+    AddStreamCancelled,
     EntityVectorWrite,
     EntityWrite,
     MemoryAddEventItem,
@@ -52,6 +55,41 @@ logger = get_logger(__name__)
 
 SCHEMA_ADD_DRAIN_TOPIC = "memory.add.drain"
 SCHEMA_ADD_EPISODE_TOPIC = "memory.add.episode"
+ProgressReporter = Callable[[str, str, int | None, dict[str, Any] | None], Awaitable[None]]
+CancelCheck = Callable[[], Awaitable[bool]]
+
+_STAGE_MESSAGES: dict[str, dict[str, str]] = {
+    "buffering": {"zh": "正在接收输入", "en": "Buffering source messages"},
+    "chunking": {"zh": "正在分析内容边界", "en": "Detecting memory episode boundaries"},
+    "llm_extracting": {"zh": "正在提取结构化记忆", "en": "Extracting structured memory"},
+    "search_fielding": {"zh": "正在生成检索线索", "en": "Generating search hints"},
+    "memory_planning": {"zh": "正在整理记忆结构", "en": "Planning memory structure"},
+    "embedding": {"zh": "正在生成记忆向量", "en": "Generating memory embeddings"},
+    "relationship_building": {"zh": "正在建立记忆关系", "en": "Building memory relationships"},
+    "ready_to_persist": {"zh": "准备写入记忆", "en": "Preparing to persist memory"},
+    "persisting": {"zh": "正在写入记忆", "en": "Persisting memory"},
+    "completed": {"zh": "记忆提取完成", "en": "Memory extraction completed"},
+}
+
+
+async def _report_progress(
+    progress: ProgressReporter | None,
+    stage: str,
+    message: str,
+    percent: int | None = None,
+    data: dict[str, Any] | None = None,
+) -> None:
+    if progress is not None:
+        stage_message = _STAGE_MESSAGES.get(stage)
+        if stage_message is not None:
+            message = stage_message["en"]
+            data = {**(data or {}), "message_i18n": stage_message}
+        await progress(stage, message, percent, data)
+
+
+async def _raise_if_cancelled(cancel_check: CancelCheck | None, stage: str) -> None:
+    if cancel_check is not None and await cancel_check():
+        raise AddStreamCancelled(stage, "Add stream cancelled before persistence.")
 
 
 @dataclass(slots=True)
@@ -101,8 +139,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        self.llm_client = llm_client or get_llm_client()
-        self.embed_client = embed_client or get_embed_client()
+        self.llm_client = initial_llm_client(llm_client)
+        self.embed_client = initial_embed_client(embed_client)
         self.entity_manager = entity_manager or get_entity_manager()
         algo_cfg = get_config().algo_config
         schema_cfg = algo_cfg.add.schema
@@ -228,6 +266,45 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         # Sync drains inline and produces the full output in one shot, so overwrite
         # the request-level record directly. The inline path does not thread the
         # trigger id into episodes, so there is no double write.
+        await suppress_recording_errors(
+            self.recorder.mark_add_completed(context, add_record_id, result),
+            operation="add.schema_add.sync",
+        )
+        return result
+
+    async def add_sync_stream(
+        self,
+        inp: AddPipelineInput,
+        context: MemoryRequestContext,
+        *,
+        add_record_id: str | None = None,
+        progress: ProgressReporter | None = None,
+        cancel_check: CancelCheck | None = None,
+    ) -> AddPipelineSyncResult:
+        """Append messages, drain synchronously, and report progress for SSE callers."""
+
+        await _report_progress(progress, "buffering", "Buffering source messages.", 8)
+        record_ids = await self.add_buffer.append(
+            context,
+            inp,
+            force_generation=inp.force_generation,
+            source_add_record_id=add_record_id,
+        )
+        try:
+            await _raise_if_cancelled(cancel_check, "buffering")
+            events = await self._ensure_drain_and_wait(
+                context,
+                consistency=self._consistency,
+                force=True,
+                progress=progress,
+                cancel_check=cancel_check,
+            )
+        except AddStreamCancelled:
+            records = await self.add_buffer.get_by_ids(context, record_ids)
+            await self.add_buffer.delete_processed(context, records)
+            raise
+        result = AddPipelineSyncResult(status="ok", memories=events)
+        await _report_progress(progress, "completed", "Memory extraction completed.", 100)
         await suppress_recording_errors(
             self.recorder.mark_add_completed(context, add_record_id, result),
             operation="add.schema_add.sync",
@@ -388,6 +465,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         *,
         consistency: str,
         force: bool,
+        progress: ProgressReporter | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> list[MemoryAddEventItem]:
         """Start the drain loop and wait for generated events."""
         key = buffer_key(context)
@@ -397,7 +476,14 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                     self._processing_by_key[key] = True
                     break
             await asyncio.sleep(0.05)
-        events, _dispatched = await self._process_loop(context, consistency=consistency, force=force, inline=True)
+        events, _dispatched = await self._process_loop(
+            context,
+            consistency=consistency,
+            force=force,
+            inline=True,
+            progress=progress,
+            cancel_check=cancel_check,
+        )
         return events
 
     async def _publish_drain_task(
@@ -463,6 +549,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         force: bool,
         inline: bool = False,
         trigger_record_id: str | None = None,
+        progress: ProgressReporter | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> tuple[list[MemoryAddEventItem], int]:
         """Run the two-phase drain loop until no processable episodes remain.
 
@@ -475,14 +563,23 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         try:
             while True:
                 # Phase 1: Chunking
+                await _raise_if_cancelled(cancel_check, "chunking")
+                await _report_progress(progress, "chunking", "Detecting memory episode boundaries.", 18)
                 episode_tasks = await self._chunk_episodes(context, force=force)
                 if not episode_tasks:
                     break
 
                 # Phase 2: Dispatch
                 dispatched += len(episode_tasks)
+                await _raise_if_cancelled(cancel_check, "llm_extracting")
                 round_events = await (
-                    self._dispatch_episodes_inline(episode_tasks, context=context, consistency=consistency)
+                    self._dispatch_episodes_inline(
+                        episode_tasks,
+                        context=context,
+                        consistency=consistency,
+                        progress=progress,
+                        cancel_check=cancel_check,
+                    )
                     if inline
                     else self._dispatch_episodes_kafka(
                         episode_tasks,
@@ -509,11 +606,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             return []
 
         sample_text = " ".join(str(e.get("content", "")) for e in entries[:20])
-        detected_lang = detect_prompt_language(
-            sample_text,
-            fallback=get_config().algo_config.common.prompt_language,
-        )
-        request_prompts = get_add_prompts(detected_lang)
+        request_prompts = get_add_prompts(_prompt_language_for_records(records, sample_text))
 
         detect_force = force or add_record_ops.force_generation(records)
         boundaries = await traced_awaitable(
@@ -605,11 +698,19 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         *,
         context: MemoryRequestContext,
         consistency: str,
+        progress: ProgressReporter | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> list[MemoryAddEventItem]:
         """Execute episode generation tasks in the current process."""
         events: list[MemoryAddEventItem] = []
         for task in tasks:
-            task_events = await self._execute_episode_task(task, context=context, consistency=consistency)
+            task_events = await self._execute_episode_task(
+                task,
+                context=context,
+                consistency=consistency,
+                progress=progress,
+                cancel_check=cancel_check,
+            )
             events.extend(task_events)
         return events
 
@@ -622,6 +723,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         context: MemoryRequestContext,
         consistency: str,
         trigger_record_id: str | None = None,
+        progress: ProgressReporter | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> list[MemoryAddEventItem]:
         """Trace and execute one episode generation task."""
         return await traced_awaitable(
@@ -631,6 +734,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                 context=context,
                 consistency=consistency,
                 trigger_record_id=trigger_record_id,
+                progress=progress,
+                cancel_check=cancel_check,
             ),
             attributes={
                 "project_id": context.project_id,
@@ -654,6 +759,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         context: MemoryRequestContext,
         consistency: str,
         trigger_record_id: str | None = None,
+        progress: ProgressReporter | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> list[MemoryAddEventItem]:
         for attempt in range(self._episode_max_retries):
             try:
@@ -661,6 +768,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                     task.records,
                     context=context,
                     consistency=consistency,
+                    progress=progress,
+                    cancel_check=cancel_check,
                 )
                 await self.add_buffer.mark_processed(
                     context,
@@ -685,6 +794,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                     operation="add.schema_add.episode_chunk",
                 )
                 return episode_events
+            except AddStreamCancelled:
+                raise
             except Exception as exc:
                 if attempt < self._episode_max_retries - 1:
                     logger.warning(
@@ -734,17 +845,15 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         *,
         context: MemoryRequestContext,
         consistency: str,
+        progress: ProgressReporter | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> list[MemoryAddEventItem]:
         """Generate schema entities, vectors, and write events for one episode."""
         conversation_text = add_record_ops.to_conversation_text(records)
         if not conversation_text.strip():
             return []
 
-        detected_lang = detect_prompt_language(
-            conversation_text,
-            fallback=get_config().algo_config.common.prompt_language,
-        )
-        request_prompts = get_add_prompts(detected_lang)
+        request_prompts = get_add_prompts(_prompt_language_for_records(records, conversation_text))
 
         episode_context = add_record_ops.context(records, context)
         event_at = add_record_ops.records_datetime(records)
@@ -765,6 +874,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             )
         )
 
+        await _report_progress(progress, "llm_extracting", "Extracting structured memory with LLM.", 35)
         selected_schema = await schema_selection_task
         raw_memory = await self.extractor.extract_memory(
             entity_schema=selected_schema,
@@ -793,8 +903,9 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
 
         objectified_content = await objectify_task
         episode_description = await description_task
-        episode_search_fields = (
-            await self.search_field_extractor.extract_search_fields(
+        if self.use_search_fields:
+            await _report_progress(progress, "search_fielding", "Generating search hints.", 52)
+            episode_search_fields = await self.search_field_extractor.extract_search_fields(
                 entities=raw_memory.get("entities", []),
                 context_text=conversation_text,
                 max_fields=self.search_fields_max,
@@ -802,9 +913,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                 augment_count=self.episode_augment_count,
                 prompt_set=request_prompts,
             )
-            if self.use_search_fields
-            else []
-        )
+        else:
+            episode_search_fields = []
         episode_entity = build_episode_entity(
             objectified_content=objectified_content,
             episode_description=episode_description,
@@ -812,6 +922,8 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             search_fields=episode_search_fields,
         )
 
+        await _raise_if_cancelled(cancel_check, "memory_planning")
+        await _report_progress(progress, "memory_planning", "Planning memory structure.", 60)
         plan, events, pending_archives, pending_updates = await self.planner.build_write_plan(
             raw_entities=raw_memory.get("entities", []),
             raw_edges=raw_memory.get("edges", []),
@@ -820,6 +932,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             request_metadata=add_record_ops.metadata(records),
             created_at=added_at,
             prompt_set=request_prompts,
+            progress=progress,
         )
 
         entity_updates = _split_entity_updates(plan)
@@ -833,6 +946,9 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         mutation_plan.entity_updates.extend(_to_entity_update_commands(entity_updates, consistency=consistency))
         mutation_plan.memory_updates.extend(memory_update_commands)
         mutation_plan.memory_deletes.extend(memory_delete_commands)
+        await _report_progress(progress, "ready_to_persist", "Memory is ready to persist.", 82)
+        await _raise_if_cancelled(cancel_check, "ready_to_persist")
+        await _report_progress(progress, "persisting", "Persisting memory to storage.", 94)
         write_result = await self.db_writer.apply_mutation_plan(
             episode_context,
             mutation_plan,
@@ -901,16 +1017,32 @@ def _reconstruct_input_from_records(records: list[BufferedAddRecord]) -> AddPipe
     """Rebuild a minimal add pipeline input from buffer records."""
     messages = []
     metadata: dict[str, Any] = {}
+    prompt_language: str | None = None
     for record in records:
         payload = record.payload
         record_messages = payload.get("messages", [])
         messages.extend(record_messages)
         if not metadata and payload.get("metadata"):
             metadata = payload["metadata"]
+        if prompt_language is None and payload.get("prompt_language") in {"EN", "ZH"}:
+            prompt_language = payload["prompt_language"]
     try:
-        return AddPipelineInput(messages=messages, metadata=metadata)
+        return AddPipelineInput(messages=messages, metadata=metadata, prompt_language=prompt_language)
     except Exception:
-        return AddPipelineInput(metadata=metadata)
+        return AddPipelineInput(metadata=metadata, prompt_language=prompt_language)
+
+
+def _prompt_language_for_records(records: list[BufferedAddRecord], text: str) -> str:
+    """Return request-level prompt language or fall back to auto detection."""
+
+    for record in records:
+        value = record.payload.get("prompt_language")
+        if value in {"EN", "ZH"}:
+            return value
+    return detect_prompt_language(
+        text,
+        fallback=get_config().algo_config.common.prompt_language,
+    )
 
 
 def _default_consistency() -> str:

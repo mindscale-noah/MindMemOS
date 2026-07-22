@@ -10,6 +10,7 @@ from ....llm import LLMClient
 from ....logging import get_logger
 from ....prompts import AddPromptSet
 from ...memory_modeling.schema import EntitySchemaProvider
+from ._runtime_clients import resolve_llm_client
 from ._schema_utils import (
     build_filtered_schema,
     format_schema_summary,
@@ -29,7 +30,7 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
     def __init__(
         self,
         *,
-        llm_client: LLMClient,
+        llm_client: LLMClient | None,
         prompt_set: AddPromptSet,
         entity_manager: EntitySchemaProvider,
         enable_schema_selection: bool,
@@ -83,7 +84,7 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
             dialogue_text=conversation_text[:2000],
             entity_schema=schema_summary,
         )
-        response = await self.llm_client.chat(
+        response = await resolve_llm_client(self.llm_client).chat(
             task="memory.add.schema_selection",
             messages=[{"role": "user", "content": prompt}],
             format_parser=parse_json_object,
@@ -109,7 +110,7 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
 
         last_memory: dict[str, Any] | None = None
         for _ in range(3):
-            response = await self.llm_client.chat(
+            response = await resolve_llm_client(self.llm_client).chat(
                 task="memory.add.entity_generation",
                 messages=[{"role": "user", "content": prompt}],
                 format_parser=parse_json_object,
@@ -140,7 +141,7 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
             "{conversation_timestamp}", conversation_timestamp
         )
         try:
-            response = await self.llm_client.chat(
+            response = await resolve_llm_client(self.llm_client).chat(
                 task="memory.add.episode_objectify",
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -166,7 +167,7 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
             "{conversation_timestamp}", conversation_timestamp
         )
         try:
-            response = await self.llm_client.chat(
+            response = await resolve_llm_client(self.llm_client).chat(
                 task="memory.add.episode_description",
                 messages=[{"role": "user", "content": prompt}],
                 format_parser=parse_json_object,

@@ -1,6 +1,10 @@
 from typing import Protocol
 
-from ...typing import GetPipelineInput, GetPipelineResult, MemoryRequestContext
+from ...typing import (
+    GetPipelineInput,
+    GetPipelineResult,
+    MemoryRequestContext,
+)
 
 
 class GetPipeline(Protocol):

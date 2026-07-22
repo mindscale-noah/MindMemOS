@@ -6,6 +6,7 @@ from typing import Any
 
 from qdrant_client import models as qmodels
 
+from ..filters import SCHEMA_ADD_BUFFER_PAYLOAD_INDEX_SCHEMA
 from ..models import QdrantRecord, SchemaAddBufferPoint
 from .base import CollectionRepository
 
@@ -20,16 +21,15 @@ class SchemaAddBufferRepository(CollectionRepository):
     async def upsert(self, points: list[SchemaAddBufferPoint]) -> None:
         """Upsert many schema buffer points."""
 
-        await self._engine.upsert(
-            self.collection,
-            [self._payload_point(point.schema_buffer_record_id, point.payload) for point in points],
+        await self._upsert_payload_points_by_project(
+            [(point.schema_buffer_record_id, point.payload) for point in points],
+            payload_indexes=list(SCHEMA_ADD_BUFFER_PAYLOAD_INDEX_SCHEMA),
         )
 
     async def get(self, project_id: str, schema_buffer_record_id: str) -> QdrantRecord | None:
         """Retrieve one schema buffer record by id, scoped to ``project_id``."""
 
-        records = await self._engine.retrieve(self.collection, [schema_buffer_record_id])
-        return self._engine.first_project_match(records, project_id)
+        return await self._get_one_scoped(project_id, schema_buffer_record_id)
 
     async def retrieve(self, project_id: str, schema_buffer_record_ids: list[str]) -> list[QdrantRecord]:
         """Retrieve many schema buffer records by id, keeping only records in ``project_id``."""
@@ -59,18 +59,12 @@ class SchemaAddBufferRepository(CollectionRepository):
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll schema buffer records across projects for internal workers."""
 
-        return await self._engine.scroll(
-            self.collection,
-            scroll_filter=filter_,
-            limit=limit,
-            offset=cursor,
-            order_by=order_by,
-        )
+        return await self._scroll_payload_global(filter_=filter_, limit=limit, cursor=cursor, order_by=order_by)
 
     async def delete_many(self, point_ids: list[str]) -> None:
         """Delete schema buffer points by id."""
 
-        await self._engine.delete(self.collection, point_ids)
+        await self._delete_payload_points_global(point_ids)
 
     async def patch(self, project_id: str, schema_buffer_record_id: str, payload: dict[str, Any]) -> None:
         """Set payload fields after project ownership is checked."""
@@ -78,4 +72,4 @@ class SchemaAddBufferRepository(CollectionRepository):
         record = await self.get(project_id, schema_buffer_record_id)
         if record is None:
             return
-        await self._engine.set_payload(self.collection, schema_buffer_record_id, payload)
+        await self._engine.set_payload(self.collection_for_project(project_id), schema_buffer_record_id, payload)

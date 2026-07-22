@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from qdrant_client import models as qmodels
 
+from ..filters import ENTITY_PAYLOAD_INDEX_SCHEMA
 from ..models import EntityPoint, QdrantRecord, QdrantSearchRecord, SparseVectorData
 from .base import CollectionRepository
 
@@ -18,10 +19,22 @@ class EntityRepository(CollectionRepository):
     async def upsert(self, points: list[EntityPoint]) -> None:
         """Upsert many entity points."""
 
-        await self._engine.upsert(
-            self.collection,
-            [self._point(point) for point in points],
-        )
+        by_collection: dict[str, list[EntityPoint]] = {}
+        for point in points:
+            project_id = str(point.payload.get("project_id") or "")
+            vector_size = len(point.vector or []) or self._cfg.vector_size
+            collection = await self._ensure_project_vector_collection(
+                project_id,
+                vector_size=vector_size,
+                enable_sparse=True,
+                payload_indexes=list(ENTITY_PAYLOAD_INDEX_SCHEMA),
+            )
+            by_collection.setdefault(collection, []).append(point)
+        for collection, collection_points in by_collection.items():
+            await self._engine.upsert(
+                collection,
+                [self._point(point) for point in collection_points],
+            )
 
     async def get(self, project_id: str, entity_id: str, *, with_vectors: bool = False) -> QdrantRecord | None:
         """Retrieve one entity by project and id."""
@@ -40,8 +53,10 @@ class EntityRepository(CollectionRepository):
     ) -> list[QdrantSearchRecord]:
         """Search entities via dense semantic vector."""
 
+        if not await self._project_collection_exists(project_id):
+            return []
         return await self._engine.query(
-            self.collection,
+            self.collection_for_project(project_id),
             source="entity_semantic",
             query=vector,
             using=self.semantic_vector_name,
@@ -62,8 +77,10 @@ class EntityRepository(CollectionRepository):
     ) -> list[QdrantSearchRecord]:
         """Search entities via sparse BM25 vector."""
 
+        if not await self._project_collection_exists(project_id):
+            return []
         return await self._engine.query(
-            self.collection,
+            self.collection_for_project(project_id),
             source="entity_bm25",
             query=self._engine.to_qdrant_sparse(vector),
             using=self.bm25_vector_name,
@@ -86,9 +103,11 @@ class EntityRepository(CollectionRepository):
     ) -> list[QdrantSearchRecord]:
         """Run Qdrant-side RRF over dense and sparse entity prefetches."""
 
+        if not await self._project_collection_exists(project_id):
+            return []
         scoped_filter = self._engine.project_filter(project_id, filter_=filter_)
         return await self._engine.query(
-            self.collection,
+            self.collection_for_project(project_id),
             source="entity_rrf",
             prefetch=[
                 qmodels.Prefetch(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ...errors import MemoryNotFoundError
 from ...typing import (
     MemoryDbMutationPlan,
     MemoryDbUpdateCommand,
@@ -29,16 +30,23 @@ class DefaultUpdatePipeline(MemoryDbPipelineMixin):
         """
         memory = await self.db_reader.get_memory(context, inp.id)
         if memory is None:
-            return UpdatePipelineResult(status="error", message=f"memory not found: {inp.id}")
-        if memory.status != "active":
+            return UpdatePipelineResult(status="error", message=str(MemoryNotFoundError(inp.id)))
+        if memory.status != "active" and inp.status != "active":
             return UpdatePipelineResult(
                 status="error",
                 message=f"memory is not active (status={memory.status}): {inp.id}",
             )
-        if not inp.content.strip():
+        if inp.content is None and not inp.metadata_patch and inp.status is None:
+            return UpdatePipelineResult(status="error", message="nothing to update")
+        if inp.content is not None and not inp.content.strip():
             return UpdatePipelineResult(status="error", message="content is empty")
 
-        command = MemoryDbUpdateCommand(memory_id=inp.id, content=inp.content)
+        command = MemoryDbUpdateCommand(
+            memory_id=inp.id,
+            content=inp.content,
+            metadata_patch=inp.metadata_patch,
+            status=inp.status,
+        )
         await self.db_writer.apply_mutation_plan(
             context,
             MemoryDbMutationPlan(memory_updates=[command]),

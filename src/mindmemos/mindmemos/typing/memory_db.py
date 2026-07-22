@@ -164,7 +164,7 @@ class MemoryDbSourceUpdateCommand(BaseModel):
 
 
 class MemoryDbMemoryDeleteCommand(BaseModel):
-    """Purpose: Archive or hard-delete one existing memory.
+    """Purpose: Archive one existing memory.
 
     Used in: delete, feedback delete, dreaming archive, and schema merge
     archive flows.
@@ -172,6 +172,7 @@ class MemoryDbMemoryDeleteCommand(BaseModel):
 
     memory_id: str
     hard: bool = False
+    """Legacy compatibility flag; the writer always archives."""
     reason: str = "user_request"
     consistency: ConsistencyMode = "strong"
 

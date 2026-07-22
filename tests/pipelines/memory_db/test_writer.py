@@ -1,8 +1,9 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import mindmemos.pipelines.memory_db.writer as writer_module
 import pytest
-from mindmemos.config import TextProcessingConfig, init_config, reset_config
+from mindmemos.config import TextProcessingConfig, get_config, init_config, reset_config
 from mindmemos.errors import MemoryUpdateError
 from mindmemos.infra.db import reset_database_clients
 from mindmemos.pipelines.memory_db.add_record_store import AddRecordStore
@@ -49,6 +50,48 @@ def make_context() -> MemoryRequestContext:
         user_id="user-1",
         session_id="session-1",
     )
+
+
+def test_writer_resolves_embed_client_per_call_when_provider_binding_enabled(monkeypatch) -> None:
+    get_config().provider_binding.enabled = True
+    clients: list[object] = []
+
+    def fake_get_embed_client():
+        client = object()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(writer_module, "get_embed_client", fake_get_embed_client)
+    writer = MemoryDbWriter(clients=SimpleNamespace(qdrant=SimpleNamespace(), neo4j=SimpleNamespace()))
+
+    first = writer._ensure_embed_client()
+    second = writer._ensure_embed_client()
+
+    assert first is clients[0]
+    assert second is clients[1]
+    assert first is not second
+    assert writer._embed_client is None
+
+
+def test_writer_caches_embed_client_when_provider_binding_disabled(monkeypatch) -> None:
+    get_config().provider_binding.enabled = False
+    clients: list[object] = []
+
+    def fake_get_embed_client():
+        client = object()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(writer_module, "get_embed_client", fake_get_embed_client)
+    writer = MemoryDbWriter(clients=SimpleNamespace(qdrant=SimpleNamespace(), neo4j=SimpleNamespace()))
+
+    first = writer._ensure_embed_client()
+    second = writer._ensure_embed_client()
+
+    assert first is clients[0]
+    assert second is clients[0]
+    assert len(clients) == 1
+    assert writer._embed_client is clients[0]
 
 
 def make_plan(*, memories: int = 1) -> MemoryDbWritePlan:
@@ -579,6 +622,24 @@ async def test_soft_delete_missing_memory_does_not_create_graph_node():
     assert result.changed is False
     assert qdrant.patches == []
     assert neo4j.archived == []
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_request_archives_without_physical_deletes():
+    qdrant = FakeQdrant(record=SimpleNamespace(payload={"metadata": {}}))
+    neo4j = FakeNeo4j()
+    writer = MemoryDbWriter(clients=SimpleNamespace(qdrant=qdrant, neo4j=neo4j))
+
+    result = await writer.delete_memory(
+        make_context(),
+        MemoryDbDeleteCommand(memory_id="mem-1", hard=True),
+    )
+
+    assert result.changed is True
+    assert qdrant.deleted == []
+    assert neo4j.deleted == []
+    assert qdrant.patches[0]["payload"]["status"] == "archived"
+    assert neo4j.archived == [("proj-1", "mem-1", "user_request")]
 
 
 @pytest.mark.asyncio

@@ -281,6 +281,9 @@ class QdrantConfig:
     skill_trace_summary_collection: str = field(default="skill_trace_summary_v1")
     """Qdrant skill trajectory-summary collection name (self-evolution input)"""
 
+    provider_binding_collection: str = field(default="provider_binding_v1")
+    """Qdrant dynamic provider binding collection name."""
+
     semantic_vector_name: str = field(default="semantic")
     """Dense semantic vector name."""
 
@@ -289,6 +292,9 @@ class QdrantConfig:
 
     vector_size: int = field(default=1024)
     """Semantic embedding dimension."""
+
+    project_collection_namespace_enabled: bool = field(default=False)
+    """Create project-scoped vector collections so projects can use different embedding dimensions."""
 
     distance: str = field(default="Cosine")
     """Dense vector distance function: Cosine, Euclid, Dot, or Manhattan."""
@@ -436,6 +442,12 @@ class AuthConfig:
 
 
 @dataclass
+class ProviderBindingConfig:
+    enabled: bool = field(default=False)
+    """Whether dynamic provider binding is enabled."""
+
+
+@dataclass
 class KafkaConsumerConfig:
     """Configuration for one Kafka consumer group."""
 
@@ -557,6 +569,9 @@ class MemoryConfig:
 
     auth: AuthConfig = field(default_factory=AuthConfig)
     """HTTP API authentication config."""
+
+    provider_binding: ProviderBindingConfig = field(default_factory=ProviderBindingConfig)
+    """Dynamic provider binding config."""
 
     kafka: KafkaConfig = frozen_field(default_factory=KafkaConfig)
     """Kafka infrastructure config"""

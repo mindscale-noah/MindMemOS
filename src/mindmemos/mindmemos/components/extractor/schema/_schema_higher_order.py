@@ -11,6 +11,7 @@ from ....logging import get_logger
 from ....prompts import AddPromptSet
 from ....typing import EntityWrite, MemoryRequestContext, MemoryView, MemoryWrite
 from ...memory_modeling.schema import TemporalEntity, memory_timestamp
+from ._runtime_clients import resolve_llm_client
 from ._schema_update_ops import SchemaMemoryUpdate
 from ._schema_utils import (
     dedupe_non_empty,
@@ -45,7 +46,7 @@ class ListEntityMemories(Protocol):
 class SchemaHigherOrderGenerator:
     """Generate higher-order property memories from first-order evidence."""
 
-    llm_client: LLMClient
+    llm_client: LLMClient | None
     db_reader: Any
     entity_manager: Any
     prompt_set: AddPromptSet
@@ -113,7 +114,7 @@ class SchemaHigherOrderGenerator:
             .replace("{min_evidence_count}", str(self.min_evidence_count))
         )
         try:
-            response = await self.llm_client.chat(
+            response = await resolve_llm_client(self.llm_client).chat(
                 task="memory.add.higher_order_generation",
                 messages=[{"role": "user", "content": prompt}],
                 format_parser=parse_json_object,

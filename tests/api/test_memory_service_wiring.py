@@ -2,7 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from mindmemos.api.schemas import AddRequest, AuthContext
+from mindmemos.api.schemas import AddRequest, AuthContext, MemoryPageRequest, MemoryScrollRequest
 from mindmemos.pipelines.delete.default import DefaultDeletePipeline
 from mindmemos.pipelines.feedback.default import DefaultFeedbackPipeline
 from mindmemos.pipelines.get.default import DefaultGetPipeline
@@ -10,10 +10,55 @@ from mindmemos.pipelines.registry import register
 from mindmemos.pipelines.search.pipeline import SearchPipelineImpl
 from mindmemos.pipelines.update.default import DefaultUpdatePipeline
 from mindmemos.typing.memory import DialogueMessage, MemoryRequestContext
-from mindmemos.typing.service import AddPipelineInput, AddPipelineSyncResult, MemoryAddEventItem
+from mindmemos.typing.service import (
+    AddPipelineInput,
+    AddPipelineSyncResult,
+    GetPipelineResult,
+    MemoryAddEventItem,
+    MemoryListPipelineResult,
+    MemoryScrollPipelineResult,
+)
 
 from mindmemos.api.services import memory_service
 from mindmemos.config import init_config, reset_config
+
+
+@pytest.mark.asyncio
+async def test_management_reads_do_not_depend_on_configured_get_pipeline() -> None:
+    class GetOnlyPipeline:
+        async def get(self, inp, context) -> GetPipelineResult:
+            return GetPipelineResult(status="ok", memories=[])
+
+    class FakeCatalog:
+        def __init__(self) -> None:
+            self.list_calls = []
+            self.scroll_calls = []
+
+        async def list(self, inp, context) -> MemoryListPipelineResult:
+            self.list_calls.append((inp, context))
+            return MemoryListPipelineResult(memories=[], page=inp.page, page_size=inp.page_size)
+
+        async def scroll(self, inp, context) -> MemoryScrollPipelineResult:
+            self.scroll_calls.append((inp, context))
+            return MemoryScrollPipelineResult(memories=[])
+
+    auth = AuthContext(
+        request_id="req-1",
+        account_id="acc-1",
+        project_id="proj-1",
+        api_key_uuid="key-1",
+        memory_algorithm="vanilla",
+    )
+    catalog = FakeCatalog()
+    service = memory_service.MemoryService(get_pipeline=GetOnlyPipeline(), catalog=catalog)
+
+    await service.list(auth, MemoryPageRequest(page=2, page_size=5))
+    await service.scroll(auth, MemoryScrollRequest(limit=3))
+
+    assert len(catalog.list_calls) == 1
+    assert catalog.list_calls[0][0].page == 2
+    assert len(catalog.scroll_calls) == 1
+    assert catalog.scroll_calls[0][0].limit == 3
 
 
 def test_get_memory_service_wires_configured_non_algorithm_pipelines() -> None:

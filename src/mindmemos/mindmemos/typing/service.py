@@ -21,6 +21,15 @@ ServiceResultStatus = Literal["ok", "error", "queued"]
 SearchPipelineStrategy = Literal["default", "vanilla", "schema"]
 
 
+class AddStreamCancelled(Exception):
+    """Raised when a streaming add request is cancelled before memory persistence."""
+
+    def __init__(self, stage: str, message: str = "add stream cancelled") -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.message = message
+
+
 def _utc_millis() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
 
@@ -115,6 +124,21 @@ class MemorySearchItem(BaseModel):
     lineage: MemoryLineage | None = None
     """Version lineage metadata populated by vanilla search."""
 
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    """Business metadata for management views."""
+
+    status: str | None = None
+    """Lifecycle status for management views."""
+
+    entity_id: str | None = None
+    """Schema entity id for management views."""
+
+    entity_type: str | None = None
+    """Schema entity type for management views."""
+
+    property_name: str | None = None
+    """Schema property name for management views."""
+
 
 class AddPipelineInput(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -141,6 +165,9 @@ class AddPipelineInput(BaseModel):
 
     metadata: dict = Field(default_factory=dict)
     """Business extension metadata."""
+
+    prompt_language: Literal["EN", "ZH"] | None = None
+    """Optional request-level prompt language for extraction."""
 
     @property
     def timestamp(self) -> int:
@@ -237,11 +264,83 @@ class GetPipelineResult(BaseModel):
     """Failure reason when get cannot be completed."""
 
 
+class MemoryListPipelineInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, Any] | None = None
+    """Public filter DSL; None returns project-scoped memories."""
+
+    page: int = Field(default=1, ge=1)
+    """1-based page number for management-style pagination."""
+
+    page_size: int = Field(default=20, ge=1)
+    """Number of memories returned per page."""
+
+    include_total: bool = True
+    """Whether to calculate the total matching memory count."""
+
+    include_inactive: bool = False
+    """Whether management list responses include non-active memories."""
+
+
+class MemoryListPipelineResult(BaseModel):
+    status: ServiceResultStatus = "ok"
+    """Service completion status."""
+
+    memories: list[MemorySearchItem]
+    """Returned memories."""
+
+    page: int
+    """1-based page number echoed from the request."""
+
+    page_size: int
+    """Page size echoed from the request."""
+
+    total: int | None = None
+    """Total matching memories when requested."""
+
+    has_more: bool = False
+    """Whether another page is available."""
+
+    message: str | None = None
+    """Failure reason when list cannot be completed."""
+
+
+class MemoryScrollPipelineInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, Any] | None = None
+    """Public filter DSL; None returns project-scoped memories."""
+
+    limit: int = Field(default=100, ge=1)
+    """Maximum memories returned from this cursor position."""
+
+    cursor: str | None = None
+    """Opaque cursor returned by the previous scroll page."""
+
+
+class MemoryScrollPipelineResult(BaseModel):
+    status: ServiceResultStatus = "ok"
+    """Service completion status."""
+
+    memories: list[MemorySearchItem]
+    """Returned memories."""
+
+    next_cursor: str | None = None
+    """Cursor for the next page, or None when the scan is complete."""
+
+    message: str | None = None
+    """Failure reason when scroll cannot be completed."""
+
+
 class DeletePipelineInput(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     id: str = Field(alias="memory_id")
     """Memory ID."""
+
+    hard: bool = False
+    """Legacy compatibility flag. Memory deletion is always archive-only."""
 
 
 class DeletePipelineResult(BaseModel):
@@ -258,8 +357,14 @@ class UpdatePipelineInput(BaseModel):
     id: str = Field(alias="memory_id")
     """Memory ID."""
 
-    content: str
+    content: str | None = None
     """New content for the target memory."""
+
+    metadata_patch: dict[str, Any] = Field(default_factory=dict)
+    """Optional metadata fields merged into the memory metadata."""
+
+    status: Literal["active", "archived", "delete"] | None = None
+    """Optional lifecycle status patch."""
 
 
 class UpdatePipelineResult(BaseModel):

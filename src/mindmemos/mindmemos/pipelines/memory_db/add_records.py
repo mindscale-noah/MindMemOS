@@ -46,7 +46,7 @@ class AddRecordBuffer:
         *,
         force_generation: bool,
         source_add_record_id: str | None = None,
-    ) -> None:
+    ) -> list[str]:
         """Persist incoming add messages as queued buffer records.
 
         Args:
@@ -86,6 +86,7 @@ class AddRecordBuffer:
             )
             points.append(point)
         await self._store.append_many(points)
+        return [point.schema_buffer_record_id for point in points]
 
     async def list_buffered(self, ctx: MemoryRequestContext, *, limit: int) -> list[BufferedAddRecord]:
         """List buffered records for the request context.

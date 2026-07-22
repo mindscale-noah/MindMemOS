@@ -209,10 +209,10 @@ def to_add_result(
     )
 
 
-def to_mutation_result(memory_id: str, *, changed: bool = True, hard: bool = False) -> MemoryDbMutationResult:
+def to_mutation_result(memory_id: str, *, changed: bool = True) -> MemoryDbMutationResult:
     """Build the DB-layer mutation result for delete/update operations."""
 
-    return MemoryDbMutationResult(status="ok", memory_id=memory_id, changed=changed, hard=hard)
+    return MemoryDbMutationResult(status="ok", memory_id=memory_id, changed=changed)
 
 
 def _dt_from_payload(value: Any) -> datetime | None:

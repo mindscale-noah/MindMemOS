@@ -483,6 +483,18 @@ class MemoryDbReader:
         )
         return [to_memory_view_from_record(record) for record in records], next_cursor
 
+    @traced("memory_db.count_memories")
+    async def count_memories(
+        self,
+        ctx: MemoryRequestContext,
+        *,
+        filters: SearchFilter | None = None,
+    ) -> int:
+        """Count memories in the request project."""
+
+        qfilter = search_filter_to_qdrant(ctx, filters)
+        return await self._clients.qdrant.count_memories(ctx.project_id, filter_=qfilter)
+
     @traced("memory_db.list_memory_records")
     async def list_memory_records(
         self,
