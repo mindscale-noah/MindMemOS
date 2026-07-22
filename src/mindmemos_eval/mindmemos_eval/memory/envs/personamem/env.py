@@ -225,6 +225,20 @@ def personamem_answer_prompt(memory_algorithm: str) -> str:
     return PERSONAMEM_COT_PROMPT if memory_algorithm == "schema" else PERSONAMEM_UNIFIED_PROMPT
 
 
+def _format_memory_with_date(memory: str, event_time: str | None) -> str:
+    """Prefix a retrieved memory with its event date (YYYY-MM-DD); unchanged if missing.
+
+    ``event_time`` from the backend looks like ``"2026-05-03 00:00:00"``; only the
+    date part is prepended (``"(2026-05-03) <memory>"``) so the unified prompt's
+    timeline reasoning has an authoritative date. Missing/unparseable time is
+    returned unchanged so answering never breaks.
+    """
+    if not event_time:
+        return memory
+    date_part = event_time.strip().split(" ", 1)[0]
+    return f"({date_part}) {memory}" if date_part else memory
+
+
 PersonaMemEvaluationMode = Literal["memory_rag", "official_full_context"]
 
 _REQUIRED_QUESTION_FIELDS = {
@@ -655,6 +669,9 @@ class PersonaMemEnv:
         self._rerank = rerank
         self._add_batch_size = add_batch_size
         self._answer_prompt = personamem_answer_prompt(memory_algorithm)
+        # The unified (vanilla) prompt reasons over dated memories; the schema CoT
+        # path is left byte-identical to develop (no date prefix).
+        self._prefix_memory_dates = memory_algorithm != "schema"
 
     def _scope_key(self, scope: PersonaMemScope) -> tuple[str, str]:
         """Return (user_id, session_id) for this scope.
@@ -768,7 +785,11 @@ class PersonaMemEnv:
                     rerank=self._rerank,
                     filters={"user_id": user_id},
                 )
-                memories = [hit.memory for hit in search.memories if hit.memory]
+                memories = [
+                    _format_memory_with_date(hit.memory, hit.event_time) if self._prefix_memory_dates else hit.memory
+                    for hit in search.memories
+                    if hit.memory
+                ]
             except Exception as exc:  # noqa: BLE001 - failures remain in the official denominator
                 return PersonaMemQAResult(
                     item=item,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from mindmemos_eval.memory.envs.personamem.env import (
     PERSONAMEM_COT_PROMPT,
     PERSONAMEM_UNIFIED_PROMPT,
+    _format_memory_with_date,
     build_personamem_items,
     build_personamem_prompt,
     personamem_answer_prompt,
@@ -51,3 +52,14 @@ def test_build_prompt_honors_selected_answer_prompt():
 def test_build_prompt_defaults_to_cot():
     prompt = build_personamem_prompt(_item(), retrieved_memories=["m1"])
     assert "Chain-of-Thought" in prompt[0]["content"]
+
+
+def test_format_memory_with_date_prefixes_date_only():
+    assert _format_memory_with_date("m", "2026-05-03 00:00:00") == "(2026-05-03) m"
+
+
+def test_format_memory_with_date_passes_through_when_missing():
+    assert _format_memory_with_date("m", None) == "m"
+    assert _format_memory_with_date("m", "") == "m"
+    assert _format_memory_with_date("m", "   ") == "m"
+
