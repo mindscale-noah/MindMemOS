@@ -15,7 +15,7 @@ from ...pipelines.delete import DefaultDeletePipeline, DeletePipeline
 from ...pipelines.dreaming import DreamingPipeline
 from ...pipelines.feedback import FeedbackPipeline
 from ...pipelines.get import DefaultGetPipeline, GetPipeline
-from ...pipelines.memory_db import MemoryOperationRecorder, suppress_recording_errors, utcnow
+from ...pipelines.memory_db import MemoryCatalog, MemoryOperationRecorder, suppress_recording_errors, utcnow
 from ...pipelines.search import SearchPipeline
 from ...pipelines.skill import SkillVersionStore, get_skill_version_store
 from ...pipelines.update import DefaultUpdatePipeline, UpdatePipeline
@@ -75,6 +75,7 @@ class MemoryService:
         self,
         *,
         get_pipeline: GetPipeline | None = None,
+        catalog: MemoryCatalog | None = None,
         add_pipeline: AddPipeline | None = None,
         search_pipeline: SearchPipeline | None = None,
         delete_pipeline: DeletePipeline | None = None,
@@ -97,6 +98,7 @@ class MemoryService:
             search_pipeline_name = SEARCH_PIPELINE_NAME
         self._search = search_pipeline
         self._get = get_pipeline if get_pipeline is not None else (None if get_pipeline_name else DefaultGetPipeline())
+        self._catalog = catalog or MemoryCatalog()
         self._delete = (
             delete_pipeline
             if delete_pipeline is not None
@@ -531,26 +533,20 @@ class MemoryService:
         """Run the paged memory list pipeline."""
 
         annotate_request_trace(auth)
-        pipeline = self._pipeline("_get")
-        if pipeline is None:
-            raise NotImplementedError("get pipeline implementation is not wired yet")
         ctx = to_memory_request_context(auth, request)
         config_ctx = await self._provider_config_context(ctx)
         with config_ctx:
-            return await pipeline.list(to_memory_list_pipeline_input(request), ctx)
+            return await self._catalog.list(to_memory_list_pipeline_input(request), ctx)
 
     @traced("memory_service.scroll")
     async def scroll(self, auth: AuthContext, request: MemoryScrollRequest) -> MemoryScrollPipelineResult:
         """Run the cursor memory scroll pipeline."""
 
         annotate_request_trace(auth)
-        pipeline = self._pipeline("_get")
-        if pipeline is None:
-            raise NotImplementedError("get pipeline implementation is not wired yet")
         ctx = to_memory_request_context(auth, request)
         config_ctx = await self._provider_config_context(ctx)
         with config_ctx:
-            return await pipeline.scroll(to_memory_scroll_pipeline_input(request), ctx)
+            return await self._catalog.scroll(to_memory_scroll_pipeline_input(request), ctx)
 
     @traced("memory_service.delete")
     async def delete(self, auth: AuthContext, request: DeleteRequest) -> DeletePipelineResult:

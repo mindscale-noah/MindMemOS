@@ -85,6 +85,39 @@ def test_internal_memory_list_uses_gateway_token_project_scope(tmp_path, monkeyp
         reset_config()
 
 
+def test_internal_memory_detail_missing_uses_standard_memory_not_found_envelope(tmp_path, monkeypatch) -> None:
+    secret = "test-internal-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret,
+        account_id="acct_001",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:read"],
+    )
+    qdrant = FakeQdrant()
+
+    async def missing_memory(*args, **kwargs):
+        return None
+
+    qdrant.get_memory = missing_memory
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        response = TestClient(make_app(monkeypatch, clients=FakeClients(qdrant=qdrant))).get(
+            "/internal/v1/projects/proj_001/memories/missing",
+            headers={"authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 404
+        assert response.json() == {
+            "code": "memory.not_found",
+            "message": "memory not found: missing",
+            "data": None,
+        }
+    finally:
+        reset_config()
+
+
 def test_internal_memory_list_pushes_query_to_qdrant_filter_before_pagination(tmp_path, monkeypatch) -> None:
     secret = "test-internal-secret"
     write_config(tmp_path, secret=secret)

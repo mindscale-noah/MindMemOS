@@ -340,7 +340,7 @@ class DeletePipelineInput(BaseModel):
     """Memory ID."""
 
     hard: bool = False
-    """Whether to physically delete the memory instead of archiving it."""
+    """Legacy compatibility flag. Memory deletion is always archive-only."""
 
 
 class DeletePipelineResult(BaseModel):

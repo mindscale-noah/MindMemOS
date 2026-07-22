@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 from mindmemos.pipelines.get import DefaultGetPipeline
+from mindmemos.pipelines.memory_db import MemoryCatalog
 from mindmemos.typing.memory import MemoryRequestContext, MemoryView, SearchFilter
 from mindmemos.typing.service import GetPipelineInput, MemoryListPipelineInput, MemoryScrollPipelineInput
 
@@ -102,9 +103,9 @@ async def test_get_projects_schema_scope_fields_for_management_lists() -> None:
         entity_type="llm4ad_memory_card",
         metadata={"entity_name": "TSP local search"},
     )
-    pipeline = DefaultGetPipeline(db_reader=FakeReader([memory]), db_writer=FakeWriter())
+    catalog = MemoryCatalog(reader=FakeReader([memory]))
 
-    result = await pipeline.list(MemoryListPipelineInput(page=1, page_size=20), make_context())
+    result = await catalog.list(MemoryListPipelineInput(page=1, page_size=20), make_context())
 
     assert result.memories[0].id == "mem-schema"
     assert result.memories[0].property_name == "good_algorithm"
@@ -165,9 +166,9 @@ async def test_list_returns_page_metadata_and_total() -> None:
         for index in range(1, 6)
     ]
     reader = FakeReader(memories)
-    pipeline = DefaultGetPipeline(db_reader=reader, db_writer=FakeWriter())
+    catalog = MemoryCatalog(reader=reader)
 
-    result = await pipeline.list(MemoryListPipelineInput(page=2, page_size=2, include_total=True), make_context())
+    result = await catalog.list(MemoryListPipelineInput(page=2, page_size=2, include_total=True), make_context())
 
     assert [item.id for item in result.memories] == ["mem-3", "mem-4"]
     assert result.page == 2
@@ -193,9 +194,9 @@ async def test_list_can_skip_total_count() -> None:
             for index in range(1, 4)
         ]
     )
-    pipeline = DefaultGetPipeline(db_reader=reader, db_writer=FakeWriter())
+    catalog = MemoryCatalog(reader=reader)
 
-    result = await pipeline.list(MemoryListPipelineInput(page=1, page_size=2, include_total=False), make_context())
+    result = await catalog.list(MemoryListPipelineInput(page=1, page_size=2, include_total=False), make_context())
 
     assert [item.id for item in result.memories] == ["mem-1", "mem-2"]
     assert result.total is None
@@ -218,10 +219,10 @@ async def test_scroll_returns_next_cursor() -> None:
             for index in range(1, 5)
         ]
     )
-    pipeline = DefaultGetPipeline(db_reader=reader, db_writer=FakeWriter())
+    catalog = MemoryCatalog(reader=reader)
 
-    first = await pipeline.scroll(MemoryScrollPipelineInput(limit=2), make_context())
-    second = await pipeline.scroll(MemoryScrollPipelineInput(limit=2, cursor=first.next_cursor), make_context())
+    first = await catalog.scroll(MemoryScrollPipelineInput(limit=2), make_context())
+    second = await catalog.scroll(MemoryScrollPipelineInput(limit=2, cursor=first.next_cursor), make_context())
 
     assert [item.id for item in first.memories] == ["mem-1", "mem-2"]
     assert first.next_cursor == "2"

@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel
 
-from ..errors import PermissionDeniedError
+from ..errors import MemoryNotFoundError, PermissionDeniedError, ResourceNotFoundError
 from ..infra.db import QdrantRecord, build_filter, match_text
 from ..pipelines.memory_db import MemoryDbReader
 from ..provider_bindings import get_provider_binding_service
@@ -79,7 +79,7 @@ async def get_project_memory(
     _ensure_internal_read(ctx, project_id)
     record = await MemoryDbReader().get_memory_record(ctx, memory_id)
     if record is None:
-        raise HTTPException(status_code=404, detail="memory not found")
+        raise ResourceNotFoundError(str(MemoryNotFoundError(memory_id)), code="memory.not_found")
     return InternalMemoryDetailResponse(request_id=ctx.request_id, data=_record_to_item(record))
 
 

@@ -625,6 +625,24 @@ async def test_soft_delete_missing_memory_does_not_create_graph_node():
 
 
 @pytest.mark.asyncio
+async def test_hard_delete_request_archives_without_physical_deletes():
+    qdrant = FakeQdrant(record=SimpleNamespace(payload={"metadata": {}}))
+    neo4j = FakeNeo4j()
+    writer = MemoryDbWriter(clients=SimpleNamespace(qdrant=qdrant, neo4j=neo4j))
+
+    result = await writer.delete_memory(
+        make_context(),
+        MemoryDbDeleteCommand(memory_id="mem-1", hard=True),
+    )
+
+    assert result.changed is True
+    assert qdrant.deleted == []
+    assert neo4j.deleted == []
+    assert qdrant.patches[0]["payload"]["status"] == "archived"
+    assert neo4j.archived == [("proj-1", "mem-1", "user_request")]
+
+
+@pytest.mark.asyncio
 async def test_soft_delete_fast_consistency_tolerates_graph_archive_failure():
     qdrant = FakeQdrant(record=SimpleNamespace(payload={"metadata": {"source": "test"}}))
     neo4j = FakeNeo4j(fail_archive=True)
