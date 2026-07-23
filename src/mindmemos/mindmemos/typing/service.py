@@ -379,6 +379,9 @@ class FeedbackPipelineResult(BaseModel):
     actions: list[FeedbackActionResult] = Field(default_factory=list)
     """Executed feedback action results."""
 
+    signals: list[dict[str, Any]] = Field(default_factory=list)
+    """Detected feedback signals with category and reason."""
+
 
 class DreamingPipelineInput(BaseModel):
     """Dreaming pipeline request payload."""

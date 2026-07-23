@@ -75,12 +75,25 @@ class ImplicitFeedbackHandler:
         )
 
         signal_count = 0
+        all_signals: list[dict[str, Any]] = []
         actions = []
         for idx, material in enumerate(sessions):
             t_detect = time.monotonic()
             result = await self._signal_detector.detect(material)
             detect_elapsed = time.monotonic() - t_detect
             signal_count += len(result.signals)
+            for s in result.signals:
+                round_messages = []
+                if 0 <= s.round_index < len(material.rounds):
+                    round_messages = material.rounds[s.round_index].messages
+                all_signals.append({
+                    "session_id": material.session_id,
+                    "session_index": idx,
+                    "round_index": s.round_index,
+                    "category": s.category,
+                    "reason": s.reason,
+                    "round_messages": round_messages,
+                })
             logger.info(
                 "feedback.implicit.detect",
                 session=f"{idx + 1}/{len(sessions)}",
@@ -101,7 +114,7 @@ class ImplicitFeedbackHandler:
                 planned = await self._action_planner.plan(
                     round_=round_,
                     signals=signals,
-                    memories=material.memories,
+                    memories=relevant_memories,
                 )
                 plan_elapsed = time.monotonic() - t_plan
                 logger.info(
@@ -126,6 +139,7 @@ class ImplicitFeedbackHandler:
             status="ok",
             message=f"processed {signal_count} implicit feedback signals in {len(sessions)} sessions",
             actions=actions,
+            signals=all_signals,
         )
 
 
@@ -374,3 +388,46 @@ def _merge_memories(existing: list[MemorySearchItem], supplemental: list[MemoryS
     for memory in supplemental:
         by_id.setdefault(memory.id, memory)
     return list(by_id.values())
+
+
+def _select_relevant_memories(
+    round_: ImplicitFeedbackRound,
+    memories: list[MemorySearchItem],
+    max_memories: int = 200,
+) -> list[MemorySearchItem]:
+    """Select memories most relevant to *round_* via word-overlap scoring.
+
+    When the total number of *memories* does not exceed *max_memories*,
+    all are returned without filtering.
+    """
+    if len(memories) <= max_memories:
+        return list(memories)
+
+    # Build query from round messages
+    query_parts: list[str] = []
+    for msg in round_.messages:
+        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        if isinstance(content, str):
+            query_parts.append(content)
+    query = " ".join(query_parts)
+
+    # Tokenize query into a set of lowercase words (length >= 3)
+    query_words = set(re.findall(r"[a-zA-Z]{3,}", query.lower()))
+    if not query_words:
+        return list(memories[:max_memories])
+
+    # Score each memory
+    scored: list[tuple[float, MemorySearchItem]] = []
+    for mem in memories:
+        mem_text = mem.memory or ""
+        mem_words = set(re.findall(r"[a-zA-Z]{3,}", mem_text.lower()))
+        if not mem_words:
+            scored.append((0.0, mem))
+            continue
+        overlap = len(query_words & mem_words)
+        # 少量加权：query 词在记忆中出现的比例
+        ratio = overlap / len(query_words) if query_words else 0.0
+        scored.append((overlap + ratio, mem))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [item[1] for item in scored[:max_memories]]

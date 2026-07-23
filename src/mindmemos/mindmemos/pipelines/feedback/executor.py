@@ -23,6 +23,7 @@ from ...typing import (
     MemoryDbWritePlan,
     MemoryRequestContext,
     MemoryWrite,
+    REL_DERIVED_FROM,
     VectorWrite,
 )
 from ..memory_db import MemoryDbReader, MemoryDbWriter
@@ -117,6 +118,9 @@ class FeedbackActionExecutor:
         memory = await self._db_reader.get_memory(context, action.target_memory_id)
         if memory is None:
             return action.model_copy(update={"result_memory_id": action.target_memory_id, "status": "error"})
+
+        # 用 DB 中实际存储的内容覆盖 LLM 填充的 before_content，确保评测日志准确
+        action = action.model_copy(update={"before_content": memory.content})
 
         # 创建新版本记忆
         new_memory_id = str(uuid4())
@@ -256,7 +260,7 @@ class FeedbackActionExecutor:
     def _text_preprocessor(self) -> TextPreprocessor:
         if self.__text_preprocessor is None:
             cfg = self._text_config or get_config().algo_config.text_processing
-            self.__text_preprocessor = get_text_preprocessor(cfg)
+            self.__text_preprocessor = TextPreprocessor(cfg) if self._text_config else get_text_preprocessor()
         return self.__text_preprocessor
 
     @_text_preprocessor.setter
