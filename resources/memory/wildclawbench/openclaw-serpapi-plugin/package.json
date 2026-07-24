@@ -1,0 +1,40 @@
+{
+  "name": "openclaw-serpapi-plugin",
+  "version": "1.0.0",
+  "description": "OpenClaw SerpApi-compatible web-search provider plugin.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.6.6"
+    },
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ]
+  },
+  "files": [
+    "dist",
+    "src",
+    "openclaw.plugin.json"
+  ],
+  "peerDependencies": {
+    "openclaw": ">=2026.6.6"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "openclaw": "^2026.6.6",
+    "typescript": "^5.9.3"
+  }
+}
