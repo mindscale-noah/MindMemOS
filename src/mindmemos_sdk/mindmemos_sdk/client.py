@@ -11,6 +11,7 @@ from __future__ import annotations
 from .config import ConfigManager, SDKConfig
 from .errors import AuthRequiredError
 from .memory import MemoryClient
+from .memory.core import MemoryDefaults
 from .skills import SkillCloudClient, SkillManager
 from .transport import HttpTransport
 
@@ -42,9 +43,9 @@ class MindMemOSClient:
         self._base_url = base_url or config.base_url
         self._api_key = api_key or config.auth.api_key
         self._user_id = user_id or config.defaults.user_id
-        self._app_id = app_id
-        self._agent_id = agent_id
-        self._session_id = session_id
+        self._app_id = app_id or config.defaults.app_id
+        self._agent_id = agent_id or config.defaults.agent_id
+        self._session_id = session_id or config.defaults.session_id
 
         self._transport = transport or HttpTransport(
             base_url=self._base_url,
@@ -61,6 +62,24 @@ class MindMemOSClient:
             default_agent_id=self._agent_id,
             default_session_id=self._session_id,
             skill_manager=self.skills,
+            memory_defaults=MemoryDefaults(
+                user_id=self._user_id,
+                app_id=self._app_id,
+                agent_id=self._agent_id,
+                session_id=self._session_id,
+                add_mode=config.memory.add_mode,
+                add_default_role=config.memory.add_default_role,
+                add_auto_skill_context=config.memory.add_auto_skill_context,
+                search_top_k=config.memory.search_top_k,
+                search_strategy=config.memory.search_strategy,
+                search_rerank=config.memory.search_rerank,
+                search_score_threshold=config.memory.search_score_threshold,
+                search_filters=config.memory.search_filters,
+                get_top_k=config.memory.get_top_k,
+                get_filters=config.memory.get_filters,
+                feedback_mode=config.memory.feedback_mode,
+                dreaming_mode=config.memory.dreaming_mode,
+            ),
         )
 
     def require_api_key(self) -> str:

@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MindMemOS · SDK Console</title>
+    <link rel="stylesheet" href="/app.css?v=console-13" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#overview" aria-label="MindMemOS home" data-nav-target="overview">
+          <span class="brand-mark">M</span>
+          <span>MindMemOS</span>
+          <span class="brand-divider"></span>
+          <span class="brand-product">SDK Console</span>
+        </a>
+
+        <nav class="tabs" aria-label="Primary navigation">
+          <button class="tab active" type="button" data-tab="overview">Overview</button>
+          <button class="tab" type="button" data-tab="memory">Memory</button>
+          <button class="tab" type="button" data-tab="skills">Skills</button>
+          <button class="tab" type="button" data-tab="settings">Settings</button>
+        </nav>
+
+        <div class="topbar-actions">
+          <span class="local-pill"><span class="status-dot"></span> Local</span>
+          <button class="avatar" type="button" aria-label="Local workspace">L</button>
+        </div>
+      </header>
+
+      <main class="page">
+        <section class="page-heading">
+          <div>
+            <p class="eyebrow">LOCAL SDK CONSOLE</p>
+            <h1 id="page-title">Overview</h1>
+            <p id="page-description" class="page-description">
+              Configure and inspect the SDK from one local workspace.
+            </p>
+          </div>
+          <div class="heading-actions">
+            <span id="preview-badge" class="preview-badge">LOADING</span>
+            <button id="save-settings" class="primary-button hidden" type="button">Save changes</button>
+          </div>
+        </section>
+
+        <div id="overview-page" class="page-panel" data-page="overview">
+          <section class="summary-grid" aria-label="Workspace summary">
+            <article class="summary-card">
+              <div class="summary-label">CONNECTION</div>
+              <div id="overview-connection-value" class="summary-value">Loading…</div>
+              <div id="overview-connection-detail" class="summary-detail">API endpoint and key status</div>
+              <button class="text-button" type="button" data-nav-target="settings">Open settings →</button>
+            </article>
+            <article class="summary-card">
+              <div class="summary-label">IDENTITY</div>
+              <div id="overview-identity-value" class="summary-value">Loading…</div>
+              <div id="overview-identity-detail" class="summary-detail">user / app / agent / session</div>
+              <button class="text-button" type="button" data-nav-target="settings">Configure defaults →</button>
+            </article>
+            <article class="summary-card">
+              <div class="summary-label">SKILLS</div>
+              <div id="overview-skills-value" class="summary-value">Loading…</div>
+              <div id="overview-skills-detail" class="summary-detail">Local registry status</div>
+              <button class="text-button" type="button" data-nav-target="skills">Open skills →</button>
+            </article>
+            <article class="summary-card">
+              <div class="summary-label">MEMORIES</div>
+              <div id="overview-memory-value" class="summary-value">Not loaded</div>
+              <div id="overview-memory-detail" class="summary-detail">Cloud memory list</div>
+              <button class="text-button" type="button" data-nav-target="memory">Open memory →</button>
+            </article>
+            <article class="summary-card">
+              <div class="summary-label">LOCAL STORAGE</div>
+              <div id="overview-storage-value" class="summary-value">Loading…</div>
+              <div id="overview-storage-detail" class="summary-detail">Cache and backup paths</div>
+              <button class="text-button" type="button" data-nav-target="settings">Review storage →</button>
+            </article>
+          </section>
+
+          <section class="content-grid overview-grid">
+            <article class="panel-card quick-card">
+              <div class="panel-heading">
+                <div>
+                  <p class="section-kicker">QUICK ACTIONS</p>
+                  <h2>Start from the workspace</h2>
+                </div>
+              </div>
+              <div class="action-list">
+                <button class="action-row" type="button" data-nav-target="skills">
+                  <span class="action-icon">＋</span>
+                  <span><strong>Register a skill</strong><small>Add a local Skill directory to the SDK registry.</small></span>
+                  <span class="action-arrow">→</span>
+                </button>
+                <button class="action-row" type="button" data-nav-target="skills" data-skill-view-target="compare">
+                  <span class="action-icon">⇄</span>
+                  <span><strong>Compare skills</strong><small>Inspect two Skill versions side by side.</small></span>
+                  <span class="action-arrow">→</span>
+                </button>
+                <button class="action-row" type="button" data-nav-target="memory">
+                  <span class="action-icon">◌</span>
+                  <span><strong>Browse memory</strong><small>Load the active memories owned by the configured user.</small></span>
+                  <span class="action-arrow">→</span>
+                </button>
+                <button class="action-row" type="button" data-nav-target="settings">
+                  <span class="action-icon">⚙</span>
+                  <span><strong>Configure SDK</strong><small>Set connection, identity, network, and local storage defaults.</small></span>
+                  <span class="action-arrow">→</span>
+                </button>
+              </div>
+            </article>
+
+            <article class="panel-card note-card">
+              <p class="section-kicker">CURRENT SCOPE</p>
+              <h2>One local control plane</h2>
+              <p>The browser talks only to this local SDK service. Cloud requests and local file operations stay behind the Python boundary.</p>
+              <div class="scope-list">
+                <span><i class="scope-dot"></i> No browser-side API key</span>
+                <span><i class="scope-dot"></i> Memory reads stay scoped to the configured user</span>
+                <span><i class="scope-dot"></i> Skill actions reuse SDK managers</span>
+              </div>
+            </article>
+          </section>
+        </div>
+
+        <div id="memory-page" class="page-panel hidden" data-page="memory">
+          <div id="memory-notice" class="settings-notice"><span class="notice-icon">i</span><span>Memory is loaded through the local SDK service.</span></div>
+          <section class="panel-card memory-toolbar">
+            <div class="panel-heading">
+              <div>
+                <p class="section-kicker">YOUR MEMORY</p>
+                <h2>Active memories</h2>
+                <p class="card-description">Only memories matching the configured User ID are requested. The API key and cloud URL stay inside Python.</p>
+              </div>
+              <span id="memory-connection-badge" class="muted-badge">NOT LOADED</span>
+            </div>
+            <div class="memory-controls">
+              <label class="field memory-query-field"><span>Search your memories</span><input id="memory-query" type="search" placeholder="Leave empty to list active memories" /></label>
+              <label class="field memory-top-k-field"><span>Top K</span><input id="memory-top-k" type="number" min="1" placeholder="SDK default" /></label>
+              <button id="memory-search" class="primary-button" type="button">Search</button>
+              <button id="memory-refresh" class="outline-button enabled" type="button">Refresh</button>
+            </div>
+          </section>
+          <div class="memory-summary-line"><span id="memory-owner">User: not configured</span><span id="memory-count">0 memories</span></div>
+          <section id="memory-list" class="memory-list" aria-live="polite">
+            <div class="memory-empty-state"><div class="empty-icon small">◌</div><strong>Memory is not loaded</strong><span>Configure a User ID and API key, then refresh.</span></div>
+          </section>
+        </div>
+
+        <div id="skills-page" class="page-panel hidden" data-page="skills">
+          <div class="section-tabs" role="tablist" aria-label="Skill views">
+            <button class="section-tab active" type="button" data-skill-view="library">Library</button>
+            <button class="section-tab" type="button" data-skill-view="compare">Compare</button>
+            <button class="section-tab" type="button" data-skill-view="graph">Graph</button>
+          </div>
+
+          <section id="skills-library-view" class="skills-workspace" data-skill-panel="library">
+            <article class="panel-card skill-list-card">
+              <div class="panel-heading">
+                <div>
+                  <p class="section-kicker">REGISTRY</p>
+                  <h2>Registered skills</h2>
+                </div>
+                <button class="outline-button" type="button" disabled>＋ Register</button>
+              </div>
+              <div id="skills-list" class="empty-list">
+                <div class="empty-icon small">✦</div>
+                <strong>No skills registered</strong>
+                <span>Registered local Skills will appear here.</span>
+              </div>
+            </article>
+            <article class="panel-card skill-editor-card">
+              <div class="panel-heading">
+                <div>
+                  <p class="section-kicker">EDITOR</p>
+                  <h2 id="skill-editor-title">Select a skill</h2>
+                  <p id="skill-editor-subtitle" class="card-description">Choose a Skill to edit its current local SKILL.md.</p>
+                </div>
+                <span id="skill-editor-status" class="muted-badge">EMPTY</span>
+              </div>
+              <div class="skill-version-toolbar">
+                <label class="field"><span>Skill version</span><select id="skill-version-select" disabled><option>Select a Skill first</option></select></label>
+                <label class="field"><span>New version label</span><input id="skill-version-label" placeholder="Optional · e.g. 1.2.0" disabled /></label>
+              </div>
+              <div class="skill-editor-actions">
+                <span id="skill-operation-status" class="skill-operation-status">Select a version to begin editing.</span>
+                <button id="save-skill" class="outline-button enabled" type="button" disabled>Save locally</button>
+                <button id="publish-skill" class="primary-button" type="button" disabled>Save &amp; publish</button>
+              </div>
+              <div class="skill-content-toolbar">
+                <span class="content-mode-label">SKILL.md</span>
+                <div class="content-mode-toggle" role="tablist" aria-label="Skill content view">
+                  <button id="skill-preview-mode" class="content-mode-button active" type="button" role="tab" aria-selected="true">Preview</button>
+                  <button id="skill-edit-mode" class="content-mode-button" type="button" role="tab" aria-selected="false">Edit</button>
+                </div>
+              </div>
+              <div id="skill-content-preview" class="markdown-content skill-library-preview" role="tabpanel" aria-live="polite">
+                <div class="markdown-empty-state">Select a version to preview its Markdown.</div>
+              </div>
+              <textarea id="skill-content-editor" class="hidden" spellcheck="false" disabled placeholder="The selected SKILL.md content will appear here…"></textarea>
+            </article>
+            <aside class="panel-card skill-info-card">
+              <div class="panel-heading">
+                <div>
+                  <p class="section-kicker">SKILL INFO</p>
+                  <h2 id="skill-info-title">No skill selected</h2>
+                </div>
+                <span id="skill-info-badge" class="muted-badge">EMPTY</span>
+              </div>
+              <div id="skill-info-content" class="skill-info-empty">
+                <p>Choose a Skill from the registry to inspect its path, hashes, lifecycle state, and version history.</p>
+              </div>
+            </aside>
+          </section>
+
+          <section id="skills-compare-view" class="compare-layout hidden" data-skill-panel="compare">
+            <article class="panel-card compare-toolbar">
+              <div class="panel-heading compare-heading">
+                <div>
+                  <p class="section-kicker">SKILL COMPARISON</p>
+                  <h2>Compare Skills or versions</h2>
+                  <p class="card-description">Select two Skills, or choose two historical versions of the same Skill, to compare their SKILL.md content side by side.</p>
+                </div>
+                <div class="compare-actions">
+                  <button class="text-button" type="button" id="load-demo">Load example</button>
+                </div>
+              </div>
+              <div class="compare-selectors">
+                <div class="compare-side-selector">
+                  <label class="field"><span>Left Skill</span><select id="compare-left-select" disabled><option>No registered skills</option></select></label>
+                  <label class="field"><span>Left version</span><select id="compare-left-version-select" disabled><option>Select a Skill first</option></select></label>
+                </div>
+                <span class="versus">VS</span>
+                <div class="compare-side-selector">
+                  <label class="field"><span>Right Skill</span><select id="compare-right-select" disabled><option>No registered skills</option></select></label>
+                  <label class="field"><span>Right version</span><select id="compare-right-version-select" disabled><option>Select a Skill first</option></select></label>
+                </div>
+              </div>
+            </article>
+
+            <section class="compare-content-grid" aria-label="Skill content comparison">
+              <article class="panel-card editor-card">
+                <div class="editor-heading"><span class="side-marker left"></span><strong>Left content</strong><span class="editor-hint">MARKDOWN</span></div>
+                <div id="compare-left" class="markdown-content" aria-live="polite">
+                  <div class="markdown-empty-state">Select a Skill to load its content.</div>
+                </div>
+              </article>
+              <article class="panel-card editor-card">
+                <div class="editor-heading"><span class="side-marker right"></span><strong>Right content</strong><span class="editor-hint">MARKDOWN</span></div>
+                <div id="compare-right" class="markdown-content" aria-live="polite">
+                  <div class="markdown-empty-state">Select a Skill to load its content.</div>
+                </div>
+              </article>
+            </section>
+          </section>
+
+          <section id="skills-graph-view" class="graph-layout hidden" data-skill-panel="graph">
+            <article class="panel-card graph-empty-card">
+              <div class="graph-empty-state">
+                <div class="empty-icon">◇</div>
+                <p class="section-kicker">SKILL GRAPH</p>
+                <h2>Graph view is reserved</h2>
+                <p>Skill relationships and dependency paths will appear here.</p>
+              </div>
+            </article>
+          </section>
+        </div>
+
+        <div id="settings-page" class="page-panel hidden" data-page="settings">
+          <div id="settings-notice" class="settings-notice"><span class="notice-icon">i</span><span>Loading SDK configuration from the local Python service…</span></div>
+          <section class="settings-grid">
+            <article class="panel-card settings-card">
+              <div class="panel-heading"><div><p class="section-kicker">CONNECTION</p><h2>Cloud connection</h2></div><span id="connection-badge" class="muted-badge">LOADING</span></div>
+              <label class="field"><span>Base URL</span><input id="setting-base-url" type="url" placeholder="https://api.mindmemos.example.com" /></label>
+              <label class="field"><span>API key</span><input id="setting-api-key" type="password" placeholder="Leave empty to keep the current key" /></label>
+              <p class="field-help">The full API key is never returned to the browser. Only masked status will be displayed.</p>
+            </article>
+
+            <article class="panel-card settings-card">
+              <div class="panel-heading"><div><p class="section-kicker">IDENTITY DEFAULTS</p><h2>Request identity</h2></div></div>
+              <div class="field-grid two">
+                <label class="field"><span>User ID</span><input id="setting-user-id" placeholder="Not set" /></label>
+                <label class="field"><span>App ID</span><input id="setting-app-id" placeholder="Not set" /></label>
+                <label class="field"><span>Agent ID</span><input id="setting-agent-id" placeholder="Not set" /></label>
+                <label class="field"><span>Session ID</span><input id="setting-session-id" placeholder="Not set" /></label>
+              </div>
+              <p class="field-help">These values are injected into Skill-related SDK requests when no per-request override is supplied.</p>
+            </article>
+
+            <article class="panel-card settings-card wide">
+              <div class="panel-heading"><div><p class="section-kicker">SKILL &amp; REQUEST DEFAULTS</p><h2>Operation presets</h2></div></div>
+              <div class="field-grid three">
+                <label class="field"><span>Search top K</span><input id="setting-search-top-k" type="number" min="1" /></label>
+                <label class="field"><span>Search strategy</span><select id="setting-search-strategy"><option value="fast">fast</option><option value="agentic">agentic</option></select></label>
+                <label class="field"><span>Rerank</span><select id="setting-search-rerank"><option value="false">Disabled</option><option value="true">Enabled</option></select></label>
+                <label class="field"><span>Score threshold</span><input id="setting-search-score-threshold" type="number" min="0" max="1" step="0.01" placeholder="Unset" /></label>
+                <label class="field"><span>Get top K</span><input id="setting-get-top-k" type="number" min="1" placeholder="Unset" /></label>
+                <label class="field"><span>Feedback mode</span><select id="setting-feedback-mode"><option value="">Unset</option><option value="sync">sync</option><option value="async">async</option></select></label>
+                <label class="field"><span>Add mode</span><select id="setting-add-mode"><option value="sync">sync</option><option value="async">async</option></select></label>
+                <label class="field"><span>Default role</span><input id="setting-add-role" /></label>
+                <label class="field"><span>Dreaming mode</span><select id="setting-dreaming-mode"><option value="sync">sync</option><option value="async">async</option></select></label>
+                <label class="field checkbox-field"><input id="setting-auto-skill-context" type="checkbox" /><span>Auto Skill context</span></label>
+                <label class="field"><span>Search filters (JSON)</span><textarea id="setting-search-filters" rows="2" placeholder="{}"></textarea></label>
+                <label class="field"><span>Get filters (JSON)</span><textarea id="setting-get-filters" rows="2" placeholder="{}"></textarea></label>
+              </div>
+              <p class="field-help">The Memory request defaults are kept here for SDK behavior consistency, but this console does not expose the Memory viewer.</p>
+            </article>
+
+            <article class="panel-card settings-card">
+              <div class="panel-heading"><div><p class="section-kicker">LOCAL STORAGE</p><h2>Skill files</h2></div></div>
+              <label class="field"><span>Skill cache directory</span><input id="setting-cache-dir" /></label>
+              <label class="field"><span>Skill backup directory</span><input id="setting-backup-dir" /></label>
+            </article>
+
+            <article class="panel-card settings-card">
+              <div class="panel-heading"><div><p class="section-kicker">NETWORK</p><h2>Transport</h2></div></div>
+              <div class="field-grid two">
+                <label class="field"><span>Timeout (seconds)</span><input id="setting-timeout" type="number" min="1" /></label>
+                <label class="field"><span>Max retries</span><input id="setting-retries" type="number" min="0" /></label>
+              </div>
+              <p class="field-help">Changes are written atomically to the SDK configuration file by the local service.</p>
+            </article>
+          </section>
+        </div>
+      </main>
+
+      <footer class="footer">
+        <span>MindMemOS SDK</span>
+        <span>Local SDK console</span>
+      </footer>
+    </div>
+    <script src="/app.js?v=console-14" defer></script>
+  </body>
+</html>

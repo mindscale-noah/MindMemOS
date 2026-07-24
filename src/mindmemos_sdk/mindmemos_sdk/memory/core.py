@@ -36,6 +36,18 @@ class MemoryDefaults:
     app_id: str | None = None
     agent_id: str | None = None
     session_id: str | None = None
+    add_mode: AddMode = "sync"
+    add_default_role: str = "user"
+    add_auto_skill_context: bool = True
+    search_top_k: int | None = 10
+    search_strategy: SearchStrategy = "fast"
+    search_rerank: bool = False
+    search_score_threshold: float | None = None
+    search_filters: dict[str, Any] | None = None
+    get_top_k: int | None = None
+    get_filters: dict[str, Any] | None = None
+    feedback_mode: FeedbackMode | None = None
+    dreaming_mode: AddMode = "async"
 
 
 @dataclass(frozen=True)

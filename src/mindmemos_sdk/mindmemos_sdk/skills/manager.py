@@ -7,7 +7,9 @@ Checkout operations delegate local file replacement to ``SkillInstaller``.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from difflib import unified_diff
 from pathlib import Path
@@ -171,7 +173,7 @@ class SkillManager:
         self._history.write_cached_content(response.content_hash, content)
         return saved
 
-    def enqueue_pending_upload(self, skill_id: str) -> SkillPendingUpload:
+    def enqueue_pending_upload(self, skill_id: str, *, version_label: str | None = None) -> SkillPendingUpload:
         """Snapshot current local content and enqueue a non-blocking upload retry."""
 
         record = self.show(skill_id)
@@ -187,7 +189,7 @@ class SkillManager:
             cloud_skill_id=record.cloud_skill_id,
             parent_version_id=record.base_version_id,
             content_hash=content_hash,
-            version_label=record.version_label,
+            version_label=version_label if version_label is not None else record.version_label,
             content_cache_key=content_hash,
             created_at=now,
             updated_at=now,
@@ -419,6 +421,39 @@ class SkillManager:
         entry = self._history.get(record.cloud_skill_id)
         return entry.versions if entry else []
 
+    def get_content(self, skill_id: str, *, version_id: str | None = None) -> str:
+        """Return canonical bundle content for the local copy or one history version."""
+
+        record = self.show(skill_id)
+        if version_id is None or version_id == record.base_version_id:
+            return serialize_bundle(read_local_bundle(record.path))
+        return self._ensure_version_content(record, version_id)
+
+    def save_content(self, skill_id: str, *, content: str) -> SkillRecord:
+        """Atomically save a bare ``SKILL.md`` or canonical bundle to the local copy."""
+
+        record = self.show(skill_id)
+        files = bundle_files_from_content(content)
+        root = resolve_skill_dir(record.path)
+        if not root.is_dir():
+            raise SkillRegistryError(f"skill directory does not exist: {root}")
+
+        target = root / "SKILL.md"
+        fd, temporary_path = tempfile.mkstemp(dir=root, prefix=".SKILL.md-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(files["SKILL.md"])
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, target)
+        except BaseException:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+            raise
+        return self.show(skill_id)
+
     def plan_rollback(self, skill_id: str, *, version_id: str) -> RollbackPlan:
         """Build a rollback checkout plan without changing local files."""
 
@@ -442,7 +477,7 @@ class SkillManager:
         content = self._ensure_version_content(record, target.version_id)
         return self._installer.plan_checkout(record, target_version_id=target.version_id, content=content)
 
-    def push(self, skill_id: str) -> SkillRecord:
+    def push(self, skill_id: str, *, version_label: str | None = None) -> SkillRecord:
         """Upload current local skill content as a new edge version."""
 
         record = self.show(skill_id)
@@ -451,7 +486,7 @@ class SkillManager:
             raise SkillRegistryError(f"cannot read local skill bundle: {record.path}")
         if record.hash_state == HashState.CONFIRMED and record.content_hash == current_hash:
             return record
-        self.enqueue_pending_upload(skill_id)
+        self.enqueue_pending_upload(skill_id, version_label=version_label)
         results = self.flush_pending_uploads(limit=1)
         if not results or not results[0].uploaded or not results[0].registry_advanced:
             error = results[0].error if results else "upload did not complete"

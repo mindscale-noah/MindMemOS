@@ -114,6 +114,7 @@ def _manager(tmp_path):
     config_manager = ConfigManager(config_dir=tmp_path / "config")
     config = config_manager.load_or_default()
     config.storage.skill_cache_dir = str(tmp_path / "cache")
+    config.storage.skill_backup_dir = str(tmp_path / "backups")
     config_manager.save(config)
     cloud = _FakeCloud()
     manager = SkillManager(
@@ -344,6 +345,22 @@ def test_push_uploads_local_changes_as_new_version(tmp_path):
     assert pushed.base_version_id == "v2"
     assert pushed.content_hash != record.content_hash
     assert pushed.hash_state == HashState.CONFIRMED
+    assert cloud.register_calls[-1]["parent_version_id"] == "v1"
+
+
+def test_save_content_writes_skill_md_and_push_accepts_version_label(tmp_path):
+    manager, cloud, _config_manager = _manager(tmp_path)
+    path = _skill_dir(tmp_path)
+    record = manager.register(str(path))
+
+    manager.save_content(record.skill_id, content="name: demo\nversion: \"1.1.0\"\n\nEdited in the UI\n")
+
+    assert (path / "SKILL.md").read_text(encoding="utf-8").endswith("Edited in the UI\n")
+    assert manager.show(record.skill_id).base_version_id == "v1"
+    pushed = manager.push(record.skill_id, version_label="1.1.0")
+
+    assert pushed.base_version_id == "v2"
+    assert cloud.register_calls[-1]["version_label"] == "1.1.0"
     assert cloud.register_calls[-1]["parent_version_id"] == "v1"
 
 

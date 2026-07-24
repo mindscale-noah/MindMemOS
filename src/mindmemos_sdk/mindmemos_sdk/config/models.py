@@ -8,7 +8,7 @@ schema migration here.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -26,6 +26,26 @@ class DefaultsConfig(BaseModel):
     """Default user identity injected into requests."""
 
     user_id: str | None = None
+    app_id: str | None = None
+    agent_id: str | None = None
+    session_id: str | None = None
+
+
+class MemoryDefaultsConfig(BaseModel):
+    """Persisted defaults for memory request builders."""
+
+    search_top_k: int | None = 10
+    search_strategy: Literal["fast", "agentic"] = "fast"
+    search_rerank: bool = False
+    search_score_threshold: float | None = None
+    search_filters: dict[str, Any] = Field(default_factory=dict)
+    add_mode: Literal["sync", "async"] = "sync"
+    add_default_role: str = "user"
+    add_auto_skill_context: bool = True
+    get_top_k: int | None = None
+    get_filters: dict[str, Any] = Field(default_factory=dict)
+    feedback_mode: Literal["sync", "async"] | None = None
+    dreaming_mode: Literal["sync", "async"] = "async"
 
 
 class StorageConfig(BaseModel):
@@ -59,4 +79,5 @@ class SDKConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     skills: list[dict[str, Any]] = Field(default_factory=list)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
+    memory: MemoryDefaultsConfig = Field(default_factory=MemoryDefaultsConfig)
     metadata: ConfigMetadata = Field(default_factory=ConfigMetadata)

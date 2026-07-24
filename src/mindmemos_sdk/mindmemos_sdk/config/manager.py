@@ -68,7 +68,7 @@ class ConfigManager:
         config.metadata.updated_at = now
 
         self.config_dir.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(config.model_dump(), indent=2, ensure_ascii=False)
+        payload = json.dumps(config.model_dump(exclude_none=True), indent=2, ensure_ascii=False)
 
         fd, tmp_path = tempfile.mkstemp(dir=self.config_dir, prefix=".settings-", suffix=".tmp")
         try:
@@ -103,6 +103,11 @@ class ConfigManager:
         config.base_url = base_url
         config.auth.api_key = api_key
         config.defaults.user_id = user_id
+        # ``mindmemos auth`` owns the legacy auth flow; clear actor overrides so
+        # an old config cannot silently change the new persisted defaults.
+        config.defaults.app_id = None
+        config.defaults.agent_id = None
+        config.defaults.session_id = None
         self.save(config)
         return config
 

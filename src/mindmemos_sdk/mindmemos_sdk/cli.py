@@ -42,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     _add_auth_command(subparsers)
     _add_config_commands(subparsers)
+    _add_ui_command(subparsers)
     _add_skill_commands(subparsers)
     _add_memory_commands(subparsers)
     _add_doctor_command(subparsers)
@@ -72,6 +73,18 @@ def _add_config_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
     reset = config_subparsers.add_parser("reset", help="Reset local SDK settings.")
     reset.add_argument("--yes", "-y", action="store_true", help="Reset without confirmation prompts.")
     reset.set_defaults(handler=_handle_config_reset)
+
+
+def _add_ui_command(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parser = subparsers.add_parser(
+        "ui",
+        help="Launch the local MindMemOS management UI.",
+        description="Start the local browser-based console for Memory, Skills, and Settings.",
+    )
+    parser.add_argument("--port", type=int, default=0, help="Bind port. 0 selects a free local port.")
+    parser.add_argument("--no-open", action="store_true", help="Do not open the UI in a browser automatically.")
+    parser.add_argument("--config-dir", default=None, help="Override the SDK configuration directory.")
+    parser.set_defaults(handler=_handle_ui)
 
 
 def _add_skill_commands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -327,6 +340,22 @@ def _handle_config_reset(args: argparse.Namespace) -> int:
 
 def _handle_skill_root(args: argparse.Namespace) -> int:
     return _missing_subcommand("skill")
+
+
+def _handle_ui(args: argparse.Namespace) -> int:
+    """Launch the unified local console without adding a web framework dependency."""
+    from .ui.server import run_ui
+
+    try:
+        run_ui(
+            host="127.0.0.1",
+            port=args.port,
+            open_browser=not args.no_open,
+            config_dir=args.config_dir,
+        )
+    except KeyboardInterrupt:
+        print("\nStopped local MindMemOS UI.")
+    return 0
 
 
 def _handle_skill_register(args: argparse.Namespace) -> int:
