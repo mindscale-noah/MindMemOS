@@ -3,9 +3,8 @@ from types import SimpleNamespace
 
 import mindmemos.workers.memory_add as memory_add
 import pytest
-from mindmemos.typing.service import AddPipelineSyncResult, MemoryAddEventItem
-
 from mindmemos.infra.kafka import ConsumedMessage
+from mindmemos.typing.service import AddPipelineSyncResult, MemoryAddEventItem
 
 
 def make_message(body: dict) -> ConsumedMessage:

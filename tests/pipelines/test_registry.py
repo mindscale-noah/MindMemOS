@@ -1,7 +1,6 @@
 import pytest
-from mindmemos.pipelines.registry import create_pipeline, register
-
 from mindmemos.config import init_config, reset_config
+from mindmemos.pipelines.registry import create_pipeline, register
 
 
 def test_register_decorator_registers_pipeline_class_for_factory_creation() -> None:
@@ -34,16 +33,15 @@ def test_create_pipeline_rejects_unknown_pipeline_name() -> None:
 
 
 def test_builtin_get_delete_update_pipelines_are_registered() -> None:
+    from mindmemos.components.extractor.vanilla import AddSafetyGate
     from mindmemos.components.extractor.vanilla._safety_gate import AddSafetyGate as NestedAddSafetyGate
     from mindmemos.pipelines.add.schema import SchemaAddPipeline
+    from mindmemos.pipelines.add.vanilla import VanillaAddPipeline
     from mindmemos.pipelines.add.vanilla.vanilla_add import VanillaAddPipeline as NestedVanillaAddPipeline
     from mindmemos.pipelines.delete.default import DefaultDeletePipeline
     from mindmemos.pipelines.get.default import DefaultGetPipeline
     from mindmemos.pipelines.search.pipeline import SearchPipelineImpl
     from mindmemos.pipelines.update.default import DefaultUpdatePipeline
-
-    from mindmemos.components.extractor.vanilla import AddSafetyGate
-    from mindmemos.pipelines.add.vanilla import VanillaAddPipeline
 
     try:
         init_config(config_path="config/mindmemos/dev.example.yaml")

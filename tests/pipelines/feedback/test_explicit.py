@@ -1,6 +1,6 @@
-import pytest
 from types import SimpleNamespace
 
+import pytest
 from mindmemos.components.feedback import DefaultExplicitFeedbackPlanner, FeedbackMemorySearchDecision
 from mindmemos.pipelines.feedback.default import DefaultFeedbackPipeline
 from mindmemos.pipelines.feedback.executor import FeedbackActionExecutor
@@ -25,8 +25,6 @@ from mindmemos.typing.service import (
     UpdatePipelineResult,
 )
 
-from mindmemos.components.feedback import DefaultExplicitFeedbackPlanner, FeedbackMemorySearchDecision
-
 
 def make_context() -> MemoryRequestContext:
     return MemoryRequestContext(
@@ -47,6 +45,7 @@ class FakeNeo4jStore:
 
     async def run_read(self, query: str, **params: object) -> list[dict]:
         return []
+
 
 class FakePlanner:
     def __init__(self, *, decision: FeedbackMemorySearchDecision | None = None) -> None:

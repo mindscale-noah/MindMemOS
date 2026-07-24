@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 from ..errors import ConfigNotInitializedError
 from .app import MemoryConfig, build_config
 from .base import safe_dict
+from .validation import validate_config
 
 _global_config: MemoryConfig | None = None
 _current: ContextVar[MemoryConfig | None] = ContextVar("config_context", default=None)
@@ -100,10 +101,13 @@ def _build_scoped_config(
     cfg = _global_config
     if cfg is None:
         raise ConfigNotInitializedError
+    if not tenant_config and not project_config:
+        return cfg
     if tenant_config:
         cfg = OmegaConf.merge(cfg, OmegaConf.create(tenant_config))
     if project_config:
         cfg = OmegaConf.merge(cfg, project_config)
+    validate_config(cfg)
     return cfg
 
 

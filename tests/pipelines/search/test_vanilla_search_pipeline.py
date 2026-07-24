@@ -1,11 +1,21 @@
+import asyncio
+import threading
+import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 from mindmemos.components.searcher.final_filter import SearchFinalFilter
-from mindmemos.config import TextProcessingConfig, VanillaSearchConfig
+from mindmemos.config import (
+    TextProcessingConfig,
+    VanillaSearchConfig,
+    bind_config_overrides,
+    init_config,
+    reset_config,
+)
 from mindmemos.pipelines.search.pipeline import SearchPipelineImpl
 from mindmemos.pipelines.search.vanilla import VanillaSearchEngine
+from mindmemos.pipelines.search.vanilla import engine as vanilla_engine_module
 from mindmemos.typing.llm import EmbeddingResponse
 from mindmemos.typing.memory import (
     FieldCondition,
@@ -204,6 +214,138 @@ def make_engine(reader: FakeReader, search_config: VanillaSearchConfig | None = 
     )
 
 
+@pytest.mark.asyncio
+async def test_vanilla_dedup_keeps_highest_scored_copy():
+    first = MemoryDbSearchHit(
+        memory_id="low",
+        score=0.6,
+        memory=memory("low", "User joined an advanced investment course online."),
+        source="rrf",
+        rank=2,
+    )
+    second = MemoryDbSearchHit(
+        memory_id="high",
+        score=0.9,
+        memory=memory("high", "User joined an advanced investment course online."),
+        source="rrf",
+        rank=1,
+    )
+    distinct = MemoryDbSearchHit(
+        memory_id="distinct",
+        score=0.5,
+        memory=memory("distinct", "User enjoys hiking on weekends."),
+        source="rrf",
+        rank=3,
+    )
+    reader = FakeReader([first, second, distinct])
+
+    result = await make_engine(reader).search_candidates(SearchPipelineInput(query="course"), make_context())
+
+    assert [item.id for item in result] == ["high", "distinct"]
+
+
+@pytest.mark.asyncio
+async def test_vanilla_dedup_keeps_same_text_for_different_users():
+    first = MemoryDbSearchHit(
+        memory_id="alice",
+        score=0.9,
+        memory=memory("alice", "User joined an advanced investment course online.", user_id="alice"),
+        source="rrf",
+        rank=1,
+    )
+    second = MemoryDbSearchHit(
+        memory_id="bob",
+        score=0.8,
+        memory=memory("bob", "User joined an advanced investment course online.", user_id="bob"),
+        source="rrf",
+        rank=2,
+    )
+    reader = FakeReader([first, second])
+
+    result = await make_engine(reader).search_candidates(SearchPipelineInput(query="course"), make_context())
+
+    assert [item.id for item in result] == ["alice", "bob"]
+
+
+@pytest.mark.asyncio
+async def test_vanilla_dedup_keeps_same_text_for_current_and_archived_lineage():
+    current = MemoryDbSearchHit(
+        memory_id="current",
+        score=0.9,
+        memory=memory("current", "User joined an advanced investment course online.", user_id="alice"),
+        source="rrf",
+        rank=1,
+    )
+    archived = MemoryDbSearchHit(
+        memory_id="archived",
+        score=0.8,
+        memory=memory(
+            "archived",
+            "User joined an advanced investment course online.",
+            user_id="alice",
+            status="archived",
+        ),
+        source="lineage_archived",
+        rank=2,
+    )
+    reader = FakeReader([current, archived])
+
+    result = await make_engine(reader).search_candidates(SearchPipelineInput(query="course"), make_context())
+
+    assert [item.id for item in result] == ["current", "archived"]
+    assert [item.lineage.role for item in result if item.lineage is not None] == ["current", "archived"]
+
+
+@pytest.mark.asyncio
+async def test_vanilla_dedup_does_not_block_the_event_loop(monkeypatch):
+    dedup_started = threading.Event()
+    release_dedup = threading.Event()
+    dedup_finished = threading.Event()
+
+    def blocking_dedup(candidates, **kwargs):
+        dedup_started.set()
+        if not release_dedup.wait(timeout=1):
+            raise TimeoutError("test did not release dedup")
+        dedup_finished.set()
+        return candidates
+
+    monkeypatch.setattr(vanilla_engine_module, "dedup_by_text_similarity", blocking_dedup)
+    hit = MemoryDbSearchHit(
+        memory_id="one",
+        score=0.9,
+        memory=memory("one", "User joined an advanced investment course online."),
+        source="rrf",
+        rank=1,
+    )
+    heartbeat_ran_during_dedup = False
+
+    async def heartbeat():
+        nonlocal heartbeat_ran_during_dedup
+        await asyncio.sleep(0.02)
+        heartbeat_ran_during_dedup = dedup_started.is_set() and not dedup_finished.is_set()
+
+    def release_after_dedup_starts():
+        if dedup_started.wait(timeout=1):
+            time.sleep(0.2)
+            release_dedup.set()
+
+    release_thread = threading.Thread(target=release_after_dedup_starts, daemon=True)
+    release_thread.start()
+    try:
+        await asyncio.gather(
+            make_engine(FakeReader([hit])).search_candidates(
+                SearchPipelineInput(query="course"),
+                make_context(),
+            ),
+            heartbeat(),
+        )
+    finally:
+        release_dedup.set()
+        release_thread.join(timeout=1)
+
+    assert heartbeat_ran_during_dedup is True
+
+
 def make_graph_engine(reader: FakeReader) -> VanillaSearchEngine:
     return make_engine(
         reader,
@@ -341,6 +483,73 @@ async def test_vanilla_search_threads_rrf_prefetch_limits() -> None:
     )
     assert reader_factor.calls[0].dense_limit == 60
     assert reader_factor.calls[0].sparse_limit == 60
+
+    # configured ceiling dominates: max(100 * 3, 30) is capped at 250
+    reader_cap = FakeReader([])
+    await make_engine(
+        reader_cap,
+        VanillaSearchConfig(recall_size=100, hybrid_prefetch_max=250),
+    ).search_candidates(
+        SearchPipelineInput(query="qdrant memory", top_k=2),
+        make_context(),
+    )
+    assert reader_cap.calls[0].dense_limit == 250
+    assert reader_cap.calls[0].sparse_limit == 250
+
+
+@pytest.mark.asyncio
+async def test_vanilla_search_enforces_runtime_recall_and_prefetch_caps() -> None:
+    reader = FakeReader([])
+    engine = make_engine(
+        reader,
+        VanillaSearchConfig(
+            recall_size=500,
+            hybrid_prefetch_factor=50,
+            hybrid_prefetch_min=500,
+            hybrid_prefetch_max=500,
+        ),
+    )
+
+    await engine.search_candidates(
+        SearchPipelineInput(query="qdrant memory", top_k=500),
+        make_context(),
+    )
+
+    call = reader.calls[0]
+    assert call.req.top_k == 100
+    assert call.dense_limit == 300
+    assert call.sparse_limit == 300
+
+
+@pytest.mark.parametrize(("configured_cap", "expected_cap"), [(17, 17), (500, 128)])
+@pytest.mark.asyncio
+async def test_vanilla_search_passes_dedup_candidate_cap(monkeypatch, configured_cap: int, expected_cap: int) -> None:
+    recorded_kwargs = {}
+
+    class RecordingDedupExecutor:
+        async def run(self, func, candidates, **kwargs):
+            recorded_kwargs.update(kwargs)
+            return func(candidates, **kwargs)
+
+    monkeypatch.setattr(vanilla_engine_module, "vanilla_dedup_executor", RecordingDedupExecutor())
+    reader = FakeReader(
+        [
+            MemoryDbSearchHit(
+                memory_id="one",
+                score=0.9,
+                memory=memory("one", "User joined an advanced investment course online."),
+                source="rrf",
+                rank=1,
+            )
+        ]
+    )
+
+    await make_engine(reader, VanillaSearchConfig(dedup_max_candidates=configured_cap)).search_candidates(
+        SearchPipelineInput(query="course", top_k=1),
+        make_context(),
+    )
+
+    assert recorded_kwargs["max_candidates"] == expected_cap
 
 
 @pytest.mark.asyncio
@@ -823,3 +1032,77 @@ async def test_search_pipeline_lazy_loads_vanilla_engine_and_final_filters(monke
     assert result.status == "ok"
     assert [item.id for item in result.memories] == ["mem-1"]
     assert isinstance(pipeline._engines["vanilla"], VanillaSearchEngine)
+
+
+@pytest.mark.asyncio
+async def test_cached_vanilla_engine_uses_each_project_search_config(monkeypatch) -> None:
+    try:
+        init_config(config_path="config/mindmemos/dev.example.yaml")
+        monkeypatch.setattr(
+            "mindmemos.pipelines.search.vanilla.engine.get_embed_client",
+            lambda: FakeEmbedClient(),
+        )
+        reader = FakeReader(
+            [
+                MemoryDbSearchHit(
+                    memory_id="mem-1",
+                    score=0.9,
+                    memory=memory("mem-1", "Kai uses Qdrant for vector search."),
+                    source="rrf",
+                    rank=1,
+                ),
+                MemoryDbSearchHit(
+                    memory_id="mem-2",
+                    score=0.8,
+                    memory=memory("mem-2", "Kai uses Qdrant for vector search."),
+                    source="rrf",
+                    rank=2,
+                ),
+            ]
+        )
+        pipeline = SearchPipelineImpl(
+            db_reader=reader,
+            db_writer=SimpleNamespace(),
+            final_filter=SearchFinalFilter(),
+        )
+        request = SearchPipelineInput(
+            query="Qdrant",
+            search_pipeline="vanilla",
+            top_k=2,
+            rerank=False,
+        )
+
+        with bind_config_overrides(
+            project_config={
+                "algo_config": {
+                    "search": {
+                        "vanilla": {
+                            "dedup_enabled": True,
+                            "dedup_threshold": 0.6,
+                        }
+                    }
+                }
+            }
+        ):
+            project_a = await pipeline.search(request, make_context())
+
+        cached_engine = pipeline._engines["vanilla"]
+        with bind_config_overrides(
+            project_config={
+                "algo_config": {
+                    "search": {
+                        "vanilla": {
+                            "dedup_enabled": False,
+                            "dedup_threshold": 1.0,
+                        }
+                    }
+                }
+            }
+        ):
+            project_b = await pipeline.search(request, make_context())
+
+        assert pipeline._engines["vanilla"] is cached_engine
+        assert [item.id for item in project_a.memories] == ["mem-1"]
+        assert [item.id for item in project_b.memories] == ["mem-1", "mem-2"]
+    finally:
+        reset_config()

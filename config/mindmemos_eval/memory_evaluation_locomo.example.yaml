@@ -41,7 +41,7 @@ benchmarks:
 
 execution_params:
   personamem:
-    add_batch_size: 50
+    add_batch_size: 20
 
 algorithm_profiles:
   vanilla:

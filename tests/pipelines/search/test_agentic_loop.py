@@ -3,12 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
+from mindmemos.components.memory_modeling.schema import TemporalEntity
+from mindmemos.config.algo.search import AgenticConfig
 from mindmemos.pipelines.search.agentic.base import SearchToolRequest, SearchToolResult
 from mindmemos.pipelines.search.agentic.loop import AgenticLoop
 from mindmemos.typing.memory import MemoryRequestContext
-
-from mindmemos.components.memory_modeling.schema import TemporalEntity
-from mindmemos.config.algo.search import AgenticConfig
 
 
 def make_context() -> MemoryRequestContext:

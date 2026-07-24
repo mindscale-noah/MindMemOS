@@ -6,14 +6,16 @@ a fake client so no network or local config is touched.
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 
 import pytest
+from mindmemos_sdk.memory import AddResult, DialogueMessage, GetResult, MemorySearchHit, SearchResult, StatusResult
 from mindmemos_sdk.skills import RollbackPlan, SkillDiffResult, SkillRecord
 from mindmemos_sdk.skills.models import HashState, LocalSkillVersion, SkillOrigin, SkillVersionStatus
 
 from mindmemos_sdk import cli
-from mindmemos_sdk.memory import AddResult, DialogueMessage, GetResult, MemorySearchHit, SearchResult, StatusResult
 
 
 class _FakeMemory:
@@ -434,7 +436,7 @@ def test_memory_add_requires_content_or_messages_json(capsys):
 def test_memory_add_rejects_invalid_messages_json(capsys):
     rc = _run(["memory", "add", "--messages-json", '{"role": "user"}'])
     assert rc == 2
-    assert "messages JSON must be a non-empty JSON array" in capsys.readouterr().out
+    assert "--messages-json must be a JSON array" in capsys.readouterr().out
 
 
 def test_memory_search_json_output(fake_client, capsys):
@@ -518,11 +520,82 @@ def test_memory_delete_with_yes_skips_prompt(fake_client, capsys):
     assert "Deleted m1." in capsys.readouterr().out
 
 
-def test_memory_feedback_passes_text(fake_client):
+def test_memory_feedback_passes_text_and_messages(fake_client):
     fake_client(StatusResult(code="ok"))
-    rc = _run(["memory", "feedback", "--text", "good"])
+    messages = [{"role": "user", "content": "wrong coffee preference", "timestamp": 1700000000000}]
+
+    rc = _run(["memory", "feedback", "--text", "good", "--messages-json", json.dumps(messages)])
+
     assert rc == 0
-    assert fake_client.holder["client"].memory.calls == [("feedback", (), {"feedback": "good"})]
+    assert fake_client.holder["client"].memory.calls == [("feedback", (), {"feedback": "good", "messages": messages})]
+
+
+def test_memory_feedback_passes_recalled_memories(fake_client):
+    fake_client(StatusResult(code="ok"))
+    messages = [{"role": "user", "content": "wrong coffee preference"}]
+    recalled_memories = [{"id": "m1", "memory": "User prefers hot coffee."}]
+
+    rc = _run(
+        [
+            "memory",
+            "feedback",
+            "--text",
+            "good",
+            "--messages-json",
+            json.dumps(messages),
+            "--recalled-memories-json",
+            json.dumps(recalled_memories),
+        ]
+    )
+
+    assert rc == 0
+    assert fake_client.holder["client"].memory.calls == [
+        (
+            "feedback",
+            (),
+            {"feedback": "good", "messages": messages, "recalled_memories": recalled_memories},
+        )
+    ]
+
+
+def test_memory_feedback_reads_messages_json_from_stdin(monkeypatch, fake_client):
+    fake_client(StatusResult(code="ok"))
+    messages = [{"role": "user", "content": "wrong coffee preference"}]
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(messages)))
+
+    rc = _run(["memory", "feedback", "--text", "good", "--messages-json-file", "-"])
+
+    assert rc == 0
+    assert fake_client.holder["client"].memory.calls == [("feedback", (), {"feedback": "good", "messages": messages})]
+
+
+def test_memory_feedback_text_requires_messages(capsys):
+    rc = _run(["memory", "feedback", "--text", "good"])
+
+    assert rc == 2
+    assert "--text requires --messages-json or --messages-json-file" in capsys.readouterr().out
+
+
+def test_memory_feedback_rejects_invalid_messages_json(capsys):
+    rc = _run(["memory", "feedback", "--text", "good", "--messages-json", '{"role": "user"}'])
+
+    assert rc == 2
+    assert "--messages-json must be a JSON array" in capsys.readouterr().out
+
+
+def test_memory_feedback_rejects_context_without_text(capsys):
+    rc = _run(["memory", "feedback", "--messages-json", '[{"role": "user", "content": "hi"}]'])
+
+    assert rc == 2
+    assert "context options require --text" in capsys.readouterr().out
+
+
+def test_memory_feedback_without_text_runs_implicit_flow(fake_client):
+    fake_client(StatusResult(code="ok"))
+    rc = _run(["memory", "feedback"])
+
+    assert rc == 0
+    assert fake_client.holder["client"].memory.calls == [("feedback", (), {})]
 
 
 def test_memory_dreaming_invokes_client(fake_client, capsys):
@@ -552,9 +625,7 @@ def test_memory_get_passes_filter_and_top_k(fake_client):
     fake_client(GetResult(memories=[MemorySearchHit(id="m1", memory="cat")]))
     rc = _run(["memory", "get", "--filter", '{"app_id": "a1"}', "--top-k", "3"])
     assert rc == 0
-    assert fake_client.holder["client"].memory.calls == [
-        ("get", (), {"filters": {"app_id": "a1"}, "top_k": 3})
-    ]
+    assert fake_client.holder["client"].memory.calls == [("get", (), {"filters": {"app_id": "a1"}, "top_k": 3})]
 
 
 def test_memory_get_invalid_filter_json_fails_fast(capsys):

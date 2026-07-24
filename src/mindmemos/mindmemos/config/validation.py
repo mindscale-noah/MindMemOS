@@ -9,6 +9,12 @@ from typing import Any
 from omegaconf.errors import ConfigAttributeError, MissingMandatoryValue
 
 from ..errors import InvalidConfigError, MissingConfigValueError
+from .algo.search.vanilla.vanilla import (
+    VANILLA_DEDUP_MAX_CANDIDATES,
+    VANILLA_HYBRID_PREFETCH_FACTOR_MAX,
+    VANILLA_HYBRID_PREFETCH_MAX,
+    VANILLA_RECALL_SIZE_MAX,
+)
 
 
 @dataclass(frozen=True)
@@ -32,7 +38,9 @@ class RangeRule:
 
 CHOICE_RULES: tuple[ChoiceRule, ...] = (
     ChoiceRule("telemetry.span_type", frozenset({"simple", "batch"}), case_insensitive=True),
-    ChoiceRule("telemetry.log_level", frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}), case_insensitive=True),
+    ChoiceRule(
+        "telemetry.log_level", frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}), case_insensitive=True
+    ),
     ChoiceRule("auth.mode", frozenset({"api_key", "gateway_jwt"})),
     ChoiceRule("database.qdrant.distance", frozenset({"Cosine", "Euclid", "Dot", "Manhattan"}), case_insensitive=True),
     ChoiceRule("database.default_consistency", frozenset({"fast", "strong"})),
@@ -65,11 +73,26 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("database.qdrant.batch_upsert_flush_interval_ms", min_value=0, support="non-negative integer"),
     RangeRule("database.qdrant.batch_upsert_max_queue_size", min_value=1, support="positive integer >= 1"),
     RangeRule("database.qdrant.batch_upsert_max_inflight_batches", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.vanilla.hybrid_prefetch_factor", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.vanilla.hybrid_prefetch_min", min_value=1, support="positive integer >= 1"),
+    RangeRule(
+        "algo_config.search.vanilla.hybrid_prefetch_factor",
+        min_value=1,
+        max_value=VANILLA_HYBRID_PREFETCH_FACTOR_MAX,
+    ),
+    RangeRule(
+        "algo_config.search.vanilla.hybrid_prefetch_min",
+        min_value=1,
+        max_value=VANILLA_HYBRID_PREFETCH_MAX,
+    ),
+    RangeRule(
+        "algo_config.search.vanilla.hybrid_prefetch_max",
+        min_value=1,
+        max_value=VANILLA_HYBRID_PREFETCH_MAX,
+    ),
     RangeRule("database.neo4j.max_connection_lifetime", min_value=0, include_min=False, support="positive number"),
     RangeRule("database.neo4j.max_connection_pool_size", min_value=1, support="positive integer >= 1"),
-    RangeRule("database.neo4j.connection_acquisition_timeout", min_value=0, include_min=False, support="positive number"),
+    RangeRule(
+        "database.neo4j.connection_acquisition_timeout", min_value=0, include_min=False, support="positive number"
+    ),
     RangeRule("database.neo4j.max_client_concurrency", min_value=1, support="positive integer >= 1"),
     RangeRule("database.neo4j.request_row_budget", min_value=1, support="positive integer >= 1"),
     RangeRule("database.neo4j.write_max_retries", min_value=0, support="non-negative integer"),
@@ -94,9 +117,18 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("algo_config.text_processing.sparse_hash_dim", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.text_processing.sparse_k1", min_value=0, include_min=False, support="positive number"),
     RangeRule("algo_config.text_processing.sparse_b", min_value=0, max_value=1, support="0 <= value <= 1"),
-    RangeRule("algo_config.text_processing.bm25_idf_smoothing", min_value=0, include_min=False, support="positive number"),
-    RangeRule("algo_config.text_processing.bm25_min_idf_denominator", min_value=0, include_min=False, support="positive number"),
-    RangeRule("algo_config.text_processing.bm25_min_avg_doc_len", min_value=0, include_min=False, support="positive number"),
+    RangeRule(
+        "algo_config.text_processing.bm25_idf_smoothing", min_value=0, include_min=False, support="positive number"
+    ),
+    RangeRule(
+        "algo_config.text_processing.bm25_min_idf_denominator",
+        min_value=0,
+        include_min=False,
+        support="positive number",
+    ),
+    RangeRule(
+        "algo_config.text_processing.bm25_min_avg_doc_len", min_value=0, include_min=False, support="positive number"
+    ),
     RangeRule("algo_config.text_processing.spacy_entity_default_confidence", min_value=0, max_value=1),
     RangeRule("algo_config.text_processing.rule_entity_default_confidence", min_value=0, max_value=1),
     RangeRule("algo_config.text_processing.max_entity_count", min_value=1, support="positive integer >= 1"),
@@ -154,10 +186,67 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("algo_config.add.schema.chunker.max_episode_length", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.add.schema.chunker.max_buffer_size", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.add.schema.chunker.max_minutes_from_first", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.add.schema.drain.episode_generation_max_retries", min_value=0, support="non-negative integer"),
+    RangeRule(
+        "algo_config.add.schema.chunker.streaming_window_size",
+        min_value=1,
+        max_value=100,
+        support="1 <= value <= 100",
+    ),
+    RangeRule(
+        "algo_config.add.schema.drain.episode_generation_max_retries", min_value=0, support="non-negative integer"
+    ),
+    RangeRule(
+        "algo_config.add.schema.drain.episode_retry_backoff_base",
+        min_value=0,
+        include_min=False,
+        support="positive number",
+    ),
+    RangeRule(
+        "algo_config.add.schema.drain.episode_retry_backoff_max",
+        min_value=0,
+        include_min=False,
+        support="positive number",
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entities_per_conversation", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entity_resolve_concurrency", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.secondary_search_retry_backoff_base",
+        min_value=0,
+        include_min=False,
+        support="positive number",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.secondary_search_retry_backoff_max",
+        min_value=0,
+        include_min=False,
+        support="positive number",
+    ),
     RangeRule("algo_config.search.request_top_k_max", min_value=1, support="positive integer >= 1"),
+    RangeRule(
+        "algo_config.search.vanilla.dedup_threshold",
+        min_value=0,
+        max_value=1,
+        include_min=False,
+        support="0 < value <= 1; use dedup_enabled: false to disable de-duplication",
+    ),
     RangeRule("algo_config.search.default.top_k", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.vanilla.recall_size", min_value=1, support="positive integer >= 1"),
+    RangeRule(
+        "algo_config.search.vanilla.recall_size",
+        min_value=1,
+        max_value=VANILLA_RECALL_SIZE_MAX,
+    ),
+    RangeRule(
+        "algo_config.search.vanilla.dedup_max_candidates",
+        min_value=1,
+        max_value=VANILLA_DEDUP_MAX_CANDIDATES,
+    ),
     RangeRule("algo_config.search.vanilla.graph_seed_memory_limit", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.search.vanilla.graph_related_per_seed", min_value=1, support="positive integer >= 1"),
     RangeRule(
@@ -177,13 +266,17 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("algo_config.search.schema_search.entity.rrf_k", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.search.schema_search.entity.top_k", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.search.schema_search.entity.top_n", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.schema_search.entity.max_rerank_candidates", min_value=1, support="positive integer >= 1"),
+    RangeRule(
+        "algo_config.search.schema_search.entity.max_rerank_candidates", min_value=1, support="positive integer >= 1"
+    ),
     RangeRule(
         "algo_config.search.schema_search.entity.search_field_overfetch_factor",
         min_value=1,
         support="positive integer >= 1",
     ),
-    RangeRule("algo_config.search.schema_search.entity.maxsim_weight", min_value=0, max_value=1, support="0 <= value <= 1"),
+    RangeRule(
+        "algo_config.search.schema_search.entity.maxsim_weight", min_value=0, max_value=1, support="0 <= value <= 1"
+    ),
     RangeRule("algo_config.search.schema_search.property.recall_size", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.search.schema_search.property.rrf_k", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.search.schema_search.property.top_k", min_value=1, support="positive integer >= 1"),
@@ -206,9 +299,15 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         min_value=1,
         support="positive integer >= 1",
     ),
-    RangeRule("algo_config.search.schema_search.dual_path.property_rrf_k", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.schema_search.dual_path.property_top_k", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.schema_search.dual_path.property_top_n", min_value=1, support="positive integer >= 1"),
+    RangeRule(
+        "algo_config.search.schema_search.dual_path.property_rrf_k", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.search.schema_search.dual_path.property_top_k", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.search.schema_search.dual_path.property_top_n", min_value=1, support="positive integer >= 1"
+    ),
     RangeRule(
         "algo_config.search.schema_search.entity_weights.episode_weight",
         min_value=0,
@@ -222,7 +321,9 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         support="0 <= value <= 1",
     ),
     RangeRule("algo_config.search.schema_search.edge.top_k", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.search.schema_search.edge.neighbor_fetch_limit", min_value=1, support="positive integer >= 1"),
+    RangeRule(
+        "algo_config.search.schema_search.edge.neighbor_fetch_limit", min_value=1, support="positive integer >= 1"
+    ),
     RangeRule(
         "algo_config.search.schema_search.edge.min_relevance_score",
         min_value=0,
@@ -250,10 +351,9 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     ),
     RangeRule("algo_config.dreaming.lookback_days", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.dreaming.max_memories_per_scope", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.dreaming.min_scope_updates", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.dreaming.min_cluster_size", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.dreaming.concurrency", min_value=1, support="positive integer >= 1"),
-    RangeRule("algo_config.dreaming.scope_batch_size", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.dreaming.max_entity_memory_count", min_value=1, support="positive integer >= 1"),
     RangeRule(
         "algo_config.dreaming.max_scopes_per_run",
         min_value=1,
@@ -439,6 +539,13 @@ def _validate_schema_add(schema_add: Any) -> None:
 
 
 def _validate_search(search: Any) -> None:
+    vanilla = search.vanilla
+    if vanilla.hybrid_prefetch_min > vanilla.hybrid_prefetch_max:
+        raise InvalidConfigError(
+            "algo_config.search.vanilla.hybrid_prefetch_min",
+            support="<= algo_config.search.vanilla.hybrid_prefetch_max",
+        )
+
     schema = search.schema_search
     if schema.property.alloc_max_factor < schema.property.alloc_min_factor:
         raise InvalidConfigError(

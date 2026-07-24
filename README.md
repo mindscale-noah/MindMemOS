@@ -38,17 +38,22 @@ MindMemOS is an open-source long-term memory system for AI agents and applicatio
 
 ## Benchmark
 
+> **Dataset preparation**: LoCoMo, LongMemEval, and PersonaMem datasets are not included in this
+> repository. Download them from the respective official benchmark sources and place them at the
+> paths configured in the example config files:
+> * LoCoMo → `datasets/locomo/locomo10.json`
+> * LongMemEval → `resources/memory/dataset/longmemeval_smoke.json`
+> * PersonaMem → `resources/memory/dataset/questions_32k.csv` and `resources/memory/dataset/shared_contexts_32k.jsonl`
+
 ### Evaluation of Conversational Memory
 
 MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive benchmark for long-term memory systems, with an overall score of **93.64**.
 
 * Benchmark: [LoCoMo](https://arxiv.org/abs/2402.17753), the most mainstream and fiercely contested benchmark for long-term memory systems, focused on factual memory retention and joint analysis, covering single-hop, multi-hop, temporal, and open-domain question answering.
-* Note: Answer model: gpt-4.1-mini. Baseline metrics are cited from the [EverMemOS](https://arxiv.org/abs/2601.02163) paper.
+* Note: Answer model: gpt-4.1-mini. Comparison method metrics are cited from the [EverMemOS](https://arxiv.org/abs/2601.02163) paper.
 
 | Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
 | :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |
-| MemoryOS            |    67.30   |   59.34   |  42.26   |    59.03    |   60.11   |
-| Mem0                |    68.97   |   61.70   |  58.26   |    50.00    |   64.20   |
 | MemU                |    74.91   |   72.34   |  43.61   |    54.17    |   66.67   |
 | MemOS               |    85.37   |   79.43   |  75.08   |    64.58    |   80.76   |
 | Zep                 |    90.84   |   81.91   |  77.26   |    75.00    |   85.22   |
@@ -59,18 +64,20 @@ Evaluation config: [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml
 
 ```bash
 cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
-# fill in API keys, then run:
+# fill in API keys, then run. Start the server first — make sure its api_key_file
+# config points to the eval key file this eval command will generate:
+#   api_key_file: eval_api_keys.yaml
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
   --benchmark-list locomo \
   --algorithm schema \
   --manifest-output output/locomo_manifest.jsonl \
-  --api-key-output config/mindmemos/api_keys.yaml
+  --api-key-output config/mindmemos/eval_api_keys.yaml
 ```
 
 ### Evaluation of Persona Memory
 
-MindMemOS achieves state-of-the-art on PersonaMem through higher-order property modeling and discovery, leading the current SOTA by approximately **2 points** in overall accuracy.
+MindMemOS-schema achieves state-of-the-art on PersonaMem with an overall accuracy of **70.6%**, leading the current SOTA by approximately **3 points**.
 
 * Benchmark: [PersonaMem](https://arxiv.org/abs/2504.14225), a persona-centric memory benchmark focused on user profiling and preference understanding, evaluating recall, tracking, revisiting, suggestion, recommendation, and generalization of user traits.
 * Note: All results are from local runs of open-source code (memory model and answer model: gpt-4.1-mini).
@@ -80,7 +87,22 @@ MindMemOS achieves state-of-the-art on PersonaMem through higher-order property 
 | MemOS               | 74.42% (96/129) | 82.35% (14/17) | 61.87% (86/139) | 77.78% (77/99) | 44.09% (41/93) | 67.27% (37/55) | 84.21% (48/57) | 67.74% (399/589) |
 | EverMemOS           | 74.42% (96/129) | 64.71% (11/17) | 64.03% (89/139) | 85.86% (85/99) | 35.48% (33/93) | 65.45% (36/55) | 84.21% (48/57) | 67.57% (398/589) |
 | MemU                | 64.34% (83/129) | 64.71% (11/17) | 66.20% (92/139) | 87.88% (87/99) | 31.18% (29/93) | 67.27% (37/55) | 84.21% (48/57) | 65.70% (387/589) |
-| **MindMemOS-schema** | 73.64% (95/129) | **82.35%** (14/17) | **67.63%** (94/139) | 85.86% (85/99) | 35.48% (33/93) | **80.00%** (44/55) | 78.95% (45/57) | **69.61% (410/589)** |
+| **MindMemOS-schema** | **81.4% (105/129)** | 64.7% (11/17) | 64.7% (90/139) | 82.8% (82/99) | **47.3% (44/93)** | **76.4% (42/55)** | 73.7% (42/57) | **70.6% (416/589)** |
+
+Evaluation config: [`config/mindmemos_eval/memory_evaluation_personamem.example.yaml`](config/mindmemos_eval/memory_evaluation_personamem.example.yaml)
+
+```bash
+cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml config/mindmemos_eval/memory_evaluation_personamem.yaml
+# fill in API keys, then run. Start the server first — make sure its api_key_file
+# config points to the eval key file this eval command will generate:
+#   api_key_file: eval_api_keys.yaml
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
+  --benchmark-list personamem \
+  --algorithm schema \
+  --manifest-output output/personamem_manifest.jsonl \
+  --api-key-output config/mindmemos/eval_api_keys.yaml
+```
 
 ### Evaluation of Dreaming
 
@@ -94,6 +116,20 @@ MindMemOS achieves state-of-the-art on PersonaMem through higher-order property 
 | mem0 | GPT-4o-mini | - | GPT-4o-mini | 18.00% | - | - | 2.00% | - | - | 10.00% | - | - |
 | Ours (Vanilla) | gpt-4.1-mini | - | gpt-4.1-mini | 83.00% | | - | 10.75% | | - | 46.88% | | - |
 | **Ours (Vanilla + Dreaming)** | **gpt-4.1-mini** | **-** | **gpt-4.1-mini** | **88.75%** | **+5.75%** 🟢 | **-27.5%** | **14.00%** | **+3.25%** 🟢 | **-28.3%** | **51.38%** | **+4.50%** 🟢 | **-27.9%** |
+
+### Evaluation of Skill Evolution
+
+With Skill self-evolution, MindMemOS improves task success rate on SpreadsheetBench-Verified to **57.2%**, a **+5.9 point** gain over No-skill and a **+9.2 point** gain over the unevolved Init-skill.
+
+* Benchmark: [SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz), a 400-task verified subset of SpreadsheetBench covering diverse real spreadsheet operations.
+* Note: MindMemOS-Unsup. evolves using execution traces only; MindMemOS-Sup. additionally uses task scores as supervision.
+
+| Method | Success Rate | Time / Task (s) | Agent Tokens | Evolve Tokens |
+|--------|:------------:|:---------------:|:------------:|:-------------:|
+| No-skill | 51.3% ± 0.8% | 11.227 | 10.4M | - |
+| Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
+| **MindMemOS-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
+| **MindMemOS-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
 
 ## Core Features
 
@@ -348,7 +384,9 @@ Manage memories:
 uv run mindmemos memory get --top-k 10
 uv run mindmemos memory update <memory_id> --content "我现在更喜欢拿铁"
 uv run mindmemos memory delete <memory_id>
-uv run mindmemos memory feedback --text "刚才召回的偏好不准确"
+uv run mindmemos memory feedback --text "刚才召回的偏好不准确" \
+  --messages-json '[{"role":"user","content":"刚才召回的偏好不准确"}]'
+uv run mindmemos memory feedback  # implicit feedback from recent adds
 uv run mindmemos memory dreaming
 ```
 

@@ -1,0 +1,161 @@
+"""Near-duplicate folding for search candidates.
+
+The add pipeline can persist the same fact many times with slightly different
+wording (e.g. one activity restated across conversation turns), and rerank
+scores those near-identical copies almost equally. Without folding, a top-k of
+distinct-looking slots is really filled with a handful of repeated facts,
+starving the answer of independent evidence. This collapses near-duplicates on
+the recall pool *before* rerank/truncation so the k slots go to k distinct
+memories.
+
+Similarity uses token-set (Jaccard) overlap rather than character-level
+sequence matching. Restatements of the same fact reorder words and swap
+synonyms, which character-level ratios (``difflib``) barely register, while
+Jaccard on content words cleanly separates same-fact restatements (high
+overlap) from merely related but distinct memories (low overlap).
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Hashable, Sequence
+
+from ....logging import get_logger
+from ....typing import MemorySearchItem
+
+logger = get_logger(__name__)
+
+_CJK_TOKEN = re.compile(r"[㐀-䶿一-鿿]")
+_WORD_OR_CJK_TOKEN = re.compile(r"[0-9a-z]{2,}|[㐀-䶿一-鿿]")
+# Numbers, versions, dates, and amounts that discriminate otherwise near-identical
+# facts. A single differing number in a long sentence ("2 cats" vs "3 cats") barely
+# moves the token-set Jaccard (~0.86, above any usable threshold), so overlap alone
+# would fold a genuinely distinct fact. Digits embedded in longer tokens count too
+# (SKU-1234 vs SKU-1235). Folding requires these fingerprints to match.
+_NUMERIC_TOKEN = re.compile(r"\d+(?:[.,:/\-]\d+)*")
+_MIN_TOKENS_FOR_NEAR_DEDUP = 5
+_MIN_CJK_CHARACTERS_FOR_NEAR_DEDUP = 10
+_MAX_TOKENS_FOR_NEAR_DEDUP = 512
+
+
+def _tokens(text: str) -> frozenset[str]:
+    """Extract a bounded word/CJK token fingerprint for overlap."""
+    lowered = text.lower()
+    tokens: set[str] = set()
+    for match in _WORD_OR_CJK_TOKEN.finditer(lowered):
+        tokens.add(match.group())
+        if len(tokens) >= _MAX_TOKENS_FOR_NEAR_DEDUP:
+            break
+    return frozenset(tokens)
+
+
+def _numeric_fingerprint(text: str) -> frozenset[str]:
+    """Discriminating numeric tokens (counts, versions, dates, amounts, ids)."""
+    return frozenset(_NUMERIC_TOKEN.findall(text))
+
+
+def _is_short_for_near_dedup(text: str, tokens: frozenset[str]) -> bool:
+    """Keep short facts intact even when generic terms overlap."""
+    cjk_characters = _CJK_TOKEN.findall(text)
+    if cjk_characters:
+        return len(cjk_characters) < _MIN_CJK_CHARACTERS_FOR_NEAR_DEDUP
+    return len(tokens) < _MIN_TOKENS_FOR_NEAR_DEDUP
+
+
+def _normalized_text(text: str) -> str:
+    """Normalize only case and whitespace for exact duplicate detection."""
+    return " ".join(text.casefold().split())
+
+
+def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    """Token-set Jaccard similarity; 0.0 when both sides are empty."""
+    if not a and not b:
+        return 0.0
+    intersection_size = len(a & b)
+    union_size = len(a) + len(b) - intersection_size
+    if not union_size:
+        return 0.0
+    return intersection_size / union_size
+
+
+def dedup_by_text_similarity(
+    candidates: list[MemorySearchItem],
+    *,
+    threshold: float = 0.6,
+    group_keys: Sequence[Hashable] | None = None,
+    max_candidates: int | None = None,
+) -> list[MemorySearchItem]:
+    """Greedily fold near-duplicate memories within each group, preserving order.
+
+    A candidate is kept when its token set is less than ``threshold`` Jaccard
+    similar to every already-kept candidate in the same group; otherwise it is
+    dropped as a near-duplicate of the earlier one. When ``group_keys`` is
+    omitted, all candidates belong to one group, preserving the legacy behavior.
+    Recall order is preserved so a later rerank still decides the final ranking.
+
+    ``threshold`` of 1.0 folds long memories with identical bounded token
+    fingerprints; lower values fold looser paraphrases. Exact duplicate texts
+    always fold. Near-duplicate folding is skipped for short memories to avoid
+    dropping facts that differ in a single salient token, and is vetoed whenever
+    two memories carry different numeric fingerprints (counts, versions, dates,
+    amounts, ids) so a lone differing number is never folded away regardless of
+    length. When ``max_candidates`` is set, only that leading window
+    participates in approximate comparisons; exact duplicate folding still
+    covers the full candidate list.
+    """
+    if group_keys is None:
+        resolved_group_keys: Sequence[Hashable] = [None] * len(candidates)
+    elif len(group_keys) != len(candidates):
+        raise ValueError("group_keys must contain one entry per candidate")
+    else:
+        resolved_group_keys = group_keys
+
+    if len(candidates) <= 1:
+        return list(candidates)
+
+    kept: list[MemorySearchItem] = []
+    approximate_tokens: list[frozenset[str]] = []
+    approximate_is_short: list[bool] = []
+    approximate_group_keys: list[Hashable] = []
+    approximate_numbers: list[frozenset[str]] = []
+    kept_texts: set[tuple[Hashable, str]] = set()
+    for index, (candidate, group_key) in enumerate(zip(candidates, resolved_group_keys, strict=True)):
+        normalized_text = _normalized_text(candidate.memory)
+        grouped_text = (group_key, normalized_text)
+        if grouped_text in kept_texts:
+            continue
+
+        approximate_enabled = max_candidates is None or index < max_candidates
+        if not approximate_enabled:
+            kept.append(candidate)
+            kept_texts.add(grouped_text)
+            continue
+
+        tokens = _tokens(candidate.memory)
+        numbers = _numeric_fingerprint(candidate.memory)
+        is_short = _is_short_for_near_dedup(candidate.memory, tokens)
+        if not is_short and any(
+            previous_group_key == group_key
+            and not previous_is_short
+            and previous_numbers == numbers
+            and _jaccard(tokens, previous_tokens) >= threshold
+            for previous_tokens, previous_is_short, previous_group_key, previous_numbers in zip(
+                approximate_tokens,
+                approximate_is_short,
+                approximate_group_keys,
+                approximate_numbers,
+                strict=True,
+            )
+        ):
+            continue
+        kept.append(candidate)
+        approximate_tokens.append(tokens)
+        approximate_is_short.append(is_short)
+        approximate_group_keys.append(group_key)
+        approximate_numbers.append(numbers)
+        kept_texts.add(grouped_text)
+
+    dropped = len(candidates) - len(kept)
+    if dropped:
+        logger.debug("search_dedup_folded", folded=dropped, kept=len(kept), total=len(candidates))
+    return kept

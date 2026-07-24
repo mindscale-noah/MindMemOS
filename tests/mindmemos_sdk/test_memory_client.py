@@ -6,11 +6,12 @@ import json
 
 import httpx
 import pytest
-from mindmemos_sdk.errors import ApiError, AuthRequiredError, MindMemOSSDKError, TransportError
+from mindmemos_sdk.errors import ApiError, AuthRequiredError, InvalidRequestError, MindMemOSSDKError, TransportError
 from mindmemos_sdk.memory import (
     DialogueMessage,
     FileMessage,
     MemoryClient,
+    MemorySearchHit,
     TextMessage,
     UrlMessage,
 )
@@ -350,17 +351,74 @@ def test_feedback_omits_none_text():
     assert captured["body"] == {}
 
 
-def test_feedback_sends_explicit_text():
+def test_feedback_rejects_explicit_text_without_messages():
+    client = MemoryClient(_transport(lambda request: httpx.Response(500)))
+
+    with pytest.raises(InvalidRequestError, match="explicit feedback requires non-empty messages context"):
+        client.feedback(feedback="great recall")
+
+
+def test_feedback_rejects_explicit_text_with_empty_messages():
+    client = MemoryClient(_transport(lambda request: httpx.Response(500)))
+
+    with pytest.raises(InvalidRequestError, match="explicit feedback requires non-empty messages context"):
+        client.feedback(feedback="great recall", messages=[])
+
+
+def test_feedback_sends_explicit_context():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"code": "ok", "message": "thanks", "data": None})
+        return httpx.Response(200, json={"code": "ok", "data": None})
 
     client = MemoryClient(_transport(handler))
-    result = client.feedback(feedback="great recall")
-    assert captured["body"] == {"feedback": "great recall"}
-    assert result.message == "thanks"
+    client.feedback(
+        feedback="that coffee preference was wrong",
+        messages=[DialogueMessage(role="user", content="I prefer iced coffee.")],
+        recalled_memories=[MemorySearchHit(id="m1", memory="User prefers hot coffee.")],
+    )
+
+    body = captured["body"]
+    assert body["feedback"] == "that coffee preference was wrong"
+    assert body["messages"][0]["role"] == "user"
+    assert body["messages"][0]["content"] == "I prefer iced coffee."
+    assert body["recalled_memories"][0] == {
+        "id": "m1",
+        "memory": "User prefers hot coffee.",
+        "memory_type": "fact",
+        "last_update_at": "",
+        "event_time": None,
+        "source_timestamp": None,
+        "lineage": None,
+    }
+
+
+def test_feedback_normalizes_raw_recalled_memory_context():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"code": "ok", "data": None})
+
+    client = MemoryClient(_transport(handler))
+    client.feedback(
+        feedback="that coffee preference was wrong",
+        messages=[{"role": "user", "content": "I prefer iced coffee."}],
+        recalled_memories=[{"id": "m1", "memory": "User prefers hot coffee."}],
+    )
+
+    assert captured["body"]["recalled_memories"] == [
+        {
+            "id": "m1",
+            "memory": "User prefers hot coffee.",
+            "memory_type": "fact",
+            "last_update_at": "",
+            "event_time": None,
+            "source_timestamp": None,
+            "lineage": None,
+        }
+    ]
 
 
 def test_feedback_sends_actor_identity():
@@ -371,14 +429,21 @@ def test_feedback_sends_actor_identity():
         return httpx.Response(200, json={"code": "ok", "data": None})
 
     client = MemoryClient(_transport(handler), default_user_id="u-default", default_app_id="app-default")
-    client.feedback(feedback="great recall", agent_id="agent-1", session_id="session-1")
+    client.feedback(
+        feedback="great recall",
+        messages=[DialogueMessage(role="user", content="That recall was useful.")],
+        agent_id="agent-1",
+        session_id="session-1",
+    )
 
-    assert captured["body"] == {
+    body = captured["body"]
+    assert body == {
         "user_id": "u-default",
         "app_id": "app-default",
         "agent_id": "agent-1",
         "session_id": "session-1",
         "feedback": "great recall",
+        "messages": [{"role": "user", "content": "That recall was useful.", "timestamp": None}],
     }
 
 
@@ -440,7 +505,7 @@ def test_add_requires_user_id():
 
 def test_add_rejects_empty_messages():
     client = MemoryClient(_transport(lambda r: httpx.Response(200, json={"code": "ok"})), default_user_id="u")
-    with pytest.raises(MindMemOSSDKError):
+    with pytest.raises(InvalidRequestError):
         client.add(messages=[])
 
 

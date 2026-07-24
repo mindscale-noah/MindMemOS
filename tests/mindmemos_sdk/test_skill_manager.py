@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from mindmemos_sdk.config import ConfigManager
 from mindmemos_sdk.skills import SkillCloudClient, SkillContentData, SkillManager, SkillRecord, SkillRegisterData
 from mindmemos_sdk.skills.bundle import compute_content_hash, deserialize_bundle
 from mindmemos_sdk.skills.detector import detect_skill_context
@@ -16,8 +17,6 @@ from mindmemos_sdk.skills.models import (
 )
 from mindmemos_sdk.skills.pending import SkillPendingUploadStore
 from mindmemos_sdk.skills.registry import SkillRegistry
-
-from mindmemos_sdk.config import ConfigManager
 
 
 class _FakeCloud(SkillCloudClient):

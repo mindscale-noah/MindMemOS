@@ -30,6 +30,13 @@ def test_dev_example_declares_all_algorithm_config_fields() -> None:
     _assert_declares_fields(raw_algo_config["search"]["vanilla"], VanillaSearchConfig)
 
 
+def test_vanilla_search_defaults_bound_prefetch_and_dedup_work() -> None:
+    vanilla = build_config(config_path="config/mindmemos/dev.example.yaml").algo_config.search.vanilla
+
+    assert vanilla.hybrid_prefetch_max == 300
+    assert vanilla.dedup_max_candidates == 128
+
+
 def test_dev_configs_keep_vanilla_settings_in_canonical_sections() -> None:
     legacy_flat_alias = "non" + "_schema"
     for path in ("config/mindmemos/dev.yaml", "config/mindmemos/dev.example.yaml"):

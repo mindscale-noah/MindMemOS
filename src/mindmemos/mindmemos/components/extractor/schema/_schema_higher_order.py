@@ -10,7 +10,7 @@ from ....llm import LLMClient
 from ....logging import get_logger
 from ....prompts import AddPromptSet
 from ....typing import EntityWrite, MemoryRequestContext, MemoryView, MemoryWrite
-from ...memory_modeling.schema import TemporalEntity, memory_timestamp
+from ...memory_modeling.schema import TemporalEntity, get_entity_manager, memory_timestamp
 from ._schema_update_ops import SchemaMemoryUpdate
 from ._schema_utils import (
     dedupe_non_empty,
@@ -47,7 +47,6 @@ class SchemaHigherOrderGenerator:
 
     llm_client: LLMClient
     db_reader: Any
-    entity_manager: Any
     prompt_set: AddPromptSet
     embed_texts: EmbedTexts
     list_entity_memories: ListEntityMemories
@@ -63,17 +62,20 @@ class SchemaHigherOrderGenerator:
         raw_entity: dict[str, Any],
         context: MemoryRequestContext,
         created_at: datetime,
+        episode_time: str = "",
         request_metadata: dict[str, Any],
         prompt_set: AddPromptSet | None = None,
     ) -> tuple[list[MemoryWrite], list[str], list[SchemaMemoryUpdate]]:
         """Generate higher-order memories and archive ids for an updated entity."""
+
+        em = get_entity_manager(project_id=context.project_id)
 
         if (
             not self.enabled
             or entity_write.entity_type == "episodes"
             or entity_write.metadata.get("merge_action") != "update"
             or not entity_write.entity_type
-            or not self.entity_manager.has_higher_order_properties(entity_write.entity_type)
+            or not em.has_higher_order_properties(entity_write.entity_type)
         ):
             return [], [], []
 
@@ -81,7 +83,7 @@ class SchemaHigherOrderGenerator:
         if not new_properties:
             return [], [], []
 
-        higher_order_names = self.entity_manager.get_higher_order_property_names(entity_write.entity_type)
+        higher_order_names = em.get_higher_order_property_names(entity_write.entity_type)
         query_text = " | ".join(str(prop.get("value") or "")[:200] for prop in new_properties if prop.get("value"))
         if not query_text:
             return [], [], []
@@ -108,7 +110,7 @@ class SchemaHigherOrderGenerator:
             .replace("{new_properties}", format_new_properties(new_properties))
             .replace(
                 "{higher_order_schema}",
-                format_higher_order_schema(self.entity_manager.get_properties_by_order(entity_write.entity_type, 2)),
+                format_higher_order_schema(em.get_properties_by_order(entity_write.entity_type, 2)),
             )
             .replace("{min_evidence_count}", str(self.min_evidence_count))
         )
@@ -130,6 +132,7 @@ class SchemaHigherOrderGenerator:
             current_higher_order=current_higher_order,
             context=context,
             created_at=created_at,
+            episode_time=episode_time,
             request_metadata=request_metadata,
         )
 
@@ -175,8 +178,9 @@ class SchemaHigherOrderGenerator:
         higher_order_names: set[str],
         context: MemoryRequestContext,
     ) -> dict[str, list[dict[str, Any]]]:
+        em = get_entity_manager(project_id=context.project_id)
         memories = await self.list_entity_memories(entity_id, context=context, limit=200)
-        entity = TemporalEntity(entity_id=entity_id, entity_manager=self.entity_manager)
+        entity = TemporalEntity(entity_id=entity_id, entity_manager=em)
         for memory in memories:
             if memory.status == "active" and memory.property_name in higher_order_names:
                 entity.modify_property(
@@ -204,6 +208,7 @@ class SchemaHigherOrderGenerator:
         current_higher_order: dict[str, list[dict[str, Any]]],
         context: MemoryRequestContext,
         created_at: datetime,
+        episode_time: str = "",
         request_metadata: dict[str, Any],
     ) -> tuple[list[MemoryWrite], list[str], list[SchemaMemoryUpdate]]:
         memories: list[MemoryWrite] = []
@@ -214,7 +219,7 @@ class SchemaHigherOrderGenerator:
                 continue
             prop_name = str(item.get("property_name") or "")
             action = item.get("action", "no_action")
-            value = str(item.get("value") or "")
+            value = str(item.get("value") or "")[:1500]
             if prop_name not in higher_order_names or action not in {"update", "add", "create"} or not value:
                 continue
 
@@ -222,14 +227,21 @@ class SchemaHigherOrderGenerator:
             if action == "update" and latest:
                 if value.strip() == str(latest.get("value") or "").strip():
                     continue
-            target_uid = str(latest["uid"]) if action == "update" and latest and latest.get("uid") else None
+
+            if action == "update" and latest and latest.get("uid"):
+                target_uid = str(latest["uid"])
+            elif action in {"add", "create"} and latest and latest.get("uid"):
+                target_uid = None
+                archive_ids.append(str(latest["uid"]))
+            else:
+                target_uid = None
 
             memory = self.memory_factory(
                 entity_write=entity_write,
                 prop={
                     "property_name": prop_name,
                     "value": value,
-                    "time": created_at.strftime("%Y-%m-%d"),
+                    "time": (episode_time.split(" ")[0] if episode_time else created_at.strftime("%Y-%m-%d")),
                     "operation": "set",
                 },
                 context=context,

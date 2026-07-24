@@ -6,7 +6,6 @@ from mindmemos.components.skill import (
     normalize_bundle,
     serialize_bundle,
 )
-
 from mindmemos.errors import SkillBundleError
 
 SKILL_BODY = "---\nname: prd-writer\nversion: 1.2.0\n---\n\n# PRD Writer\n\nWrite product docs.\n"

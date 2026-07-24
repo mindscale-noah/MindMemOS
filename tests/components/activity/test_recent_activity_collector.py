@@ -6,11 +6,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from mindmemos.components.activity import RecentActivityCollector
-from mindmemos.typing.activity import ActivityScope
-from qdrant_client import models as qmodels
-
 from mindmemos.errors import ActivityCollectionError
 from mindmemos.infra.db import QdrantRecord
+from mindmemos.typing.activity import ActivityScope
+from qdrant_client import models as qmodels
 
 WINDOW_END = datetime(2026, 6, 14, 12, 0, 0, tzinfo=UTC)
 

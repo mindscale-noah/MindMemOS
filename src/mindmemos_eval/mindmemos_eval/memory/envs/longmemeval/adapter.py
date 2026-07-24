@@ -8,6 +8,7 @@ from typing import Any
 from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.base import BenchmarkSpec, RunContext
 from mindmemos_eval.memory.config import _merged_runner_config, _option, resolve_public_search_strategy
+
 from .env import LongMemEvalEnv
 
 
@@ -52,6 +53,7 @@ class LongMemEvalAdapter:
             top_k=None if top_k is None else int(top_k),
             search_strategy=public_search_strategy,
             rerank=bool(rerank),
+            judge_runs=runner.judge_runs,
         )
         run = await env.run_dataset(
             data,

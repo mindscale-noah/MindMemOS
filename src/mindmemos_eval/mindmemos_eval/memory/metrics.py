@@ -127,6 +127,7 @@ async def collect_benchmark_metrics(
     config: MetricsCollectorConfig,
     table_output_path: str | Path | None = None,
     xlsx_output_path: str | Path | None = None,
+    json_output_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Collect Qdrant and ClickHouse metrics for every manifest row."""
     runs = load_manifest(manifest_path)
@@ -141,7 +142,6 @@ async def collect_benchmark_metrics(
                 "metrics": {
                     "qdrant": qdrant_metrics,
                     "clickhouse": clickhouse_metrics,
-                    "search_summary": _search_token_summary(qdrant_metrics, clickhouse_metrics),
                 },
                 "metrics_collected_at": datetime.now(UTC).isoformat(),
             }
@@ -154,6 +154,8 @@ async def collect_benchmark_metrics(
         write_metrics_table(table_output_path, rows)
     if xlsx_output_path:
         write_metrics_xlsx(xlsx_output_path, rows)
+    if json_output_path:
+        write_metrics_json(json_output_path, rows)
     return rows
 
 
@@ -214,6 +216,9 @@ async def collect_clickhouse_metrics(run: BenchmarkRunRef, config: ClickHouseCol
         token_percentiles = await asyncio.to_thread(
             _query_clickhouse_json, config, _llm_token_percentiles_sql(run, request_ids, config)
         )
+        search_token_perc = await asyncio.to_thread(
+            _query_clickhouse_json, config, _search_token_percentiles_sql(run, request_ids, config)
+        )
     except Exception as exc:  # noqa: BLE001 - collector should keep producing Qdrant metrics.
         if config.strict:
             raise
@@ -222,6 +227,7 @@ async def collect_clickhouse_metrics(run: BenchmarkRunRef, config: ClickHouseCol
     total_row = (totals.get("data") or [{}])[0]
     token_perc_data = token_percentiles.get("data") or []
     token_perc = {item.get("task"): item for item in token_perc_data if isinstance(item, dict)}
+    search_token_perc_row = (search_token_perc.get("data") or [{}])[0]
 
     return {
         "enabled": True,
@@ -232,6 +238,7 @@ async def collect_clickhouse_metrics(run: BenchmarkRunRef, config: ClickHouseCol
         "llm_total_time_ms": _to_float(total_row.get("llm_total_time_ms")),
         "llm_by_task": by_task.get("data") or [],
         "llm_token_percentiles_by_task": token_perc,
+        "search_token_percentiles": search_token_perc_row,
     }
 
 
@@ -277,35 +284,6 @@ def _all_request_ids(run: BenchmarkRunRef) -> list[str]:
     for stage in ("add", "search", "answer", "eval"):
         ids.extend(_request_ids(run, stage))
     return ids
-
-
-def _search_token_summary(qdrant: dict[str, Any], clickhouse: dict[str, Any]) -> dict[str, Any]:
-    """Roll up search-stage LLM token usage and average it per search query.
-
-    Args:
-        qdrant: Qdrant metrics block, providing ``search_record_count`` (= number of
-            search queries issued in this run).
-        clickhouse: ClickHouse metrics block, providing ``llm_by_task``.
-
-    Returns:
-        Aggregated search token totals plus per-query and per-call averages. The
-        ``search.*`` LLM tasks (e.g. multi_query, sufficiency_check, time_extraction)
-        are summed together since one search query may fan out to several LLM calls.
-    """
-    by_task = clickhouse.get("llm_by_task") or []
-    search_rows = [
-        task for task in by_task if isinstance(task, dict) and str(task.get("task") or "").startswith("search.")
-    ]
-    total_tokens = sum(_to_int(task.get("llm_total_tokens")) for task in search_rows)
-    call_count = sum(_to_int(task.get("llm_call_count")) for task in search_rows)
-    query_count = _to_int(qdrant.get("search_record_count"))
-    return {
-        "search_query_count": query_count,
-        "search_llm_call_count": call_count,
-        "search_total_tokens": total_tokens,
-        "search_avg_tokens_per_query": round(total_tokens / query_count, 3) if query_count else None,
-        "search_avg_tokens_per_call": round(total_tokens / call_count, 3) if call_count else None,
-    }
 
 
 def _payload_memory_count(payload: dict[str, Any]) -> int:
@@ -381,6 +359,54 @@ def _aggregate_token_percentiles(token_perc: dict[str, Any], op_name: str) -> di
     }
 
 
+def _task_prefix_avg_tokens(by_task: list[Any], prefix: str) -> float | None:
+    """Average tokens per LLM call across all tasks matching ``prefix`` (e.g. 'memory.add.')."""
+    total_tokens = 0
+    call_count = 0
+    for task in by_task:
+        if not isinstance(task, dict) or not str(task.get("task") or "").startswith(prefix):
+            continue
+        total_tokens += _to_int(task.get("llm_total_tokens"))
+        call_count += _to_int(task.get("llm_call_count"))
+    return round(total_tokens / call_count, 1) if call_count else None
+
+
+def _eval_qa_token_series(row: dict[str, Any]) -> dict[str, list[float]]:
+    """Extract per-question token counts from manifest eval_result for percentile computation.
+
+    Returns a dict mapping stage name ('answer', 'judge') to a list of total_tokens
+    values, one per question.  The manifest stores full qa_results for locomo and
+    longmemeval; personamem uses deterministic scoring so answer/judge are absent.
+    """
+    er = row.get("eval_result") or {}
+    benchmark = row.get("benchmark", "")
+    series: dict[str, list[float]] = {"answer": [], "judge": []}
+
+    if benchmark == "locomo":
+        qa_lists = [
+            conv.get("qa_results") or []
+            for conv in (er.get("conversations") or [])
+        ]
+    elif benchmark == "longmemeval":
+        qa_lists = [
+            s.get("qa_results") or []
+            for s in (er.get("samples") or [])
+        ]
+    else:
+        return series
+
+    for qa_list in qa_lists:
+        for qa in qa_list:
+            if not isinstance(qa, dict):
+                continue
+            for stage in ("answer", "judge"):
+                v = qa.get(f"{stage}_total_tokens")
+                if v is not None:
+                    series[stage].append(float(v))
+
+    return series
+
+
 def _percentile_stats(values: Sequence[float]) -> dict[str, float | None]:
     """Compute min, max, p50, p95 percentiles for a list of values."""
     if not values:
@@ -425,15 +451,14 @@ def _parse_dt(value: Any) -> datetime | None:
 
 
 def _llm_totals_sql(run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig) -> str:
+    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
     table = _qualified_table(config)
-    request_expr = _request_id_in_expr(request_ids)
     return f"""
 WITH benchmark_traces AS (
     SELECT DISTINCT TraceId
     FROM {table}
     WHERE SpanAttributes['project_id'] = {_sql_literal(run.project_id)}
       AND SpanAttributes['api_key_uuid'] = {_sql_literal(run.key_id)}
-      AND SpanAttributes['request_id'] IN {request_expr}
 )
 SELECT
     count() AS llm_call_count,
@@ -449,20 +474,21 @@ FORMAT JSON
 
 
 def _llm_by_task_sql(run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig) -> str:
+    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
     table = _qualified_table(config)
-    request_expr = _request_id_in_expr(request_ids)
     return f"""
 WITH benchmark_traces AS (
     SELECT DISTINCT TraceId
     FROM {table}
     WHERE SpanAttributes['project_id'] = {_sql_literal(run.project_id)}
       AND SpanAttributes['api_key_uuid'] = {_sql_literal(run.key_id)}
-      AND SpanAttributes['request_id'] IN {request_expr}
 )
 SELECT
     SpanAttributes['llm.task'] AS task,
     count() AS llm_call_count,
     sum(toInt64OrZero(SpanAttributes['llm.usage.total_tokens'])) AS llm_total_tokens,
+    sum(toInt64OrZero(SpanAttributes['llm.usage.prompt_tokens'])) AS llm_prompt_tokens,
+    sum(toInt64OrZero(SpanAttributes['llm.usage.completion_tokens'])) AS llm_completion_tokens,
     round(sum(toInt64OrZero(SpanAttributes['llm.usage.total_tokens'])) / count(), 3) AS llm_avg_tokens,
     round(sum(Duration) / 1000000, 3) AS llm_total_time_ms
 FROM {table}
@@ -478,15 +504,14 @@ def _llm_token_percentiles_sql(
     run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig
 ) -> str:
     """Compute token count percentiles per LLM task."""
+    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
     table = _qualified_table(config)
-    request_expr = _request_id_in_expr(request_ids)
     return f"""
 WITH benchmark_traces AS (
     SELECT DISTINCT TraceId
     FROM {table}
     WHERE SpanAttributes['project_id'] = {_sql_literal(run.project_id)}
       AND SpanAttributes['api_key_uuid'] = {_sql_literal(run.key_id)}
-      AND SpanAttributes['request_id'] IN {request_expr}
 )
 SELECT
     SpanAttributes['llm.task'] AS task,
@@ -499,6 +524,60 @@ WHERE SpanName = 'llm.chat'
   AND TraceId IN (SELECT TraceId FROM benchmark_traces)
 GROUP BY task
 ORDER BY task
+FORMAT JSON
+""".strip()
+
+
+def _search_token_percentiles_sql(
+    run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig
+) -> str:
+    """Compute search-stage token totals and per-query percentiles, entirely from ClickHouse.
+
+    Groups by TraceId so that all search.* LLM calls within one search request
+    are summed before computing percentiles — giving per-query cost distribution
+    rather than per-LLM-call distribution. Also returns call/query counts and
+    prompt/completion/total token sums so no Qdrant data is needed for search
+    token summaries.
+    """
+    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
+    table = _qualified_table(config)
+    return f"""
+WITH benchmark_traces AS (
+    SELECT DISTINCT TraceId
+    FROM {table}
+    WHERE SpanAttributes['project_id'] = {_sql_literal(run.project_id)}
+      AND SpanAttributes['api_key_uuid'] = {_sql_literal(run.key_id)}
+),
+search_calls AS (
+    SELECT
+        TraceId,
+        toInt64OrZero(SpanAttributes['llm.usage.total_tokens']) AS total_tokens,
+        toInt64OrZero(SpanAttributes['llm.usage.prompt_tokens']) AS prompt_tokens,
+        toInt64OrZero(SpanAttributes['llm.usage.completion_tokens']) AS completion_tokens
+    FROM {table}
+    WHERE SpanName = 'llm.chat'
+      AND startsWith(SpanAttributes['llm.task'], 'search.')
+      AND TraceId IN (SELECT TraceId FROM benchmark_traces)
+),
+per_query AS (
+    SELECT
+        TraceId,
+        sum(total_tokens) AS total_tokens
+    FROM search_calls
+    GROUP BY TraceId
+)
+SELECT
+    (SELECT count() FROM search_calls)              AS call_count,
+    (SELECT sum(prompt_tokens) FROM search_calls)    AS prompt_tokens,
+    (SELECT sum(completion_tokens) FROM search_calls) AS completion_tokens,
+    (SELECT sum(total_tokens) FROM search_calls)     AS total_tokens,
+    count()                                          AS query_count,
+    min(total_tokens)                                AS token_min,
+    max(total_tokens)                                AS token_max,
+    round(avg(total_tokens), 1)                      AS token_avg,
+    round(quantile(0.5)(total_tokens), 0)            AS token_p50,
+    round(quantile(0.95)(total_tokens), 0)           AS token_p95
+FROM per_query
 FORMAT JSON
 """.strip()
 
@@ -524,10 +603,6 @@ def _query_clickhouse_json(config: ClickHouseCollectorConfig, sql: str) -> dict[
 
 def _qualified_table(config: ClickHouseCollectorConfig) -> str:
     return f"{_sql_identifier(config.database)}.{_sql_identifier(config.table)}"
-
-
-def _request_id_in_expr(request_ids: Sequence[str]) -> str:
-    return "(" + ", ".join(_sql_literal(value) for value in request_ids) + ")"
 
 
 def _sql_literal(value: str) -> str:
@@ -586,6 +661,18 @@ SUMMARY_HEADERS = [
     "search_total_tokens",
     "search_avg_tokens/query",
     "search_avg_tokens/call",
+    "overall_accuracy",
+    "answer_llm_calls",
+    "answer_prompt_tokens",
+    "answer_completion_tokens",
+    "answer_total_tokens",
+    "judge_llm_calls",
+    "judge_prompt_tokens",
+    "judge_completion_tokens",
+    "judge_total_tokens",
+    "add_token_avg",
+    "answer_token_avg",
+    "judge_token_avg",
 ]
 
 EVAL_METRICS_HEADERS = [
@@ -605,10 +692,20 @@ EVAL_METRICS_HEADERS = [
     "scope_violation_count",
     "search_failure_count",
     "answer_failure_count",
+    "answer_parse_failure_count",
+    "answer_format_failure_count",
+    "search_llm_calls",
+    "search_prompt_tokens",
+    "search_completion_tokens",
+    "search_total_tokens",
     "answer_llm_calls",
     "answer_prompt_tokens",
     "answer_completion_tokens",
     "answer_total_tokens",
+    "judge_llm_calls",
+    "judge_prompt_tokens",
+    "judge_completion_tokens",
+    "judge_total_tokens",
     "build_elapsed_seconds",
     "search_elapsed_seconds",
     "answer_elapsed_seconds",
@@ -627,8 +724,15 @@ def _summary_values(row: dict[str, Any]) -> list[Any]:
     """
     qdrant = dict(row.get("metrics", {}).get("qdrant") or {})
     clickhouse = dict(row.get("metrics", {}).get("clickhouse") or {})
-    search_summary = dict(row.get("metrics", {}).get("search_summary") or {})
-    return [
+    sp = clickhouse.get("search_token_percentiles") or {}
+    em = dict((row.get("eval_result") or {}).get("metrics") or {})
+    search_call_count = _to_int(sp.get("call_count"))
+    search_total_tokens = _to_int(sp.get("total_tokens")) if sp.get("total_tokens") is not None else None
+    search_avg_per_query = _to_float(sp["token_avg"]) if sp.get("token_avg") is not None else None
+    search_avg_per_call = (
+        round(search_total_tokens / search_call_count, 3) if search_total_tokens and search_call_count else None
+    )
+    values: list[Any] = [
         row.get("benchmark"),
         row.get("run_id"),
         row.get("key_id"),
@@ -648,10 +752,27 @@ def _summary_values(row: dict[str, Any]) -> list[Any]:
         clickhouse.get("llm_prompt_tokens"),
         clickhouse.get("llm_completion_tokens"),
         clickhouse.get("llm_total_time_ms"),
-        search_summary.get("search_total_tokens"),
-        search_summary.get("search_avg_tokens_per_query"),
-        search_summary.get("search_avg_tokens_per_call"),
+        search_total_tokens,
+        search_avg_per_query,
+        search_avg_per_call,
+        em.get("overall_accuracy"),
+        em.get("answer_llm_calls"),
+        em.get("answer_prompt_tokens"),
+        em.get("answer_completion_tokens"),
+        em.get("answer_total_tokens"),
+        em.get("judge_llm_calls"),
+        em.get("judge_prompt_tokens"),
+        em.get("judge_completion_tokens"),
+        em.get("judge_total_tokens"),
     ]
+    add_avg = _task_prefix_avg_tokens(clickhouse.get("llm_by_task") or [], "memory.add.")
+    qa_series = _eval_qa_token_series(row)
+    ans_vals = qa_series.get("answer") or []
+    jdg_vals = qa_series.get("judge") or []
+    ans_avg = round(sum(ans_vals) / len(ans_vals), 1) if ans_vals else None
+    jdg_avg = round(sum(jdg_vals) / len(jdg_vals), 1) if jdg_vals else None
+    values += [add_avg, ans_avg, jdg_avg]
+    return values
 
 
 def _eval_metrics_values(row: dict[str, Any]) -> list[Any]:
@@ -660,8 +781,9 @@ def _eval_metrics_values(row: dict[str, Any]) -> list[Any]:
 
     eval_result = dict(row.get("eval_result") or {})
     metrics = dict(eval_result.get("metrics") or {})
+    sp = dict(row.get("metrics", {}).get("clickhouse", {}).get("search_token_percentiles") or {})
 
-    # ✅ 检查关键字段，防止静默数据丢失
+    # Check key fields to catch silent data loss early.
     if eval_result and not eval_result.get("protocol"):
         warnings.warn(
             f"eval_result for run_id={row.get('run_id')} missing 'protocol' field",
@@ -691,10 +813,20 @@ def _eval_metrics_values(row: dict[str, Any]) -> list[Any]:
         metrics.get("scope_violation_count"),
         metrics.get("search_failure_count"),
         metrics.get("answer_failure_count"),
+        metrics.get("answer_parse_failure_count"),
+        metrics.get("answer_format_failure_count"),
+        metrics.get("search_llm_calls") or _to_int(sp.get("call_count")),
+        metrics.get("search_prompt_tokens") or _to_int(sp.get("prompt_tokens")),
+        metrics.get("search_completion_tokens") or _to_int(sp.get("completion_tokens")),
+        metrics.get("search_total_tokens") or _to_int(sp.get("total_tokens")),
         metrics.get("answer_llm_calls"),
         metrics.get("answer_prompt_tokens"),
         metrics.get("answer_completion_tokens"),
         metrics.get("answer_total_tokens"),
+        metrics.get("judge_llm_calls"),
+        metrics.get("judge_prompt_tokens"),
+        metrics.get("judge_completion_tokens"),
+        metrics.get("judge_total_tokens"),
         metrics.get("build_elapsed_seconds"),
         metrics.get("search_elapsed_seconds"),
         metrics.get("answer_elapsed_seconds"),
@@ -716,6 +848,169 @@ def write_metrics_table(path: str | Path, rows: Iterable[dict[str, Any]]) -> Non
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+LLM_BY_TASK_HEADERS = [
+    "run_id",
+    "algorithm",
+    "task",
+    "llm_calls",
+    "llm_total_tokens",
+    "llm_avg_tokens",
+    "llm_total_time_ms",
+]
+
+PERCENTILES_HEADERS = [
+    "run_id",
+    "algorithm",
+    "operation",
+    "time_min_ms",
+    "time_max_ms",
+    "time_p50_ms",
+    "time_p95_ms",
+    "token_min",
+    "token_max",
+    "token_p50",
+    "token_p95",
+]
+
+
+def _llm_by_task_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build one row per (run, LLM task) with token and timing breakdown."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        clickhouse = dict(row.get("metrics", {}).get("clickhouse") or {})
+        for task in clickhouse.get("llm_by_task") or []:
+            if not isinstance(task, dict):
+                continue
+            out.append(
+                {
+                    "run_id": row.get("run_id"),
+                    "algorithm": row.get("memory_algorithm"),
+                    "task": task.get("task"),
+                    "llm_calls": _to_int(task.get("llm_call_count")),
+                    "llm_total_tokens": _to_int(task.get("llm_total_tokens")),
+                    "llm_avg_tokens": _to_float(task.get("llm_avg_tokens")),
+                    "llm_total_time_ms": _to_float(task.get("llm_total_time_ms")),
+                }
+            )
+        em = dict((row.get("eval_result") or {}).get("metrics") or {})
+        for stage, calls_key, tokens_key, elapsed_key in (
+            ("eval.answer", "answer_llm_calls", "answer_total_tokens", "answer_elapsed_seconds"),
+            ("eval.judge", "judge_llm_calls", "judge_total_tokens", None),
+        ):
+            calls = _to_int(em.get(calls_key))
+            tokens = _to_int(em.get(tokens_key))
+            elapsed_s = em.get(elapsed_key) if elapsed_key else None
+            elapsed_ms = _to_float(elapsed_s * 1000) if elapsed_s is not None else None
+            avg_tokens = _to_float(tokens / calls) if calls else None
+            if calls:
+                out.append(
+                    {
+                        "run_id": row.get("run_id"),
+                        "algorithm": row.get("memory_algorithm"),
+                        "task": stage,
+                        "llm_calls": calls,
+                        "llm_total_tokens": tokens,
+                        "llm_avg_tokens": avg_tokens,
+                        "llm_total_time_ms": elapsed_ms,
+                    }
+                )
+    return out
+
+
+def _percentiles_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build min/max/p50/p95 rows for add/search/eval.answer/eval.judge operations."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        qdrant = dict(row.get("metrics", {}).get("qdrant") or {})
+        clickhouse = dict(row.get("metrics", {}).get("clickhouse") or {})
+        token_perc = clickhouse.get("llm_token_percentiles_by_task") or {}
+
+        for op_name in ("add", "search"):
+            time_percentiles = qdrant.get(f"{op_name}_percentiles_ms") or {}
+
+            if op_name == "search":
+                sp = clickhouse.get("search_token_percentiles") or {}
+                token_min = _to_int(sp["token_min"]) if sp.get("token_min") is not None else None
+                token_max = _to_int(sp["token_max"]) if sp.get("token_max") is not None else None
+                token_p50 = _to_int(sp["token_p50"]) if sp.get("token_p50") is not None else None
+                token_p95 = _to_int(sp["token_p95"]) if sp.get("token_p95") is not None else None
+            else:
+                token_stats = _aggregate_token_percentiles(token_perc, op_name)
+                token_min = token_stats.get("min")
+                token_max = token_stats.get("max")
+                token_p50 = token_stats.get("p50")
+                token_p95 = token_stats.get("p95")
+
+            out.append(
+                {
+                    "run_id": row.get("run_id"),
+                    "algorithm": row.get("memory_algorithm"),
+                    "operation": op_name,
+                    "time_min_ms": time_percentiles.get("min"),
+                    "time_max_ms": time_percentiles.get("max"),
+                    "time_p50_ms": time_percentiles.get("p50"),
+                    "time_p95_ms": time_percentiles.get("p95"),
+                    "token_min": token_min,
+                    "token_max": token_max,
+                    "token_p50": token_p50,
+                    "token_p95": token_p95,
+                }
+            )
+        qa_series = _eval_qa_token_series(row)
+        em = dict((row.get("eval_result") or {}).get("metrics") or {})
+        for stage, elapsed_key in (
+            ("answer", "answer_elapsed_seconds"),
+            ("judge", None),
+        ):
+            token_vals = qa_series.get(stage) or []
+            if not token_vals:
+                continue
+            tok_stats = _percentile_stats(token_vals)
+            calls = len(token_vals)
+            elapsed_s = em.get(elapsed_key) if elapsed_key else None
+            avg_time_ms = _to_float(elapsed_s * 1000 / calls) if (elapsed_s and calls) else None
+            out.append(
+                {
+                    "run_id": row.get("run_id"),
+                    "algorithm": row.get("memory_algorithm"),
+                    "operation": f"eval.{stage}",
+                    "time_min_ms": None,
+                    "time_max_ms": None,
+                    "time_p50_ms": avg_time_ms,
+                    "time_p95_ms": None,
+                    "token_min": tok_stats["min"],
+                    "token_max": tok_stats["max"],
+                    "token_p50": tok_stats["p50"],
+                    "token_p95": tok_stats["p95"],
+                }
+            )
+    return out
+
+
+def build_metrics_sheets(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Build the summary/eval_metrics/llm_by_task/percentiles sheets as plain dicts.
+
+    Shared by :func:`write_metrics_xlsx` and :func:`write_metrics_json` so the two
+    outputs can never drift apart in content.
+    """
+    return {
+        "summary": [dict(zip(SUMMARY_HEADERS, _summary_values(row), strict=True)) for row in rows],
+        "eval_metrics": [dict(zip(EVAL_METRICS_HEADERS, _eval_metrics_values(row), strict=True)) for row in rows],
+        "llm_by_task": _llm_by_task_rows(rows),
+        "percentiles": _percentiles_rows(rows),
+    }
+
+
+def write_metrics_json(path: str | Path, rows: list[dict[str, Any]]) -> None:
+    """Write the same four sheets as :func:`write_metrics_xlsx` to a single JSON file."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(build_metrics_sheets(rows), ensure_ascii=False, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
 
 
 def write_metrics_xlsx(path: str | Path, rows: list[dict[str, Any]]) -> None:
@@ -748,74 +1043,14 @@ def write_metrics_xlsx(path: str | Path, rows: list[dict[str, Any]]) -> None:
         eval_metrics_sheet.append([row[i] for i in non_empty_cols])
 
     by_task_sheet = wb.create_sheet("llm_by_task")
-    by_task_headers = [
-        "run_id",
-        "algorithm",
-        "task",
-        "llm_calls",
-        "llm_total_tokens",
-        "llm_avg_tokens",
-        "llm_total_time_ms",
-    ]
-    by_task_sheet.append(by_task_headers)
-    for row in rows:
-        clickhouse = dict(row.get("metrics", {}).get("clickhouse") or {})
-        for task in clickhouse.get("llm_by_task") or []:
-            if not isinstance(task, dict):
-                continue
-            by_task_sheet.append(
-                [
-                    row.get("run_id"),
-                    row.get("memory_algorithm"),
-                    task.get("task"),
-                    _to_int(task.get("llm_call_count")),
-                    _to_int(task.get("llm_total_tokens")),
-                    _to_float(task.get("llm_avg_tokens")),
-                    _to_float(task.get("llm_total_time_ms")),
-                ]
-            )
+    by_task_sheet.append(LLM_BY_TASK_HEADERS)
+    for entry in _llm_by_task_rows(rows):
+        by_task_sheet.append([_xlsx_cell(entry[header]) for header in LLM_BY_TASK_HEADERS])
 
     percentiles_sheet = wb.create_sheet("percentiles")
-    percentiles_headers = [
-        "run_id",
-        "algorithm",
-        "operation",
-        "time_min_ms",
-        "time_max_ms",
-        "time_p50_ms",
-        "time_p95_ms",
-        "token_min",
-        "token_max",
-        "token_p50",
-        "token_p95",
-    ]
-    percentiles_sheet.append(percentiles_headers)
-    for row in rows:
-        qdrant = dict(row.get("metrics", {}).get("qdrant") or {})
-        clickhouse = dict(row.get("metrics", {}).get("clickhouse") or {})
-        token_perc = clickhouse.get("llm_token_percentiles_by_task") or {}
-
-        for op_name in ("add", "search"):
-            time_percentiles = qdrant.get(f"{op_name}_percentiles_ms") or {}
-
-            # 聚合该operation的所有task的token分位数
-            token_stats = _aggregate_token_percentiles(token_perc, op_name)
-
-            percentiles_sheet.append(
-                [
-                    row.get("run_id"),
-                    row.get("memory_algorithm"),
-                    op_name,
-                    time_percentiles.get("min"),
-                    time_percentiles.get("max"),
-                    time_percentiles.get("p50"),
-                    time_percentiles.get("p95"),
-                    token_stats.get("min"),
-                    token_stats.get("max"),
-                    token_stats.get("p50"),
-                    token_stats.get("p95"),
-                ]
-            )
+    percentiles_sheet.append(PERCENTILES_HEADERS)
+    for entry in _percentiles_rows(rows):
+        percentiles_sheet.append([_xlsx_cell(entry[header]) for header in PERCENTILES_HEADERS])
 
     for sheet in (summary, eval_metrics_sheet, by_task_sheet, percentiles_sheet):
         for cell in sheet[1]:
@@ -893,6 +1128,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strict-clickhouse", action="store_true")
     parser.add_argument("--table-output", help="Optional Markdown table output for compact human review.")
     parser.add_argument("--xlsx-output", help="Optional Excel (.xlsx) output for human review.")
+    parser.add_argument(
+        "--json-output",
+        help="Optional JSON mirror of the xlsx summary/eval_metrics/llm_by_task/percentiles sheets.",
+    )
     return parser
 
 
@@ -906,6 +1145,7 @@ def main(argv: list[str] | None = None) -> int:
             config_from_args(args),
             args.table_output,
             args.xlsx_output,
+            args.json_output,
         )
     )
     return 0

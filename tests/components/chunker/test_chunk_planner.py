@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from mindmemos.components.chunker.vanilla.chunk_planner import ChunkPlanner
-from mindmemos.typing.algo import Turn, TurnMessageRef
-
 from mindmemos.config import VanillaAddConfig
+from mindmemos.typing.algo import Turn, TurnMessageRef
 
 
 def _ref(text: str, role: str = "user") -> TurnMessageRef:

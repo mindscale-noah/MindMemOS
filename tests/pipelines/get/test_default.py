@@ -2,10 +2,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from mindmemos.pipelines.get import DefaultGetPipeline
 from mindmemos.typing.memory import MemoryRequestContext, MemoryView, SearchFilter
 from mindmemos.typing.service import GetPipelineInput
-
-from mindmemos.pipelines.get import DefaultGetPipeline
 
 
 def make_context() -> MemoryRequestContext:

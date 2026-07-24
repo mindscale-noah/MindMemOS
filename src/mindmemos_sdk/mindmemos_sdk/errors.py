@@ -12,6 +12,10 @@ class MindMemOSSDKError(Exception):
     """Base class for all MindMemOS SDK errors."""
 
 
+class InvalidRequestError(MindMemOSSDKError):
+    """Raised when SDK method arguments cannot form a valid request."""
+
+
 class ConfigError(MindMemOSSDKError):
     """Raised when local SDK configuration cannot be read, parsed, or written."""
 

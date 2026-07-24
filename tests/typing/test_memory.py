@@ -3,8 +3,6 @@ from datetime import UTC, datetime
 
 import mindmemos.typing.memory as memory
 import pytest
-from pydantic import BaseModel, ValidationError
-
 from mindmemos.typing import (
     AddPipelineInput,
     DialogueMessage,
@@ -14,6 +12,7 @@ from mindmemos.typing import (
     MemoryRequestContext,
     MemoryWrite,
 )
+from pydantic import BaseModel, ValidationError
 
 
 def test_minimal_memory_dtos_are_exported_and_serializable() -> None:
