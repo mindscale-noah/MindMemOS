@@ -26,14 +26,14 @@
 #   bash scripts/wildclawbench/sync_image.sh --api-key <current api_key>
 #
 # Optional env overrides:
-#   IMAGE          eval image tag       (default: wildclawbench-mindmemos:v1.3)
+#   IMAGE          eval image tag       (default: wildclawbench-mindmemos:v1.3-brave-yibu)
 #   MINDMEMOS_REPO repo root            (default: this script's repo root)
 #   BASE_URL       MindMemOS API url    (default: http://host.docker.internal:8001)
 #   USER_ID        auth user id         (default: wildclawbench)
 
 set -euo pipefail
 
-IMAGE="${IMAGE:-wildclawbench-mindmemos:v1.3}"
+IMAGE="${IMAGE:-wildclawbench-mindmemos:v1.3-brave-yibu}"
 BASE_URL="${BASE_URL:-http://host.docker.internal:8001}"
 USER_ID="${USER_ID:-wildclawbench}"
 
@@ -59,7 +59,7 @@ for d in "$sdk_src" "$plugin_src"; do
   [[ -d "$d" ]] || { echo "ERROR: not found: $d" >&2; exit 2; }
 done
 
-# Container-internal paths (verified against wildclawbench-mindmemos:v1.3).
+# Container-internal paths (verified against the MindMemOS WildClawBench images).
 CONTAINER_SDK_DST="/workspace/mindmemos_sdk"
 CONTAINER_PLUGIN_DIST="/root/.openclaw/extensions/mindmemos-memory/dist"
 

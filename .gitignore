@@ -53,7 +53,7 @@ resources/memory/
 # Node / openclaw plugin build artifacts
 node_modules/
 plugins/openclaw-plugin/dist/
-resources/memory/wildclawbench/openclaw-serpapi-plugin/dist/
+resources/memory/wildclawbench/openclaw-brave-yibu-plugin/dist/
 *.tsbuildinfo
 /results/
 /tmp/

@@ -1,11 +1,11 @@
 {
-  "id": "serpapi",
-  "name": "SerpApi",
-  "description": "OpenClaw SerpApi-compatible web-search provider plugin.",
+  "id": "brave-yibu",
+  "name": "Yibu Brave Search",
+  "description": "OpenClaw Brave-compatible web-search provider via yibuapi.com.",
   "setup": {
     "providers": [
       {
-        "id": "serpapi",
+        "id": "brave-yibu",
         "authMethods": [
           "api-key"
         ],
@@ -17,23 +17,19 @@
   },
   "uiHints": {
     "webSearch.apiKey": {
-      "label": "SerpApi API Key",
-      "help": "SerpApi-compatible API key (fallback: BRAVE_API_KEY env var).",
+      "label": "Yibu Brave API Key",
+      "help": "Yibu Brave-compatible API key (fallback: BRAVE_API_KEY env var).",
       "sensitive": true,
       "placeholder": "sk-..."
     },
-    "webSearch.mode": {
-      "label": "SerpApi Search Mode",
-      "help": "SerpApi search mode: web."
-    },
     "webSearch.baseUrl": {
-      "label": "SerpApi Base URL",
-      "help": "SerpApi-compatible API base URL. Prefer setting this explicitly; runtime fallback env var: SERPAPI_BASE_URL."
+      "label": "Yibu Brave Endpoint",
+      "help": "Full Brave-compatible search endpoint. Default: https://yibuapi.com/brave/v1/web/search. Runtime fallback env var: BRAVE_YIBU_BASE_URL."
     }
   },
   "contracts": {
     "webSearchProviders": [
-      "serpapi"
+      "brave-yibu"
     ]
   },
   "configContracts": {
@@ -53,13 +49,6 @@
             "type": [
               "string",
               "object"
-            ]
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "web",
-              "llm-context"
             ]
           },
           "baseUrl": {

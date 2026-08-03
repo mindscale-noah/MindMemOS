@@ -18,6 +18,7 @@ set -euo pipefail
 
 WILDCLAWBENCH_DIR="${WILDCLAWBENCH_DIR:?set WILDCLAWBENCH_DIR to your WildClawBench checkout}"
 MINDMEMOS_PROJECT_ID="${MINDMEMOS_PROJECT_ID:?set MINDMEMOS_PROJECT_ID to the wildclawbench project_id from config/mindmemos/api_keys.yaml}"
+export DOCKER_IMAGE="${DOCKER_IMAGE:-wildclawbench-mindmemos:v1.3-brave-yibu}"
 QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
 DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-180}"
 
