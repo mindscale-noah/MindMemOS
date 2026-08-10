@@ -223,6 +223,7 @@ class _FakeAddRecordStore:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.llm
 class TestRealLlmIntegration:
     """Integration tests that call a real LLM and verify the full extraction chain.
 
