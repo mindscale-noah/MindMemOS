@@ -10,10 +10,10 @@ from ...typing import (
     MemoryRequestContext,
 )
 from ..base import MemoryDbPipelineMixin
-from ..registry import register
+from ..registry import PipelineType, register
 
 
-@register(type="delete", name="default_delete")
+@register(type=PipelineType.DELETE, name="default_delete")
 class DefaultDeletePipeline(MemoryDbPipelineMixin):
     """Archive one memory through the project-scoped memory DB writer."""
 

@@ -8,7 +8,7 @@ SKILL_EVOLVE_TOPIC = "skill.evolve"
 class SkillEvolvePipeline(Protocol):
     """Contract for a skill self-evolution algorithm version.
 
-    Implementations are registered under ``type="skill_evolve"`` (see
+    Implementations are registered under ``type=PipelineType.SKILL_EVOLVE`` (see
     ``pipelines/registry``) so the active algorithm can be selected by config,
     mirroring the ``add`` / ``search`` pipeline families.
     """

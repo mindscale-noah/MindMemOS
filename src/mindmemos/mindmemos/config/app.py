@@ -275,6 +275,12 @@ class QdrantConfig:
     skill_blob_collection: str = field(default="skill_blob_v1")
     """Qdrant skill bundle content (dedup) collection name"""
 
+    skill_family_collection: str = field(default="skill_family_v1")
+    """Qdrant cloud Skill family pointer and revision collection"""
+
+    skill_operation_collection: str = field(default="skill_operation_v1")
+    """Qdrant idempotent cloud Skill operation ledger collection"""
+
     skill_trace_pending_collection: str = field(default="skill_trace_pending_v1")
     """Qdrant pending skill-trace collection name"""
 
@@ -385,12 +391,26 @@ class Neo4jConfig:
 
 
 @dataclass
+class SkillDatabaseConfig:
+    """Relation database used only by the cloud Skill control plane."""
+
+    provider: str = field(default_factory=lambda: _env_str("MINDMEMOS_SKILL_DB_PROVIDER", "sqlite") or "sqlite")
+    path: str = field(default_factory=lambda: _env_str("MINDMEMOS_SKILL_DB_PATH", "./data/skill-cloud.db") or "./data/skill-cloud.db")
+    dsn: str | None = secret_field(default_factory=lambda: _env_str("MINDMEMOS_SKILL_DB_DSN"))
+    pool_size: int = field(default_factory=lambda: _env_int("MINDMEMOS_SKILL_DB_POOL_SIZE", 10))
+    auto_create: bool = field(default_factory=lambda: _env_bool("MINDMEMOS_SKILL_DB_AUTO_CREATE", True))
+
+
+@dataclass
 class DatabaseConfig:
     qdrant: QdrantConfig = field(default_factory=QdrantConfig)
     """Qdrant configuration."""
 
     neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
     """Neo4j configuration."""
+
+    skill: SkillDatabaseConfig = field(default_factory=SkillDatabaseConfig)
+    """Relational Skill control-plane configuration."""
 
     default_consistency: str = field(default="fast")
     """Default write consistency: fast or strong."""
@@ -498,7 +518,9 @@ class KafkaConfig:
     enabled: bool = field(default=False)
     """Whether Kafka infrastructure is enabled."""
 
-    bootstrap_servers: str = field(default_factory=lambda: _env_str("MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
+    bootstrap_servers: str = field(
+        default_factory=lambda: _env_str("MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    )
     """Kafka broker addresses, comma-separated."""
 
     client_id: str = field(default="memos")

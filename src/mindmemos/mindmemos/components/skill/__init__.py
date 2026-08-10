@@ -2,6 +2,7 @@
 
 from .bundle import (
     CONTENT_HASH_ALGORITHM,
+    SKILL_ROOT_FILE,
     SKILL_WHITELIST,
     bundle_files_from_content,
     compute_content_hash,
@@ -14,6 +15,7 @@ from .edit import apply_edit_ops, apply_patch_ops, format_numbered, parse_edit_o
 
 __all__ = [
     "CONTENT_HASH_ALGORITHM",
+    "SKILL_ROOT_FILE",
     "SKILL_WHITELIST",
     "apply_edit_ops",
     "apply_patch_ops",

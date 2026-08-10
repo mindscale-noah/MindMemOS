@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
+from mindmemos_skill.contracts import SkillTrajectoryUpload
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from ..typing import (
@@ -135,6 +136,12 @@ class AddRequest(ActorIdentityRequest):
         ``task_id``. It is not passed into add pipeline input and is written only as
         a trace annotation in ``add_record_v1``.
     """
+
+    skill_trajectory: SkillTrajectoryUpload | None = None
+    """Optional complete Skill trajectory routed through the canonical ingest service."""
+
+    skill_trajectory_delivery: Literal["required", "async"] = "async"
+    """Persist synchronously or durably queue before starting Memory Add."""
 
     @field_validator("messages")
     @classmethod
@@ -271,6 +278,7 @@ class AddData(BaseModel):
     """
 
     memories: list[MemoryAddEventItem] = Field(default_factory=list)
+    skill_trajectory: dict[str, str] | None = None
 
 
 class MemoryListData(BaseModel):

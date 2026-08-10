@@ -1,12 +1,8 @@
-"""Route tests for ``POST /v1/skills/register`` (design §5.2).
-
-Drives the real :class:`SkillService` over an in-memory Qdrant-backed
-``SkillVersionStore``, with auth stubbed via dependency override.
-"""
+"""HTTP acceptance tests for the unified relational Skill protocol."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -14,58 +10,68 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from mindmemos.api.deps import get_request_context
-from mindmemos.api.schemas import AuthContext
+from mindmemos.api.schemas import AddRequest, AuthContext
 from mindmemos.api.services import get_skill_service
+from mindmemos.api.services.memory_service import MemoryService
 from mindmemos.api.services.skill_service import SkillService
 from mindmemos.api.skill_routes import router
-from mindmemos.components.skill import compute_content_hash, serialize_bundle
-from mindmemos.config import QdrantConfig
+from mindmemos.api.skill_schemas import SkillEvolveRequest
 from mindmemos.errors import ApiError
-from mindmemos.infra.db import SkillVersionRepository
-from mindmemos.infra.db.qdrant import QdrantStore
-from mindmemos.pipelines.skill import SKILL_EVOLVE_TOPIC, SkillVersionStore
-from mindmemos.typing.skill import SkillEvolveResult
-from qdrant_client import AsyncQdrantClient
+from mindmemos.infra.db import SkillRelationalRepository, build_cloud_skill_tables
+from mindmemos_skill.contracts import (
+    SkillBundle,
+    SkillTrajectoryReportRequest,
+    SkillTrajectoryReportResult,
+    SkillTrajectoryReportResultItem,
+    SkillVersionCore,
+    compute_trajectory_hash,
+)
+from mindmemos_skill.infra.database import DatabaseConfig, bootstrap_database
 
 
-def bundle(text: str) -> str:
-    return serialize_bundle({"SKILL.md": text})
+class _Evolver:
+    async def evolve(self, **_kwargs):
+        return [SkillBundle.from_files({"SKILL.md": "improved"})]
 
 
-class _StubEvolver:
-    """Records the evolve call args and returns a canned result."""
+class _Producer:
+    def __init__(self) -> None:
+        self.messages = []
 
-    def __init__(self, result: SkillEvolveResult) -> None:
-        self.result = result
-        self.calls: list[tuple[str, str]] = []
+    async def send(self, topic, value, **kwargs):
+        self.messages.append((topic, value, kwargs))
 
-    async def evolve(self, *, project_id: str, cloud_skill_id: str) -> SkillEvolveResult:
-        self.calls.append((project_id, cloud_skill_id))
-        return self.result
+
+class _TrajectoryIngestService:
+    def __init__(self) -> None:
+        self.request = None
+
+    async def report_trajectories(self, _auth, request):
+        self.request = request
+        return SkillTrajectoryReportResult(
+            items=[
+                SkillTrajectoryReportResultItem(
+                    trajectory_id=request.items[0].trajectory.trajectory_id,
+                    status="stored",
+                )
+            ]
+        )
 
 
 @pytest_asyncio.fixture
 async def client():
-    qclient = AsyncQdrantClient(":memory:")
-    cfg = QdrantConfig(
-        url="http://unused",
-        add_record_collection="test_add_record",
-        skill_version_collection="test_skill_version",
-        skill_blob_collection="test_skill_blob",
-        skill_trace_pending_collection="test_skill_trace_pending",
-        vector_size=2,
+    database = await bootstrap_database(
+        DatabaseConfig(provider="sqlite", options={"path": ":memory:"}),
+        build_cloud_skill_tables(),
     )
-    qdrant = QdrantStore(cfg, client=qclient)
-    await qdrant.ensure_schema()
-    skill_repo = SkillVersionRepository(cfg, engine=qdrant.engine)
-    service = SkillService(store=SkillVersionStore(skill_repo=skill_repo, add_record_repo=qdrant.add_record))
-
+    service = SkillService(repository=SkillRelationalRepository(database), evolver=_Evolver())
     app = FastAPI()
 
     @app.exception_handler(ApiError)
-    async def _handle_api_error(request, exc):
+    async def _handle_api_error(_request, exc):
         return JSONResponse(
-            status_code=exc.status_code, content={"code": exc.code, "message": exc.message, "data": None}
+            status_code=exc.status_code,
+            content={"code": exc.code, "message": exc.message, "data": None},
         )
 
     app.include_router(router)
@@ -76,201 +82,299 @@ async def client():
         project_id="proj",
         api_key_uuid="key",
         memory_algorithm="schema",
-        scopes=["memory:read", "memory:write"],
+        scopes=["skills:read", "skills:write", "skills:trajectory:read", "skills:trajectory:write", "skills:evolve"],
     )
     try:
         yield TestClient(app)
     finally:
-        await qclient.close()
+        await database.close()
 
 
-def test_register_returns_version_envelope(client):
-    resp = client.post("/v1/skills/register", json={"name": "prd-writer", "content": bundle("hello")})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == "ok"
-    assert body["request_id"] == "req-1"
-    data = body["data"]
-    assert data["content_hash"] == compute_content_hash({"SKILL.md": "hello"})
-    assert data["status"] == "observed"
-    assert data["cloud_skill_id"]
-    assert data["version_id"]
+def _register_payload(
+    *,
+    operation_id: str,
+    version_id: str,
+    text: str,
+    cloud_skill_id: str | None = None,
+    parents: list[str] | None = None,
+    label: str = "1.0.0",
+    origin: str = "local",
+):
+    now = datetime(2026, 8, 7, tzinfo=UTC)
+    bundle = SkillBundle.from_files({"SKILL.md": text})
+    return {
+        "operation_id": operation_id,
+        "version": {
+            "version_id": version_id,
+            "cloud_skill_id": cloud_skill_id,
+            "parent_version_ids": parents or [],
+            "name": "demo",
+            "content_hash": bundle.content_hash,
+            "version_label": label,
+            "status": "draft",
+            "version_revision": 0,
+            "origin": origin,
+            "metadata": {},
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+        },
+        "bundle": bundle.model_dump(mode="json"),
+    }
 
 
-def test_register_is_idempotent_over_http(client):
-    payload = {"name": "prd-writer", "content": bundle("hello")}
-    first = client.post("/v1/skills/register", json=payload).json()["data"]
-    second = client.post("/v1/skills/register", json=payload).json()["data"]
-    assert first["version_id"] == second["version_id"]
-    assert first["cloud_skill_id"] == second["cloud_skill_id"]
+def _trajectory_payload(*, cloud_skill_id: str, version_id: str, content_hash: str):
+    now = datetime(2026, 8, 7, tzinfo=UTC)
+    payload = {
+        "trajectory_id": "trajectory-1",
+        "task_id": "task-1",
+        "rollout_id": "rollout-1",
+        "attempt_no": 0,
+        "rollout_type": "inference",
+        "task_instruction": "do it",
+        "status": "succeeded",
+        "trajectory": [],
+        "skill_bindings": [
+            {
+                "name": "demo",
+                "cloud_skill_id": cloud_skill_id,
+                "version_id": version_id,
+                "content_hash": content_hash,
+                "usage": "injected",
+            }
+        ],
+        "started_at": now.isoformat(),
+        "finished_at": (now + timedelta(seconds=1)).isoformat(),
+        "source": "skill_runtime",
+        "created_at": (now + timedelta(seconds=1)).isoformat(),
+    }
+    payload["trajectory_hash"] = compute_trajectory_hash(payload)
+    return payload
 
 
-def test_list_detail_versions_and_content_over_http(client):
-    first = client.post("/v1/skills/register", json={"name": "prd-writer", "content": bundle("v1")}).json()["data"]
-    second = client.post(
+def test_version_dag_idempotency_and_status(client):
+    root_payload = _register_payload(operation_id="push-root", version_id="v1", text="root")
+    root = client.post("/v1/skills/register", json=root_payload)
+    replay = client.post("/v1/skills/register", json=root_payload)
+    assert root.status_code == replay.status_code == 200
+    assert root.json()["data"] == replay.json()["data"]
+    root_version = root.json()["data"]["version"]
+    family = root_version["cloud_skill_id"]
+
+    conflict = client.post(
         "/v1/skills/register",
-        json={"name": "prd-writer", "content": bundle("v2"), "parent_version_id": first["version_id"]},
-    ).json()["data"]
-
-    listing = client.get("/v1/skills")
-    assert listing.status_code == 200
-    skills = listing.json()["data"]["skills"]
-    assert len(skills) == 1
-    assert skills[0]["cloud_skill_id"] == first["cloud_skill_id"]
-    assert skills[0]["latest_version"]["version_id"] == second["version_id"]
-    assert skills[0]["published_head"] is None
-
-    detail = client.post(f"/v1/skills/{first['cloud_skill_id']}/get")
-    assert detail.status_code == 200
-    assert detail.json()["data"]["latest_version"]["version_id"] == second["version_id"]
-
-    versions = client.get(f"/v1/skills/{first['cloud_skill_id']}/versions")
-    assert versions.status_code == 200
-    assert [item["version_id"] for item in versions.json()["data"]["versions"]] == [
-        first["version_id"],
-        second["version_id"],
-    ]
-
-    content = client.get(f"/v1/skills/{first['cloud_skill_id']}/versions/{second['version_id']}/content")
-    assert content.status_code == 200
-    assert content.json()["data"]["version"]["version_id"] == second["version_id"]
-    assert content.json()["data"]["content"] == bundle("v2")
-
-
-def test_sync_reports_no_published_head_over_http(client):
-    version = client.post("/v1/skills/register", json={"name": "prd-writer", "content": bundle("v1")}).json()["data"]
-
-    resp = client.post(
-        "/v1/skills/sync",
-        json=[{"cloud_skill_id": version["cloud_skill_id"], "local_version_id": version["version_id"]}],
+        json=_register_payload(operation_id="push-root", version_id="different", text="different"),
     )
+    assert conflict.status_code == 409
 
-    assert resp.status_code == 200
-    result = resp.json()["data"]["results"][0]
-    assert result["has_update"] is False
-    assert result["published_head"] is None
-    assert result["gating_status"] == "no_published_head"
-
-
-def test_delete_unmanages_skill_over_http(client):
-    version = client.post("/v1/skills/register", json={"name": "prd-writer", "content": bundle("v1")}).json()["data"]
-
-    resp = client.post(f"/v1/skills/{version['cloud_skill_id']}/delete")
-    assert resp.status_code == 200
-
-    detail = client.post(f"/v1/skills/{version['cloud_skill_id']}/get")
-    assert detail.status_code == 404
-    assert detail.json()["code"] == "skill.not_found"
-
-
-def test_register_unknown_parent_is_404(client):
-    resp = client.post(
+    client.post(
         "/v1/skills/register",
-        json={"name": "prd-writer", "content": bundle("x"), "parent_version_id": "missing"},
+        json=_register_payload(
+            operation_id="push-left",
+            version_id="v2",
+            text="left",
+            cloud_skill_id=family,
+            parents=["v1"],
+            label="1.0.1",
+        ),
     )
-    assert resp.status_code == 404
-    assert resp.json()["code"] == "skill.parent_not_found"
+    right = client.post(
+        "/v1/skills/register",
+        json=_register_payload(
+            operation_id="push-right",
+            version_id="v3",
+            text="right",
+            cloud_skill_id=family,
+            parents=["v1"],
+            label="1.0.2",
+        ),
+    ).json()["data"]["version"]
+    status = client.post("/v1/skills/versions/v3/status", json={"status": "published", "expected_revision": 0})
+    assert status.status_code == 200
+    assert status.json()["data"]["version"]["version_revision"] == 1
+    listing = client.get("/v1/skills").json()["data"]["skills"]
+    assert listing[0]["latest_version"]["version_id"] == right["version_id"]
+    assert "published_head_id" not in listing[0]
 
 
-def test_register_empty_bundle_is_400(client):
-    resp = client.post("/v1/skills/register", json={"name": "x", "content": "[]"})
-    assert resp.status_code == 400
-    assert resp.json()["code"] == "skill.invalid_bundle"
+def test_openapi_does_not_expose_merge(client):
+    assert "/v1/skills/{cloud_skill_id}/merge" not in client.app.openapi()["paths"]
 
 
-def test_read_unknown_skill_is_404(client):
-    resp = client.post("/v1/skills/missing/get")
-    assert resp.status_code == 404
-    assert resp.json()["code"] == "skill.not_found"
+def test_trajectory_sync_async_pull_and_evolve(client):
+    root_payload = _register_payload(operation_id="push-root", version_id="v1", text="root")
+    version = client.post("/v1/skills/register", json=root_payload).json()["data"]["version"]
+    trajectory = _trajectory_payload(
+        cloud_skill_id=version["cloud_skill_id"],
+        version_id=version["version_id"],
+        content_hash=version["content_hash"],
+    )
+    stored_trajectory_hash = trajectory["trajectory_hash"]
+    report = {"operation_id": "report-1", "mode": "sync", "items": [{"trajectory": trajectory}]}
+    first = client.post("/v1/skills/trajectories", json=report)
+    replay = client.post("/v1/skills/trajectories", json=report)
+    assert first.json()["data"]["items"][0]["status"] == "stored"
+    assert replay.json()["data"] == first.json()["data"]
+
+    trajectory["trajectory_id"] = "trajectory-2"
+    trajectory["rollout_id"] = "rollout-2"
+    trajectory["trajectory_hash"] = compute_trajectory_hash(trajectory)
+    queued = client.post(
+        "/v1/skills/trajectories",
+        json={"operation_id": "report-2", "mode": "async", "items": [{"trajectory": trajectory}]},
+    )
+    assert queued.json()["data"]["items"][0]["status"] == "queued"
+
+    pulled = client.get(
+        "/v1/skills/trajectories",
+        params={"cloud_skill_id": version["cloud_skill_id"], "version_id": "v1"},
+    )
+    assert [item["trajectory_id"] for item in pulled.json()["data"]["items"]] == ["trajectory-1"]
+    projected = client.get(
+        "/v1/skills/trajectories",
+        params={"cloud_skill_id": version["cloud_skill_id"], "include_events": "false"},
+    ).json()["data"]["items"][0]
+    assert projected["trajectory"] == []
+    assert projected["trajectory_hash"] == stored_trajectory_hash
+
+    evolved = client.post(
+        "/v1/skills/evolve",
+        json={
+            "operation_id": "evolve-1",
+            "cloud_skill_id": version["cloud_skill_id"],
+            "base_version_id": "v1",
+            "algorithm": "fake",
+            "mode": "sync",
+        },
+    )
+    assert evolved.status_code == 200
+    assert evolved.json()["data"]["status"] == "succeeded"
+    candidate_id = evolved.json()["data"]["selected_version_id"]
+    versions = client.get(f"/v1/skills/{version['cloud_skill_id']}/versions").json()["data"]["versions"]
+    candidate = next(item for item in versions if item["version_id"] == candidate_id)
+    assert candidate["metadata"]["evolution"]["base_version_id"] == "v1"
+    assert candidate["metadata"]["evolution"]["evidence"][0]["trajectory_id"] == "trajectory-1"
 
 
-def test_sync_unknown_skill_is_404(client):
-    resp = client.post("/v1/skills/sync", json=[{"cloud_skill_id": "missing", "local_version_id": "v1"}])
-    assert resp.status_code == 404
-    assert resp.json()["code"] == "skill.not_found"
-
-
-def test_sync_rejects_object_body(client):
-    resp = client.post("/v1/skills/sync", json={"items": []})
-    assert resp.status_code == 422
-
-
-@pytest.mark.parametrize("missing", ["name", "content"])
-def test_register_rejects_missing_required_fields(client, missing):
-    payload = {"name": "x", "content": bundle("y")}
-    del payload[missing]
-    resp = client.post("/v1/skills/register", json=payload)
-    assert resp.status_code == 422
-
-
-def _evolve_app(evolver) -> TestClient:
-    service = SkillService(store=SkillVersionStore(skill_repo=object(), add_record_repo=object()), evolver=evolver)
-    app = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides[get_skill_service] = lambda: service
-    app.dependency_overrides[get_request_context] = lambda: AuthContext(
-        request_id="req-1",
-        account_id="acct",
-        project_id="proj",
+@pytest.mark.asyncio
+async def test_async_evolution_is_dispatched_and_resumes_from_frozen_operation():
+    database = await bootstrap_database(
+        DatabaseConfig(provider="sqlite", options={"path": ":memory:"}),
+        build_cloud_skill_tables(),
+    )
+    repository = SkillRelationalRepository(database)
+    producer = _Producer()
+    service = SkillService(repository=repository, evolver=_Evolver(), producer=producer)
+    auth = AuthContext(
+        request_id="request",
+        account_id="account",
+        project_id="project",
         api_key_uuid="key",
         memory_algorithm="schema",
-        scopes=["memory:write"],
     )
-    return TestClient(app)
-
-
-def test_evolve_returns_result_envelope():
-    evolver = _StubEvolver(
-        SkillEvolveResult(
-            cloud_skill_id="cs-1",
-            evolved=True,
-            pending_count=5,
-            threshold=4,
-            new_version_id="v-new",
-            new_version_ids=["v-new"],
-            summarized_count=5,
-            consumed_count=5,
+    now = datetime(2026, 8, 7, tzinfo=UTC)
+    bundle = SkillBundle.from_files({"SKILL.md": "root"})
+    version = SkillVersionCore(
+        version_id="v1",
+        cloud_skill_id="family",
+        name="demo",
+        content_hash=bundle.content_hash,
+        version_label="1.0.0",
+        status="draft",
+        origin="local",
+        created_at=now,
+        updated_at=now,
+    )
+    try:
+        await repository.create_version(
+            project_id="project",
+            operation_id="push",
+            version=version,
+            bundle=bundle,
         )
+        trajectory = _trajectory_payload(
+            cloud_skill_id="family",
+            version_id="v1",
+            content_hash=bundle.content_hash,
+        )
+        await repository.ingest_trajectories(
+            project_id="project",
+            request=SkillTrajectoryReportRequest.model_validate(
+                {"operation_id": "report", "items": [{"trajectory": trajectory}]}
+            ),
+        )
+        async_trajectory = {**trajectory, "trajectory_id": "trajectory-async", "rollout_id": "rollout-async"}
+        async_trajectory["trajectory_hash"] = compute_trajectory_hash(async_trajectory)
+        queued_trajectory = await service.report_trajectories(
+            auth,
+            SkillTrajectoryReportRequest.model_validate(
+                {
+                    "operation_id": "report-async",
+                    "mode": "async",
+                    "items": [{"trajectory": async_trajectory}],
+                }
+            ),
+        )
+        resumed_trajectory = await repository.resume_trajectory_ingest(
+            project_id="project",
+            operation_id="report-async",
+        )
+        queued = await service.evolve(
+            auth,
+            SkillEvolveRequest(
+                operation_id="evolve-async",
+                cloud_skill_id="family",
+                base_version_id="v1",
+                algorithm="fake",
+                mode="async",
+            ),
+        )
+        resumed = await service.resume_evolution(project_id="project", operation_id="evolve-async")
+        replay = await service.resume_evolution(project_id="project", operation_id="evolve-async")
+
+        assert queued.status == "queued"
+        assert queued_trajectory.items[0].status == "queued"
+        assert resumed_trajectory.items[0].status == "stored"
+        assert [message[0] for message in producer.messages] == ["skill.trajectory.ingest", "skill.evolve"]
+        assert resumed.status == replay.status == "succeeded"
+        assert resumed.selected_version_id == replay.selected_version_id
+    finally:
+        await database.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_add_assigns_add_record_reference_before_canonical_ingest():
+    trajectory = _trajectory_payload(
+        cloud_skill_id="family",
+        version_id="v1",
+        content_hash="0" * 64,
     )
-    resp = _evolve_app(evolver).post("/v1/skills/evolve", json={"cloud_skill_id": "cs-1"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == "ok"
-    assert body["data"]["evolved"] is True
-    assert body["data"]["new_version_id"] == "v-new"
-    assert evolver.calls == [("proj", "cs-1")]
+    trajectory["source"] = "memory_add"
+    trajectory["trajectory_hash"] = compute_trajectory_hash(trajectory)
+    ingest = _TrajectoryIngestService()
+    service = MemoryService(add_pipeline=object(), skill_store=None, skill_service=ingest)
+    auth = AuthContext(
+        request_id="request",
+        account_id="account",
+        project_id="project",
+        api_key_uuid="key",
+        memory_algorithm="schema",
+        scopes=["skills:trajectory:write"],
+    )
+    request = AddRequest.model_validate(
+        {
+            "user_id": "user",
+            "messages": [{"role": "user", "content": "remember", "timestamp": 1786090000000}],
+            "skill_trajectory": trajectory,
+            "skill_trajectory_delivery": "required",
+        }
+    )
 
+    result = await service._ingest_skill_trajectory(auth, "add-record-1", request)
 
-def test_evolve_below_threshold_envelope():
-    evolver = _StubEvolver(SkillEvolveResult(cloud_skill_id="cs-1", evolved=False, pending_count=2, threshold=4))
-    resp = _evolve_app(evolver).post("/v1/skills/evolve", json={"cloud_skill_id": "cs-1"})
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["evolved"] is False
-    assert data["pending_count"] == 2
-    assert data["new_version_id"] is None
-
-
-def test_evolve_async_queues_kafka(monkeypatch):
-    evolver = _StubEvolver(SkillEvolveResult(cloud_skill_id="x", evolved=False, pending_count=0, threshold=4))
-    producer = AsyncMock()
-    monkeypatch.setattr("mindmemos.api.services.skill_service.get_producer", lambda: producer)
-
-    resp = _evolve_app(evolver).post("/v1/skills/evolve", json={"cloud_skill_id": "cs-1", "mode": "async"})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == "queued"
-    assert body["data"]["status"] == "queued"
-    assert evolver.calls == []
-    producer.send.assert_awaited_once()
-    assert producer.send.call_args.args[0] == SKILL_EVOLVE_TOPIC
-    assert producer.send.call_args.kwargs["dispatch_key"] == "proj:cs-1"
-    assert producer.send.call_args.kwargs["value"]["cloud_skill_id"] == "cs-1"
-    assert producer.send.call_args.kwargs["value"]["project_id"] == "proj"
-
-
-def test_evolve_requires_cloud_skill_id():
-    evolver = _StubEvolver(SkillEvolveResult(cloud_skill_id="x", evolved=False, pending_count=0, threshold=4))
-    resp = _evolve_app(evolver).post("/v1/skills/evolve", json={})
-    assert resp.status_code == 422
+    upload = ingest.request.items[0].trajectory
+    assert upload.source_add_record_id == "add-record-1"
+    assert result == {
+        "trajectory_id": upload.trajectory_id,
+        "trajectory_hash": upload.trajectory_hash,
+        "status": "stored",
+    }

@@ -11,3 +11,4 @@ async def ensure_database_schema(clients: DatabaseClients | None = None) -> None
     db_clients = clients or get_database_clients()
     await db_clients.qdrant.ensure_schema()
     await db_clients.neo4j.ensure_schema()
+    await db_clients.skill.ensure_schema()

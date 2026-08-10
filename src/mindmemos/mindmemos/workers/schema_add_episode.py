@@ -5,7 +5,7 @@ from __future__ import annotations
 from ..api.algorithm import binding_for_memory_algorithm
 from ..infra.kafka import ConsumedMessage
 from ..logging import get_logger
-from ..pipelines import create_pipeline
+from ..pipelines import PipelineType, create_pipeline
 from ..pipelines.add import SCHEMA_ADD_EPISODE_TOPIC
 from ..typing import MemoryRequestContext
 
@@ -26,7 +26,7 @@ async def handle_schema_add_episode(msg: ConsumedMessage) -> None:
     trigger_record_id: str | None = body.get("trigger_record_id")
 
     pipeline_name = binding_for_memory_algorithm("schema").add_pipeline
-    pipeline = create_pipeline(type="add", name=pipeline_name)
+    pipeline = create_pipeline(type=PipelineType.ADD, name=pipeline_name)
     generate_episode = getattr(pipeline, "generate_episode", None)
     if generate_episode is None:
         raise RuntimeError(

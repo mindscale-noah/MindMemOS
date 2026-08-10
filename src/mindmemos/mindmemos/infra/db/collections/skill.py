@@ -15,12 +15,16 @@ from ..filters import datetime_range, is_empty, match_value
 from ..models import (
     QdrantRecord,
     SkillBlobPoint,
+    SkillFamilyPoint,
+    SkillOperationPoint,
     SkillTracePendingPoint,
     SkillTraceSummaryPoint,
     SkillVersionPoint,
 )
 from ..schema import (
     skill_blob_collection_spec,
+    skill_family_collection_spec,
+    skill_operation_collection_spec,
     skill_trace_pending_collection_spec,
     skill_trace_summary_collection_spec,
     skill_version_collection_spec,
@@ -69,19 +73,29 @@ class SkillVersionRepository:
         return self._cfg.skill_trace_pending_collection
 
     @property
+    def family_collection(self) -> str:
+        return self._cfg.skill_family_collection
+
+    @property
+    def operation_collection(self) -> str:
+        return self._cfg.skill_operation_collection
+
+    @property
     def trace_summary_collection(self) -> str:
         """Configured ``skill_trace_summary_v1`` collection name."""
 
         return self._cfg.skill_trace_summary_collection
 
     async def ensure_schema(self) -> None:
-        """Create the four skill collections and their payload indexes."""
+        """Create Skill data and additive control-plane collections."""
 
         if not self._cfg.auto_create:
             return
         for spec in (
             skill_version_collection_spec(self._cfg),
             skill_blob_collection_spec(self._cfg),
+            skill_family_collection_spec(self._cfg),
+            skill_operation_collection_spec(self._cfg),
             skill_trace_pending_collection_spec(self._cfg),
             skill_trace_summary_collection_spec(self._cfg),
         ):
@@ -96,6 +110,71 @@ class SkillVersionRepository:
         """Upsert one bundle content point (content dedup via deterministic id)."""
 
         await self._engine.upsert(self.blob_collection, [self._payload_point(point.blob_id, point.payload)])
+
+    async def upsert_family(self, point: SkillFamilyPoint) -> None:
+        await self._engine.upsert(self.family_collection, [self._payload_point(point.family_id, point.payload)])
+
+    async def get_family(self, family_id: str) -> QdrantRecord | None:
+        records = await self._engine.retrieve(self.family_collection, [family_id])
+        return records[0] if records else None
+
+    async def compare_and_swap_family(
+        self,
+        *,
+        project_id: str,
+        cloud_skill_id: str,
+        expected_revision: int,
+        changes: dict[str, Any],
+    ) -> QdrantRecord | None:
+        """Atomically update one family only when its current revision matches."""
+
+        selector = qmodels.Filter(
+            must=[
+                match_value("project_id", project_id),
+                match_value("cloud_skill_id", cloud_skill_id),
+                match_value("cloud_revision", expected_revision),
+            ]
+        )
+        await self._engine.set_payload_by_filter(self.family_collection, selector, changes)
+        records, _ = await self._engine.scroll(
+            self.family_collection,
+            scroll_filter=self._engine.project_filter(
+                project_id,
+                conditions=[match_value("cloud_skill_id", cloud_skill_id)],
+            ),
+            limit=1,
+        )
+        return records[0] if records else None
+
+    async def upsert_operation(self, point: SkillOperationPoint) -> None:
+        await self._engine.upsert(
+            self.operation_collection,
+            [self._payload_point(point.operation_point_id, point.payload)],
+        )
+
+    async def get_operation(self, operation_point_id: str) -> QdrantRecord | None:
+        records = await self._engine.retrieve(self.operation_collection, [operation_point_id])
+        return records[0] if records else None
+
+    async def delete_family_operations(self, project_id: str, cloud_skill_id: str) -> None:
+        """Delete idempotency records owned by one cloud Skill family."""
+
+        point_ids: list[str] = []
+        cursor = None
+        while True:
+            records, cursor = await self._engine.scroll(
+                self.operation_collection,
+                scroll_filter=self._engine.project_filter(
+                    project_id,
+                    conditions=[match_value("cloud_skill_id", cloud_skill_id)],
+                ),
+                limit=1000,
+                offset=cursor,
+            )
+            point_ids.extend(record.point_id for record in records)
+            if cursor is None:
+                break
+        await self._engine.delete(self.operation_collection, point_ids)
 
     async def get_version(self, project_id: str, version_id: str) -> QdrantRecord | None:
         """Retrieve one version by id, scoped to ``project_id``."""
@@ -193,6 +272,9 @@ class SkillVersionRepository:
         """Delete skill version metadata points by id."""
 
         await self._engine.delete(self.version_collection, point_ids)
+
+    async def delete_family_control(self, family_id: str) -> None:
+        await self._engine.delete(self.family_collection, [family_id])
 
     async def iter_lineage(self, project_id: str, version_id: str) -> list[QdrantRecord]:
         """Walk the parent chain from ``version_id`` up to the root version.

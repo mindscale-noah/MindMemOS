@@ -10,6 +10,7 @@ dependencies = [
     "httpx>=0.28.1",
     "jieba>=0.42.1",
     "litellm>=1.85.0",
+    "mindmemos-skill",
     "neo4j>=6.2.0",
     "numpy>=2.3.5",
     "omegaconf",
@@ -18,6 +19,7 @@ dependencies = [
     "opentelemetry-sdk>=1.42.0",
     "pydantic",
     "python-dotenv>=1.2.2",
+    "psycopg[binary,pool]>=3.2",
     "pyyaml",
     "qdrant-client>=1.18.0",
     "spacy>=3.8.14",
@@ -29,6 +31,9 @@ dependencies = [
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv.sources]
+mindmemos-skill = { workspace = true }
 
 [tool.uv.build-backend]
 module-root = "."

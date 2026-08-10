@@ -46,7 +46,7 @@ from ...memory_db import (
     suppress_recording_errors,
     utcnow,
 )
-from ...registry import register
+from ...registry import PipelineType, register
 from ..base import AddPipeline
 
 logger = get_logger(__name__)
@@ -95,7 +95,7 @@ def _override(explicit: Any, default: Any) -> Any:
     return explicit if explicit is not None else default
 
 
-@register(type="add", name="schema_add")
+@register(type=PipelineType.ADD, name="schema_add")
 class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
     """Schema-driven add pipeline migrated from the original algorithm."""
 

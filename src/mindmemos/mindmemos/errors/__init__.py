@@ -13,6 +13,7 @@ from .llm import EmbeddingDimensionError
 from .memory import MemoryUpdateError
 from .skill import (
     SkillBundleError,
+    SkillConflictError,
     SkillContentNotFoundError,
     SkillEditError,
     SkillError,
@@ -36,6 +37,7 @@ __all__ = [
     "ResourceNotFoundError",
     "SkillBundleError",
     "SkillContentNotFoundError",
+    "SkillConflictError",
     "SkillEditError",
     "SkillError",
     "SkillNotFoundError",

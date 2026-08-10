@@ -10,6 +10,8 @@ from .filters import (
     SCHEMA_ADD_BUFFER_PAYLOAD_INDEX_SCHEMA,
     SEARCH_RECORD_PAYLOAD_INDEX_SCHEMA,
     SKILL_BLOB_PAYLOAD_INDEX_SCHEMA,
+    SKILL_FAMILY_PAYLOAD_INDEX_SCHEMA,
+    SKILL_OPERATION_PAYLOAD_INDEX_SCHEMA,
     SKILL_TRACE_PENDING_PAYLOAD_INDEX_SCHEMA,
     SKILL_TRACE_SUMMARY_PAYLOAD_INDEX_SCHEMA,
     SKILL_VERSION_PAYLOAD_INDEX_SCHEMA,
@@ -25,6 +27,8 @@ SCHEMA_ADD_BUFFER_COLLECTION = "schema_add_buffer_v1"
 SEARCH_RECORD_COLLECTION = "search_record_v1"
 SKILL_VERSION_COLLECTION = "skill_version_v1"
 SKILL_BLOB_COLLECTION = "skill_blob_v1"
+SKILL_FAMILY_COLLECTION = "skill_family_v1"
+SKILL_OPERATION_COLLECTION = "skill_operation_v1"
 SKILL_TRACE_PENDING_COLLECTION = "skill_trace_pending_v1"
 SKILL_TRACE_SUMMARY_COLLECTION = "skill_trace_summary_v1"
 
@@ -153,6 +157,36 @@ def skill_blob_collection_spec(cfg: QdrantConfig) -> QdrantCollectionSpec:
     )
 
 
+def skill_family_collection_spec(cfg: QdrantConfig) -> QdrantCollectionSpec:
+    """Return the additive ``skill_family_v1`` control-plane collection spec."""
+
+    return QdrantCollectionSpec(
+        name=cfg.skill_family_collection,
+        vector_size=cfg.vector_size,
+        dense_vector_name=cfg.semantic_vector_name,
+        sparse_vector_name=cfg.bm25_vector_name,
+        distance=cfg.distance,  # type: ignore[arg-type]
+        enable_dense=False,
+        enable_sparse=False,
+        payload_indexes=list(SKILL_FAMILY_PAYLOAD_INDEX_SCHEMA),
+    )
+
+
+def skill_operation_collection_spec(cfg: QdrantConfig) -> QdrantCollectionSpec:
+    """Return the additive ``skill_operation_v1`` idempotency-ledger spec."""
+
+    return QdrantCollectionSpec(
+        name=cfg.skill_operation_collection,
+        vector_size=cfg.vector_size,
+        dense_vector_name=cfg.semantic_vector_name,
+        sparse_vector_name=cfg.bm25_vector_name,
+        distance=cfg.distance,  # type: ignore[arg-type]
+        enable_dense=False,
+        enable_sparse=False,
+        payload_indexes=list(SKILL_OPERATION_PAYLOAD_INDEX_SCHEMA),
+    )
+
+
 def skill_trace_pending_collection_spec(cfg: QdrantConfig) -> QdrantCollectionSpec:
     """Return the Qdrant spec for ``skill_trace_pending_v1`` (payload + filter only)."""
 
@@ -199,6 +233,8 @@ def all_collection_specs(cfg: QdrantConfig) -> list[QdrantCollectionSpec]:
         search_record_collection_spec(cfg),
         skill_version_collection_spec(cfg),
         skill_blob_collection_spec(cfg),
+        skill_family_collection_spec(cfg),
+        skill_operation_collection_spec(cfg),
         skill_trace_pending_collection_spec(cfg),
         skill_trace_summary_collection_spec(cfg),
     ]

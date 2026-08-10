@@ -37,7 +37,7 @@ from ...typing import (
     SearchPipelineInput,
 )
 from ..memory_db import MemoryDbReader, MemoryDbWriter
-from ..registry import create_pipeline
+from ..registry import PipelineType, create_pipeline
 from ..search import SearchPipeline
 from .executor import FeedbackActionExecutor
 
@@ -285,7 +285,7 @@ class ImplicitFeedbackRecordCollector:
     @property
     def _search_pipeline(self) -> SearchPipeline:
         if self._search is None:
-            self._search = create_pipeline(type="search", name="search_pipeline")
+            self._search = create_pipeline(type=PipelineType.SEARCH, name="search_pipeline")
         return self._search
 
     async def _supplemental_search_memories(

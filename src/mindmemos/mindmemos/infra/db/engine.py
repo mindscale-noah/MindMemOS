@@ -222,6 +222,20 @@ class QdrantEngine:
             payload=self.safe_payload(payload),
         )
 
+    async def set_payload_by_filter(
+        self,
+        collection: str,
+        filter_: qmodels.Filter,
+        payload: dict[str, Any],
+    ) -> None:
+        """Atomically set payload fields on points matching the filter at update time."""
+
+        await self._client.set_payload(
+            collection_name=collection,
+            points=filter_,
+            payload=self.safe_payload(payload),
+        )
+
     async def delete(self, collection: str, point_ids: list[str]) -> None:
         """Delete points by id (no-op on empty input)."""
 

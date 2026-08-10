@@ -5,7 +5,7 @@ from __future__ import annotations
 from ..api.algorithm import binding_for_memory_algorithm
 from ..infra.kafka import ConsumedMessage
 from ..logging import get_logger
-from ..pipelines import create_pipeline
+from ..pipelines import PipelineType, create_pipeline
 from ..pipelines.add import AddPipeline
 from ..pipelines.memory_db import MemoryOperationRecorder, suppress_recording_errors
 from ..typing import AddPipelineInput, MemoryRequestContext
@@ -26,7 +26,7 @@ async def handle_memory_add(msg: ConsumedMessage) -> None:
     if not context.memory_algorithm:
         raise RuntimeError("memory.add task missing memory_algorithm in context")
     pipeline_name = binding_for_memory_algorithm(context.memory_algorithm).add_pipeline
-    pipeline: AddPipeline = create_pipeline(type="add", name=pipeline_name)
+    pipeline: AddPipeline = create_pipeline(type=PipelineType.ADD, name=pipeline_name)
     recorder = MemoryOperationRecorder() if isinstance(add_record_id, str) and add_record_id else None
 
     logger.info(

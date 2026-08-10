@@ -8,7 +8,7 @@ from mindmemos.config import init_config, reset_config
 from mindmemos.pipelines.delete.default import DefaultDeletePipeline
 from mindmemos.pipelines.feedback.default import DefaultFeedbackPipeline
 from mindmemos.pipelines.get.default import DefaultGetPipeline
-from mindmemos.pipelines.registry import register
+from mindmemos.pipelines.registry import PipelineType, register
 from mindmemos.pipelines.search.pipeline import SearchPipelineImpl
 from mindmemos.pipelines.update.default import DefaultUpdatePipeline
 from mindmemos.typing.memory import DialogueMessage, MemoryRequestContext
@@ -80,19 +80,19 @@ pipelines:
 
 
 def test_get_memory_service_selects_non_algorithm_pipelines_from_config(tmp_path) -> None:
-    @register(type="get", name="custom_get")
+    @register(type=PipelineType.GET, name="custom_get")
     class CustomGetPipeline:
         pass
 
-    @register(type="delete", name="custom_delete")
+    @register(type=PipelineType.DELETE, name="custom_delete")
     class CustomDeletePipeline:
         pass
 
-    @register(type="update", name="custom_update")
+    @register(type=PipelineType.UPDATE, name="custom_update")
     class CustomUpdatePipeline:
         pass
 
-    @register(type="feedback", name="custom_feedback")
+    @register(type=PipelineType.FEEDBACK, name="custom_feedback")
     class CustomFeedbackPipeline:
         pass
 
@@ -149,7 +149,7 @@ pipelines:
 
 @pytest.mark.asyncio
 async def test_add_request_does_not_eagerly_create_unrelated_feedback_pipeline(tmp_path, monkeypatch) -> None:
-    @register(type="add", name="isolated_add_for_wiring_test")
+    @register(type=PipelineType.ADD, name="isolated_add_for_wiring_test")
     class IsolatedAddPipeline:
         async def add_sync(
             self, inp: AddPipelineInput, context: MemoryRequestContext, *, add_record_id: str | None = None

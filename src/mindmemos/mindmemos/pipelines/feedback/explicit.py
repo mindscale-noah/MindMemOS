@@ -14,7 +14,7 @@ from ...typing import (
     MemorySearchItem,
     SearchPipelineInput,
 )
-from ..registry import create_pipeline
+from ..registry import PipelineType, create_pipeline
 from ..search import SearchPipeline
 from .executor import FeedbackActionExecutor
 
@@ -57,7 +57,7 @@ class ExplicitFeedbackHandler:
     @property
     def _search_pipeline(self) -> SearchPipeline:
         if self._search is None:
-            self._search = create_pipeline(type="search", name="search_pipeline")
+            self._search = create_pipeline(type=PipelineType.SEARCH, name="search_pipeline")
         return self._search
 
 

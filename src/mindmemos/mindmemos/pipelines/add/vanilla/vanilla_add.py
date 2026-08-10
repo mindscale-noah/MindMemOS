@@ -27,7 +27,7 @@ from ....typing import (
 )
 from ...base import MemoryDbPipelineMixin
 from ...memory_db import suppress_recording_errors
-from ...registry import register
+from ...registry import PipelineType, register
 
 Consistency = Literal["fast", "strong"]
 MEMORY_ADD_TOPIC = "memory.add"
@@ -71,7 +71,7 @@ def _default_vanilla_add_config() -> VanillaAddConfig:
         return VanillaAddConfig()
 
 
-@register(type="add", name="vanilla_add")
+@register(type=PipelineType.ADD, name="vanilla_add")
 class VanillaAddPipeline(MemoryDbPipelineMixin):
     """Vanilla add pipeline with 6-phase orchestration.
 

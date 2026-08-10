@@ -47,7 +47,7 @@ from ...typing.memory import (
 )
 from ...typing.service import DreamingPipelineInput, DreamingPipelineResult
 from ..base import MemoryDbPipelineMixin
-from ..registry import register
+from ..registry import PipelineType, register
 
 MEMORY_DREAMING_TOPIC = "memory.dreaming"
 logger = get_logger(__name__)
@@ -67,7 +67,7 @@ class ConsolidationScope:
     primary_memory_id: str | None = None
 
 
-@register(type="dreaming", name="default_dreaming")
+@register(type=PipelineType.DREAMING, name="default_dreaming")
 class DefaultDreamingPipeline(MemoryDbPipelineMixin):
     """Consolidate hot memory scopes with two LLM calls per scope."""
 

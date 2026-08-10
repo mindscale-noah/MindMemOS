@@ -168,6 +168,8 @@ class AddPipelineSyncResult(BaseModel):
     memories: list[MemoryAddEventItem] = Field(default_factory=list)
     """Generated memory events."""
 
+    skill_trajectory: dict[str, str] | None = None
+
 
 class AddPipelineAsyncResult(BaseModel):
     status: ServiceResultStatus = "queued"
@@ -175,6 +177,8 @@ class AddPipelineAsyncResult(BaseModel):
 
     memories: list[MemoryAddEventItem] = Field(default_factory=list)
     """Always empty in async mode; workers produce the actual write results."""
+
+    skill_trajectory: dict[str, str] | None = None
 
 
 class SearchPipelineInput(BaseModel):

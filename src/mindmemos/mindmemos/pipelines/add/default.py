@@ -29,13 +29,13 @@ from ...typing import (
 )
 from ..base import MemoryDbPipelineMixin
 from ..memory_db import suppress_recording_errors
-from ..registry import register
+from ..registry import PipelineType, register
 
 Consistency = Literal["fast", "strong"]
 MEMORY_ADD_TOPIC = "memory.add"
 
 
-@register(type="add", name="default_add")
+@register(type=PipelineType.ADD, name="default_add")
 class DefaultAddPipeline(MemoryDbPipelineMixin):
     """Write plain text memories with sparse vectors, entities, and mention edges."""
 

@@ -136,6 +136,22 @@ class SkillBlobPoint:
 
 
 @dataclass(kw_only=True)
+class SkillFamilyPoint:
+    """Qdrant point for additive cloud family state in ``skill_family_v1``."""
+
+    family_id: str
+    payload: dict[str, Any]
+
+
+@dataclass(kw_only=True)
+class SkillOperationPoint:
+    """Qdrant point for one durable idempotency entry in ``skill_operation_v1``."""
+
+    operation_point_id: str
+    payload: dict[str, Any]
+
+
+@dataclass(kw_only=True)
 class SkillTracePendingPoint:
     """Qdrant point for ``skill_trace_pending_v1`` (random ``uuid4`` point id)."""
 

@@ -11,24 +11,30 @@ from mindmemos.errors import SkillBundleError
 SKILL_BODY = "---\nname: prd-writer\nversion: 1.2.0\n---\n\n# PRD Writer\n\nWrite product docs.\n"
 
 
-def test_is_whitelisted_matches_skill_md_by_basename():
+def test_is_whitelisted_accepts_only_canonical_bundle_paths():
     assert is_whitelisted("SKILL.md")
-    assert is_whitelisted("prd-writer/SKILL.md")
-    assert is_whitelisted("a\\b\\SKILL.md")
+    assert not is_whitelisted("scripts/check.py")
+    assert not is_whitelisted("scripts/nested/helper.sh")
+    assert not is_whitelisted("prd-writer/SKILL.md")
+    assert not is_whitelisted("scripts/../secret.txt")
+    assert not is_whitelisted("scripts\\check.py")
     assert not is_whitelisted("README.md")
     assert not is_whitelisted("prd-writer/reference.md")
 
 
-def test_normalize_bundle_keeps_only_whitelisted_and_canonicalizes_path():
-    normalized = normalize_bundle(
-        {
-            "prd-writer/SKILL.md": SKILL_BODY,
-            "prd-writer/reference.md": "ignored",
-            "prd-writer/assets/logo.png": "binary",
-        }
-    )
+def test_normalize_bundle_keeps_only_skill_md():
+    normalized = normalize_bundle({"SKILL.md": SKILL_BODY})
     assert set(normalized) == {"SKILL.md"}
     assert normalized["SKILL.md"] == SKILL_BODY
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["scripts/check.py", "README.md", "references/guide.md", "assets/logo.txt", "../secret.txt"],
+)
+def test_normalize_bundle_rejects_every_non_bundle_path(path):
+    with pytest.raises(SkillBundleError, match="not allowed|invalid"):
+        normalize_bundle({"SKILL.md": SKILL_BODY, path: "private"})
 
 
 def test_normalize_bundle_normalizes_newlines():
@@ -46,12 +52,11 @@ def test_empty_bundle_raises():
 def test_content_hash_is_stable_and_path_independent():
     # Hash pinned: changing the algorithm or canonical form must fail this test.
     expected = compute_content_hash({"SKILL.md": SKILL_BODY})
-    # Same content under a different path / newline style -> identical hash.
-    via_path = compute_content_hash({"prd-writer/SKILL.md": SKILL_BODY.replace("\n", "\r\n")})
+    # Newline normalization is stable across platforms.
+    via_path = compute_content_hash({"SKILL.md": SKILL_BODY.replace("\n", "\r\n")})
     assert via_path == expected
-    # Non-whitelisted files never affect the hash.
-    with_extras = compute_content_hash({"SKILL.md": SKILL_BODY, "notes.txt": "anything"})
-    assert with_extras == expected
+    with pytest.raises(SkillBundleError, match="not allowed"):
+        compute_content_hash({"SKILL.md": SKILL_BODY, "scripts/check.py": "anything"})
     # Different content -> different hash.
     assert compute_content_hash({"SKILL.md": SKILL_BODY + "x"}) != expected
 
@@ -66,8 +71,9 @@ def test_content_hash_pinned_value():
 
 
 def test_serialize_roundtrip():
-    text = serialize_bundle({"prd-writer/SKILL.md": SKILL_BODY})
-    assert deserialize_bundle(text) == {"SKILL.md": SKILL_BODY}
+    files = {"SKILL.md": SKILL_BODY}
+    text = serialize_bundle(files)
+    assert deserialize_bundle(text) == files
 
 
 def test_deserialize_rejects_garbage():
@@ -83,6 +89,10 @@ def test_deserialize_rejects_garbage():
         '["not an object"]',  # element is not a {path, content} record
         '[{"path": 1, "content": "body"}]',  # non-string path
         '[{"path": "SKILL.md", "content": 2}]',  # non-string content
+        '[{"path":"SKILL.md","content":"a","extra":"private"}]',
+        '[{"content":"a","path":"SKILL.md"},{"content":"b","path":"SKILL.md"}]',
+        '[{"content":"a","path":"SKILL.md"},{"content":"private","path":"references/guide.md"}]',
+        '[ {"content":"a","path":"SKILL.md"} ]',  # valid data, noncanonical bytes
     ],
 )
 def test_deserialize_rejects_malformed_records(text):

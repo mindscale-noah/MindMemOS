@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, StringConstraints
 
@@ -53,6 +53,14 @@ class SkillOrigin(str, Enum):
     CLOUD = "cloud"
 
 
+class SkillRemoteOperationStatus(str, Enum):
+    """Durable server-side idempotency state for one cloud mutation."""
+
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class SkillUsage(str, Enum):
     """How a skill was used within the recognized turn (design §4.3 / §5.1)."""
 
@@ -77,9 +85,56 @@ class SkillVersion(BaseModel):
     content_hash: str
     parent_version_id: str | None = None
     version_label: str | None = None
+    commit_message: str | None = None
     status: SkillVersionStatus
     origin: SkillOrigin
     created_at: datetime
+    received_at: datetime | None = None
+
+
+class SkillFamilyState(BaseModel):
+    """Mutable cloud publication state stored separately from immutable versions."""
+
+    project_id: str
+    cloud_skill_id: str
+    published_head_id: str | None = None
+    cloud_revision: int = Field(default=0, ge=0)
+    created_at: datetime
+    updated_at: datetime
+    migration_source: str | None = None
+
+
+class SkillRemoteOperation(BaseModel):
+    """One idempotent remote mutation and its replayable result."""
+
+    project_id: str
+    operation_id: str
+    cloud_skill_id: str | None = None
+    operation_type: Literal["push_version", "promote"]
+    request_hash: str
+    status: SkillRemoteOperationStatus
+    result: dict[str, Any] | None = None
+    error_code: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillRemoteSyncItem(BaseModel):
+    """Known local state sent by the SDK for one cloud family."""
+
+    cloud_skill_id: str
+    known_version_ids: list[str] = Field(default_factory=list)
+    known_published_head_id: str | None = None
+    known_cloud_revision: int | None = Field(default=None, ge=0)
+
+
+class SkillRemoteSyncResultItem(BaseModel):
+    """Cloud metadata and pointer state missing from one SDK replica."""
+
+    cloud_skill_id: str
+    versions: list[SkillVersion] = Field(default_factory=list)
+    published_head_id: str | None = None
+    cloud_revision: int = Field(ge=0)
 
 
 class SkillBlob(BaseModel):

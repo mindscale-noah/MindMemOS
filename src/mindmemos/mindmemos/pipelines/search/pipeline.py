@@ -9,7 +9,7 @@ from ...config import get_config
 from ...llm import RerankClient
 from ...typing import MemoryRequestContext, SearchPipelineInput, SearchPipelineResult
 from ..base import MemoryDbPipelineMixin
-from ..registry import register
+from ..registry import PipelineType, register
 from .agentic.wrapper import AgenticSearchWrapper
 from .base import SearchEngine
 from .default import DefaultSearchEngine
@@ -19,7 +19,7 @@ from .vanilla import VanillaSearchEngine
 _DEFAULT_ENGINE_NAMES = frozenset({"default", "vanilla", "schema"})
 
 
-@register(type="search", name="search_pipeline")
+@register(type=PipelineType.SEARCH, name="search_pipeline")
 class SearchPipelineImpl(MemoryDbPipelineMixin):
     """Select a search engine, optionally wrap it in agentic orchestration, then final-filter."""
 
