@@ -2,6 +2,5 @@
 
 from .base import AsyncConnection
 from .http import HttpConnection
-from .in_memory import InMemoryConnection
 
-__all__ = ["AsyncConnection", "HttpConnection", "InMemoryConnection"]
+__all__ = ["AsyncConnection", "HttpConnection"]

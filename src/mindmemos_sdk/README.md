@@ -39,7 +39,24 @@ The package also installs the `mindmemos` command.
 mindmemos auth
 ```
 
+Authentication, CLI settings, the local UI, and Python clients now read and
+write `~/.mindmemos/config.yaml` exclusively. `settings.json` has no runtime
+write path and is recognized only as an automatic one-time v1 migration source.
+
 You can also pass `base_url`, `api_key`, and `user_id` directly when creating a client.
+
+Existing `settings.json` v1 configuration is converted automatically on the
+first v2 SDK or Skill configuration load. To preview or apply the same
+deterministic migration manually:
+
+```bash
+mindmemos config migrate
+mindmemos config migrate --apply
+```
+
+The apply command writes `config.yaml`, preserves `settings.json`, and creates
+`settings.json.v1.bak`. It migrates configuration only: local Skill manifests,
+history, caches, outbox files, and `state.db` are not scanned or modified.
 
 ## Python SDK
 
@@ -78,21 +95,22 @@ mindmemos skill register ./my-skill --alias my-skill -m "Initial import"
 # Snapshot a later directory state as an immutable child version.
 mindmemos skill publish my-skill --from ./my-skill -m "Improve tool guidance"
 
-# Inspect history, switch only the local active pointer, and export explicitly.
+# Inspect history and export either the deterministic latest version or an explicit version.
 mindmemos skill history my-skill
-mindmemos skill switch my-skill --to <version-uuid>
 mindmemos skill export my-skill --version <version-uuid> --to ./restored-skill
 
-# Cloud operations preserve version UUIDs and do not upload linked files.
+# Local and cloud bundles contain only canonical SKILL.md.
+# Scripts, resources, references, assets, config, logs, and other files stay local.
 mindmemos skill push my-skill
 mindmemos skill pull my-skill
 mindmemos skill sync my-skill
-mindmemos skill promote my-skill --version <version-uuid>
 ```
 
-`switch` and `rollback` change only `active_version_id`. `promote` changes only
-the cloud `published_head_id`. Push, pull, and sync do not implicitly change the
-local active version.
+Neither edge nor cloud stores an active or published-head pointer. When a
+version is omitted, register, publish, export, run, and injection use the same
+latest-available selector: `draft/published`, ordered by
+`(created_at DESC, version_id DESC)`. Evolution and merge always require explicit
+base or parent version IDs.
 
 The same control plane is available through `SkillManager`:
 
@@ -119,48 +137,27 @@ manager = SkillManager.from_config_manager(
 registered = manager.register_local(
     RegisterLocalRequest(source_path="./my-skill", alias="my-skill")
 )
-active = manager.active_skill_context(registered.skill_id)
+latest = manager.latest_skill_context(registered.skill_id)
 ```
 
-Backend Skill calls use one SDK DTO surface. API mode uses the MindMemOS HTTP
-contract, while Lite mode borrows an already-running transport-neutral Skill
-service. In both cases `skills.local` remains the SDK-owned local version
-manager:
+Backend Skill calls use the MindMemOS HTTP contract, while `skills.local`
+remains the SDK-owned local version manager:
 
 ```python
 from mindmemos_sdk import AsyncSkillClient
 from mindmemos_sdk.config import ConfigManager
 from mindmemos_sdk.transport import AsyncHttpTransport
 
-# MindMemOS API mode
 skills = AsyncSkillClient.from_http(
     AsyncHttpTransport(base_url=settings.base_url, api_key=settings.auth.api_key),
     config_manager=ConfigManager(),
     owns_transport=True,
 )
 
-# MindMemOS Lite mode
-skills = AsyncSkillClient.from_lite_runtime(
-    runtime,
-    project_id="local-project",
-    config_manager=ConfigManager(),
-)
-
 local_versions = skills.local.list_local()
 backend_skills = await skills.list_skills()
 ```
 
-The Lite runtime/service is borrowed: the SDK neither starts nor closes it.
-`mindmemos_lite` is imported only when a Lite factory is used. The runtime must
-have been composed with a concrete transport-neutral `SkillService`; the Lite
-package's service `Protocol` is not instantiated as an implementation.
-
 Run `mindmemos ui` for the browser UI. Its editor creates browser-only drafts;
 publishing creates a new immutable UUID version instead of modifying an existing
-version in place. The **Lite → Traces** view accepts a Lite observability
-directory (the default runtime location is `.mindmemos/observability`) or a
-specific SQLite file. It lists individual spans with server-side name filtering
-and pagination. Selecting any span resolves its root span, displays the ancestry
-path, and renders the complete trace as a clickable flame chart. SQLite
-databases are opened read-only; input and output content is available only when
-the Lite runtime wrote it with `observability.capture_content: true`.
+version in place.

@@ -10,10 +10,10 @@ from ...typing import (
     UpdatePipelineResult,
 )
 from ..base import MemoryDbPipelineMixin
-from ..registry import register
+from ..registry import PipelineType, register
 
 
-@register(type="update", name="default_update")
+@register(type=PipelineType.UPDATE, name="default_update")
 class DefaultUpdatePipeline(MemoryDbPipelineMixin):
     """Patch one memory through the project-scoped memory DB writer."""
 

@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime
 from urllib.parse import quote
 
+from mindmemos_skill import SkillBundle as WireSkillBundle
+from mindmemos_skill import SkillVersionCore
+
 from ..transport import HttpTransport
+from .bundle import compute_content_hash, deserialize_bundle
 from .models import (
     CloudSkillsPage,
     EvolveCloudRequest,
     EvolveCloudResult,
-    PromoteCloudRequest,
-    PromoteCloudResult,
     PullVersionContent,
     PullVersionsPage,
     PushVersionRequest,
@@ -23,8 +27,10 @@ from .models import (
     SkillSummary,
     SkillSyncData,
     SkillSyncRequestItem,
+    SkillSyncResult,
     SkillVersion,
     SkillVersionsData,
+    SyncCloudItem,
     SyncCloudRequest,
     SyncCloudResult,
 )
@@ -50,22 +56,76 @@ class SkillCloudClient:
     ) -> SkillRegisterData:
         """Register a local skill bundle with the cloud version store."""
 
-        body = {"name": name, "content": content}
-        if version_label is not None:
-            body["version_label"] = version_label
-        if parent_version_id is not None:
-            body["parent_version_id"] = parent_version_id
+        bundle = WireSkillBundle.from_files(deserialize_bundle(content))
+        now = datetime.now(UTC)
+        version = SkillVersionCore(
+            version_id=str(uuid.uuid4()),
+            parent_version_ids=[parent_version_id] if parent_version_id else [],
+            name=name,
+            content_hash=bundle.content_hash,
+            version_label=version_label or "0.1.0",
+            status="draft",
+            origin="local",
+            created_at=now,
+            updated_at=now,
+        )
+        body = {
+            "operation_id": str(uuid.uuid4()),
+            "version": version.model_dump(mode="json"),
+            "bundle": bundle.model_dump(mode="json"),
+        }
         envelope = self._transport.post_envelope("/v1/skills/register", json=body)
-        return SkillRegisterData.model_validate(envelope.data or {})
+        stored = SkillVersionCore.model_validate((envelope.data or {})["version"])
+        return SkillRegisterData(
+            cloud_skill_id=stored.cloud_skill_id or "",
+            version_id=stored.version_id,
+            version_label=stored.version_label,
+            content_hash=stored.content_hash,
+            status=stored.status.value,
+        )
 
     def push_version(self, request: PushVersionRequest) -> PushVersionResult:
         """Push one client-generated immutable UUID version without private local fields."""
 
+        files = deserialize_bundle(request.content)
+        bundle = WireSkillBundle.from_files(files)
+        if bundle.content_hash != request.expected_content_hash:
+            raise ValueError(
+                f"cloud bundle hash mismatch: expected {request.expected_content_hash}, got {bundle.content_hash}"
+            )
+        created_at = datetime.fromisoformat(request.created_at.replace("Z", "+00:00"))
+        version = SkillVersionCore(
+            version_id=request.version_id,
+            cloud_skill_id=request.cloud_skill_id,
+            parent_version_ids=request.parent_version_ids,
+            name=request.name,
+            content_hash=request.expected_content_hash,
+            version_label=request.version_label or "0.1.0",
+            commit_message=request.commit_message,
+            status=request.status.value,
+            version_revision=request.version_revision,
+            origin=request.origin.value,
+            metadata=request.metadata,
+            created_at=created_at,
+            updated_at=created_at,
+        )
         envelope = self._transport.post_envelope(
             "/v1/skills/register",
-            json=request.model_dump(mode="json", exclude_none=True),
+            json={
+                "operation_id": request.operation_id,
+                "version": version.model_dump(mode="json"),
+                "bundle": bundle.model_dump(mode="json"),
+            },
         )
-        return PushVersionResult.model_validate(envelope.data or {})
+        stored = SkillVersionCore.model_validate((envelope.data or {})["version"])
+        return PushVersionResult(
+            cloud_skill_id=stored.cloud_skill_id or "",
+            version_id=stored.version_id,
+            content_hash=stored.content_hash,
+            status=stored.status.value,
+            created_at=stored.created_at.isoformat(),
+            received_at=(stored.received_at or stored.created_at).isoformat(),
+        )
 
     def list_cloud_skills(self, *, cursor: str | None = None) -> CloudSkillsPage:
         """List cloud Skill families using the target cursor contract."""
@@ -90,10 +150,15 @@ class SkillCloudClient:
         envelope = self._transport.get_envelope(
             f"/v1/skills/{_path_part(cloud_skill_id)}/versions/{_path_part(version_id)}/content",
         )
-        return PullVersionContent.model_validate(envelope.data or {})
+        payload = dict(envelope.data or {})
+        wire_version = SkillVersionCore.model_validate(payload["version"])
+        bundle = WireSkillBundle.model_validate(payload["bundle"])
+        result = PullVersionContent(version=_sdk_pull_version(wire_version), content=bundle.canonical_json())
+        self._validate_content(result.content, result.version.content_hash)
+        return result
 
     def sync_cloud(self, request: SyncCloudRequest) -> SyncCloudResult:
-        """Exchange known UUID sets and cloud published pointers."""
+        """Exchange known immutable version revisions without family pointers."""
 
         envelope = self._transport.post_envelope(
             "/v1/skills/sync",
@@ -106,31 +171,20 @@ class SkillCloudClient:
 
         envelope = self._transport.post_envelope(
             "/v1/skills/evolve",
-            json=request.model_dump(mode="json", exclude_none=True),
+            json=request.model_dump(mode="json", exclude_none=True, exclude={"operation_id"}),
+            headers={"Idempotency-Key": request.operation_id},
         )
         payload = dict(envelope.data or {})
         payload.setdefault("status", envelope.code or "ok")
         return EvolveCloudResult.model_validate(payload)
-
-    def promote(
-        self,
-        cloud_skill_id: str,
-        request: PromoteCloudRequest,
-    ) -> PromoteCloudResult:
-        """CAS-update only the cloud published head."""
-
-        envelope = self._transport.post_envelope(
-            f"/v1/skills/{_path_part(cloud_skill_id)}/promote",
-            json=request.model_dump(mode="json"),
-        )
-        return PromoteCloudResult.model_validate(envelope.data or {})
 
     def delete_cloud_skill(self, cloud_skill_id: str, *, operation_id: str) -> None:
         """Idempotently soft-delete one cloud Skill family."""
 
         self._transport.post_envelope(
             f"/v1/skills/{_path_part(cloud_skill_id)}/delete",
-            json={"operation_id": operation_id},
+            json={},
+            headers={"Idempotency-Key": operation_id},
         )
 
     def list_skills(self) -> list[SkillSummary]:
@@ -142,7 +196,7 @@ class SkillCloudClient:
     def get_skill(self, cloud_skill_id: str) -> SkillSummary:
         """Return metadata for one cloud-managed skill."""
 
-        envelope = self._transport.post_envelope(f"/v1/skills/{_path_part(cloud_skill_id)}/get", json=None)
+        envelope = self._transport.get_envelope(f"/v1/skills/{_path_part(cloud_skill_id)}")
         return SkillSummary.model_validate(envelope.data or {})
 
     def versions_since(
@@ -170,7 +224,15 @@ class SkillCloudClient:
         envelope = self._transport.get_envelope(
             f"/v1/skills/{_path_part(cloud_skill_id)}/versions/{_path_part(version_id)}/content",
         )
-        return SkillContentData.model_validate(envelope.data or {})
+        payload = dict(envelope.data or {})
+        wire_version = SkillVersionCore.model_validate(payload["version"])
+        bundle = WireSkillBundle.model_validate(payload["bundle"])
+        result = SkillContentData(
+            version=_sdk_version(wire_version),
+            content=bundle.canonical_json(),
+        )
+        self._validate_content(result.content, result.version.content_hash)
+        return result
 
     def evolve(self, cloud_skill_id: str, *, mode: SkillEvolveMode = "sync") -> SkillEvolveData:
         """Trigger one skill self-evolution pass for ``cloud_skill_id``.
@@ -180,24 +242,106 @@ class SkillCloudClient:
         ``evolved`` is false when the pending count is still below the threshold.
         """
 
+        detail = self._transport.get_envelope(f"/v1/skills/{_path_part(cloud_skill_id)}")
+        latest = SkillVersionCore.model_validate((detail.data or {})["latest_version"])
         envelope = self._transport.post_envelope(
             "/v1/skills/evolve",
-            json={"cloud_skill_id": cloud_skill_id, "mode": mode},
+            json={
+                "operation_id": str(uuid.uuid4()),
+                "cloud_skill_id": cloud_skill_id,
+                "base_version_id": latest.version_id,
+                "algorithm": "configured",
+                "mode": mode,
+            },
         )
-        data = SkillEvolveData.model_validate(envelope.data or {})
-        return data.model_copy(update={"status": envelope.code or data.status})
+        payload = dict(envelope.data or {})
+        candidate_ids = list(payload.get("candidate_version_ids") or [])
+        return SkillEvolveData(
+            cloud_skill_id=cloud_skill_id,
+            status=str(payload.get("status") or envelope.code or "failed"),
+            evolved=payload.get("status") == "succeeded",
+            pending_count=0,
+            threshold=0,
+            new_version_id=payload.get("selected_version_id"),
+            new_version_ids=candidate_ids,
+        )
 
     def sync(
         self,
         items: list[SkillSyncRequestItem | dict[str, str]],
     ) -> SkillSyncData:
-        """Check whether reported local skills have newer published heads."""
+        """Check whether reported local skills have changed immutable revisions."""
 
-        body = [item.model_dump() if isinstance(item, SkillSyncRequestItem) else item for item in items]
-        envelope = self._transport.post_envelope("/v1/skills/sync", json=body)
-        return SkillSyncData.model_validate(envelope.data or {})
+        normalized = [SkillSyncRequestItem.model_validate(item) for item in items]
+        result = self.sync_cloud(
+            SyncCloudRequest(
+                items=[
+                    SyncCloudItem(cloud_skill_id=item.cloud_skill_id, known_version_revisions={item.local_version_id: 0})
+                    for item in normalized
+                ]
+            )
+        )
+        by_id = {item.cloud_skill_id: item for item in result.items}
+        return SkillSyncData(
+            results=[
+                SkillSyncResult(
+                    cloud_skill_id=item.cloud_skill_id,
+                    local_version_id=item.local_version_id,
+                    has_update=bool(by_id.get(item.cloud_skill_id) and by_id[item.cloud_skill_id].versions),
+                    gating_status="changed"
+                    if by_id.get(item.cloud_skill_id) and by_id[item.cloud_skill_id].versions
+                    else "up_to_date",
+                )
+                for item in normalized
+            ]
+        )
 
     def delete_skill(self, cloud_skill_id: str) -> None:
         """Remove the cloud management relation for one skill."""
 
         self._transport.post_envelope(f"/v1/skills/{_path_part(cloud_skill_id)}/delete", json=None)
+
+    @staticmethod
+    def _validate_content(content: str, expected_hash: str) -> None:
+        files = deserialize_bundle(content)
+        actual_hash = compute_content_hash(files)
+        if actual_hash != expected_hash:
+            raise ValueError(f"cloud bundle hash mismatch: expected {expected_hash}, got {actual_hash}")
+
+
+def _sdk_version(version: SkillVersionCore) -> SkillVersion:
+    return SkillVersion(
+        version_id=version.version_id,
+        cloud_skill_id=version.cloud_skill_id or "",
+        name=version.name,
+        content_hash=version.content_hash,
+        parent_version_ids=version.parent_version_ids,
+        version_label=version.version_label,
+        status=version.status.value,
+        origin=version.origin.value,
+        version_revision=version.version_revision,
+        metadata=version.metadata,
+        created_at=version.created_at.isoformat(),
+        updated_at=version.updated_at.isoformat(),
+    )
+
+
+def _sdk_pull_version(version: SkillVersionCore):
+    from .models import PullVersionSummary
+
+    return PullVersionSummary(
+        version_id=version.version_id,
+        cloud_skill_id=version.cloud_skill_id or "",
+        parent_version_ids=version.parent_version_ids,
+        name=version.name,
+        content_hash=version.content_hash,
+        version_label=version.version_label,
+        commit_message=version.commit_message,
+        origin=version.origin.value,
+        status=version.status.value,
+        version_revision=version.version_revision,
+        metadata=version.metadata,
+        created_at=version.created_at.isoformat(),
+        updated_at=version.updated_at.isoformat(),
+        received_at=(version.received_at or version.created_at).isoformat(),
+    )

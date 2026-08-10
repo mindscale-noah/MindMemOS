@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from ..persistence.enums import SkillInjectionMode
 
 
 class AgentConfig(BaseModel):
@@ -14,28 +17,18 @@ class AgentConfig(BaseModel):
 
     model: str | None = Field(default=None, min_length=1)
     max_turns: int | None = Field(default=None, ge=1)
+    skill_injection_mode: SkillInjectionMode | None = None
 
     def snapshot(self) -> dict[str, Any]:
         """Return a secret-free, JSON-compatible trajectory snapshot."""
         return self.model_dump(mode="json", exclude_none=True)
 
+    def with_overrides(self, overrides: Mapping[str, Any]) -> Self:
+        """Validate per-attempt overrides and return the effective config."""
 
-class ClaudeAgentConfig(AgentConfig):
-    """Configuration specific to the Claude Code CLI agent."""
-
-    cli_path: str | None = Field(default=None, min_length=1)
-    timeout_seconds: float = Field(default=300.0, gt=0)
-    dangerously_skip_permissions: bool = False
-
-
-class ClaudeSDKAgentConfig(AgentConfig):
-    """Configuration specific to the Claude Agent SDK agent."""
-
-    permission_mode: str = Field(default="bypassPermissions", min_length=1)
+        if not overrides:
+            return self
+        return type(self).model_validate({**self.model_dump(), **overrides})
 
 
-__all__ = [
-    "AgentConfig",
-    "ClaudeAgentConfig",
-    "ClaudeSDKAgentConfig",
-]
+__all__ = ["AgentConfig"]

@@ -1,8 +1,9 @@
 """Algorithm-facing data contracts."""
 
-from .agent import AgentProfile, AgentType
+from .agent import AgentProfile, AgentType, SkillInjectionMode
 from .algorithm import AlgorithmIdentity, AlgorithmLog, AlgorithmStep
-from .env import Environment, Reward, EnvConfig
+from .env import EnvConfig, Environment, Reward
+from .execution import AgentExecutionRequest
 from .operations import (
     SkillAnalysisRequest,
     SkillAnalysisResult,
@@ -14,14 +15,17 @@ from .skill import (
     Skill,
     SkillBinding,
     SkillUsageType,
-    SkillVersion,
     SkillVersionOrigin,
     SkillVersionStatus,
+    compute_skill_content_hash,
+    normalize_skill_text,
+    serialize_skill_files,
 )
 from .task import Task
 from .trajectory import ExecutionInfo, Rollout, RolloutType, Trajectory, TrajectoryStatus
 
 __all__ = [
+    "AgentExecutionRequest",
     "AgentProfile",
     "AgentType",
     "AlgorithmIdentity",
@@ -38,13 +42,16 @@ __all__ = [
     "SkillAnalysisResult",
     "SkillBinding",
     "SkillFinding",
+    "SkillInjectionMode",
     "SkillOptimizationRequest",
     "SkillOptimizationResult",
     "SkillUsageType",
-    "SkillVersion",
     "SkillVersionOrigin",
     "SkillVersionStatus",
     "Task",
     "Trajectory",
     "TrajectoryStatus",
+    "compute_skill_content_hash",
+    "normalize_skill_text",
+    "serialize_skill_files",
 ]

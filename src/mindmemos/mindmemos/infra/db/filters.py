@@ -242,6 +242,24 @@ SKILL_BLOB_PAYLOAD_INDEX_SCHEMA: tuple[PayloadIndexSpec, ...] = (
     PayloadIndexSpec(field_name="created_at", field_schema=qmodels.PayloadSchemaType.DATETIME),
 )
 
+SKILL_FAMILY_PAYLOAD_INDEX_SCHEMA: tuple[PayloadIndexSpec, ...] = (
+    PayloadIndexSpec(field_name="project_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
+    PayloadIndexSpec(field_name="cloud_skill_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
+    PayloadIndexSpec(field_name="published_head_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
+    PayloadIndexSpec(field_name="cloud_revision", field_schema=qmodels.PayloadSchemaType.INTEGER),
+    PayloadIndexSpec(field_name="updated_at", field_schema=qmodels.PayloadSchemaType.DATETIME),
+)
+
+SKILL_OPERATION_PAYLOAD_INDEX_SCHEMA: tuple[PayloadIndexSpec, ...] = (
+    PayloadIndexSpec(field_name="project_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
+    PayloadIndexSpec(field_name="operation_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
+    PayloadIndexSpec(field_name="cloud_skill_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
+    PayloadIndexSpec(field_name="operation_type", field_schema=qmodels.PayloadSchemaType.KEYWORD),
+    PayloadIndexSpec(field_name="request_hash", field_schema=qmodels.PayloadSchemaType.KEYWORD),
+    PayloadIndexSpec(field_name="status", field_schema=qmodels.PayloadSchemaType.KEYWORD),
+    PayloadIndexSpec(field_name="updated_at", field_schema=qmodels.PayloadSchemaType.DATETIME),
+)
+
 SKILL_TRACE_PENDING_PAYLOAD_INDEX_SCHEMA: tuple[PayloadIndexSpec, ...] = (
     PayloadIndexSpec(field_name="trace_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
     PayloadIndexSpec(field_name="project_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),

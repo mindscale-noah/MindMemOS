@@ -7,26 +7,30 @@ from types import MappingProxyType
 from typing import Any
 
 from .database import ScopedDatabase
-from .models import DatabaseConfig, TableSpec
+from .models import DatabaseConfig, SchemaMigration, TableSpec
 
 
 class TableRegistry:
-    def __init__(self, specs: Iterable[TableSpec] = ()) -> None:
+    def __init__(
+        self,
+        specs: Iterable[TableSpec] = (),
+        *,
+        migrations: Iterable[SchemaMigration] = (),
+    ) -> None:
         self._specs: dict[str, TableSpec] = {}
+        self._migrations: list[SchemaMigration] = []
         self._frozen = False
         for spec in specs:
             self.register(spec)
+        for migration in migrations:
+            self.register_migration(migration)
 
     def register(self, spec: TableSpec) -> None:
         if self._frozen:
             raise RuntimeError("table registry is frozen")
         if spec.name in self._specs:
             raise ValueError(f"table {spec.name!r} is already registered")
-        index_owners = {
-            index.name: table.name
-            for table in self._specs.values()
-            for index in table.indexes
-        }
+        index_owners = {index.name: table.name for table in self._specs.values() for index in table.indexes}
         for index in spec.indexes:
             owner = index_owners.get(index.name)
             if owner is not None:
@@ -35,6 +39,22 @@ class TableRegistry:
                     f"table {spec.name!r} cannot reuse it"
                 )
         self._specs[spec.name] = spec
+
+    def register_migration(self, migration: SchemaMigration) -> None:
+        if self._frozen:
+            raise RuntimeError("table registry is frozen")
+        identity = (migration.namespace, migration.version)
+        if any((item.namespace, item.version) == identity for item in self._migrations):
+            raise ValueError(
+                f"schema migration {migration.namespace!r} version {migration.version} is already registered"
+            )
+        unknown = set(migration.tables) - set(self._specs)
+        if unknown:
+            raise ValueError(f"schema migration references unknown tables: {sorted(unknown)}")
+        previous_versions = [item.version for item in self._migrations if item.namespace == migration.namespace]
+        if previous_versions and migration.version <= previous_versions[-1]:
+            raise ValueError(f"schema migrations for namespace {migration.namespace!r} must be ordered")
+        self._migrations.append(migration)
 
     def get(self, name: str) -> TableSpec:
         try:
@@ -49,6 +69,10 @@ class TableRegistry:
     @property
     def specs(self) -> tuple[TableSpec, ...]:
         return tuple(self._specs.values())
+
+    @property
+    def migrations(self) -> tuple[SchemaMigration, ...]:
+        return tuple(self._migrations)
 
 
 DatabaseFactory = Callable[[Mapping[str, Any], TableRegistry], ScopedDatabase]

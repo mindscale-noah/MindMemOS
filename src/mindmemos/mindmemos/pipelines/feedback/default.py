@@ -6,14 +6,14 @@ from datetime import UTC, datetime
 
 from ...infra.kafka import get_producer
 from ...typing import FeedbackPipelineInput, FeedbackPipelineResult, MemoryRequestContext
-from ..registry import register
+from ..registry import PipelineType, register
 from .explicit import ExplicitFeedbackHandler
 from .implicit import ImplicitFeedbackHandler
 
 MEMORY_FEEDBACK_TOPIC = "memory.feedback"
 
 
-@register(type="feedback", name="default_feedback")
+@register(type=PipelineType.FEEDBACK, name="default_feedback")
 class DefaultFeedbackPipeline:
     """Route feedback requests to explicit or implicit handlers."""
 

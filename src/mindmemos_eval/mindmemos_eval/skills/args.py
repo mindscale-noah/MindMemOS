@@ -97,16 +97,10 @@ def add_skill_evolution_args(parser: argparse.ArgumentParser) -> None:
         help="Number of tasks per evolution batch; must be parseable as an integer and is clamped to at least 1.",
     )
     parser.add_argument(
-        "--evolution-connection-mode",
-        choices=("http", "in_memory"),
-        default=os.getenv("MINDMEMOS_EVOLUTION_CONNECTION_MODE", "http"),
-        help="Use the public HTTP API or an embedded MindMemOS Lite runtime for evolution.",
-    )
-    parser.add_argument(
         "--evolution-base-url",
         default=os.getenv("MINDMEMOS_BASE_URL"),
         metavar="URL",
-        help="MindMemOS main or Lite FastAPI base URL; required when evolution connection mode is http.",
+        help="MindMemOS FastAPI base URL.",
     )
     parser.add_argument(
         "--evolution-api-key",
@@ -120,36 +114,6 @@ def add_skill_evolution_args(parser: argparse.ArgumentParser) -> None:
         default=float(os.getenv("MINDMEMOS_EVOLUTION_TIMEOUT_SECONDS", "1200")),
         metavar="SECONDS",
         help="HTTP timeout for skill registration, trace recording, and evolution calls.",
-    )
-    parser.add_argument(
-        "--evolution-project-id",
-        default=os.getenv("MINDMEMOS_PROJECT_ID"),
-        metavar="ID",
-        help="Project identity used by embedded Lite; defaults to a benchmark-specific eval project.",
-    )
-    parser.add_argument(
-        "--evolution-lite-config-path",
-        default=os.getenv("MINDMEMOS_LITE_CONFIG_PATH"),
-        metavar="PATH",
-        help="Lite YAML config path used only by in-memory evolution.",
-    )
-    parser.add_argument(
-        "--evolution-lite-config-name",
-        default=os.getenv("MINDMEMOS_LITE_CONFIG_NAME", "dev"),
-        metavar="NAME",
-        help="Bundled Lite config name used by in-memory evolution when no config path is set.",
-    )
-    parser.add_argument(
-        "--evolution-lite-load-config-from-env",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Build the embedded Lite runtime from environment variables.",
-    )
-    parser.add_argument(
-        "--evolution-lite-start-workers",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Start Lite's in-process workers for asynchronous trace ingestion.",
     )
     parser.add_argument(
         "--continue-on-evolution-error",

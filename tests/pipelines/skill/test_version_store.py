@@ -7,18 +7,33 @@ pending-trace rebind onto the originating add record.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
-from mindmemos.components.skill import compute_content_hash, serialize_bundle
+from mindmemos.components.skill import compute_content_hash, deserialize_bundle, serialize_bundle
 from mindmemos.config import QdrantConfig
-from mindmemos.errors import SkillBundleError, SkillNotFoundError, SkillVersionNotFoundError
+from mindmemos.errors import SkillBundleError, SkillConflictError, SkillNotFoundError, SkillVersionNotFoundError
 from mindmemos.infra.db import SkillVersionRepository
 from mindmemos.infra.db.models import AddRecordPoint
 from mindmemos.infra.db.qdrant import QdrantStore
-from mindmemos.mappers import to_skill_version_point
+from mindmemos.mappers import (
+    skill_family_from_record,
+    skill_family_id,
+    skill_operation_from_record,
+    skill_operation_id,
+    to_skill_operation_point,
+    to_skill_version_point,
+)
 from mindmemos.pipelines.skill import SkillVersionStore
-from mindmemos.typing.skill import SkillContext, SkillOrigin, SkillSyncRequestItem, SkillVersionStatus
+from mindmemos.typing.skill import (
+    SkillContext,
+    SkillOrigin,
+    SkillRemoteSyncItem,
+    SkillSyncRequestItem,
+    SkillVersion,
+    SkillVersionStatus,
+)
 from qdrant_client import AsyncQdrantClient
 
 PROJECT = "proj"
@@ -86,6 +101,30 @@ async def test_register_branch_inherits_cloud_skill_id(store):
 
 
 @pytest.mark.asyncio
+async def test_cloud_evolution_keeps_single_file_bundle_contract(store):
+    version_store, _, _ = store
+    root = await version_store.register(
+        project_id=PROJECT,
+        name="demo",
+        content=serialize_bundle({"SKILL.md": "v1"}),
+    )
+
+    child = await version_store.create_evolved_version(
+        project_id=PROJECT,
+        parent_version_id=root.version_id,
+        name="demo",
+        content="v2",
+    )
+    content = await version_store.get_content(
+        project_id=PROJECT,
+        cloud_skill_id=root.cloud_skill_id,
+        version_id=child.version_id,
+    )
+
+    assert deserialize_bundle(content.content) == {"SKILL.md": "v2"}
+
+
+@pytest.mark.asyncio
 async def test_register_unknown_parent_raises(store):
     version_store, _, _ = store
     with pytest.raises(SkillVersionNotFoundError):
@@ -106,12 +145,10 @@ async def test_register_empty_bundle_raises(store):
 
 
 @pytest.mark.asyncio
-async def test_register_accepts_raw_skill_md_body(store):
-    """A bare SKILL.md body hashes identically to its canonical bundle form."""
-
+async def test_register_rejects_raw_skill_md_body(store):
     version_store, _, _ = store
-    v = await version_store.register(project_id=PROJECT, name="prd-writer", content="raw body")
-    assert v.content_hash == content_hash("raw body")
+    with pytest.raises(SkillBundleError):
+        await version_store.register(project_id=PROJECT, name="prd-writer", content="raw body")
 
 
 @pytest.mark.asyncio
@@ -171,6 +208,115 @@ async def test_delete_skill_unmanages_versions(store):
 
 
 @pytest.mark.asyncio
+async def test_delete_skill_clears_operations_and_allows_same_ids_to_recreate_family(store):
+    version_store, skill_repo, _ = store
+    push_operation_id = str(uuid.uuid4())
+    promote_operation_id = str(uuid.uuid4())
+    version_id = str(uuid.uuid4())
+    expected_hash = content_hash("v1")
+    created_at = datetime(2026, 8, 3, tzinfo=UTC)
+    root = await version_store.register(
+        project_id=PROJECT,
+        name="prd-writer",
+        content=bundle("v1"),
+        operation_id=push_operation_id,
+        version_id=version_id,
+        expected_content_hash=expected_hash,
+        created_at=created_at,
+    )
+    await version_store.promote(
+        project_id=PROJECT,
+        cloud_skill_id=root.cloud_skill_id,
+        operation_id=promote_operation_id,
+        version_id=root.version_id,
+        expected_cloud_revision=0,
+    )
+
+    await version_store.delete_skill(project_id=PROJECT, cloud_skill_id=root.cloud_skill_id)
+
+    assert await skill_repo.get_operation(skill_operation_id(PROJECT, push_operation_id)) is None
+    assert await skill_repo.get_operation(skill_operation_id(PROJECT, promote_operation_id)) is None
+
+    recreated = await version_store.register(
+        project_id=PROJECT,
+        name="prd-writer",
+        content=bundle("v1"),
+        operation_id=push_operation_id,
+        cloud_skill_id=root.cloud_skill_id,
+        version_id=version_id,
+        expected_content_hash=expected_hash,
+        created_at=created_at,
+    )
+    promoted = await version_store.promote(
+        project_id=PROJECT,
+        cloud_skill_id=root.cloud_skill_id,
+        operation_id=promote_operation_id,
+        version_id=root.version_id,
+        expected_cloud_revision=0,
+    )
+
+    assert recreated.version_id == root.version_id
+    assert recreated.cloud_skill_id == root.cloud_skill_id
+    assert recreated.content_hash == root.content_hash
+    assert recreated.created_at == root.created_at
+    assert recreated.received_at != root.received_at
+    assert promoted.published_head_id == root.version_id
+    assert promoted.cloud_revision == 1
+    detail = await version_store.get_skill(project_id=PROJECT, cloud_skill_id=root.cloud_skill_id)
+    assert detail.published_head is not None
+    assert detail.published_head.version_id == root.version_id
+
+
+@pytest.mark.asyncio
+async def test_completed_operations_do_not_return_deleted_backing_state(store):
+    version_store, skill_repo, _ = store
+    push_operation_id = str(uuid.uuid4())
+    promote_operation_id = str(uuid.uuid4())
+    version_id = str(uuid.uuid4())
+    root = await version_store.register(
+        project_id=PROJECT,
+        name="prd-writer",
+        content=bundle("v1"),
+        operation_id=push_operation_id,
+        version_id=version_id,
+    )
+    await version_store.promote(
+        project_id=PROJECT,
+        cloud_skill_id=root.cloud_skill_id,
+        operation_id=promote_operation_id,
+        version_id=version_id,
+        expected_cloud_revision=0,
+    )
+    push_record = await skill_repo.get_operation(skill_operation_id(PROJECT, push_operation_id))
+    promote_record = await skill_repo.get_operation(skill_operation_id(PROJECT, promote_operation_id))
+    assert push_record is not None
+    assert promote_record is not None
+
+    await version_store.delete_skill(project_id=PROJECT, cloud_skill_id=root.cloud_skill_id)
+    await skill_repo.upsert_operation(to_skill_operation_point(skill_operation_from_record(push_record)))
+    await skill_repo.upsert_operation(to_skill_operation_point(skill_operation_from_record(promote_record)))
+
+    recreated = await version_store.register(
+        project_id=PROJECT,
+        name="prd-writer",
+        content=bundle("v1"),
+        operation_id=push_operation_id,
+        version_id=version_id,
+    )
+
+    assert recreated.cloud_skill_id != root.cloud_skill_id
+    assert await skill_repo.get_version(PROJECT, recreated.version_id) is not None
+    with pytest.raises(SkillConflictError, match="does not belong"):
+        await version_store.promote(
+            project_id=PROJECT,
+            cloud_skill_id=root.cloud_skill_id,
+            operation_id=promote_operation_id,
+            version_id=version_id,
+            expected_cloud_revision=0,
+        )
+
+
+@pytest.mark.asyncio
 async def test_sync_reports_published_head_diff(store):
     version_store, skill_repo, _ = store
     root = await version_store.register(project_id=PROJECT, name="prd-writer", content=bundle("v1"))
@@ -208,6 +354,126 @@ async def test_sync_without_published_head_is_not_an_update(store):
     assert results[0].has_update is False
     assert results[0].published_head is None
     assert results[0].gating_status == "no_published_head"
+
+
+@pytest.mark.asyncio
+async def test_legacy_versions_are_lazily_migrated_without_rewriting_history(store):
+    version_store, skill_repo, _ = store
+    root = SkillVersion(
+        version_id=str(uuid.uuid4()),
+        project_id=PROJECT,
+        cloud_skill_id="legacy-family",
+        skill_name="legacy",
+        content_hash="legacy-root",
+        status=SkillVersionStatus.OBSERVED,
+        origin=SkillOrigin.EDGE,
+        created_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    published = root.model_copy(
+        update={
+            "version_id": str(uuid.uuid4()),
+            "content_hash": "legacy-published",
+            "parent_version_id": root.version_id,
+            "status": SkillVersionStatus.PUBLISHED,
+            "origin": SkillOrigin.CLOUD,
+            "created_at": datetime(2026, 8, 2, tzinfo=UTC),
+        }
+    )
+    await skill_repo.upsert_version(to_skill_version_point(root))
+    await skill_repo.upsert_version(to_skill_version_point(published))
+
+    [result] = await version_store.sync_remote(
+        project_id=PROJECT,
+        items=[SkillRemoteSyncItem(cloud_skill_id="legacy-family")],
+    )
+
+    assert [version.version_id for version in result.versions] == [root.version_id, published.version_id]
+    assert result.published_head_id == published.version_id
+    assert result.cloud_revision == 0
+    family_record = await skill_repo.get_family(skill_family_id(PROJECT, "legacy-family"))
+    assert family_record is not None
+    family = skill_family_from_record(family_record)
+    assert family.migration_source == "skill_version_v1"
+    assert await skill_repo.get_version(PROJECT, root.version_id) is not None
+    assert await skill_repo.get_version(PROJECT, published.version_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_target_register_is_idempotent_and_preserves_client_version_identity(store):
+    version_store, _, _ = store
+    operation_id = str(uuid.uuid4())
+    version_id = str(uuid.uuid4())
+    expected_hash = content_hash("client-version")
+
+    created = await version_store.register(
+        project_id=PROJECT,
+        name="client",
+        content=bundle("client-version"),
+        operation_id=operation_id,
+        version_id=version_id,
+        expected_content_hash=expected_hash,
+        created_at=datetime(2026, 8, 3, tzinfo=UTC),
+    )
+    replayed = await version_store.register(
+        project_id=PROJECT,
+        name="client",
+        content=bundle("client-version"),
+        operation_id=operation_id,
+        version_id=version_id,
+        expected_content_hash=expected_hash,
+        created_at=datetime(2026, 8, 3, tzinfo=UTC),
+    )
+
+    assert created.version_id == version_id
+    assert replayed == created
+    with pytest.raises(SkillConflictError, match="different inputs"):
+        await version_store.register(
+            project_id=PROJECT,
+            name="client",
+            content=bundle("different"),
+            operation_id=operation_id,
+            version_id=str(uuid.uuid4()),
+        )
+
+
+@pytest.mark.asyncio
+async def test_promote_uses_revision_cas_and_replays_completed_operation(store):
+    version_store, _, _ = store
+    root = await version_store.register(project_id=PROJECT, name="client", content=bundle("v1"))
+    child = await version_store.register(
+        project_id=PROJECT,
+        name="client",
+        content=bundle("v2"),
+        parent_version_id=root.version_id,
+    )
+    operation_id = str(uuid.uuid4())
+
+    promoted = await version_store.promote(
+        project_id=PROJECT,
+        cloud_skill_id=root.cloud_skill_id,
+        operation_id=operation_id,
+        version_id=child.version_id,
+        expected_cloud_revision=0,
+    )
+    replayed = await version_store.promote(
+        project_id=PROJECT,
+        cloud_skill_id=root.cloud_skill_id,
+        operation_id=operation_id,
+        version_id=child.version_id,
+        expected_cloud_revision=0,
+    )
+
+    assert promoted.published_head_id == child.version_id
+    assert promoted.cloud_revision == 1
+    assert replayed == promoted
+    with pytest.raises(SkillConflictError, match="cloud revision conflict"):
+        await version_store.promote(
+            project_id=PROJECT,
+            cloud_skill_id=root.cloud_skill_id,
+            operation_id=str(uuid.uuid4()),
+            version_id=root.version_id,
+            expected_cloud_revision=0,
+        )
 
 
 @pytest.mark.asyncio

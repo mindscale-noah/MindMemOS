@@ -5,7 +5,7 @@ from __future__ import annotations
 from ..config import get_config
 from ..infra.kafka import ConsumedMessage
 from ..logging import get_logger
-from ..pipelines import create_pipeline
+from ..pipelines import PipelineType, create_pipeline
 from ..pipelines.feedback import MEMORY_FEEDBACK_TOPIC
 from ..typing import FeedbackPipelineInput, MemoryRequestContext
 
@@ -21,7 +21,7 @@ async def handle_memory_feedback(msg: ConsumedMessage) -> None:
     body = msg.json()
     context = MemoryRequestContext.model_validate(body["context"])
     payload = FeedbackPipelineInput.model_validate({**(body.get("input") or {}), "mode": "sync"})
-    pipeline = create_pipeline(type="feedback", name=get_config().pipelines.feedback)
+    pipeline = create_pipeline(type=PipelineType.FEEDBACK, name=get_config().pipelines.feedback)
     if not hasattr(pipeline, "feedback_sync"):
         raise TypeError("configured feedback pipeline must expose feedback_sync for Kafka worker execution")
 

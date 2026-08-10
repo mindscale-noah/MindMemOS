@@ -8,7 +8,6 @@ from mindmemos_skill.errors import (
     MindMemOSSkillError,
     MindMemosSkillError,
     ModelEndpointNotConfiguredError,
-    RerankError,
     SkillCapabilityUnavailableError,
     SkillConfigurationError,
     SkillServiceClosedError,
@@ -27,7 +26,6 @@ def test_all_public_skill_errors_share_the_package_base() -> None:
         InvalidConfigError,
         EmbeddingDimensionError,
         ModelEndpointNotConfiguredError,
-        RerankError,
         SkillConfigurationError,
         SkillCapabilityUnavailableError,
         SkillServiceClosedError,
@@ -57,7 +55,6 @@ def test_structured_errors_keep_operator_context() -> None:
 def test_compatibility_errors_keep_builtin_exception_types() -> None:
     assert isinstance(SkillConfigurationError("invalid runtime"), ValueError)
     assert isinstance(ModelEndpointNotConfiguredError("chat"), RuntimeError)
-    assert isinstance(RerankError("no hits"), RuntimeError)
 
 
 @pytest.mark.parametrize(

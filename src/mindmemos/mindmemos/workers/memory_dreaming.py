@@ -7,7 +7,7 @@ from typing import Protocol
 from ..config import get_config
 from ..infra.kafka import ConsumedMessage
 from ..logging import get_logger
-from ..pipelines import create_pipeline
+from ..pipelines import PipelineType, create_pipeline
 from ..typing import DreamingPipelineInput, MemoryRequestContext
 
 TOPIC = "memory.dreaming"
@@ -26,7 +26,7 @@ async def handle_memory_dreaming(msg: ConsumedMessage) -> None:
     body = msg.json()
     context = MemoryRequestContext.model_validate(body["context"])
     payload = DreamingPipelineInput.model_validate(body.get("input") or {})
-    pipeline = create_pipeline(type="dreaming", name=get_config().pipelines.dreaming)
+    pipeline = create_pipeline(type=PipelineType.DREAMING, name=get_config().pipelines.dreaming)
     if not hasattr(pipeline, "dream_sync"):
         raise TypeError("configured dreaming pipeline must expose dream_sync for Kafka worker execution")
 

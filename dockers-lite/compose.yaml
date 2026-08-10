@@ -1,6 +1,0 @@
-name: mindmemos-lite
-
-# Keep each database implementation self-contained. New backends should be
-# added under backends/<provider>/ and included here.
-include:
-  - backends/pgvector/compose.yaml

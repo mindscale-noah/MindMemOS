@@ -8,8 +8,8 @@ schema migration here.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Annotated, Any, Literal
+import warnings
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,7 +17,7 @@ CONFIG_SCHEMA_VERSION = 1
 DEFAULT_BASE_URL = "https://api.mindmemos.example.com"
 
 
-class AuthConfig(BaseModel):
+class AuthConfigV1(BaseModel):
     """Authentication material used for API calls."""
 
     api_key: str | None = None
@@ -49,14 +49,14 @@ class MemoryDefaultsConfig(BaseModel):
     dreaming_mode: Literal["sync", "async"] = "async"
 
 
-class StorageConfig(BaseModel):
+class StorageConfigV1(BaseModel):
     """Local storage locations for skill cache and backups."""
 
     skill_cache_dir: str = "~/.mindmemos/skills/cache"
     skill_backup_dir: str = "~/.mindmemos/skills/backups"
 
 
-class NetworkConfig(BaseModel):
+class NetworkConfigV1(BaseModel):
     """Default HTTP transport tuning."""
 
     timeout_seconds: int = 30
@@ -73,72 +73,61 @@ class HttpConnectionConfig(BaseModel):
     max_retries: int = 2
 
 
-class InMemoryConnectionConfig(BaseModel):
-    """One shared in-process runtime connection."""
-
-    type: Literal["in_memory"] = "in_memory"
-    runtime: Literal["mindmemos_lite"] = "mindmemos_lite"
-    project_id: str
-    config_path: Path | None = None
-    config_name: str = "dev"
-    load_config_from_env: bool = False
-    start_workers: bool = True
-    account_id: str = "local"
-    api_key_uuid: str = "local-sdk"
-    project_override_config: dict[str, Any] | None = None
+ConnectionConfig = HttpConnectionConfig
 
 
-ConnectionConfig = Annotated[
-    HttpConnectionConfig | InMemoryConnectionConfig,
-    Field(discriminator="type"),
-]
-
-
-class ClientConnectionConfig(BaseModel):
+class ClientConnectionConfigV1(BaseModel):
     """Route one SDK resource client to a named connection."""
 
     connection: str = "default"
 
 
-class ClientsConfig(BaseModel):
+class ClientsConfigV1(BaseModel):
     """Per-resource connection routing."""
 
-    memory: ClientConnectionConfig = Field(default_factory=ClientConnectionConfig)
-    skills: ClientConnectionConfig = Field(default_factory=ClientConnectionConfig)
+    memory: ClientConnectionConfigV1 = Field(default_factory=ClientConnectionConfigV1)
+    skills: ClientConnectionConfigV1 = Field(default_factory=ClientConnectionConfigV1)
 
 
-class ConfigMetadata(BaseModel):
+class ConfigMetadataV1(BaseModel):
     """Bookkeeping timestamps for the config file."""
 
     created_at: str | None = None
     updated_at: str | None = None
 
 
-class SDKConfig(BaseModel):
+class SDKConfigV1(BaseModel):
     """Top-level SDK settings persisted to ``~/.mindmemos/settings.json``."""
 
     version: int = CONFIG_SCHEMA_VERSION
     base_url: str = DEFAULT_BASE_URL
-    auth: AuthConfig = Field(default_factory=AuthConfig)
+    auth: AuthConfigV1 = Field(default_factory=AuthConfigV1)
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
-    storage: StorageConfig = Field(default_factory=StorageConfig)
+    storage: StorageConfigV1 = Field(default_factory=StorageConfigV1)
     skills: list[dict[str, Any]] = Field(default_factory=list)
-    network: NetworkConfig = Field(default_factory=NetworkConfig)
+    network: NetworkConfigV1 = Field(default_factory=NetworkConfigV1)
     memory: MemoryDefaultsConfig = Field(default_factory=MemoryDefaultsConfig)
     connections: dict[str, ConnectionConfig] = Field(default_factory=dict)
-    clients: ClientsConfig = Field(default_factory=ClientsConfig)
-    metadata: ConfigMetadata = Field(default_factory=ConfigMetadata)
+    clients: ClientsConfigV1 = Field(default_factory=ClientsConfigV1)
+    metadata: ConfigMetadataV1 = Field(default_factory=ConfigMetadataV1)
 
-    def resolved_connections(self) -> dict[str, ConnectionConfig]:
-        """Return configured connections with a legacy-compatible default."""
 
-        if self.connections:
-            return dict(self.connections)
-        return {
-            "default": HttpConnectionConfig(
-                base_url=self.base_url,
-                api_key=self.auth.api_key,
-                timeout_seconds=self.network.timeout_seconds,
-                max_retries=self.network.max_retries,
-            )
-        }
+# Public v1 compatibility aliases. Keep these as aliases instead of duplicate
+# subclasses so values created through either spelling have identical Pydantic
+# validation and ``isinstance`` behavior.
+AuthConfig = AuthConfigV1
+ConfigMetadata = ConfigMetadataV1
+NetworkConfig = NetworkConfigV1
+StorageConfig = StorageConfigV1
+
+
+class SDKConfig(SDKConfigV1):
+    """Deprecated compatibility spelling for the SDK v1 configuration."""
+
+    def __init__(self, **data: Any) -> None:
+        warnings.warn(
+            "SDKConfig is deprecated; use SDKPortalConfigV2 for new code.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(**data)

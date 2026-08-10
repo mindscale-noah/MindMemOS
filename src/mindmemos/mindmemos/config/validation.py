@@ -385,6 +385,8 @@ REQUIRED_STRING_PATHS: tuple[str, ...] = (
     "database.qdrant.search_record_collection",
     "database.qdrant.skill_version_collection",
     "database.qdrant.skill_blob_collection",
+    "database.qdrant.skill_family_collection",
+    "database.qdrant.skill_operation_collection",
     "database.qdrant.skill_trace_pending_collection",
     "database.qdrant.skill_trace_summary_collection",
     "database.qdrant.semantic_vector_name",

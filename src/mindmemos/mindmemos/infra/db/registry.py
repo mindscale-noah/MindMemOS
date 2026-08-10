@@ -7,10 +7,20 @@ import weakref
 from dataclasses import dataclass
 from typing import Any
 
+from mindmemos_skill.infra.database import (
+    DatabaseConfig as StructuredDatabaseConfig,
+)
+from mindmemos_skill.infra.database import (
+    DatabaseRequirements,
+    ScopedDatabase,
+    create_database,
+)
+
 from ...config import get_config
 from .collections import SkillVersionRepository
 from .neo4j import Neo4jStore
 from .qdrant import QdrantStore
+from .skill_relational import SkillRelationalRepository, build_cloud_skill_tables
 
 
 @dataclass(slots=True)
@@ -19,15 +29,18 @@ class _LoopDatabaseClients:
 
     qdrant: QdrantStore
     neo4j: Neo4jStore
-    skill: SkillVersionRepository
+    skill: SkillRelationalRepository
+    skill_database: ScopedDatabase
+    legacy_skill: SkillVersionRepository
 
     async def close(self) -> None:
         """Close all underlying database clients.
 
-        ``skill`` shares ``qdrant``'s engine and does not own a connection, so
-        closing ``qdrant`` releases both.
+        The relational Skill repository and the memory stores own independent
+        connections and are closed independently.
         """
 
+        await self.skill_database.close()
         await self.qdrant.close()
         await self.neo4j.close()
 
@@ -53,10 +66,16 @@ class DatabaseClients:
         return _get_loop_database_clients().neo4j
 
     @property
-    def skill(self) -> SkillVersionRepository:
+    def skill(self) -> SkillRelationalRepository:
         """Return skill repository clients for the currently running event loop."""
 
         return _get_loop_database_clients().skill
+
+    @property
+    def legacy_skill(self) -> SkillVersionRepository:
+        """Temporary Qdrant reader used only by migration/legacy flows."""
+
+        return _get_loop_database_clients().legacy_skill
 
     async def close(self) -> None:
         """Close database clients for the currently running event loop."""
@@ -94,10 +113,35 @@ def _get_loop_database_clients() -> _LoopDatabaseClients:
 def _create_database_clients() -> _LoopDatabaseClients:
     cfg = get_config().database
     qdrant = QdrantStore(cfg.qdrant)
+    skill_options: dict[str, Any]
+    if cfg.skill.provider == "sqlite":
+        skill_options = {"path": cfg.skill.path}
+    elif cfg.skill.provider in {"postgres", "postgresql"}:
+        if not cfg.skill.dsn:
+            raise ValueError("database.skill.dsn is required for the postgres provider")
+        skill_options = {"dsn": cfg.skill.dsn, "pool_size": cfg.skill.pool_size}
+    else:
+        skill_options = {}
+    skill_database = create_database(
+        StructuredDatabaseConfig(
+            provider=cfg.skill.provider,
+            options=skill_options,
+            required=DatabaseRequirements(
+                metadata_filtering=True,
+                batch_record_io=True,
+                atomic_batch_write=True,
+                transactions=True,
+                compare_and_swap=True,
+            ),
+        ),
+        build_cloud_skill_tables(),
+    )
     return _LoopDatabaseClients(
         qdrant=qdrant,
         neo4j=Neo4jStore(cfg.neo4j),
-        skill=SkillVersionRepository(cfg.qdrant, engine=qdrant.engine),
+        skill=SkillRelationalRepository(skill_database),
+        skill_database=skill_database,
+        legacy_skill=SkillVersionRepository(cfg.qdrant, engine=qdrant.engine),
     )
 
 

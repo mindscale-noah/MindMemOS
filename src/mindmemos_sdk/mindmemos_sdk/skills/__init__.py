@@ -2,7 +2,6 @@
 
 from ..errors import SkillBundleError
 from .async_client import AsyncSkillClient
-from .backends import AsyncSkillBackend, HttpSkillBackend, InMemorySkillBackend
 from .bundle import (
     CONTENT_HASH_ALGORITHM,
     SKILL_WHITELIST,
@@ -16,10 +15,7 @@ from .bundle import (
     serialize_bundle,
 )
 from .cloud import SkillCloudClient
-from .detector import detect_skill_context
-from .history import SkillHistoryStore
-from .installer import SkillInstaller
-from .local_repository import LocalSkillRepository
+from .http_adapter import HttpSkillRemoteAdapter
 from .manager import SkillManager, SkillRegisterPlan
 from .models import (
     CloudSkillsPage,
@@ -38,13 +34,8 @@ from .models import (
     LocalSkillOperationType,
     LocalSkillSnapshot,
     LocalSkillSyncState,
-    LocalSkillVersion,
-    LocalSkillVersionFiles,
     LocalSkillVersionMetadata,
     LocalSyncOperation,
-    LocalSyncOutbox,
-    PromoteCloudRequest,
-    PromoteCloudResult,
     PublishLocalRequest,
     PublishLocalResult,
     PullVersionContent,
@@ -54,18 +45,14 @@ from .models import (
     PushVersionResult,
     RegisterLocalRequest,
     RegisterLocalResult,
-    RollbackPlan,
     SkillCheckoutPlan,
     SkillContentData,
     SkillContext,
     SkillDiffResult,
     SkillEvolveData,
     SkillEvolveMode,
-    SkillFlushResult,
     SkillListData,
     SkillOrigin,
-    SkillPendingUpload,
-    SkillPendingUploadsFile,
     SkillRecord,
     SkillRegisterData,
     SkillSummary,
@@ -82,9 +69,6 @@ from .models import (
     SyncCloudResult,
     SyncCloudResultItem,
 )
-from .pending import SkillPendingUploadStore
-from .registry import SkillRegistry
-from .snapshot import compute_local_snapshot_hash, read_local_snapshot, snapshot_from_editor
 
 __all__ = [
     "CONTENT_HASH_ALGORITHM",
@@ -92,9 +76,7 @@ __all__ = [
     "CloudSkillSummary",
     "CloudSkillsPage",
     "AsyncSkillClient",
-    "AsyncSkillBackend",
-    "HttpSkillBackend",
-    "InMemorySkillBackend",
+    "HttpSkillRemoteAdapter",
     "DuplicateSkillAction",
     "DuplicateSkillMatch",
     "EvolveCloudRequest",
@@ -107,18 +89,12 @@ __all__ = [
     "LocalSkillManifest",
     "LocalSkillOperationStatus",
     "LocalSkillOperationType",
-    "LocalSkillRepository",
     "LocalSkillSnapshot",
     "LocalSkillSyncState",
-    "LocalSkillVersionFiles",
     "LocalSkillVersionMetadata",
     "LocalSyncOperation",
-    "LocalSyncOutbox",
-    "LocalSkillVersion",
     "PublishLocalRequest",
     "PublishLocalResult",
-    "PromoteCloudRequest",
-    "PromoteCloudResult",
     "PullVersionContent",
     "PullVersionSummary",
     "PullVersionsPage",
@@ -126,7 +102,6 @@ __all__ = [
     "PushVersionResult",
     "RegisterLocalRequest",
     "RegisterLocalResult",
-    "RollbackPlan",
     "SkillContext",
     "SkillBundleError",
     "SkillCheckoutPlan",
@@ -134,20 +109,13 @@ __all__ = [
     "SkillContentData",
     "SkillEvolveData",
     "SkillEvolveMode",
-    "SkillFlushResult",
     "SkillDiffResult",
-    "SkillHistoryStore",
-    "SkillInstaller",
     "SkillListData",
     "SkillManager",
     "SkillOrigin",
-    "SkillPendingUpload",
-    "SkillPendingUploadStore",
-    "SkillPendingUploadsFile",
     "SkillRegisterData",
     "SkillRegisterPlan",
     "SkillRecord",
-    "SkillRegistry",
     "SkillSummary",
     "SkillSyncData",
     "SkillSyncRequestItem",
@@ -163,14 +131,10 @@ __all__ = [
     "SyncCloudResultItem",
     "bundle_files_from_content",
     "compute_content_hash",
-    "compute_local_snapshot_hash",
-    "detect_skill_context",
     "deserialize_bundle",
     "is_whitelisted",
     "normalize_bundle",
     "read_local_bundle",
-    "read_local_snapshot",
     "resolve_skill_dir",
     "serialize_bundle",
-    "snapshot_from_editor",
 ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ...errors import SkillCapabilityUnavailableError
 from .models import BackendConfig
 from .registry import BackendRegistry, TableRegistry
 from .vector_store import ScopedVectorStore
@@ -14,7 +15,16 @@ def register_builtin_vector_stores(registry: BackendRegistry) -> None:
     drivers from leaking into the backend-neutral contract modules.
     """
 
-    from .vector_store_impl import register_pgvector_backend
+    try:
+        from .vector_store_impl import register_pgvector_backend
+    except ModuleNotFoundError as exc:
+        missing_root = (exc.name or "").split(".", 1)[0]
+        if missing_root not in {"psycopg", "psycopg_pool"}:
+            raise
+        raise SkillCapabilityUnavailableError(
+            "pgvector capability is unavailable because its PostgreSQL driver is not installed. "
+            "Install it with `pip install 'mindmemos-skill[pgvector]'`."
+        ) from exc
 
     register_pgvector_backend(registry)
 

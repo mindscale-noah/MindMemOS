@@ -106,10 +106,12 @@ def test_auth_config_output_help_describes_lifecycle(capsys):
     assert "--auth-config-output PATH" in help_text
     assert "--api-key-output PATH" in help_text
     assert "complete benchmark auth config YAML" in help_text
-    assert "required for fresh HTTP runs" in help_text
-    assert "not needed for in-memory runs or with --reuse-api-key" in help_text
+    assert "required for fresh runs" in help_text
+    assert "not needed with --reuse-api-key" in help_text
     assert "completely overwritten" in help_text
     assert "deprecated compatibility alias" in help_text
+    assert "--memory-connection-mode" not in help_text
+    assert "--lite-" not in help_text
 
 
 def test_dreaming_after_add_can_be_enabled_by_cli_or_runner_yaml(tmp_path):
@@ -385,7 +387,7 @@ async def test_fresh_http_run_requires_auth_config_output(tmp_path, monkeypatch)
     async def memory_client_factory(_identity):
         return _MemoryBackend(object())
 
-    with pytest.raises(ValueError, match="--auth-config-output is required for fresh HTTP runs"):
+    with pytest.raises(ValueError, match="--auth-config-output is required for fresh runs"):
         await run_benchmark_matrix(
             args,
             adapters={"locomo": _NoopAdapter()},

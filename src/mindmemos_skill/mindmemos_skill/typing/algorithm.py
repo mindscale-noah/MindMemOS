@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+if TYPE_CHECKING:
+    from ..persistence.models import AlgorithmLogRecord
 
 
 class AlgorithmIdentity(BaseModel):
@@ -50,9 +54,41 @@ class AlgorithmLog(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    id: str = Field(min_length=1)
+    log_id: str = Field(min_length=1)
     algorithm: AlgorithmIdentity
     step: AlgorithmStep
+
+    def to_record(self) -> AlgorithmLogRecord:
+        """Flatten the aggregate into the canonical persistence row."""
+
+        from ..persistence.models import AlgorithmLogRecord
+
+        return AlgorithmLogRecord(
+            log_id=self.log_id,
+            algorithm_name=self.algorithm.name,
+            algorithm_version=self.algorithm.version,
+            component_name=self.step.component_name,
+            step_name=self.step.name,
+            status=self.step.status,
+            payload=self.step.payload,
+            created_at=self.step.created_at,
+        )
+
+    @classmethod
+    def from_record(cls, record: AlgorithmLogRecord) -> AlgorithmLog:
+        """Rebuild the business aggregate from a validated persistence row."""
+
+        return cls(
+            log_id=record.log_id,
+            algorithm=AlgorithmIdentity(name=record.algorithm_name, version=record.algorithm_version),
+            step=AlgorithmStep(
+                component_name=record.component_name,
+                name=record.step_name,
+                status=record.status,
+                payload=record.payload,
+                created_at=record.created_at,
+            ),
+        )
 
 
 __all__ = ["AlgorithmIdentity", "AlgorithmLog", "AlgorithmStep"]

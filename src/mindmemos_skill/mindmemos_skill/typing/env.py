@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 
 class EnvConfig(BaseModel):
-    ...
+    """Validated construction-time configuration shared by environments."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class Environment(BaseModel):
@@ -28,8 +30,8 @@ class Reward(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    score: float
-    """奖励分数"""
+    score: float | None = None
+    """奖励分数；尚未评分时为空。"""
 
     detail: str | None = None
     """测评详情"""
@@ -39,10 +41,12 @@ class Reward(BaseModel):
 
     @field_validator("score")
     @classmethod
-    def validate_finite_score(cls, value: float) -> float:
+    def validate_finite_score(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
         if not math.isfinite(value):
             raise ValueError("score must be a finite number")
         return value
 
 
-__all__ = ["Environment", "Reward"]
+__all__ = ["EnvConfig", "Environment", "Reward"]

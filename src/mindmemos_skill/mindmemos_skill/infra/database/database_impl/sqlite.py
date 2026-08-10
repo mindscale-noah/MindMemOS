@@ -15,13 +15,14 @@ import re
 import sqlite3
 import threading
 from collections.abc import Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 from uuid import UUID
 
-from ..database import ScopedDatabase
+from ..database import DatabaseUnitOfWork, ScopedDatabase
 from ..models import (
     DatabaseCapabilities,
     FieldSpec,
@@ -31,6 +32,7 @@ from ..models import (
     Predicate,
     Record,
     RecordQuery,
+    SchemaMigration,
     Sort,
     TableSpec,
 )
@@ -40,6 +42,7 @@ from ..scope import DatabaseScope
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _RESERVED_COLUMNS = frozenset({"_scope_key", "_scope", "_record_id", "_schema_fingerprint"})
 _SCHEMA_TABLE = "__mindmemos_schema"
+_MIGRATION_TABLE = "__mindmemos_migrations"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -82,16 +85,20 @@ class SqliteBackend(ScopedDatabase):
         metadata_filtering=True,
         batch_record_io=True,
         atomic_batch_write=True,
+        transactions=True,
+        compare_and_swap=True,
     )
 
     def __init__(self, *, options: SqliteOptions, tables: TableRegistry) -> None:
         self._options = options
         self._tables = {spec.name: spec for spec in tables.specs}
+        self._migrations = tables.migrations
         self._validate_registry()
         self._connection: sqlite3.Connection | None = None
         self._closed = False
         self._connection_lock = threading.RLock()
         self._open_lock = asyncio.Lock()
+        self._operation_lock = asyncio.Lock()
 
     @property
     def name(self) -> str:
@@ -103,12 +110,50 @@ class SqliteBackend(ScopedDatabase):
 
     async def ensure_schema(self, tables: TableRegistry) -> None:
         requested = {spec.name: spec for spec in tables.specs}
-        if requested != self._tables:
+        if requested != self._tables or tables.migrations != self._migrations:
             raise ValueError("ensure_schema registry differs from the registry used to construct the sqlite backend")
         await self._ensure_open()
-        await asyncio.to_thread(self._ensure_schema_sync)
+        async with self._operation_lock:
+            await asyncio.to_thread(self._ensure_schema_sync)
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[DatabaseUnitOfWork]:
+        """Open one SQLite ``BEGIN IMMEDIATE`` unit of work.
+
+        The yielded object must be used for all operations inside the context.
+        SQLite's database lock, rather than the in-process asyncio lock, is the
+        cross-process serialization boundary.
+        """
+
+        await self._ensure_open()
+        await self._operation_lock.acquire()
+        try:
+            await asyncio.to_thread(self._begin_transaction_sync)
+            unit_of_work = _SqliteUnitOfWork(self)
+            try:
+                yield unit_of_work
+            except BaseException:
+                await asyncio.to_thread(self._rollback_transaction_sync)
+                raise
+            else:
+                try:
+                    await asyncio.to_thread(self._commit_transaction_sync)
+                except BaseException:
+                    await asyncio.to_thread(self._rollback_transaction_sync)
+                    raise
+        finally:
+            self._operation_lock.release()
 
     async def upsert_records(self, table: str, records: Sequence[Record]) -> None:
+        await self._upsert_records(table, records, transactional=False)
+
+    async def _upsert_records(
+        self,
+        table: str,
+        records: Sequence[Record],
+        *,
+        transactional: bool,
+    ) -> None:
         if not records:
             return
         spec = self._table(table)
@@ -122,13 +167,26 @@ class SqliteBackend(ScopedDatabase):
             f"ON CONFLICT ({', '.join(_quote(item) for item in conflict)}) DO UPDATE SET "
             + ", ".join(f"{_quote(item)} = excluded.{_quote(item)}" for item in updates)
         )
-        await self._run_write(lambda connection: connection.executemany(statement, rows))
+        await self._execute_write(
+            lambda connection: connection.executemany(statement, rows),
+            transactional=transactional,
+        )
 
     async def get_records(
         self,
         table: str,
         scope: DatabaseScope,
         record_ids: Sequence[str],
+    ) -> list[Record]:
+        return await self._get_records(table, scope, record_ids, transactional=False)
+
+    async def _get_records(
+        self,
+        table: str,
+        scope: DatabaseScope,
+        record_ids: Sequence[str],
+        *,
+        transactional: bool,
     ) -> list[Record]:
         if not record_ids:
             return []
@@ -140,13 +198,9 @@ class SqliteBackend(ScopedDatabase):
         if spec.scope_scoped:
             params.append(_scope_key(scope))
         params.extend(record_ids)
-        rows = await self._fetchall(statement, params)
+        rows = await self._execute_fetchall(statement, params, transactional=transactional)
         by_id = {row["_record_id"]: row for row in rows}
-        return [
-            self._row_to_record(spec, by_id[record_id])
-            for record_id in record_ids
-            if record_id in by_id
-        ]
+        return [self._row_to_record(spec, by_id[record_id]) for record_id in record_ids if record_id in by_id]
 
     async def patch_record(
         self,
@@ -154,6 +208,17 @@ class SqliteBackend(ScopedDatabase):
         scope: DatabaseScope,
         record_id: str,
         changes: Mapping[str, Any],
+    ) -> None:
+        await self._patch_record(table, scope, record_id, changes, transactional=False)
+
+    async def _patch_record(
+        self,
+        table: str,
+        scope: DatabaseScope,
+        record_id: str,
+        changes: Mapping[str, Any],
+        *,
+        transactional: bool,
     ) -> None:
         if not changes:
             return
@@ -177,9 +242,87 @@ class SqliteBackend(ScopedDatabase):
         if spec.scope_scoped:
             params.append(_scope_key(scope))
         params.append(record_id)
-        await self._run_write(lambda connection: connection.execute(statement, params))
+        await self._execute_write(
+            lambda connection: connection.execute(statement, params),
+            transactional=transactional,
+        )
+
+    async def compare_and_swap_record(
+        self,
+        table: str,
+        scope: DatabaseScope,
+        record_id: str,
+        *,
+        expected: Mapping[str, Any],
+        changes: Mapping[str, Any],
+    ) -> bool:
+        return await self._compare_and_swap_record(
+            table,
+            scope,
+            record_id,
+            expected=expected,
+            changes=changes,
+            transactional=False,
+        )
+
+    async def _compare_and_swap_record(
+        self,
+        table: str,
+        scope: DatabaseScope,
+        record_id: str,
+        *,
+        expected: Mapping[str, Any],
+        changes: Mapping[str, Any],
+        transactional: bool,
+    ) -> bool:
+        if not expected:
+            raise ValueError("compare-and-swap requires at least one expected field")
+        if not changes:
+            raise ValueError("compare-and-swap requires at least one changed field")
+        spec = self._table(table)
+        fields = {field.name: field for field in spec.fields}
+        unknown = (set(expected) | set(changes)) - set(fields)
+        if unknown:
+            raise ValueError(f"unknown fields for table {table!r}: {', '.join(sorted(unknown))}")
+        if spec.primary_key in expected or spec.primary_key in changes:
+            raise ValueError(f"cannot compare or patch primary key {spec.primary_key!r}")
+
+        assignments: list[str] = []
+        params: list[Any] = []
+        for name, value in changes.items():
+            field = fields[name]
+            if value is None and not field.nullable:
+                raise ValueError(f"field {name!r} on table {table!r} is not nullable")
+            assignments.append(f"{_quote(name)} = ?")
+            params.append(_adapt_field_value(field, value))
+
+        identity = "_scope_key = ? AND " if spec.scope_scoped else ""
+        conditions = [f"{_quote(name)} IS ?" for name in expected]
+        statement = (
+            f"UPDATE {_quote(spec.name)} SET {', '.join(assignments)} "
+            f"WHERE {identity}_record_id = ? AND {' AND '.join(conditions)}"
+        )
+        if spec.scope_scoped:
+            params.append(_scope_key(scope))
+        params.append(record_id)
+        params.extend(_adapt_field_value(fields[name], value) for name, value in expected.items())
+
+        def execute(connection: sqlite3.Connection) -> bool:
+            return connection.execute(statement, params).rowcount == 1
+
+        return await self._execute_write(execute, transactional=transactional)
 
     async def delete_records(self, table: str, scope: DatabaseScope, record_ids: Sequence[str]) -> None:
+        await self._delete_records(table, scope, record_ids, transactional=False)
+
+    async def _delete_records(
+        self,
+        table: str,
+        scope: DatabaseScope,
+        record_ids: Sequence[str],
+        *,
+        transactional: bool,
+    ) -> None:
         if not record_ids:
             return
         spec = self._table(table)
@@ -190,24 +333,30 @@ class SqliteBackend(ScopedDatabase):
         if spec.scope_scoped:
             params.append(_scope_key(scope))
         params.extend(record_ids)
-        await self._run_write(lambda connection: connection.execute(statement, params))
+        await self._execute_write(
+            lambda connection: connection.execute(statement, params),
+            transactional=transactional,
+        )
 
     async def query_records(self, table: str, query: RecordQuery) -> tuple[list[Record], str | None]:
-        return await self._query_records(table, query)
+        return await self._query_records(table, query, transactional=False)
 
     async def close(self) -> None:
         if self._closed:
             return
-        self._closed = True
-        connection = self._connection
-        self._connection = None
-        if connection is not None:
-            await asyncio.to_thread(connection.close)
+        async with self._operation_lock:
+            self._closed = True
+            connection = self._connection
+            self._connection = None
+            if connection is not None:
+                await asyncio.to_thread(connection.close)
 
     async def _query_records(
         self,
         table: str,
         query: RecordQuery,
+        *,
+        transactional: bool,
     ) -> tuple[list[Record], str | None]:
         spec = self._table(table)
         offset = _decode_cursor(query.page.cursor, table)
@@ -215,7 +364,11 @@ class SqliteBackend(ScopedDatabase):
         order, order_params = self._order_clause(spec, query.sort)
         statement = f"SELECT * FROM {_quote(spec.name)} WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?"
         limit = query.page.limit
-        rows = await self._fetchall(statement, [*params, *order_params, limit + 1, offset])
+        rows = await self._execute_fetchall(
+            statement,
+            [*params, *order_params, limit + 1, offset],
+            transactional=transactional,
+        )
         has_more = len(rows) > limit
         records = [self._row_to_record(spec, row) for row in rows[:limit]]
         cursor = _encode_cursor(table, offset + limit) if has_more else None
@@ -250,39 +403,118 @@ class SqliteBackend(ScopedDatabase):
 
     def _ensure_schema_sync(self) -> None:
         connection = self._require_connection()
-        with self._connection_lock, connection:
-            connection.execute(
-                f"CREATE TABLE IF NOT EXISTS {_quote(_SCHEMA_TABLE)} ("
-                "table_name TEXT PRIMARY KEY, schema_fingerprint TEXT NOT NULL)"
-            )
-            for spec in self._tables.values():
-                fingerprint = _schema_fingerprint(spec)
-                existing_table = connection.execute(
-                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
-                    (spec.name,),
-                ).fetchone()
-                row = connection.execute(
-                    f"SELECT schema_fingerprint FROM {_quote(_SCHEMA_TABLE)} WHERE table_name = ?",
-                    (spec.name,),
-                ).fetchone()
-                if existing_table is not None and row is None:
-                    raise RuntimeError(
-                        f"sqlite table {spec.name!r} exists without MindMemOS schema metadata; "
-                        "adopt it through an explicit database migration"
-                    )
-                if row is not None and row["schema_fingerprint"] != fingerprint:
-                    raise RuntimeError(
-                        f"sqlite schema drift for table {spec.name!r}; use an explicit database migration "
-                        "instead of changing a registered TableSpec in place"
-                    )
-                connection.execute(self._table_ddl(spec))
-                for statement in self._index_ddl(spec):
-                    connection.execute(statement)
+        with self._connection_lock:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
                 connection.execute(
-                    f"INSERT INTO {_quote(_SCHEMA_TABLE)} (table_name, schema_fingerprint) VALUES (?, ?) "
-                    "ON CONFLICT(table_name) DO UPDATE SET schema_fingerprint = excluded.schema_fingerprint",
-                    (spec.name, fingerprint),
+                    f"CREATE TABLE IF NOT EXISTS {_quote(_SCHEMA_TABLE)} ("
+                    "table_name TEXT PRIMARY KEY, schema_fingerprint TEXT NOT NULL)"
                 )
+                connection.execute(
+                    f"CREATE TABLE IF NOT EXISTS {_quote(_MIGRATION_TABLE)} ("
+                    "namespace TEXT NOT NULL, version INTEGER NOT NULL, name TEXT NOT NULL, "
+                    "checksum TEXT NOT NULL, applied_at TEXT NOT NULL, PRIMARY KEY (namespace, version))"
+                )
+                if self._migrations:
+                    self._apply_migrations_sync(connection)
+                else:
+                    for spec in self._tables.values():
+                        self._ensure_table_sync(connection, spec)
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
+
+    def _apply_migrations_sync(self, connection: sqlite3.Connection) -> None:
+        by_namespace: dict[str, set[int]] = {}
+        covered_tables: set[str] = set()
+        for migration in self._migrations:
+            by_namespace.setdefault(migration.namespace, set()).add(migration.version)
+            covered_tables.update(migration.tables)
+
+        missing = set(self._tables) - covered_tables
+        if missing:
+            raise RuntimeError(f"registered tables are missing an explicit schema migration: {sorted(missing)}")
+
+        for namespace, expected_versions in by_namespace.items():
+            rows = connection.execute(
+                f"SELECT version FROM {_quote(_MIGRATION_TABLE)} WHERE namespace = ?",
+                (namespace,),
+            ).fetchall()
+            unexpected = {int(row["version"]) for row in rows} - expected_versions
+            if unexpected:
+                raise RuntimeError(
+                    f"sqlite schema ledger for namespace {namespace!r} contains unknown migrations: "
+                    f"{sorted(unexpected)}"
+                )
+
+        for migration in self._migrations:
+            checksum = self._migration_checksum(migration)
+            row = connection.execute(
+                f"SELECT name, checksum FROM {_quote(_MIGRATION_TABLE)} WHERE namespace = ? AND version = ?",
+                (migration.namespace, migration.version),
+            ).fetchone()
+            if row is not None and (row["name"] != migration.name or row["checksum"] != checksum):
+                raise RuntimeError(
+                    f"sqlite migration definition drift for {migration.namespace!r} version {migration.version}"
+                )
+            for table_name in migration.tables:
+                self._ensure_table_sync(connection, self._tables[table_name])
+            if row is None:
+                connection.execute(
+                    f"INSERT INTO {_quote(_MIGRATION_TABLE)} "
+                    "(namespace, version, name, checksum, applied_at) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        migration.namespace,
+                        migration.version,
+                        migration.name,
+                        checksum,
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+
+    def _migration_checksum(self, migration: SchemaMigration) -> str:
+        payload = {
+            "namespace": migration.namespace,
+            "version": migration.version,
+            "name": migration.name,
+            "tables": [
+                {"name": table_name, "fingerprint": _schema_fingerprint(self._tables[table_name])}
+                for table_name in migration.tables
+            ],
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _ensure_table_sync(self, connection: sqlite3.Connection, spec: TableSpec) -> None:
+        fingerprint = _schema_fingerprint(spec)
+        existing_table = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (spec.name,),
+        ).fetchone()
+        row = connection.execute(
+            f"SELECT schema_fingerprint FROM {_quote(_SCHEMA_TABLE)} WHERE table_name = ?",
+            (spec.name,),
+        ).fetchone()
+        if existing_table is not None and row is None:
+            raise RuntimeError(
+                f"sqlite table {spec.name!r} exists without MindMemOS schema metadata; "
+                "adopt it through an explicit database migration"
+            )
+        if row is not None and row["schema_fingerprint"] != fingerprint:
+            raise RuntimeError(
+                f"sqlite schema drift for table {spec.name!r}; use an explicit database migration "
+                "instead of changing a registered TableSpec in place"
+            )
+        connection.execute(self._table_ddl(spec))
+        for statement in self._index_ddl(spec):
+            connection.execute(statement)
+        connection.execute(
+            f"INSERT INTO {_quote(_SCHEMA_TABLE)} (table_name, schema_fingerprint) VALUES (?, ?) "
+            "ON CONFLICT(table_name) DO UPDATE SET schema_fingerprint = excluded.schema_fingerprint",
+            (spec.name, fingerprint),
+        )
 
     def _table_ddl(self, spec: TableSpec) -> str:
         columns = ["_scope_key TEXT NOT NULL", "_scope TEXT NOT NULL", "_record_id TEXT NOT NULL"]
@@ -307,15 +539,32 @@ class SqliteBackend(ScopedDatabase):
             )
         return statements
 
-    async def _run_write(self, operation: Any) -> None:
+    async def _execute_write(self, operation: Any, *, transactional: bool) -> Any:
+        if transactional:
+            return await asyncio.to_thread(self._run_transaction_operation_sync, operation)
+        return await self._run_write(operation)
+
+    async def _execute_fetchall(
+        self,
+        statement: str,
+        params: Sequence[Any],
+        *,
+        transactional: bool,
+    ) -> list[sqlite3.Row]:
+        if transactional:
+            return await asyncio.to_thread(self._fetchall_transaction_sync, statement, params)
+        return await self._fetchall(statement, params)
+
+    async def _run_write(self, operation: Any) -> Any:
         await self._ensure_open()
 
-        def run() -> None:
+        def run() -> Any:
             connection = self._require_connection()
             with self._connection_lock, connection:
-                operation(connection)
+                return operation(connection)
 
-        await asyncio.to_thread(run)
+        async with self._operation_lock:
+            return await asyncio.to_thread(run)
 
     async def _fetchall(self, statement: str, params: Sequence[Any]) -> list[sqlite3.Row]:
         await self._ensure_open()
@@ -325,7 +574,37 @@ class SqliteBackend(ScopedDatabase):
             with self._connection_lock:
                 return list(connection.execute(statement, tuple(params)).fetchall())
 
-        return await asyncio.to_thread(run)
+        async with self._operation_lock:
+            return await asyncio.to_thread(run)
+
+    def _run_transaction_operation_sync(self, operation: Any) -> Any:
+        connection = self._require_connection()
+        if not connection.in_transaction:
+            raise RuntimeError("sqlite unit of work is no longer active")
+        with self._connection_lock:
+            return operation(connection)
+
+    def _fetchall_transaction_sync(self, statement: str, params: Sequence[Any]) -> list[sqlite3.Row]:
+        return self._run_transaction_operation_sync(
+            lambda connection: list(connection.execute(statement, tuple(params)).fetchall())
+        )
+
+    def _begin_transaction_sync(self) -> None:
+        connection = self._require_connection()
+        with self._connection_lock:
+            if connection.in_transaction:
+                raise RuntimeError("sqlite connection already has an active transaction")
+            connection.execute("BEGIN IMMEDIATE")
+
+    def _commit_transaction_sync(self) -> None:
+        connection = self._require_connection()
+        with self._connection_lock:
+            connection.commit()
+
+    def _rollback_transaction_sync(self) -> None:
+        connection = self._require_connection()
+        with self._connection_lock:
+            connection.rollback()
 
     def _prepare_record(self, spec: TableSpec, record: Record) -> tuple[Any, ...]:
         if record.table != spec.name:
@@ -495,6 +774,57 @@ class SqliteBackend(ScopedDatabase):
         if self._connection is None:
             raise RuntimeError("sqlite backend is not open")
         return self._connection
+
+
+class _SqliteUnitOfWork(DatabaseUnitOfWork):
+    """Transaction-bound view over one :class:`SqliteBackend` connection."""
+
+    def __init__(self, backend: SqliteBackend) -> None:
+        self._backend = backend
+
+    async def upsert_records(self, table: str, records: Sequence[Record]) -> None:
+        await self._backend._upsert_records(table, records, transactional=True)
+
+    async def get_records(
+        self,
+        table: str,
+        scope: DatabaseScope,
+        record_ids: Sequence[str],
+    ) -> list[Record]:
+        return await self._backend._get_records(table, scope, record_ids, transactional=True)
+
+    async def patch_record(
+        self,
+        table: str,
+        scope: DatabaseScope,
+        record_id: str,
+        changes: Mapping[str, Any],
+    ) -> None:
+        await self._backend._patch_record(table, scope, record_id, changes, transactional=True)
+
+    async def compare_and_swap_record(
+        self,
+        table: str,
+        scope: DatabaseScope,
+        record_id: str,
+        *,
+        expected: Mapping[str, Any],
+        changes: Mapping[str, Any],
+    ) -> bool:
+        return await self._backend._compare_and_swap_record(
+            table,
+            scope,
+            record_id,
+            expected=expected,
+            changes=changes,
+            transactional=True,
+        )
+
+    async def delete_records(self, table: str, scope: DatabaseScope, record_ids: Sequence[str]) -> None:
+        await self._backend._delete_records(table, scope, record_ids, transactional=True)
+
+    async def query_records(self, table: str, query: RecordQuery) -> tuple[list[Record], str | None]:
+        return await self._backend._query_records(table, query, transactional=True)
 
 
 _SQLITE_TYPES = {

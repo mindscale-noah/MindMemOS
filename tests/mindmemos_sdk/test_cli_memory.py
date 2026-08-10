@@ -19,7 +19,6 @@ from mindmemos_sdk.skills import (
     PublishLocalResult,
     PushVersionResult,
     RegisterLocalResult,
-    RollbackPlan,
     SkillDiffResult,
     SkillRecord,
 )
@@ -121,14 +120,11 @@ class _FakeSkills:
     def show_local(self, *args, **kwargs):
         return self._record("show_local", *args, **kwargs)
 
-    def get_version(self, *args, **kwargs):
-        return self._record("get_version", *args, **kwargs)
+    def get_local_version(self, *args, **kwargs):
+        return self._record("get_local_version", *args, **kwargs)
 
     def local_history(self, *args, **kwargs):
         return self._record("local_history", *args, **kwargs)
-
-    def rollback_local(self, *args, **kwargs):
-        return self._record("rollback_local", *args, **kwargs)
 
     def pull_local(self, *args, **kwargs):
         return self._record("pull_local", *args, **kwargs)
@@ -138,9 +134,6 @@ class _FakeSkills:
 
     def sync_local(self, *args, **kwargs):
         return self._record("sync_local", *args, **kwargs)
-
-    def switch_local(self, *args, **kwargs):
-        return self._record("switch_local", *args, **kwargs)
 
     def export_local(self, *args, **kwargs):
         return self._record("export_local", *args, **kwargs)
@@ -215,27 +208,13 @@ def _skill_record_at(path: str) -> SkillRecord:
     return _skill_record().model_copy(update={"path": path})
 
 
-def _rollback_plan() -> RollbackPlan:
-    return RollbackPlan(
-        skill_id="sk_1",
-        path="/tmp/demo",
-        from_version_id="v2",
-        to_version_id="v1",
-        from_content_hash="hash-2",
-        to_content_hash="hash-1",
-        files=["SKILL.md"],
-        backup_path="/tmp/backups/demo/20260616T000000Z",
-    )
-
-
-def _local_manifest(*, active_version_id: str = "v1") -> LocalSkillManifest:
+def _local_manifest(*, latest_version_id: str = "v1") -> LocalSkillManifest:
     return LocalSkillManifest(
         skill_id="00000000-0000-4000-8000-000000000001",
         alias="demo-main",
         name="demo",
         cloud_skill_id=None,
-        active_version_id=active_version_id,
-        published_head_id=None,
+        latest_version_id=latest_version_id,
         version_ids=["v1", "v2"],
         created_at="2026-06-16T00:00:00Z",
         updated_at="2026-06-16T00:00:00Z",
@@ -246,13 +225,13 @@ def _local_version(version_id: str = "v1") -> LocalSkillVersionMetadata:
     return LocalSkillVersionMetadata(
         version_id=version_id,
         skill_id="00000000-0000-4000-8000-000000000001",
-        parent_version_id=None if version_id == "v1" else "v1",
+        parent_version_ids=[] if version_id == "v1" else ["v1"],
         skill_name="demo",
         content_hash=f"hash-{version_id}",
         local_snapshot_hash=f"snapshot-{version_id}",
         version_label="1.0.0" if version_id == "v1" else "1.1.0",
         commit_message="Version message",
-        origin=SkillOrigin.EDGE,
+        origin=SkillOrigin.LOCAL,
         sync_state=LocalSkillSyncState.PENDING,
         created_at="2026-06-16T00:00:00Z",
     )
@@ -276,10 +255,10 @@ def test_skill_register_prints_saved_record(fake_skills, capsys):
                 action="created",
                 skill_id=manifest.skill_id,
                 version_id="v1",
-                active_version_id="v1",
+                latest_version_id="v1",
             ),
             "show_local": manifest,
-            "get_version": _local_version(),
+            "get_local_version": _local_version(),
         }
     )
 
@@ -306,16 +285,15 @@ def test_skill_list_and_show(fake_skills, capsys):
     assert _run(["skill", "list"]) == 0
     out = capsys.readouterr().out
     assert "skill_id" in out
-    assert "active_version_id" in out
-    assert "published_head_id" in out
+    assert "latest_version_id" in out
     assert "demo-main" in out
 
-    fake_skills({"show_local": _local_manifest(), "get_version": _local_version()})
+    fake_skills({"show_local": _local_manifest(), "get_local_version": _local_version()})
     assert _run(["skill", "show", "demo-main"]) == 0
     out = capsys.readouterr().out
     assert "skill_id:       00000000-0000-4000-8000-000000000001" in out
     assert "alias:          demo-main" in out
-    assert "active_version: v1" in out
+    assert "latest_version: v1" in out
     assert "sync_state:     pending" in out
 
 
@@ -324,14 +302,12 @@ def test_skill_pull_and_history(fake_skills, capsys):
     fake_skills([version])
 
     assert _run(["skill", "pull", "sk_1"]) == 0
-    assert fake_skills.holder["manager"].calls == [
-        ("pull_local", ("sk_1",), {})
-    ]
+    assert fake_skills.holder["manager"].calls == [("pull_local", ("sk_1",), {})]
     assert "Pulled 1 version(s)." in capsys.readouterr().out
 
     fake_skills([_local_version("v2")])
     assert _run(["skill", "history", "sk_1"]) == 0
-    assert "v2 parent=v1 sync=pending" in capsys.readouterr().out
+    assert "v2 parents=v1 sync=pending" in capsys.readouterr().out
 
 
 def test_skill_push_prints_new_version(fake_skills, capsys):
@@ -347,7 +323,7 @@ def test_skill_push_prints_new_version(fake_skills, capsys):
                 cloud_skill_id=manifest.cloud_skill_id,
                 version_id="v2",
                 content_hash="hash-v2",
-                status="observed",
+                status="draft",
                 created_at="2026-06-16T00:00:00Z",
                 received_at="2026-06-16T00:00:01Z",
             ),
@@ -368,12 +344,7 @@ def test_skill_push_prints_new_version(fake_skills, capsys):
 
 
 def test_skill_update_is_compatibility_alias_for_sync(fake_skills, capsys):
-    synced = _local_manifest().model_copy(
-        update={
-            "published_head_id": "v2",
-            "cloud_revision": 3,
-        }
-    )
+    synced = _local_manifest(latest_version_id="v2")
     manager = fake_skills({"sync_local": synced})
 
     rc = _run(["skill", "update", "sk_1", "--yes"])
@@ -383,45 +354,20 @@ def test_skill_update_is_compatibility_alias_for_sync(fake_skills, capsys):
     assert "Synced demo" in capsys.readouterr().out
 
 
-def test_skill_rollback_requires_confirmation(monkeypatch, fake_skills, capsys):
-    fake_skills({"show_local": _local_manifest(active_version_id="v2"), "get_version": _local_version("v1")})
-    monkeypatch.setattr(cli, "_prompt", lambda _msg: "n")
-
-    rc = _run(["skill", "rollback", "sk_1", "--to", "v1"])
-
-    assert rc == 1
-    assert fake_skills.holder["manager"].calls[0] == ("show_local", ("sk_1",), {})
-    assert fake_skills.holder["manager"].calls[1][0] == "get_version"
-    out = capsys.readouterr().out
-    assert "Rollback plan:" in out
-    assert "Aborted." in out
+def test_skill_pointer_commands_are_not_exposed():
+    for command in ("promote", "rollback", "switch"):
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(["skill", command])
 
 
-def test_skill_rollback_with_yes_applies_checkout(fake_skills, capsys):
-    manager = fake_skills(
-        {
-            "show_local": _local_manifest(active_version_id="v2"),
-            "get_version": _local_version("v1"),
-            "rollback_local": _local_manifest(active_version_id="v1"),
-        }
-    )
-
-    rc = _run(["skill", "rollback", "sk_1", "--to", "v1", "--yes"])
-
-    assert rc == 0
-    assert manager.calls[0] == ("show_local", ("sk_1",), {})
-    assert manager.calls[-1] == ("rollback_local", ("sk_1",), {"version_id": "v1"})
-    assert "Rolled back demo (00000000-0000-4000-8000-000000000001) to v1." in capsys.readouterr().out
-
-
-def test_skill_publish_switch_and_export_use_central_repository(fake_skills, capsys):
-    manifest = _local_manifest(active_version_id="v2")
+def test_skill_publish_and_export_use_central_repository(fake_skills, capsys):
+    manifest = _local_manifest(latest_version_id="v2")
     manager = fake_skills(
         {
             "publish_local": PublishLocalResult(
                 skill_id=manifest.skill_id,
                 version_id="v2",
-                active_version_id="v2",
+                latest_version_id="v2",
                 local_snapshot_hash="snapshot-v2",
             ),
             "show_local": manifest,
@@ -442,7 +388,6 @@ def test_skill_publish_switch_and_export_use_central_repository(fake_skills, cap
                 "1.1.0",
                 "--message",
                 "Improve guidance",
-                "--activate",
             ]
         )
         == 0
@@ -453,15 +398,7 @@ def test_skill_publish_switch_and_export_use_central_repository(fake_skills, cap
     assert args[0].source_path == "/tmp/demo"
     assert args[0].base_version_id == "v1"
     assert args[0].commit_message == "Improve guidance"
-    assert args[0].activate is True
     assert "Published local version v2" in capsys.readouterr().out
-
-    fake_skills({"switch_local": manifest})
-    assert _run(["skill", "switch", "demo-main", "--to", "v2"]) == 0
-    assert fake_skills.holder["manager"].calls == [
-        ("switch_local", ("demo-main",), {"version_id": "v2"})
-    ]
-    assert "Activated v2" in capsys.readouterr().out
 
     fake_skills(
         {
@@ -545,9 +482,10 @@ def test_skill_unregister_delete_files_with_yes(fake_skills, tmp_path, capsys):
 
     rc = _run(["skill", "unregister", "sk_1", "--delete-files", "--yes"])
 
-    assert rc == 0
-    assert not skill_dir.exists()
-    assert "Deleted" in capsys.readouterr().out
+    assert rc == 2
+    assert skill_dir.exists()
+    assert fake_skills.holder["manager"].calls == []
+    assert "no longer supported" in capsys.readouterr().out
 
 
 def test_memory_add_builds_dialogue_message(fake_client):

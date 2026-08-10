@@ -16,8 +16,6 @@ config/mindmemos/*.yaml
 !config/mindmemos/api_keys.yaml
 config/mindmemos_eval/*.yaml
 !config/mindmemos_eval/*.example.yaml
-config/mindmemos_lite/*.yaml
-!config/mindmemos_lite/*.example.yaml
 
 # Virtual environments
 .venv
@@ -54,7 +52,6 @@ results/
 outputs/
 docs/paper/
 docs/superpowers/
-docs/lite/
 docs/sdk/
 resources/memory/
 

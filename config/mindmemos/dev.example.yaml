@@ -320,6 +320,9 @@ kafka:
     - name: skill.evolve
       partitions: 16
       replication_factor: 1
+    - name: skill.trajectory.ingest
+      partitions: 16
+      replication_factor: 1
 
   consumers:
     - topics: [memory.add]
@@ -393,6 +396,19 @@ kafka:
       global_max_concurrency: 8
       per_key_max_concurrency: 1
       max_buffered: 200
+      session_timeout_ms: 180000
+      heartbeat_interval_ms: 10000
+      max_poll_interval_ms: 600000
+      auto_offset_reset: earliest
+      max_retries: 3
+      dlq_suffix: .dlq
+
+    - topics: [skill.trajectory.ingest]
+      group_id: skill-trajectory-ingest-worker
+      max_poll_records: 16
+      global_max_concurrency: 16
+      per_key_max_concurrency: 1
+      max_buffered: 500
       session_timeout_ms: 180000
       heartbeat_interval_ms: 10000
       max_poll_interval_ms: 600000

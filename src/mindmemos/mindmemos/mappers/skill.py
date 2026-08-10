@@ -15,13 +15,18 @@ from typing import Any
 from ..infra.db import (
     QdrantRecord,
     SkillBlobPoint,
+    SkillFamilyPoint,
+    SkillOperationPoint,
     SkillTracePendingPoint,
     SkillTraceSummaryPoint,
     SkillVersionPoint,
 )
 from ..typing import (
     SkillBlob,
+    SkillFamilyState,
     SkillOrigin,
+    SkillRemoteOperation,
+    SkillRemoteOperationStatus,
     SkillTracePending,
     SkillTraceSummary,
     SkillVersion,
@@ -50,6 +55,18 @@ def skill_blob_id(project_id: str, content_hash: str) -> str:
     return str(uuid.uuid5(SKILL_ID_NAMESPACE, f"blob|{project_id}|{content_hash}"))
 
 
+def skill_family_id(project_id: str, cloud_skill_id: str) -> str:
+    """Derive the stable physical id for one cloud Skill family state row."""
+
+    return str(uuid.uuid5(SKILL_ID_NAMESPACE, f"family|{project_id}|{cloud_skill_id}"))
+
+
+def skill_operation_id(project_id: str, operation_id: str) -> str:
+    """Derive the stable physical id for one project-scoped operation ledger row."""
+
+    return str(uuid.uuid5(SKILL_ID_NAMESPACE, f"operation|{project_id}|{operation_id}"))
+
+
 def to_skill_version_point(version: SkillVersion) -> SkillVersionPoint:
     """Build the Qdrant point for one skill version."""
 
@@ -63,9 +80,11 @@ def to_skill_version_point(version: SkillVersion) -> SkillVersionPoint:
             "content_hash": version.content_hash,
             "parent_version_id": version.parent_version_id,
             "version_label": version.version_label,
+            "commit_message": version.commit_message,
             "status": version.status.value,
             "origin": version.origin.value,
             "created_at": version.created_at,
+            "received_at": version.received_at,
         },
     )
 
@@ -82,10 +101,40 @@ def skill_version_from_record(record: QdrantRecord) -> SkillVersion:
         content_hash=payload["content_hash"],
         parent_version_id=payload.get("parent_version_id"),
         version_label=payload.get("version_label"),
+        commit_message=payload.get("commit_message"),
         status=SkillVersionStatus(payload["status"]),
         origin=SkillOrigin(payload["origin"]),
         created_at=_parse_datetime(payload["created_at"]),
+        received_at=(
+            _parse_datetime(payload["received_at"])
+            if payload.get("received_at") is not None
+            else (None if "received_at" in payload else _parse_datetime(payload["created_at"]))
+        ),
     )
+
+
+def to_skill_family_point(state: SkillFamilyState) -> SkillFamilyPoint:
+    return SkillFamilyPoint(
+        family_id=skill_family_id(state.project_id, state.cloud_skill_id),
+        payload=state.model_dump(mode="python"),
+    )
+
+
+def skill_family_from_record(record: QdrantRecord) -> SkillFamilyState:
+    return SkillFamilyState.model_validate(record.payload)
+
+
+def to_skill_operation_point(operation: SkillRemoteOperation) -> SkillOperationPoint:
+    return SkillOperationPoint(
+        operation_point_id=skill_operation_id(operation.project_id, operation.operation_id),
+        payload=operation.model_dump(mode="python"),
+    )
+
+
+def skill_operation_from_record(record: QdrantRecord) -> SkillRemoteOperation:
+    payload = dict(record.payload)
+    payload["status"] = SkillRemoteOperationStatus(payload["status"])
+    return SkillRemoteOperation.model_validate(payload)
 
 
 def to_skill_blob_point(blob: SkillBlob) -> SkillBlobPoint:

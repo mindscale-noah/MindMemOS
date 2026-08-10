@@ -11,6 +11,11 @@ def register_builtin_databases(registry: DatabaseRegistry) -> None:
     from .database_impl import register_sqlite_backend
 
     register_sqlite_backend(registry)
+    try:
+        from .database_impl.postgres import register_postgres_backend
+    except ImportError:
+        return
+    register_postgres_backend(registry)
 
 
 def create_database(

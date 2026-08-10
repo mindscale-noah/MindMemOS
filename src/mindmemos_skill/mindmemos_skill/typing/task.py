@@ -15,7 +15,7 @@ class Task(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
     """任务标识"""
 
     instruction: str = Field(min_length=1)

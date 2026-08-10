@@ -2,33 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
-from enum import StrEnum
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from ..persistence.enums import RolloutType, TrajectoryStatus
 from .agent import AgentProfile
 from .env import Environment, Reward
 from .skill import Skill, SkillBinding
 from .task import Task
 
-
-class RolloutType(StrEnum):
-    """Business purpose of one planned rollout."""
-
-    TRAIN = "train"
-    EVALUATE = "evaluate"
-    TEST = "test"
-    INFERENCE = "inference"
-
-
-class TrajectoryStatus(StrEnum):
-    """Lifecycle state of one physical rollout attempt."""
-
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+if TYPE_CHECKING:
+    from ..persistence.models import TrajectoryRecord
 
 
 class Rollout(BaseModel):
@@ -36,7 +24,7 @@ class Rollout(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    id: str = Field(min_length=1)
+    rollout_id: str = Field(min_length=1)
     """一次计划 rollout 的稳定标识；其所有重试共享该值。"""
 
     attempt_no: int = Field(default=0, ge=0)
@@ -91,7 +79,7 @@ class Trajectory(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    id: str = Field(min_length=1)
+    trajectory_id: str = Field(min_length=1)
     """某一次实际执行 attempt 的唯一标识。"""
 
     task: Task
@@ -107,7 +95,7 @@ class Trajectory(BaseModel):
     """执行轨迹的 Agent 类型及可复现配置。"""
 
     injected_skills: list[Skill] = Field(default_factory=list)
-    """执行开始前提供给 Agent 的完整 Skill。"""
+    """执行开始前提供给 Agent 的不可变 Skill 版本快照。"""
 
     events: list[dict[str, JsonValue]] = Field(default_factory=list)
     """按发生顺序记录的消息、工具调用和内部事件。"""
@@ -115,14 +103,126 @@ class Trajectory(BaseModel):
     skill_bindings: list[SkillBinding] = Field(default_factory=list)
     """本次执行实际使用到的 Skill 版本引用。"""
 
-    reward: Reward | None = None
-    """尚未评估时为空的结构化评分结果。"""
+    reward: Reward = Field(default_factory=Reward)
+    """结构化评分；未评估时 ``score`` 为空。"""
 
     execution: ExecutionInfo
     """该物理 attempt 的状态、时间、轮数和错误。"""
 
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     """数据集、采集器和算法附加信息。"""
+
+    def to_record(self) -> TrajectoryRecord:
+        """Flatten the aggregate into the canonical persistence row."""
+
+        from ..persistence.models import TrajectoryRecord
+
+        created_at = self.execution.finished_at or self.execution.started_at
+        source_payload = {
+            "trajectory_id": self.trajectory_id,
+            "task_id": self.task.task_id,
+            "rollout_id": self.rollout.rollout_id,
+            "attempt_no": self.rollout.attempt_no,
+            "rollout_type": self.rollout.rollout_type.value,
+            "task_instruction": self.task.instruction,
+            "task_system_prompt": self.task.system_prompt,
+            "task_tags": self.task.tags,
+            "task_metadata": self.task.metadata,
+            "env_metadata": self.environment.metadata,
+            "agent_type": self.agent.agent_type.value,
+            "agent_profile": self.agent.model_dump(mode="json", exclude={"agent_type"}, exclude_none=True),
+            "status": self.execution.status.value,
+            "trajectory": self.events,
+            "skill_bindings": [binding.model_dump(mode="json") for binding in self.skill_bindings],
+            "reward_score": self.reward.score,
+            "reward_detail": self.reward.detail,
+            "reward_metadata": self.reward.metadata,
+            "started_at": self.execution.started_at.isoformat(),
+            "finished_at": self.execution.finished_at.isoformat() if self.execution.finished_at else None,
+            "n_turn": self.execution.n_turn,
+            "error_info": self.execution.error_info,
+            "metadata": self.metadata,
+            "source": "skill_runtime",
+            "created_at": created_at.isoformat(),
+        }
+        trajectory_hash = hashlib.sha256(
+            json.dumps(source_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return TrajectoryRecord(
+            trajectory_id=self.trajectory_id,
+            trajectory_hash=trajectory_hash,
+            task_id=self.task.task_id,
+            rollout_id=self.rollout.rollout_id,
+            attempt_no=self.rollout.attempt_no,
+            rollout_type=self.rollout.rollout_type,
+            task_instruction=self.task.instruction,
+            task_system_prompt=self.task.system_prompt,
+            task_tags=self.task.tags,
+            task_metadata=self.task.metadata,
+            running_dir=self.environment.running_dir,
+            env_metadata=self.environment.metadata,
+            injected_skills=[skill.model_dump(mode="json") for skill in self.injected_skills],
+            agent_type=self.agent.agent_type,
+            agent_profile=self.agent.model_dump(
+                mode="json",
+                exclude={"agent_type"},
+                exclude_none=True,
+            ),
+            status=self.execution.status,
+            trajectory=self.events,
+            skill_bindings=[binding.model_dump(mode="json") for binding in self.skill_bindings],
+            reward_score=self.reward.score,
+            reward_detail=self.reward.detail,
+            reward_metadata=self.reward.metadata,
+            started_at=self.execution.started_at,
+            finished_at=self.execution.finished_at,
+            n_turn=self.execution.n_turn,
+            error_info=self.execution.error_info,
+            metadata=self.metadata,
+            source="skill_runtime",
+            created_at=created_at,
+        )
+
+    @classmethod
+    def from_record(cls, record: TrajectoryRecord) -> Trajectory:
+        """Rebuild the business aggregate from a validated persistence row."""
+
+        return cls(
+            trajectory_id=record.trajectory_id,
+            task=Task(
+                task_id=record.task_id,
+                instruction=record.task_instruction,
+                system_prompt=record.task_system_prompt,
+                tags=record.task_tags,
+                metadata=record.task_metadata,
+            ),
+            rollout=Rollout(
+                rollout_id=record.rollout_id,
+                attempt_no=record.attempt_no,
+                rollout_type=record.rollout_type,
+            ),
+            environment=Environment(running_dir=record.running_dir, metadata=record.env_metadata),
+            agent=AgentProfile.from_serialized(
+                record.agent_profile,
+                agent_type=record.agent_type,
+            ),
+            injected_skills=[Skill.model_validate(skill) for skill in record.injected_skills],
+            events=record.trajectory,
+            skill_bindings=[SkillBinding.model_validate(binding) for binding in record.skill_bindings],
+            reward=Reward(
+                score=record.reward_score,
+                detail=record.reward_detail,
+                metadata=record.reward_metadata,
+            ),
+            execution=ExecutionInfo(
+                status=record.status,
+                started_at=record.started_at,
+                finished_at=record.finished_at,
+                n_turn=record.n_turn,
+                error_info=record.error_info,
+            ),
+            metadata=record.metadata,
+        )
 
 
 __all__ = [

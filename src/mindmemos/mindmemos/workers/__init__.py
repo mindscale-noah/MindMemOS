@@ -22,6 +22,8 @@ def register_workers() -> None:
     from .schema_add_episode import handle_schema_add_episode
     from .skill_evolve import GROUP_ID as SKILL_EVOLVE_GROUP_ID
     from .skill_evolve import handle_skill_evolve
+    from .skill_trajectory_ingest import GROUP_ID as SKILL_TRAJECTORY_INGEST_GROUP_ID
+    from .skill_trajectory_ingest import handle_skill_trajectory_ingest
 
     register_handler(MEMORY_ADD_GROUP_ID, handle_memory_add)
     register_handler(MEMORY_DREAMING_GROUP_ID, handle_memory_dreaming)
@@ -29,4 +31,5 @@ def register_workers() -> None:
     register_handler(SCHEMA_ADD_DRAIN_GROUP_ID, handle_schema_add_drain)
     register_handler(SCHEMA_ADD_EPISODE_GROUP_ID, handle_schema_add_episode)
     register_handler(SKILL_EVOLVE_GROUP_ID, handle_skill_evolve)
+    register_handler(SKILL_TRAJECTORY_INGEST_GROUP_ID, handle_skill_trajectory_ingest)
     logger.debug("business kafka workers registered")

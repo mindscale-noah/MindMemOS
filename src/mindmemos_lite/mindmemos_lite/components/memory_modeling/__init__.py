@@ -1,1 +1,0 @@
-"""Memory graph modeling components."""

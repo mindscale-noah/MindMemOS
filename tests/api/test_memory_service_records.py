@@ -188,6 +188,7 @@ class FakeRecorder:
         skill_bindings=None,
         score=None,
         task_id=None,
+        extra_payload=None,
     ) -> str:
         self.add_calls.append(
             {
@@ -199,6 +200,7 @@ class FakeRecorder:
                 "skill_bindings": skill_bindings,
                 "score": score,
                 "task_id": task_id,
+                "extra_payload": extra_payload,
             }
         )
         return add_record_id
@@ -433,7 +435,7 @@ async def test_add_request_missing_optional_actor_fields_stay_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_add_binds_skill_context_and_passes_bindings_to_recorder() -> None:
+async def test_add_projects_legacy_skill_context_to_audit_without_writing_old_store() -> None:
     recorder = FakeRecorder()
     skill_store = FakeSkillStore()
     service = make_service(add_pipeline=FakeAddPipeline(), operation_recorder=recorder, skill_store=skill_store)
@@ -447,10 +449,8 @@ async def test_add_binds_skill_context_and_passes_bindings_to_recorder() -> None
         ),
     )
 
-    # The store was driven with the trace id that the recorder also received.
-    assert len(skill_store.calls) == 1
+    assert skill_store.calls == []
     call = recorder.add_calls[0]
-    assert skill_store.calls[0]["add_record_id"] == call["add_record_id"]
     assert call["add_record_id"]
     assert [b.name for b in call["skill_bindings"]] == ["prd-writer"]
     # skill_context never leaks into the pipeline input contract.
@@ -482,9 +482,8 @@ async def test_vanilla_add_records_skill_bindings_at_service() -> None:
 
     assert result.status == "ok"
     assert len(recorder.add_calls) == 1
-    assert len(skill_store.calls) == 1
+    assert skill_store.calls == []
     call = recorder.add_calls[0]
-    assert call["add_record_id"] == skill_store.calls[0]["add_record_id"]
     assert call["add_record_id"]
     assert [binding.name for binding in call["skill_bindings"]] == ["prd-writer"]
     assert call["score"] == 1.0
@@ -508,7 +507,7 @@ async def test_add_without_skill_context_passes_no_bindings() -> None:
 
 
 @pytest.mark.asyncio
-async def test_add_skill_binding_failure_never_blocks_add() -> None:
+async def test_legacy_skill_context_does_not_invoke_injected_old_store() -> None:
     recorder = FakeRecorder()
     skill_store = FakeSkillStore(raise_on_bind=True)
     service = make_service(add_pipeline=FakeAddPipeline(), operation_recorder=recorder, skill_store=skill_store)
@@ -522,9 +521,9 @@ async def test_add_skill_binding_failure_never_blocks_add() -> None:
         ),
     )
 
-    # Add still succeeds and is still recorded, just without skill bindings.
     assert result.status == "ok"
-    assert recorder.add_calls[0]["skill_bindings"] is None
+    assert skill_store.calls == []
+    assert [binding.name for binding in recorder.add_calls[0]["skill_bindings"]] == ["prd-writer"]
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,6 @@
 """Public transport-neutral Skill algorithm interfaces."""
 
-from ..config import SkillConfigSource
-from ..errors import SkillCapabilityUnavailableError, SkillServiceClosedError
+from ..errors import SkillCapabilityUnavailableError
 from ..typing.operations import (
     SkillAnalysisRequest,
     SkillAnalysisResult,
@@ -9,32 +8,17 @@ from ..typing.operations import (
     SkillOptimizationRequest,
     SkillOptimizationResult,
 )
-from .protocols import (
-    LifecycleHook,
-    SkillAnalyzer,
-    SkillOptimizer,
-    SkillServiceComponents,
-    SkillServiceFactory,
-)
-from .skill import (
-    MindMemosSkill,
-    SkillAlgorithms,
-)
+from .protocols import SkillAnalyzer, SkillOptimizer
+from .skill import SkillAlgorithms
 
 __all__ = [
-    "MindMemosSkill",
     "SkillAlgorithms",
-    "LifecycleHook",
     "SkillAnalysisRequest",
     "SkillAnalysisResult",
     "SkillAnalyzer",
     "SkillCapabilityUnavailableError",
-    "SkillConfigSource",
     "SkillFinding",
     "SkillOptimizationRequest",
     "SkillOptimizationResult",
     "SkillOptimizer",
-    "SkillServiceClosedError",
-    "SkillServiceComponents",
-    "SkillServiceFactory",
 ]

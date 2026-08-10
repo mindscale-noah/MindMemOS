@@ -79,6 +79,7 @@ class MemoryOperationRecorder:
         skill_bindings: list[SkillBinding] | None = None,
         score: float | None = None,
         task_id: str | None = None,
+        extra_payload: dict | None = None,
     ) -> str:
         """Write the add input record up front, before the output is known.
 
@@ -100,6 +101,7 @@ class MemoryOperationRecorder:
             score=score,
             task_id=task_id,
             status=status,
+            extra_payload=extra_payload,
         )
         await self._add_records.append(point)
         return point.add_record_id

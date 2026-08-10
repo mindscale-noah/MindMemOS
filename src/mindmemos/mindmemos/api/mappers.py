@@ -51,7 +51,13 @@ from .schemas import (
 
 # Actor identity fields carried by request models but owned by MemoryRequestContext.
 _ACTOR_FIELDS = ("user_id", "app_id", "session_id", "agent_id")
-_SKILL_FIELDS = ("skill_context", "score", "task_id")
+_SKILL_FIELDS = (
+    "skill_context",
+    "score",
+    "task_id",
+    "skill_trajectory",
+    "skill_trajectory_delivery",
+)
 
 
 def to_add_pipeline_input(req: AddRequest) -> AddPipelineInput:
@@ -171,7 +177,7 @@ def to_add_api_response(
     return ApiResponse[AddData](
         code=result.status,
         request_id=request_id,
-        data=AddData(memories=result.memories),
+        data=AddData(memories=result.memories, skill_trajectory=result.skill_trajectory),
     )
 
 

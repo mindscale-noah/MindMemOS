@@ -12,20 +12,21 @@ from importlib.resources import files
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from ..config import ConfigManager, SDKConfig, mask_secret
-from ..errors import ConfigError, MindMemOSSDKError
+from ..client import MindMemOSClient
+from ..config import CompiledSDKPortalConfigV2, ConfigManager, SDKPortalConfigV2, mask_secret
+from ..errors import (
+    ConfigError,
+    MindMemOSSDKError,
+    SkillCapabilityUnavailableError,
+    SkillRemoteError,
+)
 from ..memory import MemoryClient
-from ..memory.core import MemoryDefaults
 from ..skills import (
     ExportSkillRequest,
-    LocalSkillRepository,
     PublishLocalRequest,
     RegisterLocalRequest,
-    SkillCloudClient,
     SkillManager,
 )
-from ..transport import HttpTransport
-from .lite_trace_service import LiteTraceService
 from .skill_service import LocalSkillUIService
 
 
@@ -83,9 +84,6 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
         if path.startswith("/api/v1/skills/") and path.endswith("/publish"):
             self._handle_skill_publish(path.removesuffix("/publish"))
             return
-        if path.startswith("/api/v1/skills/") and path.endswith("/switch"):
-            self._handle_skill_switch(path.removesuffix("/switch"))
-            return
         if path.startswith("/api/v1/skills/") and path.endswith("/export"):
             self._handle_skill_export(path.removesuffix("/export"))
             return
@@ -95,8 +93,14 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
         if path.startswith("/api/v1/skills/") and path.endswith("/evolve"):
             self._handle_skill_evolve(path.removesuffix("/evolve"))
             return
-        if path.startswith("/api/v1/skills/") and path.endswith("/promote"):
-            self._handle_skill_promote(path.removesuffix("/promote"))
+        self._send_json({"error": "not_found", "message": "Unknown API route."}, status=404)
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        if not self._validate_mutation_request():
+            return
+        path = urlsplit(self.path).path
+        if path.startswith("/api/v1/skills/"):
+            self._handle_skill_unregister(path)
             return
         self._send_json({"error": "not_found", "message": "Unknown API route."}, status=404)
 
@@ -114,14 +118,6 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
             if path in {"/api/v1/memories", "/api/v1/memories/search"}:
                 self._handle_memory_get(path)
                 return
-            if path == "/api/v1/lite/spans" or path == "/api/v1/lite/traces" or path.startswith("/api/v1/lite/traces/"):
-                if not self._validate_local_request():
-                    return
-                if path == "/api/v1/lite/spans":
-                    self._handle_lite_span_get()
-                else:
-                    self._handle_lite_trace_get(path)
-                return
             if path.startswith("/api/v1/skills/"):
                 self._handle_skill_get(path)
                 return
@@ -131,9 +127,9 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
 
     def _handle_memory_get(self, path: str) -> None:
         query = parse_qs(urlsplit(self.path).query)
-        client, transport, config = _memory_client(self._config_manager)
+        client, owner, config = _memory_client(self._config_manager)
         try:
-            user_id = config.defaults.user_id
+            user_id = config.profile.identity.user_id
             if not user_id:
                 raise ValueError("Configure a User ID in Settings before loading Memory.")
             top_k = _query_top_k(query)
@@ -147,7 +143,7 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
                 result = client.search(search_query, **kwargs)
                 mode = "search"
             else:
-                kwargs = {"filters": _owned_memory_filters(config.memory.get_filters, user_id)}
+                kwargs = {"filters": _owned_memory_filters(config.profile.memory_defaults.get_filters, user_id)}
                 if top_k is not None:
                     kwargs["top_k"] = top_k
                 result = client.get(**kwargs)
@@ -162,46 +158,7 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
                 }
             )
         finally:
-            transport.close()
-
-    def _handle_lite_trace_get(self, path: str) -> None:
-        query = parse_qs(urlsplit(self.path).query)
-        directory = (query.get("directory") or [""])[0]
-        service = LiteTraceService()
-        if path == "/api/v1/lite/traces":
-            self._send_json(
-                service.list_traces(
-                    directory,
-                    limit=_query_bounded_int(query, "limit", default=100, minimum=1, maximum=500),
-                    offset=_query_bounded_int(query, "offset", default=0, minimum=0, maximum=1_000_000),
-                )
-            )
-            return
-
-        trace_id = unquote(path.removeprefix("/api/v1/lite/traces/")).strip()
-        if not trace_id or "/" in trace_id:
-            raise ValueError("A valid trace ID is required.")
-        source = (query.get("source") or [""])[0]
-        self._send_json(
-            service.trace_detail(
-                directory,
-                source=source,
-                trace_id=trace_id,
-                selected_span_id=(query.get("span_id") or [None])[0],
-            )
-        )
-
-    def _handle_lite_span_get(self) -> None:
-        query = parse_qs(urlsplit(self.path).query)
-        directory = (query.get("directory") or [""])[0]
-        self._send_json(
-            LiteTraceService().list_spans(
-                directory,
-                span_name=(query.get("span_name") or [""])[0],
-                limit=_query_bounded_int(query, "limit", default=25, minimum=1, maximum=500),
-                offset=_query_bounded_int(query, "offset", default=0, minimum=0, maximum=1_000_000),
-            )
-        )
+            owner.close()
 
     def _handle_skill_get(self, path: str) -> None:
         suffix = path.removeprefix("/api/v1/skills/")
@@ -210,7 +167,7 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
             self._send_json({"error": "not_found", "message": "Skill reference is required."}, status=404)
             return
         skill_ref = parts[0]
-        manager, transport = _skill_manager(self._config_manager)
+        manager = _skill_manager(self._config_manager)
         service = LocalSkillUIService(manager)
         try:
             if len(parts) == 1:
@@ -231,10 +188,10 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
                 return
             self._send_json({"error": "not_found", "message": "Unknown Skill route."}, status=404)
         finally:
-            transport.close()
+            manager.close()
 
     def _handle_skill_register(self) -> None:
-        manager, transport = _skill_manager(self._config_manager)
+        manager = _skill_manager(self._config_manager)
         try:
             payload = self._read_json()
             result = LocalSkillUIService(manager).register(RegisterLocalRequest.model_validate(payload))
@@ -242,7 +199,18 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
         except (ConfigError, MindMemOSSDKError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self._send_json({"error": "skill_register_failed", "message": str(exc)}, status=400)
         finally:
-            transport.close()
+            manager.close()
+
+    def _handle_skill_unregister(self, path: str) -> None:
+        manager = _skill_manager(self._config_manager)
+        try:
+            skill_ref = _single_skill_ref(path)
+            result = LocalSkillUIService(manager).unregister(skill_ref)
+            self._send_json(result.model_dump(mode="json"))
+        except (ConfigError, MindMemOSSDKError, OSError, TypeError, ValueError) as exc:
+            self._send_json({"error": "skill_unregister_failed", "message": str(exc)}, status=400)
+        finally:
+            manager.close()
 
     def _handle_skill_publish(self, path: str) -> None:
         suffix = path.removeprefix("/api/v1/skills/")
@@ -251,19 +219,29 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
             self._send_json({"error": "not_found", "message": "Skill reference is required."}, status=404)
             return
 
-        manager, transport = _skill_manager(self._config_manager)
+        manager = _skill_manager(self._config_manager)
         try:
             payload = self._read_json()
             content = payload.get("content")
-            if not isinstance(content, str) or not content.strip():
+            files = payload.get("files")
+            if files is not None:
+                if not isinstance(files, dict) or any(
+                    not isinstance(file_path, str) or not isinstance(file_content, str)
+                    for file_path, file_content in files.items()
+                ):
+                    raise ValueError("Skill files must map paths to text.")
+                if not isinstance(files.get("SKILL.md"), str) or not files["SKILL.md"].strip():
+                    raise ValueError("Skill files must contain a non-empty SKILL.md.")
+                content = None
+            elif not isinstance(content, str) or not content.strip():
                 raise ValueError("Skill content must be a non-empty string.")
             request = PublishLocalRequest(
                 skill_id=parts[0],
                 base_version_id=_optional_string(payload, "base_version_id"),
                 content=content,
+                files=files,
                 version_label=_optional_string(payload, "version_label"),
                 commit_message=_optional_string(payload, "commit_message"),
-                activate=bool(payload.get("activate", False)),
             )
             result, detail = LocalSkillUIService(manager).publish(request)
             self._send_json(
@@ -277,26 +255,11 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
         except (ConfigError, MindMemOSSDKError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self._send_json({"error": "skill_publish_failed", "message": str(exc)}, status=400)
         finally:
-            transport.close()
-
-    def _handle_skill_switch(self, path: str) -> None:
-        skill_ref = _single_skill_ref(path)
-        manager, transport = _skill_manager(self._config_manager)
-        try:
-            payload = self._read_json()
-            version_id = payload.get("version_id")
-            if not isinstance(version_id, str) or not version_id.strip():
-                raise ValueError("version_id must be a non-empty string")
-            detail = LocalSkillUIService(manager).switch(skill_ref, version_id.strip())
-            self._send_json(detail.model_dump(mode="json"))
-        except (ConfigError, MindMemOSSDKError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            self._send_json({"error": "skill_switch_failed", "message": str(exc)}, status=400)
-        finally:
-            transport.close()
+            manager.close()
 
     def _handle_skill_export(self, path: str) -> None:
         skill_ref = _single_skill_ref(path)
-        manager, transport = _skill_manager(self._config_manager)
+        manager = _skill_manager(self._config_manager)
         try:
             payload = self._read_json()
             target_path = payload.get("target_path")
@@ -314,11 +277,11 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
         except (ConfigError, MindMemOSSDKError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self._send_json({"error": "skill_export_failed", "message": str(exc)}, status=400)
         finally:
-            transport.close()
+            manager.close()
 
     def _handle_skill_sync(self, path: str) -> None:
         skill_ref = _single_skill_ref(path)
-        manager, transport = _skill_manager(self._config_manager)
+        manager = _skill_manager(self._config_manager)
         try:
             payload = self._read_json()
             direction = payload.get("direction", "both")
@@ -329,14 +292,16 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
                 direction=direction,
             )
             self._send_json(detail.model_dump(mode="json"))
+        except (SkillCapabilityUnavailableError, SkillRemoteError) as exc:
+            self._send_skill_error(exc)
         except (ConfigError, MindMemOSSDKError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self._send_json({"error": "skill_sync_failed", "message": str(exc)}, status=400)
         finally:
-            transport.close()
+            manager.close()
 
     def _handle_skill_evolve(self, path: str) -> None:
         skill_ref = _single_skill_ref(path)
-        manager, transport = _skill_manager(self._config_manager)
+        manager = _skill_manager(self._config_manager)
         try:
             payload = self._read_json()
             mode = payload.get("mode", "sync")
@@ -347,44 +312,20 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
                 base_version_id=_optional_string(payload, "base_version_id"),
                 algorithm=_optional_string(payload, "algorithm"),
                 mode=mode,
-                operation_id=_optional_string(payload, "operation_id"),
+                operation_id=self.headers.get("Idempotency-Key"),
             )
             self._send_json(result.model_dump(mode="json"))
         except (ConfigError, MindMemOSSDKError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self._send_json({"error": "skill_evolve_failed", "message": str(exc)}, status=400)
         finally:
-            transport.close()
-
-    def _handle_skill_promote(self, path: str) -> None:
-        skill_ref = _single_skill_ref(path)
-        manager, transport = _skill_manager(self._config_manager)
-        try:
-            payload = self._read_json()
-            version_id = _optional_string(payload, "version_id")
-            if version_id is None:
-                raise ValueError("version_id must be a non-empty string")
-            revision = payload.get("expected_cloud_revision")
-            if revision is not None and (not isinstance(revision, int) or isinstance(revision, bool)):
-                raise ValueError("expected_cloud_revision must be an integer")
-            result = LocalSkillUIService(manager).promote(
-                skill_ref,
-                version_id=version_id,
-                expected_cloud_revision=revision,
-                operation_id=_optional_string(payload, "operation_id"),
-            )
-            self._send_json(result.model_dump(mode="json"))
-        except (ConfigError, MindMemOSSDKError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            self._send_json({"error": "skill_promote_failed", "message": str(exc)}, status=400)
-        finally:
-            transport.close()
+            manager.close()
 
     def _handle_config_update(self) -> None:
         try:
             payload = self._read_json()
-            config = self._config_manager.load_or_default()
+            config = self._config_manager.load_or_default_portal()
             _apply_config_update(config, payload)
-            validated = SDKConfig.model_validate(config.model_dump())
-            self._config_manager.save(validated)
+            self._config_manager.save_portal(config)
             self._send_json(_config_payload(self._config_manager))
         except (ConfigError, ValueError, TypeError, json.JSONDecodeError) as exc:
             self._send_json({"error": "invalid_config", "message": str(exc)}, status=400)
@@ -410,6 +351,39 @@ class _LocalUIHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_skill_error(self, exc: SkillCapabilityUnavailableError | SkillRemoteError) -> None:
+        if isinstance(exc, SkillCapabilityUnavailableError):
+            self._send_json(
+                {
+                    "error": "skill_capability_unavailable",
+                    "message": str(exc),
+                    "retryable": False,
+                },
+                status=409,
+            )
+            return
+        status = {
+            "remote_auth_required": 401,
+            "remote_unauthorized": 401,
+            "remote_forbidden": 403,
+            "remote_not_found": 404,
+            "remote_conflict": 409,
+            "remote_rate_limited": 429,
+            "remote_unavailable": 503,
+            "remote_server_error": 503,
+            "remote_invalid_response": 502,
+        }.get(exc.error_code, 502)
+        payload = {
+            "error": exc.error_code,
+            "message": str(exc),
+            "retryable": exc.retryable,
+        }
+        if exc.request_id is not None:
+            payload["request_id"] = exc.request_id
+        if exc.operation_id is not None:
+            payload["operation_id"] = exc.operation_id
+        self._send_json(payload, status=status)
 
     def _validate_mutation_request(self) -> bool:
         return self._validate_local_request()
@@ -439,44 +413,66 @@ def _static_directory() -> Path:
 
 
 def _config_payload(config_manager: ConfigManager) -> dict[str, object]:
-    config = config_manager.load_or_default()
+    config = config_manager.load_or_default_portal()
+    compiled = config_manager.compile_portal() if config_manager.portal_exists() else None
+    if compiled is None:
+        from ..config import SDKConfigCompilerV2
+
+        compiled = SDKConfigCompilerV2().compile(config)
+    profile = config.profiles[config.active_profile]
+    compiled_profile = compiled.profile
+    connection = profile.connections[compiled_profile.memory_connection]
+    manager = SkillManager.from_config_manager(config_manager)
+    try:
+        skills_count = len(manager.management_overview().skills)
+    finally:
+        manager.close()
     return {
-        "config_path": str(config_manager.config_path),
-        "base_url": config.base_url,
-        "api_key_configured": bool(config.auth.api_key),
-        "api_key_masked": mask_secret(config.auth.api_key),
-        "defaults": config.defaults.model_dump(mode="json"),
-        "memory": config.memory.model_dump(mode="json"),
-        "storage": config.storage.model_dump(mode="json"),
-        "network": config.network.model_dump(mode="json"),
-        "skills_count": len(LocalSkillRepository(config_manager).list_manifests()),
-        "metadata": config.metadata.model_dump(mode="json"),
+        "config_path": str(config_manager.portal_path),
+        "profile": config.active_profile,
+        "connection": compiled_profile.memory_connection,
+        "base_url": connection.base_url,
+        "api_key_configured": bool(connection.api_key),
+        "api_key_masked": mask_secret(connection.api_key),
+        "defaults": profile.identity.model_dump(mode="json"),
+        "memory": profile.memory.defaults.model_dump(mode="json"),
+        "storage": {
+            "skill_cache_dir": str(profile.skill.application.local.artifacts_dir),
+            "skill_backup_dir": "",
+        },
+        "network": {
+            "timeout_seconds": connection.timeout_seconds,
+            "max_retries": connection.max_retries,
+        },
+        "skills_count": skills_count,
+        "metadata": {"schema_version": config.version, "active_profile": config.active_profile},
     }
 
 
-def _apply_config_update(config: SDKConfig, payload: dict[str, object]) -> None:
+def _apply_config_update(config: SDKPortalConfigV2, payload: dict[str, object]) -> None:
     """Apply only UI-owned fields; an empty API key intentionally preserves it."""
+    profile = config.profiles[config.active_profile]
+    connection_name = profile.memory.connection or profile.default_connection
+    connection = profile.connections[connection_name]
+    connection_payload = connection.model_dump(mode="python")
     if isinstance(payload.get("base_url"), str) and payload["base_url"].strip():
-        config.base_url = payload["base_url"].strip()
+        connection_payload["base_url"] = payload["base_url"].strip()
 
     api_key = payload.get("api_key")
     if isinstance(api_key, str) and api_key:
-        config.auth.api_key = api_key
+        connection_payload["api_key"] = api_key
 
     for field in ("user_id", "app_id", "agent_id", "session_id"):
         value = payload.get(field)
         if value is not None:
-            setattr(config.defaults, field, str(value).strip() or None)
-
-    for field in ("skill_cache_dir", "skill_backup_dir"):
-        value = payload.get(field)
-        if isinstance(value, str) and value.strip():
-            setattr(config.storage, field, value.strip())
+            setattr(profile.identity, field, str(value).strip() or None)
 
     for field in ("timeout_seconds", "max_retries"):
         value = payload.get(field)
         if value is not None:
-            setattr(config.network, field, int(value))
+            connection_payload[field] = int(value)
+
+    profile.connections[connection_name] = type(connection).model_validate(connection_payload)
 
     memory = payload.get("memory")
     if isinstance(memory, dict):
@@ -495,47 +491,23 @@ def _apply_config_update(config: SDKConfig, payload: dict[str, object]) -> None:
             "dreaming_mode",
         ):
             if field in memory:
-                setattr(config.memory, field, memory[field])
+                setattr(profile.memory.defaults, field, memory[field])
 
-
-def _skill_manager(config_manager: ConfigManager) -> tuple[SkillManager, HttpTransport]:
-    config = config_manager.load_or_default()
-    transport = HttpTransport(
-        base_url=config.base_url,
-        api_key=config.auth.api_key,
-        timeout_seconds=config.network.timeout_seconds,
-        max_retries=config.network.max_retries,
+    profile.identity = type(profile.identity).model_validate(profile.identity.model_dump(mode="python"))
+    profile.memory.defaults = type(profile.memory.defaults).model_validate(
+        profile.memory.defaults.model_dump(mode="python")
     )
-    return SkillManager.from_config_manager(config_manager, SkillCloudClient(transport)), transport
 
 
-def _memory_client(config_manager: ConfigManager) -> tuple[MemoryClient, HttpTransport, SDKConfig]:
-    config = config_manager.load_or_default()
-    transport = HttpTransport(
-        base_url=config.base_url,
-        api_key=config.auth.api_key,
-        timeout_seconds=config.network.timeout_seconds,
-        max_retries=config.network.max_retries,
-    )
-    defaults = MemoryDefaults(
-        user_id=config.defaults.user_id,
-        app_id=config.defaults.app_id,
-        agent_id=config.defaults.agent_id,
-        session_id=config.defaults.session_id,
-        add_mode=config.memory.add_mode,
-        add_default_role=config.memory.add_default_role,
-        add_auto_skill_context=config.memory.add_auto_skill_context,
-        search_top_k=config.memory.search_top_k,
-        search_strategy=config.memory.search_strategy,
-        search_rerank=config.memory.search_rerank,
-        search_score_threshold=config.memory.search_score_threshold,
-        search_filters=config.memory.search_filters,
-        get_top_k=config.memory.get_top_k,
-        get_filters=config.memory.get_filters,
-        feedback_mode=config.memory.feedback_mode,
-        dreaming_mode=config.memory.dreaming_mode,
-    )
-    return MemoryClient(transport, memory_defaults=defaults), transport, config
+def _skill_manager(config_manager: ConfigManager) -> SkillManager:
+    return SkillManager.from_config_manager(config_manager)
+
+
+def _memory_client(
+    config_manager: ConfigManager,
+) -> tuple[MemoryClient, MindMemOSClient, CompiledSDKPortalConfigV2]:
+    owner = MindMemOSClient(config_manager=config_manager)
+    return owner.memory, owner, config_manager.compile_portal()
 
 
 def _query_top_k(query: dict[str, list[str]]) -> int | None:
@@ -548,23 +520,6 @@ def _query_top_k(query: dict[str, list[str]]) -> int | None:
     return top_k
 
 
-def _query_bounded_int(
-    query: dict[str, list[str]],
-    key: str,
-    *,
-    default: int,
-    minimum: int,
-    maximum: int,
-) -> int:
-    raw = (query.get(key) or [""])[0].strip()
-    if not raw:
-        return default
-    value = int(raw)
-    if value < minimum or value > maximum:
-        raise ValueError(f"{key} must be between {minimum} and {maximum}.")
-    return value
-
-
 def _owned_memory_filters(filters: dict[str, object] | None, user_id: str) -> dict[str, object]:
     """Keep the local Memory page scoped to the configured user."""
     owner = {"user_id": user_id}
@@ -574,10 +529,10 @@ def _owned_memory_filters(filters: dict[str, object] | None, user_id: str) -> di
 
 
 def _skills_payload(config_manager: ConfigManager) -> dict[str, object]:
-    manager, transport = _skill_manager(config_manager)
+    manager = _skill_manager(config_manager)
     try:
-        skills = LocalSkillUIService(manager).list_skills()
-        pending = manager.local_repository.load_outbox().operations
+        service = LocalSkillUIService(manager)
+        skills, pending = service.overview()
         return {
             "skills": [item.model_dump(mode="json") for item in skills],
             "outbox_operations": [item.model_dump(mode="json") for item in pending],
@@ -585,7 +540,7 @@ def _skills_payload(config_manager: ConfigManager) -> dict[str, object]:
             "pending_count": len(pending),
         }
     finally:
-        transport.close()
+        manager.close()
 
 
 def _optional_string(payload: dict[str, object], key: str) -> str | None:

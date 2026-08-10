@@ -1,7 +1,7 @@
 """Backend-neutral structured database capability used by persistence."""
 
 from .backends import bootstrap_database, create_database, register_builtin_databases
-from .database import ScopedDatabase
+from .database import DatabaseUnitOfWork, ScopedDatabase
 from .models import (
     ComparisonOperator,
     DatabaseCapabilities,
@@ -17,6 +17,7 @@ from .models import (
     Predicate,
     Record,
     RecordQuery,
+    SchemaMigration,
     Sort,
     TableSpec,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "DatabaseRegistry",
     "DatabaseRequirements",
     "DatabaseScope",
+    "DatabaseUnitOfWork",
     "FieldSpec",
     "FieldType",
     "FilterExpression",
@@ -41,6 +43,7 @@ __all__ = [
     "Predicate",
     "Record",
     "RecordQuery",
+    "SchemaMigration",
     "ScopeValue",
     "ScopedDatabase",
     "Sort",

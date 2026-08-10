@@ -1,102 +1,128 @@
-"""HTTP schemas for the ``/v1/skills/*`` endpoints (design §5.2–§5.4).
-
-Kept separate from ``api.schemas`` so the memory and skill surfaces evolve
-independently while sharing the same :class:`ApiResponse` envelope.
-"""
+"""Unified HTTP projections for cloud Skill versions and trajectories."""
 
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
-
-from ..typing import (
-    SkillEvolveResult,
-    SkillSummary,
-    SkillSyncRequestItem,
-    SkillSyncResult,
-    SkillVersion,
+from mindmemos_skill.contracts import (
+    ContractModel,
+    SkillBundle,
+    SkillTrajectory,
+    SkillTrajectoryListRequest,
+    SkillTrajectoryReportRequest,
+    SkillTrajectoryReportResult,
+    SkillVersionCore,
     SkillVersionStatus,
 )
-from .schemas import NonEmptyStr
+from pydantic import Field
 
 
-class SkillRegisterRequest(BaseModel):
-    """HTTP body for ``POST /v1/skills/register`` (design §5.2).
-
-    ``content`` is the canonical bundle text (see ``components/skill``); a bare
-    ``SKILL.md`` body is also accepted and treated as the single whitelisted
-    file. ``parent_version_id`` branches off an existing version (lineage);
-    omitting it registers a root version.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: NonEmptyStr
-    content: NonEmptyStr
-    version_label: NonEmptyStr | None = None
-    parent_version_id: NonEmptyStr | None = None
+class SkillRegisterRequest(ContractModel):
+    operation_id: str = Field(min_length=1)
+    version: SkillVersionCore
+    bundle: SkillBundle
 
 
-class SkillRegisterData(BaseModel):
-    """``data`` payload returned by ``POST /v1/skills/register`` (design §5.2)."""
+class SkillRegisterData(ContractModel):
+    version: SkillVersionCore
 
+
+class SkillSummaryData(ContractModel):
     cloud_skill_id: str
-    version_id: str
-    version_label: str | None = None
-    content_hash: str
+    name: str
+    latest_version: SkillVersionCore
+
+
+class SkillListData(ContractModel):
+    skills: list[SkillSummaryData]
+
+
+class SkillVersionsData(ContractModel):
+    versions: list[SkillVersionCore]
+    next_cursor: str | None = None
+
+
+class SkillContentData(ContractModel):
+    version: SkillVersionCore
+    bundle: SkillBundle
+
+
+class SkillRemoteSyncItem(ContractModel):
+    cloud_skill_id: str = Field(min_length=1)
+    known_version_revisions: dict[str, int] = Field(default_factory=dict)
+
+
+class SkillRemoteSyncRequest(ContractModel):
+    items: list[SkillRemoteSyncItem] = Field(min_length=1)
+
+
+class SkillRemoteSyncResultItem(ContractModel):
+    cloud_skill_id: str
+    versions: list[SkillVersionCore]
+
+
+class SkillRemoteSyncData(ContractModel):
+    items: list[SkillRemoteSyncResultItem]
+
+
+class SkillVersionStatusRequest(ContractModel):
     status: SkillVersionStatus
+    expected_revision: int = Field(ge=0)
 
 
-class SkillListData(BaseModel):
-    """``data`` payload returned by ``GET /v1/skills`` (design §5.4)."""
-
-    skills: list[SkillSummary]
-
-
-class SkillVersionsData(BaseModel):
-    """``data`` payload returned by ``GET .../versions`` (design §5.4)."""
-
-    versions: list[SkillVersion]
+class SkillTrajectoryPageData(ContractModel):
+    items: list[SkillTrajectory]
+    returned_count: int = Field(ge=0)
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
-class SkillContentData(BaseModel):
-    """``data`` payload returned by ``GET .../content`` (design §5.4)."""
-
-    version: SkillVersion
-    content: str
-
-
-class SkillSyncRequest(RootModel[list[SkillSyncRequestItem]]):
-    """HTTP body for ``POST /v1/skills/sync`` (design §5.3).
-
-    The wire contract is a top-level JSON array, matching the SDK-facing design:
-    ``[{ "cloud_skill_id": "...", "local_version_id": "..." }]``.
-    """
-
-    root: list[SkillSyncRequestItem] = Field(min_length=1)
-
-
-class SkillSyncData(BaseModel):
-    """``data`` payload returned by ``POST /v1/skills/sync`` (design §5.3)."""
-
-    results: list[SkillSyncResult]
-
-
-class SkillEvolveRequest(BaseModel):
-    """HTTP body for ``POST /v1/skills/evolve``.
-
-    ``cloud_skill_id`` selects the injected add traces that drive the
-    self-evolution pipeline. ``mode`` mirrors memory add: sync runs inline,
-    async queues Kafka work. ``project_id`` is resolved from the bearer
-    ``api_key`` (same as the memory endpoints), never taken from the body.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    cloud_skill_id: NonEmptyStr
+class SkillEvolveRequest(ContractModel):
+    operation_id: str = Field(min_length=1)
+    cloud_skill_id: str = Field(min_length=1)
+    base_version_id: str = Field(min_length=1)
+    algorithm: str = Field(min_length=1)
     mode: Literal["sync", "async"] = "sync"
+    reuse_evidence: bool = False
+    trajectory_ids: list[str] | None = None
 
 
-# The evolve endpoint returns the full result DTO as its ``data`` payload.
-SkillEvolveData = SkillEvolveResult
+class SkillEvolveData(ContractModel):
+    operation_id: str
+    evolution_run_id: str
+    cloud_skill_id: str
+    base_version_id: str
+    status: Literal["queued", "succeeded", "no_change", "failed"]
+    candidate_version_ids: list[str] = Field(default_factory=list)
+    selected_version_id: str | None = None
+
+
+class MemorySkillTrajectoryRef(ContractModel):
+    trajectory_id: str
+    trajectory_hash: str
+    delivery: Literal["required", "async"]
+
+
+SkillTrajectoryReportData = SkillTrajectoryReportResult
+
+
+__all__ = [
+    "MemorySkillTrajectoryRef",
+    "SkillContentData",
+    "SkillEvolveData",
+    "SkillEvolveRequest",
+    "SkillListData",
+    "SkillRegisterData",
+    "SkillRegisterRequest",
+    "SkillRemoteSyncData",
+    "SkillRemoteSyncItem",
+    "SkillRemoteSyncRequest",
+    "SkillRemoteSyncResultItem",
+    "SkillSummaryData",
+    "SkillTrajectoryListRequest",
+    "SkillTrajectoryPageData",
+    "SkillTrajectoryReportData",
+    "SkillTrajectoryReportRequest",
+    "SkillVersionStatusRequest",
+    "SkillVersionsData",
+]

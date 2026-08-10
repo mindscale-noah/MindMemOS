@@ -128,22 +128,15 @@ def _build_evolver(args: argparse.Namespace, benchmark_name: str) -> SkillEvolut
     if not args.evolve:
         return NoopSkillEvolutionClient()
 
-    connection_mode = getattr(args, "evolution_connection_mode", "http")
     base_url = getattr(args, "evolution_base_url", None)
-    if connection_mode == "http" and not base_url:
+    if not base_url:
         print(f"{benchmark_name}: --evolve set without --evolution-base-url; running with no-op evolution.")
         return NoopSkillEvolutionClient()
 
     backend = build_mindmemos_backend(
-        connection_mode=connection_mode,
         base_url=base_url,
         api_key=getattr(args, "evolution_api_key", None),
-        project_id=getattr(args, "evolution_project_id", None) or f"{benchmark_name}-eval",
         timeout_seconds=getattr(args, "evolution_timeout_seconds", 1200.0),
-        lite_config_path=getattr(args, "evolution_lite_config_path", None),
-        lite_config_name=getattr(args, "evolution_lite_config_name", "dev"),
-        lite_load_config_from_env=getattr(args, "evolution_lite_load_config_from_env", False),
-        lite_start_workers=getattr(args, "evolution_lite_start_workers", True),
         user_id=f"{benchmark_name}-eval",
         app_id="mindmemos-eval",
     )

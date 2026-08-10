@@ -1,11 +1,19 @@
 """Memory HTTP business logic."""
 
-from typing import Literal
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
+
+from mindmemos_skill.contracts import (
+    SkillTrajectoryReportRequest,
+    SkillTrajectoryUpload,
+    SkillTrajectoryUploadItem,
+    TrajectorySource,
+    compute_trajectory_hash,
+)
 
 from ...config import get_config
+from ...errors import BadRequestError
 from ...logging import get_logger, traced
-from ...pipelines import create_pipeline
+from ...pipelines import PipelineType, create_pipeline
 from ...pipelines.add import AddPipeline
 from ...pipelines.delete import DefaultDeletePipeline, DeletePipeline
 from ...pipelines.dreaming import DreamingPipeline
@@ -13,7 +21,6 @@ from ...pipelines.feedback import FeedbackPipeline
 from ...pipelines.get import DefaultGetPipeline, GetPipeline
 from ...pipelines.memory_db import MemoryOperationRecorder, suppress_recording_errors, utcnow
 from ...pipelines.search import SearchPipeline
-from ...pipelines.skill import SkillVersionStore, get_skill_version_store
 from ...pipelines.update import DefaultUpdatePipeline, UpdatePipeline
 from ...typing import (
     AddPipelineAsyncResult,
@@ -28,7 +35,7 @@ from ...typing import (
     UpdatePipelineResult,
 )
 from ..algorithm import binding_for_memory_algorithm
-from ..deps import annotate_request_trace
+from ..deps import annotate_request_trace, ensure_scopes
 from ..mappers import (
     to_add_pipeline_input,
     to_delete_pipeline_input,
@@ -49,10 +56,10 @@ from ..schemas import (
     SearchRequest,
     UpdateRequest,
 )
+from .skill_service import SkillService, get_skill_service
 
 logger = get_logger(__name__)
 
-PipelineKind = Literal["add", "search", "get", "delete", "update", "feedback", "dreaming"]
 SEARCH_PIPELINE_NAME = "search_pipeline"
 
 
@@ -77,7 +84,8 @@ class MemoryService:
         feedback_pipeline_name: str | None = None,
         dreaming_pipeline_name: str | None = None,
         operation_recorder: MemoryOperationRecorder | None = None,
-        skill_store: SkillVersionStore | None = None,
+        skill_store: object | None = None,
+        skill_service: SkillService | None = None,
     ) -> None:
         self._add = add_pipeline
         if search_pipeline is None and search_pipeline_name is None:
@@ -96,17 +104,18 @@ class MemoryService:
         )
         self._feedback = feedback_pipeline
         self._dreaming = dreaming_pipeline
-        self._pipeline_names: dict[str, tuple[PipelineKind, str | None]] = {
-            "_add": ("add", add_pipeline_name),
-            "_search": ("search", search_pipeline_name),
-            "_get": ("get", get_pipeline_name),
-            "_delete": ("delete", delete_pipeline_name),
-            "_update": ("update", update_pipeline_name),
-            "_feedback": ("feedback", feedback_pipeline_name),
-            "_dreaming": ("dreaming", dreaming_pipeline_name),
+        self._pipeline_names: dict[str, tuple[PipelineType, str | None]] = {
+            "_add": (PipelineType.ADD, add_pipeline_name),
+            "_search": (PipelineType.SEARCH, search_pipeline_name),
+            "_get": (PipelineType.GET, get_pipeline_name),
+            "_delete": (PipelineType.DELETE, delete_pipeline_name),
+            "_update": (PipelineType.UPDATE, update_pipeline_name),
+            "_feedback": (PipelineType.FEEDBACK, feedback_pipeline_name),
+            "_dreaming": (PipelineType.DREAMING, dreaming_pipeline_name),
         }
         self._recorder = operation_recorder or MemoryOperationRecorder()
-        self._skill_store = skill_store if skill_store is not None else get_skill_version_store()
+        del skill_store  # Legacy injection point retained for constructor compatibility; the old store is never written.
+        self._skill_service = skill_service
         self._algorithm_add_pipelines: dict[str, AddPipeline] = {}
 
     def _pipeline(self, attr: str):
@@ -124,7 +133,7 @@ class MemoryService:
         pipeline_name = binding_for_memory_algorithm(memory_algorithm).add_pipeline
         pipeline = self._algorithm_add_pipelines.get(pipeline_name)
         if pipeline is None:
-            pipeline = create_pipeline(type="add", name=pipeline_name)
+            pipeline = create_pipeline(type=PipelineType.ADD, name=pipeline_name)
             self._algorithm_add_pipelines[pipeline_name] = pipeline
         return pipeline, pipeline_name
 
@@ -151,6 +160,14 @@ class MemoryService:
         payload = to_add_pipeline_input(request)
         add_record_id = str(uuid4())
         request_submitted_at = utcnow()
+        trajectory_result = await self._ingest_skill_trajectory(auth, add_record_id, request)
+        trajectory_ref = None
+        if trajectory_result is not None:
+            trajectory_ref = {
+                "trajectory_id": trajectory_result["trajectory_id"],
+                "trajectory_hash": trajectory_result["trajectory_hash"],
+                "delivery": request.skill_trajectory_delivery,
+            }
         skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
         try:
             if payload.mode == "async":
@@ -159,6 +176,7 @@ class MemoryService:
                     "skill_bindings": [binding.model_dump(mode="json") for binding in skill_bindings or []],
                     "score": request.score,
                     "task_id": request.task_id,
+                    "skill_trajectory_ref": trajectory_ref,
                 }
                 await suppress_recording_errors(
                     self._recorder.record_add_input(
@@ -170,15 +188,17 @@ class MemoryService:
                         skill_bindings=skill_bindings,
                         score=request.score,
                         task_id=request.task_id,
+                        extra_payload={"skill_trajectory_ref": trajectory_ref} if trajectory_ref else None,
                     ),
                     operation="add",
                 )
-                return await pipeline.add_async(
+                result = await pipeline.add_async(
                     payload,
                     ctx,
                     add_record_id=add_record_id,
                     record_metadata=record_metadata,
                 )
+                return result.model_copy(update={"skill_trajectory": trajectory_result})
             await suppress_recording_errors(
                 self._recorder.record_add_input(
                     payload,
@@ -189,10 +209,12 @@ class MemoryService:
                     skill_bindings=skill_bindings,
                     score=request.score,
                     task_id=request.task_id,
+                    extra_payload={"skill_trajectory_ref": trajectory_ref} if trajectory_ref else None,
                 ),
                 operation="add",
             )
-            return await pipeline.add_sync(payload, ctx, add_record_id=add_record_id)
+            result = await pipeline.add_sync(payload, ctx, add_record_id=add_record_id)
+            return result.model_copy(update={"skill_trajectory": trajectory_result})
         except Exception as exc:
             await suppress_recording_errors(
                 self._recorder.mark_add_failed(ctx, add_record_id, str(exc)),
@@ -200,25 +222,76 @@ class MemoryService:
             )
             raise
 
+    async def _ingest_skill_trajectory(
+        self,
+        auth: AuthContext,
+        add_record_id: str,
+        request: AddRequest,
+    ) -> dict[str, str] | None:
+        upload = request.skill_trajectory
+        if upload is None:
+            return None
+        ensure_scopes(auth, ("skills:trajectory:write",))
+        if upload.source is not TrajectorySource.MEMORY_ADD:
+            raise BadRequestError(
+                "Memory Add skill_trajectory requires source=memory_add",
+                code="skill.trajectory_invalid",
+                status_code=422,
+            )
+        if upload.source_add_record_id not in {None, add_record_id}:
+            raise BadRequestError(
+                "Memory Add skill_trajectory source_add_record_id is server-assigned",
+                code="skill.trajectory_invalid",
+                status_code=422,
+            )
+        source = upload.model_dump(mode="json")
+        source["source_add_record_id"] = add_record_id
+        source["trajectory_hash"] = compute_trajectory_hash(source)
+        upload = SkillTrajectoryUpload.model_validate(source)
+        operation_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"mindmemos:memory-add-trajectory:{upload.trajectory_id}:{upload.trajectory_hash}",
+            )
+        )
+        skill_service = self._skill_service or get_skill_service()
+        report = await skill_service.report_trajectories(
+            auth,
+            SkillTrajectoryReportRequest(
+                operation_id=operation_id,
+                mode="sync" if request.skill_trajectory_delivery == "required" else "async",
+                items=[SkillTrajectoryUploadItem(trajectory=upload)],
+            ),
+        )
+        item = report.items[0]
+        return {
+            "trajectory_id": item.trajectory_id,
+            "trajectory_hash": upload.trajectory_hash.removeprefix("sha256:"),
+            "status": item.status,
+        }
+
     async def _bind_skill_context(
         self,
         project_id: str,
         add_record_id: str,
         skill_context: list[SkillContext] | None,
     ) -> list[SkillBinding] | None:
-        """Resolve ``skill_context`` to trace bindings, swallowing all failures."""
+        """Project legacy ``skill_context`` into add-audit metadata without touching old Skill collections."""
 
-        if self._skill_store is None or not skill_context:
+        del project_id, add_record_id
+        if not skill_context:
             return None
-        try:
-            return await self._skill_store.bind_skill_context(
-                project_id=project_id,
-                add_record_id=add_record_id,
-                skill_context=skill_context,
+        return [
+            SkillBinding(
+                name=context.name,
+                content_hash=context.content_hash,
+                base_version_id=context.base_version_id,
+                version_id=context.base_version_id or None,
+                version_label=context.version_label,
+                usage=context.usage,
             )
-        except Exception as exc:  # noqa: BLE001 - binding must never block add
-            logger.warning("skill_context binding failed", error=str(exc), add_record_id=add_record_id)
-            return None
+            for context in skill_context
+        ]
 
     @traced("memory_service.search")
     async def search(

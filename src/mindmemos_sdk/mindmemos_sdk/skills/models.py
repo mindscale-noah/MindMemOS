@@ -26,22 +26,19 @@ class HashState(str, Enum):
 class SkillVersionStatus(str, Enum):
     """Cloud lifecycle status for one skill version."""
 
-    OBSERVED = "observed"
     DRAFT = "draft"
-    EVALUATING = "evaluating"
-    READY = "ready"
     REJECTED = "rejected"
     ARCHIVED = "archived"
     PUBLISHED = "published"
-    SUPERSEDED = "superseded"
-    ROLLED_BACK = "rolled_back"
 
 
 class SkillOrigin(str, Enum):
     """Origin of one skill version."""
 
-    EDGE = "edge"
+    LOCAL = "local"
     CLOUD = "cloud"
+    EVOLUTION = "evolution"
+    MERGE = "merge"
 
 
 class LocalSkillSyncState(str, Enum):
@@ -67,8 +64,9 @@ class LocalSkillOperationType(str, Enum):
     """Cloud-facing operation persisted in the local outbox."""
 
     PUSH_VERSION = "push_version"
-    PROMOTE = "promote"
-    DELETE_CLOUD_SKILL = "delete_cloud_skill"
+    REPORT_TRAJECTORY = "report_trajectory"
+    EVOLVE = "evolve"
+    MERGE = "merge"
 
 
 class LocalSkillOperationStatus(str, Enum):
@@ -141,29 +139,22 @@ class LocalSkillManifest(BaseModel):
     name: str
     alias: str | None = None
     cloud_skill_id: str | None = None
-    active_version_id: str
-    published_head_id: str | None = None
-    cloud_revision: int | None = Field(default=None, ge=0)
+    latest_version_id: str
     version_ids: list[str] = Field(default_factory=list)
     last_sync_at: str | None = None
     created_at: str
     updated_at: str
 
     @model_validator(mode="after")
-    def validate_version_pointers(self) -> LocalSkillManifest:
-        """Require both pointers to reference complete local versions."""
+    def validate_latest_version(self) -> LocalSkillManifest:
+        """Require the derived latest projection to reference a complete version."""
 
         if not self.version_ids:
             raise ValueError("version_ids must contain at least one version")
         if len(self.version_ids) != len(set(self.version_ids)):
             raise ValueError("version_ids may not contain duplicates")
-        if self.active_version_id not in self.version_ids:
-            raise ValueError("active_version_id must belong to version_ids")
-        if (
-            self.published_head_id is not None
-            and self.published_head_id not in self.version_ids
-        ):
-            raise ValueError("published_head_id must be fully available locally")
+        if self.latest_version_id not in self.version_ids:
+            raise ValueError("latest_version_id must belong to version_ids")
         return self
 
 
@@ -175,13 +166,13 @@ class LocalSkillVersionMetadata(BaseModel):
     schema_version: int = 1
     version_id: str
     skill_id: str
-    parent_version_id: str | None = None
+    parent_version_ids: list[str] = Field(default_factory=list)
     skill_name: str
     content_hash: str
     local_snapshot_hash: str
     version_label: str | None = None
     commit_message: str | None = None
-    origin: SkillOrigin = SkillOrigin.EDGE
+    origin: SkillOrigin = SkillOrigin.LOCAL
     cloud_status: SkillVersionStatus | None = None
     sync_state: LocalSkillSyncState = LocalSkillSyncState.LOCAL_ONLY
     created_at: str
@@ -199,44 +190,6 @@ class LocalSkillFileEntry(BaseModel):
     media_type: str | None = None
     mode: int | None = None
     role: LocalSkillFileRole
-
-
-class LocalSkillVersionFiles(BaseModel):
-    """Complete file manifest stored beside one local version's metadata."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    schema_version: int = 1
-    version_id: str
-    algorithm_files: list[LocalSkillFileEntry]
-    linked_files: list[LocalSkillFileEntry] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_roles_and_paths(self) -> LocalSkillVersionFiles:
-        """Keep algorithm and private file manifests structurally separate."""
-
-        if not self.algorithm_files:
-            raise ValueError("algorithm_files must contain at least one file")
-        if any(
-            entry.role != LocalSkillFileRole.ALGORITHM
-            for entry in self.algorithm_files
-        ):
-            raise ValueError("algorithm_files may contain only algorithm entries")
-        if any(
-            entry.role == LocalSkillFileRole.ALGORITHM
-            for entry in self.linked_files
-        ):
-            raise ValueError("linked_files may not contain algorithm entries")
-        paths = [entry.path for entry in self.files]
-        if len(paths) != len(set(paths)):
-            raise ValueError("files.json contains duplicate paths")
-        return self
-
-    @property
-    def files(self) -> list[LocalSkillFileEntry]:
-        """Return the complete snapshot manifest in storage order."""
-
-        return [*self.algorithm_files, *self.linked_files]
 
 
 class LocalSkillSnapshot(BaseModel):
@@ -279,7 +232,7 @@ class DuplicateSkillMatch(BaseModel):
     local_snapshot_hash: str
     skill_id: str
     name: str
-    active_version_id: str
+    latest_version_id: str
     matched_version_id: str
     cloud_skill_id: str | None = None
     last_sync_at: str | None = None
@@ -293,7 +246,7 @@ class RegisterLocalResult(BaseModel):
     action: Literal["created", "reused"]
     skill_id: str
     version_id: str
-    active_version_id: str
+    latest_version_id: str
     summary: DuplicateSkillMatch | None = None
 
 
@@ -306,9 +259,9 @@ class PublishLocalRequest(BaseModel):
     base_version_id: str | None = None
     source_path: str | None = None
     content: str | None = None
+    files: dict[str, str] | None = None
     version_label: str | None = None
     commit_message: str | None = None
-    activate: bool = False
 
 
 class PublishLocalResult(BaseModel):
@@ -318,7 +271,7 @@ class PublishLocalResult(BaseModel):
 
     skill_id: str
     version_id: str
-    active_version_id: str
+    latest_version_id: str
     local_snapshot_hash: str
 
 
@@ -354,7 +307,6 @@ class LocalSyncOperation(BaseModel):
     operation_type: LocalSkillOperationType
     skill_id: str
     version_id: str | None = None
-    expected_cloud_revision: int | None = None
     status: LocalSkillOperationStatus = LocalSkillOperationStatus.PENDING
     attempt_count: int = 0
     next_retry_at: str | None = None
@@ -363,17 +315,8 @@ class LocalSyncOperation(BaseModel):
     updated_at: str
 
 
-class LocalSyncOutbox(BaseModel):
-    """Top-level centralized local Skill outbox."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    schema_version: int = 1
-    operations: list[LocalSyncOperation] = Field(default_factory=list)
-
-
 class PushVersionRequest(BaseModel):
-    """Strict cloud payload for uploading one immutable algorithm version."""
+    """Strict payload carrying only one canonical immutable cloud bundle."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -381,11 +324,15 @@ class PushVersionRequest(BaseModel):
     cloud_skill_id: str | None = None
     name: str
     version_id: str
-    parent_version_id: str | None = None
+    parent_version_ids: list[str] = Field(default_factory=list)
     content: str
     expected_content_hash: str
     version_label: str | None = None
     commit_message: str | None = None
+    status: SkillVersionStatus = SkillVersionStatus.DRAFT
+    origin: SkillOrigin = SkillOrigin.LOCAL
+    version_revision: int = 0
+    metadata: dict = Field(default_factory=dict)
     created_at: str
 
 
@@ -408,18 +355,23 @@ class PullVersionSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version_id: str
-    parent_version_id: str | None = None
+    cloud_skill_id: str
+    parent_version_ids: list[str] = Field(default_factory=list)
+    name: str
     content_hash: str
     version_label: str | None = None
     commit_message: str | None = None
     origin: SkillOrigin
     status: SkillVersionStatus
+    version_revision: int = 0
+    metadata: dict = Field(default_factory=dict)
     created_at: str
+    updated_at: str | None = None
     received_at: str
 
 
 class PullVersionContent(BaseModel):
-    """Cloud algorithm content for one version; private local files are forbidden."""
+    """Canonical cloud bundle; resources and arbitrary local files are forbidden."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -443,8 +395,6 @@ class CloudSkillSummary(BaseModel):
 
     cloud_skill_id: str
     name: str
-    published_head_id: str | None = None
-    cloud_revision: int
     latest_version_id: str | None = None
     updated_at: str
 
@@ -464,9 +414,7 @@ class SyncCloudItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     cloud_skill_id: str
-    known_version_ids: list[str] = Field(default_factory=list)
-    known_published_head_id: str | None = None
-    known_cloud_revision: int | None = None
+    known_version_revisions: dict[str, int] = Field(default_factory=dict)
 
 
 class SyncCloudRequest(BaseModel):
@@ -484,8 +432,6 @@ class SyncCloudResultItem(BaseModel):
 
     cloud_skill_id: str
     versions: list[PullVersionSummary] = Field(default_factory=list)
-    published_head_id: str | None = None
-    cloud_revision: int
 
 
 class SyncCloudResult(BaseModel):
@@ -494,27 +440,6 @@ class SyncCloudResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[SyncCloudResultItem] = Field(default_factory=list)
-
-
-class PromoteCloudRequest(BaseModel):
-    """CAS request for changing only the cloud published pointer."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    operation_id: str
-    version_id: str
-    expected_cloud_revision: int
-
-
-class PromoteCloudResult(BaseModel):
-    """Cloud published pointer after a successful promote/rollback."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    cloud_skill_id: str
-    published_head_id: str
-    cloud_revision: int
-    updated_at: str
 
 
 class EvolveCloudRequest(BaseModel):
@@ -545,48 +470,6 @@ class EvolveCloudResult(BaseModel):
     consumed_count: int = 0
 
 
-class SkillPendingUpload(BaseModel):
-    """One local outbox entry for an unconfirmed skill content snapshot."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    job_id: str
-    skill_id: str
-    path: str
-    skill_name: str
-    cloud_skill_id: str | None = None
-    parent_version_id: str = ""
-    content_hash: str
-    version_label: str | None = None
-    content_cache_key: str
-    attempts: int = 0
-    next_retry_at: str | None = None
-    last_error: str | None = None
-    created_at: str
-    updated_at: str
-
-
-class SkillPendingUploadsFile(BaseModel):
-    """Top-level ``skill_pending_uploads.json`` schema."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    version: int = 1
-    uploads: dict[str, SkillPendingUpload] = Field(default_factory=dict)
-
-
-class SkillFlushResult(BaseModel):
-    """Outcome of one pending upload retry."""
-
-    skill_id: str
-    content_hash: str
-    parent_version_id: str
-    uploaded: bool
-    version_id: str | None = None
-    registry_advanced: bool = False
-    error: str | None = None
-
-
 class SkillVersion(BaseModel):
     """Cloud version metadata returned by ``/v1/skills/*``."""
 
@@ -595,41 +478,16 @@ class SkillVersion(BaseModel):
     version_id: str
     project_id: str | None = None
     cloud_skill_id: str
-    skill_name: str
+    name: str
     content_hash: str
-    parent_version_id: str | None = None
+    parent_version_ids: list[str] = Field(default_factory=list)
     version_label: str | None = None
     status: SkillVersionStatus
     origin: SkillOrigin
+    version_revision: int = 0
+    metadata: dict = Field(default_factory=dict)
     created_at: str
-
-
-class LocalSkillVersion(BaseModel):
-    """Version metadata persisted in ``skill_history.json``."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    version_id: str
-    parent_version_id: str | None = None
-    version_label: str | None = None
-    status: SkillVersionStatus
-    origin: SkillOrigin
-    content_hash: str
-    created_at: str
-
-    @classmethod
-    def from_cloud(cls, version: SkillVersion) -> LocalSkillVersion:
-        """Create a local history entry from cloud metadata."""
-
-        return cls(
-            version_id=version.version_id,
-            parent_version_id=version.parent_version_id,
-            version_label=version.version_label,
-            status=version.status,
-            origin=version.origin,
-            content_hash=version.content_hash,
-            created_at=version.created_at,
-        )
+    updated_at: str | None = None
 
 
 class SkillSummary(BaseModel):
@@ -638,9 +496,8 @@ class SkillSummary(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     cloud_skill_id: str
-    skill_name: str
+    name: str
     latest_version: SkillVersion
-    published_head: SkillVersion | None = None
 
 
 class SkillListData(BaseModel):
@@ -710,14 +567,13 @@ class SkillSyncRequestItem(BaseModel):
 
 
 class SkillSyncResult(BaseModel):
-    """Published-head diff result returned by ``POST /v1/skills/sync``."""
+    """Immutable-version revision diff returned by ``POST /v1/skills/sync``."""
 
     model_config = ConfigDict(extra="ignore")
 
     cloud_skill_id: str
     local_version_id: str
     has_update: bool
-    published_head: SkillVersion | None = None
     gating_status: str
 
 
@@ -727,25 +583,6 @@ class SkillSyncData(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     results: list[SkillSyncResult] = Field(default_factory=list)
-
-
-class SkillHistoryEntry(BaseModel):
-    """One skill bucket inside ``skill_history.json``."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    skill_name: str
-    versions: list[LocalSkillVersion] = Field(default_factory=list)
-    last_pulled_at: str | None = None
-
-
-class SkillHistoryFile(BaseModel):
-    """Top-level ``skill_history.json`` schema."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    version: int = 1
-    skills: dict[str, SkillHistoryEntry] = Field(default_factory=dict)
 
 
 class SkillCheckoutPlan(BaseModel):
@@ -782,4 +619,3 @@ class SkillUpdateResult(BaseModel):
 
 
 SkillUpdatePlan = SkillCheckoutPlan
-RollbackPlan = SkillCheckoutPlan

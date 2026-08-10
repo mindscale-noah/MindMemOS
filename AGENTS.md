@@ -2,9 +2,9 @@
 
 ## Project Structure & Module Organization
 
-MindMemOS is a Python `uv` monorepo. The main FastAPI service and runtime live in `src/mindmemos/`; benchmark runners and evaluation environments are in `src/mindmemos_eval/`; the Python SDK and CLI are in `src/mindmemos_sdk/`. The Lite implementation is under `src/mindmemos_lite/`, with tests in `tests/mindmemos_lite/`. Other tests are grouped by boundary (`api`, `architecture`, `infra`, `llm`, `config`, `workers`, and so on). Use `config/` for examples, `dockers/` for local dependencies, `docs/` for operational guidance, `plugins/openclaw-plugin/` for the TypeScript integration, and `skills/`, `resources/`, and `assets/` for shipped agent content.
+MindMemOS is a Python `uv` monorepo. The main FastAPI service and runtime live in `src/mindmemos/`; benchmark runners and evaluation environments are in `src/mindmemos_eval/`; the Python SDK and CLI are in `src/mindmemos_sdk/`; and the standalone Skill runtime is in `src/mindmemos_skill/`. Tests are grouped by boundary (`api`, `architecture`, `infra`, `llm`, `config`, `workers`, and so on). Use `config/` for examples, `dockers/` for local dependencies, `docs/` for operational guidance, `plugins/openclaw-plugin/` for the TypeScript integration, and `skills/`, `resources/`, and `assets/` for shipped agent content.
 
-The root `uv` workspace currently includes `mindmemos`, `mindmemos-eval`, and `mindmemos-sdk`; Lite has its own package metadata and should not be assumed to resolve through the root environment.
+The root `uv` workspace includes `mindmemos`, `mindmemos-eval`, `mindmemos-sdk`, and `mindmemos-skill`.
 
 ## Build, Test, and Development Commands
 
@@ -16,11 +16,11 @@ The root `uv` workspace currently includes `mindmemos`, `mindmemos-eval`, and `m
 
 ## Coding Style & Naming Conventions
 
-Target Python 3.11–3.13, four-space indentation, double quotes, and a 120-character Ruff line length. Use `snake_case` for Python names, `PascalCase` for classes, and `test_*.py` / `test_*` for tests. Keep Lite’s service layer dependent on ports; construct backends in the runtime/composition root. Its task queue is intentionally in-process, bounded, and non-persistent.
+Target Python 3.11–3.13, four-space indentation, double quotes, and a 120-character Ruff line length. Use `snake_case` for Python names, `PascalCase` for classes, and `test_*.py` / `test_*` for tests.
 
 ## Testing Guidelines
 
-Tests use pytest and pytest-asyncio; no project-wide coverage threshold is configured. Add focused regression tests beside the affected subsystem and run the narrow suite before the full suite. Lite tests require an environment built from `src/mindmemos_lite/pyproject.toml`; the root `uv run` command resolves the main `mindmemos` package instead.
+Tests use pytest and pytest-asyncio; no project-wide coverage threshold is configured. Add focused regression tests beside the affected subsystem and run the narrow suite before the full suite.
 
 ## Commit & Pull Request Guidelines
 

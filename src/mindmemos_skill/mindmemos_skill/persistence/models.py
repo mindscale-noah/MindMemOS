@@ -1,12 +1,4 @@
-"""Minimal persistence contracts for local Skill algorithms.
-
-``SkillRecord``, ``TrajectoryRecord``, and ``AlgorithmLogRecord`` each describe
-one flat database row.  JSON columns use plain JSON-compatible dictionaries or
-lists rather than nested Pydantic models.
-
-This module contains data contracts only.  It does not open SQLite, select a
-vector backend, or depend on ``mindmemos_sdk``.
-"""
+"""Flat local projections for unified Skill facts and control state."""
 
 from __future__ import annotations
 
@@ -17,225 +9,170 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-from ..typing.agent import AgentType
-from ..typing.skill import SkillVersionOrigin, SkillVersionStatus
-from ..typing.trajectory import RolloutType, TrajectoryStatus
+from ..contracts import parse_skill_bundle
+from .enums import AgentType, RolloutType, SkillVersionOrigin, SkillVersionStatus, TrajectoryStatus
 
 
 def utcnow() -> datetime:
-    """Return a timezone-aware UTC timestamp."""
-
     return datetime.now(UTC)
 
 
 class PersistenceModel(BaseModel):
-    """Strict base model shared by the three flat database-row records."""
-
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
 class SkillRecord(PersistenceModel):
-    """One table row representing one immutable version of a registered Skill."""
-
-    # ------------- 版本号 -------------
     skill_id: str = Field(min_length=1)
-    """Skill 家族标识；同一个 Skill 的所有版本共享该值。"""
-
     version_id: str = Field(min_length=1)
-    """当前不可变版本的唯一标识；一条数据库记录对应一个 version_id。"""
-
     cloud_skill_id: str | None = None
-    """与云端 Skill 家族关联的可选标识。"""
-
     parent_version_ids: list[str] = Field(default_factory=list)
-    """当前版本的直接父版本集合；根版本为空，多父表示合并。"""
-
-    # ------------- Skill核心内容 -------------
     name: str = Field(min_length=1)
-    """Skill 的展示名称。"""
-
     description: str | None = None
-    """Skill 功能描述"""
-
     alias: str | None = None
-    """便于 CLI 和人工检索的可选短名称。"""
-
-    blob: str = Field(min_length=1)
-    """核心 Skill 文件的 JSON 文本，结构为相对路径到文件内容的映射。"""
-
+    bundle: str = Field(min_length=1)
     resources: str = "{}"
-    """辅助资源文件的 JSON 文本，与 blob 使用相同结构。"""
-
     content_hash: str = Field(min_length=1)
-    """Skill 核心BUNDLE 规范化后的内容哈希。"""
-
+    local_snapshot_hash: str = Field(min_length=1)
     status: SkillVersionStatus = SkillVersionStatus.DRAFT
-    """当前 Skill 版本的生命周期状态。"""
-
-    version_label: str = Field(
-        pattern=r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$",
-        examples=["1.0.0", "1.2.3"],
-    )
-    """人工可读版本标签；格式固定为 x.x.x。"""
-
+    version_revision: int = Field(default=0, ge=0)
+    version_label: str = Field(min_length=1)
     commit_message: str | None = None
-    """创建该版本时记录的变更说明。"""
-
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    """算法运行、候选来源和其他扩展信息。"""
-
-    # ------------- 溯源信息 -------------
-    created_at: datetime = Field(default_factory=utcnow)
-    """该版本记录首次写入数据库的时间。"""
-
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    local_metadata: dict[str, JsonValue] = Field(default_factory=dict)
     origin: SkillVersionOrigin = SkillVersionOrigin.LOCAL
-    """版本来源；区分本机创建、云端同步、算法演进或合并。"""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    received_at: datetime | None = None
 
-    @field_validator("blob", "resources")
+    @field_validator("bundle")
     @classmethod
-    def validate_serialized_files(cls, value: str) -> str:
+    def validate_bundle(cls, value: str) -> str:
+        return parse_skill_bundle(value).canonical_json()
+
+    @field_validator("resources")
+    @classmethod
+    def validate_resources(cls, value: str) -> str:
         _parse_serialized_files(value)
         return value
 
     @model_validator(mode="after")
-    def validate_parent_ids(self) -> SkillRecord:
+    def validate_record(self) -> SkillRecord:
         if self.version_id in self.parent_version_ids:
             raise ValueError("a Skill version cannot be its own parent")
         if len(self.parent_version_ids) != len(set(self.parent_version_ids)):
-            raise ValueError("parent_version_ids may not contain duplicates")
+            raise ValueError("parent_version_ids must be unique and ordered")
+        bundle = parse_skill_bundle(self.bundle)
+        if bundle.content_hash != self.content_hash.removeprefix("sha256:"):
+            raise ValueError("content_hash does not match canonical bundle")
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at must not precede created_at")
+        return self
+
+    @property
+    def blob(self) -> str:
+        """Compatibility view for internal snapshot code; not a physical column."""
+
+        bundle = parse_skill_bundle(self.bundle)
+        return json.dumps(
+            {item.path: item.content for item in bundle.files},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+
+class SkillSyncStateRecord(PersistenceModel):
+    skill_id: str = Field(min_length=1)
+    last_version_sync_at: datetime | None = None
+    trajectory_pull_cursor: str | None = None
+    last_trajectory_pull_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    @model_validator(mode="after")
+    def validate_timestamps(self) -> SkillSyncStateRecord:
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at must not precede created_at")
         return self
 
 
+# Source compatibility while callers migrate; the physical table is skill_sync_state.
+SkillFamilyStateRecord = SkillSyncStateRecord
+
+
+class SkillRemoteOperationRecord(PersistenceModel):
+    operation_id: str = Field(min_length=1)
+    operation_type: str = Field(min_length=1)
+    skill_id: str | None = None
+    cloud_skill_id: str | None = None
+    version_id: str | None = None
+    trajectory_id: str | None = None
+    request_hash: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    attempt_count: int = Field(default=0, ge=0)
+    lease_expires_at: datetime | None = None
+    next_retry_at: datetime | None = None
+    last_error_code: str | None = None
+    remote_result: dict[str, JsonValue] | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class TrajectoryRecord(PersistenceModel):
-    """One flat table row containing one physical Agent rollout attempt."""
-
-    # ------------- 轨迹溯源 -------------
     trajectory_id: str = Field(min_length=1)
-    """某一次实际执行 attempt 的唯一标识。"""
-
+    trajectory_hash: str = Field(min_length=1)
     task_id: str = Field(min_length=1)
-    """本次执行的任务标识。"""
-
     rollout_id: str = Field(min_length=1)
-    """一次计划 rollout 的稳定标识；重试共享该值。"""
-
     attempt_no: int = Field(default=0, ge=0)
-    """同一 rollout_id 下的尝试序号；首次为 0。"""
-
     rollout_type: RolloutType = RolloutType.INFERENCE
-    """rollout 用途；区分训练、评估、测试和普通推理。"""
-
-    # ------------- 任务信息 -------------
     task_instruction: str = Field(min_length=1)
-    """提交给 Agent 的任务指令。"""
-
     task_system_prompt: str | None = None
-    """本次任务使用的系统提示词快照。"""
-
     task_tags: list[str] = Field(default_factory=list)
-    """任务标签 JSON 列。"""
-
     task_metadata: dict[str, JsonValue] = Field(default_factory=dict)
-    """数据集、环境和调用方附加的任务信息 JSON 列。"""
-
     running_dir: str | None = None
-    """运行工作目录"""
-
     env_metadata: dict[str, JsonValue] = Field(default_factory=dict)
-    """执行该任务的env环境信息"""
-
     injected_skills: list[dict[str, JsonValue]] = Field(default_factory=list)
-    """执行该任务注入的 Skill 快照 JSON 列。"""
-
-    # ------------- Agent信息 -------------
     agent_type: AgentType = AgentType.UNKNOWN
-    """执行任务的 Agent 实现类型。"""
-
     agent_profile: dict[str, Any] = Field(default_factory=dict)
-    """模型、提供商、温度和推理参数等非密钥配置快照。"""
-
-    # ------------- 轨迹详情 -------------
     status: TrajectoryStatus = TrajectoryStatus.RUNNING
-    """该 rollout attempt 的执行状态。"""
-
     trajectory: list[dict[str, JsonValue]] = Field(default_factory=list)
-    """按发生顺序保存的消息、工具和内部事件 JSON 列。"""
-
     skill_bindings: list[dict[str, JsonValue]] = Field(default_factory=list)
-    """本次执行实际使用的 Skill 绑定信息 JSON 列。"""
-
-    # ------------- Reward信息 -------------
     reward_score: float | None = None
-    """本次执行的奖励分数；尚未评分时为空。"""
-
     reward_detail: str | None = None
-    """评分过程、通过情况或失败原因等说明。"""
-
     reward_metadata: dict[str, JsonValue] = Field(default_factory=dict)
-    """评估器、指标名称、阈值和其他评分信息 JSON 列。"""
-
-    # ------------- 运行信息 -------------
     started_at: datetime = Field(default_factory=utcnow)
-    """该 attempt 开始执行的时间。"""
-
     finished_at: datetime | None = None
-    """该 attempt 结束的时间。"""
-
     n_turn: int = Field(default=0, ge=0)
-    """该 attempt 消耗的 Agent 交互轮数。"""
-
     error_info: str | None = None
-    """执行失败、工具异常或环境错误信息。"""
-
-    # ------------- 其他非固定信息 -------------
     metadata: dict[str, Any] = Field(default_factory=dict)
-    """数据集、采集器和 Agent 附加信息。"""
+    metadata_revision: int = Field(default=0, ge=0)
+    metadata_updated_at: datetime | None = None
+    source: str = "skill_runtime"
+    source_add_record_id: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    received_at: datetime | None = None
 
     @model_validator(mode="after")
     def validate_values(self) -> TrajectoryRecord:
         if self.finished_at is not None and self.finished_at < self.started_at:
-            raise ValueError("finished_at must not be earlier than started_at")
+            raise ValueError("finished_at must not precede started_at")
         if self.reward_score is not None and not math.isfinite(self.reward_score):
-            raise ValueError("reward_score must be a finite number")
+            raise ValueError("reward_score must be finite")
         return self
 
 
 class AlgorithmLogRecord(PersistenceModel):
-    """One generic step report emitted by an algorithm component.
-
-    Algorithms decide which steps to report and place step-specific inputs,
-    outputs, metrics, decisions, errors, and artifact references in ``payload``.
-    The table keeps only the common fields needed to order and locate reports.
-    """
-
     log_id: str = Field(min_length=1)
-    """单条算法步骤报告的唯一标识。"""
-
     algorithm_name: str = Field(min_length=1)
-    """算法名称，例如 trace_summary、skillopt 或 merge_resolver。"""
-
     algorithm_version: str | None = None
-    """算法实现或 Prompt 协议版本。"""
-
     component_name: str = Field(min_length=1)
-    """上报该步骤的算法组件名称。"""
-
     step_name: str = Field(min_length=1)
-    """组件注册的步骤名称。"""
-
     status: str | None = None
-    """组件自定义的步骤状态，例如 started、succeeded、rejected 或 failed。"""
-
     payload: dict[str, JsonValue] = Field(default_factory=dict)
-    """步骤具体要报告的信息，以 JSON 存储。"""
-
     created_at: datetime = Field(default_factory=utcnow)
-    """该步骤报告写入数据库的时间。"""
 
 
 def _parse_serialized_files(value: str) -> dict[str, str]:
-    """Parse one serialized multi-file field and validate its portable shape."""
-
     try:
         parsed = json.loads(value)
     except json.JSONDecodeError as exc:
@@ -243,7 +180,7 @@ def _parse_serialized_files(value: str) -> dict[str, str]:
     if not isinstance(parsed, dict) or any(
         not isinstance(path, str) or not path or not isinstance(content, str) for path, content in parsed.items()
     ):
-        raise ValueError("serialized files must be a JSON object mapping non-empty paths to text content")
+        raise ValueError("serialized files must map non-empty paths to text")
     return parsed
 
 
@@ -252,7 +189,10 @@ __all__ = [
     "AlgorithmLogRecord",
     "PersistenceModel",
     "RolloutType",
+    "SkillFamilyStateRecord",
     "SkillRecord",
+    "SkillRemoteOperationRecord",
+    "SkillSyncStateRecord",
     "SkillVersionOrigin",
     "SkillVersionStatus",
     "TrajectoryRecord",

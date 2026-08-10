@@ -13,11 +13,11 @@ from ...typing import (
     SearchFilter,
 )
 from ..base import MemoryDbPipelineMixin
-from ..registry import register
+from ..registry import PipelineType, register
 from ..utils import format_datetime, format_memory_event_time, format_source_timestamp
 
 
-@register(type="get", name="default_get")
+@register(type=PipelineType.GET, name="default_get")
 class DefaultGetPipeline(MemoryDbPipelineMixin):
     """List active memories in the request project by filter (no query scoring)."""
 

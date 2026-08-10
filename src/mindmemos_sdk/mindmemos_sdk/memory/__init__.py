@@ -1,7 +1,7 @@
 """Memory API resource client."""
 
 from .async_client import AsyncMemoryClient
-from .backends import AsyncMemoryBackend, HttpMemoryBackend, InMemoryMemoryBackend
+from .backends import AsyncMemoryBackend, HttpMemoryBackend
 from .client import MemoryClient
 from .models import (
     AddResult,
@@ -25,7 +25,6 @@ __all__ = [
     "AsyncMemoryClient",
     "AsyncMemoryBackend",
     "HttpMemoryBackend",
-    "InMemoryMemoryBackend",
     "AddResult",
     "FeedbackMode",
     "SearchResult",

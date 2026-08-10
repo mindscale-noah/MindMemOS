@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from mindmemos_skill.management import (
+    PendingSkillOperation,
+    SkillManagementDetail,
+    SkillManagementSummary,
+    snapshot_from_record,
+)
+from mindmemos_skill.persistence import SkillRecord
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..skills import (
     EvolveCloudResult,
     ExportSkillRequest,
     ExportSkillResult,
-    LocalSkillManifest,
-    LocalSyncOperation,
-    PromoteCloudResult,
     PublishLocalRequest,
     PublishLocalResult,
     RegisterLocalRequest,
@@ -18,8 +22,7 @@ from ..skills import (
     SkillEvolveMode,
     SkillManager,
 )
-from ..skills.bundle import bundle_files_from_content
-from ..skills.models import LocalSkillFileRole, LocalSkillSyncState, LocalSkillVersionMetadata
+from ..skills.models import LocalSkillFileRole, LocalSkillSyncState
 
 
 class SkillListItemView(BaseModel):
@@ -29,11 +32,11 @@ class SkillListItemView(BaseModel):
 
     skill_id: str
     name: str
+    description: str | None = None
     alias: str | None = None
     cloud_skill_id: str | None = None
-    active_version_id: str
-    published_head_id: str | None = None
-    cloud_revision: int | None = None
+    latest_version_id: str
+    latest_version_label: str
     version_count: int
     pending_count: int
     sync_state: str
@@ -46,14 +49,14 @@ class SkillVersionView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version_id: str
-    parent_version_id: str | None = None
+    parent_version_ids: list[str] = Field(default_factory=list)
     version_label: str | None = None
     commit_message: str | None = None
     content_hash: str
     local_snapshot_hash: str
     origin: str
     status: str
-    is_active: bool
+    is_latest: bool
     is_published: bool
     has_linked_files: bool
     sync_state: str
@@ -67,19 +70,19 @@ class SkillDetailView(BaseModel):
 
     skill: SkillListItemView
     versions: list[SkillVersionView] = Field(default_factory=list)
-    active_version: SkillVersionView
-    published_version: SkillVersionView | None = None
-    outbox_operations: list[LocalSyncOperation] = Field(default_factory=list)
+    latest_version: SkillVersionView
+    outbox_operations: list[PendingSkillOperation] = Field(default_factory=list)
 
 
 class SkillContentView(BaseModel):
-    """Human-editable algorithm content for one immutable version."""
+    """Human-editable files for one immutable version."""
 
     model_config = ConfigDict(extra="forbid")
 
     skill_id: str
     version_id: str
     content: str
+    files: dict[str, str] = Field(default_factory=dict)
 
 
 class SkillCompareView(BaseModel):
@@ -93,6 +96,20 @@ class SkillCompareView(BaseModel):
     linked_file_changes: list[str] = Field(default_factory=list)
 
 
+class SkillDeleteResultView(BaseModel):
+    """Explicit scope report for one destructive local unregister operation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str
+    name: str
+    alias: str | None = None
+    deleted_version_count: int = Field(ge=0)
+    deleted_pending_count: int = Field(ge=0)
+    source_files_deleted: bool = False
+    cloud_skill_deleted: bool = False
+
+
 class LocalSkillUIService:
     """Aggregate UI DTOs while delegating every state change to ``SkillManager``."""
 
@@ -100,43 +117,42 @@ class LocalSkillUIService:
         self._manager = manager
 
     def list_skills(self) -> list[SkillListItemView]:
-        """Return centralized Skill rows without any external source paths."""
+        """Project the one-shot Application overview without querying SDK stores."""
 
-        operations = self._manager.local_repository.load_outbox().operations
-        return [self._list_item(manifest, operations) for manifest in self._manager.list_local()]
+        skills, _operations = self.overview()
+        return skills
+
+    def overview(self) -> tuple[list[SkillListItemView], list[PendingSkillOperation]]:
+        """Return list rows and outbox projected from one Application result DTO."""
+
+        overview = self._manager.management_overview()
+        return [self._list_item(summary) for summary in overview.skills], overview.pending_operations
 
     def detail(self, skill_ref: str) -> SkillDetailView:
         """Build one Skill detail aggregate from immutable local state."""
 
-        manifest = self._manager.show_local(skill_ref)
-        operations = [
-            operation
-            for operation in self._manager.local_repository.load_outbox().operations
-            if operation.skill_id == manifest.skill_id
-        ]
-        versions = [
-            self._version_view(manifest, metadata)
-            for metadata in self._manager.local_history(manifest.skill_id)
-        ]
+        aggregate = self._manager.management_detail(skill_ref)
+        versions = [self._version_view(aggregate, record) for record in aggregate.versions]
         by_id = {version.version_id: version for version in versions}
         return SkillDetailView(
-            skill=self._list_item(manifest, operations),
+            skill=self._list_item(SkillManagementSummary(skill=aggregate.skill, sync_state=aggregate.sync_state)),
             versions=versions,
-            active_version=by_id[manifest.active_version_id],
-            published_version=by_id.get(manifest.published_head_id or ""),
-            outbox_operations=operations,
+            latest_version=by_id[aggregate.latest_version.version_id],
+            outbox_operations=aggregate.pending_operations,
         )
 
     def content(self, skill_ref: str, version_id: str | None = None) -> SkillContentView:
         """Return only the algorithm-managed ``SKILL.md`` content."""
 
-        manifest = self._manager.show_local(skill_ref)
-        resolved_version_id = version_id or manifest.active_version_id
-        snapshot = self._manager.get_local_snapshot(manifest.skill_id, version_id=resolved_version_id)
+        aggregate = self._manager.management_detail(skill_ref)
+        resolved_version_id = version_id or aggregate.latest_version.version_id
+        record = next(item for item in aggregate.versions if item.version_id == resolved_version_id)
+        snapshot = snapshot_from_record(record)
         return SkillContentView(
-            skill_id=manifest.skill_id,
+            skill_id=aggregate.skill.skill_id,
             version_id=resolved_version_id,
-            content=bundle_files_from_content(snapshot.content)["SKILL.md"],
+            content=snapshot.blob["SKILL.md"],
+            files=snapshot.file_contents,
         )
 
     def register(self, request: RegisterLocalRequest) -> RegisterLocalResult:
@@ -150,40 +166,28 @@ class LocalSkillUIService:
         result = self._manager.publish_local(request)
         return result, self.detail(result.skill_id)
 
-    def switch(self, skill_ref: str, version_id: str) -> SkillDetailView:
-        """Switch the local active pointer and return refreshed detail."""
-
-        manifest = self._manager.switch_local(skill_ref, version_id=version_id)
-        return self.detail(manifest.skill_id)
-
     def export(self, request: ExportSkillRequest) -> ExportSkillResult:
         """Export a complete selected snapshot through the shared manager."""
 
         return self._manager.export_local(request)
 
+    def unregister(self, skill_ref: str) -> SkillDeleteResultView:
+        """Delete one local registration while preserving source and cloud data."""
+
+        detail = self.detail(skill_ref)
+        removed = self._manager.unregister(detail.skill.skill_id)
+        return SkillDeleteResultView(
+            skill_id=removed.skill_id,
+            name=removed.name,
+            alias=removed.alias,
+            deleted_version_count=len(detail.versions),
+            deleted_pending_count=len(detail.outbox_operations),
+        )
+
     def sync(self, skill_ref: str, *, direction: str = "both") -> SkillDetailView:
         """Run one explicit cloud direction and return refreshed local state."""
 
-        if direction == "both":
-            manifest = self._manager.sync_local(skill_ref)
-        elif direction == "pull":
-            self._manager.pull_local(skill_ref)
-            manifest = self._manager.show_local(skill_ref)
-        elif direction == "push":
-            manifest = self._manager.show_local(skill_ref)
-            for version in self._manager.local_history(manifest.skill_id):
-                if version.sync_state == LocalSkillSyncState.CONFLICT:
-                    raise ValueError(
-                        f"cannot push unresolved conflicting version: {version.version_id}"
-                    )
-                if version.sync_state != LocalSkillSyncState.SYNCED:
-                    self._manager.push_local(
-                        manifest.skill_id,
-                        version_id=version.version_id,
-                    )
-            manifest = self._manager.show_local(manifest.skill_id)
-        else:
-            raise ValueError("sync direction must be 'push', 'pull', or 'both'")
+        manifest = self._manager.sync_local(skill_ref, direction=direction)
         return self.detail(manifest.skill_id)
 
     def evolve(
@@ -205,23 +209,6 @@ class LocalSkillUIService:
             operation_id=operation_id,
         )
 
-    def promote(
-        self,
-        skill_ref: str,
-        *,
-        version_id: str,
-        expected_cloud_revision: int | None = None,
-        operation_id: str | None = None,
-    ) -> PromoteCloudResult:
-        """Promote one cloud UUID without changing the local active pointer."""
-
-        return self._manager.promote_local(
-            skill_ref,
-            version_id=version_id,
-            operation_id=operation_id,
-            expected_cloud_revision=expected_cloud_revision,
-        )
-
     def compare(self, skill_ref: str, from_version_id: str, to_version_id: str) -> SkillCompareView:
         """Compare algorithm content and local-only linked file manifests."""
 
@@ -230,23 +217,22 @@ class LocalSkillUIService:
             from_version_id=from_version_id,
             to_version_id=to_version_id,
         )
-        manifest = self._manager.show_local(skill_ref)
-        from_snapshot = self._manager.get_local_snapshot(manifest.skill_id, version_id=from_version_id)
-        to_snapshot = self._manager.get_local_snapshot(manifest.skill_id, version_id=to_version_id)
+        aggregate = self._manager.management_detail(skill_ref)
+        by_id = {record.version_id: record for record in aggregate.versions}
+        from_snapshot = snapshot_from_record(by_id[from_version_id])
+        to_snapshot = snapshot_from_record(by_id[to_version_id])
         from_files = {
-            item.path: item.blob_hash
+            item.path: item.content_hash
             for item in from_snapshot.files
-            if item.role != LocalSkillFileRole.ALGORITHM
+            if item.role.value != LocalSkillFileRole.ALGORITHM.value
         }
         to_files = {
-            item.path: item.blob_hash
+            item.path: item.content_hash
             for item in to_snapshot.files
-            if item.role != LocalSkillFileRole.ALGORITHM
+            if item.role.value != LocalSkillFileRole.ALGORITHM.value
         }
         changed = [
-            path
-            for path in sorted(set(from_files) | set(to_files))
-            if from_files.get(path) != to_files.get(path)
+            path for path in sorted(set(from_files) | set(to_files)) if from_files.get(path) != to_files.get(path)
         ]
         return SkillCompareView(
             from_version_id=from_version_id,
@@ -257,54 +243,50 @@ class LocalSkillUIService:
 
     def _list_item(
         self,
-        manifest: LocalSkillManifest,
-        operations: list[LocalSyncOperation],
+        summary: SkillManagementSummary,
     ) -> SkillListItemView:
-        pending_count = sum(1 for operation in operations if operation.skill_id == manifest.skill_id)
-        version_states = {
-            version.sync_state
-            for version in self._manager.local_history(manifest.skill_id)
-        }
-        if LocalSkillSyncState.CONFLICT in version_states:
-            sync_state = LocalSkillSyncState.CONFLICT.value
-        elif pending_count:
-            sync_state = LocalSkillSyncState.PENDING.value
-        elif manifest.cloud_skill_id is None:
-            sync_state = LocalSkillSyncState.LOCAL_ONLY.value
-        else:
-            sync_state = LocalSkillSyncState.SYNCED.value
+        skill = summary.skill
         return SkillListItemView(
-            skill_id=manifest.skill_id,
-            name=manifest.name,
-            alias=manifest.alias,
-            cloud_skill_id=manifest.cloud_skill_id,
-            active_version_id=manifest.active_version_id,
-            published_head_id=manifest.published_head_id,
-            cloud_revision=manifest.cloud_revision,
-            version_count=len(manifest.version_ids),
-            pending_count=pending_count,
-            sync_state=sync_state,
-            last_sync_at=manifest.last_sync_at,
+            skill_id=skill.skill_id,
+            name=skill.name,
+            description=skill.description,
+            alias=skill.alias,
+            cloud_skill_id=skill.cloud_skill_id,
+            latest_version_id=skill.latest_version_id,
+            latest_version_label=skill.latest_version_label,
+            version_count=skill.version_count,
+            pending_count=skill.pending_count,
+            sync_state=summary.sync_state.value,
+            last_sync_at=skill.last_version_sync_at.isoformat() if skill.last_version_sync_at else None,
         )
 
     def _version_view(
         self,
-        manifest: LocalSkillManifest,
-        metadata: LocalSkillVersionMetadata,
+        aggregate: SkillManagementDetail,
+        record: SkillRecord,
     ) -> SkillVersionView:
-        snapshot = self._manager.get_local_snapshot(manifest.skill_id, version_id=metadata.version_id)
+        snapshot = snapshot_from_record(record)
+        operation = next((item for item in aggregate.pending_operations if item.version_id == record.version_id), None)
+        if operation is not None and operation.status.value == "failed":
+            sync_state = LocalSkillSyncState.FAILED.value
+        elif operation is not None:
+            sync_state = LocalSkillSyncState.PENDING.value
+        elif isinstance(record.metadata.get("cloud"), dict) or record.origin.value == "cloud":
+            sync_state = LocalSkillSyncState.SYNCED.value
+        else:
+            sync_state = LocalSkillSyncState.LOCAL_ONLY.value
         return SkillVersionView(
-            version_id=metadata.version_id,
-            parent_version_id=metadata.parent_version_id,
-            version_label=metadata.version_label,
-            commit_message=metadata.commit_message,
-            content_hash=metadata.content_hash,
-            local_snapshot_hash=metadata.local_snapshot_hash,
-            origin=metadata.origin.value,
-            status=metadata.cloud_status.value if metadata.cloud_status is not None else "local_only",
-            is_active=metadata.version_id == manifest.active_version_id,
-            is_published=metadata.version_id == manifest.published_head_id,
-            has_linked_files=bool(snapshot.linked_files),
-            sync_state=metadata.sync_state.value,
-            created_at=metadata.created_at,
+            version_id=record.version_id,
+            parent_version_ids=list(record.parent_version_ids),
+            version_label=record.version_label,
+            commit_message=record.commit_message,
+            content_hash=record.content_hash,
+            local_snapshot_hash=snapshot.local_snapshot_hash,
+            origin=record.origin.value,
+            status=record.status.value,
+            is_latest=record.version_id == aggregate.latest_version.version_id,
+            is_published=record.status.value == "published",
+            has_linked_files=bool(snapshot.resources),
+            sync_state=sync_state,
+            created_at=record.created_at.isoformat(),
         )

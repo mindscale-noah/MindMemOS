@@ -8,7 +8,7 @@ from .dreaming.base import DreamingPipeline
 from .feedback.base import FeedbackPipeline
 from .get.base import GetPipeline
 from .memory_db import MemoryDbReader, MemoryDbWriter
-from .registry import create_pipeline, load_builtin_pipelines, register
+from .registry import PipelineType, create_pipeline, load_builtin_pipelines, register
 from .search.base import SearchPipeline
 from .update.base import UpdatePipeline
 
@@ -24,6 +24,7 @@ __all__ = [
     "MemoryDbPipelineMixin",
     "MemoryDbReader",
     "MemoryDbWriter",
+    "PipelineType",
     "SearchPipeline",
     "SchemaAddPipeline",
     "UpdatePipeline",

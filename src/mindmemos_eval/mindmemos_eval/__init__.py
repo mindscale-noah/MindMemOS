@@ -95,7 +95,7 @@ from mindmemos_eval.memory.envs.personamem import (
     load_personamem_questions,
 )
 
-from .backend import ConnectionMode, MindMemOSBackend, build_mindmemos_backend
+from .backend import MindMemOSBackend, build_mindmemos_backend
 from .llm import LLMClient, LLMCompletion, LLMConfig, LLMProvider
 from .memory.base import (
     AlgorithmProfile,
@@ -175,7 +175,6 @@ __all__ = [
     "LLMCompletion",
     "LLMConfig",
     "LLMProvider",
-    "ConnectionMode",
     "MindMemOSBackend",
     "build_mindmemos_backend",
     "BenchmarkRunManifest",

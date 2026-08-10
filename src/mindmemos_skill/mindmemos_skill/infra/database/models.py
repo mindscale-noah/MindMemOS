@@ -83,6 +83,8 @@ class DatabaseCapabilities:
     metadata_filtering: bool = True
     batch_record_io: bool = True
     atomic_batch_write: bool = False
+    transactions: bool = False
+    compare_and_swap: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -90,11 +92,19 @@ class DatabaseRequirements:
     metadata_filtering: bool = False
     batch_record_io: bool = False
     atomic_batch_write: bool = False
+    transactions: bool = False
+    compare_and_swap: bool = False
 
     def missing_from(self, available: DatabaseCapabilities) -> tuple[str, ...]:
         return tuple(
             field_name
-            for field_name in ("metadata_filtering", "batch_record_io", "atomic_batch_write")
+            for field_name in (
+                "metadata_filtering",
+                "batch_record_io",
+                "atomic_batch_write",
+                "transactions",
+                "compare_and_swap",
+            )
             if getattr(self, field_name) and not getattr(available, field_name)
         )
 
@@ -177,6 +187,34 @@ class TableSpec:
                 raise ValueError(f"index {index.name!r} references unknown fields: {sorted(unknown)}")
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SchemaMigration:
+    """One immutable, ordered schema step over registered logical tables.
+
+    The generic contract intentionally models only table-catalog adoption. A
+    backend records the step before accepting a newer catalog. Destructive or
+    data-transforming migrations must be added as explicit backend operations
+    instead of silently changing a :class:`TableSpec` in place.
+    """
+
+    namespace: str
+    version: int
+    name: str
+    tables: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.namespace.strip():
+            raise ValueError("schema migration namespace must not be empty")
+        if self.version <= 0:
+            raise ValueError("schema migration version must be positive")
+        if not self.name.strip():
+            raise ValueError("schema migration name must not be empty")
+        if not self.tables:
+            raise ValueError("schema migration must reference at least one table")
+        if len(self.tables) != len(set(self.tables)):
+            raise ValueError("schema migration tables may not contain duplicates")
+
+
 __all__ = [
     "ComparisonOperator",
     "DatabaseCapabilities",
@@ -192,6 +230,7 @@ __all__ = [
     "Predicate",
     "Record",
     "RecordQuery",
+    "SchemaMigration",
     "Sort",
     "TableSpec",
 ]

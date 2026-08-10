@@ -1,18 +1,12 @@
-"""Root SDK client facade.
-
-Assembles the SDK from local config: it reads ``~/.mindmemos/settings.json`` via
-:class:`ConfigManager`, builds a shared :class:`HttpTransport`, and exposes resource
-clients (currently ``memory``). Explicit constructor arguments override config so
-callers can run without a config file.
-"""
+"""Synchronous root SDK facade composed from portal configuration."""
 
 from __future__ import annotations
 
-from .config import ConfigManager, SDKConfig
+from .config import ConfigManager, SDKConfig, SDKConfigCompilerV2, SDKPortalConfigV2
 from .errors import AuthRequiredError
 from .memory import MemoryClient
 from .memory.core import MemoryDefaults
-from .skills import SkillCloudClient, SkillManager
+from .skills import SkillManager
 from .transport import HttpTransport
 
 
@@ -28,24 +22,32 @@ class MindMemOSClient:
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
-        config: SDKConfig | None = None,
+        config: SDKPortalConfigV2 | SDKConfig | None = None,
         config_manager: ConfigManager | None = None,
         transport: HttpTransport | None = None,
     ) -> None:
         """Handle init."""
+        manager = config_manager or ConfigManager()
         if config is None:
-            manager = config_manager or ConfigManager()
-            config = manager.load_or_default()
-        else:
-            manager = config_manager or ConfigManager()
+            config = manager.load_or_default_portal()
+        elif isinstance(config, SDKConfig):
+            config = manager.convert_legacy_config(config)
         self._config = config
+        portal_profile = SDKConfigCompilerV2().compile(config).profile
+        connection = portal_profile.connections[portal_profile.memory_connection]
+        identity = portal_profile.identity
+        memory_config = portal_profile.memory_defaults
+        resolved_base_url = connection.base_url
+        resolved_api_key = connection.api_key
+        timeout_seconds = connection.timeout_seconds
+        max_retries = connection.max_retries
 
-        self._base_url = base_url or config.base_url
-        self._api_key = api_key or config.auth.api_key
-        self._user_id = user_id or config.defaults.user_id
-        self._app_id = app_id or config.defaults.app_id
-        self._agent_id = agent_id or config.defaults.agent_id
-        self._session_id = session_id or config.defaults.session_id
+        self._base_url = base_url or resolved_base_url
+        self._api_key = api_key or resolved_api_key
+        self._user_id = user_id or identity.user_id
+        self._app_id = app_id or identity.app_id
+        self._agent_id = agent_id or identity.agent_id
+        self._session_id = session_id or identity.session_id
 
         self._owns_transport = transport is None
         resolved_transport = transport
@@ -53,12 +55,12 @@ class MindMemOSClient:
             resolved_transport = HttpTransport(
                 base_url=self._base_url,
                 api_key=self._api_key,
-                timeout_seconds=config.network.timeout_seconds,
-                max_retries=config.network.max_retries,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
             )
         self._transport = resolved_transport
 
-        self.skills = SkillManager.from_config_manager(manager, SkillCloudClient(self._transport))
+        self.skills = SkillManager.from_portal_profile(portal_profile)
         self.memory = MemoryClient(
             self._transport,
             default_user_id=self._user_id,
@@ -71,18 +73,18 @@ class MindMemOSClient:
                 app_id=self._app_id,
                 agent_id=self._agent_id,
                 session_id=self._session_id,
-                add_mode=config.memory.add_mode,
-                add_default_role=config.memory.add_default_role,
-                add_auto_skill_context=config.memory.add_auto_skill_context,
-                search_top_k=config.memory.search_top_k,
-                search_strategy=config.memory.search_strategy,
-                search_rerank=config.memory.search_rerank,
-                search_score_threshold=config.memory.search_score_threshold,
-                search_filters=config.memory.search_filters,
-                get_top_k=config.memory.get_top_k,
-                get_filters=config.memory.get_filters,
-                feedback_mode=config.memory.feedback_mode,
-                dreaming_mode=config.memory.dreaming_mode,
+                add_mode=memory_config.add_mode,
+                add_default_role=memory_config.add_default_role,
+                add_auto_skill_context=memory_config.add_auto_skill_context,
+                search_top_k=memory_config.search_top_k,
+                search_strategy=memory_config.search_strategy,
+                search_rerank=memory_config.search_rerank,
+                search_score_threshold=memory_config.search_score_threshold,
+                search_filters=memory_config.search_filters,
+                get_top_k=memory_config.get_top_k,
+                get_filters=memory_config.get_filters,
+                feedback_mode=memory_config.feedback_mode,
+                dreaming_mode=memory_config.dreaming_mode,
             ),
         )
 
@@ -94,6 +96,7 @@ class MindMemOSClient:
 
     def close(self) -> None:
         """Release resources created by this root client."""
+        self.skills.close()
         if self._owns_transport:
             self._transport.close()
 

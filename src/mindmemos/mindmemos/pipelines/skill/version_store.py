@@ -13,6 +13,8 @@ the same point and returns the existing version instead of forking a new
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from datetime import datetime
 
@@ -21,15 +23,27 @@ from ...components.skill import (
     compute_content_hash,
     serialize_bundle,
 )
-from ...errors import SkillContentNotFoundError, SkillNotFoundError, SkillVersionNotFoundError
+from ...errors import (
+    SkillBundleError,
+    SkillConflictError,
+    SkillContentNotFoundError,
+    SkillNotFoundError,
+    SkillVersionNotFoundError,
+)
 from ...infra.db import AddRecordPoint, get_database_clients
 from ...logging import get_logger
 from ...mappers import (
     skill_blob_from_record,
+    skill_family_from_record,
+    skill_family_id,
+    skill_operation_from_record,
+    skill_operation_id,
     skill_trace_pending_from_record,
     skill_version_from_record,
     skill_version_id,
     to_skill_blob_point,
+    to_skill_family_point,
+    to_skill_operation_point,
     to_skill_trace_pending_point,
     to_skill_version_point,
 )
@@ -38,7 +52,12 @@ from ...typing import (
     SkillBlob,
     SkillContent,
     SkillContext,
+    SkillFamilyState,
     SkillOrigin,
+    SkillRemoteOperation,
+    SkillRemoteOperationStatus,
+    SkillRemoteSyncItem,
+    SkillRemoteSyncResultItem,
     SkillSummary,
     SkillSyncRequestItem,
     SkillSyncResult,
@@ -65,7 +84,7 @@ class SkillVersionStore:
 
     @property
     def _skill(self):
-        return self._skill_repo if self._skill_repo is not None else get_database_clients().skill
+        return self._skill_repo if self._skill_repo is not None else get_database_clients().legacy_skill
 
     @property
     def _add_record(self):
@@ -79,6 +98,12 @@ class SkillVersionStore:
         content: str,
         version_label: str | None = None,
         parent_version_id: str | None = None,
+        operation_id: str | None = None,
+        cloud_skill_id: str | None = None,
+        version_id: str | None = None,
+        expected_content_hash: str | None = None,
+        commit_message: str | None = None,
+        created_at: datetime | None = None,
     ) -> SkillVersion:
         """Register a skill version idempotently (design §5.2).
 
@@ -97,36 +122,85 @@ class SkillVersionStore:
         files = bundle_files_from_content(content)
         content_hash = compute_content_hash(files)
         canonical = serialize_bundle(files)
+        if expected_content_hash is not None and expected_content_hash != content_hash:
+            raise SkillConflictError(
+                f"content hash mismatch: expected {expected_content_hash}, computed {content_hash}"
+            )
         parent = parent_version_id or None
-        version_id = skill_version_id(project_id, content_hash, parent)
-
-        existing = await self._skill.get_version(project_id, version_id)
+        resolved_version_id = version_id or skill_version_id(project_id, content_hash, parent)
+        request_hash = _operation_request_hash(
+            {
+                "cloud_skill_id": cloud_skill_id,
+                "name": name,
+                "version_id": resolved_version_id,
+                "parent_version_id": parent,
+                "content_hash": content_hash,
+                "version_label": version_label,
+                "commit_message": commit_message,
+            }
+        )
+        operation = await self._begin_operation(
+            project_id=project_id,
+            operation_id=operation_id,
+            operation_type="push_version",
+            request_hash=request_hash,
+            cloud_skill_id=cloud_skill_id,
+        )
+        existing = await self._skill.get_version(project_id, resolved_version_id)
         if existing is not None:
             version = skill_version_from_record(existing)
+            if (
+                version.content_hash != content_hash
+                or version.parent_version_id != parent
+                or version.skill_name != name
+                or (cloud_skill_id is not None and version.cloud_skill_id != cloud_skill_id)
+            ):
+                raise SkillConflictError(f"version_id already has different immutable inputs: {resolved_version_id}")
+            await self._ensure_family_state(
+                project_id=project_id,
+                cloud_skill_id=version.cloud_skill_id,
+                now=utcnow(),
+            )
             await self._rebind_pending(project_id, version)
+            await self._complete_operation(operation, version.model_dump(mode="json"), version.cloud_skill_id)
             return version
 
-        cloud_skill_id = await self._resolve_cloud_skill_id(project_id, parent)
+        resolved_cloud_skill_id = await self._resolve_cloud_skill_id(project_id, parent)
+        if parent is None and cloud_skill_id is not None:
+            resolved_cloud_skill_id = cloud_skill_id
+        elif cloud_skill_id is not None and cloud_skill_id != resolved_cloud_skill_id:
+            raise SkillConflictError(
+                f"cloud Skill mapping mismatch: expected {resolved_cloud_skill_id}, got {cloud_skill_id}"
+            )
         now = utcnow()
+        version_created_at = created_at or now
         await self._skill.upsert_blob(
             to_skill_blob_point(
                 SkillBlob(project_id=project_id, content_hash=content_hash, content=canonical, created_at=now)
             )
         )
         version = SkillVersion(
-            version_id=version_id,
+            version_id=resolved_version_id,
             project_id=project_id,
-            cloud_skill_id=cloud_skill_id,
+            cloud_skill_id=resolved_cloud_skill_id,
             skill_name=name,
             content_hash=content_hash,
             parent_version_id=parent,
             version_label=version_label,
+            commit_message=commit_message,
             status=SkillVersionStatus.OBSERVED,
             origin=SkillOrigin.EDGE,
-            created_at=now,
+            created_at=version_created_at,
+            received_at=now,
         )
         await self._skill.upsert_version(to_skill_version_point(version))
+        await self._ensure_family_state(
+            project_id=project_id,
+            cloud_skill_id=resolved_cloud_skill_id,
+            now=now,
+        )
         await self._rebind_pending(project_id, version)
+        await self._complete_operation(operation, version.model_dump(mode="json"), resolved_cloud_skill_id)
         return version
 
     async def create_evolved_version(
@@ -152,7 +226,10 @@ class SkillVersionStore:
             SkillVersionNotFoundError: If ``parent_version_id`` does not exist.
         """
 
-        files = bundle_files_from_content(content)
+        try:
+            files = bundle_files_from_content(content)
+        except SkillBundleError:
+            files = {"SKILL.md": content}
         content_hash = compute_content_hash(files)
         canonical = serialize_bundle(files)
         version_id = skill_version_id(project_id, content_hash, parent_version_id)
@@ -240,7 +317,9 @@ class SkillVersionStore:
         """Unmanage a cloud skill by deleting its version metadata (design §5.4)."""
 
         versions = await self.versions_since(project_id=project_id, cloud_skill_id=cloud_skill_id)
+        await self._skill.delete_family_operations(project_id, cloud_skill_id)
         await self._skill.delete_versions([version.version_id for version in versions])
+        await self._skill.delete_family_control(skill_family_id(project_id, cloud_skill_id))
 
     async def sync(self, *, project_id: str, items: list[SkillSyncRequestItem]) -> list[SkillSyncResult]:
         """Compare local versions with cloud published heads (design §5.3)."""
@@ -248,8 +327,12 @@ class SkillVersionStore:
         results: list[SkillSyncResult] = []
         for item in items:
             await self._latest_or_raise(project_id, item.cloud_skill_id)
-            head_record = await self._skill.published_head(project_id, item.cloud_skill_id)
-            published_head = skill_version_from_record(head_record) if head_record is not None else None
+            state = await self._get_or_migrate_family_state(project_id, item.cloud_skill_id)
+            published_head = (
+                await self._version_or_raise(project_id, state.published_head_id)
+                if state.published_head_id is not None
+                else None
+            )
             results.append(
                 SkillSyncResult(
                     cloud_skill_id=item.cloud_skill_id,
@@ -261,14 +344,238 @@ class SkillVersionStore:
             )
         return results
 
+    async def sync_remote(
+        self,
+        *,
+        project_id: str,
+        items: list[SkillRemoteSyncItem],
+    ) -> list[SkillRemoteSyncResultItem]:
+        results: list[SkillRemoteSyncResultItem] = []
+        for item in items:
+            state = await self._get_or_migrate_family_state(project_id, item.cloud_skill_id)
+            versions = await self.versions_since(
+                project_id=project_id,
+                cloud_skill_id=item.cloud_skill_id,
+            )
+            known = set(item.known_version_ids)
+            results.append(
+                SkillRemoteSyncResultItem(
+                    cloud_skill_id=item.cloud_skill_id,
+                    versions=[version for version in versions if version.version_id not in known],
+                    published_head_id=state.published_head_id,
+                    cloud_revision=state.cloud_revision,
+                )
+            )
+        return results
+
+    async def promote(
+        self,
+        *,
+        project_id: str,
+        cloud_skill_id: str,
+        operation_id: str | None,
+        version_id: str,
+        expected_cloud_revision: int,
+    ) -> SkillFamilyState:
+        request_hash = _operation_request_hash(
+            {
+                "cloud_skill_id": cloud_skill_id,
+                "version_id": version_id,
+                "expected_cloud_revision": expected_cloud_revision,
+            }
+        )
+        resolved_operation_id = operation_id or f"promote:{request_hash}"
+        operation = await self._begin_operation(
+            project_id=project_id,
+            operation_id=resolved_operation_id,
+            operation_type="promote",
+            request_hash=request_hash,
+            cloud_skill_id=cloud_skill_id,
+        )
+        if operation is not None and operation.status is SkillRemoteOperationStatus.COMPLETED:
+            assert operation.result is not None
+            completed = SkillFamilyState.model_validate(operation.result)
+            family_record = await self._skill.get_family(skill_family_id(project_id, cloud_skill_id))
+            version_record = await self._skill.get_version(project_id, version_id)
+            if family_record is not None and version_record is not None:
+                current_family = skill_family_from_record(family_record)
+                current_version = skill_version_from_record(version_record)
+                if (
+                    completed.project_id == project_id
+                    and completed.cloud_skill_id == cloud_skill_id
+                    and completed.published_head_id == version_id
+                    and current_family.created_at == completed.created_at
+                    and current_family.cloud_revision >= completed.cloud_revision
+                    and current_version.cloud_skill_id == cloud_skill_id
+                ):
+                    return completed
+
+        version = await self._version_or_raise(project_id, version_id)
+        if version.cloud_skill_id != cloud_skill_id:
+            raise SkillConflictError(f"version {version_id} does not belong to cloud Skill {cloud_skill_id}")
+        state = await self._get_or_migrate_family_state(project_id, cloud_skill_id)
+        if state.cloud_revision != expected_cloud_revision:
+            if state.cloud_revision == expected_cloud_revision + 1 and state.published_head_id == version_id:
+                await self._complete_operation(operation, state.model_dump(mode="json"), cloud_skill_id)
+                return state
+            raise SkillConflictError(
+                f"cloud revision conflict: expected {expected_cloud_revision}, current {state.cloud_revision}"
+            )
+        now = utcnow()
+        record = await self._skill.compare_and_swap_family(
+            project_id=project_id,
+            cloud_skill_id=cloud_skill_id,
+            expected_revision=expected_cloud_revision,
+            changes={
+                "published_head_id": version_id,
+                "cloud_revision": expected_cloud_revision + 1,
+                "updated_at": now,
+            },
+        )
+        if record is None:
+            raise SkillConflictError(f"cloud Skill family disappeared: {cloud_skill_id}")
+        updated = skill_family_from_record(record)
+        if updated.cloud_revision != expected_cloud_revision + 1 or updated.published_head_id != version_id:
+            raise SkillConflictError(
+                f"cloud revision conflict: expected {expected_cloud_revision}, current {updated.cloud_revision}"
+            )
+        await self._complete_operation(operation, updated.model_dump(mode="json"), cloud_skill_id)
+        return updated
+
     async def _summary_from_latest(self, project_id: str, latest: SkillVersion) -> SkillSummary:
-        head_record = await self._skill.published_head(project_id, latest.cloud_skill_id)
+        state = await self._get_or_migrate_family_state(project_id, latest.cloud_skill_id)
         return SkillSummary(
             cloud_skill_id=latest.cloud_skill_id,
             skill_name=latest.skill_name,
             latest_version=latest,
-            published_head=skill_version_from_record(head_record) if head_record is not None else None,
+            published_head=(
+                await self._version_or_raise(project_id, state.published_head_id)
+                if state.published_head_id is not None
+                else None
+            ),
         )
+
+    async def _ensure_family_state(
+        self,
+        *,
+        project_id: str,
+        cloud_skill_id: str,
+        now: datetime,
+        published_head_id: str | None = None,
+        migration_source: str | None = None,
+    ) -> SkillFamilyState:
+        family_key = skill_family_id(project_id, cloud_skill_id)
+        existing = await self._skill.get_family(family_key)
+        if existing is not None:
+            state = skill_family_from_record(existing)
+            if state.cloud_revision == 0 and state.published_head_id is None:
+                legacy_head = await self._skill.published_head(project_id, cloud_skill_id)
+                if legacy_head is not None:
+                    migrated = await self._skill.compare_and_swap_family(
+                        project_id=project_id,
+                        cloud_skill_id=cloud_skill_id,
+                        expected_revision=0,
+                        changes={
+                            "published_head_id": legacy_head.payload["version_id"],
+                            "migration_source": "skill_version_v1",
+                            "updated_at": utcnow(),
+                        },
+                    )
+                    if migrated is not None:
+                        return skill_family_from_record(migrated)
+            return state
+        candidate = SkillFamilyState(
+            project_id=project_id,
+            cloud_skill_id=cloud_skill_id,
+            published_head_id=published_head_id,
+            cloud_revision=0,
+            created_at=now,
+            updated_at=now,
+            migration_source=migration_source,
+        )
+        await self._skill.upsert_family(to_skill_family_point(candidate))
+        stored = await self._skill.get_family(family_key)
+        assert stored is not None
+        return skill_family_from_record(stored)
+
+    async def _get_or_migrate_family_state(
+        self,
+        project_id: str,
+        cloud_skill_id: str,
+    ) -> SkillFamilyState:
+        family_key = skill_family_id(project_id, cloud_skill_id)
+        existing = await self._skill.get_family(family_key)
+        if existing is not None:
+            return await self._ensure_family_state(
+                project_id=project_id,
+                cloud_skill_id=cloud_skill_id,
+                now=utcnow(),
+            )
+        await self._latest_or_raise(project_id, cloud_skill_id)
+        legacy_head = await self._skill.published_head(project_id, cloud_skill_id)
+        return await self._ensure_family_state(
+            project_id=project_id,
+            cloud_skill_id=cloud_skill_id,
+            now=utcnow(),
+            published_head_id=legacy_head.payload["version_id"] if legacy_head is not None else None,
+            migration_source="skill_version_v1",
+        )
+
+    async def _begin_operation(
+        self,
+        *,
+        project_id: str,
+        operation_id: str | None,
+        operation_type: str,
+        request_hash: str,
+        cloud_skill_id: str | None,
+    ) -> SkillRemoteOperation | None:
+        if operation_id is None:
+            return None
+        point_id = skill_operation_id(project_id, operation_id)
+        existing = await self._skill.get_operation(point_id)
+        if existing is not None:
+            operation = skill_operation_from_record(existing)
+            if operation.request_hash != request_hash or operation.operation_type != operation_type:
+                raise SkillConflictError(f"operation_id already belongs to different inputs: {operation_id}")
+            return operation
+        now = utcnow()
+        operation = SkillRemoteOperation(
+            project_id=project_id,
+            operation_id=operation_id,
+            cloud_skill_id=cloud_skill_id,
+            operation_type=operation_type,
+            request_hash=request_hash,
+            status=SkillRemoteOperationStatus.PENDING,
+            created_at=now,
+            updated_at=now,
+        )
+        await self._skill.upsert_operation(to_skill_operation_point(operation))
+        stored = await self._skill.get_operation(point_id)
+        assert stored is not None
+        stored_operation = skill_operation_from_record(stored)
+        if stored_operation.request_hash != request_hash:
+            raise SkillConflictError(f"operation_id was claimed concurrently: {operation_id}")
+        return stored_operation
+
+    async def _complete_operation(
+        self,
+        operation: SkillRemoteOperation | None,
+        result: dict,
+        cloud_skill_id: str,
+    ) -> None:
+        if operation is None:
+            return
+        completed = operation.model_copy(
+            update={
+                "cloud_skill_id": cloud_skill_id,
+                "status": SkillRemoteOperationStatus.COMPLETED,
+                "result": result,
+                "error_code": None,
+                "updated_at": utcnow(),
+            }
+        )
+        await self._skill.upsert_operation(to_skill_operation_point(completed))
 
     async def _latest_or_raise(self, project_id: str, cloud_skill_id: str) -> SkillVersion:
         record = await self._skill.latest_version(project_id, cloud_skill_id)
@@ -429,6 +736,11 @@ class SkillVersionStore:
                 binding["version_id"] = version.version_id
                 changed = True
         return changed
+
+
+def _operation_request_hash(payload: dict) -> str:
+    serialized = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 _store: SkillVersionStore | None = None

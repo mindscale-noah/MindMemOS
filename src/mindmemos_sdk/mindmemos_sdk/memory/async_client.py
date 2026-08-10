@@ -6,6 +6,8 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from mindmemos_skill import SkillApplication
+
 from ..config import HttpConnectionConfig
 from ..connections import HttpConnection
 from ..transport import AsyncHttpTransport
@@ -38,6 +40,7 @@ class AsyncMemoryClient:
         default_agent_id: str | None = None,
         default_session_id: str | None = None,
         memory_defaults: MemoryDefaults | None = None,
+        skill_application: SkillApplication | None = None,
     ) -> None:
         if isinstance(backend, AsyncHttpTransport):
             connection = HttpConnection(
@@ -49,6 +52,7 @@ class AsyncMemoryClient:
         if not isinstance(backend, AsyncMemoryBackend):
             raise TypeError("backend must be an AsyncHttpTransport or AsyncMemoryBackend")
         self._backend = backend
+        self._skill_application = skill_application
         base_defaults = memory_defaults or MemoryDefaults()
         self._defaults = replace(
             base_defaults,
@@ -74,6 +78,8 @@ class AsyncMemoryClient:
         task_id: str | None = None,
     ) -> AddResult:
         """Add content to the memory store."""
+        if self._skill_application is not None and self._defaults.add_auto_skill_context and skill_context is None:
+            skill_context = await self._skill_application.resolve_skill_context(messages)
         request = self._core.add(
             messages=messages,
             user_id=user_id,
@@ -109,9 +115,7 @@ class AsyncMemoryClient:
             user_id=user_id,
             search_strategy=search_strategy or self._defaults.search_strategy,
             rerank=self._defaults.search_rerank if rerank is None else rerank,
-            score_threshold=(
-                self._defaults.search_score_threshold if score_threshold is _UNSET else score_threshold
-            ),
+            score_threshold=(self._defaults.search_score_threshold if score_threshold is _UNSET else score_threshold),
             filters=self._defaults.search_filters if filters is _UNSET else filters,
             app_id=app_id,
             agent_id=agent_id,

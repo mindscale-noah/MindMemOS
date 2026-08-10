@@ -338,18 +338,18 @@ async def test_rewrite_pass_runs_when_enabled(harness, patched_cfg):
 def test_skill_evolver_is_registered_and_selectable():
     """The evolve algorithm version is pluggable via the pipeline registry."""
 
-    from mindmemos.pipelines.registry import create_pipeline, load_builtin_pipelines
+    from mindmemos.pipelines.registry import PipelineType, create_pipeline, load_builtin_pipelines
 
     load_builtin_pipelines()
-    evolver = create_pipeline(type="skill_evolve", name="trace_v2_summary")
+    evolver = create_pipeline(type=PipelineType.SKILL_EVOLVE, name="trace_v2_summary")
     assert isinstance(evolver, SkillEvolver)
 
 
 def test_unknown_evolve_version_raises():
-    from mindmemos.pipelines.registry import create_pipeline
+    from mindmemos.pipelines.registry import PipelineType, create_pipeline
 
     with pytest.raises(ValueError, match="Unknown skill_evolve pipeline"):
-        create_pipeline(type="skill_evolve", name="does_not_exist")
+        create_pipeline(type=PipelineType.SKILL_EVOLVE, name="does_not_exist")
 
 
 def test_rewrite_prompt_is_format_only():

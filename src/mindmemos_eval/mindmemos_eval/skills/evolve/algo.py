@@ -4,7 +4,7 @@ Three implementations satisfy :class:`SkillEvolutionClient`:
 
 - :class:`NoopSkillEvolutionClient` — the no-evolution baseline.
 - :class:`MindMemOSSkillEvolutionClient` — uses the shared asynchronous SDK
-  backend over HTTP or an embedded Lite runtime.
+  backend over HTTP.
 - :class:`FastAPISkillEvolutionClient` — drives the real MindMemOS server:
   register the staged skills once, record each finished rollout as an *injected*
   ``/v1/memory/add`` trace, then call ``POST /v1/skills/evolve``. When the server
@@ -107,7 +107,7 @@ class _ManagedSkill:
 
 
 class MindMemOSSkillEvolutionClient:
-    """Drive skill evolution through a shared HTTP or Lite in-memory backend."""
+    """Drive skill evolution through a shared HTTP backend."""
 
     def __init__(
         self,
