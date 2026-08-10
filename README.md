@@ -317,6 +317,12 @@ mindmemos skill unregister my-skill
 - **File system memory**: Structure scattered knowledge from local files, documents, project artifacts, and agent outputs into searchable and connected file knowledge objects or knowledge graphs, helping agents complete user tasks more effectively.
 - **Agent integrations**: Continue expanding support for coding agents, OpenClaw, Codex-style workflows, and long-running multi-agent systems.
 
+## Contributing
+
+Contributions of all kinds are welcome. Please open pull requests against the `develop` branch. After review,
+accepted changes will be merged into `develop`; maintainers periodically merge stable `develop` updates into `main`
+for release.
+
 ## 💬 Community
 
 Join the MindMemOS Feishu group for project updates, usage discussions, and community participation.
