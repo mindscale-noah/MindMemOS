@@ -245,7 +245,7 @@ def test_search_returns_hits_and_sends_params():
         )
 
     client = MemoryClient(_transport(handler), default_user_id="u_1")
-    result = client.search("pets", top_k=5)
+    result = client.search("pets", top_k=5, user_id="u_1")
     assert captured["body"]["query"] == "pets"
     assert captured["body"]["top_k"] == 5
     assert captured["body"]["user_id"] == "u_1"
@@ -606,14 +606,14 @@ def test_user_id_override():
     assert captured["body"]["user_id"] == "u_override"
 
 
-def test_search_without_user_id_omits_user_scope():
+def test_search_without_user_id_does_not_inherit_default_user_scope():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, json={"code": "ok", "data": {"memories": []}})
 
-    client = MemoryClient(_transport(handler))
+    client = MemoryClient(_transport(handler), default_user_id="u-default")
     client.search("q")
 
     assert "user_id" not in captured["body"]
