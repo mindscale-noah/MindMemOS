@@ -64,15 +64,24 @@ def _trajectory(*, expected_token: str, final_answer: str) -> Trajectory:
                     {
                         "id": "call-1",
                         "type": "function",
-                        "function": {"name": "Skill", "arguments": f'{{"skill":"{SKILL_NAME}"}}'},
+                        "function": {"name": "skill", "arguments": f'{{"name":"{SKILL_NAME}"}}'},
                     }
                 ],
             },
             {
                 "role": "tool",
-                "name": "Skill",
+                "name": "skill",
                 "tool_call_id": "call-1",
-                "content": '{"name":"mindmemos-runtime-eval"}',
+                "content": "Result of 'skill' delivered in the following user message.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Loaded skill '{SKILL_NAME}'.\n"
+                    "Skill directory (absolute path): /tmp/skills/mindmemos-runtime-eval\n"
+                    "Reference files live under that directory; read or run them with the read/shell tools as needed.\n\n"
+                    f"----- {SKILL_NAME}/SKILL.md -----\nUse the private token."
+                ),
             },
             {"role": "assistant", "content": final_answer},
         ],
