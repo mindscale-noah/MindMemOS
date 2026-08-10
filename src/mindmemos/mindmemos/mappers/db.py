@@ -64,6 +64,10 @@ def search_filter_to_qdrant(
 
     filterable_fields = _filterable_fields_for_target(target)
     must: list[Any] = [match_value("project_id", ctx.project_id)]
+    if ctx.user_id is not None:
+        # User-level isolation within a project: restrict recall to the
+        # requesting actor's memories/entities (payload field `user_id`).
+        must.append(match_value("user_id", ctx.user_id))
     should: list[Any] = []
     must_not: list[Any] = []
     if sf is not None:
