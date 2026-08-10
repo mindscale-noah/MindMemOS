@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -152,7 +153,7 @@ async def test_react_agent_exposes_injected_skill_as_reserved_tool_and_binds_ver
     )
     llm = FakeChatClient(
         [
-            assistant(tool_calls=[tool_call("Skill", '{"skill":"demo"}', call_id="skill-call")]),
+            assistant(tool_calls=[tool_call("skill", '{"name":"demo"}', call_id="skill-call")]),
             assistant(content="done"),
         ]
     )
@@ -181,6 +182,7 @@ async def test_react_agent_exposes_injected_skill_as_reserved_tool_and_binds_ver
         update={
             "name": "demo<&>",
             "description": "Use <tool> & verify",
+            "resources": {"references/helper.py": "HELPER = True\n"},
         }
     )
     with agent.inject_skills([escaped_skill]) as injection:
@@ -192,11 +194,34 @@ async def test_react_agent_exposes_injected_skill_as_reserved_tool_and_binds_ver
             "  </skill>\n"
             "</available_skills>"
         )
+        assert injection.workspace is not None
+        skill_directory = Path(injection.workspace) / "skills" / "demo"
+        assert (skill_directory / "SKILL.md").read_text(encoding="utf-8") == (
+            "Always use the persisted instructions.\n"
+        )
+        assert (skill_directory / "references" / "helper.py").read_text(encoding="utf-8") == "HELPER = True\n"
+    assert not Path(injection.workspace).exists()
     skill_schema = llm.calls[0]["tools"][0]
-    assert skill_schema["function"]["name"] == "Skill"
-    assert skill_schema["function"]["parameters"]["properties"]["skill"]["enum"] == ["demo"]
+    assert skill_schema["function"]["name"] == "skill"
+    assert skill_schema["function"]["parameters"] == {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Skill to load. One of: demo.",
+            }
+        },
+        "required": ["name"],
+    }
     tool_result = next(event for event in trajectory.events if event.get("tool_call_id") == "skill-call")
-    assert "Always use the persisted instructions." in tool_result["content"]
+    assert tool_result["content"] == "Result of 'skill' delivered in the following user message."
+    delivered_result = trajectory.events[trajectory.events.index(tool_result) + 1]
+    assert delivered_result["role"] == "user"
+    assert "Loaded skill 'demo'." in delivered_result["content"]
+    assert "Skill directory (absolute path):" in delivered_result["content"]
+    assert "Always use the persisted instructions." in delivered_result["content"]
+    assert "version-1" not in delivered_result["content"]
+    assert "sha256:skill" not in delivered_result["content"]
     assert trajectory.skill_bindings[0].version_id == "version-1"
     assert trajectory.skill_bindings[0].usage is SkillUsageType.INJECTED
     assert trajectory.skill_bindings[0].injection_mode is SkillInjectionMode.TOOL
@@ -215,7 +240,12 @@ async def test_react_agent_only_binds_a_successfully_loaded_skill_result() -> No
     )
     llm = FakeChatClient(
         [
-            assistant(tool_calls=[tool_call("Skill", '{"skill":"unknown"}', call_id="failed-skill")]),
+            assistant(
+                tool_calls=[
+                    tool_call("skill", '{"name":"unknown"}', call_id="failed-skill"),
+                    tool_call("skill", "not-json", call_id="malformed-skill"),
+                ]
+            ),
             assistant(content="done"),
         ]
     )
@@ -223,7 +253,14 @@ async def test_react_agent_only_binds_a_successfully_loaded_skill_result() -> No
     trajectory = await ReactAgent({}, llm=llm).execute(make_request(skills=[skill]))
 
     failed_result = next(event for event in trajectory.events if event.get("tool_call_id") == "failed-skill")
-    assert failed_result["content"].startswith("Error: ValueError: unknown Skill")
+    assert failed_result["content"] == "Result of 'skill' delivered in the following user message."
+    delivered_error = trajectory.events[trajectory.events.index(failed_result) + 1]
+    assert delivered_error["content"] == "Error: unknown skill 'unknown'. Available skills: demo"
+    malformed_result = next(event for event in trajectory.events if event.get("tool_call_id") == "malformed-skill")
+    assert malformed_result["content"] == "Result of 'skill' delivered in the following user message."
+    malformed_error = trajectory.events[trajectory.events.index(malformed_result) + 1]
+    assert malformed_error["content"].startswith("Error: TypeError:")
+    assert "__raw__" in malformed_error["content"]
     assert trajectory.skill_bindings[0].usage is SkillUsageType.UNUSED
 
 
@@ -343,7 +380,7 @@ async def test_react_agent_returns_tool_errors_to_model_for_recovery() -> None:
 
     assert trajectory.execution.status is TrajectoryStatus.SUCCEEDED
     assert trajectory.events[-3]["content"] == "Error: unknown tool 'missing'"
-    assert trajectory.events[-2]["content"].startswith("Error: invalid tool arguments:")
+    assert trajectory.events[-2]["content"] == "Error: unknown tool 'missing'"
     assert llm.calls[1]["messages"][-2:] == trajectory.events[-3:-1]
 
 
@@ -374,4 +411,27 @@ def test_react_agent_rejects_duplicate_and_reserved_tool_names() -> None:
     with pytest.raises(ValueError, match="duplicate tool name"):
         ReactAgent({}, llm=FakeChatClient([]), tools=[duplicate, duplicate])
     with pytest.raises(ValueError, match="reserved"):
-        ReactAgent({}, llm=FakeChatClient([]), tools=[Tool(name="Skill", description="", func=noop)])
+        ReactAgent({}, llm=FakeChatClient([]), tools=[Tool(name="skill", description="", func=noop)])
+
+
+def test_react_skill_tool_materialization_rejects_directory_collisions_and_escaping_paths() -> None:
+    skill = Skill(
+        skill_id="skill-1",
+        version_id="version-1",
+        version_label="1.0.0",
+        content_hash="sha256:skill",
+        name="demo one",
+        blob={"SKILL.md": "instructions"},
+        created_at=datetime(2026, 8, 4, tzinfo=UTC),
+    )
+    agent = ReactAgent({}, llm=FakeChatClient([]))
+
+    collision = skill.model_copy(update={"skill_id": "skill-2", "version_id": "version-2", "name": "demo@one"})
+    with pytest.raises(ValueError, match="duplicate injected Skill directory"):
+        with agent.inject_skills([skill, collision]):
+            pass
+
+    escaping = skill.model_copy(update={"resources": {"../outside.txt": "blocked"}})
+    with pytest.raises(ValueError, match="escapes its ReAct directory"):
+        with agent.inject_skills([escaping]):
+            pass

@@ -1,6 +1,43 @@
 """Skill components for MindMemOS."""
 
 from .agents import Agent, AgentExecutionRequest, get_agent, list_agents
+from .application import SkillApplication
+from .contracts import (
+    AgentType as RemoteAgentType,
+)
+from .contracts import (
+    RolloutType as RemoteRolloutType,
+)
+from .contracts import (
+    SkillBundle,
+    SkillBundleFile,
+    SkillRemoteOperation,
+    SkillRemoteOperationStatus,
+    SkillRemoteOperationType,
+    SkillTrajectory,
+    SkillTrajectoryBinding,
+    SkillTrajectoryReportRequest,
+    SkillTrajectoryReportResult,
+    SkillTrajectoryUpload,
+    SkillVersionCore,
+    TrajectorySanitizer,
+    TrajectorySource,
+    canonical_request_hash,
+    compute_trajectory_hash,
+    parse_skill_bundle,
+)
+from .contracts import (
+    SkillUsageType as RemoteSkillUsageType,
+)
+from .contracts import (
+    SkillVersionOrigin as RemoteSkillVersionOrigin,
+)
+from .contracts import (
+    SkillVersionStatus as RemoteSkillVersionStatus,
+)
+from .contracts import (
+    TrajectoryStatus as RemoteTrajectoryStatus,
+)
 from .envs import get_env, list_envs
 from .errors import (
     ConfigError,
@@ -19,16 +56,100 @@ from .errors import (
     SkillExportError,
     SkillManagementError,
     SkillNotFoundError,
+    SkillRemoteOperationError,
+    SkillRemoteRequestError,
     SkillServiceClosedError,
     SkillSnapshotError,
 )
-from .service import MindMemosSkill, SkillAlgorithms
+from .management import (
+    PullResult,
+    PushResult,
+    SkillManagementDetail,
+    SkillManagementOverview,
+    SkillManagementSummary,
+    SkillManagementSyncState,
+)
+from .remote import (
+    CLOUD_SKILL_ROOT_FILE,
+    RemoteEvolveRequest,
+    RemoteEvolveResult,
+    RemotePushRequest,
+    RemotePushResult,
+    RemoteSyncItem,
+    RemoteSyncRequest,
+    RemoteSyncResult,
+    RemoteSyncResultItem,
+    RemoteTrajectoryPage,
+    RemoteTrajectoryPullRequest,
+    RemoteTrajectoryReportRequest,
+    RemoteTrajectoryReportResult,
+    RemoteVersionContent,
+    RemoteVersionsPage,
+    RemoteVersionSummary,
+    SkillRemotePort,
+    compute_remote_skill_content_hash,
+    deserialize_remote_skill_content,
+    is_remote_skill_bundle_path,
+    normalize_remote_skill_bundle,
+    serialize_remote_skill_content,
+)
+from .service import SkillAlgorithms
 
 __all__ = [
+    "CLOUD_SKILL_ROOT_FILE",
     "Agent",
     "AgentExecutionRequest",
-    "MindMemosSkill",
+    "RemoteAgentType",
+    "RemoteRolloutType",
+    "RemoteSkillUsageType",
+    "RemoteSkillVersionOrigin",
+    "RemoteSkillVersionStatus",
+    "RemoteTrajectoryStatus",
+    "SkillBundle",
+    "SkillBundleFile",
+    "SkillRemoteOperation",
+    "SkillRemoteOperationStatus",
+    "SkillRemoteOperationType",
+    "SkillTrajectory",
+    "SkillTrajectoryBinding",
+    "SkillTrajectoryReportRequest",
+    "SkillTrajectoryReportResult",
+    "SkillTrajectoryUpload",
+    "SkillVersionCore",
+    "TrajectorySanitizer",
+    "TrajectorySource",
+    "canonical_request_hash",
+    "compute_trajectory_hash",
+    "parse_skill_bundle",
+    "SkillApplication",
     "SkillAlgorithms",
+    "SkillRemotePort",
+    "PullResult",
+    "PushResult",
+    "SkillManagementDetail",
+    "SkillManagementOverview",
+    "SkillManagementSummary",
+    "SkillManagementSyncState",
+    "RemotePushRequest",
+    "RemotePushResult",
+    "RemoteSyncItem",
+    "RemoteSyncRequest",
+    "RemoteSyncResult",
+    "RemoteSyncResultItem",
+    "RemoteVersionContent",
+    "RemoteVersionSummary",
+    "RemoteVersionsPage",
+    "RemoteEvolveRequest",
+    "RemoteEvolveResult",
+    "RemoteTrajectoryPage",
+    "RemoteTrajectoryPullRequest",
+    "RemoteTrajectoryReportRequest",
+    "RemoteTrajectoryReportResult",
+    "compute_remote_skill_content_hash",
+    "deserialize_remote_skill_content",
+    "is_remote_skill_bundle_path",
+    "normalize_remote_skill_bundle",
+    "serialize_remote_skill_content",
     "MindMemOSSkillError",
     "MindMemosSkillError",
     "ConfigError",
@@ -45,6 +166,8 @@ __all__ = [
     "SkillExportError",
     "SkillManagementError",
     "SkillNotFoundError",
+    "SkillRemoteOperationError",
+    "SkillRemoteRequestError",
     "SkillServiceClosedError",
     "SkillSnapshotError",
     "get_agent",

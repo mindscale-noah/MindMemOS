@@ -5,49 +5,56 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from mindmemos_skill.contracts import SkillBundle
 from mindmemos_skill.persistence import (
     AlgorithmLogRecord,
     RolloutType,
-    SkillFamilyStateRecord,
     SkillRecord,
+    SkillRemoteOperationRecord,
+    SkillSyncStateRecord,
     TrajectoryRecord,
 )
 from pydantic import ValidationError
 
 
 def test_one_skill_record_is_one_version_with_inline_content() -> None:
+    bundle = SkillBundle.from_files({"SKILL.md": "# Spreadsheet Skill"})
     version = SkillRecord(
         version_id="version-3",
         skill_id="skill-1",
         name="spreadsheet",
         parent_version_ids=["version-1", "version-2"],
-        content_hash="content-hash",
-        blob='{"SKILL.md":"# Spreadsheet Skill","core/policy.md":"policy"}',
+        content_hash=bundle.content_hash,
+        bundle=bundle.canonical_json(),
         resources='{"references/guide.md":"guide"}',
+        local_snapshot_hash=bundle.content_hash,
         version_label="1.2.0",
     )
 
     assert version.parent_version_ids == ["version-1", "version-2"]
-    assert '"core/policy.md"' in version.blob
+    assert '"SKILL.md":"# Spreadsheet Skill\\n"' in version.blob
 
-    with pytest.raises(ValidationError, match="may not contain duplicates"):
+    with pytest.raises(ValidationError, match="must be unique and ordered"):
+        duplicate_bundle = SkillBundle.from_files({"SKILL.md": "# Spreadsheet Skill"})
         SkillRecord(
             version_id="version-3",
             skill_id="skill-1",
             name="spreadsheet",
             parent_version_ids=["version-1", "version-1"],
-            content_hash="content-hash",
-            blob='{"SKILL.md":"# Spreadsheet Skill"}',
+            content_hash=duplicate_bundle.content_hash,
+            bundle=duplicate_bundle.canonical_json(),
+            local_snapshot_hash=duplicate_bundle.content_hash,
             version_label="1.2.0",
         )
 
-    with pytest.raises(ValidationError, match="valid JSON"):
+    with pytest.raises(ValidationError):
         SkillRecord(
             version_id="version-4",
             skill_id="skill-1",
             name="spreadsheet",
-            content_hash="content-hash",
-            blob="# Plain Markdown is not the persistence format",
+            content_hash=bundle.content_hash,
+            bundle="# Plain Markdown is not the persistence format",
+            local_snapshot_hash=bundle.content_hash,
             version_label="1.3.0",
         )
 
@@ -56,6 +63,7 @@ def test_trajectory_is_one_flat_row_with_json_columns() -> None:
     started = datetime(2026, 8, 3, tzinfo=UTC)
     trajectory = TrajectoryRecord(
         trajectory_id="trajectory-1",
+        trajectory_hash="sha256:trajectory-1",
         task_id="task-1",
         task_instruction="Update the workbook",
         rollout_id="rollout-1",
@@ -92,6 +100,7 @@ def test_trajectory_is_one_flat_row_with_json_columns() -> None:
 def test_trajectory_retry_keeps_rollout_id_and_appends_attempt() -> None:
     failed = TrajectoryRecord(
         trajectory_id="trajectory-1",
+        trajectory_hash="sha256:trajectory-1",
         task_id="task-1",
         task_instruction="Update the workbook",
         rollout_id="rollout-1",
@@ -100,6 +109,7 @@ def test_trajectory_retry_keeps_rollout_id_and_appends_attempt() -> None:
     )
     retried = TrajectoryRecord(
         trajectory_id="trajectory-2",
+        trajectory_hash="sha256:trajectory-2",
         task_id="task-1",
         task_instruction="Update the workbook",
         rollout_id="rollout-1",
@@ -141,7 +151,7 @@ def test_algorithm_log_accepts_component_specific_json_payload() -> None:
         )
 
 
-def test_three_fact_records_and_one_control_record_are_table_records() -> None:
+def test_persistence_exports_canonical_fact_and_control_records() -> None:
     from mindmemos_skill.persistence import models
 
     record_names = {
@@ -154,16 +164,18 @@ def test_three_fact_records_and_one_control_record_are_table_records() -> None:
         "AlgorithmLogRecord",
         "SkillFamilyStateRecord",
         "SkillRecord",
+        "SkillRemoteOperationRecord",
+        "SkillSyncStateRecord",
         "TrajectoryRecord",
     }
 
 
-def test_persistence_defines_three_fact_rows_and_one_family_state_row() -> None:
+def test_persistence_defines_five_physical_row_models() -> None:
     from mindmemos_skill.persistence import models
 
     row_model_names = {
-        name
-        for name, value in vars(models).items()
+        value.__name__
+        for value in vars(models).values()
         if isinstance(value, type)
         and issubclass(value, models.PersistenceModel)
         and value is not models.PersistenceModel
@@ -171,32 +183,36 @@ def test_persistence_defines_three_fact_rows_and_one_family_state_row() -> None:
 
     assert row_model_names == {
         "AlgorithmLogRecord",
-        "SkillFamilyStateRecord",
         "SkillRecord",
+        "SkillRemoteOperationRecord",
+        "SkillSyncStateRecord",
         "TrajectoryRecord",
     }
 
 
-def test_family_state_requires_stable_unique_pending_operation_ids() -> None:
-    state = SkillFamilyStateRecord(
+def test_sync_state_and_remote_operation_are_independent_records() -> None:
+    state = SkillSyncStateRecord(
         skill_id="skill-1",
-        effective_version_id="version-1",
-        pending_operations=[{"operation_id": "push-1", "kind": "push", "status": "pending"}],
+        trajectory_pull_cursor="cursor-1",
+    )
+    operation = SkillRemoteOperationRecord(
+        operation_id="push-1",
+        operation_type="push_version",
+        skill_id="skill-1",
+        version_id="version-1",
+        request_hash="sha256:request-1",
+        status="pending",
     )
 
-    assert state.pending_operations[0]["operation_id"] == "push-1"
+    assert state.trajectory_pull_cursor == "cursor-1"
+    assert operation.operation_id == "push-1"
 
-    with pytest.raises(ValidationError, match="non-empty operation_id"):
-        SkillFamilyStateRecord(
-            skill_id="skill-1",
-            effective_version_id="version-1",
-            pending_operations=[{"kind": "push"}],
-        )
-    with pytest.raises(ValidationError, match="must be unique"):
-        SkillFamilyStateRecord(
-            skill_id="skill-1",
-            effective_version_id="version-1",
-            pending_operations=[{"operation_id": "same"}, {"operation_id": "same"}],
+    with pytest.raises(ValidationError):
+        SkillRemoteOperationRecord(
+            operation_id="",
+            operation_type="push_version",
+            request_hash="sha256:request-1",
+            status="pending",
         )
 
 

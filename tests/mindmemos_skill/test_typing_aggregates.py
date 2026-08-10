@@ -4,6 +4,7 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from mindmemos_skill.contracts import SkillBundle
 from mindmemos_skill.persistence import TrajectoryRecord
 from mindmemos_skill.typing import (
     AgentProfile,
@@ -30,30 +31,29 @@ from pydantic import ValidationError
 
 def test_skill_aggregates_version_identity_content_and_lineage() -> None:
     created_at = datetime(2026, 8, 4, tzinfo=UTC)
+    content_hash = SkillBundle.from_files({"SKILL.md": "# Spreadsheet Skill"}).content_hash
     skill = Skill(
         skill_id="skill-1",
         version_id="version-2",
         parent_version_ids=["version-1"],
         version_label="1.1.0",
-        content_hash="sha256:abc",
+        content_hash=content_hash,
         status=SkillVersionStatus.PUBLISHED,
         origin=SkillVersionOrigin.EVOLUTION,
         name="spreadsheet",
         description="Edit and validate workbooks",
         alias="sheet",
-        blob={
-            "SKILL.md": "# Spreadsheet Skill",
+        blob={"SKILL.md": "# Spreadsheet Skill"},
+        resources={
+            "references/format.md": "format guide",
             "scripts/validate.py": "print('ok')",
         },
-        resources={"references/format.md": "format guide"},
         created_at=created_at,
     )
 
-    assert skill.blob == {
-        "SKILL.md": "# Spreadsheet Skill",
-        "scripts/validate.py": "print('ok')",
-    }
-    assert skill.content == "# Spreadsheet Skill"
+    assert skill.blob == {"SKILL.md": "# Spreadsheet Skill\n"}
+    assert skill.resources["scripts/validate.py"] == "print('ok')"
+    assert skill.content == "# Spreadsheet Skill\n"
     assert skill.parent_version_ids == ["version-1"]
     assert Skill.from_record(skill.to_record()) == skill
 
@@ -210,6 +210,7 @@ def test_trajectory_record_stores_only_agent_api_key_digest() -> None:
 def test_persistence_trajectory_keeps_algorithm_aggregates_as_json_columns() -> None:
     record = TrajectoryRecord(
         trajectory_id="trajectory-1",
+        trajectory_hash="0" * 64,
         task_id="task-1",
         task_instruction="Update the workbook",
         rollout_id="rollout-1",

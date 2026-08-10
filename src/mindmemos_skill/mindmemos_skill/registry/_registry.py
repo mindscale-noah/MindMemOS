@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
+
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -16,18 +19,38 @@ if TYPE_CHECKING:
 
 
 class ComponentType(StrEnum):
-    """Supported unified component registry categories."""
-
     ENV = "env"
     DATASET = "dataset"
     ALGO = "algo"
     AGENT = "agent"
 
 
-_COMPONENT_REGISTRY: dict[ComponentType, dict[str, type[Any]]] = {}
+@dataclass(frozen=True, slots=True)
+class ComponentRequirements:
+    """Cross-component references and runtime support required by a component."""
+
+    requires_model_ref: bool = False
+    required_model_roles: frozenset[str] = frozenset()
+    supported_skill_injection_modes: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class ComponentSpec:
+    """Construction and validation metadata for one registered component."""
+
+    component_type: ComponentType
+    name: str
+    factory: type[Any]
+    config_model: type[BaseModel] | None = None
+    capabilities: frozenset[str] = frozenset()
+    requirements: ComponentRequirements = ComponentRequirements()
+
+
+_COMPONENT_REGISTRY: dict[ComponentType, dict[str, ComponentSpec]] = {}
 _BUILTINS_LOADED = False
 _BUILTIN_MODULES = (
     "..agents.claude",
+    "..agents.openclaw",
     "..agents.react",
     "..envs.registered_envs",
     "..datasets.alfworld",
@@ -35,7 +58,14 @@ _BUILTIN_MODULES = (
 )
 
 
-def register(*, type: ComponentType, name: str):
+def register(
+    *,
+    type: ComponentType,
+    name: str,
+    config_model: type[BaseModel] | None = None,
+    capabilities: frozenset[str] | set[str] = frozenset(),
+    requirements: ComponentRequirements = ComponentRequirements(),
+):
     """Register a component class under a type/name pair."""
 
     _require_component_type(type)
@@ -46,7 +76,24 @@ def register(*, type: ComponentType, name: str):
         components = _COMPONENT_REGISTRY.setdefault(type, {})
         if name in components:
             raise ValueError(f"{type} component {name!r} is already registered")
-        components[name] = cls
+        resolved_config_model = config_model or getattr(cls, "config_type", None)
+        resolved_requirements = requirements
+        if type is ComponentType.AGENT and not requirements.supported_skill_injection_modes:
+            runtime_types = getattr(cls, "skill_runtime_types", {})
+            resolved_requirements = replace(
+                requirements,
+                supported_skill_injection_modes=frozenset(
+                    mode.value if hasattr(mode, "value") else str(mode) for mode in runtime_types
+                ),
+            )
+        components[name] = ComponentSpec(
+            component_type=type,
+            name=name,
+            factory=cls,
+            config_model=resolved_config_model,
+            capabilities=frozenset(capabilities),
+            requirements=resolved_requirements,
+        )
         return cls
 
     return decorator
@@ -57,11 +104,23 @@ def create(*, type: ComponentType, name: str, **kwargs: Any) -> Any:
 
     _require_component_type(type)
     load_builtin_components()
-    component_cls = _COMPONENT_REGISTRY.get(type, {}).get(name)
-    if component_cls is None:
+    component = _COMPONENT_REGISTRY.get(type, {}).get(name)
+    if component is None:
         available = ", ".join(sorted(_COMPONENT_REGISTRY.get(type, {}))) or "<none>"
         raise ValueError(f"Unknown {type} component {name!r}. Available {type} components: {available}")
-    return component_cls(**kwargs)
+    return component.factory(**kwargs)
+
+
+def get_component(*, type: ComponentType, name: str) -> ComponentSpec:
+    """Return the immutable catalog entry for one registered component."""
+
+    _require_component_type(type)
+    load_builtin_components()
+    component = _COMPONENT_REGISTRY.get(type, {}).get(name)
+    if component is None:
+        available = ", ".join(sorted(_COMPONENT_REGISTRY.get(type, {}))) or "<none>"
+        raise ValueError(f"Unknown {type} component {name!r}. Available {type} components: {available}")
+    return component
 
 
 def list_components(*, type: ComponentType | None = None) -> dict[str, list[str]]:
@@ -139,9 +198,12 @@ def load_builtin_components() -> None:
 
 
 __all__ = [
+    "ComponentRequirements",
+    "ComponentSpec",
     "ComponentType",
     "create",
     "get_agent",
+    "get_component",
     "get_env",
     "list_agents",
     "list_components",

@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 
 from ..errors import SkillConflictError, SkillSnapshotError
+from ..typing import compute_skill_content_hash, normalize_skill_text, serialize_skill_files
 
 _VERSION_LABEL = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
 
 def normalize_text(content: str) -> str:
-    return content.replace("\r\n", "\n").replace("\r", "\n")
+    return normalize_skill_text(content)
 
 
 def serialize_files(files: dict[str, str]) -> str:
-    return json.dumps(files, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return serialize_skill_files(files)
 
 
 def deserialize_files(payload: str) -> dict[str, str]:
@@ -32,7 +32,7 @@ def deserialize_files(payload: str) -> dict[str, str]:
 
 
 def compute_content_hash(blob: dict[str, str]) -> str:
-    return hashlib.sha256(serialize_files(blob).encode("utf-8")).hexdigest()
+    return compute_skill_content_hash(blob)
 
 
 def parse_version_label(value: str) -> tuple[int, int, int]:

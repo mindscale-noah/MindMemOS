@@ -121,6 +121,45 @@ class SkillExportError(SkillManagementError):
     """Raised when a snapshot cannot be safely materialized or restored."""
 
 
+class SkillRemoteRequestError(SkillManagementError):
+    """Transport-neutral failure returned by a configured Skill remote port."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str,
+        retryable: bool,
+        status_code: int | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        self.error_code = error_code
+        self.retryable = retryable
+        self.status_code = status_code
+        self.request_id = request_id
+        super().__init__(message)
+
+
+class SkillRemoteOperationError(SkillManagementError):
+    """Raised after a remote operation fails and its durable state is recorded."""
+
+    def __init__(
+        self,
+        operation_id: str,
+        error_code: str,
+        *,
+        retryable: bool = False,
+        status_code: int | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        self.operation_id = operation_id
+        self.error_code = error_code
+        self.retryable = retryable
+        self.status_code = status_code
+        self.request_id = request_id
+        super().__init__(f"remote Skill operation failed: {operation_id} ({error_code})")
+
+
 __all__ = [
     "MindMemOSSkillError",
     "MindMemosSkillError",
@@ -140,4 +179,6 @@ __all__ = [
     "SkillConflictError",
     "SkillSnapshotError",
     "SkillExportError",
+    "SkillRemoteRequestError",
+    "SkillRemoteOperationError",
 ]

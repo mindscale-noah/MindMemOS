@@ -13,6 +13,7 @@ from mindmemos_skill.agents import (
     AgentExecutionRequest,
     ClaudeAgentConfig,
     ClaudeSDKAgentConfig,
+    OpenClawAgentConfig,
     get_agent,
     list_agents,
 )
@@ -41,7 +42,8 @@ def make_skill(*, content_hash: str = "sha256:demo") -> Skill:
         version_label="1.0.0",
         content_hash=content_hash,
         name="demo",
-        blob={"SKILL.md": "instructions", "script.py": "first"},
+        blob={"SKILL.md": "instructions"},
+        resources={"script.py": "first"},
         created_at=datetime(2026, 8, 4, tzinfo=UTC),
     )
 
@@ -94,9 +96,30 @@ def test_get_agent_rejects_config_for_a_different_agent_type() -> None:
 
 
 def test_list_agents_uses_agent_type_values() -> None:
-    assert list_agents() == [AgentType.CLAUDE.value, AgentType.CLAUDE_SDK.value, AgentType.REACT.value]
+    assert list_agents() == [
+        AgentType.CLAUDE.value,
+        AgentType.CLAUDE_SDK.value,
+        AgentType.OPENCLAW.value,
+        AgentType.REACT.value,
+    ]
     assert get_agent is registry_get_agent
     assert list_agents is registry_list_agents
+
+
+def test_get_agent_builds_openclaw_agent_config() -> None:
+    from mindmemos_skill.agents.openclaw import OpenClawAgent
+
+    agent = get_agent(
+        agent_type=AgentType.OPENCLAW,
+        config={"model": "openai/gpt-5", "agent_id": "main", "timeout_seconds": 30},
+    )
+
+    assert isinstance(agent, OpenClawAgent)
+    assert agent.config == OpenClawAgentConfig(
+        model="openai/gpt-5",
+        agent_id="main",
+        timeout_seconds=30,
+    )
 
 
 def test_agent_without_mounted_skill_runtime_rejects_injection() -> None:
@@ -178,7 +201,7 @@ def test_skill_workspace_materializes_the_persisted_bundle_without_rewriting(
         skill_dir = workspace / ".claude" / "skills" / "demo"
         assert result.mode is SkillInjectionMode.FILESYSTEM
         assert result.workspace == str(workspace)
-        assert (skill_dir / "SKILL.md").read_text() == "instructions"
+        assert (skill_dir / "SKILL.md").read_text() == "instructions\n"
         assert (skill_dir / "script.py").read_text() == "first"
         assert (skill_dir / "references" / "guide.md").read_text() == "guide"
 

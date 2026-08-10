@@ -23,7 +23,7 @@ from .support import (
 )
 
 
-@register(type=ComponentType.AGENT, name=AgentType.CLAUDE_SDK.value)
+@register(type=ComponentType.AGENT, name=AgentType.CLAUDE_SDK.value, capabilities={"execute"})
 class ClaudeSDKAgent(Agent[ClaudeSDKAgentConfig]):
     """Agent that uses ``claude_agent_sdk`` to execute tasks with skill support."""
 

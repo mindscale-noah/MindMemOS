@@ -37,7 +37,7 @@ def read_skill_snapshot(source_path: str | Path) -> SkillSnapshot:
             raise SkillSnapshotError(f"binary files are not supported in Skill snapshots: {relative}") from exc
         raw = normalized.encode("utf-8")
         role = _file_role(relative)
-        target = blob if role in {SnapshotFileRole.ALGORITHM, SnapshotFileRole.SCRIPT} else resources
+        target = blob if role is SnapshotFileRole.ALGORITHM else resources
         target[relative] = normalized
         files.append(
             SnapshotFile(
@@ -55,24 +55,70 @@ def read_skill_snapshot(source_path: str | Path) -> SkillSnapshot:
 
 
 def snapshot_from_editor(content: str, inherited: SkillSnapshot) -> SkillSnapshot:
-    normalized = normalize_text(content)
-    blob = dict(inherited.blob)
-    blob["SKILL.md"] = normalized
+    files = inherited.file_contents
+    files["SKILL.md"] = content
+    return snapshot_from_editor_files(files, inherited)
+
+
+def snapshot_from_editor_files(files: dict[str, str], inherited: SkillSnapshot) -> SkillSnapshot:
+    """Build a complete edited snapshot while preserving its file manifest."""
+
+    normalized = {validate_snapshot_path(path): normalize_text(content) for path, content in files.items()}
+    inherited_paths = set(inherited.file_contents)
+    if set(normalized) != inherited_paths:
+        raise SkillSnapshotError("editor files must preserve the existing Skill file paths")
+    if not normalized.get("SKILL.md", "").strip():
+        raise SkillSnapshotError("SKILL.md cannot be empty")
     files = [item.model_copy(deep=True) for item in inherited.files]
-    skill_file = next((item for item in files if item.path == "SKILL.md"), None)
-    if skill_file is None:
-        raise SkillSnapshotError("inherited snapshot contains no SKILL.md")
-    raw = normalized.encode("utf-8")
-    files[files.index(skill_file)] = skill_file.model_copy(
-        update={"content_hash": hashlib.sha256(raw).hexdigest(), "byte_size": len(raw)}
+    for index, item in enumerate(files):
+        raw = normalized[item.path].encode("utf-8")
+        files[index] = item.model_copy(
+            update={"content_hash": hashlib.sha256(raw).hexdigest(), "byte_size": len(raw)}
+        )
+    return _build_snapshot(
+        blob={"SKILL.md": normalized["SKILL.md"]},
+        resources={path: content for path, content in normalized.items() if path != "SKILL.md"},
+        files=files,
     )
-    return _build_snapshot(blob=blob, resources=dict(inherited.resources), files=files)
+
+
+def snapshot_from_cloud_content(
+    content: str,
+    inherited: SkillSnapshot | None,
+) -> SkillSnapshot:
+    """Compatibility wrapper for a single-file cloud bundle."""
+
+    return snapshot_from_cloud_bundle({"SKILL.md": content}, inherited)
+
+
+def snapshot_from_cloud_bundle(
+    blob: dict[str, str],
+    inherited: SkillSnapshot | None,
+) -> SkillSnapshot:
+    """Install a complete cloud bundle while retaining private local resources.
+
+    The local and remote bundle both contain only ``SKILL.md``. Scripts,
+    references and other resources are inherited locally and never cross the
+    remote boundary.
+    """
+
+    normalized_blob = {validate_snapshot_path(path): normalize_text(text) for path, text in blob.items()}
+    resources = dict(inherited.resources) if inherited is not None else {}
+    files = [_snapshot_file(path, text) for path, text in normalized_blob.items()]
+    if inherited is not None:
+        inherited_by_path = {item.path: item for item in inherited.files}
+        files.extend(inherited_by_path[path].model_copy(deep=True) for path in resources)
+    return _build_snapshot(
+        blob=normalized_blob,
+        resources=resources,
+        files=files,
+    )
 
 
 def snapshot_from_record(record: SkillRecord) -> SkillSnapshot:
     blob = deserialize_files(record.blob)
     resources = deserialize_files(record.resources)
-    metadata = record.metadata.get("snapshot")
+    metadata = record.local_metadata.get("snapshot")
     if not isinstance(metadata, dict):
         raise SkillSnapshotError(f"version {record.version_id} has no snapshot metadata")
     raw_files = metadata.get("files")
@@ -113,6 +159,8 @@ def _build_snapshot(
 ) -> SkillSnapshot:
     normalized_blob = {validate_snapshot_path(path): normalize_text(text) for path, text in blob.items()}
     normalized_resources = {validate_snapshot_path(path): normalize_text(text) for path, text in resources.items()}
+    if set(normalized_blob) != {"SKILL.md"}:
+        raise SkillSnapshotError("Skill bundle must contain exactly one SKILL.md file")
     if set(normalized_blob) & set(normalized_resources):
         raise SkillSnapshotError("snapshot paths may not appear in both blob and resources")
     expected_paths = set(normalized_blob) | set(normalized_resources)
@@ -189,9 +237,23 @@ def _file_role(path: str) -> SnapshotFileRole:
     return SnapshotFileRole.RESOURCE
 
 
+def _snapshot_file(path: str, content: str) -> SnapshotFile:
+    raw = content.encode("utf-8")
+    return SnapshotFile(
+        path=path,
+        content_hash=hashlib.sha256(raw).hexdigest(),
+        byte_size=len(raw),
+        media_type=mimetypes.guess_type(path)[0],
+        role=_file_role(path),
+    )
+
+
 __all__ = [
     "read_skill_snapshot",
+    "snapshot_from_cloud_bundle",
+    "snapshot_from_cloud_content",
     "snapshot_from_editor",
+    "snapshot_from_editor_files",
     "snapshot_from_record",
     "snapshot_metadata",
     "validate_snapshot_path",

@@ -40,7 +40,7 @@ class SkillVersionOrigin(StrEnum):
     LOCAL = "local"
     CLOUD = "cloud"
     EVOLUTION = "evolution"
-    MANAGE = "manage"
+    MERGE = "merge"
 
 
 class SkillVersionStatus(StrEnum):

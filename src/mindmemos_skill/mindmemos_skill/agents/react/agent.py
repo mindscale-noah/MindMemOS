@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from ...llm import ChatResponse
-from ...registry import ComponentType, register
+from ...registry import ComponentRequirements, ComponentType, register
 from ...typing import (
     AgentExecutionRequest,
     AgentType,
@@ -21,7 +21,7 @@ from .config import ReactAgentConfig
 from .skill_runtime import ReactSkillRuntime
 from .tool import Tool
 
-_SKILL_TOOL_NAME = "Skill"
+_SKILL_TOOL_NAME = "skill"
 
 
 class ChatClient(Protocol):
@@ -37,12 +37,17 @@ class ChatClient(Protocol):
     ) -> ChatResponse | None: ...
 
 
-@register(type=ComponentType.AGENT, name=AgentType.REACT.value)
+@register(
+    type=ComponentType.AGENT,
+    name=AgentType.REACT.value,
+    capabilities={"execute"},
+    requirements=ComponentRequirements(requires_model_ref=True),
+)
 class ReactAgent(Agent[ReactAgentConfig]):
     """A minimal ReAct loop over native OpenAI ``tool_calls`` messages.
 
     The model client and callable tools are runtime dependencies, not persisted
-    configuration. Injected Skills are exposed through a reserved ``Skill``
+    configuration. Injected Skills are exposed through a reserved ``skill``
     tool so the trajectory records exactly which persisted version was loaded.
     """
 
@@ -187,13 +192,12 @@ class ReactAgent(Agent[ReactAgentConfig]):
         name = function.get("name") if isinstance(function.get("name"), str) else ""
         call_id = call.get("id") if isinstance(call.get("id"), str) else ""
 
-        raw_arguments = function.get("arguments", "{}")
+        raw_arguments = function.get("arguments") or "{}"
         try:
             arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-            if not isinstance(arguments, dict):
-                raise TypeError("tool arguments must decode to an object")
-        except (json.JSONDecodeError, TypeError) as exc:
-            return [self._tool_message(call_id, name, f"Error: invalid tool arguments: {exc}")]
+        except json.JSONDecodeError:
+            arguments = {"__raw__": raw_arguments}
+        arguments = arguments or {}
 
         candidate = tools.get(name)
         if candidate is None:
@@ -207,7 +211,7 @@ class ReactAgent(Agent[ReactAgentConfig]):
 
         if candidate.deliver_result_as_user:
             return [
-                self._tool_message(call_id, name, "Result delivered in the following user message."),
+                self._tool_message(call_id, name, f"Result of '{name}' delivered in the following user message."),
                 {"role": "user", "content": content},
             ]
         return [self._tool_message(call_id, name, content)]
@@ -227,7 +231,7 @@ class ReactAgent(Agent[ReactAgentConfig]):
             return result
         try:
             return json.dumps(result, ensure_ascii=False)
-        except (TypeError, ValueError):
+        except TypeError:
             return str(result)
 
     @staticmethod
@@ -236,9 +240,7 @@ class ReactAgent(Agent[ReactAgentConfig]):
         config: ReactAgentConfig,
     ) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
-        system_prompt = "\n\n".join(
-            prompt for prompt in (config.system_prompt, request.task.system_prompt) if prompt
-        )
+        system_prompt = "\n\n".join(prompt for prompt in (config.system_prompt, request.task.system_prompt) if prompt)
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": request.task.instruction})

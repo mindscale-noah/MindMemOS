@@ -1,12 +1,14 @@
 """Local persistence contracts for Skill metadata and algorithm evidence."""
 
 from .database import DEFAULT_SKILL_DATABASE_PATH, bootstrap_skill_database, default_skill_database_config
+from .enums import SkillInjectionMode
 from .models import (
     AlgorithmLogRecord,
     RolloutType,
     SkillFamilyStateRecord,
-    SkillInjectionMode,
     SkillRecord,
+    SkillRemoteOperationRecord,
+    SkillSyncStateRecord,
     SkillVersionOrigin,
     SkillVersionStatus,
     TrajectoryRecord,
@@ -16,6 +18,8 @@ from .records import PersistenceRecord, from_database_record, to_database_record
 from .tables import (
     ALGORITHM_LOG_TABLE,
     SKILL_FAMILY_STATE_TABLE,
+    SKILL_REMOTE_OPERATION_TABLE,
+    SKILL_SYNC_STATE_TABLE,
     SKILL_TABLE,
     TRAJECTORY_TABLE,
     build_persistence_tables,
@@ -30,7 +34,11 @@ __all__ = [
     "SkillInjectionMode",
     "SkillFamilyStateRecord",
     "SkillRecord",
+    "SkillRemoteOperationRecord",
+    "SkillSyncStateRecord",
     "SKILL_FAMILY_STATE_TABLE",
+    "SKILL_REMOTE_OPERATION_TABLE",
+    "SKILL_SYNC_STATE_TABLE",
     "SKILL_TABLE",
     "SkillVersionOrigin",
     "SkillVersionStatus",

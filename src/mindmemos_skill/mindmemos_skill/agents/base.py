@@ -45,6 +45,7 @@ class Agent(ABC, Generic[AgentConfigT]):
     def __init__(self, config: AgentConfigT | Mapping[str, Any]) -> None:
         raw_config = config.model_dump() if isinstance(config, BaseModel) else config
         self.config = cast(AgentConfigT, self.config_type.model_validate(raw_config))
+        self._model_profile: dict[str, Any] = {}
         self._skill_runtimes = {
             mode: runtime_type(mode)
             for mode, runtime_type in self.skill_runtime_types.items()
@@ -56,6 +57,16 @@ class Agent(ABC, Generic[AgentConfigT]):
                 f"{type(self).__name__} does not support {configured_mode.value!r} Skill injection; "
                 f"supported modes: {supported}"
             )
+
+    def attach_model_profile(self, profile: Mapping[str, Any]) -> None:
+        """Attach one resolved endpoint snapshot before the Agent starts executing."""
+
+        if self._model_profile:
+            raise RuntimeError(f"{type(self).__name__} already has a model profile attached")
+        normalized = AgentProfile.from_config(agent_type=self.agent_type, config=profile)
+        flattened = normalized.model_dump(mode="json", exclude={"agent_type"}, exclude_none=True)
+        extensions = flattened.pop("config")
+        self._model_profile = {**extensions, **flattened}
 
     def inject_skills(
         self,
@@ -94,7 +105,10 @@ class Agent(ABC, Generic[AgentConfigT]):
             task=request.task,
             rollout=request.rollout,
             environment=request.environment,
-            agent=AgentProfile.from_config(agent_type=self.agent_type, config=config.snapshot()),
+            agent=AgentProfile.from_config(
+                agent_type=self.agent_type,
+                config={**self._model_profile, **config.snapshot()},
+            ),
             injected_skills=request.skills,
             events=messages,
             execution=ExecutionInfo(

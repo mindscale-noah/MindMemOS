@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -115,8 +117,40 @@ class Trajectory(BaseModel):
 
         from ..persistence.models import TrajectoryRecord
 
+        created_at = self.execution.finished_at or self.execution.started_at
+        source_payload = {
+            "trajectory_id": self.trajectory_id,
+            "task_id": self.task.task_id,
+            "rollout_id": self.rollout.rollout_id,
+            "attempt_no": self.rollout.attempt_no,
+            "rollout_type": self.rollout.rollout_type.value,
+            "task_instruction": self.task.instruction,
+            "task_system_prompt": self.task.system_prompt,
+            "task_tags": self.task.tags,
+            "task_metadata": self.task.metadata,
+            "env_metadata": self.environment.metadata,
+            "agent_type": self.agent.agent_type.value,
+            "agent_profile": self.agent.model_dump(mode="json", exclude={"agent_type"}, exclude_none=True),
+            "status": self.execution.status.value,
+            "trajectory": self.events,
+            "skill_bindings": [binding.model_dump(mode="json") for binding in self.skill_bindings],
+            "reward_score": self.reward.score,
+            "reward_detail": self.reward.detail,
+            "reward_metadata": self.reward.metadata,
+            "started_at": self.execution.started_at.isoformat(),
+            "finished_at": self.execution.finished_at.isoformat() if self.execution.finished_at else None,
+            "n_turn": self.execution.n_turn,
+            "error_info": self.execution.error_info,
+            "metadata": self.metadata,
+            "source": "skill_runtime",
+            "created_at": created_at.isoformat(),
+        }
+        trajectory_hash = hashlib.sha256(
+            json.dumps(source_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        ).hexdigest()
         return TrajectoryRecord(
             trajectory_id=self.trajectory_id,
+            trajectory_hash=trajectory_hash,
             task_id=self.task.task_id,
             rollout_id=self.rollout.rollout_id,
             attempt_no=self.rollout.attempt_no,
@@ -145,6 +179,8 @@ class Trajectory(BaseModel):
             n_turn=self.execution.n_turn,
             error_info=self.execution.error_info,
             metadata=self.metadata,
+            source="skill_runtime",
+            created_at=created_at,
         )
 
     @classmethod

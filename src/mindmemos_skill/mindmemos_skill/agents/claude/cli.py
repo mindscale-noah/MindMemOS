@@ -26,7 +26,7 @@ from .support import (
 )
 
 
-@register(type=ComponentType.AGENT, name=AgentType.CLAUDE.value)
+@register(type=ComponentType.AGENT, name=AgentType.CLAUDE.value, capabilities={"execute"})
 class ClaudeAgent(Agent[ClaudeAgentConfig]):
     agent_type = AgentType.CLAUDE
     config_type = ClaudeAgentConfig

@@ -17,6 +17,9 @@ from .skill import (
     SkillUsageType,
     SkillVersionOrigin,
     SkillVersionStatus,
+    compute_skill_content_hash,
+    normalize_skill_text,
+    serialize_skill_files,
 )
 from .task import Task
 from .trajectory import ExecutionInfo, Rollout, RolloutType, Trajectory, TrajectoryStatus
@@ -48,4 +51,7 @@ __all__ = [
     "Task",
     "Trajectory",
     "TrajectoryStatus",
+    "compute_skill_content_hash",
+    "normalize_skill_text",
+    "serialize_skill_files",
 ]

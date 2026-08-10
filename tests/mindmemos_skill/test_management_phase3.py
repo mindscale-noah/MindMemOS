@@ -9,13 +9,11 @@ from pathlib import Path
 import pytest
 from mindmemos_skill.errors import SkillConflictError, SkillExportError
 from mindmemos_skill.management import (
-    DetectedSkillUsage,
     DuplicateAction,
     ExportSkillRequest,
     LocalSkillManager,
     PublishSkillRequest,
     RegisterSkillRequest,
-    detect_openclaw_skill_candidates,
 )
 from mindmemos_skill.persistence import SkillVersionOrigin
 
@@ -38,27 +36,6 @@ def _source(tmp_path: Path, name: str = "source", *, version: str = "1.0.0", bod
     return source
 
 
-def test_openclaw_detector_remains_explicit_and_prefers_modification_evidence() -> None:
-    messages = [
-        {"role": "assistant", "content": '[tool_call] read({"path":"/skills/demo/SKILL.md"})'},
-        {"role": "tool", "content": 'name: demo\nversion: "1.0.0"\n\nRead\n'},
-        {
-            "role": "assistant",
-            "content": (
-                '[tool_call] write({"path":"/skills/demo/SKILL.md",'
-                '"content":"name: demo\\nversion: \\"1.1.0\\"\\n\\nEdited\\n"})'
-            ),
-        },
-    ]
-
-    [candidate] = detect_openclaw_skill_candidates(messages)
-
-    assert candidate.name == "demo"
-    assert candidate.version_label == "1.1.0"
-    assert candidate.usage == DetectedSkillUsage.MODIFIED
-    assert candidate.content.endswith("Edited\n")
-
-
 @pytest.mark.asyncio
 async def test_register_query_duplicate_and_restart_are_database_backed(tmp_path: Path) -> None:
     database_path = tmp_path / "state.db"
@@ -68,7 +45,6 @@ async def test_register_query_duplicate_and_restart_are_database_backed(tmp_path
         RegisterSkillRequest(source_path=source, alias="demo-main", commit_message="  Initial import  ")
     )
 
-    assert registered.effective_version_id == registered.version_id
     detail = await manager.get_skill("demo-main")
     version = await manager.get_version(registered.skill_id, registered.version_id)
     assert detail.skill.version_count == 1
@@ -91,7 +67,7 @@ async def test_register_query_duplicate_and_restart_are_database_backed(tmp_path
     await manager.close()
 
     reopened = await LocalSkillManager.open(database_path)
-    assert (await reopened.get_skill("demo-main")).effective_version.version_id == registered.version_id
+    assert (await reopened.get_skill("demo-main")).latest_version.version_id == registered.version_id
     await reopened.close()
 
 
@@ -119,8 +95,9 @@ async def test_repository_accepts_branches_and_multi_parent_merges(tmp_path: Pat
             "version_id": "merged-version",
             "parent_version_ids": [first_branch.version_id, second_branch.version_id],
             "version_label": "2.0.0",
-            "origin": SkillVersionOrigin.MANAGE,
+            "origin": SkillVersionOrigin.MERGE,
             "created_at": branch_record.created_at + timedelta(seconds=1),
+            "updated_at": branch_record.created_at + timedelta(seconds=1),
         }
     )
 
@@ -128,13 +105,13 @@ async def test_repository_accepts_branches_and_multi_parent_merges(tmp_path: Pat
     stored_merge = await manager.get_version("dag", "merged-version")
 
     assert stored_merge.parent_version_ids == [first_branch.version_id, second_branch.version_id]
-    assert state.effective_version_id == root.version_id
+    assert state.skill_id == root.skill_id
     assert len(await manager.list_versions("dag")) == 4
     await manager.close()
 
 
 @pytest.mark.asyncio
-async def test_publish_builds_dag_uses_integer_labels_and_does_not_activate_by_default(tmp_path: Path) -> None:
+async def test_publish_builds_dag_and_derives_latest_version_without_pointer(tmp_path: Path) -> None:
     manager = await LocalSkillManager.open(tmp_path / "state.db")
     registered = await manager.register(RegisterSkillRequest(source_path=_source(tmp_path), alias="demo"))
     published = await manager.publish(
@@ -148,18 +125,17 @@ async def test_publish_builds_dag_uses_integer_labels_and_does_not_activate_by_d
     versions = await manager.list_versions("demo")
     assert [item.version_id for item in versions] == [registered.version_id, published.version_id]
     assert versions[1].parent_version_ids == [registered.version_id]
-    assert published.effective_version_id == registered.version_id
-    assert len((await manager.get_skill("demo")).state.pending_operations) == 2
+    assert (await manager.get_skill("demo")).latest_version.version_id == published.version_id
+    assert len(await manager.repository.list_operations(skill_id=registered.skill_id)) == 2
 
-    with pytest.raises(SkillConflictError, match="increase monotonically"):
-        await manager.publish(
-            PublishSkillRequest(
-                skill_ref="demo",
-                content='name: demo\nversion: "1.2.0"\n\nNumerically older\n',
-            )
+    older_label = await manager.publish(
+        PublishSkillRequest(
+            skill_ref="demo",
+            content='name: demo\nversion: "1.2.0"\n\nNumerically older\n',
         )
-    assert len(await manager.list_versions("demo")) == 2
-    assert len((await manager.get_skill("demo")).state.pending_operations) == 2
+    )
+    assert (await manager.get_skill("demo")).latest_version.version_id == older_label.version_id
+    assert len(await manager.list_versions("demo")) == 3
     await manager.close()
 
 
@@ -191,7 +167,7 @@ async def test_repository_rejects_cross_family_parent_and_alias_conflicts_atomic
 
 
 @pytest.mark.asyncio
-async def test_effective_pointer_is_cas_and_never_changes_published_pointer_or_outbox(tmp_path: Path) -> None:
+async def test_sync_state_has_no_head_pointers_and_outbox_is_flat(tmp_path: Path) -> None:
     manager = await LocalSkillManager.open(tmp_path / "state.db")
     registered = await manager.register(RegisterSkillRequest(source_path=_source(tmp_path)))
     published = await manager.publish(
@@ -200,34 +176,13 @@ async def test_effective_pointer_is_cas_and_never_changes_published_pointer_or_o
             content='name: demo\nversion: "1.1.0"\n\nCandidate\n',
         )
     )
-    before = await manager.get_skill(registered.skill_id)
+    detail = await manager.get_skill(registered.skill_id)
+    state = detail.sync_state.model_dump()
+    operations = await manager.repository.list_operations(skill_id=registered.skill_id)
 
-    won = await manager.repository.compare_and_set_effective_version(
-        registered.skill_id,
-        version_id=published.version_id,
-        expected_version_id=registered.version_id,
-        updated_at=datetime.now(UTC),
-    )
-    stale = await manager.repository.compare_and_set_effective_version(
-        registered.skill_id,
-        version_id=registered.version_id,
-        expected_version_id=registered.version_id,
-        updated_at=datetime.now(UTC),
-    )
-    after = await manager.get_skill(registered.skill_id)
-
-    assert won is True
-    assert stale is False
-    assert after.state.effective_version_id == published.version_id
-    assert after.state.published_head_id is None
-    assert after.state.pending_operations == before.state.pending_operations
-
-    rolled_back = await manager.rollback(
-        registered.skill_id,
-        registered.version_id,
-        expected_version_id=published.version_id,
-    )
-    assert rolled_back.state.effective_version_id == registered.version_id
+    assert detail.latest_version.version_id == published.version_id
+    assert not {"effective_version_id", "published_head_id", "pending_operations"}.intersection(state)
+    assert [item.version_id for item in operations] == [registered.version_id, published.version_id]
     await manager.close()
 
 

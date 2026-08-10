@@ -56,6 +56,25 @@ def _load_litellm() -> Any:
     return litellm
 
 
+def resolve_model_provider(model: str, *, api_base: str | None = None) -> str:
+    """Return the provider LiteLLM resolves for one model endpoint."""
+
+    litellm = _load_litellm()
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=model, api_base=api_base)
+    except Exception as exc:
+        raise ValueError(f"unrecognized LiteLLM model identifier {model!r}") from exc
+    if not provider:
+        raise ValueError(f"unrecognized LiteLLM model identifier {model!r}")
+    return str(provider)
+
+
+def validate_model_identifier(model: str, *, api_base: str | None = None) -> None:
+    """Validate that LiteLLM can resolve a provider from one model identifier."""
+
+    resolve_model_provider(model, api_base=api_base)
+
+
 @dataclass(slots=True)
 class Usage:
     """Provider token counters shared by chat and embedding responses."""

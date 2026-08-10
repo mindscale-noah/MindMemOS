@@ -7,8 +7,9 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..contracts import SkillBundle
 from ..persistence.enums import SkillInjectionMode, SkillVersionOrigin, SkillVersionStatus
 
 if TYPE_CHECKING:
@@ -26,6 +27,25 @@ class SkillUsageType(StrEnum):
 
     UNUSED = "unused"
     """技能注入但未使用"""
+
+
+def normalize_skill_text(content: str) -> str:
+    """Normalize text before computing a cross-runtime Skill hash."""
+
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.rstrip("\n") + "\n"
+
+
+def serialize_skill_files(files: dict[str, str]) -> str:
+    """Serialize a Skill file mapping deterministically."""
+
+    return json.dumps(files, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def compute_skill_content_hash(blob: dict[str, str]) -> str:
+    """Return the canonical SHA-256 hash used by Skill persistence and bindings."""
+
+    return SkillBundle.from_files(blob).content_hash
 
 
 class Skill(BaseModel):
@@ -65,7 +85,17 @@ class Skill(BaseModel):
 
     commit_message: str | None = None
     created_at: datetime
+    updated_at: datetime | None = None
+    received_at: datetime | None = None
+    version_revision: int = Field(default=0, ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    local_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("blob")
+    @classmethod
+    def normalize_bundle(cls, value: dict[str, str]) -> dict[str, str]:
+        bundle = SkillBundle.from_files(value)
+        return {item.path: item.content for item in bundle.files}
 
     @property
     def content(self) -> str:
@@ -75,6 +105,8 @@ class Skill(BaseModel):
 
     @model_validator(mode="after")
     def validate_aggregate(self) -> Skill:
+        if set(self.blob) != {"SKILL.md"}:
+            raise ValueError("Skill bundle must contain exactly one SKILL.md file")
         invalid_paths = [path for path in (*self.blob, *self.resources) if not path]
         if invalid_paths:
             raise ValueError("Skill file paths must not be empty")
@@ -82,6 +114,10 @@ class Skill(BaseModel):
             raise ValueError("a Skill cannot be its own parent version")
         if len(self.parent_version_ids) != len(set(self.parent_version_ids)):
             raise ValueError("parent_version_ids may not contain duplicates")
+        if self.blob.keys() & self.resources.keys():
+            raise ValueError("Skill bundle and resources may not contain the same path")
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.created_at)
         return self
 
     def to_record(self) -> SkillRecord:
@@ -97,14 +133,23 @@ class Skill(BaseModel):
             name=self.name,
             description=self.description,
             alias=self.alias,
-            blob=_serialize_files(self.blob),
-            resources=_serialize_files(self.resources),
+            bundle=SkillBundle.from_files(self.blob).canonical_json(),
+            resources=serialize_skill_files(self.resources),
             content_hash=self.content_hash,
+            local_snapshot_hash=str(
+                self.local_metadata.get("local_snapshot_hash")
+                or self.metadata.get("snapshot", {}).get("local_snapshot_hash")
+                or self.content_hash
+            ),
             status=self.status,
+            version_revision=self.version_revision,
             version_label=self.version_label,
             commit_message=self.commit_message,
             metadata=self.metadata,
+            local_metadata=self.local_metadata,
             created_at=self.created_at,
+            updated_at=self.updated_at or self.created_at,
+            received_at=self.received_at,
             origin=self.origin,
         )
 
@@ -124,11 +169,15 @@ class Skill(BaseModel):
             name=record.name,
             description=record.description,
             alias=record.alias,
-            blob=json.loads(record.blob),
+            blob={item.path: item.content for item in SkillBundle.model_validate_json(record.bundle).files},
             resources=json.loads(record.resources),
             commit_message=record.commit_message,
             created_at=record.created_at,
+            updated_at=record.updated_at,
+            received_at=record.received_at,
+            version_revision=record.version_revision,
             metadata=record.metadata,
+            local_metadata=record.local_metadata,
         )
 
 
@@ -151,6 +200,9 @@ class SkillBinding(BaseModel):
     skill_id: str | None = None
     """已注册时指向本地 Skill 家族；未注册时为空。"""
 
+    cloud_skill_id: str | None = None
+    """已同步时指向云端 Skill family；未 push 时为空。"""
+
     base_version_id: str | None = None
     """当前 Skill 内容派生自的版本；根版本或未知时为空。"""
 
@@ -167,16 +219,13 @@ class SkillBinding(BaseModel):
     """该 Skill 版本在本次轨迹中的注入机制。"""
 
 
-def _serialize_files(files: dict[str, str]) -> str:
-    """Serialize a file mapping deterministically for the JSON text column."""
-
-    return json.dumps(files, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
-
 __all__ = [
     "Skill",
     "SkillBinding",
     "SkillUsageType",
     "SkillVersionOrigin",
     "SkillVersionStatus",
+    "compute_skill_content_hash",
+    "normalize_skill_text",
+    "serialize_skill_files",
 ]
