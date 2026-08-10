@@ -1,6 +1,8 @@
 """Regression tests: verify schema_general.json guides LLM to classify
-technical artifacts (software, tools, frameworks) as "item", not "person"
-or "organization".
+technical artifacts (software, tools, frameworks) as "item".
+The schema uses context-based guidance (not absolute "never" rules):
+a term like Docker may be "item" when discussed as a tool, or
+"organization" when discussed as a company.
 
 Structural tests (no model needed) always run.
 Live model tests require LLM_API_KEY env var or config/mindmemos/dev.yaml.
@@ -21,7 +23,7 @@ import yaml
 # Skip guard for live model tests (same pattern as test_real_llm_integration)
 # ---------------------------------------------------------------------------
 
-_DEV_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "mindmemos" / "dev.yaml"
+_DEV_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "mindmemos" / "dev.yaml"
 
 
 def _dev_chat_endpoint() -> dict:
@@ -50,47 +52,78 @@ skip_no_llm_key = pytest.mark.skipif(
 
 
 # ---------------------------------------------------------------------------
-# Test dialogues with technical terms that MUST be classified as "item"
+# Test dialogues + expected minimum entity classification
 # ---------------------------------------------------------------------------
+# Each dialogue is (timestamp, text, expected_entities) where
+# expected_entities maps entity_name_substring → expected entity_type.
+# The model may produce longer names ("Apache Kafka") — we match by
+# case-insensitive substring so "Kafka" matches "Apache Kafka".
 
-TECH_ARTIFACT_DIALOGUES: list[tuple[str, str]] = [
+DIALOGUE_1 = (
+    "2024-08-10 10:00:00",
     (
-        "2024-08-10 10:00:00",
-        (
-            "Alice: We're evaluating message queues for the new platform. "
-            "I think Kafka is the right choice for our event streaming needs.\n"
-            "Bob: Yeah, Kafka is solid. But we also need to containerize everything "
-            "with Docker. And for package management, we're standardizing on npm.\n"
-            "Alice: What about the API gateway? I was looking at Kong or maybe just "
-            "using Nginx with some Lua scripting.\n"
-            "Bob: For orchestration, Kubernetes is the obvious pick. And we should "
-            "use Prometheus for monitoring and Grafana for dashboards.\n"
-            "Alice: Makes sense. I'll set up a proof of concept with Kafka + Docker "
-            "this week."
-        ),
+        "Alice: We're evaluating message queues for the new platform. "
+        "I think Kafka is the right choice for our event streaming needs.\n"
+        "Bob: Yeah, Kafka is solid. But we also need to containerize everything "
+        "with Docker. And for package management, we're standardizing on npm.\n"
+        "Alice: What about the API gateway? I was looking at Kong or maybe just "
+        "using Nginx with some Lua scripting.\n"
+        "Bob: For orchestration, Kubernetes is the obvious pick. And we should "
+        "use Prometheus for monitoring and Grafana for dashboards.\n"
+        "Alice: Makes sense. I'll set up a proof of concept with Kafka + Docker "
+        "this week."
     ),
-    (
-        "2024-08-10 11:00:00",
-        (
-            "Carol: For the backend, I'm leaning towards PostgreSQL with the "
-            "pgvector extension for the vector search part.\n"
-            "Dave: PostgreSQL is great. But have you considered using Qdrant "
-            "as a dedicated vector database? It's purpose-built for that.\n"
-            "Carol: We could. The Python service will use FastAPI with Pydantic "
-            "for validation. And for the frontend, we're going with Next.js.\n"
-            "Dave: Make sure to use Redis for caching and set up proper "
-            "CI/CD with GitHub Actions.\n"
-            "Carol: Good call. I'll add Redis to the architecture doc."
-        ),
-    ),
-]
+    # All discussed as tools/products → expected type "item"
+    {
+        "kafka": "item",
+        "docker": "item",
+        "npm": "item",
+        "nginx": "item",
+        "kubernetes": "item",
+        "prometheus": "item",
+        "grafana": "item",
+    },
+)
 
-# Technical terms that should never be person or organization
-TECH_TERMS_LOWER = {
-    "kafka", "docker", "npm", "kubernetes", "prometheus", "grafana",
-    "nginx", "kong", "postgresql", "qdrant", "fastapi", "pydantic",
-    "next.js", "redis", "github actions", "pgvector", "lua",
-}
+DIALOGUE_2 = (
+    "2024-08-10 11:00:00",
+    (
+        "Carol: For the backend, I'm leaning towards PostgreSQL with the "
+        "pgvector extension for the vector search part.\n"
+        "Dave: PostgreSQL is great. But have you considered using Qdrant "
+        "as a dedicated vector database? It's purpose-built for that.\n"
+        "Carol: We could. The Python service will use FastAPI with Pydantic "
+        "for validation. And for the frontend, we're going with Next.js.\n"
+        "Dave: Make sure to use Redis for caching and set up proper "
+        "CI/CD with GitHub Actions.\n"
+        "Carol: Good call. I'll add Redis to the architecture doc."
+    ),
+    # All discussed as tools/products → expected type "item"
+    {
+        "postgresql": "item",
+        "qdrant": "item",
+        "fastapi": "item",
+        "pydantic": "item",
+        "next.js": "item",
+        "redis": "item",
+        "github actions": "item",
+    },
+)
+
+ALL_DIALOGUES: list[tuple[str, str, dict[str, str]]] = [DIALOGUE_1, DIALOGUE_2]
+
+
+def _normalize(name: str) -> str:
+    """Normalize entity name for matching: lowercase, strip whitespace."""
+    return name.strip().lower()
+
+
+def _entity_matches(normalized_entity: str, expected_key: str) -> bool:
+    """Check whether a model-returned entity name matches the expected key.
+
+    Handles variants like "Apache Kafka" → "kafka", "Docker Engine" → "docker".
+    """
+    return expected_key in normalized_entity
 
 
 # ---------------------------------------------------------------------------
@@ -140,10 +173,14 @@ class TestSchemaGeneralStructure:
             f"item entity_description must mention software, got: {desc}"
         )
 
-    def test_item_instruction_warns_against_person_org_misclassification(self) -> None:
+    def test_item_instruction_guides_context_based_choice(self) -> None:
+        """Instruction should guide context-based choice, not absolute 'never'."""
         instr = find_item_instruction(load_schema())
-        assert "person" in instr.lower() and "organization" in instr.lower(), (
-            f"item entity_instruction must warn against person/org classification, got: {instr}"
+        assert "context" in instr.lower(), (
+            f"item entity_instruction must mention context-based judgment, got: {instr}"
+        )
+        assert "organization" in instr.lower(), (
+            f"item entity_instruction must mention organization for disambiguation, got: {instr}"
         )
 
     def test_schema_is_valid_json_array(self) -> None:
@@ -246,16 +283,60 @@ class TestLiveModelEntityClassification:
             by_type.setdefault(entity_type, []).append(name)
         return by_type
 
-    # ---- Dialogue 1: infra/devops terms (kafka, docker, npm, k8s, ...) ----
+    def _verify_expected(
+        self,
+        by_type: dict[str, list[str]],
+        expected: dict[str, str],
+        label: str,
+    ) -> None:
+        """Verify every expected entity is found under its expected type.
+
+        Uses substring matching: "Apache Kafka" matches expected key "kafka".
+        Reports ALL mismatches at once rather than failing on the first.
+        """
+        mismatches: list[str] = []
+        not_found: list[str] = []
+
+        for expected_key, expected_type in expected.items():
+            # Search across all types for this entity
+            found_type: str | None = None
+            for entity_type, names in by_type.items():
+                for name in names:
+                    if _entity_matches(_normalize(name), expected_key):
+                        found_type = entity_type
+                        break
+                if found_type is not None:
+                    break
+
+            if found_type is None:
+                not_found.append(expected_key)
+            elif found_type != expected_type:
+                mismatches.append(
+                    f"'{expected_key}' expected '{expected_type}', got '{found_type}'"
+                )
+
+        errors: list[str] = []
+        if not_found:
+            errors.append(
+                f"[{label}] Entities not extracted at all: {not_found}"
+            )
+        if mismatches:
+            errors.append(
+                f"[{label}] Classification mismatches: {mismatches}"
+            )
+
+        assert not errors, (
+            "\n".join(errors) + f"\nAll entities by type: {by_type}"
+        )
 
     @skip_no_llm_key
     @pytest.mark.asyncio
-    async def test_infra_terms_not_person_or_org(self) -> None:
-        """Kafka, Docker, npm, etc. must NOT be person or organization."""
+    async def test_infra_terms_classified_correctly(self) -> None:
+        """Kafka, Docker, npm, etc. → 'item' (dialogue context = using tools)."""
         import litellm
         from mindmemos.components.extractor.schema._schema_utils import parse_json_object
 
-        ts, dialogue = TECH_ARTIFACT_DIALOGUES[0]
+        ts, dialogue, expected = DIALOGUE_1
         prompt = self._build_prompt(ts, dialogue)
 
         resp = await litellm.acompletion(
@@ -273,35 +354,16 @@ class TestLiveModelEntityClassification:
         by_type = self._parse_entities(raw)
         print(f"\n[Infra dialogue] entities by type: {by_type}")
 
-        for bad_type in ("person", "organization"):
-            misclassified = [
-                n for n in by_type.get(bad_type, [])
-                if n.lower() in TECH_TERMS_LOWER
-            ]
-            assert not misclassified, (
-                f"Tech terms misclassified as '{bad_type}': {misclassified}\n"
-                f"All: {by_type}"
-            )
-
-        # At least one tech term should be "item"
-        item_tech = [
-            n for n in by_type.get("item", [])
-            if n.lower() in TECH_TERMS_LOWER
-        ]
-        assert item_tech, (
-            f"No tech terms classified as 'item'. Items: {by_type.get('item', [])}"
-        )
-
-    # ---- Dialogue 2: database/framework terms (pg, qdrant, fastapi, ...) ----
+        self._verify_expected(by_type, expected, "infra")
 
     @skip_no_llm_key
     @pytest.mark.asyncio
-    async def test_database_terms_not_person_or_org(self) -> None:
-        """PostgreSQL, Qdrant, FastAPI, etc. must NOT be person or organization."""
+    async def test_database_terms_classified_correctly(self) -> None:
+        """PostgreSQL, Qdrant, FastAPI, etc. → 'item' (dialogue context = using tools)."""
         import litellm
         from mindmemos.components.extractor.schema._schema_utils import parse_json_object
 
-        ts, dialogue = TECH_ARTIFACT_DIALOGUES[1]
+        ts, dialogue, expected = DIALOGUE_2
         prompt = self._build_prompt(ts, dialogue)
 
         resp = await litellm.acompletion(
@@ -319,20 +381,4 @@ class TestLiveModelEntityClassification:
         by_type = self._parse_entities(raw)
         print(f"\n[Database dialogue] entities by type: {by_type}")
 
-        for bad_type in ("person", "organization"):
-            misclassified = [
-                n for n in by_type.get(bad_type, [])
-                if n.lower() in TECH_TERMS_LOWER
-            ]
-            assert not misclassified, (
-                f"Tech terms misclassified as '{bad_type}': {misclassified}\n"
-                f"All: {by_type}"
-            )
-
-        item_tech = [
-            n for n in by_type.get("item", [])
-            if n.lower() in TECH_TERMS_LOWER
-        ]
-        assert item_tech, (
-            f"No tech terms classified as 'item'. Items: {by_type.get('item', [])}"
-        )
+        self._verify_expected(by_type, expected, "database")
