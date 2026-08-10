@@ -811,6 +811,23 @@ async def test_search_request_actor_identity_merged_into_context_and_stripped_fr
     assert call["ctx"].agent_id == "caller-agent"
     assert isinstance(call["inp"], SearchPipelineInput)
     assert not hasattr(call["inp"], "user_id")
+    assert call["inp"].filters == {"user_id": "caller-user"}
+
+
+@pytest.mark.asyncio
+async def test_search_request_without_user_id_keeps_project_wide_scope() -> None:
+    recorder = FakeRecorder()
+    service = make_service(
+        search_pipeline=FakeSearchPipeline(),
+        search_pipeline_name="search_pipeline",
+        operation_recorder=recorder,
+    )
+
+    await service.search(make_context(), SearchRequest(query="Qdrant"))
+
+    call = recorder.search_calls[0]
+    assert call["ctx"].user_id is None
+    assert call["inp"].filters is None
 
 
 @pytest.mark.asyncio

@@ -113,7 +113,7 @@ class MemoryCore:
         return MemoryRequest(
             path="/v1/memory/search",
             body=build_search_body(
-                user_id=self._resolve_user_id(user_id),
+                user_id=user_id or self._defaults.user_id,
                 query=query,
                 top_k=top_k,
                 search_strategy=search_strategy,

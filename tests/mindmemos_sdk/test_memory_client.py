@@ -606,6 +606,19 @@ def test_user_id_override():
     assert captured["body"]["user_id"] == "u_override"
 
 
+def test_search_without_user_id_omits_user_scope():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"code": "ok", "data": {"memories": []}})
+
+    client = MemoryClient(_transport(handler))
+    client.search("q")
+
+    assert "user_id" not in captured["body"]
+
+
 def test_error_envelope_raises_api_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

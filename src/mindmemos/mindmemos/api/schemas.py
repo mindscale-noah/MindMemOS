@@ -73,8 +73,8 @@ class AuthContext(BaseModel):
     scopes: list[str] = Field(default_factory=list)
 
 
-# Actor identity: ``user_id`` is required for add/search/feedback and optional
-# for dreaming. It is supplied in the request body. The Qdrant payload schema
+# Actor identity: ``user_id`` is required for add/feedback, optional for search
+# and dreaming. It is supplied in the request body. The Qdrant payload schema
 # indexes all four fields as plain KEYWORD values with no storage-level not-null
 # constraint.
 
@@ -83,7 +83,7 @@ class ActorIdentityRequest(BaseModel):
     """Actor identity supplied by request bodies that scope memory operations."""
 
     user_id: NonEmptyStr | None = None
-    """Business actor user ID. Required by add/search/feedback service methods."""
+    """Business actor user ID. Required by add/feedback and optional for search/dreaming."""
 
     app_id: NonEmptyStr | None = None
 
@@ -242,6 +242,7 @@ class DeleteRequest(BaseModel):
 
     id: NonEmptyStr = Field(alias="memory_id")
     """Memory ID"""
+
 
 class UpdateRequest(ActorIdentityRequest):
     """HTTP body for ``POST /v1/memory/update``.

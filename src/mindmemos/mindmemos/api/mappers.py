@@ -93,6 +93,11 @@ def to_search_pipeline_input(
 
     _validate_request_top_k(req.top_k)
     data = req.model_dump(by_alias=True, exclude=set(_ACTOR_FIELDS) | {"search_strategy"})
+    if req.user_id:
+        request_filters = data.get("filters")
+        data["filters"] = (
+            {"AND": [{"user_id": req.user_id}, request_filters]} if request_filters else {"user_id": req.user_id}
+        )
     data["search_pipeline"] = search_pipeline
     data["agentic"] = req.search_strategy == "agentic"
     return SearchPipelineInput.model_validate(data)
@@ -107,6 +112,7 @@ def _validate_request_top_k(top_k: int | None) -> None:
             f"top_k must be <= {top_k_max}; value={top_k}",
             code="search.top_k_too_large",
         )
+
 
 def to_get_pipeline_input(req: GetRequest) -> GetPipelineInput:
     """Build get pipeline input from a public get request."""
