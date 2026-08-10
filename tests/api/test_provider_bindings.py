@@ -9,6 +9,8 @@ from mindmemos.provider_bindings import (
     ProviderBindingRecord,
     ProviderBindingResolver,
     ProviderBindingScope,
+    ProviderBindingService,
+    provider_binding_id,
     validate_provider_binding_patch,
 )
 from mindmemos.typing import MemoryRequestContext
@@ -289,3 +291,33 @@ def test_provider_binding_patch_rejects_embedding_model_and_dimensions_changes(m
             "request_id": "req-1",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_provider_binding_create_cannot_overwrite_embedding_identity() -> None:
+    scope = ProviderBindingScope()
+    existing = ProviderBindingRecord(
+        binding_id=provider_binding_id("proj-1", scope),
+        project_id="proj-1",
+        scope=scope,
+        routers=router_config(),
+    )
+
+    class Store:
+        async def get(self, project_id: str, binding_id: str) -> ProviderBindingRecord | None:
+            return existing
+
+        async def upsert(self, record: ProviderBindingRecord) -> ProviderBindingRecord:
+            return record
+
+    service = ProviderBindingService(store=Store(), enabled=True)
+
+    with pytest.raises(BadRequestError) as exc_info:
+        await service.create_binding(
+            project_id="proj-1",
+            scope={},
+            routers=router_config(embed_model="openai/text-embedding-3-small", dimensions=512),
+            request_id="req-create",
+        )
+
+    assert exc_info.value.code == "provider_binding.immutable_embedding_config"

@@ -143,14 +143,24 @@ class ProviderBindingService:
         request_id: str | None,
     ) -> dict[str, Any]:
         self._ensure_enabled()
-        del request_id
         binding_scope = ProviderBindingScope.model_validate(scope or {})
+        binding_id = provider_binding_id(project_id, binding_scope)
         record = ProviderBindingRecord(
-            binding_id=provider_binding_id(project_id, binding_scope),
+            binding_id=binding_id,
             project_id=project_id,
             scope=binding_scope,
             routers=deepcopy(routers),
         )
+        existing = await self._store.get(project_id, binding_id)
+        if existing is not None:
+            validate_provider_binding_patch(
+                existing.routers,
+                record.routers,
+                project_id=project_id,
+                binding_id=binding_id,
+                scope=binding_scope,
+                request_id=request_id,
+            )
         stored = await self._store.upsert(record)
         return stored.model_dump(mode="json")
 

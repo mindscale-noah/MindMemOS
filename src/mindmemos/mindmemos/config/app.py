@@ -300,7 +300,7 @@ class QdrantConfig:
     """Semantic embedding dimension."""
 
     project_collection_namespace_enabled: bool = field(default=False)
-    """Create project-scoped vector collections so projects can use different embedding dimensions."""
+    """Create dimension-shared vector collections so projects can use different embedding dimensions."""
 
     distance: str = field(default="Cosine")
     """Dense vector distance function: Cosine, Euclid, Dot, or Manhattan."""
