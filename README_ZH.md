@@ -407,6 +407,11 @@ openclaw plugins enable mindmemos-memory
 
 完整配置和排障说明见 [docs/sdk/openclaw_plugin.md](docs/sdk/openclaw_plugin.md)。
 
+## 参与贡献
+
+欢迎大家提交各类改进和修复。请将 Pull Request 的目标分支设为 `develop`；
+通过审核的改动会合入 `develop`，维护者会定期将 `develop` 的稳定版本合入 `main` 并发布。
+
 ## Community
 
 欢迎加入 MindMemOS 飞书群，获取项目动态、交流使用问题和参与社区讨论。

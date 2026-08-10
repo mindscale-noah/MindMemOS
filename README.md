@@ -414,6 +414,12 @@ openclaw plugins enable mindmemos-memory
 For full configuration and troubleshooting, see
 [docs/sdk/openclaw_plugin.md](docs/sdk/openclaw_plugin.md).
 
+## Contributing
+
+Contributions of all kinds are welcome. Please open pull requests against the `develop` branch. After review,
+accepted changes will be merged into `develop`; maintainers periodically merge stable `develop` updates into `main`
+for release.
+
 ## Community
 
 Join the MindMemOS Feishu community for updates, discussions, and support.
