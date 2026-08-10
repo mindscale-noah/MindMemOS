@@ -22,7 +22,10 @@ class _UnusedCloud:
 def _source(tmp_path: Path) -> Path:
     source = tmp_path / "skill"
     source.mkdir()
-    (source / "SKILL.md").write_text('name: demo\nversion: "1.0.0"\n\nBody\n', encoding="utf-8")
+    (source / "SKILL.md").write_text(
+        'name: demo\ndescription: Demo description\nversion: "1.0.0"\n\nBody\n',
+        encoding="utf-8",
+    )
     (source / "references").mkdir()
     (source / "references" / "private.md").write_text("private\n", encoding="utf-8")
     return source
@@ -42,15 +45,17 @@ def test_ui_service_uses_immutable_versions_and_shared_manager(tmp_path):
 
     assert len(items) == 1
     assert items[0].skill_id == registered.skill_id
+    assert items[0].description == "Demo description"
+    assert items[0].latest_version_label == "1.0.0"
     assert items[0].pending_count == 1
     assert items[0].sync_state == "pending"
-    assert items[0].cloud_revision is None
     assert items[0].model_dump().get("path") is None
-    assert detail.skill.active_version_id == registered.version_id
-    assert detail.active_version.is_active is True
-    assert detail.active_version.has_linked_files is True
+    assert detail.skill.latest_version_id == registered.version_id
+    assert detail.latest_version.is_latest is True
+    assert detail.latest_version.has_linked_files is True
     assert content.version_id == registered.version_id
     assert content.content.endswith("Body\n")
+    assert set(content.files) == {"SKILL.md", "references/private.md"}
 
     published, unchanged_detail = service.publish(
         PublishLocalRequest(
@@ -61,14 +66,26 @@ def test_ui_service_uses_immutable_versions_and_shared_manager(tmp_path):
         )
     )
 
-    assert published.active_version_id == registered.version_id
-    assert unchanged_detail.active_version.version_id == registered.version_id
+    assert published.latest_version_id == published.version_id
+    assert unchanged_detail.skill.latest_version_label == "1.1.0"
+    assert unchanged_detail.latest_version.version_id == published.version_id
     assert unchanged_detail.versions[-1].commit_message == "UI draft"
-    assert unchanged_detail.versions[-1].is_active is False
-
-    switched = service.switch("demo-main", published.version_id)
-    assert switched.active_version.version_id == published.version_id
+    assert unchanged_detail.versions[-1].is_latest is True
     assert service.content("demo-main").content.endswith("Edited\n")
+
+    files = service.content("demo-main", published.version_id).files
+    files["references/private.md"] = "edited in browser\n"
+    files_published, _ = service.publish(
+        PublishLocalRequest(
+            skill_id=registered.skill_id,
+            base_version_id=published.version_id,
+            files=files,
+            version_label="1.2.0",
+        )
+    )
+    assert service.content("demo-main", files_published.version_id).files["references/private.md"] == (
+        "edited in browser\n"
+    )
 
 
 def test_ui_service_compare_and_export_include_local_linked_file_changes(tmp_path):
@@ -85,7 +102,6 @@ def test_ui_service_compare_and_export_include_local_linked_file_changes(tmp_pat
         PublishLocalRequest(
             skill_id=registered.skill_id,
             source_path=str(source),
-            activate=True,
         )
     )
 
@@ -103,25 +119,42 @@ def test_ui_service_compare_and_export_include_local_linked_file_changes(tmp_pat
     assert (tmp_path / "export" / "references" / "private.md").read_text(encoding="utf-8") == "changed private\n"
 
 
-def test_ui_list_surfaces_version_conflict_over_pending_summary(tmp_path):
+def test_ui_list_uses_application_pending_summary(tmp_path):
     manager = SkillManager.from_config_manager(
         ConfigManager(config_dir=tmp_path / "config"),
         _UnusedCloud(),
     )
     service = LocalSkillUIService(manager)
     registered = service.register(RegisterLocalRequest(source_path=str(_source(tmp_path))))
-    metadata = manager.local_repository.get_version(
-        registered.skill_id,
-        registered.version_id,
-    )
-    manager.local_repository._atomic_write_model(
-        manager.local_repository._metadata_path(
-            registered.skill_id,
-            registered.version_id,
-        ),
-        metadata.model_copy(update={"sync_state": LocalSkillSyncState.CONFLICT}),
-    )
-
     [item] = service.list_skills()
 
-    assert item.sync_state == "conflict"
+    assert item.sync_state == LocalSkillSyncState.PENDING.value
+
+
+def test_ui_service_unregister_reports_deleted_scope_and_preserves_source(tmp_path):
+    source = _source(tmp_path)
+    manager = SkillManager.from_config_manager(
+        ConfigManager(config_dir=tmp_path / "config"),
+        _UnusedCloud(),
+    )
+    service = LocalSkillUIService(manager)
+    registered = service.register(RegisterLocalRequest(source_path=str(source), alias="demo-main"))
+    service.publish(
+        PublishLocalRequest(
+            skill_id=registered.skill_id,
+            base_version_id=registered.version_id,
+            content='name: demo\nversion: "1.1.0"\n\nEdited\n',
+        )
+    )
+
+    result = service.unregister(registered.skill_id)
+
+    assert result.skill_id == registered.skill_id
+    assert result.name == "demo"
+    assert result.alias == "demo-main"
+    assert result.deleted_version_count == 2
+    assert result.deleted_pending_count == 2
+    assert result.source_files_deleted is False
+    assert result.cloud_skill_deleted is False
+    assert source.is_dir()
+    assert service.list_skills() == []

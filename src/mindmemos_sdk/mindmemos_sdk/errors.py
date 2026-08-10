@@ -24,7 +24,7 @@ class ConfigNotFoundError(ConfigError):
     """Raised when the SDK config file does not exist yet.
 
     Typically resolved by running ``mindmemos auth`` to create
-    ``~/.mindmemos/settings.json``.
+    ``~/.mindmemos/config.yaml``.
     """
 
 
@@ -70,6 +70,31 @@ class SkillError(MindMemOSSDKError):
     """Base class for SDK skill-management errors."""
 
 
+class SkillCapabilityUnavailableError(SkillError):
+    """Raised when the configured Skill application lacks an operation."""
+
+
+class SkillRemoteError(SkillError):
+    """Stable SDK projection of a configured Skill remote failure."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str,
+        retryable: bool,
+        status_code: int | None = None,
+        request_id: str | None = None,
+        operation_id: str | None = None,
+    ) -> None:
+        self.error_code = error_code
+        self.retryable = retryable
+        self.status_code = status_code
+        self.request_id = request_id
+        self.operation_id = operation_id
+        super().__init__(message)
+
+
 class SkillBundleError(SkillError):
     """Raised when a local skill bundle cannot be read or normalized."""
 
@@ -78,33 +103,29 @@ class SkillRegistryError(SkillError):
     """Raised when SDK skill registry content is invalid."""
 
 
-class SkillHistoryError(SkillError):
-    """Raised when local skill history/cache content cannot be read or written."""
+def translate_skill_error(exc: Exception) -> SkillError:
+    """Translate Skill domain errors without exposing package-specific classes."""
 
+    from mindmemos_skill import (
+        MindMemOSSkillError,
+        SkillRemoteOperationError,
+        SkillRemoteRequestError,
+    )
+    from mindmemos_skill import (
+        SkillCapabilityUnavailableError as DomainCapabilityUnavailableError,
+    )
 
-class SkillPendingUploadError(SkillError):
-    """Raised when the local skill pending-upload queue cannot be read or written."""
-
-
-class SkillInstallerError(SkillError):
-    """Raised when a managed skill checkout cannot be safely applied."""
-
-
-class LocalSkillRepositoryError(SkillError):
-    """Raised when the centralized local Skill repository is invalid or cannot be updated."""
-
-
-class SkillSnapshotError(SkillError):
-    """Raised when a complete local Skill snapshot cannot be read or validated."""
-
-
-class LiteUnavailableError(MindMemOSSDKError):
-    """Raised when the optional Lite runtime or a required Lite capability is unavailable."""
-
-
-class LiteExecutionError(MindMemOSSDKError):
-    """Raised when an in-process Lite operation fails."""
-
-    def __init__(self, *, operation: str, message: str) -> None:
-        super().__init__(f"{operation} failed: {message}")
-        self.operation = operation
+    if isinstance(exc, DomainCapabilityUnavailableError):
+        return SkillCapabilityUnavailableError(str(exc))
+    if isinstance(exc, (SkillRemoteRequestError, SkillRemoteOperationError)):
+        return SkillRemoteError(
+            str(exc),
+            error_code=exc.error_code,
+            retryable=exc.retryable,
+            status_code=exc.status_code,
+            request_id=exc.request_id,
+            operation_id=getattr(exc, "operation_id", None),
+        )
+    if isinstance(exc, MindMemOSSkillError):
+        return SkillRegistryError(str(exc))
+    raise TypeError(f"not a Skill domain error: {type(exc).__name__}")

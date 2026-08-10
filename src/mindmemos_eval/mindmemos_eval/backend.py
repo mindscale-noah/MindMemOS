@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Self
 
-from mindmemos_sdk.config import ConfigManager, DefaultsConfig, HttpConnectionConfig, SDKConfig
+from mindmemos_sdk.config import ConfigManager, DefaultsConfig, HttpConnectionConfig
 
 from mindmemos_sdk import AsyncMindMemOSClient
 
@@ -73,25 +73,19 @@ def build_mindmemos_backend(
     )
 
     connection_name = "eval"
-    config = SDKConfig(
-        defaults=DefaultsConfig(
-            user_id=user_id,
-            app_id=app_id,
-            agent_id=agent_id,
-            session_id=session_id,
-        ),
-        connections={connection_name: connection},
-        clients={
-            "memory": {"connection": connection_name},
-            "skills": {"connection": connection_name},
-        },
+    config = (config_manager or ConfigManager()).default_portal()
+    profile = config.profiles[config.active_profile]
+    profile.default_connection = connection_name
+    profile.connections = {connection_name: connection}
+    profile.identity = DefaultsConfig(
+        user_id=user_id,
+        app_id=app_id,
+        agent_id=agent_id,
+        session_id=session_id,
     )
-    return MindMemOSBackend(
-        AsyncMindMemOSClient(
-            config=config,
-            config_manager=config_manager,
-        )
-    )
+    profile.memory.connection = connection_name
+    profile.skill.remote.connection = connection_name
+    return MindMemOSBackend(AsyncMindMemOSClient(config=config))
 
 
 __all__ = [

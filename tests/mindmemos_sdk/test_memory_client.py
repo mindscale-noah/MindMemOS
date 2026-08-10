@@ -189,6 +189,17 @@ def test_add_auto_detects_and_ensures_registered_skill(tmp_path):
             assert skill_id == "sk_1"
             return SkillContext(name="demo", content_hash="hash-confirmed", base_version_id="v1", usage=usage)
 
+        def resolve_skill_context(self, messages):
+            assert messages
+            return [
+                SkillContext(
+                    name="demo",
+                    content_hash="hash-confirmed",
+                    base_version_id="v1",
+                    usage="injected",
+                )
+            ]
+
         def flush_pending_uploads(self):
             self.flush_called = True
             return []
@@ -211,7 +222,7 @@ def test_add_auto_detects_and_ensures_registered_skill(tmp_path):
             "usage": "injected",
         }
     ]
-    assert skills.flush_called is True
+    assert skills.flush_called is False
 
 
 def test_add_with_centralized_skill_pushes_uuid_before_sending_trace(tmp_path):
@@ -229,7 +240,7 @@ def test_add_with_centralized_skill_pushes_uuid_before_sending_trace(tmp_path):
                 cloud_skill_id="00000000-0000-4000-8000-000000000010",
                 version_id=request.version_id,
                 content_hash=request.expected_content_hash,
-                status="observed",
+                status="draft",
                 created_at=request.created_at,
                 received_at="2026-07-25T00:00:01Z",
             )
@@ -238,9 +249,7 @@ def test_add_with_centralized_skill_pushes_uuid_before_sending_trace(tmp_path):
         ConfigManager(config_dir=tmp_path / "config"),
         Cloud(),
     )
-    registered = manager.register_local(
-        RegisterLocalRequest(source_path=str(source))
-    )
+    registered = manager.register_local(RegisterLocalRequest(source_path=str(source)))
 
     def handler(request: httpx.Request) -> httpx.Response:
         events.append(("add", None))

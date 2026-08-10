@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, TypeVar
 
-from ..skills import SkillManager, detect_skill_context
+from ..skills import SkillManager
 from ..transport import HttpTransport
 from .core import MemoryCore, MemoryDefaults, MemoryRequest
 from .models import (
@@ -107,27 +107,13 @@ class MemoryClient:
         return result
 
     def _detect_and_ensure_skill_context(self, messages: list[Message | dict[str, Any]]) -> list[Any]:
-        manifests = (
-            self._skill_manager.list_local()
-            if hasattr(self._skill_manager, "list_local")
-            else None
-        )
-        contexts = detect_skill_context(
-            messages,
-            manifests=manifests,
-        )
-        managed_contexts = [
-            context
-            for context in contexts
-            if self._skill_manager.skill_id_for_context(context) is not None
-        ]
-        return self._ensure_provided_skill_context(managed_contexts)
+        return self._skill_manager.resolve_skill_context(messages)
 
     def _ensure_provided_skill_context(self, skill_context: list[Any]) -> list[Any]:
         ensured: list[Any] = []
         ensure_cloud = getattr(
             self._skill_manager,
-            "ensure_active_cloud_version",
+            "ensure_latest_cloud_version",
             None,
         )
         used_centralized_manager = callable(ensure_cloud)
@@ -171,9 +157,7 @@ class MemoryClient:
             user_id=user_id,
             search_strategy=search_strategy or self._defaults.search_strategy,
             rerank=self._defaults.search_rerank if rerank is None else rerank,
-            score_threshold=(
-                self._defaults.search_score_threshold if score_threshold is _UNSET else score_threshold
-            ),
+            score_threshold=(self._defaults.search_score_threshold if score_threshold is _UNSET else score_threshold),
             filters=self._defaults.search_filters if filters is _UNSET else filters,
             app_id=app_id,
             agent_id=agent_id,

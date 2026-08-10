@@ -1,129 +1,106 @@
-"""Asynchronous Skill service client backed by the MindMemOS HTTP API."""
+"""Asynchronous public facade over ``mindmemos_skill.SkillApplication``."""
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Awaitable
+from typing import TypeVar
 
-from ..config import ConfigManager
-from ..config.models import HttpConnectionConfig
-from ..connections import AsyncConnection, HttpConnection
-from .backends import AsyncSkillBackend, HttpSkillBackend
-from .manager import SkillManager
-from .models import (
-    SkillContentData,
-    SkillEvolveData,
-    SkillEvolveMode,
-    SkillRegisterData,
-    SkillSummary,
-    SkillSyncData,
-    SkillSyncRequestItem,
-    SkillVersion,
+from mindmemos_skill.management import (
+    ExportSkillRequest,
+    ExportSkillResult,
+    ManagedSkill,
+    PublishSkillRequest,
+    PublishSkillResult,
+    PullResult,
+    PushResult,
+    RegisterSkillRequest,
+    RegisterSkillResult,
+    SkillDetail,
+    SkillDiffResult,
+    SkillManagementDetail,
+    SkillManagementOverview,
 )
+from mindmemos_skill.persistence import SkillRecord
+
+from mindmemos_skill import MindMemOSSkillError, SkillApplication
+
+from ..errors import translate_skill_error
+
+_ResultT = TypeVar("_ResultT")
 
 
 class AsyncSkillClient:
-    """Thin public facade over an :class:`AsyncSkillBackend`.
+    """Compatibility-stable SDK entry point with no Skill business state of its own."""
 
-    This client represents backend service calls only. Local immutable versions,
-    active pointers, import/export and outbox state continue to belong to
-    :class:`mindmemos_sdk.skills.SkillManager`.
-    """
-
-    def __init__(
-        self,
-        backend: AsyncSkillBackend,
-        *,
-        local: SkillManager | None = None,
-        connection: AsyncConnection | None = None,
-    ) -> None:
-        if not isinstance(backend, AsyncSkillBackend):
-            raise TypeError("backend must be an AsyncSkillBackend")
-        self._backend = backend
-        self._local = local
-        self._connection = connection
-
-    @classmethod
-    def from_http(
-        cls,
-        transport: Any,
-        *,
-        config_manager: ConfigManager | None = None,
-        owns_transport: bool = False,
-    ) -> AsyncSkillClient:
-        """Build an API-mode client with SDK-owned local version management."""
-
-        manager = config_manager or ConfigManager()
-        connection = HttpConnection(
-            HttpConnectionConfig(base_url="https://external.invalid"),
-            transport=transport,
-            owns_transport=owns_transport,
-        )
-        return cls(
-            HttpSkillBackend(connection),
-            local=SkillManager.from_config_manager(manager),
-            connection=connection,
-        )
+    def __init__(self, application: SkillApplication) -> None:
+        if not isinstance(application, SkillApplication):
+            raise TypeError("application must be a SkillApplication")
+        self._application = application
 
     @property
-    def local(self) -> SkillManager:
-        """Return the SDK-owned local Skill version manager."""
+    def application(self) -> SkillApplication:
+        return self._application
 
-        if self._local is None:
-            raise RuntimeError("SDK local Skill management is not configured")
-        return self._local
+    async def register(self, request: RegisterSkillRequest) -> RegisterSkillResult:
+        return await self._call(self._application.register(request))
 
-    async def register(
+    async def publish(self, request: PublishSkillRequest) -> PublishSkillResult:
+        return await self._call(self._application.publish(request))
+
+    async def list_skills(self) -> list[ManagedSkill]:
+        return await self._call(self._application.list_skills())
+
+    async def get_management_overview(self) -> SkillManagementOverview:
+        return await self._call(self._application.get_management_overview())
+
+    async def get_skill(self, skill_ref: str) -> SkillDetail:
+        return await self._call(self._application.get_skill(skill_ref))
+
+    async def get_management_detail(self, skill_ref: str) -> SkillManagementDetail:
+        return await self._call(self._application.get_management_detail(skill_ref))
+
+    async def list_versions(self, skill_ref: str) -> list[SkillRecord]:
+        return await self._call(self._application.list_versions(skill_ref))
+
+    async def get_version(self, skill_ref: str, version_id: str) -> SkillRecord:
+        return await self._call(self._application.get_version(skill_ref, version_id))
+
+    async def export(self, request: ExportSkillRequest) -> ExportSkillResult:
+        return await self._call(self._application.export(request))
+
+    async def diff(
         self,
+        skill_ref: str,
         *,
-        name: str,
-        content: str,
-        version_label: str | None = None,
-        parent_version_id: str | None = None,
-    ) -> SkillRegisterData:
-        return await self._backend.register(
-            name=name,
-            content=content,
-            version_label=version_label,
-            parent_version_id=parent_version_id,
+        to_version_id: str,
+        from_version_id: str | None = None,
+    ) -> SkillDiffResult:
+        return await self._call(
+            self._application.diff(
+                skill_ref,
+                to_version_id=to_version_id,
+                from_version_id=from_version_id,
+            )
         )
 
-    async def list_skills(self) -> list[SkillSummary]:
-        return await self._backend.list_skills()
+    async def push(self, skill_ref: str, version_id: str | None = None) -> PushResult:
+        return await self._call(self._application.push(skill_ref, version_id))
 
-    async def get_skill(self, cloud_skill_id: str) -> SkillSummary:
-        return await self._backend.get_skill(cloud_skill_id)
+    async def pull(self, skill_ref: str) -> PullResult:
+        return await self._call(self._application.pull(skill_ref))
 
-    async def versions_since(
-        self,
-        cloud_skill_id: str,
-        *,
-        since: str | None = None,
-    ) -> list[SkillVersion]:
-        return await self._backend.versions_since(cloud_skill_id, since=since)
+    async def sync(self, skill_ref: str) -> SkillDetail:
+        return await self._call(self._application.sync(skill_ref))
 
-    async def get_content(self, cloud_skill_id: str, version_id: str) -> SkillContentData:
-        return await self._backend.get_content(cloud_skill_id, version_id)
-
-    async def evolve(
-        self,
-        cloud_skill_id: str,
-        *,
-        mode: SkillEvolveMode = "sync",
-    ) -> SkillEvolveData:
-        return await self._backend.evolve(cloud_skill_id, mode=mode)
-
-    async def sync(
-        self,
-        items: list[SkillSyncRequestItem | dict[str, str]],
-    ) -> SkillSyncData:
-        return await self._backend.sync(items)
-
-    async def delete_skill(self, cloud_skill_id: str) -> None:
-        await self._backend.delete_skill(cloud_skill_id)
+    @staticmethod
+    async def _call(operation: Awaitable[_ResultT]) -> _ResultT:
+        try:
+            return await operation
+        except MindMemOSSkillError as exc:
+            raise translate_skill_error(exc) from exc
 
     async def aclose(self) -> None:
-        if self._connection is not None:
-            await self._connection.aclose()
+        """Do nothing: ``SDKPortalRuntime`` owns the shared Application lifecycle."""
 
 
 __all__ = ["AsyncSkillClient"]

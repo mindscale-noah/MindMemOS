@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MindMemOS · SDK Console</title>
-    <link rel="stylesheet" href="/app.css?v=console-19" />
+    <link rel="stylesheet" href="/app.css?v=console-31" />
   </head>
   <body>
     <div class="app-shell">
@@ -19,7 +19,6 @@
         <nav class="tabs" aria-label="Primary navigation">
           <button class="tab active" type="button" data-tab="overview">Overview</button>
           <button class="tab" type="button" data-tab="memory">Memory</button>
-          <button class="tab" type="button" data-tab="lite">Lite Logs</button>
           <button class="tab" type="button" data-tab="skills">Skills</button>
           <button class="tab" type="button" data-tab="settings">Settings</button>
         </nav>
@@ -148,103 +147,6 @@
           </section>
         </div>
 
-        <div id="lite-page" class="page-panel hidden" data-page="lite">
-          <section id="lite-traces-view">
-            <div id="lite-notice" class="settings-notice">
-              <span class="notice-icon">i</span>
-              <span>View logs produced by the local Lite runtime. SQLite observability files are opened read-only by the local SDK service.</span>
-            </div>
-
-            <article class="panel-card lite-trace-toolbar">
-              <div class="panel-heading">
-                <div>
-                  <p class="section-kicker">LOCAL LITE LOGS</p>
-                  <h2>Lite log explorer</h2>
-                  <p class="card-description">Inspect trace logs generated in local Lite mode. Load span records from SQLite, filter by span name, then resolve any span back to its root trace.</p>
-                </div>
-                <span id="lite-database-badge" class="muted-badge">NOT LOADED</span>
-              </div>
-              <div class="lite-path-controls">
-                <label class="field lite-path-field">
-                  <span>Trace directory or SQLite file</span>
-                  <input id="lite-trace-directory" value=".mindmemos/observability" placeholder="/absolute/path/to/observability" spellcheck="false" />
-                </label>
-                <label class="field lite-limit-field">
-                  <span>Page size</span>
-                  <input id="lite-trace-limit" type="number" min="1" max="500" value="25" />
-                </label>
-                <button id="lite-load-traces" class="primary-button" type="button">Load spans</button>
-                <button id="lite-refresh-traces" class="outline-button enabled" type="button">Refresh</button>
-              </div>
-            </article>
-
-            <div class="lite-trace-summary-line">
-              <span id="lite-trace-directory-label">No directory selected</span>
-              <span id="lite-trace-count">0 spans</span>
-            </div>
-
-            <section class="lite-trace-workspace">
-              <aside class="panel-card lite-trace-list-card">
-                <div class="panel-heading">
-                  <div>
-                    <p class="section-kicker">SPANS</p>
-                    <h2>Span records</h2>
-                  </div>
-                </div>
-                <div class="lite-filter-controls">
-                  <label class="field lite-filter-field">
-                    <span>Filter by span name</span>
-                    <input id="lite-span-name-filter" type="search" placeholder="e.g. llm.chat" spellcheck="false" />
-                  </label>
-                  <div class="lite-filter-actions">
-                    <button id="lite-apply-filter" class="outline-button enabled" type="button">Filter</button>
-                    <button id="lite-clear-filter" class="text-button" type="button">Clear</button>
-                  </div>
-                </div>
-                <div id="lite-trace-list" class="lite-trace-list" aria-live="polite">
-                  <div class="lite-empty-state">
-                    <div class="empty-icon small">⌁</div>
-                    <strong>No spans loaded</strong>
-                    <span>Enter the directory that contains Lite SQLite logs.</span>
-                  </div>
-                </div>
-                <nav class="lite-span-pagination" aria-label="Span pagination">
-                  <button id="lite-previous-page" class="outline-button enabled" type="button" disabled>← Previous</button>
-                  <span id="lite-page-status">Page 1 of 1</span>
-                  <button id="lite-next-page" class="outline-button enabled" type="button" disabled>Next →</button>
-                </nav>
-              </aside>
-
-              <article class="panel-card lite-flame-card">
-                <div id="lite-trace-heading" class="panel-heading">
-                  <div>
-                    <p class="section-kicker">FLAME CHART</p>
-                    <h2>Select a trace</h2>
-                    <p class="card-description">Each span occupies one timeline row. Click a row to expand or collapse its direct sub-spans.</p>
-                  </div>
-                  <span id="lite-trace-status" class="muted-badge">EMPTY</span>
-                </div>
-                <div id="lite-root-context" class="lite-root-context hidden" aria-live="polite"></div>
-                <div id="lite-flame-chart" class="lite-flame-chart">
-                  <div class="lite-empty-state">
-                    <div class="empty-icon">◇</div>
-                    <strong>No trace selected</strong>
-                    <span>Choose any span to inspect its trace and available span hierarchy.</span>
-                  </div>
-                </div>
-
-                <section id="lite-span-detail" class="lite-span-detail" aria-live="polite">
-                  <div class="lite-empty-state compact">
-                    <strong>Span details</strong>
-                    <span>Click any flame block to inspect timing, attributes, events, input, and output.</span>
-                  </div>
-                </section>
-              </article>
-            </section>
-          </section>
-
-        </div>
-
         <div id="skills-page" class="page-panel hidden" data-page="skills">
           <div class="section-tabs" role="tablist" aria-label="Skill views">
             <button class="section-tab active" type="button" data-skill-view="library">Library</button>
@@ -261,59 +163,54 @@
                 </div>
                 <button id="register-skill" class="outline-button enabled" type="button">＋ Register</button>
               </div>
-              <p id="register-skill-status" class="register-skill-status" role="status" aria-live="polite"></p>
-              <label class="field"><span>Import directory or SKILL.md</span><input id="register-skill-path" placeholder="/absolute/path/to/skill" /></label>
-              <label class="field"><span>Local alias</span><input id="register-skill-alias" placeholder="Optional · e.g. research-main" /></label>
-              <label class="field"><span>Root version label</span><input id="register-skill-version-label" placeholder="Optional · e.g. 1.0.0" /></label>
-              <label class="field"><span>Root commit message (cloud-visible)</span><input id="register-skill-message" placeholder="Optional · why this Skill was registered" /></label>
-              <label class="field">
-                <span>If an identical snapshot already exists</span>
-                <select id="register-skill-duplicate-action">
-                  <option value="">Do not register it (default)</option>
-                  <option value="reuse">Reuse the existing Skill</option>
-                  <option value="create_new">Register a separate Skill</option>
-                </select>
-              </label>
               <div id="skills-list" class="empty-list">
                 <div class="empty-icon small">✦</div>
                 <strong>No skills registered</strong>
-                <span>Registered local Skills will appear here.</span>
+                <span>Register a Skill to add it to this library.</span>
               </div>
             </article>
             <article class="panel-card skill-editor-card">
-              <div class="panel-heading">
-                <div>
-                  <p class="section-kicker">EDITOR</p>
+              <div class="skill-document-heading">
+                <div class="skill-title-row">
                   <h2 id="skill-editor-title">Select a skill</h2>
-                  <p id="skill-editor-subtitle" class="card-description">Choose a Skill to edit its current local SKILL.md.</p>
+                  <div class="skill-version-controls">
+                    <label class="skill-version-picker">
+                      <span>VERSION</span>
+                      <select id="skill-version-select" aria-label="Skill version" disabled>
+                        <option>Select a Skill first</option>
+                      </select>
+                    </label>
+                  </div>
                 </div>
-                <span id="skill-editor-status" class="muted-badge">EMPTY</span>
+                <div class="skill-document-context">
+                  <p id="skill-editor-subtitle" class="skill-document-name">SKILL.md</p>
+                  <p id="skill-version-message" class="skill-version-message"><span>COMMIT</span><span>No version selected</span></p>
+                </div>
+                <div class="skill-editor-toolbar" aria-label="Skill actions">
+                  <button id="sync-skill" class="outline-button enabled skill-header-action" type="button" disabled>Sync with cloud</button>
+                  <button id="open-export-skill" class="outline-button enabled skill-header-action" type="button" disabled>Export</button>
+                  <button id="evolve-skill" class="outline-button enabled skill-header-action" type="button" disabled>Evolve from selected</button>
+                  <button id="open-delete-skill" class="danger-button skill-header-action" type="button" disabled>Delete local registration</button>
+                  <span class="skill-toolbar-spacer" aria-hidden="true"></span>
+                  <button id="cancel-skill-edit" class="outline-button enabled skill-header-action hidden" type="button">Discard changes</button>
+                  <button id="publish-skill" class="primary-button skill-header-action hidden" type="button" disabled>Publish new version</button>
+                </div>
+                <span id="skill-operation-status" class="skill-operation-status">Select a Skill to view its content.</span>
               </div>
-              <div class="skill-version-toolbar">
-                <label class="field"><span>Skill version</span><select id="skill-version-select" disabled><option>Select a Skill first</option></select></label>
-                <label class="field"><span>New version label</span><input id="skill-version-label" placeholder="Optional · e.g. 1.2.0" disabled /></label>
-                <label class="field"><span>Commit message</span><input id="skill-commit-message" placeholder="Why this version exists" disabled /></label>
-              </div>
-              <div class="skill-editor-actions">
-                <span id="skill-operation-status" class="skill-operation-status">Select a version to begin editing.</span>
-                <label class="checkbox-row" for="activate-published-skill">
-                  <input id="activate-published-skill" type="checkbox" />
-                  <span>Activate new version</span>
-                </label>
-                <button id="activate-skill-version" class="outline-button enabled" type="button" disabled>Activate selected</button>
-                <button id="publish-skill" class="primary-button" type="button" disabled>Publish version</button>
-              </div>
-              <div class="skill-content-toolbar">
-                <span class="content-mode-label">SKILL.md</span>
-                <div class="content-mode-toggle" role="tablist" aria-label="Skill content view">
-                  <button id="skill-preview-mode" class="content-mode-button active" type="button" role="tab" aria-selected="true">Preview</button>
-                  <button id="skill-edit-mode" class="content-mode-button" type="button" role="tab" aria-selected="false">Edit</button>
+              <div class="skill-folder-workspace">
+                <aside class="skill-file-browser" aria-label="Skill files">
+                  <span class="skill-file-browser-label">FILES</span>
+                  <div id="skill-file-tree" class="skill-file-tree">
+                    <span class="skill-file-empty">Select a Skill</span>
+                  </div>
+                </aside>
+                <div class="skill-document-pane">
+                  <div id="skill-content-preview" class="markdown-content skill-library-preview" role="button" tabindex="0" aria-label="Double-click to edit SKILL.md" aria-live="polite">
+                    <div class="markdown-empty-state">Select a Skill to view its files.</div>
+                  </div>
+                  <textarea id="skill-content-editor" class="hidden" spellcheck="false" disabled placeholder="The selected file content will appear here…"></textarea>
                 </div>
               </div>
-              <div id="skill-content-preview" class="markdown-content skill-library-preview" role="tabpanel" aria-live="polite">
-                <div class="markdown-empty-state">Select a version to preview its Markdown.</div>
-              </div>
-              <textarea id="skill-content-editor" class="hidden" spellcheck="false" disabled placeholder="The selected SKILL.md content will appear here…"></textarea>
             </article>
             <aside class="panel-card skill-info-card">
               <div class="panel-heading">
@@ -326,12 +223,115 @@
               <div id="skill-info-content" class="skill-info-empty">
                 <p>Choose a Skill to inspect its immutable versions, active pointer, hashes, and synchronization state.</p>
               </div>
-              <label class="field"><span>Export directory</span><input id="skill-export-path" placeholder="/absolute/path/to/export" disabled /></label>
-              <button id="export-skill" class="outline-button enabled" type="button" disabled>Export selected version</button>
-              <button id="sync-skill" class="outline-button enabled" type="button" disabled>Sync with cloud</button>
-              <button id="evolve-skill" class="outline-button enabled" type="button" disabled>Evolve from selected</button>
-              <button id="promote-skill" class="outline-button enabled" type="button" disabled>Promote selected</button>
             </aside>
+          </section>
+
+          <dialog id="publish-skill-dialog" class="publish-dialog" aria-labelledby="publish-dialog-title">
+            <form id="publish-skill-form" class="publish-dialog-card">
+              <div>
+                <p class="section-kicker">NEW VERSION</p>
+                <h2 id="publish-dialog-title">Publish SKILL.md</h2>
+                <p class="publish-dialog-copy">Create an immutable version from the changes in this editor.</p>
+              </div>
+              <label class="field"><span>Version number</span><input id="publish-version-label" required pattern="[0-9]+\.[0-9]+\.[0-9]+" placeholder="e.g. 1.2.1" /></label>
+              <label class="field"><span>Commit message</span><input id="publish-commit-message" maxlength="160" placeholder="Describe what changed in this version" /></label>
+              <label class="checkbox-row" for="publish-activate-version">
+                <input id="publish-activate-version" type="checkbox" />
+                <span>Make this the active version</span>
+              </label>
+              <p id="publish-dialog-status" class="publish-dialog-status" role="status" aria-live="polite"></p>
+              <div class="publish-dialog-actions">
+                <button id="cancel-publish-skill" class="outline-button enabled" type="button">Cancel</button>
+                <button id="confirm-publish-skill" class="primary-button" type="submit">Publish version</button>
+              </div>
+            </form>
+          </dialog>
+
+          <dialog id="export-skill-dialog" class="export-dialog" aria-labelledby="export-dialog-title">
+            <form id="export-skill-form" class="export-dialog-card">
+              <div>
+                <p class="section-kicker">EXPORT VERSION</p>
+                <h2 id="export-dialog-title">Export Skill folder</h2>
+                <p id="export-version-summary" class="export-version-summary">Select a version to export.</p>
+                <p id="export-version-commit" class="export-version-commit">No commit message</p>
+              </div>
+              <label class="field"><span>Export directory</span><input id="export-skill-path" autocomplete="off" required placeholder="/absolute/path/to/export" /></label>
+              <p id="export-dialog-status" class="export-dialog-status" role="status" aria-live="polite"></p>
+              <div class="export-cli-section">
+                <div class="export-cli-heading">
+                  <span>CLI COMMAND</span>
+                  <button id="copy-export-command" class="export-copy-button" type="button">Copy</button>
+                </div>
+                <code id="export-cli-command">mindmemos skill export</code>
+                <p>Replace the path after <code>--to</code>, or enter it above to update this command.</p>
+              </div>
+              <div class="export-dialog-actions">
+                <button id="cancel-export-skill" class="outline-button enabled" type="button">Cancel</button>
+                <button id="confirm-export-skill" class="primary-button" type="submit">Export version</button>
+              </div>
+            </form>
+          </dialog>
+
+          <dialog id="delete-skill-dialog" class="delete-dialog" aria-labelledby="delete-dialog-title">
+            <form id="delete-skill-form" class="delete-dialog-card">
+              <div>
+                <p class="section-kicker">LOCAL REGISTRATION</p>
+                <h2 id="delete-dialog-title">Delete local registration?</h2>
+                <p id="delete-skill-summary" class="delete-skill-summary">Select a Skill to delete.</p>
+              </div>
+              <div class="delete-impact-grid">
+                <div class="delete-impact delete-impact-removed">
+                  <span>DELETES LOCALLY</span>
+                  <p id="delete-local-impact">Local version history, stored Skill files, pointers, and pending operations.</p>
+                </div>
+                <div class="delete-impact delete-impact-preserved">
+                  <span>KEEPS</span>
+                  <p>The original imported directory and any cloud Skill.</p>
+                </div>
+              </div>
+              <p id="delete-unsaved-warning" class="delete-unsaved-warning hidden">Unsaved editor changes will also be discarded.</p>
+              <label id="delete-confirmation-field" class="field hidden">
+                <span>Type <strong id="delete-confirmation-name"></strong> to confirm</span>
+                <input id="delete-skill-confirmation" autocomplete="off" spellcheck="false" />
+              </label>
+              <p id="delete-dialog-status" class="delete-dialog-status" role="status" aria-live="polite"></p>
+              <div class="delete-dialog-actions">
+                <button id="cancel-delete-skill" class="outline-button enabled" type="button">Cancel</button>
+                <button id="confirm-delete-skill" class="danger-button" type="submit">Delete local registration</button>
+              </div>
+            </form>
+          </dialog>
+
+          <section id="skills-register-view" class="register-layout hidden" data-skill-panel="register">
+            <article class="panel-card register-skill-card">
+              <div class="panel-heading register-heading">
+                <div>
+                  <p class="section-kicker">REGISTER SKILL</p>
+                  <h2>Add a Skill to the library</h2>
+                  <p class="card-description">Import one local Skill directory or SKILL.md as the root of a versioned Skill family.</p>
+                </div>
+                <button class="text-button" type="button" data-register-back>← Back to library</button>
+              </div>
+              <p id="register-skill-status" class="register-skill-status" role="status" aria-live="polite"></p>
+              <div class="register-form-grid">
+                <label class="field register-source-field"><span>Import directory or SKILL.md</span><input id="register-skill-path" placeholder="/absolute/path/to/skill" /></label>
+                <label class="field"><span>Local alias</span><input id="register-skill-alias" placeholder="Optional · e.g. research-main" /></label>
+                <label class="field"><span>Root version label</span><input id="register-skill-version-label" placeholder="Optional · e.g. 1.0.0" /></label>
+                <label class="field register-message-field"><span>Root commit message (cloud-visible)</span><input id="register-skill-message" placeholder="Optional · why this Skill was registered" /></label>
+                <label class="field register-duplicate-field">
+                  <span>If an identical snapshot already exists</span>
+                  <select id="register-skill-duplicate-action">
+                    <option value="">Do not register it (default)</option>
+                    <option value="reuse">Reuse the existing Skill</option>
+                    <option value="create_new">Register a separate Skill</option>
+                  </select>
+                </label>
+              </div>
+              <div class="register-actions">
+                <button class="outline-button enabled" type="button" data-register-back>Cancel</button>
+                <button id="submit-register-skill" class="primary-button" type="button">Register skill</button>
+              </div>
+            </article>
           </section>
 
           <section id="skills-compare-view" class="compare-layout hidden" data-skill-panel="compare">
@@ -450,6 +450,6 @@
         <span>Local SDK console</span>
       </footer>
     </div>
-    <script src="/app.js?v=console-20" defer></script>
+    <script src="/app.js?v=console-30" defer></script>
   </body>
 </html>

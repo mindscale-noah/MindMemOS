@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-from ..config import DefaultsConfig, HttpConnectionConfig, SDKConfig
+from mindmemos_skill import SkillRemotePort
+
+from ..config import CompiledSDKPortalConfigV2, DefaultsConfig
 from ..connections import AsyncConnection, HttpConnection
 from ..memory.backends import AsyncMemoryBackend, HttpMemoryBackend
-from ..skills.backends import AsyncSkillBackend, HttpSkillBackend
+from ..skills.http_adapter import HttpSkillRemoteAdapter
 
 
-def build_connections(config: SDKConfig) -> dict[str, AsyncConnection]:
-    """Construct named connections without opening them."""
+def build_portal_connections(config: CompiledSDKPortalConfigV2) -> dict[str, AsyncConnection]:
+    """Construct the active portal profile's named connections without opening them."""
 
-    connections: dict[str, AsyncConnection] = {}
-    for name, connection_config in config.resolved_connections().items():
-        if isinstance(connection_config, HttpConnectionConfig):
-            connections[name] = HttpConnection(connection_config)
-        else:  # pragma: no cover - protected by the discriminated config union
-            raise TypeError(f"unsupported SDK connection config: {type(connection_config).__name__}")
-    return connections
+    return {name: HttpConnection(connection_config) for name, connection_config in config.profile.connections.items()}
 
 
 def build_memory_backend(
@@ -30,14 +26,16 @@ def build_memory_backend(
     raise TypeError(f"connection does not provide a Memory backend: {type(connection).__name__}")
 
 
-def build_skill_backend(
-    connection: AsyncConnection,
-    *,
-    defaults: DefaultsConfig | None = None,
-) -> AsyncSkillBackend:
+def build_skill_remote_port(connection: AsyncConnection) -> SkillRemotePort:
+    """Adapt a borrowed SDK connection without transferring lifecycle ownership."""
+
     if isinstance(connection, HttpConnection):
-        return HttpSkillBackend(connection)
-    raise TypeError(f"connection does not provide a Skill backend: {type(connection).__name__}")
+        return HttpSkillRemoteAdapter(connection)
+    raise TypeError(f"connection does not provide a Skill remote port: {type(connection).__name__}")
 
 
-__all__ = ["build_connections", "build_memory_backend", "build_skill_backend"]
+__all__ = [
+    "build_memory_backend",
+    "build_portal_connections",
+    "build_skill_remote_port",
+]
