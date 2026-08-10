@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path
 from mindmemos_skill.contracts import SkillTrajectory
 
 from .deps import require_scopes
@@ -20,6 +18,7 @@ from .skill_schemas import (
     SkillRemoteSyncData,
     SkillRemoteSyncRequest,
     SkillSummaryData,
+    SkillTrajectoryListRequest,
     SkillTrajectoryPageData,
     SkillTrajectoryReportData,
     SkillTrajectoryReportRequest,
@@ -73,7 +72,7 @@ async def sync_skills(
     return SkillRemoteSyncResponse(code="ok", request_id=auth.request_id, data=await service.sync_remote(auth, payload))
 
 
-@router.post("/trajectories", response_model=SkillTrajectoryReportResponse)
+@router.post("/trajectory/report", response_model=SkillTrajectoryReportResponse)
 async def report_trajectories(
     payload: SkillTrajectoryReportRequest,
     auth: AuthContext = Depends(require_scopes(SCOPE_TRAJECTORY_WRITE)),
@@ -93,33 +92,13 @@ async def evolve_skill(
     return SkillEvolveResponse(code=data.status, request_id=auth.request_id, data=data)
 
 
-@router.get("/trajectories", response_model=SkillTrajectoryPageResponse)
+@router.post("/trajectory/list", response_model=SkillTrajectoryPageResponse)
 async def list_trajectories(
-    cloud_skill_id: str = Query(min_length=1),
-    version_id: str | None = Query(default=None),
-    since: datetime | None = Query(default=None),
-    cursor: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
-    status: str | None = Query(default=None),
-    min_score: float | None = Query(default=None),
-    include_events: bool = Query(default=True),
+    payload: SkillTrajectoryListRequest,
     auth: AuthContext = Depends(require_scopes(SCOPE_TRAJECTORY_READ)),
     service: SkillService = Depends(get_skill_service),
 ) -> SkillTrajectoryPageResponse:
-    data = await service.list_trajectories(
-        auth,
-        cloud_skill_id=cloud_skill_id,
-        version_id=version_id,
-        since=since,
-        cursor=cursor,
-        limit=limit,
-        status=status,
-        min_score=min_score,
-    )
-    if not include_events:
-        data = data.model_copy(
-            update={"items": [item.model_copy(update={"trajectory": []}) for item in data.items]}
-        )
+    data = await service.list_trajectories(auth, payload)
     return SkillTrajectoryPageResponse(code="ok", request_id=auth.request_id, data=data)
 
 

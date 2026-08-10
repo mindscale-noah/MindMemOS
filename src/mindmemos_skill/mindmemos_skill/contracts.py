@@ -361,6 +361,17 @@ class SkillTrajectoryReportRequest(ContractModel):
     items: list[SkillTrajectoryUploadItem] = Field(min_length=1, max_length=100)
 
 
+class SkillTrajectoryListRequest(ContractModel):
+    cloud_skill_id: str = Field(min_length=1)
+    version_id: str | None = None
+    since: datetime | None = None
+    cursor: str | None = None
+    limit: int = Field(default=100, ge=1, le=500)
+    status: str | None = None
+    min_score: float | None = None
+    include_events: bool = True
+
+
 class SkillTrajectoryReportResultItem(ContractModel):
     trajectory_id: str
     status: Literal["stored", "duplicate", "queued", "rejected"]
@@ -453,6 +464,7 @@ __all__ = [
     "SkillRemoteOperationType",
     "SkillTrajectory",
     "SkillTrajectoryBinding",
+    "SkillTrajectoryListRequest",
     "SkillTrajectoryReportRequest",
     "SkillTrajectoryReportResult",
     "SkillTrajectoryReportResultItem",

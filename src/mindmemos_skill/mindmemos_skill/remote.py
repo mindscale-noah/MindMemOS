@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import Field
@@ -12,6 +11,7 @@ from .contracts import (
     ContractModel,
     SkillBundle,
     SkillTrajectory,
+    SkillTrajectoryListRequest,
     SkillTrajectoryReportRequest,
     SkillTrajectoryReportResult,
     SkillVersionCore,
@@ -79,17 +79,7 @@ class RemoteSyncResult(ContractModel):
 
 RemoteTrajectoryReportRequest = SkillTrajectoryReportRequest
 RemoteTrajectoryReportResult = SkillTrajectoryReportResult
-
-
-class RemoteTrajectoryPullRequest(ContractModel):
-    cloud_skill_id: str = Field(min_length=1)
-    version_id: str | None = None
-    since: datetime | None = None
-    cursor: str | None = None
-    limit: int = Field(default=100, ge=1, le=500)
-    status: str | None = None
-    min_score: float | None = None
-    include_events: bool = True
+RemoteTrajectoryListRequest = SkillTrajectoryListRequest
 
 
 class RemoteTrajectoryPage(ContractModel):
@@ -134,7 +124,7 @@ class SkillRemotePort(Protocol):
         request: RemoteTrajectoryReportRequest,
     ) -> RemoteTrajectoryReportResult: ...
 
-    async def pull_trajectories(self, request: RemoteTrajectoryPullRequest) -> RemoteTrajectoryPage: ...
+    async def list_trajectories(self, request: RemoteTrajectoryListRequest) -> RemoteTrajectoryPage: ...
 
     async def evolve(self, request: RemoteEvolveRequest) -> RemoteEvolveResult: ...
 
@@ -174,8 +164,8 @@ __all__ = [
     "RemoteSyncRequest",
     "RemoteSyncResult",
     "RemoteSyncResultItem",
+    "RemoteTrajectoryListRequest",
     "RemoteTrajectoryPage",
-    "RemoteTrajectoryPullRequest",
     "RemoteTrajectoryReportRequest",
     "RemoteTrajectoryReportResult",
     "RemoteVersionContent",

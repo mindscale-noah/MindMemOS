@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from mindmemos_skill.contracts import SkillBundle, SkillRemoteOperationType
@@ -30,6 +29,7 @@ from ..skill_schemas import (
     SkillRemoteSyncRequest,
     SkillRemoteSyncResultItem,
     SkillSummaryData,
+    SkillTrajectoryListRequest,
     SkillTrajectoryPageData,
     SkillTrajectoryReportData,
     SkillTrajectoryReportRequest,
@@ -452,31 +452,26 @@ class SkillService:
     async def list_trajectories(
         self,
         auth: AuthContext,
-        *,
-        cloud_skill_id: str,
-        version_id: str | None,
-        since: datetime | None,
-        cursor: str | None,
-        limit: int,
-        status: str | None,
-        min_score: float | None,
+        request: SkillTrajectoryListRequest,
     ) -> SkillTrajectoryPageData:
         annotate_request_trace(auth)
         try:
             items, next_cursor, has_more = await self.repository.list_trajectories(
                 project_id=auth.project_id,
-                cloud_skill_id=cloud_skill_id,
-                version_id=version_id,
-                since=since,
-                cursor=cursor,
-                limit=limit,
-                status=status,
-                min_score=min_score,
+                cloud_skill_id=request.cloud_skill_id,
+                version_id=request.version_id,
+                since=request.since,
+                cursor=request.cursor,
+                limit=request.limit,
+                status=request.status,
+                min_score=request.min_score,
             )
         except SkillVersionNotFoundError as exc:
             raise ResourceNotFoundError(str(exc), code="skill.version_not_found") from exc
         except (SkillConflictError, ValueError) as exc:
             raise BadRequestError(str(exc), code="skill.trajectory_invalid") from exc
+        if not request.include_events:
+            items = [item.model_copy(update={"trajectory": []}) for item in items]
         return SkillTrajectoryPageData(
             items=items,
             returned_count=len(items),

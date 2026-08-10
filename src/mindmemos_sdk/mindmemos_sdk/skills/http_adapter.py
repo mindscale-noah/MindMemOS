@@ -16,8 +16,8 @@ from mindmemos_skill import (
     RemotePushResult,
     RemoteSyncRequest,
     RemoteSyncResult,
+    RemoteTrajectoryListRequest,
     RemoteTrajectoryPage,
-    RemoteTrajectoryPullRequest,
     RemoteTrajectoryReportRequest,
     RemoteTrajectoryReportResult,
     RemoteVersionContent,
@@ -93,16 +93,16 @@ class HttpSkillRemoteAdapter:
         request: RemoteTrajectoryReportRequest,
     ) -> RemoteTrajectoryReportResult:
         envelope = await self._transport.post_envelope(
-            "/v1/skills/trajectories",
+            "/v1/skills/trajectory/report",
             json=request.model_dump(mode="json"),
         )
         return RemoteTrajectoryReportResult.model_validate(_payload(envelope.data))
 
     @_translate_remote_errors
-    async def pull_trajectories(self, request: RemoteTrajectoryPullRequest) -> RemoteTrajectoryPage:
-        envelope = await self._transport.get_envelope(
-            "/v1/skills/trajectories",
-            params=request.model_dump(mode="json", exclude_none=True),
+    async def list_trajectories(self, request: RemoteTrajectoryListRequest) -> RemoteTrajectoryPage:
+        envelope = await self._transport.post_envelope(
+            "/v1/skills/trajectory/list",
+            json=request.model_dump(mode="json", exclude_none=True),
         )
         return RemoteTrajectoryPage.model_validate(_payload(envelope.data))
 

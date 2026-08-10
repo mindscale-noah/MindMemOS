@@ -17,7 +17,7 @@ from mindmemos_skill import (
     RemotePushRequest,
     RemoteSyncItem,
     RemoteSyncRequest,
-    RemoteTrajectoryPullRequest,
+    RemoteTrajectoryListRequest,
     RemoteTrajectoryReportRequest,
     SkillBundle,
     SkillRemoteRequestError,
@@ -127,9 +127,9 @@ async def test_http_adapter_exposes_trajectory_and_evolve_routes():
 
     def handler(request: httpx.Request) -> httpx.Response:
         paths.append(request.url.path)
-        if request.url.path.endswith("/trajectories") and request.method == "POST":
+        if request.url.path.endswith("/trajectory/report"):
             data = {"items": [{"trajectory_id": "t1", "status": "queued", "error_code": None}]}
-        elif request.url.path.endswith("/trajectories"):
+        elif request.url.path.endswith("/trajectory/list"):
             data = {"items": [], "returned_count": 0, "next_cursor": None, "has_more": False}
         elif request.url.path.endswith("/evolve"):
             data = {
@@ -149,7 +149,7 @@ async def test_http_adapter_exposes_trajectory_and_evolve_routes():
     adapter = HttpSkillRemoteAdapter(connection)
     report = RemoteTrajectoryReportRequest.model_construct(operation_id="report", mode="async", items=[])
     assert (await adapter.report_trajectories(report)).items[0].status == "queued"
-    assert (await adapter.pull_trajectories(RemoteTrajectoryPullRequest(cloud_skill_id="family"))).items == []
+    assert (await adapter.list_trajectories(RemoteTrajectoryListRequest(cloud_skill_id="family"))).items == []
     assert (
         await adapter.evolve(
             RemoteEvolveRequest(
@@ -162,8 +162,8 @@ async def test_http_adapter_exposes_trajectory_and_evolve_routes():
         )
     ).status == "queued"
     assert paths == [
-        "/v1/skills/trajectories",
-        "/v1/skills/trajectories",
+        "/v1/skills/trajectory/report",
+        "/v1/skills/trajectory/list",
         "/v1/skills/evolve",
     ]
     await client.aclose()

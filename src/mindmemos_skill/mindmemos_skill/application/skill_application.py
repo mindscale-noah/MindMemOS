@@ -88,8 +88,8 @@ from ..remote import (
     RemotePushResult,
     RemoteSyncItem,
     RemoteSyncRequest,
+    RemoteTrajectoryListRequest,
     RemoteTrajectoryPage,
-    RemoteTrajectoryPullRequest,
     RemoteVersionSummary,
     SkillRemotePort,
 )
@@ -751,8 +751,8 @@ class SkillApplication:
         detail = await self._manager.get_skill(skill_ref)
         if detail.skill.cloud_skill_id is None:
             raise SkillConflictError(f"local Skill has no cloud mapping: {detail.skill.skill_id}")
-        page = await self._remote.pull_trajectories(
-            RemoteTrajectoryPullRequest(
+        page = await self._remote.list_trajectories(
+            RemoteTrajectoryListRequest(
                 cloud_skill_id=detail.skill.cloud_skill_id,
                 cursor=detail.sync_state.trajectory_pull_cursor,
                 limit=limit,

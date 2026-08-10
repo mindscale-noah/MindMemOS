@@ -196,8 +196,13 @@ def test_version_dag_idempotency_and_status(client):
     assert "published_head_id" not in listing[0]
 
 
-def test_openapi_does_not_expose_merge(client):
-    assert "/v1/skills/{cloud_skill_id}/merge" not in client.app.openapi()["paths"]
+def test_openapi_exposes_distinct_trajectory_post_routes(client):
+    paths = client.app.openapi()["paths"]
+    assert "/v1/skills/{cloud_skill_id}/merge" not in paths
+    assert "/v1/skills/trajectories" not in paths
+    assert set(paths["/v1/skills/trajectory/report"]) == {"post"}
+    assert set(paths["/v1/skills/trajectory/list"]) == {"post"}
+    assert set(paths["/v1/skills/trajectories/{trajectory_id}"]) == {"get"}
 
 
 def test_trajectory_sync_async_pull_and_evolve(client):
@@ -210,8 +215,8 @@ def test_trajectory_sync_async_pull_and_evolve(client):
     )
     stored_trajectory_hash = trajectory["trajectory_hash"]
     report = {"operation_id": "report-1", "mode": "sync", "items": [{"trajectory": trajectory}]}
-    first = client.post("/v1/skills/trajectories", json=report)
-    replay = client.post("/v1/skills/trajectories", json=report)
+    first = client.post("/v1/skills/trajectory/report", json=report)
+    replay = client.post("/v1/skills/trajectory/report", json=report)
     assert first.json()["data"]["items"][0]["status"] == "stored"
     assert replay.json()["data"] == first.json()["data"]
 
@@ -219,19 +224,19 @@ def test_trajectory_sync_async_pull_and_evolve(client):
     trajectory["rollout_id"] = "rollout-2"
     trajectory["trajectory_hash"] = compute_trajectory_hash(trajectory)
     queued = client.post(
-        "/v1/skills/trajectories",
+        "/v1/skills/trajectory/report",
         json={"operation_id": "report-2", "mode": "async", "items": [{"trajectory": trajectory}]},
     )
     assert queued.json()["data"]["items"][0]["status"] == "queued"
 
-    pulled = client.get(
-        "/v1/skills/trajectories",
-        params={"cloud_skill_id": version["cloud_skill_id"], "version_id": "v1"},
+    pulled = client.post(
+        "/v1/skills/trajectory/list",
+        json={"cloud_skill_id": version["cloud_skill_id"], "version_id": "v1"},
     )
     assert [item["trajectory_id"] for item in pulled.json()["data"]["items"]] == ["trajectory-1"]
-    projected = client.get(
-        "/v1/skills/trajectories",
-        params={"cloud_skill_id": version["cloud_skill_id"], "include_events": "false"},
+    projected = client.post(
+        "/v1/skills/trajectory/list",
+        json={"cloud_skill_id": version["cloud_skill_id"], "include_events": False},
     ).json()["data"]["items"][0]
     assert projected["trajectory"] == []
     assert projected["trajectory_hash"] == stored_trajectory_hash

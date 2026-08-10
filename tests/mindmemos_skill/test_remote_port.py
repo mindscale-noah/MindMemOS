@@ -14,8 +14,8 @@ from mindmemos_skill import (
     RemotePushResult,
     RemoteSyncRequest,
     RemoteSyncResult,
+    RemoteTrajectoryListRequest,
     RemoteTrajectoryPage,
-    RemoteTrajectoryPullRequest,
     RemoteTrajectoryReportRequest,
     RemoteTrajectoryReportResult,
     RemoteVersionContent,
@@ -64,7 +64,7 @@ class _Remote:
     ) -> RemoteTrajectoryReportResult:
         return RemoteTrajectoryReportResult(items=[])
 
-    async def pull_trajectories(self, _request: RemoteTrajectoryPullRequest) -> RemoteTrajectoryPage:
+    async def list_trajectories(self, _request: RemoteTrajectoryListRequest) -> RemoteTrajectoryPage:
         return RemoteTrajectoryPage()
 
     async def evolve(self, request: RemoteEvolveRequest) -> RemoteEvolveResult:
