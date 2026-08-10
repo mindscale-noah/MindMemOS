@@ -200,7 +200,7 @@ GOOD extraction:
 
 ## 6. Entity Type Selection & Default Property Usage
 - **Entity type (`entity_type`) MUST be one of the types defined in the schema** (e.g., person, organization). NEVER invent new entity types. Do NOT generate "episodes" type entities — the system creates them separately.
-- If an entity does not perfectly match any entity type in schema, choose the **closest matching type**. For example, a pet or named animal should use "animal"; a fictional character or public figure should use "person"; a club or team should use "organization".
+- If an entity does not perfectly match any entity type in schema, choose the **closest matching type**. For example, a pet or named animal should use "animal"; a fictional character or public figure should use "person"; a club or team should use "organization"; software, tools, frameworks, protocols, services, and models (technical artifacts) should use "item" — technical terms (e.g., kafka, npm, docker) must NEVER be classified as "person" or "organization".
 - **`default_property` is a PROPERTY NAME, NOT an entity type.** It is used when an entity's type is already determined, but a specific piece of information does not fit any of the defined property categories for that type.
 - Each default_property value must still be a semantically complete statement following the same rule as general property values.
 

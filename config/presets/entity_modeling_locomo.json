@@ -265,7 +265,7 @@
   },
   {
     "entity_type": "item",
-    "entity_description": "Significant physical items, gifts, keepsakes, artworks, or objects that carry personal meaning or are referenced multiple times. Only create item entities for items that are meaningfully discussed (e.g., named objects, gifts, decorations), NOT for generic purchases or throwaway mentions.",
+    "entity_description": "Significant physical items, gifts, keepsakes, artworks, or objects that carry personal meaning or are referenced multiple times. This type also covers named technical artifacts (software, tools, frameworks, protocols, services, models) when they are meaningfully discussed. Only create item entities for items that are meaningfully discussed (e.g., named objects, gifts, decorations, named software/tools), NOT for generic purchases or throwaway mentions.",
     "entity_instruction": "Each property value MUST be a semantically complete sentence. Only create item entities for distinctive, named, or personally meaningful objects. Do not create item entities for generic items like 'groceries' or 'a shirt'.",
     "search_weight": 0.8,
     "static_property": {

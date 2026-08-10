@@ -166,7 +166,7 @@ Schema定义了允许的实体类型及其属性。以此为参考，同时也�
 
 ## 6. 实体类型选择 & default_property 的使用
 - **实体类型（`entity_type`）必须是 schema 中定义的类型**（如 person、organization），禁止发明新类型。不要生成 "episodes" 类型的实体 — 系统会单独创建。
-- 如果某个实体不完全匹配任何entity类型，选择**最接近的类型**。例如：宠物或有名字的动物应使用 "animal"；虚构角色、公众人物应使用 "person"；俱乐部或团队应使用 "organization"
+- 如果某个实体不完全匹配任何entity类型，选择**最接近的类型**。例如：宠物或有名字的动物应使用 "animal"；虚构角色、公众人物应使用 "person"；俱乐部或团队应使用 "organization"；软件、工具、框架、协议、服务、模型等技术产物应使用 "item"——技术名词（如 kafka、npm、docker）绝不能归类为 "person" 或 "organization"
 - **`default_property` 是一个属性名，不是实体类型。** 当实体类型已确定，但某条具体信息不适合该类型下任何已定义的属性类别时，将该属性命名为 default_property
 - 每条 default_property 的值与其他类型属性要求一样仍须是语义完整的陈述句
 
