@@ -545,12 +545,10 @@ class MemoryService:
         if pipeline is None:
             raise NotImplementedError("delete pipeline implementation is not wired yet")
         ctx = to_memory_request_context(auth)
-        config_ctx = await self._provider_config_context(ctx)
-        with config_ctx:
-            try:
-                return await pipeline.delete(to_delete_pipeline_input(request), ctx)
-            except MemoryNotFoundError as exc:
-                raise ResourceNotFoundError(str(exc), code="memory.not_found") from exc
+        try:
+            return await pipeline.delete(to_delete_pipeline_input(request), ctx)
+        except MemoryNotFoundError as exc:
+            raise ResourceNotFoundError(str(exc), code="memory.not_found") from exc
 
     @traced("memory_service.update")
     async def update(self, auth: AuthContext, request: UpdateRequest) -> UpdatePipelineResult:

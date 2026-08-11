@@ -10,6 +10,7 @@ mapping and project scoping live in exactly one place.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -79,6 +80,7 @@ class QdrantEngine:
             if cfg.batch_upsert_enabled
             else None
         )
+        self._collection_locks: dict[str, asyncio.Lock] = {}
 
     @property
     def client(self) -> AsyncQdrantClient:
@@ -121,6 +123,13 @@ class QdrantEngine:
         with an empty ``vectors_config`` (payload + filter only).
         """
 
+        lock = self._collection_locks.setdefault(spec.name, asyncio.Lock())
+        async with lock:
+            await self._ensure_collection_locked(spec)
+
+    async def _ensure_collection_locked(self, spec: QdrantCollectionSpec) -> None:
+        """Ensure one collection while its process-local name lock is held."""
+
         exists = await self._client.collection_exists(spec.name)
         if not exists:
             vectors_config: dict[str, qmodels.VectorParams] = {}
@@ -134,12 +143,19 @@ class QdrantEngine:
                 sparse_vectors_config = {
                     spec.sparse_vector_name: qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
                 }
-            await self._client.create_collection(
-                collection_name=spec.name,
-                vectors_config=vectors_config,
-                sparse_vectors_config=sparse_vectors_config,
-                on_disk_payload=spec.on_disk_payload,
-            )
+            try:
+                await self._client.create_collection(
+                    collection_name=spec.name,
+                    vectors_config=vectors_config,
+                    sparse_vectors_config=sparse_vectors_config,
+                    on_disk_payload=spec.on_disk_payload,
+                )
+            except Exception:
+                # Another service instance may win the create race after our
+                # existence check. Treat that as success only when Qdrant now
+                # confirms the requested collection exists.
+                if not await self._client.collection_exists(spec.name):
+                    raise
         elif spec.on_disk_payload is not None:
             await self._client.update_collection(
                 collection_name=spec.name,

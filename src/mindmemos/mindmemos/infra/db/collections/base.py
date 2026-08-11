@@ -1,16 +1,16 @@
 """Shared base for per-collection Qdrant repositories.
 
-Each table under ``collections/`` binds exactly one Qdrant collection and adds
-its own typed upsert/read methods. The cross-cutting mechanics — project-scoped
-retrieve/scroll and point-struct building — live here so the concrete
-repositories stay small and free of duplication. All low-level work is delegated
-to the shared :class:`QdrantEngine`.
+Each table under ``collections/`` binds one logical Qdrant collection and adds
+its own typed upsert/read methods. A logical vector collection may map to a
+small set of dimension-compatible physical collections; payload-only data stays
+in its base collection. The cross-cutting mechanics — project-scoped
+retrieve/scroll and point-struct building — live here so concrete repositories
+stay small and free of duplication. All low-level work is delegated to the
+shared :class:`QdrantEngine`.
 """
 
 from __future__ import annotations
 
-import hashlib
-from collections import defaultdict
 from typing import Any
 
 from qdrant_client import models as qmodels
@@ -21,7 +21,7 @@ from ..models import PayloadIndexSpec, QdrantCollectionSpec, QdrantRecord
 
 
 class CollectionRepository:
-    """Typed adapter bound to a single Qdrant collection."""
+    """Typed adapter bound to one logical Qdrant collection."""
 
     def __init__(self, engine: QdrantEngine, cfg: QdrantConfig) -> None:
         self._engine = engine
@@ -34,17 +34,78 @@ class CollectionRepository:
         raise NotImplementedError
 
     def collection_for_project(self, project_id: str | None) -> str:
-        """Return the physical collection used for one project."""
+        """Return the default physical collection for a project.
 
-        if not self._cfg.project_collection_namespace_enabled or not project_id:
+        Payload-only repositories always use their base collection. Vector
+        repositories use the configured default dimension; operations that
+        already have an actual vector call :meth:`collection_for_vector_size`.
+        """
+
+        del project_id
+        if not self._cfg.project_collection_namespace_enabled or not self._is_vector_repository:
             return self.collection
-        digest = hashlib.sha256(project_id.encode("utf-8")).hexdigest()[:16]
-        return f"{self.collection}__p_{digest}"
+        return self.collection_for_vector_size(self._cfg.vector_size)
+
+    def collection_for_vector_size(self, vector_size: int) -> str:
+        """Return the shared physical collection for a dense-vector dimension."""
+
+        if not self._cfg.project_collection_namespace_enabled:
+            return self.collection
+        return f"{self.collection}__d_{vector_size}"
+
+    @property
+    def _is_vector_repository(self) -> bool:
+        return self.collection in {
+            getattr(self._cfg, "memory_collection", None),
+            getattr(self._cfg, "entity_collection", None),
+            getattr(self._cfg, "source_collection", None),
+        }
+
+    async def _dimension_collection_names(self) -> list[str]:
+        """Return this repository's shared vector collections, ordered by dimension."""
+
+        if not self._cfg.project_collection_namespace_enabled:
+            return [self.collection] if await self._engine.collection_exists(self.collection) else []
+        prefix = f"{self.collection}__d_"
+        names = [name for name in await self._engine.collection_names() if name.startswith(prefix)]
+
+        def dimension(name: str) -> int:
+            suffix = name.removeprefix(prefix)
+            return int(suffix) if suffix.isdigit() else 2**31 - 1
+
+        return sorted(names, key=lambda name: (dimension(name), name))
+
+    async def _collection_holding_project(
+        self,
+        project_id: str,
+        *,
+        vector_size: int | None = None,
+    ) -> str | None:
+        """Locate the shared vector collection containing one project's data."""
+
+        if not self._cfg.project_collection_namespace_enabled or not self._is_vector_repository:
+            return self.collection
+        preferred = self.collection_for_vector_size(vector_size) if vector_size else None
+        candidates = await self._dimension_collection_names()
+        if preferred in candidates:
+            candidates.remove(preferred)
+            candidates.insert(0, preferred)
+        for collection in candidates:
+            count = await self._engine.count(
+                collection,
+                count_filter=self._engine.project_filter(project_id),
+                exact=True,
+            )
+            if count:
+                return collection
+        return None
 
     async def _project_collection_exists(self, project_id: str) -> bool:
         if not self._cfg.project_collection_namespace_enabled:
             return True
-        return await self._engine.collection_exists(self.collection_for_project(project_id))
+        if not self._is_vector_repository:
+            return True
+        return await self._collection_holding_project(project_id) is not None
 
     @property
     def semantic_vector_name(self) -> str:
@@ -63,10 +124,15 @@ class CollectionRepository:
     ) -> QdrantRecord | None:
         """Retrieve one point and return it only if it belongs to ``project_id``."""
 
-        if not await self._project_collection_exists(project_id):
+        collection = (
+            await self._collection_holding_project(project_id)
+            if self._is_vector_repository
+            else self.collection
+        )
+        if collection is None:
             return None
         records = await self._engine.retrieve(
-            self.collection_for_project(project_id),
+            collection,
             [point_id],
             with_vectors=with_vectors,
         )
@@ -77,10 +143,15 @@ class CollectionRepository:
     ) -> list[QdrantRecord]:
         """Retrieve points by id, keeping only those owned by ``project_id``."""
 
-        if not await self._project_collection_exists(project_id):
+        collection = (
+            await self._collection_holding_project(project_id)
+            if self._is_vector_repository
+            else self.collection
+        )
+        if collection is None:
             return []
         records = await self._engine.retrieve(
-            self.collection_for_project(project_id),
+            collection,
             point_ids,
             with_vectors=with_vectors,
         )
@@ -98,10 +169,15 @@ class CollectionRepository:
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll the collection inside one project."""
 
-        if not await self._project_collection_exists(project_id):
+        collection = (
+            await self._collection_holding_project(project_id)
+            if self._is_vector_repository
+            else self.collection
+        )
+        if collection is None:
             return [], None
         return await self._engine.scroll(
-            self.collection_for_project(project_id),
+            collection,
             scroll_filter=self._engine.project_filter(project_id, filter_=filter_),
             limit=limit,
             offset=cursor,
@@ -112,10 +188,15 @@ class CollectionRepository:
     async def _count_scoped(self, project_id: str, *, filter_: qmodels.Filter | None = None) -> int:
         """Count points inside one project."""
 
-        if not await self._project_collection_exists(project_id):
+        collection = (
+            await self._collection_holding_project(project_id)
+            if self._is_vector_repository
+            else self.collection
+        )
+        if collection is None:
             return 0
         return await self._engine.count(
-            self.collection_for_project(project_id),
+            collection,
             count_filter=self._engine.project_filter(project_id, filter_=filter_),
             exact=True,
         )
@@ -129,9 +210,10 @@ class CollectionRepository:
         payload_indexes: list[PayloadIndexSpec],
         on_disk_payload: bool | None = None,
     ) -> str:
-        """Ensure the vector collection for one project exists and return its name."""
+        """Ensure the dimension-compatible shared vector collection exists."""
 
-        collection = self.collection_for_project(project_id)
+        del project_id
+        collection = self.collection_for_vector_size(vector_size)
         if not self._cfg.project_collection_namespace_enabled:
             return collection
         await self._engine.ensure_collection(
@@ -156,25 +238,10 @@ class CollectionRepository:
         payload_indexes: list[PayloadIndexSpec],
         on_disk_payload: bool | None = None,
     ) -> str:
-        """Ensure the payload-only collection for one project exists and return its name."""
+        """Return the already bootstrapped shared payload-only collection."""
 
-        collection = self.collection_for_project(project_id)
-        if not self._cfg.project_collection_namespace_enabled or not project_id:
-            return collection
-        await self._engine.ensure_collection(
-            QdrantCollectionSpec(
-                name=collection,
-                vector_size=self._cfg.vector_size,
-                dense_vector_name=self.semantic_vector_name,
-                sparse_vector_name=self.bm25_vector_name,
-                distance=self._cfg.distance,  # type: ignore[arg-type]
-                enable_dense=False,
-                enable_sparse=False,
-                on_disk_payload=on_disk_payload,
-                payload_indexes=payload_indexes,
-            )
-        )
-        return collection
+        del project_id, payload_indexes, on_disk_payload
+        return self.collection
 
     async def _upsert_payload_points_by_project(
         self,
@@ -182,32 +249,20 @@ class CollectionRepository:
         *,
         payload_indexes: list[PayloadIndexSpec],
     ) -> None:
-        """Upsert payload-only points into the physical collection for each project."""
+        """Upsert payload-only points into the shared base collection."""
 
         if not points:
             return
-        grouped: dict[str | None, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
-        for point_id, payload in points:
-            project_id = payload.get("project_id")
-            grouped[project_id if isinstance(project_id, str) and project_id else None].append((point_id, payload))
-        for project_id, project_points in grouped.items():
-            collection = await self._ensure_project_payload_collection(project_id, payload_indexes=payload_indexes)
-            await self._engine.upsert(
-                collection,
-                [self._payload_point(point_id, payload) for point_id, payload in project_points],
-            )
+        collection = await self._ensure_project_payload_collection(None, payload_indexes=payload_indexes)
+        await self._engine.upsert(
+            collection,
+            [self._payload_point(point_id, payload) for point_id, payload in points],
+        )
 
     async def _global_payload_collection_names(self) -> list[str]:
         """Return physical collections that may hold payload-only points for this repository."""
 
-        if not self._cfg.project_collection_namespace_enabled:
-            return [self.collection]
-        names = set(await self._engine.collection_names())
-        prefix = f"{self.collection}__p_"
-        collections = [name for name in sorted(names) if name.startswith(prefix)]
-        if self.collection in names:
-            collections.insert(0, self.collection)
-        return collections
+        return [self.collection] if await self._engine.collection_exists(self.collection) else []
 
     async def _scroll_payload_global(
         self,
@@ -217,7 +272,7 @@ class CollectionRepository:
         cursor: Any | None = None,
         order_by: Any | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
-        """Scroll payload-only records across base and project-scoped collections."""
+        """Scroll payload-only records in the shared base collection."""
 
         if not self._cfg.project_collection_namespace_enabled:
             return await self._engine.scroll(

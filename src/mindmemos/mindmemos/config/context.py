@@ -24,6 +24,7 @@ class ConfigOverrides:
 
     tenant_config: dict[str, Any] | None = None
     project_config: dict[str, Any] | None = None
+    allow_project_embedding_dimensions: bool = False
 
     def is_empty(self) -> bool:
         return not self.tenant_config and not self.project_config
@@ -93,7 +94,11 @@ def bind_config_overrides(
             allow_project_embedding_dimensions=allow_project_embedding_dimensions,
         )
     )
-    overrides = ConfigOverrides(tenant_config=tenant_config, project_config=project_config)
+    overrides = ConfigOverrides(
+        tenant_config=tenant_config,
+        project_config=project_config,
+        allow_project_embedding_dimensions=allow_project_embedding_dimensions,
+    )
     overrides_token = _current_overrides.set(None if overrides.is_empty() else overrides)
     try:
         yield

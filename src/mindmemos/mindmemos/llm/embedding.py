@@ -26,9 +26,9 @@ def _resolved_expected_dim() -> int | None:
     Dynamic provider binding can bind a project-specific embedding dimension
     while the base Qdrant config remains read-only. In that mode, prefer the
     request-scoped embedding endpoint dimension. A built-in endpoint may not
-    publish one; project-namespaced storage can safely discover its actual
-    dimension from the response because projects do not share vector
-    collections. Static/shared-collection mode keeps the original global
+    publish one; dimension-namespaced storage can safely discover its actual
+    dimension from the response and route it to a compatible collection.
+    Static/base-collection mode keeps the original global
     ``database.qdrant.vector_size`` behavior.
     """
 

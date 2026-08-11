@@ -10,15 +10,25 @@ from fastapi.testclient import TestClient
 from mindmemos.api.app import register_exception_handlers
 from mindmemos.api.deps import get_request_context
 from mindmemos.api.routes import router
-from mindmemos.api.schemas import AuthContext
+from mindmemos.api.schemas import AuthContext, DeleteRequest
 from mindmemos.api.services import get_memory_service
 from mindmemos.api.services.memory_service import MemoryService
 from mindmemos.errors import MemoryNotFoundError
+from mindmemos.typing.service import DeletePipelineResult
 
 
 class _MissingDeletePipeline:
     async def delete(self, inp, context):
         raise MemoryNotFoundError(inp.id)
+
+
+class _RecordingDeletePipeline:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def delete(self, inp, context):
+        self.calls.append((inp, context))
+        return DeletePipelineResult(status="ok", message=None)
 
 
 class _MissingUpdatePipeline:
@@ -49,6 +59,27 @@ def _client(monkeypatch: pytest.MonkeyPatch, auth_context: AuthContext, service:
     app.dependency_overrides[get_request_context] = lambda: auth_context
     app.dependency_overrides[get_memory_service] = lambda: service
     return TestClient(app)
+
+
+@pytest.mark.asyncio
+async def test_delete_does_not_resolve_model_provider_context(
+    monkeypatch: pytest.MonkeyPatch,
+    auth_context: AuthContext,
+) -> None:
+    pipeline = _RecordingDeletePipeline()
+    service = MemoryService(delete_pipeline=pipeline, skill_store=object())
+
+    async def _unexpected_provider_context(_context):
+        raise AssertionError("delete must not resolve model provider configuration")
+
+    monkeypatch.setattr(service, "_provider_config_context", _unexpected_provider_context)
+
+    result = await service.delete(auth_context, DeleteRequest(memory_id="memory-1"))
+
+    assert result.status == "ok"
+    assert len(pipeline.calls) == 1
+    assert pipeline.calls[0][0].id == "memory-1"
+    assert pipeline.calls[0][1].project_id == auth_context.project_id
 
 
 def test_delete_rejects_hard_flag_over_http(monkeypatch: pytest.MonkeyPatch, auth_context: AuthContext) -> None:

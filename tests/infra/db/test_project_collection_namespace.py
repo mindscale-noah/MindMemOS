@@ -41,15 +41,26 @@ async def test_project_collection_namespace_is_disabled_by_default() -> None:
 
     try:
         await store.ensure_schema()
+        memory_id = "00000000-0000-0000-0000-000000000011"
+        await store.upsert_memory(_memory_point("static-project", memory_id, [1.0, 0.0]))
+        hits = await store.search_memory_dense("static-project", [1.0, 0.0], limit=5)
+        assert [hit.point_id for hit in hits] == [memory_id]
+        assert await store.get_memory("another-project", memory_id) is None
+        await store.patch_memory("static-project", memory_id, {"status": "archived"})
+        assert (await store.get_memory("static-project", memory_id)).payload["status"] == "archived"
+        await store.delete_memory("static-project", memory_id)
+        assert await store.get_memory("static-project", memory_id) is None
+
         collections = {item.name for item in (await client.get_collections()).collections}
         assert "default_memos" in collections
         assert store.memory.collection_for_project("proj-a") == "default_memos"
+        assert not any(name.startswith("default_memos__d_") for name in collections)
     finally:
         await client.close()
 
 
 @pytest.mark.asyncio
-async def test_project_collection_namespace_allows_per_project_vector_dimensions() -> None:
+async def test_project_collection_namespace_shares_same_dimension_and_separates_different_dimensions() -> None:
     client = AsyncQdrantClient(":memory:")
     cfg = QdrantConfig(
         url="http://unused",
@@ -65,16 +76,22 @@ async def test_project_collection_namespace_allows_per_project_vector_dimensions
         await store.ensure_schema()
         await store.upsert_memory(_memory_point("proj-a", "00000000-0000-0000-0000-000000000001", [1.0, 0.0]))
         await store.upsert_memory(
-            _memory_point("proj-b", "00000000-0000-0000-0000-000000000002", [1.0, 0.0, 0.0])
+            _memory_point("proj-b", "00000000-0000-0000-0000-000000000002", [0.0, 1.0])
+        )
+        await store.upsert_memory(
+            _memory_point("proj-c", "00000000-0000-0000-0000-000000000003", [1.0, 0.0, 0.0])
         )
 
         collections = {item.name for item in (await client.get_collections()).collections}
         assert "tenant_memos" not in collections
-        assert store.memory.collection_for_project("proj-a") in collections
-        assert store.memory.collection_for_project("proj-b") in collections
-        assert store.memory.collection_for_project("proj-a") != store.memory.collection_for_project("proj-b")
+        assert "tenant_memos__d_2" in collections
+        assert "tenant_memos__d_3" in collections
+        assert not any(name.startswith("tenant_memos__p_") for name in collections)
+        assert store.memory.collection_for_vector_size(2) == "tenant_memos__d_2"
+        assert store.memory.collection_for_vector_size(3) == "tenant_memos__d_3"
         assert await store.project_memory_vector_size("proj-a") == 2
-        assert await store.project_memory_vector_size("proj-b") == 3
+        assert await store.project_memory_vector_size("proj-b") == 2
+        assert await store.project_memory_vector_size("proj-c") == 3
         assert await store.project_memory_vector_size("proj-missing") is None
 
         a_hits = await store.search_memory_dense(
@@ -85,12 +102,21 @@ async def test_project_collection_namespace_allows_per_project_vector_dimensions
         )
         b_hits = await store.search_memory_dense(
             "proj-b",
-            [1.0, 0.0, 0.0],
+            [0.0, 1.0],
             filter_=build_filter(must=[match_value("project_id", "proj-b")]),
             limit=1,
         )
         assert [hit.point_id for hit in a_hits] == ["00000000-0000-0000-0000-000000000001"]
         assert [hit.point_id for hit in b_hits] == ["00000000-0000-0000-0000-000000000002"]
+
+        # Knowing another project's logical ID must never bypass project ownership.
+        assert await store.get_memory(
+            "proj-b", "00000000-0000-0000-0000-000000000001"
+        ) is None
+        await store.delete_memory("proj-b", "00000000-0000-0000-0000-000000000001")
+        assert await store.get_memory(
+            "proj-a", "00000000-0000-0000-0000-000000000001"
+        ) is not None
     finally:
         await client.close()
 
@@ -151,9 +177,12 @@ async def test_project_collection_namespace_scopes_payload_only_records() -> Non
         )
 
         collections = {item.name for item in (await client.get_collections()).collections}
-        assert store.add_record.collection_for_project("proj-a") in collections
-        assert store.schema_add_buffer.collection_for_project("proj-a") in collections
-        assert store.search_record.collection_for_project("proj-a") in collections
+        assert store.add_record_collection in collections
+        assert store.schema_add_buffer_collection in collections
+        assert store.search_record_collection in collections
+        assert not any(name.startswith("tenant_add_records__p_") for name in collections)
+        assert not any(name.startswith("tenant_schema_add_buffer__p_") for name in collections)
+        assert not any(name.startswith("tenant_search_records__p_") for name in collections)
 
         add_records, _ = await store.scroll_add_records("proj-a")
         add_records_other, _ = await store.scroll_add_records("proj-b")
@@ -190,9 +219,15 @@ async def test_project_collection_namespace_scopes_payload_only_records() -> Non
             scroll_filter=None,
             limit=10,
         )
-        assert base_add_records == []
-        assert base_schema_records == []
-        assert base_search_records == []
+        assert [record.payload["request_id"] for record in base_add_records] == [
+            "00000000-0000-0000-0000-000000000101"
+        ]
+        assert [record.payload["schema_buffer_record_id"] for record in base_schema_records] == [
+            "00000000-0000-0000-0000-000000000201"
+        ]
+        assert [record.payload["request_id"] for record in base_search_records] == [
+            "00000000-0000-0000-0000-000000000301"
+        ]
 
         await store.patch_schema_add_buffer_record(
             "proj-a",

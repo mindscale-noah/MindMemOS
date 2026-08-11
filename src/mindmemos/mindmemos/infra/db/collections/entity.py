@@ -53,10 +53,13 @@ class EntityRepository(CollectionRepository):
     ) -> list[QdrantSearchRecord]:
         """Search entities via dense semantic vector."""
 
-        if not await self._project_collection_exists(project_id):
+        collection = self.collection_for_vector_size(len(vector))
+        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(
+            collection
+        ):
             return []
         return await self._engine.query(
-            self.collection_for_project(project_id),
+            collection,
             source="entity_semantic",
             query=vector,
             using=self.semantic_vector_name,
@@ -77,10 +80,11 @@ class EntityRepository(CollectionRepository):
     ) -> list[QdrantSearchRecord]:
         """Search entities via sparse BM25 vector."""
 
-        if not await self._project_collection_exists(project_id):
+        collection = await self._collection_holding_project(project_id)
+        if collection is None:
             return []
         return await self._engine.query(
-            self.collection_for_project(project_id),
+            collection,
             source="entity_bm25",
             query=self._engine.to_qdrant_sparse(vector),
             using=self.bm25_vector_name,
@@ -103,11 +107,14 @@ class EntityRepository(CollectionRepository):
     ) -> list[QdrantSearchRecord]:
         """Run Qdrant-side RRF over dense and sparse entity prefetches."""
 
-        if not await self._project_collection_exists(project_id):
+        collection = self.collection_for_vector_size(len(dense_vector))
+        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(
+            collection
+        ):
             return []
         scoped_filter = self._engine.project_filter(project_id, filter_=filter_)
         return await self._engine.query(
-            self.collection_for_project(project_id),
+            collection,
             source="entity_rrf",
             prefetch=[
                 qmodels.Prefetch(
