@@ -1,0 +1,47 @@
+version: 1
+method: skill_grpo_with_replay_buffer
+environment: spreadsheetbench
+launcher:
+  env_file: .skill.env
+parameters:
+  dataset:
+    data_root: data/mindmemos_skill/spreadsheetbench
+    split_dir: resources/mindmemos_skill/datasets/spreadsheetbench/splits
+    initial_skill: resources/mindmemos_skill/skills/spreadsheetbench/SKILL.md
+  models:
+    target_model: openai/gpt-5.4-mini
+    optimizer_model: openai/gpt-5.4-mini
+    embedding_model: openai/text-embedding-3-small
+    reasoning_effort: medium
+    request_timeout: 1800
+    model_retries: 10
+    max_completion_tokens: 16384
+  training:
+    epochs: 4
+    batch_size: 8
+    train_rollouts: 4
+    validation_rollouts: 1
+    test_rollouts: 3
+    validate_every: 5
+    seed: 0
+  rollout:
+    max_concurrent_rollouts: 32
+    queue_capacity: 64
+    max_concurrent_extractions: 32
+    rollout_retries: 3
+    fail_fast: false
+  environment_options:
+    max_turns: 30
+    shell_timeout: 120
+  algorithm:
+    max_experiences_per_task: 3
+    max_patch_edits: 6
+    patch_attempts: 2
+    replay_similarity_threshold: 0.9
+    min_cluster_edits: 2
+    replay_capacity: 512
+    replay_max_uses: 10
+    ablation_source_cases: 8
+    ablation_rollouts: 1
+    ablation_commit_topk: 5
+    ablation_positive_only: true

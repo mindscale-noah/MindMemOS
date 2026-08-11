@@ -1,0 +1,36 @@
+version: 1
+method: experience_memory_embedding
+environment: alfworld
+launcher:
+  env_file: .skill.env
+parameters:
+  dataset:
+    data_root: data/mindmemos_skill/alfworld
+    split_dir: resources/mindmemos_skill/datasets/alfworld/splits
+    initial_skill: resources/mindmemos_skill/skills/alfworld/SKILL.md
+  models:
+    target_model: openai/gpt-5.4-mini
+    optimizer_model: openai/gpt-5.4-mini
+    embedding_model: openai/qwen3-embedding-4b
+    reasoning_effort: medium
+    request_timeout: 1800
+    model_retries: 3
+    max_completion_tokens: 16384
+  experiment:
+    train_rollouts: 4
+    test_rollouts: 1
+    mini_batch_size: 8
+    max_experiences_per_task: 3
+    top_k: 3
+    run_baseline: true
+    reflection: true
+  rollout:
+    max_concurrent_reflections: 8
+    max_concurrent_extractions: 16
+    embedding_batch_size: 64
+    max_concurrent_rollouts: 32
+    queue_capacity: 64
+    rollout_retries: 3
+  environment_options:
+    max_steps: 50
+    seed: 42

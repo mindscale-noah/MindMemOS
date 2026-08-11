@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live smoke evaluation for the built-in ``mindmemos_skill`` agents.
+"""Script-side live smoke evaluation for the built-in ``mindmemos_skill`` agents.
 
 The evaluation uses a per-run random token that exists only inside the
 injected Skill.  An agent therefore passes the adherence check only when its
@@ -10,10 +10,13 @@ Trajectory -> TrajectoryRecord -> Trajectory round trip.
 Examples:
 
     UV_CACHE_DIR=/tmp/mindmemos-skill-uv-cache uv run python \
-      scripts/evaluate_mindmemos_skill_agents.py
+      scripts/run_mindmemos_skill_experiment.sh --config \
+        config/mindmemos_skill/agent_evaluation/local/default.yaml
 
     UV_CACHE_DIR=/tmp/mindmemos-skill-uv-cache uv run python \
-      scripts/evaluate_mindmemos_skill_agents.py --agents react --strict
+      scripts/run_mindmemos_skill_experiment.sh --config \
+        config/mindmemos_skill/agent_evaluation/local/default.yaml \
+        --set evaluation.agents='[react]' --set evaluation.strict=true
 """
 
 from __future__ import annotations
@@ -48,8 +51,8 @@ from mindmemos_skill.typing import (
     TrajectoryStatus,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ENV_FILE = REPO_ROOT / ".agent.env"
+REPO_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_ENV_FILE = REPO_ROOT / ".skill.env"
 DEFAULT_RESULTS_ROOT = REPO_ROOT / "results" / "agent_skill_eval"
 DEFAULT_MODEL = "claude-sonnet-4-6"
 SKILL_NAME = "mindmemos-runtime-eval"
@@ -207,9 +210,7 @@ def _assess_trajectory(
     trajectory_valid, trajectory_error = _trajectory_round_trip_ok(trajectory)
 
     prompt_exposure = mode is SkillInjectionMode.SYSTEM_PROMPT and any(
-        event.get("role") == "system"
-        and isinstance(event.get("content"), str)
-        and expected_token in event["content"]
+        event.get("role") == "system" and isinstance(event.get("content"), str) and expected_token in event["content"]
         for event in trajectory.events
     )
     native_discovery_observable = mode is not SkillInjectionMode.SYSTEM_PROMPT
@@ -218,11 +219,7 @@ def _assess_trajectory(
     skill_applied = final_answer == expected_token
     agent_ran = trajectory.execution.status is TrajectoryStatus.SUCCEEDED and bool(final_answer)
     passed = bool(
-        agent_ran
-        and skill_injected
-        and skill_applied
-        and trajectory_valid
-        and (skill_discovered is not False)
+        agent_ran and skill_injected and skill_applied and trajectory_valid and (skill_discovered is not False)
     )
 
     return {
@@ -360,7 +357,9 @@ async def _run_case(
     return _redact(result, secrets_to_hide=secrets_to_hide)
 
 
-def _selected_cases(agent_names: Sequence[str], react_modes: Sequence[str]) -> list[tuple[str, AgentType, SkillInjectionMode]]:
+def _selected_cases(
+    agent_names: Sequence[str], react_modes: Sequence[str]
+) -> list[tuple[str, AgentType, SkillInjectionMode]]:
     requested = set(agent_names)
     if "all" in requested:
         requested = {"react", "claude", "claude-sdk"}

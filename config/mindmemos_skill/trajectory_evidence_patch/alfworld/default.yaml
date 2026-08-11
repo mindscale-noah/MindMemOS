@@ -1,0 +1,38 @@
+version: 1
+method: trajectory_evidence_patch
+environment: alfworld
+launcher:
+  env_file: .skill.env
+parameters:
+  dataset:
+    data_root: data/mindmemos_skill/alfworld
+    split_dir: resources/mindmemos_skill/datasets/alfworld/splits
+    initial_skill: resources/mindmemos_skill/skills/alfworld/SKILL.md
+  models:
+    target_model: openai/gpt-5.4-mini
+    optimizer_model: openai/gpt-5.4-mini
+    reasoning_effort: medium
+    request_timeout: 1800
+    model_retries: 3
+    max_completion_tokens: 16384
+  trace2skill:
+    train_limit: 8
+    collection_rollouts: 1
+    min_trajectories: 8
+    max_trajectories: 8
+    summary_concurrency: 8
+    transcript_max_chars: 1500
+    annotation_mode: auto
+    require_skill_match: true
+    rewrite_skill: false
+  evaluation:
+    test_rollouts: 1
+  rollout:
+    max_concurrent_rollouts: 16
+    queue_capacity: 16
+    rollout_retries: 1
+    seed: 0
+  environment_options:
+    max_turns: 1
+    max_steps: 50
+    env_seed: 42
