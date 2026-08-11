@@ -12,24 +12,19 @@ from typing import Any
 from pydantic import Field
 
 from ....agents.base import Agent
+from ....algos.evolve.skill_grpo_with_replay_buffer.prompts import (
+    LIVEMATH_SYSTEM as SYSTEM_PROMPT,
+)
+from ....algos.evolve.skill_grpo_with_replay_buffer.prompts import (
+    livemath_refinement_prompt,
+    livemath_system_prompt,
+    livemath_user_prompt,
+)
 from ....registry import ComponentType, register
 from ....typing import EnvConfig, Reward, Skill, Task, Trajectory
 from ...base import BaseEnv, EnvRolloutContext, PreparedRollout
 
 _ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL | re.IGNORECASE)
-SYSTEM_PROMPT = """You are an expert mathematical reasoning agent solving multiple-choice questions.
-
-{skill_section}## Task Format
-You will receive one mathematics multiple-choice question and its answer choices.
-Reason carefully about quantifiers, hypotheses, extremal wording, and exact equality conditions.
-
-## Answer Format
-Think step by step, then provide your final answer inside <answer>...</answer> tags.
-Inside the tags, output only the single choice label, such as A or C.
-
-Example:
-<answer>B</answer>
-"""
 
 
 class LiveMathEnvConfig(EnvConfig):
@@ -190,26 +185,15 @@ class LiveMathEnv(BaseEnv[LiveMathEnvConfig]):
 
 
 def build_system(skill_content: str) -> str:
-    skill_section = f"## Skill\n{skill_content.strip()}\n\n" if skill_content.strip() else ""
-    return SYSTEM_PROMPT.format(skill_section=skill_section)
+    return livemath_system_prompt(skill_content)
 
 
 def build_user(item: Mapping[str, Any], use_theorem: bool, use_sketch: bool) -> str:
-    choices = "\n".join(f"{choice['label']}. {choice['text']}" for choice in item["choices"])
-    parts = [f"## Question\n{item['question']}", f"## Choices\n{choices}"]
-    if use_theorem and item.get("theorem"):
-        parts.append(f"## Theorem\n{item['theorem']}")
-    if use_sketch and item.get("sketch"):
-        parts.append(f"## Proof Sketch\n{item['sketch']}")
-    return "\n\n".join(parts)
+    return livemath_user_prompt(dict(item), use_theorem, use_sketch)
 
 
 def refinement(previous_response: str) -> str:
-    return (
-        f"Your previous answer was:\n{previous_response}\n\n"
-        "Re-evaluate the exact option wording. If needed, correct it. "
-        "Output only the final choice label inside <answer>...</answer>."
-    )
+    return livemath_refinement_prompt(previous_response)
 
 
 def skill_text(skills: Sequence[Skill]) -> str:

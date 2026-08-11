@@ -7,10 +7,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ..envs.registered_envs.alfworld import SYSTEM_PROMPT
-from ..registry import ComponentType, register
-from ..typing import Task
-from .base import TaskDataset
+from ....envs.registered_envs.alfworld import SYSTEM_PROMPT
+from ....registry import ComponentType, register
+from ....typing import Task
+from ...base import TaskDataset
 
 SPLIT_DIR_NAMES = {"train": "train", "validation": "val", "test": "test"}
 TASK_TYPES = (

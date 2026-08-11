@@ -8,9 +8,9 @@ import random
 from pathlib import Path
 from typing import Any
 
-from ..registry import ComponentType, register
-from ..typing import Task
-from .base import TaskDataset
+from ....registry import ComponentType, register
+from ....typing import Task
+from ...base import TaskDataset
 
 SPLIT_DIR_NAMES = {"train": "train", "validation": "val", "test": "test"}
 _CHOICE_LABELS = ("A", "B", "C", "D", "E", "F", "G")
