@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
 from datetime import UTC, datetime
-from pathlib import Path
 
+from experiments import agent_evaluation as SCRIPT
 from mindmemos_skill.typing import (
     AgentProfile,
     AgentType,
@@ -18,12 +17,6 @@ from mindmemos_skill.typing import (
     TrajectoryStatus,
 )
 
-SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "evaluate_mindmemos_skill_agents.py"
-SPEC = importlib.util.spec_from_file_location("evaluate_mindmemos_skill_agents", SCRIPT_PATH)
-assert SPEC is not None and SPEC.loader is not None
-SCRIPT = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(SCRIPT)
-
 SKILL_NAME = SCRIPT.SKILL_NAME
 _assess_trajectory = SCRIPT._assess_trajectory
 _build_skill = SCRIPT._build_skill
@@ -31,7 +24,7 @@ _load_env_file = SCRIPT._load_env_file
 
 
 def test_load_env_file_handles_comments_export_and_quotes(tmp_path) -> None:
-    env_file = tmp_path / ".agent.env"
+    env_file = tmp_path / ".skill.env"
     env_file.write_text(
         "# provider\nexport OPENAI_BASE_URL='https://example.test/v1'\nOPENAI_API_KEY=secret\n",
         encoding="utf-8",

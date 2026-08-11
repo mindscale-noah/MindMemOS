@@ -20,7 +20,7 @@ runner:
 
 benchmarks:
   memoryagentbench:
-    dataset: data/memoryagentbench_conflict_resolution.json
+    dataset: datasets/memoryagentbench/conflict_resolution.jsonl
     sub_dataset: factconsolidation_sh_6k
     default_algorithm: vanilla
     max_queries: 0

@@ -42,6 +42,9 @@ class EnvRolloutContext:
     metadata: dict[str, JsonValue] = field(default_factory=dict)
     """Trainer 附加的可序列化上下文；原样传入请求，并写入环境元数据（环境中另补 ``workspace_scope``）。"""
 
+    env_ref: str = "unknown"
+    """当前物理 attempt 使用的注册 Env 名称；由 scheduler 从 ``RolloutSpec.env_ref`` 传入。"""
+
 
 @dataclass(slots=True)
 class PreparedRollout:
@@ -123,6 +126,7 @@ class BaseEnv(ABC, Generic[EnvConfigT]):
         workspace = self._create_workspace(task=task, context=context)
         running_dir = str(workspace) if workspace is not None else None
         environment = Environment(
+            env_ref=context.env_ref,
             running_dir=running_dir,
             metadata={**context.metadata, "workspace_scope": context.workspace_scope},
         )

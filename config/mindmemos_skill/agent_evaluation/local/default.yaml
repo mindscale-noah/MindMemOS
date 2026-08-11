@@ -1,0 +1,19 @@
+version: 1
+method: agent_evaluation
+environment: local
+launcher:
+  env_file: .skill.env
+parameters:
+  runtime:
+    env_file: .skill.env
+    output_dir: results/agent_skill_eval/{timestamp}
+  models:
+    model: claude-sonnet-4-6
+  evaluation:
+    agents:
+      - all
+    react_modes:
+      - tool
+      - system_prompt
+    timeout: 180
+    strict: false

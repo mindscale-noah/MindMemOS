@@ -43,6 +43,7 @@ from mindmemos_skill.persistence import (
 )
 
 from mindmemos_skill import (
+    EvolveRunRequest,
     MindMemOSSkillError,
     RemotePushRequest,
     RemotePushResult,
@@ -52,8 +53,10 @@ from mindmemos_skill import (
     RemoteVersionContent,
     RemoteVersionsPage,
     RemoteVersionSummary,
+    SkillAlgorithmRunResult,
     SkillApplication,
     SkillBundle,
+    Trace2SkillRunRequest,
 )
 
 from ..config import CompiledSDKProfileV2, ConfigManager, SDKConfigCompilerV2
@@ -455,6 +458,12 @@ class SkillManager:
     def evolve_local(self, *args: Any, **kwargs: Any) -> Any:
         del args, kwargs
         raise SkillRegistryError("cloud evolve is not part of the SkillApplication remote port")
+
+    def run_trace2skill_local(self, request: Trace2SkillRunRequest) -> SkillAlgorithmRunResult:
+        return self._call(self._runner.application.run_trace2skill(request))
+
+    def run_evolve_local(self, request: EvolveRunRequest) -> SkillAlgorithmRunResult:
+        return self._call(self._runner.application.run_evolve(request))
 
     def unregister(self, skill_ref: str) -> LocalSkillManifest:
         manifest = self.show_local(skill_ref)

@@ -29,11 +29,11 @@ benchmarks:
     dataset: datasets/locomo/locomo10.json
     default_algorithm: vanilla
   longmemeval:
-    dataset: resources/memory/dataset/longmemeval_smoke.json
+    dataset: datasets/longmemeval/longmemeval_s_cleaned.json
     default_algorithm: vanilla
   personamem:
-    dataset: resources/memory/dataset/questions_32k.csv
-    context_dataset: resources/memory/dataset/shared_contexts_32k.jsonl
+    dataset: datasets/personamem/questions_32k.csv
+    context_dataset: datasets/personamem/shared_contexts_32k.jsonl
     benchmark_version: v1
     context_size: 32k
     evaluation_mode: memory_rag

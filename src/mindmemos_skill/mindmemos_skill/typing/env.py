@@ -18,6 +18,9 @@ class Environment(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
+    env_ref: str = Field(default="unknown", min_length=1)
+    """注册环境名称；旧轨迹或非注册环境使用 ``unknown``。"""
+
     running_dir: str | None = None
     """Agent 执行任务时使用的工作目录。"""
 

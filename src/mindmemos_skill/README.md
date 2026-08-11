@@ -81,13 +81,16 @@ from mindmemos_skill.persistence import bootstrap_skill_database
 database = await bootstrap_skill_database()
 async with database.transaction() as unit_of_work:
     await unit_of_work.upsert_records("skill_versions", version_records)
-    await unit_of_work.upsert_records("skill_family_state", (family_state_record,))
+    await unit_of_work.upsert_records("skill_sync_state", (sync_state_record,))
 ```
 
-The SQLite backend records ordered schema migrations, rolls the unit of work
-back on errors, and exposes atomic `compare_and_swap_record(...)` for mutable
-family pointers. Use the transaction-bound `unit_of_work` inside the context;
-do not call the outer `database` object until the context exits.
+The initial public schema is `mindmemos-skill` version 1. SQLite records ordered,
+forward-only migrations and automatically creates a consistent backup before an
+upgrade. Use `get_skill_database_status(...)` to inspect pending versions or
+`backup_skill_database(...)` to create a manual backup. Migration failures roll
+back both DDL and the version ledger. Use the transaction-bound `unit_of_work`
+inside the context; do not call the outer `database` object until the context
+exits.
 
 ## Skill application
 
@@ -135,10 +138,21 @@ the remote for missing versions and lifecycle revisions, then commits the
 imported versions and `last_sync_at` in one transaction. Edge and cloud never
 persist an active or head pointer; omitted-version reads use the shared
 `(created_at DESC, version_id DESC)` latest-available selector.
-Agent execution appends its trajectory attempt automatically. Algorithm logs
-are appended after analyze/optimize; components can add detailed step reports
-through `record_algorithm_log(...)`. Changed optimization results are normalized
-into immutable evolution versions.
+Agent execution appends its trajectory attempt automatically. Product-side
+trace2skill and evolve runs use `run_trace2skill(...)` and `run_evolve(...)`:
+the algorithm orchestrator resolves persisted inputs, dispatches a configured
+algorithm by instance name, and applies `dry_run`, `persist`, or
+`persist_and_push` commit policy. Non-dry-run runs persist output trajectories,
+normalize changed candidates into immutable evolution versions, and append a
+result log; components can add detailed step reports through
+`record_algorithm_log(...)`.
+The script-side experiment layer additionally evaluates the resulting Skill
+through the selected dataset's test split and registered environment. The
+generic `skill_evaluation` method accepts either one explicit `SKILL.md`/Skill
+directory or true no-Skill execution, and writes a common `test/summary.json`,
+`results.jsonl`, and `skill.json` artifact set. This runner-level benchmark
+lives under `scripts/mindmemos_skill/`, remains outside this package, and does
+not change candidate acceptance.
 
 ## Low-level local management
 

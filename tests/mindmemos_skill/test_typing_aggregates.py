@@ -94,7 +94,11 @@ def test_trajectory_groups_flat_record_fields_by_business_concept() -> None:
             metadata={"dataset": "SpreadsheetBench"},
         ),
         rollout=Rollout(rollout_id="rollout-1", attempt_no=1, rollout_type=RolloutType.EVALUATE),
-        environment=Environment(running_dir="/tmp/workbook", metadata={"sandbox": "local"}),
+        environment=Environment(
+            env_ref="spreadsheetbench",
+            running_dir="/tmp/workbook",
+            metadata={"sandbox": "local"},
+        ),
         agent=AgentProfile(
             agent_type=AgentType.CODEX,
             provider="openai",
@@ -120,6 +124,7 @@ def test_trajectory_groups_flat_record_fields_by_business_concept() -> None:
     assert trajectory.task.task_id == "task-1"
     assert trajectory.rollout.attempt_no == 1
     assert trajectory.agent.model == "gpt-5"
+    assert trajectory.environment.env_ref == "spreadsheetbench"
     assert trajectory.agent.config == {"sandbox": "workspace-write"}
     assert trajectory.reward is not None and trajectory.reward.score == 1.0
     assert trajectory.execution.duration_s == 2.0

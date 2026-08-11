@@ -30,14 +30,18 @@ from mindmemos_skill.typing import (
     AlgorithmIdentity,
     AlgorithmLog,
     AlgorithmStep,
+    ExecutionInfo,
     Rollout,
     Skill,
     SkillAnalysisRequest,
     SkillAnalysisResult,
-    SkillOptimizationRequest,
-    SkillOptimizationResult,
+    SkillCandidate,
     SkillVersionOrigin,
     Task,
+    Trace2SkillInput,
+    Trace2SkillOutput,
+    Trajectory,
+    TrajectoryStatus,
     compute_skill_content_hash,
 )
 from pydantic import BaseModel, ConfigDict
@@ -97,16 +101,17 @@ class ApplicationOptimizer:
         self.config = config
         self.context = context
 
-    async def optimize(self, request: SkillOptimizationRequest) -> SkillOptimizationResult:
-        optimized = request.skill.model_copy(
-            update={
-                "blob": {
-                    **request.skill.blob,
-                    "SKILL.md": request.skill.blob["SKILL.md"] + "\nOptimized\n",
-                }
-            }
+    async def optimize(self, request: Trace2SkillInput) -> Trace2SkillOutput[dict[str, str]]:
+        if self.config.prefix == "unchanged":
+            return Trace2SkillOutput(candidate=None, report={"status": "unchanged"})
+        candidate = SkillCandidate(
+            blob={
+                **request.base_skill.blob,
+                "SKILL.md": request.base_skill.blob["SKILL.md"] + "\nOptimized\n",
+            },
+            resources=request.base_skill.resources,
         )
-        return SkillOptimizationResult(skill=optimized, changed=True)
+        return Trace2SkillOutput(candidate=candidate, report={"status": "optimized"})
 
 
 def _config(tmp_path: Path) -> dict:
@@ -126,6 +131,21 @@ def _source(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return source
+
+
+def _optimization_trajectory(skill: Skill) -> Trajectory:
+    return Trajectory(
+        trajectory_id="optimization-trajectory",
+        task=Task(task_id="optimization-task", instruction="Improve the Skill"),
+        rollout=Rollout(rollout_id="optimization-rollout"),
+        injected_skills=[skill],
+        events=[{"role": "user", "content": "Improve the Skill"}],
+        execution=ExecutionInfo(
+            status=TrajectoryStatus.SUCCEEDED,
+            started_at=datetime(2026, 8, 5, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC),
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -293,17 +313,44 @@ async def test_optimization_persists_normalized_immutable_version_without_switch
     registered = await application.register(RegisterSkillRequest(source_path=_source(tmp_path), alias="demo"))
     base = Skill.from_record(await application.get_version("demo", registered.version_id))
 
-    result = await application.optimize(SkillOptimizationRequest(skill=base))
+    result = await application.optimize(
+        Trace2SkillInput(base_skill=base, trajectories=[_optimization_trajectory(base)])
+    )
 
     detail = await application.get_skill("demo")
-    assert result.skill.version_id != base.version_id
-    assert result.skill.parent_version_ids == [base.version_id]
-    assert result.skill.version_label == "1.0.1"
-    assert result.skill.origin is SkillVersionOrigin.EVOLUTION
-    assert result.skill.content_hash == compute_skill_content_hash(result.skill.blob)
-    assert result.skill.metadata["skill_application"] == {"config_hash": application.config.config_hash}
-    assert detail.latest_version.version_id == result.skill.version_id
+    assert result.version_id != base.version_id
+    assert result.parent_version_ids == [base.version_id]
+    assert result.version_label == "1.0.1"
+    assert result.origin is SkillVersionOrigin.EVOLUTION
+    assert result.content_hash == compute_skill_content_hash(result.blob)
+    assert result.metadata["skill_application"] == {"config_hash": application.config.config_hash}
+    assert detail.latest_version.version_id == result.version_id
     assert detail.skill.version_count == 2
+    await application.close()
+
+
+@pytest.mark.asyncio
+async def test_optimization_without_candidate_keeps_base_version(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["runtime"] = {
+        "algorithms": {
+            "optimizer": {
+                "type": "test_application_optimizer",
+                "config": {"prefix": "unchanged"},
+            }
+        }
+    }
+    application = await SkillApplication.from_config(config)
+    registered = await application.register(RegisterSkillRequest(source_path=_source(tmp_path), alias="demo"))
+    base = Skill.from_record(await application.get_version("demo", registered.version_id))
+
+    result = await application.optimize(
+        Trace2SkillInput(base_skill=base, trajectories=[_optimization_trajectory(base)])
+    )
+
+    detail = await application.get_skill("demo")
+    assert result.version_id == base.version_id
+    assert detail.skill.version_count == 1
     await application.close()
 
 

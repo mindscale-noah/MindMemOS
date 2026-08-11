@@ -1,0 +1,43 @@
+version: 1
+method: skill_grpo_without_replay_buffer
+environment: livemath
+launcher:
+  env_file: .skill.env
+parameters:
+  dataset:
+    data_root: data/mindmemos_skill/livemath/raw
+    split_dir: resources/mindmemos_skill/datasets/livemath/splits
+    initial_skill: resources/mindmemos_skill/skills/livemath/SKILL.md
+  models:
+    target_model: openai/gpt-5.4-mini
+    optimizer_model: openai/gpt-5.4-mini
+    reasoning_effort: medium
+    request_timeout: 1800
+    model_retries: 10
+    max_completion_tokens: 16384
+  training:
+    epochs: 4
+    batch_size: 40
+    mini_batch_size: 8
+    train_rollouts: 4
+    validation_gate: true
+    validation_rollouts: 1
+    seed: 0
+  evaluation:
+    test_rollouts: 1
+  rollout:
+    max_concurrent_rollouts: 32
+    max_concurrent_extractions: 16
+    reflection: true
+    max_concurrent_reflections: 8
+    rollout_retries: 3
+    fail_fast: false
+  environment_options:
+    max_turns: 1
+    use_theorem: false
+    use_sketch: false
+    shuffle_choices: true
+  algorithm:
+    max_experiences_per_task: 3
+    max_patch_edits: 6
+    patch_attempts: 2

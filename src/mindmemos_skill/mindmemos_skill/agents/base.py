@@ -128,7 +128,7 @@ class Agent(ABC, Generic[AgentConfigT]):
         request: AgentExecutionRequest,
         messages: list[dict[str, Any]],
         *,
-        tools: Sequence[dict[str, Any]] = (),
+        tools: Sequence[dict[str, Any]] | None = (),
     ) -> ChatResponse:
         """Generate one assistant response for an environment-owned conversation.
 

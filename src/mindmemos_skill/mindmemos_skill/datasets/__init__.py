@@ -1,7 +1,11 @@
 """Benchmark task datasets shipped with ``mindmemos_skill``."""
 
-from .alfworld import ALFWorldPathSplitDataset
 from .base import TaskDataset
-from .livemath import LiveMathIdSplitDataset
+from .registered_datasets import ALFWorldPathSplitDataset, LiveMathIdSplitDataset, SpreadsheetBenchIdSplitDataset
 
-__all__ = ["ALFWorldPathSplitDataset", "LiveMathIdSplitDataset", "TaskDataset"]
+__all__ = [
+    "ALFWorldPathSplitDataset",
+    "LiveMathIdSplitDataset",
+    "SpreadsheetBenchIdSplitDataset",
+    "TaskDataset",
+]

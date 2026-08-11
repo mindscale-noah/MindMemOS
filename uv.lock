@@ -1487,9 +1487,9 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+    { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pydantic" },
     { name = "python-dotenv" },
-    { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pyyaml" },
     { name = "qdrant-client" },
     { name = "spacy" },
@@ -1512,9 +1512,9 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.42.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.42.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.42.0" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
     { name = "pydantic" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
     { name = "pyyaml" },
     { name = "qdrant-client", specifier = ">=1.18.0" },
     { name = "spacy", specifier = ">=3.8.14" },
@@ -1638,23 +1638,33 @@ alfworld = [
 claude-sdk = [
     { name = "claude-agent-sdk" },
 ]
+dataset-download = [
+    { name = "alfworld" },
+    { name = "huggingface-hub" },
+]
 llm = [
     { name = "litellm" },
 ]
 pgvector = [
     { name = "psycopg", extra = ["binary", "pool"] },
 ]
+spreadsheetbench = [
+    { name = "openpyxl" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "alfworld", marker = "extra == 'alfworld'", specifier = ">=0.4.0" },
+    { name = "alfworld", marker = "extra == 'dataset-download'", specifier = ">=0.4.0" },
     { name = "claude-agent-sdk", marker = "extra == 'claude-sdk'", specifier = ">=0.1.0" },
+    { name = "huggingface-hub", marker = "extra == 'dataset-download'", specifier = ">=0.34.0" },
     { name = "litellm", marker = "extra == 'llm'", specifier = ">=1.85.0" },
+    { name = "openpyxl", marker = "extra == 'spreadsheetbench'", specifier = ">=3.1.5" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'pgvector'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", marker = "extra == 'alfworld'", specifier = ">=6.0" },
 ]
-provides-extras = ["alfworld", "llm", "pgvector", "claude-sdk"]
+provides-extras = ["alfworld", "dataset-download", "llm", "pgvector", "claude-sdk", "spreadsheetbench"]
 
 [[package]]
 name = "more-itertools"

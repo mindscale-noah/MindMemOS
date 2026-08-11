@@ -4,11 +4,12 @@ from ..errors import SkillCapabilityUnavailableError
 from ..typing.operations import (
     SkillAnalysisRequest,
     SkillAnalysisResult,
+    SkillCandidate,
     SkillFinding,
-    SkillOptimizationRequest,
-    SkillOptimizationResult,
+    Trace2SkillInput,
+    Trace2SkillOutput,
 )
-from .protocols import SkillAnalyzer, SkillOptimizer
+from .protocols import SkillAnalyzer, SkillEvolver, SkillOptimizer
 from .skill import SkillAlgorithms
 
 __all__ = [
@@ -17,8 +18,10 @@ __all__ = [
     "SkillAnalysisResult",
     "SkillAnalyzer",
     "SkillCapabilityUnavailableError",
+    "SkillCandidate",
     "SkillFinding",
-    "SkillOptimizationRequest",
-    "SkillOptimizationResult",
+    "SkillEvolver",
     "SkillOptimizer",
+    "Trace2SkillInput",
+    "Trace2SkillOutput",
 ]

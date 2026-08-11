@@ -11,9 +11,9 @@ from typing import Any
 from ..agents import Agent
 from ..config import CompiledSkillApplicationConfig, CompiledSkillModelConfig, SkillExecutionConfig
 from ..errors import SkillConfigurationError
-from ..llm import LLMClient, get_router
+from ..llm import LLMCallSink, LLMClient, get_router
 from ..service import SkillAlgorithms
-from ..service.protocols import SkillAnalyzer, SkillOptimizer
+from ..service.protocols import SkillAnalyzer, SkillEvolver, SkillOptimizer
 from .enums import SkillApplicationCapability
 
 
@@ -84,7 +84,11 @@ class RuntimeComponents:
             raise error
 
 
-def compose_runtime(config: CompiledSkillApplicationConfig) -> RuntimeComponents:
+def compose_runtime(
+    config: CompiledSkillApplicationConfig,
+    *,
+    llm_call_sink: LLMCallSink | None = None,
+) -> RuntimeComponents:
     """Create model clients, Agents, and algorithms from compiled configuration."""
 
     required_model_refs = {
@@ -98,7 +102,7 @@ def compose_runtime(config: CompiledSkillApplicationConfig) -> RuntimeComponents
         for model_ref in algorithm.model_roles.values()
     )
     model_clients = {
-        name: _build_model_client(name, config.runtime.models[name])
+        name: _build_model_client(name, config.runtime.models[name], call_sink=llm_call_sink)
         for name in sorted(required_model_refs)
     }
     agents = _build_agents(config, model_clients)
@@ -113,7 +117,12 @@ def compose_runtime(config: CompiledSkillApplicationConfig) -> RuntimeComponents
     )
 
 
-def _build_model_client(name: str, model: CompiledSkillModelConfig) -> LLMClient:
+def _build_model_client(
+    name: str,
+    model: CompiledSkillModelConfig,
+    *,
+    call_sink: LLMCallSink | None,
+) -> LLMClient:
     endpoint = dict(model.options)
     reserved = {"model", "api_key", "api_base", "temperature"} & endpoint.keys()
     if reserved:
@@ -129,7 +138,7 @@ def _build_model_client(name: str, model: CompiledSkillModelConfig) -> LLMClient
         }
     )
     router, max_retries = get_router({"endpoints": [endpoint]}, model.model)
-    return LLMClient(router, default_model=model.model, max_attempts=max_retries + 1)
+    return LLMClient(router, default_model=model.model, max_attempts=max_retries + 1, call_sink=call_sink)
 
 
 def _build_agents(
@@ -196,28 +205,44 @@ def _build_skill_algorithms(
     instances: Mapping[str, Any],
     agents: Mapping[str, Agent[Any]],
 ) -> tuple[SkillAlgorithms | None, dict[str, str]]:
-    analyzer: SkillAnalyzer | None = None
-    optimizer: SkillOptimizer | None = None
+    analyzers: dict[str, SkillAnalyzer] = {}
+    optimizers: dict[str, SkillOptimizer] = {}
+    evolvers: dict[str, SkillEvolver] = {}
     owners: dict[str, str] = {}
     for name, instance in instances.items():
         capabilities = config.runtime.algorithms[name].component.capabilities
         if SkillApplicationCapability.ANALYZE.value in capabilities:
-            if analyzer is not None:
-                raise SkillConfigurationError("multiple configured algorithms provide analyze")
             if not isinstance(instance, SkillAnalyzer):
                 raise SkillConfigurationError(f"algorithm {name!r} declares analyze but does not implement it")
-            analyzer = instance
-            owners[SkillApplicationCapability.ANALYZE.value] = name
+            analyzers[name] = instance
         if SkillApplicationCapability.OPTIMIZE.value in capabilities:
-            if optimizer is not None:
-                raise SkillConfigurationError("multiple configured algorithms provide optimize")
             if not isinstance(instance, SkillOptimizer):
                 raise SkillConfigurationError(f"algorithm {name!r} declares optimize but does not implement it")
-            optimizer = instance
-            owners[SkillApplicationCapability.OPTIMIZE.value] = name
-    if analyzer is None and optimizer is None:
+            optimizers[name] = instance
+        if SkillApplicationCapability.EVOLVE.value in capabilities:
+            if not isinstance(instance, SkillEvolver):
+                raise SkillConfigurationError(f"algorithm {name!r} declares evolve but does not implement it")
+            evolvers[name] = instance
+
+    for capability, configured in (
+        (SkillApplicationCapability.ANALYZE.value, analyzers),
+        (SkillApplicationCapability.OPTIMIZE.value, optimizers),
+        (SkillApplicationCapability.EVOLVE.value, evolvers),
+    ):
+        if len(configured) == 1:
+            owners[capability] = next(iter(configured))
+
+    if not analyzers and not optimizers and not evolvers:
         return None, owners
-    return SkillAlgorithms(analyzer=analyzer, optimizer=optimizer, agents=agents), owners
+    return (
+        SkillAlgorithms(
+            analyzers=analyzers,
+            optimizers=optimizers,
+            evolvers=evolvers,
+            agents=agents,
+        ),
+        owners,
+    )
 
 
 def _unique_resources(resources: list[Any]) -> list[Any]:

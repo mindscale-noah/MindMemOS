@@ -130,6 +130,7 @@ def build_cloud_skill_tables() -> TableRegistry:
                     _text("task_system_prompt"),
                     _json("task_tags", nullable=False, default=[]),
                     _json("task_metadata", nullable=False, default={}),
+                    _text("env_ref", nullable=False, default="unknown"),
                     _json("env_metadata", nullable=False, default={}),
                     _text("agent_type", nullable=False),
                     _json("agent_profile", nullable=False, default={}),

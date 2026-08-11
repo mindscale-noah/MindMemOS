@@ -8,6 +8,7 @@ import pytest
 from mindmemos_skill.contracts import SkillBundle
 from mindmemos_skill.persistence import (
     AlgorithmLogRecord,
+    LLMCallRecord,
     RolloutType,
     SkillRecord,
     SkillRemoteOperationRecord,
@@ -151,6 +152,32 @@ def test_algorithm_log_accepts_component_specific_json_payload() -> None:
         )
 
 
+def test_llm_call_record_keeps_flat_tokens_and_full_response_usage() -> None:
+    started = datetime(2026, 8, 10, tzinfo=UTC)
+    call = LLMCallRecord(
+        call_id="call-1",
+        run_id="run-1",
+        task="skill_grpo.patch",
+        call_type="chat",
+        request={"model": "chat", "messages": [{"role": "user", "content": "patch"}]},
+        response={
+            "content": "done",
+            "usage": {"prompt_tokens_details": {"cached_tokens": 4}},
+        },
+        model="gpt-test",
+        input_tokens=10,
+        output_tokens=2,
+        total_tokens=12,
+        status="succeeded",
+        started_at=started,
+        finished_at=started + timedelta(milliseconds=25),
+        latency_ms=25.0,
+    )
+
+    assert LLMCallRecord.model_validate_json(call.model_dump_json()) == call
+    assert call.response["usage"]["prompt_tokens_details"] == {"cached_tokens": 4}
+
+
 def test_persistence_exports_canonical_fact_and_control_records() -> None:
     from mindmemos_skill.persistence import models
 
@@ -162,6 +189,7 @@ def test_persistence_exports_canonical_fact_and_control_records() -> None:
 
     assert record_names == {
         "AlgorithmLogRecord",
+        "LLMCallRecord",
         "SkillFamilyStateRecord",
         "SkillRecord",
         "SkillRemoteOperationRecord",
@@ -170,7 +198,7 @@ def test_persistence_exports_canonical_fact_and_control_records() -> None:
     }
 
 
-def test_persistence_defines_five_physical_row_models() -> None:
+def test_persistence_defines_six_physical_row_models() -> None:
     from mindmemos_skill.persistence import models
 
     row_model_names = {
@@ -183,6 +211,7 @@ def test_persistence_defines_five_physical_row_models() -> None:
 
     assert row_model_names == {
         "AlgorithmLogRecord",
+        "LLMCallRecord",
         "SkillRecord",
         "SkillRemoteOperationRecord",
         "SkillSyncStateRecord",

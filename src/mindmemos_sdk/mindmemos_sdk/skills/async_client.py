@@ -22,7 +22,13 @@ from mindmemos_skill.management import (
 )
 from mindmemos_skill.persistence import SkillRecord
 
-from mindmemos_skill import MindMemOSSkillError, SkillApplication
+from mindmemos_skill import (
+    EvolveRunRequest,
+    MindMemOSSkillError,
+    SkillAlgorithmRunResult,
+    SkillApplication,
+    Trace2SkillRunRequest,
+)
 
 from ..errors import translate_skill_error
 
@@ -91,6 +97,12 @@ class AsyncSkillClient:
 
     async def sync(self, skill_ref: str) -> SkillDetail:
         return await self._call(self._application.sync(skill_ref))
+
+    async def run_trace2skill(self, request: Trace2SkillRunRequest) -> SkillAlgorithmRunResult:
+        return await self._call(self._application.run_trace2skill(request))
+
+    async def run_evolve(self, request: EvolveRunRequest) -> SkillAlgorithmRunResult:
+        return await self._call(self._application.run_evolve(request))
 
     @staticmethod
     async def _call(operation: Awaitable[_ResultT]) -> _ResultT:

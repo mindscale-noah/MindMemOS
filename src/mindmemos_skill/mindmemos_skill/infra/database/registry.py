@@ -52,8 +52,12 @@ class TableRegistry:
         if unknown:
             raise ValueError(f"schema migration references unknown tables: {sorted(unknown)}")
         previous_versions = [item.version for item in self._migrations if item.namespace == migration.namespace]
-        if previous_versions and migration.version <= previous_versions[-1]:
-            raise ValueError(f"schema migrations for namespace {migration.namespace!r} must be ordered")
+        expected_version = previous_versions[-1] + 1 if previous_versions else 1
+        if migration.version != expected_version:
+            raise ValueError(
+                f"schema migrations for namespace {migration.namespace!r} must be contiguous; "
+                f"expected version {expected_version}, got {migration.version}"
+            )
         self._migrations.append(migration)
 
     def get(self, name: str) -> TableSpec:

@@ -27,6 +27,8 @@ def test_skill_core_and_optional_dependency_metadata_are_separate() -> None:
         "pgvector": ["psycopg[binary,pool]>=3.2"],
         "claude-sdk": ["claude-agent-sdk>=0.1.0"],
         "alfworld": ["alfworld>=0.4.0", "pyyaml>=6.0"],
+        "dataset-download": ["alfworld>=0.4.0", "huggingface-hub>=0.34.0"],
+        "spreadsheetbench": ["openpyxl>=3.1.5"],
     }
     assert "mindmemos-skill>=0.1.0" in sdk_project["dependencies"]
 
@@ -36,7 +38,7 @@ def test_skill_core_imports_without_optional_dependencies() -> None:
 import importlib.abc
 import sys
 
-blocked = {"claude_agent_sdk", "litellm", "psycopg", "psycopg_pool"}
+blocked = {"claude_agent_sdk", "litellm", "openpyxl", "psycopg", "psycopg_pool"}
 
 class BlockOptionalDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
@@ -72,9 +74,7 @@ assert blocked.isdisjoint(sys.modules)
 """
     environment = dict(os.environ)
     source_root = str(REPOSITORY_ROOT / "src/mindmemos_skill")
-    environment["PYTHONPATH"] = os.pathsep.join(
-        part for part in (source_root, environment.get("PYTHONPATH")) if part
-    )
+    environment["PYTHONPATH"] = os.pathsep.join(part for part in (source_root, environment.get("PYTHONPATH")) if part)
     result = subprocess.run(
         [sys.executable, "-c", script],
         check=False,

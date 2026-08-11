@@ -53,8 +53,11 @@ _BUILTIN_MODULES = (
     "..agents.openclaw",
     "..agents.react",
     "..envs.registered_envs",
-    "..datasets.alfworld",
-    "..datasets.livemath",
+    "..datasets.registered_datasets",
+    "..algos.evolve.skill_grpo_with_experience_validation",
+    "..algos.evolve.skill_grpo_without_replay_buffer",
+    "..algos.evolve.skill_grpo_with_replay_buffer",
+    "..algos.trace2skill.trajectory_evidence_patch",
 )
 
 

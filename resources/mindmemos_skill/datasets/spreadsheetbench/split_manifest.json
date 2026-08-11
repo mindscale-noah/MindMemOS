@@ -1,0 +1,24 @@
+{
+  "benchmark": "SpreadsheetBench",
+  "manifest_type": "id_split",
+  "source_repo": "KAKA22/SpreadsheetBench",
+  "source_repo_type": "dataset",
+  "source_url": "https://huggingface.co/datasets/KAKA22/SpreadsheetBench",
+  "source_revision": "ab0b742b0fc95b946f212d80ac7771b5531272e4",
+  "source_file": "spreadsheetbench_verified_400.tar.gz",
+  "source_split_name": "spreadsheetbench_split",
+  "counts": {
+    "train": 80,
+    "val": 40,
+    "test": 280
+  },
+  "item_fields": [
+    "id",
+    "spreadsheet_path",
+    "instruction_type"
+  ],
+  "notes": [
+    "This is a split manifest, not the full SpreadsheetBench payload.",
+    "Materialize full task JSON rows plus spreadsheet files from SpreadsheetBench Verified 400 before evaluation."
+  ]
+}

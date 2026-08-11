@@ -36,7 +36,7 @@ SYSTEM_PROMPT = (
 class ALFWorldEnvConfig(EnvConfig):
     """ALFWorld rollout settings matching the lean-history source env."""
 
-    max_steps: int = Field(default=50, ge=1)
+    max_turns: int = Field(default=50, ge=1)
     seed: int = 42
 
 
@@ -102,7 +102,7 @@ class ALFWorldEnv(BaseEnv[ALFWorldEnvConfig]):
                 }
             )
 
-            for step_index in range(self.config.max_steps):
+            for step_index in range(self.config.max_turns):
                 response = await agent.respond(prepared.agent_request, transcript, tools=[])
                 assistant_text = response.content.strip()
                 if not assistant_text:
@@ -146,8 +146,8 @@ class ALFWorldEnv(BaseEnv[ALFWorldEnvConfig]):
                 await asyncio.to_thread(simulator.close)
                 state["simulator"] = None
 
-        if not won and error is None and turns >= self.config.max_steps:
-            error = f"Timeout after {self.config.max_steps} steps"
+        if not won and error is None and turns >= self.config.max_turns:
+            error = f"Timeout after {self.config.max_turns} turns"
         ended = time.time()
         state.update(
             {
@@ -220,9 +220,7 @@ class ALFWorldEnv(BaseEnv[ALFWorldEnvConfig]):
             return ""
         return (
             "## Skill Knowledge\n"
-            "Below are learned strategies. Use them to choose admissible actions.\n\n"
-            + "\n\n".join(parts)
-            + "\n"
+            "Below are learned strategies. Use them to choose admissible actions.\n\n" + "\n\n".join(parts) + "\n"
         )
 
     @staticmethod

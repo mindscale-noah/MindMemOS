@@ -8,13 +8,24 @@ from typing import Any
 import pytest
 from mindmemos_skill.agents import Agent, AgentConfig, AgentExecutionRequest, SkillInjection
 from mindmemos_skill.agents.react import ReactAgent
+from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.prompts import experience_extraction_messages
 from mindmemos_skill.datasets import LiveMathIdSplitDataset
-from mindmemos_skill.envs import ALFWorldEnv, EnvRolloutContext, LiveMathEnv
+from mindmemos_skill.envs import ALFWorldBoundedHistoryEnv, ALFWorldEnv, EnvRolloutContext, LiveMathEnv
 from mindmemos_skill.envs.registered_envs.alfworld import (
     SYSTEM_PROMPT as ALFWORLD_SYSTEM_PROMPT,
 )
 from mindmemos_skill.envs.registered_envs.alfworld import format_observation
+from mindmemos_skill.envs.registered_envs.alfworld.env import ALFWorldEnvConfig
+from mindmemos_skill.envs.registered_envs.alfworld_bounded_history import (
+    ALFWORLD_SYSTEM_PROMPT as BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT,
+)
+from mindmemos_skill.envs.registered_envs.alfworld_bounded_history import (
+    format_bounded_history_observation,
+)
+from mindmemos_skill.envs.registered_envs.alfworld_bounded_history.env import ALFWorldBoundedHistoryEnvConfig
 from mindmemos_skill.envs.registered_envs.livemath import build_system, build_user, evaluate, refinement
+from mindmemos_skill.envs.registered_envs.livemath.env import LiveMathEnvConfig
+from mindmemos_skill.envs.registered_envs.spreadsheetbench.env import SpreadsheetBenchEnvConfig
 from mindmemos_skill.llm import ChatResponse
 from mindmemos_skill.typing import (
     Rollout,
@@ -31,7 +42,7 @@ class ScriptedMessageAgent(Agent[AgentConfig]):
     def __init__(self, responses: list[str]) -> None:
         super().__init__({})
         self.responses = list(responses)
-        self.calls: list[tuple[list[dict[str, Any]], list[dict[str, Any]]]] = []
+        self.calls: list[tuple[list[dict[str, Any]], list[dict[str, Any]] | None]] = []
 
     def inject_skills(self, skills, *, mode: SkillInjectionMode | None = None):
         del skills
@@ -52,7 +63,7 @@ class ScriptedMessageAgent(Agent[AgentConfig]):
         tools=(),
     ) -> ChatResponse:
         del request
-        self.calls.append((list(messages), list(tools)))
+        self.calls.append((list(messages), None if tools is None else list(tools)))
         return ChatResponse(finish_reason="stop", content=self.responses.pop(0), model="fake")
 
 
@@ -64,6 +75,36 @@ class RecordingChatClient:
     async def chat(self, task: str, messages: list[dict[str, Any]], *, model=None, **kwargs):
         self.calls.append({"task": task, "messages": messages, "model": model, **kwargs})
         return ChatResponse(finish_reason="stop", content=self.content, model="fake")
+
+
+def test_builtin_env_configs_only_accept_max_turns() -> None:
+    config_types = (ALFWorldEnvConfig, ALFWorldBoundedHistoryEnvConfig, LiveMathEnvConfig, SpreadsheetBenchEnvConfig)
+
+    for config_type in config_types:
+        assert "max_turns" in config_type.model_fields
+        assert "max_steps" not in config_type.model_fields
+
+    with pytest.raises(ValueError, match="max_steps"):
+        ALFWorldEnvConfig.model_validate({"max_steps": 3})
+    with pytest.raises(ValueError, match="max_steps"):
+        ALFWorldBoundedHistoryEnvConfig.model_validate({"max_steps": 3})
+
+
+def test_alfworld_bounded_history_prompt_keeps_only_two_recent_steps() -> None:
+    prompt = format_bounded_history_observation(
+        current_observation="current observation",
+        admissible_actions=["help", "look"],
+        task_description="put the mug in the cabinet",
+        history=[("old observation", "old action"), ("recent one", "action one"), ("recent two", "action two")],
+    )
+
+    assert "already taken 3 step(s)" in prompt
+    assert "most recent 2 observations" in prompt
+    assert "old observation" not in prompt
+    assert "old action" not in prompt
+    assert "recent one" in prompt
+    assert "recent two" in prompt
+    assert "'help'" not in prompt
 
 
 def make_skill(name: str = "main", content: str = "Compare every option.") -> Skill:
@@ -247,10 +288,21 @@ class FakeALFWorldEnv(ALFWorldEnv):
         return self.simulator
 
 
+class FakeALFWorldBoundedHistoryEnv(ALFWorldBoundedHistoryEnv):
+    def __init__(self, config, simulator: FakeALFWorldSimulator) -> None:
+        super().__init__(config)
+        self.simulator = simulator
+        self.build_args: tuple[Task, int] | None = None
+
+    def _build_simulator(self, task: Task, sample_index: int):
+        self.build_args = (task, sample_index)
+        return self.simulator
+
+
 @pytest.mark.asyncio
 async def test_alfworld_is_lean_history_and_preserves_step_and_final_rewards(tmp_path) -> None:
     simulator = FakeALFWorldSimulator()
-    env = FakeALFWorldEnv({"max_steps": 3, "seed": 42}, simulator)
+    env = FakeALFWorldEnv({"max_turns": 3, "seed": 42}, simulator)
     agent = ScriptedMessageAgent(
         [
             "I forgot the tags.",
@@ -313,3 +365,131 @@ async def test_alfworld_is_lean_history_and_preserves_step_and_final_rewards(tmp
     assert trajectory.metadata["invalid_actions"] == 1
     assert trajectory.reward.score == 1.0
     assert trajectory.reward.metadata["won"] is True
+
+
+@pytest.mark.asyncio
+async def test_alfworld_bounded_history_matches_agent_inputs_and_extraction_trajectory(tmp_path) -> None:
+    simulator = FakeALFWorldSimulator()
+    env = FakeALFWorldBoundedHistoryEnv({"max_turns": 3, "seed": 42}, simulator)
+    agent = ScriptedMessageAgent(
+        [
+            "<think>inspect first</think><action>look</action>",
+            "<think>open it now</think><action>open cabinet 1</action>",
+        ]
+    )
+    task = Task(
+        task_id="valid_seen:bounded-history",
+        instruction="Complete the ALFWorld task.",
+        tags=["validation"],
+        metadata={
+            "gamefile": "/json_2.1.1/valid_seen/task/game.tw-pddl",
+            "resolved_gamefile": "/data/task/game.tw-pddl",
+            "task_type": "pick_and_place",
+        },
+    )
+    skill = make_skill("route", "Open closed receptacles before placing objects.")
+
+    trajectory = await env.rollout(
+        agent,
+        task,
+        [skill],
+        context=EnvRolloutContext(
+            rollout=Rollout(rollout_id="rollout-bounded-history"),
+            workspace_root=tmp_path,
+            metadata={"sample_index": 3},
+        ),
+    )
+
+    first_user = """
+
+## Skill Knowledge
+Below is a skill document with learned strategies. Use these guidelines to inform your decisions:
+
+Open closed receptacles before placing objects.
+
+
+
+You are an expert agent operating in the ALFRED Embodied Environment.
+Your current observation is: Welcome. Your task is to: put the mug in the cabinet.
+Your admissible actions of the current situation are: ['look'
+ 'go to cabinet 1'].
+
+Now it's your turn to take an action.
+You should first reason step-by-step about the current situation. This reasoning process MUST be enclosed within <think> </think> tags.
+Once you've finished your reasoning, you should choose an admissible action for current step and present it within <action> </action> tags.
+"""
+    second_user = """
+
+## Skill Knowledge
+Below is a skill document with learned strategies. Use these guidelines to inform your decisions:
+
+Open closed receptacles before placing objects.
+
+
+
+You are an expert agent operating in the ALFRED Embodied Environment. Your task is to: put the mug in the cabinet.
+Prior to this step, you have already taken 1 step(s). Below are the most recent 1 observations and the corresponding actions you took: [Observation 1: 'Welcome. Your task is to: put the mug in the cabinet.', Action 1: 'look']
+You are now at step 2 and your current observation is: You see a closed cabinet.
+Your admissible actions of the current situation are: ['look'
+ 'open cabinet 1'].
+
+Now it's your turn to take an action.
+You should first reason step-by-step about the current situation. This reasoning process MUST be enclosed within <think> </think> tags.
+Once you've finished your reasoning, you should choose an admissible action for current step and present it within <action> </action> tags.
+"""
+    assert agent.calls == [
+        (
+            [
+                {"role": "system", "content": BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT},
+                {"role": "user", "content": first_user},
+            ],
+            None,
+        ),
+        (
+            [
+                {"role": "system", "content": BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT},
+                {"role": "user", "content": second_user},
+            ],
+            None,
+        ),
+    ]
+    assert trajectory.events == [
+        {
+            "step": 0,
+            "action": "look",
+            "reasoning": "inspect first",
+            "model_response": "<think>inspect first</think><action>look</action>",
+            "env_feedback": "You see a closed cabinet.",
+            "reward": 0.0,
+            "done": False,
+        },
+        {
+            "step": 1,
+            "action": "open cabinet 1",
+            "reasoning": "open it now",
+            "model_response": "<think>open it now</think><action>open cabinet 1</action>",
+            "env_feedback": "You won the game!",
+            "reward": 10.0,
+            "done": True,
+        },
+    ]
+    assert all("role" not in event for event in trajectory.events)
+    assert trajectory.reward.score == 1.0
+    assert env.build_args == (task, 3)
+
+    extraction_user = experience_extraction_messages(
+        task=task,
+        skill=skill,
+        trajectories=[trajectory],
+        max_experiences=3,
+    )[1]["content"]
+    assert BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT not in extraction_user
+    assert "[step 0 think] inspect first" in extraction_user
+    assert "[step 0 action] look" in extraction_user
+    assert "[step 0 obs]    You see a closed cabinet." in extraction_user
+    assert ("[step 0 obs]    You see a closed cabinet.\n[step 1 think] open it now") in extraction_user
+    assert "#### [1] SYSTEM" not in extraction_user
+
+    workspace = tmp_path / "rollout" / "valid_seen_bounded-history" / "rollout-bounded-history" / "0"
+    saved = json.loads((workspace / "prediction" / "conversation.json").read_text(encoding="utf-8"))
+    assert saved == trajectory.events

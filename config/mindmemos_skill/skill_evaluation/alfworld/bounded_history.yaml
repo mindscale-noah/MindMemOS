@@ -1,0 +1,26 @@
+version: 1
+method: skill_evaluation
+environment: alfworld
+launcher:
+  env_file: .skill.env
+parameters:
+  dataset:
+    data_root: data/mindmemos_skill/alfworld
+    split_dir: resources/mindmemos_skill/datasets/alfworld/splits
+    skill: resources/mindmemos_skill/skills/alfworld/SKILL.md
+    env_ref: alfworld_bounded_history
+  models:
+    target_model: openai/gpt-5.4-mini
+    reasoning_effort: medium
+    request_timeout: 1800
+    model_retries: 3
+    max_completion_tokens: 16384
+  evaluation:
+    test_rollouts: 3
+    seed: 0
+  rollout:
+    max_concurrent_rollouts: 16
+    rollout_retries: 1
+  environment_options:
+    max_turns: 50
+    env_seed: 42

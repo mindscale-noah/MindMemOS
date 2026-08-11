@@ -22,6 +22,8 @@ config/mindmemos_eval/*.yaml
 .claude
 .codex
 .env
+.skill.env
+!.skill.env.example
 
 # MindMemOS local runtime files
 .mindmemos-viewer.pid
@@ -39,11 +41,11 @@ config/mindmemos_eval/*.yaml
 openspec/
 .coverage
 
-# Local LoCoMo run configuration
+# Local benchmark datasets and LoCoMo run configuration
 scripts/locomo/locomo_eval.env
 .locomo-runs/
 .design/
-datasets/locomo/
+/datasets/
 reports/
 
 # Eval / run outputs

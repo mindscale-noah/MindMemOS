@@ -229,9 +229,9 @@ class SkillConfigCompiler:
             component = self._resolve_component(ComponentType.ALGO, algorithm.type)
             if component.config_model is None:
                 raise SkillConfigurationError(f"algorithm component {algorithm.type!r} does not declare config_model")
-            if not component.capabilities.intersection({"analyze", "optimize"}):
+            if not component.capabilities.intersection({"analyze", "optimize", "evolve"}):
                 raise SkillConfigurationError(
-                    f"algorithm component {algorithm.type!r} must declare analyze or optimize capability"
+                    f"algorithm component {algorithm.type!r} must declare analyze, optimize, or evolve capability"
                 )
             missing_roles = component.requirements.required_model_roles - algorithm.model_roles.keys()
             if missing_roles:
