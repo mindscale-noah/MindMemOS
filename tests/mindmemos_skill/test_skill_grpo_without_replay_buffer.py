@@ -230,7 +230,6 @@ def make_config(*, validation: bool, reflection: bool = False) -> SkillGrpoWitho
             "training": {"epochs": 1, "batch_size": 1, "seed": 7},
             "rollout": {
                 "max_concurrent_rollouts": 1,
-                "queue_capacity": 1,
                 "train": {"name": "fixed_group", "params": {"group_size": 1}},
                 "validation": {"name": "fixed_group", "params": {"group_size": 1}},
             },
@@ -330,7 +329,6 @@ async def test_batch_rollout_summary_reports_early_stopping_histogram(capsys) ->
     config_payload = make_config(validation=False).model_dump(mode="json")
     config_payload["training"]["batch_size"] = 3
     config_payload["rollout"]["max_concurrent_rollouts"] = 4
-    config_payload["rollout"]["queue_capacity"] = 12
     config_payload["rollout"]["train"]["params"]["group_size"] = 4
     request = SkillGrpoWithoutReplayBufferEvolveInput(
         run_id="rollout-summary",
@@ -446,7 +444,7 @@ async def test_successful_first_rollout_stops_remaining_samples() -> None:
 async def test_three_experience_streams_use_mini_batches_and_priority_order() -> None:
     config_payload = make_config(validation=False, reflection=True).model_dump(mode="json")
     config_payload["training"].update({"batch_size": 10, "mini_batch_size": 3})
-    config_payload["rollout"].update({"max_concurrent_rollouts": 10, "queue_capacity": 40})
+    config_payload["rollout"]["max_concurrent_rollouts"] = 10
     config_payload["rollout"]["train"]["params"]["group_size"] = 4
     tasks = [
         *[

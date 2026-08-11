@@ -333,7 +333,6 @@ runtime:
           env_ref: livemath
           samples_per_task: 2
           max_concurrent_rollouts: 8
-          queue_capacity: 16
           fail_fast: false
 ```
 

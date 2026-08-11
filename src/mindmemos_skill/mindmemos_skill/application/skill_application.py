@@ -705,6 +705,7 @@ class SkillApplication:
             "task_system_prompt": record.task_system_prompt,
             "task_tags": record.task_tags,
             "task_metadata": record.task_metadata,
+            "env_ref": record.env_ref,
             "env_metadata": record.env_metadata,
             "agent_type": record.agent_type,
             "agent_profile": record.agent_profile,

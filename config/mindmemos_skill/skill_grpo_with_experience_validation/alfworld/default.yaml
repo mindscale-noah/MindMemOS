@@ -25,13 +25,12 @@ parameters:
     test_rollouts: 1
   rollout:
     max_concurrent_rollouts: 32
-    queue_capacity: 64
     max_concurrent_extractions: 16
     max_concurrent_reflections: 8
     rollout_retries: 3
     fail_fast: false
   environment_options:
-    max_steps: 50
+    max_turns: 50
   algorithm:
     max_experiences_per_task: 3
     max_patch_edits: 6

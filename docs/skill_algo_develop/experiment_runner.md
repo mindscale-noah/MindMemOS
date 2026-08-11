@@ -82,6 +82,11 @@ rollout.max_concurrent_rollouts: 16 -> --max-concurrent-rollouts 16
 
 `test_rollouts=2` 表示测试集的每个 task 各跑两次；只想测试两个 task 时使用 `test_limit=2`。
 
+每个 rollout 的交互预算统一使用 `environment_options.max_turns`：一轮表示环境驱动的一次模型决策。
+例如 ALFWorld 的 `max_turns: 50` 最多执行 50 次动作，SpreadsheetBench 的 `max_turns: 30` 最多生成
+30 轮回复/工具调用，LiveMath 的 `max_turns: 1` 只生成一次答案。所有 built-in EnvConfig 和实验 YAML
+都只使用 `max_turns`，实验配置、adapter CLI 和 EnvConfig 不接受其他同义字段。
+
 ## 临时覆盖与 dry-run
 
 临时覆盖参数无需复制 YAML：

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..skill_grpo_with_replay_buffer.config import (
     DatasetRuntimeConfig,
@@ -25,7 +25,6 @@ class RolloutConfig(_StrictModel):
     """Rollout settings for training, validation and final test."""
 
     max_concurrent_rollouts: int = Field(default=8, ge=1)
-    queue_capacity: int = Field(default=16, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0.0)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     fail_fast: bool = True
@@ -85,12 +84,6 @@ class SkillGrpoWithoutReplayBufferRunConfig(_StrictModel):
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     rollout: RolloutConfig = Field(default_factory=RolloutConfig)
     dataset: DatasetRuntimeConfig
-
-    @model_validator(mode="after")
-    def validate_queue(self) -> SkillGrpoWithoutReplayBufferRunConfig:
-        if self.rollout.queue_capacity < self.rollout.max_concurrent_rollouts:
-            raise ValueError("queue_capacity must be at least max_concurrent_rollouts")
-        return self
 
 
 __all__ = [

@@ -23,7 +23,6 @@ class RolloutConfig(_StrictModel):
     """Rollout settings for training, experience re-runs and final test."""
 
     max_concurrent_rollouts: int = Field(default=8, ge=1)
-    queue_capacity: int = Field(default=16, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0.0)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     fail_fast: bool = True
@@ -78,9 +77,7 @@ class SkillGrpoWithExperienceValidationRunConfig(_StrictModel):
     dataset: DatasetRuntimeConfig
 
     @model_validator(mode="after")
-    def validate_queue(self) -> SkillGrpoWithExperienceValidationRunConfig:
-        if self.rollout.queue_capacity < self.rollout.max_concurrent_rollouts:
-            raise ValueError("queue_capacity must be at least max_concurrent_rollouts")
+    def validate_experience_validation_strategy(self) -> SkillGrpoWithExperienceValidationRunConfig:
         if self.rollout.experience_validation.name != "fixed_group":
             raise ValueError("experience_validation rollout strategy must be fixed_group")
         return self

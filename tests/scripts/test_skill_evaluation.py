@@ -82,9 +82,7 @@ async def test_progress_reports_completed_correct_errors_and_mean_reward() -> No
     await progress.on_outcome(_outcome("task-2", 0, 0.0, completed=False))
     progress.close()
 
-    assert stream.getvalue().splitlines()[-1] == (
-        "test [##########] 2/2 correct=1 errors=1 mean_reward=0.5000"
-    )
+    assert stream.getvalue().splitlines()[-1] == ("test [##########] 2/2 correct=1 errors=1 mean_reward=0.5000")
 
 
 def test_parser_requires_exactly_one_skill_mode(tmp_path: Path) -> None:
@@ -97,11 +95,31 @@ def test_parser_requires_exactly_one_skill_mode(tmp_path: Path) -> None:
         str(tmp_path / "output"),
         "--run-id",
         "run",
+        "--max-turns",
+        "50",
     ]
 
     assert evaluation.parse_args([*common, "--no-skill"]).no_skill is True
     skill_args = evaluation.parse_args([*common, "--skill", str(tmp_path / "SKILL.md")])
     assert skill_args.skill == Path(tmp_path / "SKILL.md")
+
+
+def test_parser_only_accepts_max_turns(tmp_path: Path) -> None:
+    common = [
+        "--benchmark",
+        "alfworld",
+        "--data-root",
+        str(tmp_path / "data"),
+        "--output-dir",
+        str(tmp_path / "output"),
+        "--run-id",
+        "run",
+        "--no-skill",
+    ]
+
+    assert evaluation.parse_args([*common, "--max-turns", "40"]).max_turns == 40
+    with pytest.raises(SystemExit):
+        evaluation.parse_args([*common, "--max-turns", "40", "--max-steps", "50"])
 
 
 def test_build_skill_accepts_skill_directory(tmp_path: Path) -> None:

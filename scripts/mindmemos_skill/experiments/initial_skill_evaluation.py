@@ -44,10 +44,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-completion-tokens", type=int, default=16384)
     parser.add_argument("--rollouts", type=int, default=3)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=16)
-    parser.add_argument("--queue-capacity", type=int, default=16)
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--rollout-retries", type=int, default=1)
-    parser.add_argument("--max-steps", type=int, default=50)
+    parser.add_argument("--max-turns", type=int, required=True)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--env-seed", type=int, default=42)
     parser.add_argument("--test-limit", type=int)
@@ -206,7 +205,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     rollout_config = RolloutConfig.model_validate(
         {
             "max_concurrent_rollouts": args.max_concurrent_rollouts,
-            "queue_capacity": args.queue_capacity,
             "timeout_seconds": args.rollout_timeout,
             "retry": {"max_attempts": args.rollout_retries},
             "fail_fast": False,
@@ -237,7 +235,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 agent_ref="react",
                 env_ref="alfworld",
                 seed=args.seed,
-                env_options={"max_steps": args.max_steps, "seed": args.env_seed},
+                env_options={"max_turns": args.max_turns, "seed": args.env_seed},
             )
         )
     )

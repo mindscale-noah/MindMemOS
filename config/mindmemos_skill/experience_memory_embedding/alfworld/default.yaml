@@ -29,8 +29,7 @@ parameters:
     max_concurrent_extractions: 16
     embedding_batch_size: 64
     max_concurrent_rollouts: 32
-    queue_capacity: 64
     rollout_retries: 3
   environment_options:
-    max_steps: 50
+    max_turns: 50
     seed: 42

@@ -91,11 +91,12 @@ def test_skill_evaluation_can_switch_to_true_no_skill_mode(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     "config_path",
     [
-        CONFIG_ROOT / "skill_grpo_without_replay_buffer" / "alfworld" / "skillopt.yaml",
-        CONFIG_ROOT / "skill_evaluation" / "alfworld" / "skillopt.yaml",
+        CONFIG_ROOT / "skill_grpo_without_replay_buffer" / "alfworld" / "bounded_history.yaml",
+        CONFIG_ROOT / "skill_grpo_with_experience_validation" / "alfworld" / "bounded_history.yaml",
+        CONFIG_ROOT / "skill_evaluation" / "alfworld" / "bounded_history.yaml",
     ],
 )
-def test_skillopt_alfworld_configs_select_the_registered_env(config_path: Path, tmp_path: Path) -> None:
+def test_bounded_history_alfworld_configs_select_the_registered_env(config_path: Path, tmp_path: Path) -> None:
     invocation = SCRIPT.build_invocation(
         config_path,
         env_file_override=empty_env_file(tmp_path),
@@ -104,7 +105,7 @@ def test_skillopt_alfworld_configs_select_the_registered_env(config_path: Path, 
     )
 
     assert invocation.environment == "alfworld"
-    assert invocation.command[invocation.command.index("--env-ref") + 1] == "alfworld_skillopt"
+    assert invocation.command[invocation.command.index("--env-ref") + 1] == "alfworld_bounded_history"
 
 
 def test_trace2skill_routes_to_family_runner_and_keeps_test_config(tmp_path: Path) -> None:
@@ -142,6 +143,26 @@ def test_all_shipped_experiment_configs_build(config_path: Path, tmp_path: Path)
         )
 
 
+@pytest.mark.parametrize(
+    ("config_path", "expected"),
+    [
+        (CONFIG_ROOT / "skill_evaluation" / "alfworld" / "default.yaml", "50"),
+        (CONFIG_ROOT / "skill_evaluation" / "livemath" / "default.yaml", "1"),
+        (CONFIG_ROOT / "skill_evaluation" / "spreadsheetbench" / "default.yaml", "30"),
+    ],
+)
+def test_configs_use_one_public_turn_limit(config_path: Path, expected: str, tmp_path: Path) -> None:
+    invocation = SCRIPT.build_invocation(
+        config_path,
+        env_file_override=empty_env_file(tmp_path),
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    assert invocation.command[invocation.command.index("--max-turns") + 1] == expected
+    assert "--max-steps" not in invocation.command
+
+
 def test_explicit_run_id_and_output_dir_still_override_defaults(tmp_path: Path) -> None:
     invocation = SCRIPT.build_invocation(
         CONFIG_ROOT / "skill_evaluation" / "alfworld" / "default.yaml",
@@ -167,7 +188,8 @@ def test_overrides_and_environment_expansion_are_applied(tmp_path: Path) -> None
                     "data_root": "$DATA_ROOT",
                     "split_dir": "split",
                     "initial_skill": "SKILL.md",
-                }
+                },
+                "environment_options": {"max_turns": 50},
             },
         },
     )

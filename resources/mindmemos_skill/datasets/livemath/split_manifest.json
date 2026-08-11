@@ -1,0 +1,34 @@
+{
+  "benchmark": "LiveMathematicianBench",
+  "manifest_type": "id_split",
+  "source_repo": "LiveMathematicianBench/LiveMathematicianBench",
+  "source_repo_type": "dataset",
+  "source_url": "https://huggingface.co/datasets/LiveMathematicianBench/LiveMathematicianBench",
+  "source_revision": "b72450f6ce96c26158d64d945a5d31ef7727be41",
+  "source_files": [
+    "data/202511/qa_202511_final.json",
+    "data/202512/qa_202512_final.json",
+    "data/202601/qa_202601_final.json",
+    "data/202602/qa_202602_final.json"
+  ],
+  "split_mode": "ratio",
+  "split_ratio": "2:1:7",
+  "split_seed": 42,
+  "counts": {
+    "train": 35,
+    "val": 18,
+    "test": 124
+  },
+  "item_fields": [
+    "id",
+    "month",
+    "no",
+    "paper_link",
+    "source_file"
+  ],
+  "id_format": "<month>:<no>",
+  "notes": [
+    "This is an ID split manifest, not the full LiveMathematicianBench payload.",
+    "Materialize full split items from the official LiveMathematicianBench raw qa_*_final.json files before evaluation."
+  ]
+}

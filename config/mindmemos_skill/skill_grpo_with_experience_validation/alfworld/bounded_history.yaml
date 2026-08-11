@@ -1,5 +1,5 @@
 version: 1
-method: skill_grpo_without_replay_buffer
+method: skill_grpo_with_experience_validation
 environment: alfworld
 launcher:
   env_file: .skill.env
@@ -8,7 +8,7 @@ parameters:
     data_root: data/mindmemos_skill/alfworld
     split_dir: resources/mindmemos_skill/datasets/alfworld/splits
     initial_skill: resources/mindmemos_skill/skills/alfworld/SKILL.md
-    env_ref: alfworld_skillopt
+    env_ref: alfworld_bounded_history
   models:
     target_model: openai/gpt-5.4-mini
     optimizer_model: openai/gpt-5.4-mini
@@ -21,22 +21,18 @@ parameters:
     batch_size: 40
     mini_batch_size: 8
     train_rollouts: 4
-    validation_gate: true
-    validation_rollouts: 1
     seed: 0
   evaluation:
-    test_rollouts: 1
+    test_rollouts: 3
   rollout:
-    max_concurrent_rollouts: 32
-    queue_capacity: 64
+    max_concurrent_rollouts: 64
     max_concurrent_extractions: 32
-    reflection: true
     max_concurrent_reflections: 32
     rollout_retries: 3
     fail_fast: false
   environment_options:
-    max_turns: 1
-    max_steps: 50
+    max_turns: 50
+    env_seed: 42
   algorithm:
     max_experiences_per_task: 3
     max_patch_edits: 6

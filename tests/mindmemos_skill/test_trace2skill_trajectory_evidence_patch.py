@@ -245,13 +245,7 @@ def test_collection_config_has_one_rollout_budget() -> None:
     config = TaskCollectionConfig(agent_ref="react", env_ref="livemath", samples_per_task=3)
 
     assert config.samples_per_task == 3
-    with pytest.raises(ValueError, match="queue_capacity must be at least max_concurrent_rollouts"):
-        TaskCollectionConfig(
-            agent_ref="react",
-            env_ref="livemath",
-            max_concurrent_rollouts=2,
-            queue_capacity=1,
-        )
+    assert config.max_concurrent_rollouts == 8
 
 
 @pytest.mark.asyncio

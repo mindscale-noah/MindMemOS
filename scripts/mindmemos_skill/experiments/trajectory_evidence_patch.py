@@ -71,13 +71,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--test-rollouts", type=int, default=1)
     parser.add_argument("--test-limit", type=int)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=16)
-    parser.add_argument("--queue-capacity", type=int, default=16)
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--rollout-retries", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
 
-    parser.add_argument("--max-turns", type=int, default=1)
-    parser.add_argument("--max-steps", type=int, default=50)
+    parser.add_argument("--max-turns", type=int, required=True)
     parser.add_argument("--env-seed", type=int, default=42)
     parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
@@ -133,7 +131,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     env_options = environment_options(
         args.benchmark,
         max_turns=args.max_turns,
-        max_steps=args.max_steps,
         env_seed=args.env_seed,
         shell_timeout=args.shell_timeout,
         use_theorem=args.use_theorem,
@@ -181,7 +178,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             env_ref=args.benchmark,
             samples_per_task=args.collection_rollouts,
             max_concurrent_rollouts=args.max_concurrent_rollouts,
-            queue_capacity=args.queue_capacity,
             timeout_seconds=args.rollout_timeout,
             retry={"max_attempts": args.rollout_retries},
             fail_fast=False,
@@ -218,7 +214,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 benchmark=args.benchmark,
                 rollouts=args.test_rollouts,
                 max_concurrent_rollouts=args.max_concurrent_rollouts,
-                queue_capacity=args.queue_capacity,
                 rollout_timeout=args.rollout_timeout,
                 rollout_retries=args.rollout_retries,
                 seed=args.seed,

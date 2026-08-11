@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 from mindmemos_skill.envs import (
+    ALFWorldBoundedHistoryEnv,
     ALFWorldEnv,
-    ALFWorldSkillOptEnv,
     BaseEnv,
     LiveMathEnv,
     PreparedRollout,
@@ -41,7 +41,8 @@ def test_registry_rejects_plain_string_component_types() -> None:
 def test_builtin_and_package_external_envs_use_the_same_registry() -> None:
     assert "livemath" in list_envs()
     assert "alfworld" in list_envs()
-    assert "alfworld_skillopt" in list_envs()
+    assert "alfworld_bounded_history" in list_envs()
+    assert "alfworld_skillopt" not in list_envs()
     assert "alfworld_lean_history" not in list_envs()
     assert "test_external_env" in list_envs()
 
@@ -53,5 +54,7 @@ def test_builtin_and_package_external_envs_use_the_same_registry() -> None:
 
 def test_builtin_envs_live_in_independent_registered_env_packages() -> None:
     assert ALFWorldEnv.__module__ == "mindmemos_skill.envs.registered_envs.alfworld.env"
-    assert ALFWorldSkillOptEnv.__module__ == "mindmemos_skill.envs.registered_envs.alfworld_skillopt.env"
+    assert ALFWorldBoundedHistoryEnv.__module__ == (
+        "mindmemos_skill.envs.registered_envs.alfworld_bounded_history.env"
+    )
     assert LiveMathEnv.__module__ == "mindmemos_skill.envs.registered_envs.livemath.env"

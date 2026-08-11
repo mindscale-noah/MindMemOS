@@ -12,17 +12,10 @@ from typing import Any
 from pydantic import Field
 
 from ....agents.base import Agent
-from ....algos.evolve.skill_grpo_with_replay_buffer.prompts import (
-    LIVEMATH_SYSTEM as SYSTEM_PROMPT,
-)
-from ....algos.evolve.skill_grpo_with_replay_buffer.prompts import (
-    livemath_refinement_prompt,
-    livemath_system_prompt,
-    livemath_user_prompt,
-)
 from ....registry import ComponentType, register
 from ....typing import EnvConfig, Reward, Skill, Task, Trajectory
 from ...base import BaseEnv, EnvRolloutContext, PreparedRollout
+from .prompts import SYSTEM_PROMPT, build_system, build_user, refinement
 
 _ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL | re.IGNORECASE)
 
@@ -182,18 +175,6 @@ class LiveMathEnv(BaseEnv[LiveMathEnvConfig]):
         )
         (workspace / "target_system_prompt.txt").write_text(state["system"], encoding="utf-8")
         (workspace / "target_user_prompt.txt").write_text(state["user"], encoding="utf-8")
-
-
-def build_system(skill_content: str) -> str:
-    return livemath_system_prompt(skill_content)
-
-
-def build_user(item: Mapping[str, Any], use_theorem: bool, use_sketch: bool) -> str:
-    return livemath_user_prompt(dict(item), use_theorem, use_sketch)
-
-
-def refinement(previous_response: str) -> str:
-    return livemath_refinement_prompt(previous_response)
 
 
 def skill_text(skills: Sequence[Skill]) -> str:

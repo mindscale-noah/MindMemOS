@@ -24,9 +24,8 @@ parameters:
     run_baseline: true
   rollout:
     max_concurrent_rollouts: 32
-    queue_capacity: 32
     max_concurrent_summaries: 8
     rollout_retries: 1
   environment_options:
-    max_steps: 50
+    max_turns: 50
     env_seed: 42

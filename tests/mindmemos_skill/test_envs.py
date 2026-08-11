@@ -125,6 +125,7 @@ async def test_rollout_uses_attempt_context_and_evaluates_trajectory(tmp_path) -
     rollout = Rollout(rollout_id="../rollout 1", attempt_no=2, rollout_type=RolloutType.TRAIN)
     context = EnvRolloutContext(
         rollout=rollout,
+        env_ref="example",
         workspace_root=tmp_path,
         workspace_scope="train/epoch 1",
         agent_options={"temperature": 0.2},
@@ -136,6 +137,7 @@ async def test_rollout_uses_attempt_context_and_evaluates_trajectory(tmp_path) -
     workspace = tmp_path / "train" / "epoch_1" / "unsafe_task" / "rollout_1" / "2"
     assert workspace.is_dir()
     assert trajectory.rollout == rollout
+    assert trajectory.environment.env_ref == "example"
     assert trajectory.environment.running_dir == str(workspace)
     assert trajectory.environment.metadata == {"batch": 3, "workspace_scope": "train/epoch 1"}
     assert trajectory.reward == Reward(

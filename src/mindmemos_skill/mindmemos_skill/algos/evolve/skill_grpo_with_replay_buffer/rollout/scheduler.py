@@ -65,42 +65,31 @@ class RolloutScheduler:
         if not specs:
             return []
         worker_count = min(self._config.max_concurrent_rollouts, len(specs))
-        queue: asyncio.Queue[RolloutSpec | None] = asyncio.Queue(maxsize=self._config.queue_capacity)
+        spec_iter = iter(specs)
         outcomes: list[RolloutOutcome] = []
         failed = asyncio.Event()
 
-        async def producer() -> None:
-            for spec in specs:
-                if failed.is_set() and self._config.fail_fast:
-                    break
-                await queue.put(spec)
-            for _ in range(worker_count):
-                await queue.put(None)
-
         async def worker() -> None:
             while True:
-                spec = await queue.get()
+                if failed.is_set() and self._config.fail_fast:
+                    return
                 try:
-                    if spec is None:
-                        return
-                    if failed.is_set() and self._config.fail_fast:
-                        continue
-                    # Multiple phases may share this scheduler concurrently. Keep
-                    # one run-wide rollout budget instead of multiplying the
-                    # configured limit by the number of active scheduler runs.
-                    async with self._rollout_slots:
-                        outcome = await self._run_spec(spec)
-                    outcomes.append(outcome)
-                    if not outcome.succeeded:
-                        failed.set()
-                    if self._on_outcome is not None:
-                        await self._on_outcome(outcome)
-                finally:
-                    queue.task_done()
+                    spec = next(spec_iter)
+                except StopIteration:
+                    return
+                # Multiple phases may share this scheduler concurrently. Keep
+                # one run-wide rollout budget instead of multiplying the
+                # configured limit by the number of active scheduler runs.
+                async with self._rollout_slots:
+                    outcome = await self._run_spec(spec)
+                outcomes.append(outcome)
+                if not outcome.succeeded:
+                    failed.set()
+                if self._on_outcome is not None:
+                    await self._on_outcome(outcome)
 
         workers = [asyncio.create_task(worker()) for _ in range(worker_count)]
-        producer_task = asyncio.create_task(producer())
-        await asyncio.gather(producer_task, *workers)
+        await asyncio.gather(*workers)
         outcomes.sort(key=lambda item: item.spec.sequence_no)
 
         if self._config.fail_fast:
@@ -169,6 +158,7 @@ class RolloutScheduler:
                 attempt_no=attempt_no,
                 rollout_type=rollout_type,
             ),
+            env_ref=spec.env_ref,
             workspace_root=self._config.workspace_root,
             workspace_scope=spec.phase.value,
             agent_options={
@@ -188,9 +178,15 @@ class RolloutScheduler:
         env = self._env_factory.create(spec.env_ref, spec.env_options)
         async with env:
             call = env.rollout(agent, spec.task, spec.skills, context=context)
-            if self._config.timeout_seconds is None:
-                return await call
-            return await asyncio.wait_for(call, timeout=self._config.timeout_seconds)
+            trajectory = (
+                await call
+                if self._config.timeout_seconds is None
+                else await asyncio.wait_for(call, timeout=self._config.timeout_seconds)
+            )
+            # The scheduler owns the resolved component reference. Stamp it at
+            # the boundary even for custom Envs that override BaseEnv.rollout().
+            trajectory.environment.env_ref = spec.env_ref
+            return trajectory
 
 
 __all__ = [

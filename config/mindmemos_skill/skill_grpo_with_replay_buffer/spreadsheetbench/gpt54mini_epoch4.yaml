@@ -26,7 +26,6 @@ parameters:
     seed: 0
   rollout:
     max_concurrent_rollouts: 32
-    queue_capacity: 64
     max_concurrent_extractions: 32
     rollout_retries: 3
     fail_fast: false

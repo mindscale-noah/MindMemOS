@@ -56,11 +56,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--test-rollouts", type=int, default=1)
     parser.add_argument("--run-baseline", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=32)
-    parser.add_argument("--queue-capacity", type=int, default=32)
     parser.add_argument("--max-concurrent-summaries", type=int, default=8)
     parser.add_argument("--rollout-retries", type=int, default=1)
     parser.add_argument("--rollout-timeout", type=float)
-    parser.add_argument("--max-steps", type=int, default=50)
+    parser.add_argument("--max-turns", type=int, required=True)
     parser.add_argument("--env-seed", type=int, default=42)
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
@@ -193,7 +192,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             },
             "rollout": {
                 "max_concurrent_rollouts": args.max_concurrent_rollouts,
-                "queue_capacity": args.queue_capacity,
                 "timeout_seconds": args.rollout_timeout,
                 "retry": {"max_attempts": args.rollout_retries},
                 "workspace_root": args.output_dir / "workspace",
@@ -201,7 +199,10 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "dataset": {
                 "env_ref": "alfworld",
                 "agent_ref": "react",
-                "env_options": {"max_steps": args.max_steps, "seed": args.env_seed},
+                "env_options": {
+                    "max_turns": args.max_turns,
+                    "seed": args.env_seed,
+                },
                 "agent_options": {},
             },
         }

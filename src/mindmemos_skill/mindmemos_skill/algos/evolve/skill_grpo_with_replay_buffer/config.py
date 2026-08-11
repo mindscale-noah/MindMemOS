@@ -28,7 +28,6 @@ class RolloutConfig(_StrictModel):
     """The only concurrency budget used for every rollout phase."""
 
     max_concurrent_rollouts: int = Field(default=8, ge=1)
-    queue_capacity: int = Field(default=16, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0.0)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     fail_fast: bool = True
@@ -121,12 +120,6 @@ class SkillGrpoRunConfig(_StrictModel):
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     rollout: RolloutConfig = Field(default_factory=RolloutConfig)
     dataset: DatasetRuntimeConfig
-
-    @model_validator(mode="after")
-    def validate_queue(self) -> SkillGrpoRunConfig:
-        if self.rollout.queue_capacity < self.rollout.max_concurrent_rollouts:
-            raise ValueError("queue_capacity must be at least max_concurrent_rollouts")
-        return self
 
 
 __all__ = [

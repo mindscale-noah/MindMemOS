@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from mindmemos_skill.algos.evolve.skill_grpo_with_experience_validation import (
 )
 from mindmemos_skill.algos.evolve.skill_grpo_with_experience_validation.validation import (
     assess_experience,
+    inject_experience,
     render_experience_guidance,
 )
 from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.contracts import (
@@ -139,6 +141,40 @@ class FakeEnvFactory:
         return ExperimentEnv(config)
 
 
+class ValidationConcurrencyTracker:
+    def __init__(self) -> None:
+        self.active = 0
+        self.peak = 0
+        self.sequence_nos: list[int] = []
+
+
+class ConcurrencyTrackingEnv(ExperimentEnv):
+    def __init__(self, config: EnvConfig, tracker: ValidationConcurrencyTracker) -> None:
+        super().__init__(config)
+        self._tracker = tracker
+
+    async def rollout(self, agent, task, skills, *, context):
+        if "## Available Experience" not in skills[0].content:
+            return await super().rollout(agent, task, skills, context=context)
+        self._tracker.active += 1
+        self._tracker.peak = max(self._tracker.peak, self._tracker.active)
+        self._tracker.sequence_nos.append(context.metadata["sequence_no"])
+        try:
+            await asyncio.sleep(0.01)
+            return await super().rollout(agent, task, skills, context=context)
+        finally:
+            self._tracker.active -= 1
+
+
+class ConcurrencyTrackingEnvFactory:
+    def __init__(self) -> None:
+        self.tracker = ValidationConcurrencyTracker()
+
+    def create(self, ref: str, config) -> ConcurrencyTrackingEnv:
+        assert ref == "fake"
+        return ConcurrencyTrackingEnv(config, self.tracker)
+
+
 class FakeAgentResolver:
     def resolve(self, ref: str):
         assert ref == "fake"
@@ -155,7 +191,6 @@ def make_config() -> SkillGrpoWithExperienceValidationRunConfig:
             "training": {"epochs": 1, "batch_size": 3, "mini_batch_size": 8, "seed": 7},
             "rollout": {
                 "max_concurrent_rollouts": 4,
-                "queue_capacity": 12,
                 "train": {"name": "fixed_group", "params": {"group_size": 4}},
                 "experience_validation": {"name": "fixed_group", "params": {"group_size": 1}},
             },
@@ -236,6 +271,37 @@ async def test_all_three_sources_must_pass_targeted_reruns_before_patch() -> Non
     assert all(".experience." in task or ".reflection." in task for task in chat.tasks[:patch_call])
 
 
+@pytest.mark.asyncio
+async def test_experience_validations_run_concurrently_with_unique_sequences() -> None:
+    env_factory = ConcurrencyTrackingEnvFactory()
+    algorithm = SkillGrpoWithExperienceValidation(
+        chat_model=FakeChatModel(),
+        agent_resolver=FakeAgentResolver(),
+        env_factory=env_factory,
+    )
+
+    result = await algorithm.evolve(
+        SkillGrpoWithExperienceValidationEvolveInput(
+            run_id="concurrent-experience-validation",
+            base_skill=make_skill(),
+            train_tasks=[
+                Task(task_id="contrast", instruction="contrast task"),
+                Task(task_id="failed", instruction="failed task"),
+                Task(task_id="successful", instruction="successful task"),
+            ],
+            config=make_config(),
+        )
+    )
+
+    assert 1 < env_factory.tracker.peak <= 4
+    assert len(env_factory.tracker.sequence_nos) == len(set(env_factory.tracker.sequence_nos))
+    assert [item.source for item in result.batches[0].experience_validations] == [
+        ExperienceSource.CONTRAST,
+        ExperienceSource.FAILURE,
+        ExperienceSource.SUCCESS,
+    ]
+
+
 def make_outcome(task_id: str, *, sample_index: int, score: float) -> RolloutOutcome:
     now = datetime.now(UTC)
     task = Task(task_id=task_id, instruction=task_id)
@@ -270,8 +336,18 @@ def make_outcome(task_id: str, *, sample_index: int, score: float) -> RolloutOut
     ("source", "task_ids", "outcomes", "baseline_attempt"),
     [
         (ExperienceSource.CONTRAST, ["a"], [make_outcome("a", sample_index=2, score=1.0)], 3),
-        (ExperienceSource.FAILURE, ["a", "b"], [make_outcome("a", sample_index=0, score=0.0), make_outcome("b", sample_index=0, score=0.0)], None),
-        (ExperienceSource.SUCCESS, ["a", "b"], [make_outcome("a", sample_index=0, score=1.0), make_outcome("b", sample_index=0, score=0.0)], None),
+        (
+            ExperienceSource.FAILURE,
+            ["a", "b"],
+            [make_outcome("a", sample_index=0, score=0.0), make_outcome("b", sample_index=0, score=0.0)],
+            None,
+        ),
+        (
+            ExperienceSource.SUCCESS,
+            ["a", "b"],
+            [make_outcome("a", sample_index=0, score=1.0), make_outcome("b", sample_index=0, score=0.0)],
+            None,
+        ),
     ],
 )
 def test_source_gates_reject_no_improvement_or_success_drop(
@@ -299,9 +375,12 @@ def test_source_gates_reject_no_improvement_or_success_drop(
     assert record.decision is ExperienceValidationDecision.REJECTED
 
 
-def test_experience_injection_excludes_task_evidence() -> None:
-    guidance = render_experience_guidance(
-        json.dumps(
+def test_experience_injection_is_available_guidance_and_excludes_task_evidence() -> None:
+    experience = ExtractedExperienceSet(
+        task_id="set",
+        task_ids=["task"],
+        source=ExperienceSource.FAILURE,
+        content=json.dumps(
             {
                 "experiences": [
                     {
@@ -311,10 +390,18 @@ def test_experience_injection_excludes_task_evidence() -> None:
                     }
                 ]
             }
-        )
+        ),
+        rollout_count=1,
     )
+    guidance = render_experience_guidance(experience.content)
+    injected = inject_experience(make_skill(), experience, run_id="run", batch_index=0, experience_index=0)
 
+    assert injected is not None
+    assert "## Available Experience" in injected.content
+    assert "Apply it when relevant to the current situation." in injected.content
+    assert "Candidate guidance" not in injected.content
+    assert "experimental re-run" not in injected.content
     assert "Use the reusable check." in guidance
     assert "It catches incomplete work." in guidance
-    assert "secret-task" not in guidance
-    assert "specific object" not in guidance
+    assert "secret-task" not in injected.content
+    assert "specific object" not in injected.content

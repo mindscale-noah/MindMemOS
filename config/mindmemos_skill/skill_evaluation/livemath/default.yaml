@@ -19,7 +19,6 @@ parameters:
     seed: 0
   rollout:
     max_concurrent_rollouts: 16
-    queue_capacity: 16
     rollout_retries: 1
   environment_options:
     max_turns: 1

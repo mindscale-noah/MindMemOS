@@ -145,6 +145,8 @@ class Trajectory(BaseModel):
             "source": "skill_runtime",
             "created_at": created_at.isoformat(),
         }
+        if self.environment.env_ref != "unknown":
+            source_payload["env_ref"] = self.environment.env_ref
         trajectory_hash = hashlib.sha256(
             json.dumps(source_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
         ).hexdigest()
@@ -159,6 +161,7 @@ class Trajectory(BaseModel):
             task_system_prompt=self.task.system_prompt,
             task_tags=self.task.tags,
             task_metadata=self.task.metadata,
+            env_ref=self.environment.env_ref,
             running_dir=self.environment.running_dir,
             env_metadata=self.environment.metadata,
             injected_skills=[skill.model_dump(mode="json") for skill in self.injected_skills],
@@ -201,7 +204,11 @@ class Trajectory(BaseModel):
                 attempt_no=record.attempt_no,
                 rollout_type=record.rollout_type,
             ),
-            environment=Environment(running_dir=record.running_dir, metadata=record.env_metadata),
+            environment=Environment(
+                env_ref=record.env_ref,
+                running_dir=record.running_dir,
+                metadata=record.env_metadata,
+            ),
             agent=AgentProfile.from_serialized(
                 record.agent_profile,
                 agent_type=record.agent_type,

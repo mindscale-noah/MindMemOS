@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from ...agents import Agent
 from ...typing import Skill, Task, Trajectory
@@ -38,7 +38,6 @@ class TaskCollectionConfig(BaseModel):
     env_ref: str = Field(min_length=1)
     samples_per_task: int = Field(default=1, ge=1)
     max_concurrent_rollouts: int = Field(default=8, ge=1)
-    queue_capacity: int = Field(default=16, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0.0)
     retry: CollectionRetryConfig = Field(default_factory=CollectionRetryConfig)
     fail_fast: bool = False
@@ -47,12 +46,6 @@ class TaskCollectionConfig(BaseModel):
     temperature: float | None = None
     agent_options: dict[str, JsonValue] = Field(default_factory=dict)
     env_options: dict[str, JsonValue] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_queue(self) -> TaskCollectionConfig:
-        if self.queue_capacity < self.max_concurrent_rollouts:
-            raise ValueError("queue_capacity must be at least max_concurrent_rollouts")
-        return self
 
 
 class TrajectoryCollectionResult(BaseModel):
@@ -88,7 +81,6 @@ class ScheduledTrajectoryCollector:
             env_factory=RegistryEnvFactory(),
             config=RolloutConfig(
                 max_concurrent_rollouts=config.max_concurrent_rollouts,
-                queue_capacity=config.queue_capacity,
                 timeout_seconds=config.timeout_seconds,
                 retry=RetryConfig(
                     max_attempts=config.retry.max_attempts,

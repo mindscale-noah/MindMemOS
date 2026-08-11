@@ -8,7 +8,7 @@ parameters:
     data_root: data/mindmemos_skill/alfworld
     split_dir: resources/mindmemos_skill/datasets/alfworld/splits
     skill: resources/mindmemos_skill/skills/alfworld/SKILL.md
-    env_ref: alfworld_skillopt
+    env_ref: alfworld_bounded_history
   models:
     target_model: openai/gpt-5.4-mini
     reasoning_effort: medium
@@ -20,9 +20,7 @@ parameters:
     seed: 0
   rollout:
     max_concurrent_rollouts: 16
-    queue_capacity: 16
     rollout_retries: 1
   environment_options:
-    max_turns: 1
-    max_steps: 50
+    max_turns: 50
     env_seed: 42

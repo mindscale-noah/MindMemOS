@@ -57,7 +57,9 @@ def inject_experience(
         return None
     content = (
         f"{base.content.rstrip()}\n\n"
-        "## Candidate guidance for this experimental re-run\n\n"
+        "## Available Experience\n\n"
+        "The following task-relevant experience is available. "
+        "Apply it when relevant to the current situation.\n\n"
         f"{guidance}\n"
     )
     blob = {"SKILL.md": content}

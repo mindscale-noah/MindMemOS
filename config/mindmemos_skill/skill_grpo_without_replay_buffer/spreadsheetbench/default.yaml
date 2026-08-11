@@ -27,7 +27,6 @@ parameters:
     test_rollouts: 3
   rollout:
     max_concurrent_rollouts: 32
-    queue_capacity: 64
     max_concurrent_extractions: 16
     reflection: true
     max_concurrent_reflections: 8

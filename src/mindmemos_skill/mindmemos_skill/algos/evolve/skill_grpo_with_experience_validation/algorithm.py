@@ -103,9 +103,7 @@ class SkillGrpoWithExperienceValidation:
         if isinstance(request, SkillGrpoWithExperienceValidationEvolveInput):
             return request
         if self._config is None:
-            raise SkillConfigurationError(
-                "skill_grpo_with_experience_validation has no configured run settings"
-            )
+            raise SkillConfigurationError("skill_grpo_with_experience_validation has no configured run settings")
         return SkillGrpoWithExperienceValidationEvolveInput(
             **request.model_dump(exclude={"validation_tasks"}),
             config=self._config,
@@ -219,8 +217,9 @@ class SkillGrpoWithExperienceValidation:
                 experience_sources=dict(Counter(experience.source.value for experience in experiences)),
             )
 
-            validations: list[ExperienceValidationRecord] = []
-            accepted_experiences: list[ExtractedExperienceSet] = []
+            validation_jobs: list[
+                Awaitable[tuple[int, ExtractedExperienceSet, ExperienceValidationRecord, list[RolloutOutcome]]]
+            ] = []
             task_by_id = {task.task_id: task for task in batch.tasks}
             for experience_index, experience in enumerate(experiences):
                 baseline_outcomes = self._baseline_outcomes_for_experience(
@@ -228,10 +227,14 @@ class SkillGrpoWithExperienceValidation:
                     train_outcomes,
                     success_reward=config.training.success_reward,
                 )
-                baseline_attempt = self._first_success_attempt(
-                    baseline_outcomes,
-                    success_reward=config.training.success_reward,
-                ) if experience.source is ExperienceSource.CONTRAST else None
+                baseline_attempt = (
+                    self._first_success_attempt(
+                        baseline_outcomes,
+                        success_reward=config.training.success_reward,
+                    )
+                    if experience.source is ExperienceSource.CONTRAST
+                    else None
+                )
                 injected_skill = inject_experience(
                     current_skill,
                     experience,
@@ -239,18 +242,18 @@ class SkillGrpoWithExperienceValidation:
                     batch_index=batch.batch_index,
                     experience_index=experience_index,
                 )
-                if injected_skill is None:
-                    validation = rejected_empty_experience(
-                        experience,
-                        experience_index=experience_index,
-                        baseline_first_success_attempt=baseline_attempt,
-                    )
-                else:
-                    validation_tasks = [task_by_id[task_id] for task_id in experience.task_ids]
-                    group_size = baseline_attempt if experience.source is ExperienceSource.CONTRAST else 1
-                    if group_size is None:
-                        raise RuntimeError("contrast experience is missing its baseline success attempt")
-                    injected_outcomes, rollout_sequence = await self._run_experience_validation(
+                validation_tasks = [task_by_id[task_id] for task_id in experience.task_ids]
+                group_size = baseline_attempt if experience.source is ExperienceSource.CONTRAST else 1
+                if group_size is None:
+                    raise RuntimeError("contrast experience is missing its baseline success attempt")
+                sequence_start = rollout_sequence
+                if injected_skill is not None:
+                    # Reserve a deterministic, non-overlapping range before the
+                    # validation jobs start concurrently. Reflective early stop
+                    # may leave gaps, matching the previous sequential behavior.
+                    rollout_sequence += len(validation_tasks) * group_size
+                validation_jobs.append(
+                    self._validate_experience(
                         request=request,
                         scheduler=scheduler,
                         batch_index=batch.batch_index,
@@ -260,36 +263,21 @@ class SkillGrpoWithExperienceValidation:
                         skill=injected_skill,
                         group_size=group_size,
                         baseline_outcomes=baseline_outcomes,
-                        rollout_sequence=rollout_sequence,
+                        baseline_attempt=baseline_attempt,
+                        rollout_sequence=sequence_start,
                         reflector=reflector,
                     )
-                    all_outcomes.extend(injected_outcomes)
-                    validation = assess_experience(
-                        experience,
-                        experience_index=experience_index,
-                        injected_outcomes=injected_outcomes,
-                        baseline_first_success_attempt=baseline_attempt,
-                        success_reward=config.training.success_reward,
-                    )
+                )
+
+            validation_results = await asyncio.gather(*validation_jobs)
+            validation_results.sort(key=lambda item: item[0])
+            validations: list[ExperienceValidationRecord] = []
+            accepted_experiences: list[ExtractedExperienceSet] = []
+            for _experience_index, experience, validation, injected_outcomes in validation_results:
+                all_outcomes.extend(injected_outcomes)
                 validations.append(validation)
                 if validation.decision is ExperienceValidationDecision.ACCEPTED:
                     accepted_experiences.append(experience)
-                await self._emit(
-                    request.run_id,
-                    "experience_validation_completed",
-                    {
-                        "batch_index": batch.batch_index,
-                        "experience_index": experience_index,
-                        "source": experience.source.value,
-                        "task_ids": experience.task_ids,
-                        "decision": validation.decision.value,
-                        "baseline_success_rate": validation.baseline_success_rate,
-                        "injected_success_rate": validation.injected_success_rate,
-                        "baseline_first_success_attempt": validation.baseline_first_success_attempt,
-                        "injected_first_success_attempt": validation.injected_first_success_attempt,
-                        "reason": validation.reason,
-                    },
-                )
 
             patch = None
             candidate_edits = []
@@ -394,6 +382,74 @@ class SkillGrpoWithExperienceValidation:
             batches=batches,
             rollouts=all_outcomes,
         )
+
+    async def _validate_experience(
+        self,
+        *,
+        request: SkillGrpoWithExperienceValidationEvolveInput,
+        scheduler: RolloutScheduler,
+        batch_index: int,
+        experience_index: int,
+        experience: ExtractedExperienceSet,
+        tasks: list[Task],
+        skill: Skill | None,
+        group_size: int,
+        baseline_outcomes: list[RolloutOutcome],
+        baseline_attempt: int | None,
+        rollout_sequence: int,
+        reflector: ReflectionGenerator,
+    ) -> tuple[int, ExtractedExperienceSet, ExperienceValidationRecord, list[RolloutOutcome]]:
+        if skill is None:
+            injected_outcomes: list[RolloutOutcome] = []
+            validation = rejected_empty_experience(
+                experience,
+                experience_index=experience_index,
+                baseline_first_success_attempt=baseline_attempt,
+            )
+        else:
+            injected_outcomes, next_sequence = await self._run_experience_validation(
+                request=request,
+                scheduler=scheduler,
+                batch_index=batch_index,
+                experience_index=experience_index,
+                experience=experience,
+                tasks=tasks,
+                skill=skill,
+                group_size=group_size,
+                baseline_outcomes=baseline_outcomes,
+                rollout_sequence=rollout_sequence,
+                reflector=reflector,
+            )
+            expected_next_sequence = rollout_sequence + len(tasks) * group_size
+            if next_sequence != expected_next_sequence:
+                raise RuntimeError(
+                    "experience validation planned an unexpected rollout sequence range: "
+                    f"expected {expected_next_sequence}, got {next_sequence}"
+                )
+            validation = assess_experience(
+                experience,
+                experience_index=experience_index,
+                injected_outcomes=injected_outcomes,
+                baseline_first_success_attempt=baseline_attempt,
+                success_reward=request.config.training.success_reward,
+            )
+        await self._emit(
+            request.run_id,
+            "experience_validation_completed",
+            {
+                "batch_index": batch_index,
+                "experience_index": experience_index,
+                "source": experience.source.value,
+                "task_ids": experience.task_ids,
+                "decision": validation.decision.value,
+                "baseline_success_rate": validation.baseline_success_rate,
+                "injected_success_rate": validation.injected_success_rate,
+                "baseline_first_success_attempt": validation.baseline_first_success_attempt,
+                "injected_first_success_attempt": validation.injected_first_success_attempt,
+                "reason": validation.reason,
+            },
+        )
+        return experience_index, experience, validation, injected_outcomes
 
     async def _run_experience_validation(
         self,
@@ -713,9 +769,7 @@ class SkillGrpoWithExperienceValidation:
             )
         return name
 
-    async def _emit_stage(
-        self, run_id: str, stage: str, status: str, batch_index: int, **payload: Any
-    ) -> None:
+    async def _emit_stage(self, run_id: str, stage: str, status: str, batch_index: int, **payload: Any) -> None:
         await self._emit(run_id, f"stage_{status}", {"stage": stage, "batch_index": batch_index, **payload})
 
     @classmethod

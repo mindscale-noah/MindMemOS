@@ -19,11 +19,11 @@ from pydantic import Field
 
 from ....agents.base import Agent
 from ....agents.react.tool import Tool
-from ....algos.evolve.skill_grpo_with_replay_buffer.prompts import spreadsheet_messages
 from ....registry import ComponentType, register
 from ....typing import EnvConfig, Reward, Skill, Task, Trajectory
 from ...base import BaseEnv, EnvRolloutContext, PreparedRollout
 from .evaluator import compare_workbooks
+from .prompts import build_messages
 
 _INSTALL_RE = re.compile(
     r"^(?:sudo\s+)?(?:\w+=\S+\s+)*(?:(?:python[\d.]*\s+-m\s+)?pip[\d.]*\s+(?:install|uninstall)|"
@@ -99,7 +99,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
             "workspace": workspace,
             "golden_workbook": golden_workbook,
             "skill_names": list(skill_directories),
-            "messages": spreadsheet_messages(task=task, skill_names=list(skill_directories)),
+            "messages": build_messages(task=task, skill_names=list(skill_directories)),
             "tools": tools,
             "error": None,
             "finished": False,
@@ -216,7 +216,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
             json.dumps(messages, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        initial = spreadsheet_messages(
+        initial = build_messages(
             task=prepared.agent_request.task,
             skill_names=state["skill_names"],
         )

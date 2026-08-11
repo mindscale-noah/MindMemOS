@@ -10,15 +10,22 @@ from mindmemos_skill.agents import Agent, AgentConfig, AgentExecutionRequest, Sk
 from mindmemos_skill.agents.react import ReactAgent
 from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.prompts import experience_extraction_messages
 from mindmemos_skill.datasets import LiveMathIdSplitDataset
-from mindmemos_skill.envs import ALFWorldEnv, ALFWorldSkillOptEnv, EnvRolloutContext, LiveMathEnv
+from mindmemos_skill.envs import ALFWorldBoundedHistoryEnv, ALFWorldEnv, EnvRolloutContext, LiveMathEnv
 from mindmemos_skill.envs.registered_envs.alfworld import (
     SYSTEM_PROMPT as ALFWORLD_SYSTEM_PROMPT,
 )
 from mindmemos_skill.envs.registered_envs.alfworld import format_observation
-from mindmemos_skill.envs.registered_envs.alfworld_skillopt import (
-    ALFWORLD_SYSTEM_PROMPT as SKILLOPT_ALFWORLD_SYSTEM_PROMPT,
+from mindmemos_skill.envs.registered_envs.alfworld.env import ALFWorldEnvConfig
+from mindmemos_skill.envs.registered_envs.alfworld_bounded_history import (
+    ALFWORLD_SYSTEM_PROMPT as BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT,
 )
+from mindmemos_skill.envs.registered_envs.alfworld_bounded_history import (
+    format_bounded_history_observation,
+)
+from mindmemos_skill.envs.registered_envs.alfworld_bounded_history.env import ALFWorldBoundedHistoryEnvConfig
 from mindmemos_skill.envs.registered_envs.livemath import build_system, build_user, evaluate, refinement
+from mindmemos_skill.envs.registered_envs.livemath.env import LiveMathEnvConfig
+from mindmemos_skill.envs.registered_envs.spreadsheetbench.env import SpreadsheetBenchEnvConfig
 from mindmemos_skill.llm import ChatResponse
 from mindmemos_skill.typing import (
     Rollout,
@@ -68,6 +75,36 @@ class RecordingChatClient:
     async def chat(self, task: str, messages: list[dict[str, Any]], *, model=None, **kwargs):
         self.calls.append({"task": task, "messages": messages, "model": model, **kwargs})
         return ChatResponse(finish_reason="stop", content=self.content, model="fake")
+
+
+def test_builtin_env_configs_only_accept_max_turns() -> None:
+    config_types = (ALFWorldEnvConfig, ALFWorldBoundedHistoryEnvConfig, LiveMathEnvConfig, SpreadsheetBenchEnvConfig)
+
+    for config_type in config_types:
+        assert "max_turns" in config_type.model_fields
+        assert "max_steps" not in config_type.model_fields
+
+    with pytest.raises(ValueError, match="max_steps"):
+        ALFWorldEnvConfig.model_validate({"max_steps": 3})
+    with pytest.raises(ValueError, match="max_steps"):
+        ALFWorldBoundedHistoryEnvConfig.model_validate({"max_steps": 3})
+
+
+def test_alfworld_bounded_history_prompt_keeps_only_two_recent_steps() -> None:
+    prompt = format_bounded_history_observation(
+        current_observation="current observation",
+        admissible_actions=["help", "look"],
+        task_description="put the mug in the cabinet",
+        history=[("old observation", "old action"), ("recent one", "action one"), ("recent two", "action two")],
+    )
+
+    assert "already taken 3 step(s)" in prompt
+    assert "most recent 2 observations" in prompt
+    assert "old observation" not in prompt
+    assert "old action" not in prompt
+    assert "recent one" in prompt
+    assert "recent two" in prompt
+    assert "'help'" not in prompt
 
 
 def make_skill(name: str = "main", content: str = "Compare every option.") -> Skill:
@@ -251,7 +288,7 @@ class FakeALFWorldEnv(ALFWorldEnv):
         return self.simulator
 
 
-class FakeALFWorldSkillOptEnv(ALFWorldSkillOptEnv):
+class FakeALFWorldBoundedHistoryEnv(ALFWorldBoundedHistoryEnv):
     def __init__(self, config, simulator: FakeALFWorldSimulator) -> None:
         super().__init__(config)
         self.simulator = simulator
@@ -265,7 +302,7 @@ class FakeALFWorldSkillOptEnv(ALFWorldSkillOptEnv):
 @pytest.mark.asyncio
 async def test_alfworld_is_lean_history_and_preserves_step_and_final_rewards(tmp_path) -> None:
     simulator = FakeALFWorldSimulator()
-    env = FakeALFWorldEnv({"max_steps": 3, "seed": 42}, simulator)
+    env = FakeALFWorldEnv({"max_turns": 3, "seed": 42}, simulator)
     agent = ScriptedMessageAgent(
         [
             "I forgot the tags.",
@@ -331,9 +368,9 @@ async def test_alfworld_is_lean_history_and_preserves_step_and_final_rewards(tmp
 
 
 @pytest.mark.asyncio
-async def test_alfworld_skillopt_matches_agent_inputs_and_extraction_trajectory(tmp_path) -> None:
+async def test_alfworld_bounded_history_matches_agent_inputs_and_extraction_trajectory(tmp_path) -> None:
     simulator = FakeALFWorldSimulator()
-    env = FakeALFWorldSkillOptEnv({"max_steps": 3, "seed": 42}, simulator)
+    env = FakeALFWorldBoundedHistoryEnv({"max_turns": 3, "seed": 42}, simulator)
     agent = ScriptedMessageAgent(
         [
             "<think>inspect first</think><action>look</action>",
@@ -341,7 +378,7 @@ async def test_alfworld_skillopt_matches_agent_inputs_and_extraction_trajectory(
         ]
     )
     task = Task(
-        task_id="valid_seen:skillopt",
+        task_id="valid_seen:bounded-history",
         instruction="Complete the ALFWorld task.",
         tags=["validation"],
         metadata={
@@ -357,7 +394,7 @@ async def test_alfworld_skillopt_matches_agent_inputs_and_extraction_trajectory(
         task,
         [skill],
         context=EnvRolloutContext(
-            rollout=Rollout(rollout_id="rollout-skillopt"),
+            rollout=Rollout(rollout_id="rollout-bounded-history"),
             workspace_root=tmp_path,
             metadata={"sample_index": 3},
         ),
@@ -403,14 +440,14 @@ Once you've finished your reasoning, you should choose an admissible action for 
     assert agent.calls == [
         (
             [
-                {"role": "system", "content": SKILLOPT_ALFWORLD_SYSTEM_PROMPT},
+                {"role": "system", "content": BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT},
                 {"role": "user", "content": first_user},
             ],
             None,
         ),
         (
             [
-                {"role": "system", "content": SKILLOPT_ALFWORLD_SYSTEM_PROMPT},
+                {"role": "system", "content": BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT},
                 {"role": "user", "content": second_user},
             ],
             None,
@@ -446,16 +483,13 @@ Once you've finished your reasoning, you should choose an admissible action for 
         trajectories=[trajectory],
         max_experiences=3,
     )[1]["content"]
-    assert SKILLOPT_ALFWORLD_SYSTEM_PROMPT not in extraction_user
+    assert BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT not in extraction_user
     assert "[step 0 think] inspect first" in extraction_user
     assert "[step 0 action] look" in extraction_user
     assert "[step 0 obs]    You see a closed cabinet." in extraction_user
-    assert (
-        "[step 0 obs]    You see a closed cabinet.\n"
-        "[step 1 think] open it now"
-    ) in extraction_user
+    assert ("[step 0 obs]    You see a closed cabinet.\n[step 1 think] open it now") in extraction_user
     assert "#### [1] SYSTEM" not in extraction_user
 
-    workspace = tmp_path / "rollout" / "valid_seen_skillopt" / "rollout-skillopt" / "0"
+    workspace = tmp_path / "rollout" / "valid_seen_bounded-history" / "rollout-bounded-history" / "0"
     saved = json.loads((workspace / "prediction" / "conversation.json").read_text(encoding="utf-8"))
     assert saved == trajectory.events

@@ -151,6 +151,20 @@ def _trajectory_payload(*, cloud_skill_id: str, version_id: str, content_hash: s
     return payload
 
 
+def test_trajectory_hash_keeps_unknown_env_ref_backward_compatible() -> None:
+    payload = _trajectory_payload(
+        cloud_skill_id="cloud-skill",
+        version_id="version-1",
+        content_hash="a" * 64,
+    )
+    payload.pop("trajectory_hash")
+
+    legacy_hash = compute_trajectory_hash(payload)
+
+    assert compute_trajectory_hash({**payload, "env_ref": "unknown"}) == legacy_hash
+    assert compute_trajectory_hash({**payload, "env_ref": "alfworld"}) != legacy_hash
+
+
 def test_version_dag_idempotency_and_status(client):
     root_payload = _register_payload(operation_id="push-root", version_id="v1", text="root")
     root = client.post("/v1/skills/register", json=root_payload)

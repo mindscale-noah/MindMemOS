@@ -70,7 +70,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--test-rollouts", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=32)
-    parser.add_argument("--queue-capacity", type=int, default=64)
     parser.add_argument("--max-concurrent-extractions", type=int, default=16)
     parser.add_argument("--reflection", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-concurrent-reflections", type=int, default=8)
@@ -78,8 +77,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--fail-fast", action=argparse.BooleanOptionalAction, default=False)
 
-    parser.add_argument("--max-turns", type=int, default=1)
-    parser.add_argument("--max-steps", type=int, default=50)
+    parser.add_argument("--max-turns", type=int, required=True)
     parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--use-sketch", action=argparse.BooleanOptionalAction, default=False)
@@ -152,16 +150,13 @@ def limited(items: list[Any], limit: int | None) -> list[Any]:
 
 
 def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRunConfig:
+    env_options: dict[str, Any] = {"max_turns": args.max_turns}
     if args.benchmark == "spreadsheetbench":
-        env_options = {"max_turns": args.max_turns, "shell_timeout_seconds": args.shell_timeout}
+        env_options["shell_timeout_seconds"] = args.shell_timeout
     elif args.benchmark == "alfworld":
-        env_options = {"max_steps": args.max_steps, "seed": args.seed}
+        env_options["seed"] = args.seed
     else:
-        env_options = {
-            "max_turns": args.max_turns,
-            "use_theorem": args.use_theorem,
-            "use_sketch": args.use_sketch,
-        }
+        env_options.update({"use_theorem": args.use_theorem, "use_sketch": args.use_sketch})
     return SkillGrpoWithoutReplayBufferRunConfig.model_validate(
         {
             "algorithm": {
@@ -185,7 +180,6 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRu
             },
             "rollout": {
                 "max_concurrent_rollouts": args.max_concurrent_rollouts,
-                "queue_capacity": args.queue_capacity,
                 "timeout_seconds": args.rollout_timeout,
                 "retry": {"max_attempts": args.rollout_retries},
                 "fail_fast": args.fail_fast,

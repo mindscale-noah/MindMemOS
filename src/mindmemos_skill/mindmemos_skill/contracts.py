@@ -235,6 +235,7 @@ class SkillTrajectory(ContractModel):
     task_system_prompt: str | None = None
     task_tags: list[str] = Field(default_factory=list)
     task_metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    env_ref: str = Field(default="unknown", min_length=1)
     env_metadata: dict[str, JsonValue] = Field(default_factory=dict)
     agent_type: AgentType = AgentType.UNKNOWN
     agent_profile: dict[str, JsonValue] = Field(default_factory=dict)
@@ -297,6 +298,10 @@ def trajectory_source_payload(value: SkillTrajectory | dict[str, Any]) -> dict[s
 def compute_trajectory_hash(value: SkillTrajectory | dict[str, Any]) -> str:
     payload = trajectory_source_payload(value)
     normalized = _SkillTrajectorySourceFacts.model_validate(payload).model_dump(mode="json")
+    # Preserve hashes produced before env_ref became an explicit source fact.
+    # New registered environment names are hashed; the compatibility sentinel is not.
+    if normalized.get("env_ref") == "unknown":
+        normalized.pop("env_ref")
     canonical = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -311,6 +316,7 @@ class _SkillTrajectorySourceFacts(ContractModel):
     task_system_prompt: str | None = None
     task_tags: list[str] = Field(default_factory=list)
     task_metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    env_ref: str = Field(default="unknown", min_length=1)
     env_metadata: dict[str, JsonValue] = Field(default_factory=dict)
     agent_type: AgentType = AgentType.UNKNOWN
     agent_profile: dict[str, JsonValue] = Field(default_factory=dict)

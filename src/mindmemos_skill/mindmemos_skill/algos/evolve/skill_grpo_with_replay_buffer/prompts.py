@@ -6,7 +6,6 @@ No algorithm component should define prompt prose outside this module.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from typing import Any
 
 from ....typing import Skill, Task, Trajectory
@@ -190,35 +189,6 @@ FUSION_SYSTEM = (
 
 SKILL_CONTENT_OMITTED = "[Skill content omitted: identical to the Current Skill shown above.]"
 
-LIVEMATH_SYSTEM = """You are an expert mathematical reasoning agent solving multiple-choice questions.
-
-{skill_section}## Task Format
-You will receive one mathematics multiple-choice question and its answer choices.
-Reason carefully about quantifiers, hypotheses, extremal wording, and exact equality conditions.
-
-## Answer Format
-Think step by step, then provide your final answer inside <answer>...</answer> tags.
-Inside the tags, output only the single choice label, such as A or C.
-
-Example:
-<answer>B</answer>
-"""
-
-
-SPREADSHEET_SYSTEM = (
-    "You are an expert spreadsheet assistant. Your working directory contains a "
-    "source Excel file named 'input.xlsx'. Do NOT modify 'input.xlsx'. Instead, "
-    "produce a new file 'output.xlsx' in the same directory that fully satisfies "
-    "the user's request (start from a copy of 'input.xlsx' and apply your changes).\n"
-    "Work by writing and running Python (openpyxl is available) through the shell "
-    "tool — do not answer from memory. Inspect the sheets first, apply the changes, "
-    "save to 'output.xlsx', and verify.\n"
-    "IMPORTANT: 'output.xlsx' is graded by reading cached cell VALUES, with no "
-    "formula recalculation. Write the final computed values into the target cells "
-    "(not bare formulas), since an unevaluated formula reads back as empty.\n"
-    "When you are done, stop without calling any tool."
-)
-
 
 def experience_extraction_messages(
     *,
@@ -300,47 +270,6 @@ def fusion_messages(
         f"HISTORY as {history_count} edits) and emit the fused CENTROID_TEXT."
     )
     return [{"role": "system", "content": FUSION_SYSTEM}, {"role": "user", "content": user}]
-
-
-def spreadsheet_messages(*, task: Task, skill_names: list[str]) -> list[dict[str, str]]:
-    system = SPREADSHEET_SYSTEM
-    if skill_names:
-        names = ", ".join(skill_names)
-        system += (
-            f"\n\nA `skill` tool is available with expert skills: {names}. "
-            f'Call it first (e.g. skill(name="{skill_names[0]}")) to load detailed '
-            "guidance and the absolute path to reusable reference scripts before you start."
-        )
-    user = (
-        "The source file 'input.xlsx' is in your working directory.\n\n"
-        f"Task:\n{task.instruction}\n\n"
-        "Complete the task and save the result as 'output.xlsx' "
-        "(do not modify 'input.xlsx')."
-    )
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
-
-
-def livemath_system_prompt(skill_content: str) -> str:
-    skill_section = f"## Skill\n{skill_content.strip()}\n\n" if skill_content.strip() else ""
-    return LIVEMATH_SYSTEM.format(skill_section=skill_section)
-
-
-def livemath_user_prompt(item: Mapping[str, Any], use_theorem: bool, use_sketch: bool) -> str:
-    choices = "\n".join(f"{choice['label']}. {choice['text']}" for choice in item["choices"])
-    parts = [f"## Question\n{item['question']}", f"## Choices\n{choices}"]
-    if use_theorem and item.get("theorem"):
-        parts.append(f"## Theorem\n{item['theorem']}")
-    if use_sketch and item.get("sketch"):
-        parts.append(f"## Proof Sketch\n{item['sketch']}")
-    return "\n\n".join(parts)
-
-
-def livemath_refinement_prompt(previous_response: str) -> str:
-    return (
-        f"Your previous answer was:\n{previous_response}\n\n"
-        "Re-evaluate the exact option wording. If needed, correct it. "
-        "Output only the final choice label inside <answer>...</answer>."
-    )
 
 
 def _render_events(events: list[dict[str, Any]], skill_content: str) -> str:
@@ -437,15 +366,9 @@ __all__ = [
     "EXPERIENCE_EXTRACTION_SYSTEM",
     "EXPERIENCE_PATCH_SYSTEM",
     "FUSION_SYSTEM",
-    "LIVEMATH_SYSTEM",
     "PATCH_REPAIR_USER",
-    "SPREADSHEET_SYSTEM",
     "experience_extraction_messages",
     "experience_patch_messages",
     "fusion_messages",
-    "livemath_refinement_prompt",
-    "livemath_system_prompt",
-    "livemath_user_prompt",
     "patch_repair_message",
-    "spreadsheet_messages",
 ]

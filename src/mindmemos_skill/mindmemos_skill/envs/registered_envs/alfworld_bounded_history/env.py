@@ -1,4 +1,4 @@
-"""ALFWorld interaction protocol matching SkillOpt's target-agent inputs."""
+"""ALFWorld interaction protocol with a bounded observation/action history."""
 
 from __future__ import annotations
 
@@ -20,8 +20,7 @@ from ..alfworld.runtime import ALFWorldSimulator, project_action
 
 ALFWORLD_SYSTEM_PROMPT = "You are an expert agent operating in the ALFRED Embodied Environment."
 
-# These strings intentionally preserve the leading and trailing newlines from
-# SkillOpt's skillopt/envs/alfworld/prompts/rollout_*.md files.
+# These strings intentionally preserve their leading and trailing newlines.
 _NO_HISTORY_TEMPLATE = """
 You are an expert agent operating in the ALFRED Embodied Environment.
 Your current observation is: {current_observation}
@@ -43,21 +42,21 @@ You should first reason step-by-step about the current situation. This reasoning
 Once you've finished your reasoning, you should choose an admissible action for current step and present it within <action> </action> tags.
 """
 
-_HISTORY_LENGTH = 2
+_HISTORY_WINDOW_SIZE = 2
 
 
-class ALFWorldSkillOptEnvConfig(EnvConfig):
-    """The fixed SkillOpt protocol plus benchmark execution limits."""
+class ALFWorldBoundedHistoryEnvConfig(EnvConfig):
+    """The bounded-history protocol plus benchmark execution limits."""
 
-    max_steps: int = Field(default=50, ge=1)
+    max_turns: int = Field(default=50, ge=1)
     seed: int = 42
 
 
-@register(type=ComponentType.ENV, name="alfworld_skillopt")
-class ALFWorldSkillOptEnv(BaseEnv[ALFWorldSkillOptEnvConfig]):
-    """Send the same stateless two-message request used by SkillOpt each step."""
+@register(type=ComponentType.ENV, name="alfworld_bounded_history")
+class ALFWorldBoundedHistoryEnv(BaseEnv[ALFWorldBoundedHistoryEnvConfig]):
+    """Send stateless requests containing only a bounded recent history window."""
 
-    config_type = ALFWorldSkillOptEnvConfig
+    config_type = ALFWorldBoundedHistoryEnvConfig
 
     async def _prepare(
         self,
@@ -67,7 +66,7 @@ class ALFWorldSkillOptEnv(BaseEnv[ALFWorldSkillOptEnvConfig]):
         context: EnvRolloutContext,
     ) -> PreparedRollout:
         if len(skills) > 1:
-            raise ValueError("alfworld_skillopt accepts at most one Skill, matching SkillOpt's single skill document")
+            raise ValueError("alfworld_bounded_history accepts at most one Skill")
         prepared = await super()._prepare(task=task, skills=skills, context=context)
         prepared.agent_request.options["skill_injection_mode"] = "system_prompt"
         gamefile = task.metadata.get("resolved_gamefile")
@@ -105,14 +104,14 @@ class ALFWorldSkillOptEnv(BaseEnv[ALFWorldSkillOptEnvConfig]):
             current_observation, _info = await asyncio.to_thread(simulator.reset)
             task_description = extract_task_description(current_observation)
 
-            for step_index in range(self.config.max_steps):
-                observation_prompt = format_skillopt_observation(
+            for step_index in range(self.config.max_turns):
+                observation_prompt = format_bounded_history_observation(
                     current_observation=current_observation,
                     admissible_actions=simulator.admissible_actions,
                     task_description=task_description,
                     history=history,
                 )
-                user_prompt = build_skillopt_user_prompt(state["skill_content"], observation_prompt)
+                user_prompt = build_bounded_history_user_prompt(state["skill_content"], observation_prompt)
                 messages = [
                     {"role": "system", "content": ALFWORLD_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -155,8 +154,8 @@ class ALFWorldSkillOptEnv(BaseEnv[ALFWorldSkillOptEnvConfig]):
                 await asyncio.to_thread(simulator.close)
                 state["simulator"] = None
 
-        if not won and error is None and turns >= self.config.max_steps:
-            error = f"Timeout after {self.config.max_steps} steps"
+        if not won and error is None and turns >= self.config.max_turns:
+            error = f"Timeout after {self.config.max_turns} turns"
         elif not won and error is None:
             error = "Episode ended without completing the task"
         ended = time.time()
@@ -223,8 +222,8 @@ class ALFWorldSkillOptEnv(BaseEnv[ALFWorldSkillOptEnvConfig]):
         (prediction_dir / "conversation.json").write_text(payload, encoding="utf-8")
 
 
-def build_skillopt_user_prompt(skill_content: str, observation_prompt: str) -> str:
-    """Apply SkillOpt's exact Skill prefix construction."""
+def build_bounded_history_user_prompt(skill_content: str, observation_prompt: str) -> str:
+    """Prepend the optional Skill document to one bounded-history request."""
 
     if not skill_content or not skill_content.strip():
         return observation_prompt
@@ -237,14 +236,14 @@ def build_skillopt_user_prompt(skill_content: str, observation_prompt: str) -> s
     return skill_prompt + "\n" + observation_prompt
 
 
-def format_skillopt_observation(
+def format_bounded_history_observation(
     *,
     current_observation: str,
     admissible_actions: list[str],
     task_description: str,
     history: list[tuple[str, str]],
 ) -> str:
-    """Render SkillOpt's no-history or two-step-history user prompt."""
+    """Render a prompt containing at most the configured fixed history window."""
 
     formatted_actions = "\n ".join(f"'{action}'" for action in admissible_actions if action != "help")
     if not history:
@@ -252,11 +251,10 @@ def format_skillopt_observation(
             current_observation=current_observation,
             admissible_actions=formatted_actions,
         )
-    recent = history[-_HISTORY_LENGTH:]
+    recent = history[-_HISTORY_WINDOW_SIZE:]
     start_index = len(history) - len(recent)
     action_history = "\n".join(
-        f"[Observation {start_index + offset + 1}: '{observation}', "
-        f"Action {start_index + offset + 1}: '{action}']"
+        f"[Observation {start_index + offset + 1}: '{observation}', Action {start_index + offset + 1}: '{action}']"
         for offset, (observation, action) in enumerate(recent)
     )
     return _WITH_HISTORY_TEMPLATE.format(
@@ -299,8 +297,8 @@ def eval_dataset(task: Task) -> str:
 
 __all__ = [
     "ALFWORLD_SYSTEM_PROMPT",
-    "ALFWorldSkillOptEnv",
-    "ALFWorldSkillOptEnvConfig",
-    "build_skillopt_user_prompt",
-    "format_skillopt_observation",
+    "ALFWorldBoundedHistoryEnv",
+    "ALFWorldBoundedHistoryEnvConfig",
+    "build_bounded_history_user_prompt",
+    "format_bounded_history_observation",
 ]

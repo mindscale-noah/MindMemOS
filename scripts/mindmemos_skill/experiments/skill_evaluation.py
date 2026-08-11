@@ -43,7 +43,6 @@ class TestEvaluationConfig:
     env_ref: str | None = None
     rollouts: int = 1
     max_concurrent_rollouts: int = 16
-    queue_capacity: int = 16
     rollout_timeout: float | None = None
     rollout_retries: int = 1
     seed: int = 0
@@ -56,8 +55,6 @@ class TestEvaluationConfig:
             raise ValueError("test rollouts must be at least 1")
         if self.max_concurrent_rollouts < 1:
             raise ValueError("max concurrent rollouts must be at least 1")
-        if self.queue_capacity < self.max_concurrent_rollouts:
-            raise ValueError("queue capacity must be at least max concurrent rollouts")
         if self.rollout_retries < 1:
             raise ValueError("rollout retries must be at least 1")
 
@@ -133,13 +130,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--test-rollouts", type=int, default=1)
     parser.add_argument("--test-limit", type=int)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=16)
-    parser.add_argument("--queue-capacity", type=int, default=16)
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--rollout-retries", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
 
-    parser.add_argument("--max-turns", type=int, default=1)
-    parser.add_argument("--max-steps", type=int, default=50)
+    parser.add_argument("--max-turns", type=int, required=True)
     parser.add_argument("--env-seed", type=int, default=42)
     parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
@@ -177,19 +172,19 @@ def environment_options(
     benchmark: str,
     *,
     max_turns: int,
-    max_steps: int,
     env_seed: int,
     shell_timeout: int,
     use_theorem: bool,
     use_sketch: bool,
 ) -> dict[str, Any]:
+    options: dict[str, Any] = {"max_turns": max_turns}
     if benchmark == "alfworld":
-        return {"max_steps": max_steps, "seed": env_seed}
+        options["seed"] = env_seed
     if benchmark == "spreadsheetbench":
-        return {"max_turns": max_turns, "shell_timeout_seconds": shell_timeout}
+        options["shell_timeout_seconds"] = shell_timeout
     if benchmark == "livemath":
-        return {"max_turns": max_turns, "use_theorem": use_theorem, "use_sketch": use_sketch}
-    raise ValueError(f"unsupported benchmark: {benchmark!r}")
+        options.update({"use_theorem": use_theorem, "use_sketch": use_sketch})
+    return options
 
 
 def limited_test_tasks(dataset: TaskDataset, limit: int | None) -> list[Task]:
@@ -268,7 +263,6 @@ async def evaluate_test_tasks(
     output_dir.mkdir(parents=True, exist_ok=False)
     rollout_config = RolloutConfig(
         max_concurrent_rollouts=config.max_concurrent_rollouts,
-        queue_capacity=config.queue_capacity,
         timeout_seconds=config.rollout_timeout,
         retry={"max_attempts": config.rollout_retries},
         fail_fast=False,
@@ -452,14 +446,12 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             env_ref=args.env_ref,
             rollouts=args.test_rollouts,
             max_concurrent_rollouts=args.max_concurrent_rollouts,
-            queue_capacity=args.queue_capacity,
             rollout_timeout=args.rollout_timeout,
             rollout_retries=args.rollout_retries,
             seed=args.seed,
             env_options=environment_options(
                 args.benchmark,
                 max_turns=args.max_turns,
-                max_steps=args.max_steps,
                 env_seed=args.env_seed,
                 shell_timeout=args.shell_timeout,
                 use_theorem=args.use_theorem,

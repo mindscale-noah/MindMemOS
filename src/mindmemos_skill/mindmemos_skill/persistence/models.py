@@ -129,6 +129,7 @@ class TrajectoryRecord(PersistenceModel):
     task_system_prompt: str | None = None
     task_tags: list[str] = Field(default_factory=list)
     task_metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    env_ref: str = Field(default="unknown", min_length=1)
     running_dir: str | None = None
     env_metadata: dict[str, JsonValue] = Field(default_factory=dict)
     injected_skills: list[dict[str, JsonValue]] = Field(default_factory=list)

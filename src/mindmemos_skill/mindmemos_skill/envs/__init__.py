@@ -3,10 +3,10 @@
 from ..registry import get_env, list_envs
 from .base import BaseEnv, EnvConfigT, EnvRolloutContext, PreparedRollout
 from .registered_envs import (
+    ALFWorldBoundedHistoryEnv,
+    ALFWorldBoundedHistoryEnvConfig,
     ALFWorldEnv,
     ALFWorldEnvConfig,
-    ALFWorldSkillOptEnv,
-    ALFWorldSkillOptEnvConfig,
     LiveMathEnv,
     LiveMathEnvConfig,
     SpreadsheetBenchEnv,
@@ -14,10 +14,10 @@ from .registered_envs import (
 )
 
 __all__ = [
+    "ALFWorldBoundedHistoryEnv",
+    "ALFWorldBoundedHistoryEnvConfig",
     "ALFWorldEnv",
     "ALFWorldEnvConfig",
-    "ALFWorldSkillOptEnv",
-    "ALFWorldSkillOptEnvConfig",
     "BaseEnv",
     "EnvConfigT",
     "EnvRolloutContext",

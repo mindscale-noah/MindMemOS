@@ -79,6 +79,7 @@ def build_persistence_tables() -> TableRegistry:
                 _text("task_system_prompt"),
                 _json("task_tags", nullable=False, default=[]),
                 _json("task_metadata", nullable=False, default={}),
+                _text("env_ref", nullable=False, default="unknown"),
                 _text("running_dir"),
                 _json("env_metadata", nullable=False, default={}),
                 _json("injected_skills", nullable=False, default=[]),

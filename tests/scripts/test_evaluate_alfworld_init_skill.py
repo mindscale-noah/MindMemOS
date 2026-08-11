@@ -90,5 +90,5 @@ def test_yaml_config_keeps_reference_protocol_defaults() -> None:
 
     assert config["parameters"]["evaluation"]["rollouts"] == 3
     assert config["parameters"]["evaluation"]["max_concurrent_rollouts"] == 16
-    assert config["parameters"]["environment_options"]["max_steps"] == 50
+    assert config["parameters"]["environment_options"]["max_turns"] == 50
     assert config["parameters"]["models"]["reasoning_effort"] == "medium"

@@ -29,7 +29,6 @@ parameters:
     test_rollouts: 1
   rollout:
     max_concurrent_rollouts: 16
-    queue_capacity: 16
     rollout_retries: 1
     seed: 0
   environment_options:

@@ -139,10 +139,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-concurrent-extractions", type=int, default=16)
     parser.add_argument("--embedding-batch-size", type=int, default=64)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=32)
-    parser.add_argument("--queue-capacity", type=int, default=64)
     parser.add_argument("--rollout-retries", type=int, default=3)
     parser.add_argument("--rollout-timeout", type=float)
-    parser.add_argument("--max-steps", type=int, default=50)
+    parser.add_argument("--max-turns", type=int, required=True)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
@@ -287,7 +286,6 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRu
             },
             "rollout": {
                 "max_concurrent_rollouts": args.max_concurrent_rollouts,
-                "queue_capacity": args.queue_capacity,
                 "timeout_seconds": args.rollout_timeout,
                 "retry": {"max_attempts": args.rollout_retries},
                 "fail_fast": False,
@@ -298,7 +296,10 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRu
             "dataset": {
                 "env_ref": "alfworld",
                 "agent_ref": "react",
-                "env_options": {"max_steps": args.max_steps, "seed": args.seed},
+                "env_options": {
+                    "max_turns": args.max_turns,
+                    "seed": args.seed,
+                },
                 "agent_options": {},
             },
         }
@@ -514,7 +515,7 @@ def fixed_group_specs(
     group_size: int,
     sequence_start: int,
     seed: int,
-    max_steps: int,
+    max_turns: int,
 ) -> list[RolloutSpec]:
     strategies = RolloutStrategyRegistry.with_builtins()
     return strategies.get("fixed_group").plan(
@@ -530,7 +531,7 @@ def fixed_group_specs(
             env_ref="alfworld",
             seed=seed,
             agent_options={},
-            env_options={"max_steps": max_steps, "seed": seed},
+            env_options={"max_turns": max_turns, "seed": seed},
         )
     )
 
@@ -698,7 +699,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 group_size=args.train_rollouts,
                 sequence_start=0,
                 seed=args.seed,
-                max_steps=args.max_steps,
+                max_turns=args.max_turns,
             )
             if args.resume_experience_db is not None:
                 train_outcomes = []
@@ -749,7 +750,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                     group_size=args.test_rollouts,
                     sequence_start=sequence_start,
                     seed=args.seed,
-                    max_steps=args.max_steps,
+                    max_turns=args.max_turns,
                 )
                 baseline_outcomes = await scheduler.run(baseline_specs)
                 sequence_start += len(baseline_specs)
@@ -768,7 +769,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                     group_size=args.test_rollouts,
                     sequence_start=sequence_start,
                     seed=args.seed,
-                    max_steps=args.max_steps,
+                    max_turns=args.max_turns,
                 )
                 memory_specs.extend(specs)
                 sequence_start += len(specs)

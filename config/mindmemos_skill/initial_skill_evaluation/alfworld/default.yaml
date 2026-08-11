@@ -17,10 +17,9 @@ parameters:
   evaluation:
     rollouts: 3
     max_concurrent_rollouts: 16
-    queue_capacity: 16
     rollout_retries: 1
     seed: 0
     progress_every: 10
   environment_options:
-    max_steps: 50
+    max_turns: 50
     env_seed: 42

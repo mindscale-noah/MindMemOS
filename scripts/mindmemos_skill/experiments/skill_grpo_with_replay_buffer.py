@@ -196,13 +196,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--validate-every", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=32)
-    parser.add_argument("--queue-capacity", type=int, default=64)
     parser.add_argument("--max-concurrent-extractions", type=int, default=16)
     parser.add_argument("--rollout-retries", type=int, default=3)
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--fail-fast", action=argparse.BooleanOptionalAction, default=False)
 
-    parser.add_argument("--max-turns", type=int, default=1)
+    parser.add_argument("--max-turns", type=int, required=True)
     parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--use-sketch", action=argparse.BooleanOptionalAction, default=False)
@@ -294,14 +293,11 @@ def limited(items: list[Any], limit: int | None) -> list[Any]:
 
 
 def build_run_config(args: argparse.Namespace) -> SkillGrpoRunConfig:
+    env_options: dict[str, Any] = {"max_turns": args.max_turns}
     if args.benchmark == "spreadsheetbench":
-        env_options = {"max_turns": args.max_turns, "shell_timeout_seconds": args.shell_timeout}
+        env_options["shell_timeout_seconds"] = args.shell_timeout
     else:
-        env_options = {
-            "max_turns": args.max_turns,
-            "use_theorem": args.use_theorem,
-            "use_sketch": args.use_sketch,
-        }
+        env_options.update({"use_theorem": args.use_theorem, "use_sketch": args.use_sketch})
     return SkillGrpoRunConfig.model_validate(
         {
             "algorithm": {
@@ -333,7 +329,6 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoRunConfig:
             },
             "rollout": {
                 "max_concurrent_rollouts": args.max_concurrent_rollouts,
-                "queue_capacity": args.queue_capacity,
                 "timeout_seconds": args.rollout_timeout,
                 "retry": {"max_attempts": args.rollout_retries},
                 "fail_fast": args.fail_fast,

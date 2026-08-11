@@ -40,7 +40,6 @@ from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.prompts import (
     EXPERIENCE_PATCH_SYSTEM,
     FUSION_SYSTEM,
     PATCH_REPAIR_USER,
-    SPREADSHEET_SYSTEM,
     experience_extraction_messages,
     fusion_messages,
 )
@@ -59,6 +58,7 @@ from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.rollout import (
 from mindmemos_skill.datasets import SpreadsheetBenchIdSplitDataset
 from mindmemos_skill.envs import BaseEnv, EnvRolloutContext, PreparedRollout, SpreadsheetBenchEnv
 from mindmemos_skill.envs.registered_envs.livemath import SYSTEM_PROMPT as LIVEMATH_SYSTEM
+from mindmemos_skill.envs.registered_envs.spreadsheetbench import SYSTEM_PROMPT as SPREADSHEET_SYSTEM
 from mindmemos_skill.llm import ChatResponse, current_llm_run_id
 from mindmemos_skill.persistence.enums import TrajectoryStatus
 from mindmemos_skill.typing import (
@@ -197,7 +197,7 @@ async def test_scheduler_has_one_global_rollout_concurrency_budget() -> None:
     scheduler = RolloutScheduler(
         agent_resolver=MappingAgentResolver({"fake": object()}),  # type: ignore[arg-type]
         env_factory=FakeEnvFactory(tracker),
-        config=RolloutConfig(max_concurrent_rollouts=3, queue_capacity=3),
+        config=RolloutConfig(max_concurrent_rollouts=3),
     )
     strategy = RolloutStrategyRegistry.with_builtins().get("fixed_group")
     specs = strategy.plan(
@@ -220,6 +220,7 @@ async def test_scheduler_has_one_global_rollout_concurrency_budget() -> None:
     assert len(outcomes) == 8
     assert tracker.maximum == 3
     assert [outcome.spec.sequence_no for outcome in outcomes] == list(range(8))
+    assert {outcome.trajectory.environment.env_ref for outcome in outcomes if outcome.trajectory} == {"fake"}
 
 
 @pytest.mark.asyncio
@@ -228,7 +229,7 @@ async def test_scheduler_shares_rollout_budget_across_concurrent_phase_runs() ->
     scheduler = RolloutScheduler(
         agent_resolver=MappingAgentResolver({"fake": object()}),  # type: ignore[arg-type]
         env_factory=FakeEnvFactory(tracker),
-        config=RolloutConfig(max_concurrent_rollouts=2, queue_capacity=2),
+        config=RolloutConfig(max_concurrent_rollouts=2),
     )
     strategy = RolloutStrategyRegistry.with_builtins().get("fixed_group")
     before_specs = strategy.plan(
@@ -277,7 +278,7 @@ async def test_scheduler_preserves_returned_failed_trajectory_as_training_eviden
     scheduler = RolloutScheduler(
         agent_resolver=MappingAgentResolver({"fake": object()}),  # type: ignore[arg-type]
         env_factory=FakeEnvFactory(tracker),
-        config=RolloutConfig(max_concurrent_rollouts=1, queue_capacity=1),
+        config=RolloutConfig(max_concurrent_rollouts=1),
     )
     spec = (
         RolloutStrategyRegistry.with_builtins()
@@ -366,7 +367,6 @@ async def test_complete_algorithm_applies_positive_ablation_candidate_and_return
             "training": {"epochs": 1, "batch_size": 1, "success_reward": 1.0, "seed": 7},
             "rollout": {
                 "max_concurrent_rollouts": 2,
-                "queue_capacity": 2,
                 "train": {"name": "fixed_group", "params": {"group_size": 2}},
                 "ablation": {"name": "paired_ablation", "params": {"samples_per_case": 1}},
                 "test": {"name": "fixed_group", "params": {"group_size": 1}},
@@ -522,7 +522,6 @@ async def test_complete_algorithm_runs_on_livemath_env_without_policy() -> None:
             "training": {"epochs": 1, "batch_size": 1},
             "rollout": {
                 "max_concurrent_rollouts": 2,
-                "queue_capacity": 2,
                 "train": {"name": "fixed_group", "params": {"group_size": 2}},
                 "ablation": {"name": "paired_ablation", "params": {"samples_per_case": 1}},
             },
@@ -673,7 +672,7 @@ def test_source_prompt_assets_and_dynamic_builders_are_exact() -> None:
         EXPERIENCE_PATCH_SYSTEM: "02c457eb6af6835baaaa49ea8c5f163bb2d58b3bf7584efb068eab618c368901",
         FUSION_SYSTEM: "8c8bac16ef539fe346bdf42ff4ebf3fd80cdfe6caa69da27f91d895d9ddaa23d",
         SPREADSHEET_SYSTEM: "d51300508e68fc8257be6349a25523f208ad4d3df2a57dd38cc89aade68c4e6e",
-        LIVEMATH_SYSTEM: "506702528eabd178a7f4e3f4a44339175a712cec8d6d68e4c3c7032e9f6c3df6",
+        LIVEMATH_SYSTEM: "243ce14b9c9432e6012c3b4b5f9489b5483f67a0df016faa4b80e937c3205e9e",
     }
     for content, expected in expected_hashes.items():
         assert hashlib.sha256(content.encode()).hexdigest() == expected
