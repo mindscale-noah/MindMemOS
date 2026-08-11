@@ -8,6 +8,7 @@ class SkillApplicationCapability(StrEnum):
 
     ANALYZE = "analyze"
     DIFF = "diff"
+    EVOLVE = "evolve"
     EXECUTE = "execute"
     EXPORT = "export"
     LIST = "list"

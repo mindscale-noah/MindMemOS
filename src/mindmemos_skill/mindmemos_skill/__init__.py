@@ -1,7 +1,13 @@
 """Skill components for MindMemOS."""
 
 from .agents import Agent, AgentExecutionRequest, get_agent, list_agents
-from .application import SkillApplication
+from .application import (
+    AlgorithmCommitPolicy,
+    EvolveRunRequest,
+    SkillAlgorithmRunResult,
+    SkillApplication,
+    Trace2SkillRunRequest,
+)
 from .contracts import (
     AgentType as RemoteAgentType,
 )
@@ -124,6 +130,10 @@ __all__ = [
     "compute_trajectory_hash",
     "parse_skill_bundle",
     "SkillApplication",
+    "AlgorithmCommitPolicy",
+    "EvolveRunRequest",
+    "SkillAlgorithmRunResult",
+    "Trace2SkillRunRequest",
     "SkillAlgorithms",
     "SkillRemotePort",
     "PullResult",

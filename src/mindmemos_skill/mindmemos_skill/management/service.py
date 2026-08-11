@@ -19,7 +19,7 @@ from ..persistence import (
     SkillVersionStatus,
     bootstrap_skill_database,
 )
-from ..typing import Skill, compute_skill_content_hash
+from ..typing import Skill, SkillCandidate, compute_skill_content_hash
 from .bundle import frontmatter_value, next_version_label, parse_version_label, serialize_files
 from .installer import SkillInstaller
 from .models import (
@@ -227,31 +227,37 @@ class LocalSkillManager:
             changed_files=changed_files,
         )
 
-    async def persist_optimized_version(self, candidate: Skill, *, base_version_id: str) -> Skill:
-        base = await self.repository.get_version(base_version_id)
-        if candidate.skill_id != base.skill_id:
-            raise SkillConflictError("optimized Skill candidate must remain in the same Skill family")
+    async def persist_algorithm_candidate(self, candidate: SkillCandidate, *, base_version_id: str) -> Skill:
+        """Create one canonical immutable version from an unpersisted algorithm candidate."""
+
+        base = Skill.from_record(await self.repository.get_version(base_version_id))
         versions = await self.repository.list_versions(base.skill_id)
         now = self._clock()
-        candidate = candidate.model_copy(
+        evolved = base.model_copy(
             update={
-                "skill_id": base.skill_id,
                 "version_id": self._id_generator(),
                 "cloud_skill_id": await self.repository.get_cloud_skill_id(base.skill_id),
                 "parent_version_ids": [base.version_id],
-                "name": base.name,
-                "alias": base.alias,
+                "blob": candidate.blob,
+                "resources": candidate.resources,
                 "content_hash": compute_skill_content_hash(candidate.blob),
                 "status": SkillVersionStatus.DRAFT,
                 "version_label": next_version_label([version.version_label for version in versions]),
+                "commit_message": candidate.commit_message,
+                "metadata": {**base.metadata, **candidate.metadata},
                 "created_at": now,
                 "updated_at": now,
                 "origin": SkillVersionOrigin.EVOLUTION,
             }
         )
-        record = candidate.to_record()
+        record = evolved.to_record()
         await self.repository.create_version(record, now=now, pending_operation=_push_operation(record, now))
         return Skill.from_record(record)
+
+    async def persist_optimized_version(self, candidate: SkillCandidate, *, base_version_id: str) -> Skill:
+        """Compatibility alias for callers migrating to ``persist_algorithm_candidate``."""
+
+        return await self.persist_algorithm_candidate(candidate, base_version_id=base_version_id)
 
     async def _summary(self, state: SkillSyncStateRecord) -> ManagedSkill:
         versions = await self.repository.query_versions(skill_id=state.skill_id)

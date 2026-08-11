@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from datetime import UTC, datetime
+from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
+from ..contracts import SkillBundle
 from .skill import Skill
+from .task import Task
 from .trajectory import Trajectory
 
 
@@ -45,35 +48,99 @@ class SkillAnalysisResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class SkillOptimizationRequest(BaseModel):
-    """Inputs needed to produce a locally optimized Skill candidate."""
+class Trace2SkillInput(BaseModel):
+    """One base Skill plus offline traces, collection tasks, or both."""
 
     model_config = ConfigDict(extra="forbid")
 
-    skill: Skill
+    base_skill: Skill
     trajectories: list[Trajectory] = Field(default_factory=list)
-    analysis: SkillAnalysisResult | None = None
-    options: dict[str, Any] = Field(default_factory=dict)
-    request_id: str | None = None
+    tasks: list[Task] = Field(default_factory=list)
+    run_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_source(self) -> Trace2SkillInput:
+        if not self.trajectories and not self.tasks:
+            raise ValueError("provide at least one non-empty trajectory source: trajectories or tasks")
+        return self
 
 
-class SkillOptimizationResult(BaseModel):
-    """Selected optimized Skill plus optional candidate and audit information."""
+class EvolveInput(BaseModel):
+    """Shared input boundary for algorithms that run a complete Skill evolution loop."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    run_id: str = Field(min_length=1)
+    base_skill: Skill
+    train_tasks: list[Task] = Field(min_length=1)
+    validation_tasks: list[Task] = Field(default_factory=list)
+    test_tasks: list[Task] = Field(default_factory=list)
+
+
+class EvolveOutput(BaseModel):
+    """Shared output boundary returned by complete Skill evolution algorithms."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    run_id: str
+    final_skill: Skill
+    changed: bool
+    trajectories: list[Trajectory] = Field(default_factory=list)
+    finished_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class SkillCandidate(BaseModel):
+    """Unpersisted Skill contents without version identity or lifecycle state."""
 
     model_config = ConfigDict(extra="forbid")
 
-    skill: Skill
-    changed: bool
-    candidates: list[Skill] = Field(default_factory=list)
-    analysis: SkillAnalysisResult | None = None
-    artifacts: dict[str, str] = Field(default_factory=dict)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    blob: dict[str, str]
+    resources: dict[str, str] = Field(default_factory=dict)
+    commit_message: str | None = None
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("blob")
+    @classmethod
+    def normalize_blob(cls, value: dict[str, str]) -> dict[str, str]:
+        bundle = SkillBundle.from_files(value)
+        return {item.path: item.content for item in bundle.files}
+
+    @model_validator(mode="after")
+    def validate_files(self) -> SkillCandidate:
+        if set(self.blob) != {"SKILL.md"}:
+            raise ValueError("Skill candidate blob must contain exactly one SKILL.md file")
+        invalid_paths = [path for path in (*self.blob, *self.resources) if not path]
+        if invalid_paths:
+            raise ValueError("Skill candidate file paths must not be empty")
+        if self.blob.keys() & self.resources.keys():
+            raise ValueError("Skill candidate blob and resources may not contain the same path")
+        return self
+
+
+ReportT = TypeVar("ReportT")
+
+
+class Trace2SkillOutput(BaseModel, Generic[ReportT]):
+    """Algorithm output: an optional content candidate and a typed audit report."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate: SkillCandidate | None = None
+    trajectories: list[Trajectory] = Field(default_factory=list)
+    report: ReportT
+
+    @property
+    def changed(self) -> bool:
+        return self.candidate is not None
 
 
 __all__ = [
+    "EvolveInput",
+    "EvolveOutput",
     "SkillAnalysisRequest",
     "SkillAnalysisResult",
     "SkillFinding",
-    "SkillOptimizationRequest",
-    "SkillOptimizationResult",
+    "SkillCandidate",
+    "Trace2SkillInput",
+    "Trace2SkillOutput",
 ]

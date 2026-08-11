@@ -41,6 +41,7 @@ from ..infra.database import (
     ScopedDatabase,
     bootstrap_database,
 )
+from ..llm import DatabaseLLMCallSink
 from ..management import (
     ExportSkillRequest,
     ExportSkillResult,
@@ -96,11 +97,17 @@ from ..remote import (
 from ..typing import (
     AgentExecutionRequest,
     AlgorithmLog,
+    Skill,
     SkillAnalysisRequest,
     SkillAnalysisResult,
-    SkillOptimizationRequest,
-    SkillOptimizationResult,
+    Trace2SkillInput,
     Trajectory,
+)
+from .algorithms import (
+    EvolveRunRequest,
+    SkillAlgorithmOrchestrator,
+    SkillAlgorithmRunResult,
+    Trace2SkillRunRequest,
 )
 from .components import RuntimeComponents, compose_runtime
 from .enums import AlgorithmResultStatus, SkillApplicationCapability
@@ -160,6 +167,21 @@ class SkillApplication:
         self._remote = remote
         self._clock = clock
         self._id_generator = id_generator
+        self._algorithm_orchestrator = (
+            SkillAlgorithmOrchestrator(
+                algorithms=runtime.skill_algorithms,
+                manager=manager,
+                load_trajectory=self.get_trajectory,
+                record_trajectory=self.record_trajectory,
+                record_algorithm_log=self.record_algorithm_log,
+                push_version=self.push,
+                config_hash=config.config_hash,
+                clock=clock,
+                id_generator=id_generator,
+            )
+            if runtime.skill_algorithms is not None
+            else None
+        )
         self._owner_loop: asyncio.AbstractEventLoop | None = None
         self._started = False
         self._closed = False
@@ -195,7 +217,7 @@ class SkillApplication:
         resolved_clock = clock or (lambda: datetime.now(UTC))
         resolved_id_generator = id_generator or (lambda: str(uuid.uuid4()))
         try:
-            runtime = compose_runtime(compiled)
+            runtime = compose_runtime(compiled, llm_call_sink=DatabaseLLMCallSink(database))
             manager = LocalSkillManager(
                 SkillRepository(database),
                 managed_root=compiled.local.root_dir,
@@ -562,34 +584,52 @@ class SkillApplication:
         return result
 
     @requires_ready
-    async def optimize(self, request: SkillOptimizationRequest) -> SkillOptimizationResult:
+    async def optimize(self, request: Trace2SkillInput) -> Skill:
         if self._runtime.skill_algorithms is None:
             raise SkillCapabilityUnavailableError("Skill optimization is not configured")
-        result = await self._runtime.skill_algorithms.optimize(request)
-        if not result.changed:
+        output = await self._runtime.skill_algorithms.optimize(request)
+        if output.candidate is None:
             await self._record_algorithm_result(
                 SkillApplicationCapability.OPTIMIZE,
-                result.model_dump(mode="json"),
+                output.model_dump(mode="json"),
             )
-            return result
-        candidate = result.skill.model_copy(
+            return request.base_skill
+        candidate = output.candidate.model_copy(
             update={
                 "metadata": {
-                    **result.skill.metadata,
+                    **output.candidate.metadata,
                     "skill_application": {"config_hash": self._config.config_hash},
                 }
             }
         )
-        persisted = await self._manager.persist_optimized_version(
+        persisted = await self._manager.persist_algorithm_candidate(
             candidate,
-            base_version_id=request.skill.version_id,
+            base_version_id=request.base_skill.version_id,
         )
-        persisted_result = result.model_copy(update={"skill": persisted})
         await self._record_algorithm_result(
             SkillApplicationCapability.OPTIMIZE,
-            persisted_result.model_dump(mode="json"),
+            {
+                "output": output.model_dump(mode="json"),
+                "persisted_version_id": persisted.version_id,
+            },
         )
-        return persisted_result
+        return persisted
+
+    @requires_ready
+    async def run_trace2skill(self, request: Trace2SkillRunRequest) -> SkillAlgorithmRunResult:
+        """Run one configured trajectory-to-Skill algorithm through application orchestration."""
+
+        if self._algorithm_orchestrator is None:
+            raise SkillCapabilityUnavailableError("Skill algorithms are not configured")
+        return await self._algorithm_orchestrator.run_trace2skill(request)
+
+    @requires_ready
+    async def run_evolve(self, request: EvolveRunRequest) -> SkillAlgorithmRunResult:
+        """Run one configured complete evolution algorithm through application orchestration."""
+
+        if self._algorithm_orchestrator is None:
+            raise SkillCapabilityUnavailableError("Skill algorithms are not configured")
+        return await self._algorithm_orchestrator.run_evolve(request)
 
     @requires_ready
     async def execute(self, agent_name: str, request: AgentExecutionRequest) -> Trajectory:
