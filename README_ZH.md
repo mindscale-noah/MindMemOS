@@ -38,8 +38,10 @@
 > **数据集准备**：LoCoMo、LongMemEval、PersonaMem 数据集不在本仓库中，
 > 请从各 benchmark 官方渠道下载，按示例配置中的路径放置：
 > * LoCoMo → `datasets/locomo/locomo10.json`
-> * LongMemEval → `resources/memory/dataset/longmemeval_smoke.json`
-> * PersonaMem → `resources/memory/dataset/questions_32k.csv` 和 `resources/memory/dataset/shared_contexts_32k.jsonl`
+> * LongMemEval → `datasets/longmemeval/longmemeval_s_cleaned.json`
+> * PersonaMem → `datasets/personamem/questions_32k.csv` 和 `datasets/personamem/shared_contexts_32k.jsonl`
+>
+> 跨平台下载入口：`uv run python scripts/benchmark_download/download_memory_benchmarks.py`。
 
 ### Evaluation of Conversational Memory
 

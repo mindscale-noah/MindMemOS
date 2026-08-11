@@ -42,8 +42,10 @@ MindMemOS is an open-source long-term memory system for AI agents and applicatio
 > repository. Download them from the respective official benchmark sources and place them at the
 > paths configured in the example config files:
 > * LoCoMo → `datasets/locomo/locomo10.json`
-> * LongMemEval → `resources/memory/dataset/longmemeval_smoke.json`
-> * PersonaMem → `resources/memory/dataset/questions_32k.csv` and `resources/memory/dataset/shared_contexts_32k.jsonl`
+> * LongMemEval → `datasets/longmemeval/longmemeval_s_cleaned.json`
+> * PersonaMem → `datasets/personamem/questions_32k.csv` and `datasets/personamem/shared_contexts_32k.jsonl`
+>
+> Cross-platform downloader: `uv run python scripts/benchmark_download/download_memory_benchmarks.py`.
 
 ### Evaluation of Conversational Memory
 
