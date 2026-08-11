@@ -250,7 +250,7 @@ def build_add_body(
 
 def build_search_body(
     *,
-    user_id: str,
+    user_id: str | None,
     query: str,
     top_k: int | None = 10,
     search_strategy: SearchStrategy = "fast",
@@ -264,11 +264,9 @@ def build_search_body(
     """Build a memory search request body without empty optional fields."""
     if not isinstance(rerank, bool):
         raise TypeError("rerank must be a bool")
-    body: dict[str, Any] = {
-        "user_id": user_id,
-        "query": query,
-        "search_strategy": search_strategy,
-    }
+    body: dict[str, Any] = {"query": query, "search_strategy": search_strategy}
+    if user_id:
+        body["user_id"] = user_id
     if top_k is not None:
         body["top_k"] = top_k
     body["rerank"] = rerank

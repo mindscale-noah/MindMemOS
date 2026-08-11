@@ -315,7 +315,9 @@ Configure credentials once:
 uv run mindmemos auth
 ```
 
-Then reuse the local SDK config:
+Then reuse the local SDK config. Operations that require a user, such as `memory.add`, inherit its default
+`user_id`. Search does not inherit that default: pass `user_id` to search one user, or omit it to search the
+entire API-key project.
 
 ```python
 import time
@@ -336,7 +338,7 @@ with MindMemOSClient() as client:
     for item in add_result.memories:
         print(item.operation, item.memory_id, item.content)
 
-    search_result = client.memory.search("coffee preference", top_k=5)
+    search_result = client.memory.search("coffee preference", top_k=5, user_id="u_123")
     for hit in search_result.memories:
         print(hit.id, hit.memory)
 ```
@@ -375,8 +377,11 @@ Add and search memories:
 
 ```bash
 uv run mindmemos memory add --content "我喜欢喝冰美式"
-uv run mindmemos memory search "咖啡偏好" --top-k 5
+uv run mindmemos memory search "咖啡偏好" --top-k 5 --user-id u_123
 ```
+
+`memory add` inherits the default user configured by `mindmemos auth`. `memory search` does not: use
+`--user-id` for user-scoped recall, or omit it for a project-wide search.
 
 Manage memories:
 
@@ -409,7 +414,12 @@ Then install and enable the plugin in OpenClaw:
 ```bash
 openclaw plugins install @mindmemos/openclaw-plugin
 openclaw plugins enable mindmemos-memory
+openclaw config set plugins.entries.mindmemos-memory.config.userId u_123
+openclaw gateway restart
 ```
+
+The plugin `userId` scopes both search and add to that user. If it is omitted, search is project-wide, while add
+still inherits the default user from the local `mindmemos` CLI config.
 
 For full configuration and troubleshooting, see
 [docs/sdk/openclaw_plugin.md](docs/sdk/openclaw_plugin.md).

@@ -314,11 +314,7 @@ class MemoryService:
                             "event": "completed",
                             "stage": "completed",
                             "message": "Add completed.",
-                            "data": {
-                                "memories": [
-                                    memory.model_dump(mode="json") for memory in result.memories
-                                ]
-                            },
+                            "data": {"memories": [memory.model_dump(mode="json") for memory in result.memories]},
                         }
                     )
             except AddStreamCancelled as exc:
@@ -459,7 +455,7 @@ class MemoryService:
         # Stamp request identity onto the handler-root span so downstream LLM spans
         # (which live in this trace, not the auth dependency's trace) are attributable.
         annotate_request_trace(auth)
-        ctx = to_memory_request_context(auth, request, require_user_id=True)
+        ctx = to_memory_request_context(auth, request)
         binding = binding_for_memory_algorithm(auth.memory_algorithm)
         payload = to_search_pipeline_input(request, search_pipeline=binding.search_pipeline)
         pipeline = self._pipeline("_search")

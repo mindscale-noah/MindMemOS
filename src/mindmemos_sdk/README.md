@@ -39,7 +39,9 @@ The package also installs the `mindmemos` command.
 mindmemos auth
 ```
 
-You can also pass `base_url`, `api_key`, and `user_id` directly when creating a client.
+You can also pass `base_url`, `api_key`, and `user_id` directly when creating a client. The default `user_id`
+is used by operations that require a user, such as `memory.add`. Search is different: `memory.search` only uses
+the `user_id` passed to that call. Omit it for a project-wide search, or pass it explicitly for a user-scoped search.
 
 ## Python SDK
 
@@ -53,7 +55,7 @@ with MindMemOSClient(user_id="alice", app_id="my-agent") as client:
         ],
     )
 
-    result = client.memory.search("What coffee does the user prefer?", top_k=5)
+    result = client.memory.search("What coffee does the user prefer?", top_k=5, user_id="alice")
     for memory in result.memories:
         print(memory.memory)
 ```
