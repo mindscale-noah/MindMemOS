@@ -1,13 +1,12 @@
-"""Transport-neutral edge-cloud Skill v2 protocol."""
+"""Remote Skill request and response models."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal
 
 from pydantic import Field
 
-from .contracts import (
+from ..contracts import (
     ContractModel,
     SkillBundle,
     SkillTrajectory,
@@ -15,11 +14,7 @@ from .contracts import (
     SkillTrajectoryReportRequest,
     SkillTrajectoryReportResult,
     SkillVersionCore,
-    canonical_request_hash,
-    parse_skill_bundle,
 )
-
-CLOUD_SKILL_ROOT_FILE = "SKILL.md"
 
 
 class RemotePushRequest(ContractModel):
@@ -107,75 +102,3 @@ class RemoteEvolveResult(ContractModel):
     status: Literal["queued", "succeeded", "no_change", "failed"]
     candidate_version_ids: list[str] = Field(default_factory=list)
     selected_version_id: str | None = None
-
-
-@runtime_checkable
-class SkillRemotePort(Protocol):
-    async def push_version(self, request: RemotePushRequest) -> RemotePushResult: ...
-
-    async def pull_versions(self, cloud_skill_id: str, cursor: str | None = None) -> RemoteVersionsPage: ...
-
-    async def pull_content(self, cloud_skill_id: str, version_id: str) -> RemoteVersionContent: ...
-
-    async def sync(self, request: RemoteSyncRequest) -> RemoteSyncResult: ...
-
-    async def report_trajectories(
-        self,
-        request: RemoteTrajectoryReportRequest,
-    ) -> RemoteTrajectoryReportResult: ...
-
-    async def list_trajectories(self, request: RemoteTrajectoryListRequest) -> RemoteTrajectoryPage: ...
-
-    async def evolve(self, request: RemoteEvolveRequest) -> RemoteEvolveResult: ...
-
-def normalize_remote_skill_bundle(blob: Mapping[str, str]) -> dict[str, str]:
-    bundle = SkillBundle.from_files(dict(blob))
-    return {item.path: item.content for item in bundle.files}
-
-
-def serialize_remote_skill_content(blob: Mapping[str, str]) -> str:
-    return SkillBundle.from_files(dict(blob)).canonical_json()
-
-
-def deserialize_remote_skill_content(content: str) -> dict[str, str]:
-    bundle = parse_skill_bundle(content)
-    return {item.path: item.content for item in bundle.files}
-
-
-def compute_remote_skill_content_hash(content: str) -> str:
-    return parse_skill_bundle(content).content_hash
-
-
-def is_remote_skill_bundle_path(path: str) -> bool:
-    try:
-        SkillBundle.from_files({path: ""})
-    except ValueError:
-        return False
-    return path == CLOUD_SKILL_ROOT_FILE
-
-
-__all__ = [
-    "CLOUD_SKILL_ROOT_FILE",
-    "RemoteEvolveRequest",
-    "RemoteEvolveResult",
-    "RemotePushRequest",
-    "RemotePushResult",
-    "RemoteSyncItem",
-    "RemoteSyncRequest",
-    "RemoteSyncResult",
-    "RemoteSyncResultItem",
-    "RemoteTrajectoryListRequest",
-    "RemoteTrajectoryPage",
-    "RemoteTrajectoryReportRequest",
-    "RemoteTrajectoryReportResult",
-    "RemoteVersionContent",
-    "RemoteVersionSummary",
-    "RemoteVersionsPage",
-    "SkillRemotePort",
-    "canonical_request_hash",
-    "compute_remote_skill_content_hash",
-    "deserialize_remote_skill_content",
-    "is_remote_skill_bundle_path",
-    "normalize_remote_skill_bundle",
-    "serialize_remote_skill_content",
-]
