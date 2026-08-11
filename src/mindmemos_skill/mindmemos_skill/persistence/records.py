@@ -7,16 +7,31 @@ from typing import TypeVar, cast
 from pydantic import BaseModel
 
 from ..infra.database import DatabaseScope, Record
-from .models import AlgorithmLogRecord, SkillRecord, SkillRemoteOperationRecord, SkillSyncStateRecord, TrajectoryRecord
+from .models import (
+    AlgorithmLogRecord,
+    LLMCallRecord,
+    SkillRecord,
+    SkillRemoteOperationRecord,
+    SkillSyncStateRecord,
+    TrajectoryRecord,
+)
 from .tables import (
     ALGORITHM_LOG_TABLE,
+    LLM_CALL_TABLE,
     SKILL_REMOTE_OPERATION_TABLE,
     SKILL_SYNC_STATE_TABLE,
     SKILL_TABLE,
     TRAJECTORY_TABLE,
 )
 
-PersistenceRecord = SkillRecord | SkillSyncStateRecord | SkillRemoteOperationRecord | TrajectoryRecord | AlgorithmLogRecord
+PersistenceRecord = (
+    SkillRecord
+    | SkillSyncStateRecord
+    | SkillRemoteOperationRecord
+    | TrajectoryRecord
+    | AlgorithmLogRecord
+    | LLMCallRecord
+)
 PersistenceRecordType = TypeVar("PersistenceRecordType", bound=PersistenceRecord)
 
 _MODEL_TABLES: dict[type[BaseModel], tuple[str, str]] = {
@@ -25,6 +40,7 @@ _MODEL_TABLES: dict[type[BaseModel], tuple[str, str]] = {
     SkillRemoteOperationRecord: (SKILL_REMOTE_OPERATION_TABLE, "operation_id"),
     TrajectoryRecord: (TRAJECTORY_TABLE, "trajectory_id"),
     AlgorithmLogRecord: (ALGORITHM_LOG_TABLE, "log_id"),
+    LLMCallRecord: (LLM_CALL_TABLE, "call_id"),
 }
 
 

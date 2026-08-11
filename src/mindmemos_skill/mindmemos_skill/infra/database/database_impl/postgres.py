@@ -25,6 +25,7 @@ from ..models import (
     FilterGroup,
     Record,
     RecordQuery,
+    SchemaMigration,
     Sort,
     TableSpec,
 )
@@ -98,9 +99,9 @@ class PostgresBackend(ScopedDatabase):
         await self._open()
         async with self._pool.connection() as connection, connection.transaction():
             await connection.execute(
-                sql.SQL("CREATE TABLE IF NOT EXISTS {} (table_name TEXT PRIMARY KEY, schema_fingerprint TEXT NOT NULL)").format(
-                    sql.Identifier(_SCHEMA_TABLE)
-                )
+                sql.SQL(
+                    "CREATE TABLE IF NOT EXISTS {} (table_name TEXT PRIMARY KEY, schema_fingerprint TEXT NOT NULL)"
+                ).format(sql.Identifier(_SCHEMA_TABLE))
             )
             await connection.execute(
                 sql.SQL(
@@ -109,49 +110,133 @@ class PostgresBackend(ScopedDatabase):
                     "PRIMARY KEY (namespace, version))"
                 ).format(sql.Identifier(_MIGRATION_TABLE))
             )
-            for spec in self._tables.values():
-                fingerprint = _schema_fingerprint(spec)
-                row = await (
-                    await connection.execute(
-                        sql.SQL("SELECT schema_fingerprint FROM {} WHERE table_name = %s").format(
-                            sql.Identifier(_SCHEMA_TABLE)
-                        ),
-                        (spec.name,),
-                    )
-                ).fetchone()
-                if row is not None and row["schema_fingerprint"] != fingerprint:
-                    raise RuntimeError(f"postgres schema drift for table {spec.name!r}; apply an explicit migration")
-                await connection.execute(_table_ddl(spec))
-                for statement in _index_ddl(spec):
-                    await connection.execute(statement)
-                await connection.execute(
-                    sql.SQL(
-                        "INSERT INTO {} (table_name, schema_fingerprint) VALUES (%s, %s) "
-                        "ON CONFLICT (table_name) DO UPDATE SET schema_fingerprint = EXCLUDED.schema_fingerprint"
-                    ).format(sql.Identifier(_SCHEMA_TABLE)),
-                    (spec.name, fingerprint),
+            if tables.migrations:
+                await self._apply_migrations(connection, tables.migrations)
+            else:
+                for spec in self._tables.values():
+                    await self._ensure_table(connection, spec)
+
+    async def _apply_migrations(self, connection, migrations: tuple[SchemaMigration, ...]) -> None:
+        covered_tables = {table for migration in migrations for table in migration.tables}
+        missing = set(self._tables) - covered_tables
+        if missing:
+            raise RuntimeError(f"registered tables are missing an explicit schema migration: {sorted(missing)}")
+
+        ledger_rows = await (
+            await connection.execute(
+                sql.SQL("SELECT namespace, version, name, checksum FROM {}").format(sql.Identifier(_MIGRATION_TABLE))
+            )
+        ).fetchall()
+        registered = {(item.namespace, item.version): item for item in migrations}
+        unexpected = sorted(
+            (str(row["namespace"]), int(row["version"]))
+            for row in ledger_rows
+            if (str(row["namespace"]), int(row["version"])) not in registered
+        )
+        if unexpected:
+            raise RuntimeError(f"postgres schema ledger contains unknown migrations: {unexpected}")
+
+        applied: set[tuple[str, int]] = set()
+        for row in ledger_rows:
+            identity = (str(row["namespace"]), int(row["version"]))
+            migration = registered[identity]
+            checksum = _migration_checksum(migration)
+            if row["name"] != migration.name or row["checksum"] != checksum:
+                raise RuntimeError(
+                    f"postgres migration definition drift for {migration.namespace!r} version {migration.version}"
                 )
-            for migration in tables.migrations:
-                checksum = _migration_checksum(migration, self._tables)
-                row = await (
-                    await connection.execute(
-                        sql.SQL("SELECT name, checksum FROM {} WHERE namespace = %s AND version = %s").format(
-                            sql.Identifier(_MIGRATION_TABLE)
-                        ),
-                        (migration.namespace, migration.version),
-                    )
-                ).fetchone()
-                if row is not None and (row["name"] != migration.name or row["checksum"] != checksum):
-                    raise RuntimeError(
-                        f"postgres migration definition drift for {migration.namespace!r} version {migration.version}"
-                    )
-                if row is None:
-                    await connection.execute(
-                        sql.SQL(
-                            "INSERT INTO {} (namespace, version, name, checksum, applied_at) VALUES (%s, %s, %s, %s, %s)"
-                        ).format(sql.Identifier(_MIGRATION_TABLE)),
-                        (migration.namespace, migration.version, migration.name, checksum, datetime.now(UTC)),
-                    )
+            applied.add(identity)
+
+        namespaces = {migration.namespace for migration in migrations}
+        for namespace in namespaces:
+            applied_versions = sorted(
+                version for applied_namespace, version in applied if applied_namespace == namespace
+            )
+            if applied_versions != list(range(1, len(applied_versions) + 1)):
+                raise RuntimeError(
+                    f"postgres schema ledger for namespace {namespace!r} is not a contiguous prefix: {applied_versions}"
+                )
+
+        schema_row = await (
+            await connection.execute(sql.SQL("SELECT COUNT(*) AS count FROM {}").format(sql.Identifier(_SCHEMA_TABLE)))
+        ).fetchone()
+        existing_registered_tables = set()
+        for table_name in self._tables:
+            row = await (await connection.execute("SELECT to_regclass(%s) AS table_name", (table_name,))).fetchone()
+            if row["table_name"] is not None:
+                existing_registered_tables.add(table_name)
+        fresh_database = not ledger_rows and int(schema_row["count"]) == 0 and not existing_registered_tables
+        if not ledger_rows and not fresh_database:
+            raise RuntimeError(
+                "postgres database contains registered schema objects without a migration ledger; "
+                "recreate this unpublished database or adopt it through an explicit migration"
+            )
+
+        if fresh_database:
+            for spec in self._tables.values():
+                await self._ensure_table(connection, spec)
+            for migration in migrations:
+                await self._record_migration(connection, migration)
+            return
+
+        touched_tables: set[str] = set()
+        for migration in migrations:
+            if (migration.namespace, migration.version) in applied:
+                continue
+            for statement in migration.statements_for("postgres"):
+                await connection.execute(statement)
+            touched_tables.update(migration.tables)
+            await self._record_migration(connection, migration)
+
+        for spec in self._tables.values():
+            await self._ensure_table(
+                connection,
+                spec,
+                allow_migrated_fingerprint=spec.name in touched_tables,
+            )
+
+    async def _record_migration(self, connection, migration: SchemaMigration) -> None:
+        await connection.execute(
+            sql.SQL(
+                "INSERT INTO {} (namespace, version, name, checksum, applied_at) VALUES (%s, %s, %s, %s, %s)"
+            ).format(sql.Identifier(_MIGRATION_TABLE)),
+            (
+                migration.namespace,
+                migration.version,
+                migration.name,
+                _migration_checksum(migration),
+                datetime.now(UTC),
+            ),
+        )
+
+    async def _ensure_table(
+        self,
+        connection,
+        spec: TableSpec,
+        *,
+        allow_migrated_fingerprint: bool = False,
+    ) -> None:
+        fingerprint = _schema_fingerprint(spec)
+        row = await (
+            await connection.execute(
+                sql.SQL("SELECT schema_fingerprint FROM {} WHERE table_name = %s").format(
+                    sql.Identifier(_SCHEMA_TABLE)
+                ),
+                (spec.name,),
+            )
+        ).fetchone()
+        if row is not None and row["schema_fingerprint"] != fingerprint and not allow_migrated_fingerprint:
+            raise RuntimeError(f"postgres schema drift for table {spec.name!r}; apply an explicit migration")
+        await connection.execute(_table_ddl(spec))
+        for statement in _index_ddl(spec):
+            await connection.execute(statement)
+        await connection.execute(
+            sql.SQL(
+                "INSERT INTO {} (table_name, schema_fingerprint) VALUES (%s, %s) "
+                "ON CONFLICT (table_name) DO UPDATE SET schema_fingerprint = EXCLUDED.schema_fingerprint"
+            ).format(sql.Identifier(_SCHEMA_TABLE)),
+            (spec.name, fingerprint),
+        )
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[DatabaseUnitOfWork]:
@@ -169,9 +254,7 @@ class PostgresBackend(ScopedDatabase):
         async with self._pool.connection() as connection:
             return await self._get(connection, table, scope, record_ids)
 
-    async def patch_record(
-        self, table: str, scope: DatabaseScope, record_id: str, changes: Mapping[str, Any]
-    ) -> None:
+    async def patch_record(self, table: str, scope: DatabaseScope, record_id: str, changes: Mapping[str, Any]) -> None:
         await self._open()
         async with self._pool.connection() as connection, connection.transaction():
             await self._patch(connection, table, scope, record_id, changes)
@@ -243,9 +326,7 @@ class PostgresBackend(ScopedDatabase):
         spec = self._table(table)
         fields = {field.name: field for field in spec.fields}
         _validate_changes(spec, fields, changes)
-        assignments = sql.SQL(", ").join(
-            sql.SQL("{} = %s").format(sql.Identifier(name)) for name in changes
-        )
+        assignments = sql.SQL(", ").join(sql.SQL("{} = %s").format(sql.Identifier(name)) for name in changes)
         condition = sql.SQL("_scope_key = %s AND ") if spec.scope_scoped else sql.SQL("")
         statement = sql.SQL("UPDATE {} SET {} WHERE {}_record_id = %s").format(
             sql.Identifier(spec.name), assignments, condition
@@ -262,9 +343,7 @@ class PostgresBackend(ScopedDatabase):
         spec = self._table(table)
         fields = {field.name: field for field in spec.fields}
         _validate_changes(spec, fields, {**expected, **changes})
-        assignments = sql.SQL(", ").join(
-            sql.SQL("{} = %s").format(sql.Identifier(name)) for name in changes
-        )
+        assignments = sql.SQL(", ").join(sql.SQL("{} = %s").format(sql.Identifier(name)) for name in changes)
         comparisons = sql.SQL(" AND ").join(
             sql.SQL("{} IS NOT DISTINCT FROM %s").format(sql.Identifier(name)) for name in expected
         )
@@ -285,9 +364,7 @@ class PostgresBackend(ScopedDatabase):
             return
         spec = self._table(table)
         condition = sql.SQL("_scope_key = %s AND ") if spec.scope_scoped else sql.SQL("")
-        statement = sql.SQL("DELETE FROM {} WHERE {}_record_id = ANY(%s)").format(
-            sql.Identifier(spec.name), condition
-        )
+        statement = sql.SQL("DELETE FROM {} WHERE {}_record_id = ANY(%s)").format(sql.Identifier(spec.name), condition)
         params: list[Any] = []
         if spec.scope_scoped:
             params.append(_scope_key(scope))
@@ -342,23 +419,27 @@ class _PostgresUnitOfWork(DatabaseUnitOfWork):
 
 
 def _table_ddl(spec: TableSpec):
-    columns = [sql.SQL("_scope_key TEXT NOT NULL"), sql.SQL("_scope JSONB NOT NULL"), sql.SQL("_record_id TEXT NOT NULL")]
+    columns = [
+        sql.SQL("_scope_key TEXT NOT NULL"),
+        sql.SQL("_scope JSONB NOT NULL"),
+        sql.SQL("_record_id TEXT NOT NULL"),
+    ]
     for field in spec.fields:
         declaration = sql.SQL("{} {}").format(sql.Identifier(field.name), sql.SQL(_PG_TYPES[field.field_type]))
         if not field.nullable:
             declaration += sql.SQL(" NOT NULL")
         columns.append(declaration)
-    primary = sql.SQL("PRIMARY KEY (_scope_key, _record_id)") if spec.scope_scoped else sql.SQL("PRIMARY KEY (_record_id)")
-    columns.append(primary)
-    return sql.SQL("CREATE TABLE IF NOT EXISTS {} ({})").format(
-        sql.Identifier(spec.name), sql.SQL(", ").join(columns)
+    primary = (
+        sql.SQL("PRIMARY KEY (_scope_key, _record_id)") if spec.scope_scoped else sql.SQL("PRIMARY KEY (_record_id)")
     )
+    columns.append(primary)
+    return sql.SQL("CREATE TABLE IF NOT EXISTS {} ({})").format(sql.Identifier(spec.name), sql.SQL(", ").join(columns))
 
 
 def _index_ddl(spec: TableSpec):
     statements = []
     for index in spec.indexes:
-        columns = [*( ["_scope_key"] if spec.scope_scoped else []), *index.fields]
+        columns = [*(["_scope_key"] if spec.scope_scoped else []), *index.fields]
         translated = ["_record_id" if item == spec.primary_key else item for item in columns]
         statements.append(
             sql.SQL("CREATE {}INDEX IF NOT EXISTS {} ON {} ({})").format(
@@ -498,14 +579,17 @@ def _schema_fingerprint(spec: TableSpec):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def _migration_checksum(migration, tables):
+def _migration_checksum(migration: SchemaMigration):
     payload = {
         "namespace": migration.namespace,
         "version": migration.version,
         "name": migration.name,
-        "tables": [{"name": name, "fingerprint": _schema_fingerprint(tables[name])} for name in migration.tables],
+        "tables": migration.tables,
+        "sqlite_statements": migration.sqlite_statements,
+        "postgres_statements": migration.postgres_statements,
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def _encode_cursor(table: str, offset: int):

@@ -50,8 +50,9 @@ def _load_litellm() -> Any:
     litellm.drop_params = True
     litellm.suppress_debug_info = True
     litellm.turn_off_message_logging = True
-    logging.getLogger("LiteLLM").setLevel(logging.INFO)
-    for logger_name in ("LiteLLM Router", "LiteLLM Proxy"):
+    # LiteLLM logs one INFO record for every completion, which overwhelms
+    # long-running concurrent benchmark output. Keep warnings and errors.
+    for logger_name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy"):
         logging.getLogger(logger_name).setLevel(logging.WARNING)
     return litellm
 

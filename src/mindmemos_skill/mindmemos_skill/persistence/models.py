@@ -161,6 +161,30 @@ class TrajectoryRecord(PersistenceModel):
         return self
 
 
+class LLMCallRecord(PersistenceModel):
+    call_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    task: str = Field(min_length=1)
+    call_type: str = Field(pattern=r"^(chat|embedding)$")
+    request: dict[str, JsonValue]
+    response: dict[str, JsonValue] | None = None
+    model: str = Field(min_length=1)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    status: str = Field(pattern=r"^(succeeded|failed)$")
+    error: str | None = None
+    started_at: datetime = Field(default_factory=utcnow)
+    finished_at: datetime = Field(default_factory=utcnow)
+    latency_ms: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_timestamps(self) -> LLMCallRecord:
+        if self.finished_at < self.started_at:
+            raise ValueError("finished_at must not precede started_at")
+        return self
+
+
 class AlgorithmLogRecord(PersistenceModel):
     log_id: str = Field(min_length=1)
     algorithm_name: str = Field(min_length=1)
@@ -187,6 +211,7 @@ def _parse_serialized_files(value: str) -> dict[str, str]:
 __all__ = [
     "AgentType",
     "AlgorithmLogRecord",
+    "LLMCallRecord",
     "PersistenceModel",
     "RolloutType",
     "SkillFamilyStateRecord",

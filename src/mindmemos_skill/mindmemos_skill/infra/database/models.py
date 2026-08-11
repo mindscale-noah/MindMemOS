@@ -189,18 +189,23 @@ class TableSpec:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SchemaMigration:
-    """One immutable, ordered schema step over registered logical tables.
+    """One immutable, ordered, forward-only schema migration.
 
-    The generic contract intentionally models only table-catalog adoption. A
-    backend records the step before accepting a newer catalog. Destructive or
-    data-transforming migrations must be added as explicit backend operations
-    instead of silently changing a :class:`TableSpec` in place.
+    ``tables`` identifies the latest catalog entries affected by the step.
+    Backend statements are intentionally stored on the migration itself so its
+    checksum never depends on a mutable latest :class:`TableSpec`.
+
+    An initial migration may omit statements: a fresh database is created from
+    the latest catalog and all registered migrations are stamped atomically.
+    Existing databases execute only statements for versions not yet recorded.
     """
 
     namespace: str
     version: int
     name: str
     tables: tuple[str, ...]
+    sqlite_statements: tuple[str, ...] = field(default_factory=tuple)
+    postgres_statements: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         if not self.namespace.strip():
@@ -213,6 +218,17 @@ class SchemaMigration:
             raise ValueError("schema migration must reference at least one table")
         if len(self.tables) != len(set(self.tables)):
             raise ValueError("schema migration tables may not contain duplicates")
+        if any(not statement.strip() for statement in self.sqlite_statements):
+            raise ValueError("sqlite migration statements must not be empty")
+        if any(not statement.strip() for statement in self.postgres_statements):
+            raise ValueError("postgres migration statements must not be empty")
+
+    def statements_for(self, provider: str) -> tuple[str, ...]:
+        if provider == "sqlite":
+            return self.sqlite_statements
+        if provider in {"postgres", "postgresql"}:
+            return self.postgres_statements
+        raise ValueError(f"unsupported migration provider: {provider!r}")
 
 
 __all__ = [

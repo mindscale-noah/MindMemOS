@@ -21,6 +21,7 @@ from mindmemos_skill.infra.database import (
     bootstrap_database,
 )
 from mindmemos_skill.persistence import (
+    CURRENT_SCHEMA_VERSION,
     DEFAULT_SKILL_DATABASE_PATH,
     SKILL_REMOTE_OPERATION_TABLE,
     SKILL_SYNC_STATE_TABLE,
@@ -28,9 +29,11 @@ from mindmemos_skill.persistence import (
     SkillRecord,
     SkillRemoteOperationRecord,
     SkillSyncStateRecord,
+    backup_skill_database,
     bootstrap_skill_database,
     default_skill_database_config,
     from_database_record,
+    get_skill_database_status,
     to_database_record,
 )
 
@@ -73,7 +76,7 @@ def _operation() -> SkillRemoteOperationRecord:
 
 
 @pytest.mark.asyncio
-async def test_persistence_bootstrap_registers_the_unified_v2_catalog(tmp_path) -> None:
+async def test_persistence_bootstrap_registers_the_public_v1_catalog(tmp_path) -> None:
     path = tmp_path / "state.db"
     migrated = await bootstrap_skill_database(path)
     await migrated.close()
@@ -83,20 +86,39 @@ async def test_persistence_bootstrap_registers_the_unified_v2_catalog(tmp_path) 
             "SELECT namespace, version, name FROM __mindmemos_migrations ORDER BY version"
         ).fetchall()
         tables = {
-            row[0]
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         }
 
     assert migrations == [
-        ("skill-persistence-v2", 1, "create_unified_local_skill_schema"),
+        ("mindmemos-skill", 1, "initial_schema"),
     ]
     assert {
         "algorithm_logs",
+        "llm_calls",
         "skill_remote_operations",
         "skill_sync_state",
         "skill_versions",
         "trajectories",
     } <= tables
+    status = get_skill_database_status(path)
+    assert status.current_version == CURRENT_SCHEMA_VERSION == 1
+    assert status.target_version == 1
+    assert status.pending_versions == ()
+    assert status.database_is_newer is False
+
+
+@pytest.mark.asyncio
+async def test_skill_database_backup_is_a_consistent_sqlite_copy(tmp_path) -> None:
+    path = tmp_path / "state.db"
+    database = await bootstrap_skill_database(path)
+    await database.upsert_records(SKILL_TABLE, (to_database_record(_skill()),))
+    await database.close()
+
+    backup_path = backup_skill_database(path)
+
+    assert backup_path.name.startswith("state.db.backup-v1-to-v1-")
+    with sqlite3.connect(backup_path) as connection:
+        assert connection.execute("SELECT version_id FROM skill_versions").fetchall() == [("version-1",)]
 
 
 @pytest.mark.asyncio
@@ -174,9 +196,7 @@ async def test_transaction_rolls_back_version_sync_state_and_outbox_together(tmp
 
     assert await database.get_records(SKILL_TABLE, DatabaseScope(), (skill.version_id,)) == []
     assert await database.get_records(SKILL_SYNC_STATE_TABLE, DatabaseScope(), (state.skill_id,)) == []
-    assert await database.get_records(
-        SKILL_REMOTE_OPERATION_TABLE, DatabaseScope(), (operation.operation_id,)
-    ) == []
+    assert await database.get_records(SKILL_REMOTE_OPERATION_TABLE, DatabaseScope(), (operation.operation_id,)) == []
     await database.close()
 
 

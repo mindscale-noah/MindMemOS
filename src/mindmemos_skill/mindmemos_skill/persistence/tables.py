@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from ..infra.database import FieldSpec, FieldType, IndexSpec, SchemaMigration, TableRegistry, TableSpec
+from ..infra.database import FieldSpec, FieldType, IndexSpec, TableRegistry, TableSpec
+from .migrations import SKILL_SCHEMA_MIGRATIONS
 
 SKILL_TABLE = "skill_versions"
 TRAJECTORY_TABLE = "trajectories"
 ALGORITHM_LOG_TABLE = "algorithm_logs"
+LLM_CALL_TABLE = "llm_calls"
 SKILL_SYNC_STATE_TABLE = "skill_sync_state"
 SKILL_REMOTE_OPERATION_TABLE = "skill_remote_operations"
 SKILL_FAMILY_STATE_TABLE = SKILL_SYNC_STATE_TABLE
@@ -124,8 +126,34 @@ def build_persistence_tables() -> TableRegistry:
                 _json("payload", nullable=False, default={}),
                 _datetime("created_at", nullable=False),
             ),
+            indexes=(IndexSpec(name="algorithm_logs_algorithm_created_idx", fields=("algorithm_name", "created_at")),),
+            scope_scoped=False,
+        ),
+        TableSpec(
+            name=LLM_CALL_TABLE,
+            primary_key="call_id",
+            fields=(
+                _text("call_id", nullable=False),
+                _text("run_id", nullable=False),
+                _text("task", nullable=False),
+                _text("call_type", nullable=False),
+                _json("request", nullable=False),
+                _json("response"),
+                _text("model", nullable=False),
+                _integer("input_tokens"),
+                _integer("output_tokens"),
+                _integer("total_tokens"),
+                _text("status", nullable=False),
+                _text("error"),
+                _datetime("started_at", nullable=False),
+                _datetime("finished_at", nullable=False),
+                _float("latency_ms", nullable=False),
+            ),
             indexes=(
-                IndexSpec(name="algorithm_logs_algorithm_created_idx", fields=("algorithm_name", "created_at")),
+                IndexSpec(
+                    name="llm_calls_run_task_started_idx",
+                    fields=("run_id", "task", "started_at"),
+                ),
             ),
             scope_scoped=False,
         ),
@@ -161,20 +189,7 @@ def build_persistence_tables() -> TableRegistry:
     )
     registry = TableRegistry(
         specs,
-        migrations=(
-            SchemaMigration(
-                namespace="skill-persistence-v2",
-                version=1,
-                name="create_unified_local_skill_schema",
-                tables=(
-                    SKILL_TABLE,
-                    SKILL_SYNC_STATE_TABLE,
-                    TRAJECTORY_TABLE,
-                    ALGORITHM_LOG_TABLE,
-                    SKILL_REMOTE_OPERATION_TABLE,
-                ),
-            ),
-        ),
+        migrations=SKILL_SCHEMA_MIGRATIONS,
     )
     registry.freeze()
     return registry
@@ -202,6 +217,7 @@ def _json(name: str, *, nullable: bool = True, default=None) -> FieldSpec:
 
 __all__ = [
     "ALGORITHM_LOG_TABLE",
+    "LLM_CALL_TABLE",
     "SKILL_FAMILY_STATE_TABLE",
     "SKILL_REMOTE_OPERATION_TABLE",
     "SKILL_SYNC_STATE_TABLE",

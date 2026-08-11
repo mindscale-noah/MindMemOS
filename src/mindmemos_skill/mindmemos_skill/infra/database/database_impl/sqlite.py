@@ -427,67 +427,122 @@ class SqliteBackend(ScopedDatabase):
                 connection.commit()
 
     def _apply_migrations_sync(self, connection: sqlite3.Connection) -> None:
-        by_namespace: dict[str, set[int]] = {}
+        by_namespace: dict[str, list[SchemaMigration]] = {}
         covered_tables: set[str] = set()
         for migration in self._migrations:
-            by_namespace.setdefault(migration.namespace, set()).add(migration.version)
+            by_namespace.setdefault(migration.namespace, []).append(migration)
             covered_tables.update(migration.tables)
 
         missing = set(self._tables) - covered_tables
         if missing:
             raise RuntimeError(f"registered tables are missing an explicit schema migration: {sorted(missing)}")
 
-        for namespace, expected_versions in by_namespace.items():
-            rows = connection.execute(
-                f"SELECT version FROM {_quote(_MIGRATION_TABLE)} WHERE namespace = ?",
-                (namespace,),
-            ).fetchall()
-            unexpected = {int(row["version"]) for row in rows} - expected_versions
-            if unexpected:
-                raise RuntimeError(
-                    f"sqlite schema ledger for namespace {namespace!r} contains unknown migrations: "
-                    f"{sorted(unexpected)}"
-                )
+        ledger_rows = connection.execute(
+            f"SELECT namespace, version, name, checksum FROM {_quote(_MIGRATION_TABLE)}"
+        ).fetchall()
+        registered = {(item.namespace, item.version): item for item in self._migrations}
+        unexpected = sorted(
+            (str(row["namespace"]), int(row["version"]))
+            for row in ledger_rows
+            if (str(row["namespace"]), int(row["version"])) not in registered
+        )
+        if unexpected:
+            raise RuntimeError(f"sqlite schema ledger contains unknown migrations: {unexpected}")
 
-        for migration in self._migrations:
+        applied: set[tuple[str, int]] = set()
+        for row in ledger_rows:
+            identity = (str(row["namespace"]), int(row["version"]))
+            migration = registered[identity]
             checksum = self._migration_checksum(migration)
-            row = connection.execute(
-                f"SELECT name, checksum FROM {_quote(_MIGRATION_TABLE)} WHERE namespace = ? AND version = ?",
-                (migration.namespace, migration.version),
-            ).fetchone()
-            if row is not None and (row["name"] != migration.name or row["checksum"] != checksum):
+            if row["name"] != migration.name or row["checksum"] != checksum:
                 raise RuntimeError(
                     f"sqlite migration definition drift for {migration.namespace!r} version {migration.version}"
                 )
-            for table_name in migration.tables:
-                self._ensure_table_sync(connection, self._tables[table_name])
-            if row is None:
-                connection.execute(
-                    f"INSERT INTO {_quote(_MIGRATION_TABLE)} "
-                    "(namespace, version, name, checksum, applied_at) VALUES (?, ?, ?, ?, ?)",
-                    (
-                        migration.namespace,
-                        migration.version,
-                        migration.name,
-                        checksum,
-                        datetime.now(UTC).isoformat(),
-                    ),
+            applied.add(identity)
+
+        for namespace, migrations in by_namespace.items():
+            applied_versions = sorted(
+                version for applied_namespace, version in applied if applied_namespace == namespace
+            )
+            expected_prefix = list(range(1, len(applied_versions) + 1))
+            if applied_versions != expected_prefix:
+                raise RuntimeError(
+                    f"sqlite schema ledger for namespace {namespace!r} is not a contiguous prefix: {applied_versions}"
                 )
+
+        schema_row_count = int(connection.execute(f"SELECT COUNT(*) FROM {_quote(_SCHEMA_TABLE)}").fetchone()[0])
+        existing_registered_tables = {
+            name
+            for name in self._tables
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (name,),
+            ).fetchone()
+            is not None
+        }
+        fresh_database = not ledger_rows and schema_row_count == 0 and not existing_registered_tables
+        if not ledger_rows and not fresh_database:
+            raise RuntimeError(
+                "sqlite database contains registered schema objects without a migration ledger; "
+                "recreate this unpublished database or adopt it through an explicit migration"
+            )
+
+        if fresh_database:
+            for spec in self._tables.values():
+                self._ensure_table_sync(connection, spec)
+            for migration in self._migrations:
+                self._record_migration_sync(connection, migration)
+            return
+
+        touched_tables: set[str] = set()
+        for migration in self._migrations:
+            identity = (migration.namespace, migration.version)
+            if identity in applied:
+                continue
+            for statement in migration.statements_for("sqlite"):
+                connection.execute(statement)
+            touched_tables.update(migration.tables)
+            self._record_migration_sync(connection, migration)
+
+        for spec in self._tables.values():
+            self._ensure_table_sync(
+                connection,
+                spec,
+                allow_migrated_fingerprint=spec.name in touched_tables,
+            )
+
+    def _record_migration_sync(self, connection: sqlite3.Connection, migration: SchemaMigration) -> None:
+        connection.execute(
+            f"INSERT INTO {_quote(_MIGRATION_TABLE)} "
+            "(namespace, version, name, checksum, applied_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                migration.namespace,
+                migration.version,
+                migration.name,
+                self._migration_checksum(migration),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
 
     def _migration_checksum(self, migration: SchemaMigration) -> str:
         payload = {
             "namespace": migration.namespace,
             "version": migration.version,
             "name": migration.name,
-            "tables": [
-                {"name": table_name, "fingerprint": _schema_fingerprint(self._tables[table_name])}
-                for table_name in migration.tables
-            ],
+            "tables": migration.tables,
+            "sqlite_statements": migration.sqlite_statements,
+            "postgres_statements": migration.postgres_statements,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-    def _ensure_table_sync(self, connection: sqlite3.Connection, spec: TableSpec) -> None:
+    def _ensure_table_sync(
+        self,
+        connection: sqlite3.Connection,
+        spec: TableSpec,
+        *,
+        allow_migrated_fingerprint: bool = False,
+    ) -> None:
         fingerprint = _schema_fingerprint(spec)
         existing_table = connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -497,12 +552,12 @@ class SqliteBackend(ScopedDatabase):
             f"SELECT schema_fingerprint FROM {_quote(_SCHEMA_TABLE)} WHERE table_name = ?",
             (spec.name,),
         ).fetchone()
-        if existing_table is not None and row is None:
+        if existing_table is not None and row is None and not allow_migrated_fingerprint:
             raise RuntimeError(
                 f"sqlite table {spec.name!r} exists without MindMemOS schema metadata; "
                 "adopt it through an explicit database migration"
             )
-        if row is not None and row["schema_fingerprint"] != fingerprint:
+        if row is not None and row["schema_fingerprint"] != fingerprint and not allow_migrated_fingerprint:
             raise RuntimeError(
                 f"sqlite schema drift for table {spec.name!r}; use an explicit database migration "
                 "instead of changing a registered TableSpec in place"
@@ -510,11 +565,47 @@ class SqliteBackend(ScopedDatabase):
         connection.execute(self._table_ddl(spec))
         for statement in self._index_ddl(spec):
             connection.execute(statement)
+        self._validate_physical_table_sync(connection, spec)
         connection.execute(
             f"INSERT INTO {_quote(_SCHEMA_TABLE)} (table_name, schema_fingerprint) VALUES (?, ?) "
             "ON CONFLICT(table_name) DO UPDATE SET schema_fingerprint = excluded.schema_fingerprint",
             (spec.name, fingerprint),
         )
+
+    def _validate_physical_table_sync(self, connection: sqlite3.Connection, spec: TableSpec) -> None:
+        rows = connection.execute(f"PRAGMA table_info({_quote(spec.name)})").fetchall()
+        expected_columns = {
+            "_scope_key": ("TEXT", True, 1 if spec.scope_scoped else 0),
+            "_scope": ("TEXT", True, 0),
+            "_record_id": ("TEXT", True, 2 if spec.scope_scoped else 1),
+            **{field.name: (_SQLITE_TYPES[field.field_type], not field.nullable, 0) for field in spec.fields},
+        }
+        actual_columns = {
+            str(row["name"]): (str(row["type"]).upper(), bool(row["notnull"]), int(row["pk"])) for row in rows
+        }
+        if actual_columns != expected_columns:
+            raise RuntimeError(
+                f"sqlite physical schema for table {spec.name!r} does not match the registered TableSpec"
+            )
+
+        actual_indexes: dict[str, tuple[bool, tuple[str, ...]]] = {}
+        for row in connection.execute(f"PRAGMA index_list({_quote(spec.name)})").fetchall():
+            name = str(row["name"])
+            if name.startswith("sqlite_autoindex_"):
+                continue
+            fields = tuple(
+                str(item["name"]) for item in connection.execute(f"PRAGMA index_info({_quote(name)})").fetchall()
+            )
+            actual_indexes[name] = (bool(row["unique"]), fields)
+        expected_indexes = {}
+        for index in spec.indexes:
+            fields = [*(["_scope_key"] if spec.scope_scoped else []), *index.fields]
+            expected_indexes[index.name] = (
+                index.unique,
+                tuple("_record_id" if field == spec.primary_key else field for field in fields),
+            )
+        if actual_indexes != expected_indexes:
+            raise RuntimeError(f"sqlite physical indexes for table {spec.name!r} do not match the registered TableSpec")
 
     def _table_ddl(self, spec: TableSpec) -> str:
         columns = ["_scope_key TEXT NOT NULL", "_scope TEXT NOT NULL", "_record_id TEXT NOT NULL"]
