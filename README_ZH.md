@@ -310,7 +310,8 @@ Python SDK 已发布到 PyPI：[mindmemos-sdk](https://pypi.org/project/mindmemo
 uv run mindmemos auth
 ```
 
-之后可以直接复用本地 SDK 配置：
+之后可以直接复用本地 SDK 配置。`memory.add` 等需要用户身份的操作会继承其中的默认 `user_id`；
+搜索不会继承该默认值：显式传入 `user_id` 时按用户检索，省略时检索当前 API key 对应的整个项目。
 
 ```python
 import time
@@ -331,7 +332,7 @@ with MindMemOSClient() as client:
     for item in add_result.memories:
         print(item.operation, item.memory_id, item.content)
 
-    search_result = client.memory.search("coffee preference", top_k=5)
+    search_result = client.memory.search("coffee preference", top_k=5, user_id="u_123")
     for hit in search_result.memories:
         print(hit.id, hit.memory)
 ```
@@ -370,8 +371,11 @@ uv run mindmemos auth
 
 ```bash
 uv run mindmemos memory add --content "我喜欢喝冰美式"
-uv run mindmemos memory search "咖啡偏好" --top-k 5
+uv run mindmemos memory search "咖啡偏好" --top-k 5 --user-id u_123
 ```
+
+`memory add` 会继承 `mindmemos auth` 配置的默认用户；`memory search` 不会继承。用户级召回应传
+`--user-id`，省略该参数表示项目级搜索。
 
 管理记忆：
 
@@ -403,7 +407,12 @@ uv run mindmemos auth
 ```bash
 openclaw plugins install @mindmemos/openclaw-plugin
 openclaw plugins enable mindmemos-memory
+openclaw config set plugins.entries.mindmemos-memory.config.userId u_123
+openclaw gateway restart
 ```
+
+插件的 `userId` 会同时约束搜索和写入。省略该配置时，搜索覆盖整个项目，而写入仍继承本地
+`mindmemos` CLI 配置中的默认用户。
 
 完整配置和排障说明见 [docs/sdk/openclaw_plugin.md](docs/sdk/openclaw_plugin.md)。
 
