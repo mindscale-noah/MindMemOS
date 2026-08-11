@@ -159,7 +159,7 @@ class ReactAgent(Agent[ReactAgentConfig]):
         request: AgentExecutionRequest,
         messages: list[dict[str, Any]],
         *,
-        tools: Sequence[dict[str, Any]] = (),
+        tools: Sequence[dict[str, Any]] | None = (),
     ) -> ChatResponse:
         """Generate one benchmark-controlled turn without altering its messages."""
 
@@ -169,7 +169,8 @@ class ReactAgent(Agent[ReactAgentConfig]):
             value = getattr(config, name)
             if value is not None:
                 kwargs[name] = value
-        kwargs["tools"] = list(tools)
+        if tools is not None:
+            kwargs["tools"] = list(tools)
 
         response = await self._llm.chat(
             task=request.task.task_id,

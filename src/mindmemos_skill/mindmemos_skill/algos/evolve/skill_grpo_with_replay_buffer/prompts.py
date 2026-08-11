@@ -344,6 +344,9 @@ def livemath_refinement_prompt(previous_response: str) -> str:
 
 
 def _render_events(events: list[dict[str, Any]], skill_content: str) -> str:
+    if events and all("action" in event and "env_feedback" in event for event in events):
+        return "\n".join(_render_step_event(event) for event in events)
+
     rendered: list[str] = []
     for index, event in enumerate(events, start=1):
         if "action" in event and "env_feedback" in event:
@@ -371,15 +374,21 @@ def _render_step_event(event: dict[str, Any]) -> str:
     """Match SkillOpt's analyst-facing ALFWorld trajectory format."""
 
     step = event.get("step", "?")
-    reasoning = str(event.get("reasoning") or "")[:300]
-    action = str(event.get("action") or "")[:200]
-    feedback = str(event.get("env_feedback") or "")[:500]
+    reasoning = _clip_event_text(event.get("reasoning"), 300)
+    action = _clip_event_text(event.get("action"), 200)
+    feedback = _clip_event_text(event.get("env_feedback"), 500)
     lines: list[str] = []
     if reasoning:
         lines.append(f"[step {step} think] {reasoning}")
     lines.append(f"[step {step} action] {action}")
     lines.append(f"[step {step} obs]    {feedback}")
     return "\n".join(lines)
+
+
+def _clip_event_text(value: Any, limit: int) -> str:
+    if value is None:
+        return ""
+    return str(value)[:limit]
 
 
 def _message_content(message: dict[str, Any]) -> str:

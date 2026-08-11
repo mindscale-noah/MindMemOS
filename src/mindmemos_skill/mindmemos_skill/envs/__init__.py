@@ -5,6 +5,8 @@ from .base import BaseEnv, EnvConfigT, EnvRolloutContext, PreparedRollout
 from .registered_envs import (
     ALFWorldEnv,
     ALFWorldEnvConfig,
+    ALFWorldSkillOptEnv,
+    ALFWorldSkillOptEnvConfig,
     LiveMathEnv,
     LiveMathEnvConfig,
     SpreadsheetBenchEnv,
@@ -14,6 +16,8 @@ from .registered_envs import (
 __all__ = [
     "ALFWorldEnv",
     "ALFWorldEnvConfig",
+    "ALFWorldSkillOptEnv",
+    "ALFWorldSkillOptEnvConfig",
     "BaseEnv",
     "EnvConfigT",
     "EnvRolloutContext",
