@@ -134,6 +134,7 @@ def test_treeskill_uses_trace2skill_family_and_explicit_router_config(tmp_path: 
     assert arguments[:2] == ["--algorithm", "treeskill"]
     assert invocation.command[invocation.command.index("--tree-router-max-tokens") + 1] == "512"
     assert invocation.command[invocation.command.index("--annotation-mode") + 1] == "required"
+    assert "--transactional-recalculation" in invocation.command
 
 
 @pytest.mark.parametrize(

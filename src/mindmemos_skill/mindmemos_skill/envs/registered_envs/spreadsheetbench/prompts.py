@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ....typing import Task
+from .recalculation import append_recalculation_instructions
+
+_LITERAL_VALUE_ONLY_GUIDANCE = (
+    "IMPORTANT: 'output.xlsx' is graded by reading cached cell VALUES, with no "
+    "formula recalculation. Write the final computed values into the target cells "
+    "(not bare formulas), since an unevaluated formula reads back as empty.\n"
+)
 
 SYSTEM_PROMPT = (
     "You are an expert spreadsheet assistant. Your working directory contains a "
@@ -12,15 +21,20 @@ SYSTEM_PROMPT = (
     "Work by writing and running Python (openpyxl is available) through the shell "
     "tool — do not answer from memory. Inspect the sheets first, apply the changes, "
     "save to 'output.xlsx', and verify.\n"
-    "IMPORTANT: 'output.xlsx' is graded by reading cached cell VALUES, with no "
-    "formula recalculation. Write the final computed values into the target cells "
-    "(not bare formulas), since an unevaluated formula reads back as empty.\n"
+    f"{_LITERAL_VALUE_ONLY_GUIDANCE}"
     "When you are done, stop without calling any tool."
 )
 
 
-def build_messages(*, task: Task, skill_names: list[str]) -> list[dict[str, str]]:
+def build_messages(
+    *,
+    task: Task,
+    skill_names: list[str],
+    recalculation_workspace: Path | None = None,
+) -> list[dict[str, str]]:
     system = SYSTEM_PROMPT
+    if recalculation_workspace is not None:
+        system = system.replace(_LITERAL_VALUE_ONLY_GUIDANCE, "")
     if skill_names:
         names = ", ".join(skill_names)
         system += (
@@ -34,6 +48,12 @@ def build_messages(*, task: Task, skill_names: list[str]) -> list[dict[str, str]
         "Complete the task and save the result as 'output.xlsx' "
         "(do not modify 'input.xlsx')."
     )
+    if recalculation_workspace is not None:
+        user = append_recalculation_instructions(
+            user,
+            working_dir=recalculation_workspace,
+            output_file=recalculation_workspace / "output.xlsx",
+        )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 

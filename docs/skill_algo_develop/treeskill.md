@@ -97,6 +97,41 @@ has an explicit bridge because that environment owns its ReAct conversation
 loop. In routed mode it does not create or expose the legacy `skill` tool; in
 all other modes its previous tool-injection behavior remains unchanged.
 
+## Spreadsheet formula recalculation
+
+The TreeSkill SpreadsheetBench entrypoint enables transactional formula
+recalculation for both full-Skill trajectory collection and routed held-out
+evaluation. The capability belongs to the environment rather than to a Skill,
+so routing cannot accidentally remove it and both conditions receive the same
+policy-visible command.
+
+When enabled, the environment removes its legacy literal-values-only guidance
+and appends the canonical recalculation instruction to the task prompt. If the
+policy creates or changes formulas, it invokes the packaged helper before
+completion. The helper:
+
+1. inspects `output.xlsx` and returns `not_needed` without launching
+   LibreOffice when no formulas exist;
+2. recalculates a temporary workbook through a private headless LibreOffice
+   profile;
+3. verifies that recalculation preserved the formula count and records cached
+   values and formula errors;
+4. atomically replaces `output.xlsx` only after validation; and
+5. writes `.tree_only_recalc_status.json` beside the workbook.
+
+The experiment performs a real formula preflight before its first model call.
+Configure LibreOffice using executable paths in the environment:
+
+```bash
+export TREE_ONLY_SOFFICE_PATH=/path/to/libreoffice/program/soffice
+export TREE_ONLY_LIBREOFFICE_PYTHON=/path/to/libreoffice/program/python
+```
+
+System installations under the standard LibreOffice paths are also detected.
+The official cached-cell-value evaluator remains unchanged. Generic MindMemOS
+SpreadsheetBench experiments retain their existing behavior unless
+`transactional_recalculation` is explicitly enabled in the environment config.
+
 ## Run the integrated example
 
 Store endpoint credentials in `.skill.env`, then validate the resolved command:

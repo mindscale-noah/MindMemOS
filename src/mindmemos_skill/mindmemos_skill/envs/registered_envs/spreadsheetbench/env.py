@@ -81,6 +81,7 @@ def _spreadsheet_content(file_path: Path, max_rows: int = 5) -> str:
 class SpreadsheetBenchEnvConfig(EnvConfig):
     max_turns: int = Field(default=15, ge=1)
     shell_timeout_seconds: int = Field(default=120, ge=1)
+    transactional_recalculation: bool = False
 
 
 @register(type=ComponentType.ENV, name="spreadsheetbench")
@@ -132,7 +133,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         mode = self._effective_skill_mode(agent, prepared)
         if mode is SkillInjectionMode.TREE_ROUTED_SYSTEM_PROMPT:
             prepared.agent_request.options["skill_injection_mode"] = mode.value
-            messages = build_messages(task=prepared.agent_request.task, skill_names=[])
+            messages = self._build_messages(prepared, skill_names=[])
             async with agent.inject_skill_request(prepared.agent_request, mode=mode) as injection:
                 return await self._execute_conversation(
                     agent=agent,
@@ -151,9 +152,17 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         return await self._execute_conversation(
             agent=agent,
             prepared=prepared,
-            messages=build_messages(task=prepared.agent_request.task, skill_names=list(skill_directories)),
+            messages=self._build_messages(prepared, skill_names=list(skill_directories)),
             tools=tools,
             injection=None,
+        )
+
+    def _build_messages(self, prepared: PreparedRollout, *, skill_names: list[str]) -> list[dict[str, str]]:
+        workspace = prepared.runtime_state["workspace"] if self.config.transactional_recalculation else None
+        return build_messages(
+            task=prepared.agent_request.task,
+            skill_names=skill_names,
+            recalculation_workspace=workspace,
         )
 
     async def _execute_conversation(

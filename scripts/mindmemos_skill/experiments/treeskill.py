@@ -14,6 +14,9 @@ from typing import Any
 
 from mindmemos_skill.algos.trace2skill import TaskCollectionConfig
 from mindmemos_skill.algos.trace2skill.treeskill import TreeSkill, TreeSkillConfig
+from mindmemos_skill.envs.registered_envs.spreadsheetbench.recalculation import (
+    preflight_recalculation_runtime,
+)
 from mindmemos_skill.llm import DatabaseLLMCallSink
 from mindmemos_skill.persistence import bootstrap_skill_database
 from mindmemos_skill.typing import (
@@ -90,6 +93,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-turns", type=int, required=True)
     parser.add_argument("--env-seed", type=int, default=42)
     parser.add_argument("--shell-timeout", type=int, default=120)
+    parser.add_argument(
+        "--transactional-recalculation",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--use-sketch", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--shuffle-choices", action=argparse.BooleanOptionalAction, default=True)
@@ -148,6 +156,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         shell_timeout=args.shell_timeout,
         use_theorem=args.use_theorem,
         use_sketch=args.use_sketch,
+        transactional_recalculation=args.transactional_recalculation,
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -155,6 +164,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         args.output_dir / "arguments.json",
         {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
     )
+    if args.transactional_recalculation:
+        preflight_recalculation_runtime(args.output_dir / "recalculation_preflight")
     database = await bootstrap_skill_database(args.output_dir / "state.db")
     sink = DatabaseLLMCallSink(database)
     target_client = build_client(

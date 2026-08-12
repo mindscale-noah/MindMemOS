@@ -44,3 +44,4 @@ parameters:
   environment_options:
     max_turns: 30
     shell_timeout: 120
+    transactional_recalculation: true

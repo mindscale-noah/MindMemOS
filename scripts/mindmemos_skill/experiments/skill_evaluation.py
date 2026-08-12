@@ -176,12 +176,15 @@ def environment_options(
     shell_timeout: int,
     use_theorem: bool,
     use_sketch: bool,
+    transactional_recalculation: bool = False,
 ) -> dict[str, Any]:
     options: dict[str, Any] = {"max_turns": max_turns}
     if benchmark == "alfworld":
         options["seed"] = env_seed
     if benchmark == "spreadsheetbench":
         options["shell_timeout_seconds"] = shell_timeout
+        if transactional_recalculation:
+            options["transactional_recalculation"] = True
     if benchmark == "livemath":
         options.update({"use_theorem": use_theorem, "use_sketch": use_sketch})
     return options
