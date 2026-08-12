@@ -57,6 +57,27 @@ def _is_utf8(value: bytes) -> bool:
         return False
 
 
+def _spreadsheet_content(file_path: Path, max_rows: int = 5) -> str:
+    """Return the workbook preview consumed by the TreeSkill routing prompt."""
+
+    try:
+        import openpyxl
+
+        workbook = openpyxl.load_workbook(file_path, data_only=True)
+        worksheet = workbook.active
+        lines: list[str] = []
+        for index, row in enumerate(worksheet.iter_rows(values_only=True), 1):
+            if index > max_rows:
+                lines.append(f"... ({worksheet.max_row - max_rows} more rows)")
+                break
+            values = [str(cell) if cell is not None else "" for cell in row]
+            lines.append(str(tuple(values)))
+        workbook.close()
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"[Could not read spreadsheet: {exc}]"
+
+
 class SpreadsheetBenchEnvConfig(EnvConfig):
     max_turns: int = Field(default=15, ge=1)
     shell_timeout_seconds: int = Field(default=120, ge=1)
@@ -83,6 +104,13 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         init_workbook = self._workbook(source_dir, "init")
         golden_workbook = self._workbook(source_dir, "golden")
         shutil.copyfile(init_workbook, workspace / "input.xlsx")
+        prepared.agent_request.metadata["treeskill_routing_context"] = {
+            "instance_id": task.task_id,
+            "instruction_type": str(task.metadata.get("instruction_type") or ""),
+            "answer_position": str(task.metadata.get("answer_position") or ""),
+            "instruction": task.instruction,
+            "spreadsheet_content": _spreadsheet_content(workspace / "input.xlsx"),
+        }
         prepared.runtime_state = {
             "workspace": workspace,
             "golden_workbook": golden_workbook,

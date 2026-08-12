@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import shutil
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,8 @@ class ReactTreeSkillRuntime(SkillRuntime):
 
     async def route(self, request: AgentExecutionRequest) -> SkillRoute:
         by_name = _unique_skills(request.skills)
+        raw_context = request.metadata.get("treeskill_routing_context")
+        routing_context = raw_context if isinstance(raw_context, Mapping) else None
         routed: list[RoutedSkillSnapshot] = []
         details: dict[str, Any] = {}
         full_chars = 0
@@ -48,6 +50,7 @@ class ReactTreeSkillRuntime(SkillRuntime):
                 skill=skill,
                 task=request.task,
                 env_ref=request.environment.env_ref,
+                routing_context=routing_context,
             )
             detail = result.model_dump(mode="json", exclude={"skill_content"})
             details[name] = detail

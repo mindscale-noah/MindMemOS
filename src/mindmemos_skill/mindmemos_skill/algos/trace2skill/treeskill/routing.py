@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from ....typing import Skill, Task
 from .analysis import ChatModel
 from .json_utils import parse_model
 from .models import TreeRoutingResult
-from .prompts import (
-    ROUTING_SYSTEM_PROMPT,
-    SPREADSHEET_ROUTING_GUIDANCE,
-    routing_user_prompt,
-)
+from .prompts import ROUTING_SYSTEM_PROMPT, routing_user_prompt
 from .tree import (
     TreeMetadataError,
     ancestor_closure,
@@ -52,7 +50,14 @@ class TreeSkillRouter:
         self._temperature = temperature
         self._max_tokens = max_tokens
 
-    async def route(self, *, skill: Skill, task: Task, env_ref: str = "unknown") -> TreeRoutingResult:
+    async def route(
+        self,
+        *,
+        skill: Skill,
+        task: Task,
+        env_ref: str = "unknown",
+        routing_context: Mapping[str, object] | None = None,
+    ) -> TreeRoutingResult:
         metadata = skill.metadata.get("treeskill")
         try:
             tree = parse_tree_with_metadata(skill.content, metadata)
@@ -70,15 +75,15 @@ class TreeSkillRouter:
                 raise ValueError(f"router returned unknown node ids: {sorted(set(unknown))}")
             return payload
 
-        system_prompt = ROUTING_SYSTEM_PROMPT
-        if env_ref == "spreadsheetbench" or task.metadata.get("benchmark") == "SpreadsheetBench":
-            system_prompt = f"{system_prompt}\n\n{SPREADSHEET_ROUTING_GUIDANCE}"
         try:
             response = await self._chat_model.chat(
                 task=self._task,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": routing_user_prompt(tree, task)},
+                    {"role": "system", "content": ROUTING_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": routing_user_prompt(tree, task, routing_context),
+                    },
                 ],
                 format_parser=parse,
                 feedback_on_parse_error=True,

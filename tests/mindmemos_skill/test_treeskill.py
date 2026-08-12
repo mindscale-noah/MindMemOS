@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +19,23 @@ from mindmemos_skill.algos.trace2skill.treeskill import (
     parse_tree_with_metadata,
     render_selected_subtrees,
 )
+from mindmemos_skill.algos.trace2skill.treeskill.models import (
+    AnalysisItem,
+    LocatedEvidence,
+    TrajectoryAnalysisRecord,
+)
+from mindmemos_skill.algos.trace2skill.treeskill.prompts import (
+    LOCALIZATION_SYSTEM_PROMPT,
+    NODE_FUSION_SYSTEM_PROMPT,
+    ROUTING_SYSTEM_PROMPT,
+    fusion_user_prompt,
+    localization_user_prompt,
+    routing_user_prompt,
+)
 from mindmemos_skill.algos.trace2skill.treeskill.tree import (
     NewTreeNode,
     create_child_subtree,
+    tree_prompt_payload,
     update_node_content,
 )
 from mindmemos_skill.envs import EnvRolloutContext, SpreadsheetBenchEnv
@@ -68,6 +84,95 @@ def make_skill(content: str, *, metadata: dict[str, Any] | None = None) -> Skill
         resources={"references/helper.py": "HELPER = True\n"},
         metadata=metadata or {},
         created_at=datetime(2026, 8, 12, tzinfo=UTC),
+    )
+
+
+def test_treeskill_prompt_resources_match_reference_files() -> None:
+    prompt_package = "mindmemos_skill.algos.trace2skill.treeskill.prompt_templates"
+    expected_hashes = {
+        "locating_system_prompt.txt": "40433e54931be334a84fc5366bac7432d93cd0a719e41f058cca7b389384ac6a",
+        "node_fusion_system_prompt.txt": "bbecdd8e368cb4d92c96e64b2409ccb37d876ac3af892ed4fb832bf75dbeb246",
+        "tree_only_skill_routing_system_prompt.txt": (
+            "04c69b98c278fb92db5d4df9554b7d037860e26116e4531ed75dcc7023e4f613"
+        ),
+    }
+    resources = files(prompt_package)
+    for name, expected in expected_hashes.items():
+        assert hashlib.sha256(resources.joinpath(name).read_bytes()).hexdigest() == expected
+
+    assert LOCALIZATION_SYSTEM_PROMPT == resources.joinpath("locating_system_prompt.txt").read_text()
+    assert NODE_FUSION_SYSTEM_PROMPT == resources.joinpath("node_fusion_system_prompt.txt").read_text()
+    assert ROUTING_SYSTEM_PROMPT == resources.joinpath("tree_only_skill_routing_system_prompt.txt").read_text().rstrip()
+
+
+def test_treeskill_user_prompts_match_reference_payloads() -> None:
+    tree = parse_skill_markdown("# Workbook\n\nInspect first.\n\n## Formulas\n\nWrite formulas.\n")
+    tree_payload = tree_prompt_payload(tree)
+    record = TrajectoryAnalysisRecord(
+        instance_id="trajectory-1",
+        task_id="task-1",
+        record_source="success",
+        items=(
+            AnalysisItem(
+                item_id="i1",
+                kind="success_memory",
+                title="Verify formulas",
+                description="Verification supported the successful result.",
+                content="Recalculate and verify formula outputs.",
+            ),
+        ),
+    )
+    expected_localization = {
+        "analysis_record": record.model_dump(mode="json"),
+        "skill_tree": tree_payload,
+    }
+    assert localization_user_prompt(tree, record) == (
+        "Locate trajectory-derived evidence into the Markdown skill tree.\n"
+        "Use the recursive skill tree to choose existing fusion target nodes.\n\n"
+        + json.dumps(expected_localization, ensure_ascii=False, indent=2)
+    )
+
+    evidence = [
+        LocatedEvidence(
+            instance_id="trajectory-1",
+            evidence_id="e1",
+            record_source="success",
+            reusable_lesson="Recalculate and verify formula outputs.",
+            target_node_id="002",
+            rationale="Formula guidance owns this lesson.",
+        )
+    ]
+    expected_fusion = {
+        "target_node_id": "002",
+        "skill_tree": tree_payload,
+        "located_evidence": [
+            {
+                "instance_id": "trajectory-1",
+                "evidence_id": "e1",
+                "record_source": "success",
+                "reusable_lesson": "Recalculate and verify formula outputs.",
+                "target_node_id": "002",
+            }
+        ],
+    }
+    assert fusion_user_prompt(tree, "002", evidence) == (
+        "Fuse the located evidence for this target Markdown node.\n"
+        "Use the complete recursive skill tree to avoid redundant or misplaced edits.\n\n"
+        + json.dumps(expected_fusion, ensure_ascii=False, indent=2)
+    )
+
+    task = Task(task_id="sheet-1", instruction="Write a formula.")
+    routing_context = {
+        "instance_id": "sheet-1",
+        "instruction_type": "cell",
+        "answer_position": "Sheet1!C2",
+        "instruction": "Write a formula.",
+        "spreadsheet_content": "('Revenue', 'Cost')",
+    }
+    expected_routing = {"task": routing_context, "skill_tree": tree_payload}
+    assert routing_user_prompt(tree, task, routing_context) == (
+        "Route skill subtrees for this spreadsheet task.\n\n"
+        + json.dumps(expected_routing, ensure_ascii=False, indent=2)
     )
 
 
@@ -314,6 +419,18 @@ async def test_spreadsheetbench_tree_routing_bypasses_legacy_skill_tool(tmp_path
     )
 
     assert len(llm.calls) == 2
+    router_call = llm.calls[0]
+    assert router_call["messages"][0]["content"] == ROUTING_SYSTEM_PROMPT
+    router_payload = json.loads(
+        router_call["messages"][1]["content"].removeprefix("Route skill subtrees for this spreadsheet task.\n\n")
+    )
+    assert router_payload["task"] == {
+        "instance_id": "sheet-task",
+        "instruction_type": "cell",
+        "answer_position": "A1",
+        "instruction": "Preserve A1.",
+        "spreadsheet_content": "('1',)",
+    }
     policy_call = llm.calls[1]
     assert "Selected rule." in policy_call["messages"][0]["content"]
     assert "Other rule." not in policy_call["messages"][0]["content"]
