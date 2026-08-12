@@ -51,13 +51,16 @@ def load_builtin_pipelines() -> None:
 
     for module_name in (
         ".add.default",
+        ".add.feedback_evo",
         ".add.schema",
         ".add.vanilla",
         ".delete.default",
         ".dreaming.default",
         ".feedback.default",
+        ".feedback_evo.pipeline",
         ".get.default",
         ".search.default",
+        ".search.feedback_evo",
         ".search.pipeline",
         ".skill.evolution",
         ".update.default",

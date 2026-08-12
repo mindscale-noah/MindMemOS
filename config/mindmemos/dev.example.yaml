@@ -399,3 +399,19 @@ kafka:
       auto_offset_reset: earliest
       max_retries: 3
       dlq_suffix: .dlq
+
+# feedback-driven self-evolution mode (feedback_evo).
+# Code defaults are used when this section is absent; it is documented here so
+# local dev.yaml can override any value.
+feedback_evo:
+  enabled: true
+  min_signals_to_evolve: 5
+  max_changes_per_evolution: null  # None = no limit on parameter changes per round
+  require_signal_confidence: 0.7
+  max_numeric_change_ratio: 0.5
+  max_entity_type_delta: 2
+  state_store: db_and_file
+  file_history_dir: config/evolved
+  defaults:
+    add: {}
+    search: {}

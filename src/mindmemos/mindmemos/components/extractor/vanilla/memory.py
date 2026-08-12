@@ -49,6 +49,14 @@ class ExtractedMemoryCandidate(BaseModel):
     reason: str | None = None
     segment_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    entity_type: str | None = Field(
+        default=None,
+        description="Optional entity-type tag (feedback_evo tagging output).",
+    )
+    property_name: str | None = Field(
+        default=None,
+        description="Optional property-name tag (feedback_evo tagging output).",
+    )
 
 
 class ExtractedEntityCandidate(BaseModel):
@@ -107,9 +115,16 @@ class MemoryExtractor(Protocol):
 class VanillaMemoryExtractor:
     """Extract vanilla-mode memories with optional LLM and deterministic fallback."""
 
-    def __init__(self, *, llm_client=None, enable_entities: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        llm_client=None,
+        enable_entities: bool = False,
+        extraction_prompt: str | None = None,
+    ) -> None:
         self._llm_client = llm_client
         self._enable_entities = enable_entities
+        self._extraction_prompt = extraction_prompt
 
     async def extract_from_envelope(
         self,
@@ -137,7 +152,11 @@ class VanillaMemoryExtractor:
             response = await self._llm_client.chat(
                 task="memory.add.extract",
                 messages=_envelope_prompt_messages(
-                    envelope, preprocessed_texts, context, enable_entities=self._enable_entities
+                    envelope,
+                    preprocessed_texts,
+                    context,
+                    enable_entities=self._enable_entities,
+                    extraction_prompt=self._extraction_prompt,
                 ),
                 format_parser=parse_memory_extraction_json,
             )
@@ -324,6 +343,7 @@ def _envelope_prompt_messages(
     context: MemoryRequestContext,
     *,
     enable_entities: bool = False,
+    extraction_prompt: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build LLM prompt messages from an ExtractionEnvelope.
 
@@ -406,7 +426,7 @@ def _envelope_prompt_messages(
     from ....prompts import get_extraction_system_prompt
 
     lang = _dominant_lang(preprocessed_texts) if preprocessed_texts else "en"
-    system_prompt = get_extraction_system_prompt(lang, enable_entities=enable_entities)
+    system_prompt = extraction_prompt or get_extraction_system_prompt(lang, enable_entities=enable_entities)
 
     return [
         {"role": "system", "content": system_prompt},

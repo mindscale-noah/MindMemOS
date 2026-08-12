@@ -21,6 +21,8 @@ from ...logging import get_logger
 from .collections import (
     AddRecordRepository,
     EntityRepository,
+    EvolutionStateRepository,
+    FeedbackEventRepository,
     MemoryRepository,
     SchemaAddBufferRepository,
     SearchRecordRepository,
@@ -56,6 +58,8 @@ class QdrantStore:
         self._add_record = AddRecordRepository(self._engine, cfg)
         self._schema_add_buffer = SchemaAddBufferRepository(self._engine, cfg)
         self._search_record = SearchRecordRepository(self._engine, cfg)
+        self._feedback_event = FeedbackEventRepository(self._engine, cfg)
+        self._evolution_state = EvolutionStateRepository(self._engine, cfg)
 
     @property
     def engine(self) -> QdrantEngine:
@@ -104,6 +108,18 @@ class QdrantStore:
         """Repository for ``search_record_v1``."""
 
         return self._search_record
+
+    @property
+    def feedback_event(self) -> FeedbackEventRepository:
+        """Repository for ``feedback_event_v1``."""
+
+        return self._feedback_event
+
+    @property
+    def evolution_state(self) -> EvolutionStateRepository:
+        """Repository for ``evolution_state_v1``."""
+
+        return self._evolution_state
 
     @property
     def memory_collection(self) -> str:

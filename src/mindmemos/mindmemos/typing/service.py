@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
+from .feedback_evo import ParameterChange
 from .memory import (
     AddMode,
     DialogueMessage,
@@ -18,7 +19,7 @@ from .memory import (
 )
 
 ServiceResultStatus = Literal["ok", "error", "queued"]
-SearchPipelineStrategy = Literal["default", "vanilla", "schema"]
+SearchPipelineStrategy = Literal["default", "vanilla", "schema", "feedback_evo_search"]
 
 
 def _utc_millis() -> int:
@@ -381,6 +382,76 @@ class FeedbackPipelineResult(BaseModel):
 
     signals: list[dict[str, Any]] = Field(default_factory=list)
     """Detected feedback signals with category and reason."""
+
+
+class FeedbackEvoPipelineInput(BaseModel):
+    """Input for the feedback-driven self-evolution pipeline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    """Project whose evolution state should be updated."""
+
+    user_id: str | None = None
+    """Optional user filter when reading feedback events."""
+
+    min_signals_to_evolve: int | None = Field(
+        default=None,
+        ge=0,
+        description="Override the default signal threshold for this run.",
+    )
+
+    force: bool = False
+    """Bypass the min_signals_to_evolve gate (used for tests/manual runs)."""
+
+
+class FeedbackEvoPipelineResult(BaseModel):
+    """Result of one feedback-driven evolution run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    status: ServiceResultStatus = "ok"
+    """Service completion status."""
+
+    evolved: bool = False
+    """True when a new evolution version was applied."""
+
+    version: int = 0
+    """New current version, or 0 when nothing was applied."""
+
+    changes: list[ParameterChange] = Field(default_factory=list)
+    """Applied parameter changes."""
+
+    signal_count: int = 0
+    """Number of accumulated feedback signals considered."""
+
+    message: str = ""
+    """Human-readable outcome summary."""
+
+
+class FeedbackEvoCollectResult(BaseModel):
+    """Result of persisting one task-end feedback event (feedback_evo)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: ServiceResultStatus = "ok"
+    """Service completion status."""
+
+    event_id: str
+    """Id of the persisted feedback event."""
+
+    project_id: str
+    """Project the event was recorded for."""
+
+    signal_count: int = 0
+    """Number of feedback signals detected in the submitted task context."""
+
+    signals: list[dict[str, Any]] = Field(default_factory=list)
+    """Detected signals (kept so callers can record per-category counts)."""
+
+    message: str = ""
+    """Human-readable outcome summary."""
 
 
 class DreamingPipelineInput(BaseModel):

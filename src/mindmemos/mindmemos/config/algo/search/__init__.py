@@ -2,6 +2,7 @@
 
 from .agentic import AgenticConfig
 from .default_search import DefaultSearchConfig
+from .feedback_evo import FeedbackEvoSearchConfig
 from .rerank import RerankConfig
 from .root import SearchConfig
 from .schema import (
@@ -21,6 +22,7 @@ __all__ = [
     "EdgeSearchConfig",
     "EntitySearchConfig",
     "EntityWeightsConfig",
+    "FeedbackEvoSearchConfig",
     "PropertySearchConfig",
     "RerankConfig",
     "SchemaSearchConfig",

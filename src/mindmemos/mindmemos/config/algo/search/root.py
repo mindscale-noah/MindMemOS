@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from .agentic import AgenticConfig
 from .default_search import DefaultSearchConfig
+from .feedback_evo import FeedbackEvoSearchConfig
 from .rerank import RerankConfig
 from .schema import SchemaSearchConfig
 from .vanilla import VanillaSearchConfig
@@ -26,6 +27,9 @@ class SearchConfig:
 
     vanilla: VanillaSearchConfig = field(default_factory=VanillaSearchConfig)
     """Vanilla hybrid search pipeline configuration."""
+
+    feedback_evo: FeedbackEvoSearchConfig = field(default_factory=FeedbackEvoSearchConfig)
+    """Feedback-driven self-evolution search pipeline configuration."""
 
     schema_search: SchemaSearchConfig = field(default_factory=SchemaSearchConfig)
     """Schema-aware search pipeline configuration."""

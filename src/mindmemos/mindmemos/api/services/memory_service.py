@@ -4,12 +4,16 @@ from typing import Literal
 from uuid import uuid4
 
 from ...config import get_config
+from ...errors import BadRequestError
+from ...infra.db import EvolutionStateStore
 from ...logging import get_logger, traced
 from ...pipelines import create_pipeline
 from ...pipelines.add import AddPipeline
+from ...components.feedback_evo import FeedbackEvoCollector
 from ...pipelines.delete import DefaultDeletePipeline, DeletePipeline
 from ...pipelines.dreaming import DreamingPipeline
 from ...pipelines.feedback import FeedbackPipeline
+from ...pipelines.feedback_evo import FeedbackEvoPipeline
 from ...pipelines.get import DefaultGetPipeline, GetPipeline
 from ...pipelines.memory_db import MemoryOperationRecorder, suppress_recording_errors, utcnow
 from ...pipelines.search import SearchPipeline
@@ -20,6 +24,8 @@ from ...typing import (
     AddPipelineSyncResult,
     DeletePipelineResult,
     DreamingPipelineResult,
+    FeedbackEvoCollectResult,
+    FeedbackEvoPipelineResult,
     FeedbackPipelineResult,
     GetPipelineResult,
     SearchPipelineResult,
@@ -33,6 +39,7 @@ from ..mappers import (
     to_add_pipeline_input,
     to_delete_pipeline_input,
     to_dreaming_pipeline_input,
+    to_feedback_evo_pipeline_input,
     to_feedback_pipeline_input,
     to_get_pipeline_input,
     to_memory_request_context,
@@ -44,15 +51,18 @@ from ..schemas import (
     AuthContext,
     DeleteRequest,
     DreamingRequest,
+    EvolutionRollbackRequest,
     FeedbackRequest,
+    FeedbackEvoCollectRequest,
     GetRequest,
     SearchRequest,
+    SelfEvolveRequest,
     UpdateRequest,
 )
 
 logger = get_logger(__name__)
 
-PipelineKind = Literal["add", "search", "get", "delete", "update", "feedback", "dreaming"]
+PipelineKind = Literal["add", "search", "get", "delete", "update", "feedback", "dreaming", "feedback_evo"]
 SEARCH_PIPELINE_NAME = "search_pipeline"
 
 
@@ -68,6 +78,7 @@ class MemoryService:
         delete_pipeline: DeletePipeline | None = None,
         update_pipeline: UpdatePipeline | None = None,
         feedback_pipeline: FeedbackPipeline | None = None,
+        feedback_evo_pipeline: FeedbackEvoPipeline | None = None,
         dreaming_pipeline: DreamingPipeline | None = None,
         add_pipeline_name: str | None = None,
         search_pipeline_name: str | None = None,
@@ -75,6 +86,7 @@ class MemoryService:
         delete_pipeline_name: str | None = None,
         update_pipeline_name: str | None = None,
         feedback_pipeline_name: str | None = None,
+        feedback_evo_pipeline_name: str | None = None,
         dreaming_pipeline_name: str | None = None,
         operation_recorder: MemoryOperationRecorder | None = None,
         skill_store: SkillVersionStore | None = None,
@@ -95,6 +107,7 @@ class MemoryService:
             else (None if update_pipeline_name else DefaultUpdatePipeline())
         )
         self._feedback = feedback_pipeline
+        self._feedback_evo = feedback_evo_pipeline
         self._dreaming = dreaming_pipeline
         self._pipeline_names: dict[str, tuple[PipelineKind, str | None]] = {
             "_add": ("add", add_pipeline_name),
@@ -103,11 +116,13 @@ class MemoryService:
             "_delete": ("delete", delete_pipeline_name),
             "_update": ("update", update_pipeline_name),
             "_feedback": ("feedback", feedback_pipeline_name),
+            "_feedback_evo": ("feedback", feedback_evo_pipeline_name),
             "_dreaming": ("dreaming", dreaming_pipeline_name),
         }
         self._recorder = operation_recorder or MemoryOperationRecorder()
         self._skill_store = skill_store if skill_store is not None else get_skill_version_store()
         self._algorithm_add_pipelines: dict[str, AddPipeline] = {}
+        self._algorithm_search_pipelines: dict[str, SearchPipeline] = {}
 
     def _pipeline(self, attr: str):
         pipeline = getattr(self, attr)
@@ -127,6 +142,25 @@ class MemoryService:
             pipeline = create_pipeline(type="add", name=pipeline_name)
             self._algorithm_add_pipelines[pipeline_name] = pipeline
         return pipeline, pipeline_name
+
+    def _search_pipeline_for_algorithm(self, search_pipeline_name: str) -> SearchPipeline:
+        """Select the search pipeline for an algorithm binding.
+
+        ``feedback_evo_search`` is an independent registered pipeline; the other
+        strategies (default / vanilla / schema) run inside the generic
+        ``search_pipeline`` dispatcher.
+        """
+
+        if search_pipeline_name != "feedback_evo_search":
+            pipeline = self._pipeline("_search")
+            if pipeline is None:
+                raise NotImplementedError("search pipeline implementation is not wired yet")
+            return pipeline
+        pipeline = self._algorithm_search_pipelines.get(search_pipeline_name)
+        if pipeline is None:
+            pipeline = create_pipeline(type="search", name=search_pipeline_name)
+            self._algorithm_search_pipelines[search_pipeline_name] = pipeline
+        return pipeline
 
     def _add_pipeline_for_auth(self, auth: AuthContext) -> tuple[AddPipeline | None, str | None]:
         if self._add is not None:
@@ -234,9 +268,7 @@ class MemoryService:
         ctx = to_memory_request_context(auth, request, require_user_id=True)
         binding = binding_for_memory_algorithm(auth.memory_algorithm)
         payload = to_search_pipeline_input(request, search_pipeline=binding.search_pipeline)
-        pipeline = self._pipeline("_search")
-        if pipeline is None:
-            raise NotImplementedError("search pipeline implementation is not wired yet")
+        pipeline = self._search_pipeline_for_algorithm(binding.search_pipeline)
         request_submitted_at = utcnow()
         try:
             result = await pipeline.search(payload, ctx)
@@ -319,6 +351,62 @@ class MemoryService:
             return await pipeline.feedback_async(payload, ctx)
         return await pipeline.feedback_sync(payload, ctx)
 
+    @traced("memory_service.self_evolve")
+    async def self_evolve(self, auth: AuthContext, request: SelfEvolveRequest) -> FeedbackEvoPipelineResult:
+        """Run one feedback-driven evolution round for the project."""
+
+        annotate_request_trace(auth)
+        pipeline = self._pipeline("_feedback_evo")
+        if pipeline is None:
+            raise NotImplementedError("feedback_evo pipeline implementation is not wired yet")
+        payload = to_feedback_evo_pipeline_input(request, auth)
+        ctx = to_memory_request_context(auth, request)
+        return await pipeline.run(payload, ctx)
+
+    @traced("memory_service.rollback_evolution")
+    async def rollback_evolution(
+        self,
+        auth: AuthContext,
+        request: EvolutionRollbackRequest,
+    ) -> FeedbackEvoPipelineResult:
+        """Roll the project's evolution state back to a previous version."""
+
+        annotate_request_trace(auth)
+        try:
+            result = await EvolutionStateStore().rollback(auth.project_id, request.version)
+        except ValueError as exc:
+            raise BadRequestError(str(exc), code="evolution.version_not_found") from exc
+        return FeedbackEvoPipelineResult(
+            project_id=auth.project_id,
+            status="ok",
+            version=result.version,
+            message=f"rolled back to version {result.version}",
+        )
+
+    @traced("memory_service.collect_feedback_evo")
+    async def collect_feedback_evo(
+        self,
+        auth: AuthContext,
+        request: FeedbackEvoCollectRequest,
+    ) -> FeedbackEvoCollectResult:
+        """Persist one task-end feedback event for the auth project."""
+
+        annotate_request_trace(auth)
+        ctx = to_memory_request_context(auth, request)
+        event = await FeedbackEvoCollector().collect(
+            ctx,
+            task_messages=request.task_messages,
+            task_id=request.task_id,
+            session_id=request.session_id,
+        )
+        return FeedbackEvoCollectResult(
+            event_id=event.event_id,
+            project_id=auth.project_id,
+            signal_count=len(event.signals),
+            signals=event.signals,
+            message=f"collected {len(event.signals)} signal(s)",
+        )
+
     @traced("memory_service.dream")
     async def dream(self, auth: AuthContext, request: DreamingRequest) -> DreamingPipelineResult:
         """Run the dreaming pipeline."""
@@ -349,12 +437,14 @@ def get_memory_service() -> MemoryService:
     delete_pipeline = cfg["delete"]
     update_pipeline = cfg["update"]
     feedback_pipeline = cfg["feedback"]
+    feedback_evo_pipeline = cfg["feedback_evo"]
     dreaming_pipeline = cfg["dreaming"]
     service_key = (
         get_pipeline,
         delete_pipeline,
         update_pipeline,
         feedback_pipeline,
+        feedback_evo_pipeline,
         dreaming_pipeline,
     )
     if _service is None or _service_key != service_key:
@@ -363,6 +453,7 @@ def get_memory_service() -> MemoryService:
             delete_pipeline_name=delete_pipeline,
             update_pipeline_name=update_pipeline,
             feedback_pipeline_name=feedback_pipeline,
+            feedback_evo_pipeline_name=feedback_evo_pipeline,
             dreaming_pipeline_name=dreaming_pipeline,
         )
         _service_key = service_key

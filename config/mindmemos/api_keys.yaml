@@ -15,3 +15,27 @@ api_keys:
   scopes:
   - memory:read
   - memory:write
+- key_id: key_dev_0003
+  api_key: dev-api-key-003
+  project_id: proj-dev-feedback-evo
+  memory_algorithm: feedback_evo
+  enabled: true
+  scopes:
+  - memory:read
+  - memory:write
+- key_id: key_dev_0004
+  api_key: feedback_evo_state_bench
+  project_id: proj-feedback-evo-state-bench
+  memory_algorithm: feedback_evo
+  enabled: true
+  scopes:
+  - memory:read
+  - memory:write
+- key_id: key_dev_0005
+  api_key: feedback_evo_state_bench_baseline
+  project_id: proj-feedback-evo-state-bench-baseline
+  memory_algorithm: feedback_evo
+  enabled: true
+  scopes:
+  - memory:read
+  - memory:write

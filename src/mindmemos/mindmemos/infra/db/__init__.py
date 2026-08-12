@@ -15,6 +15,8 @@ from .errors import (
     MemoryDbValidationError,
     MemoryNotFoundError,
 )
+from .evolution_state import EvolutionStateStore
+from .feedback_event import FeedbackEventStore
 from .filters import (
     FILTERABLE_ENTITY_FIELDS,
     FILTERABLE_MEMORY_FIELDS,
@@ -62,6 +64,8 @@ from .registry import (
 from .schema import (
     ADD_RECORD_COLLECTION,
     ENTITY_COLLECTION,
+    EVOLUTION_STATE_COLLECTION,
+    FEEDBACK_EVENT_COLLECTION,
     MEMORY_COLLECTION,
     NEO4J_SCHEMA_STATEMENTS,
     SCHEMA_ADD_BUFFER_COLLECTION,
@@ -81,15 +85,19 @@ __all__ = [
     "DatabaseClients",
     "DatabaseClientConcurrencyLimits",
     "DatabaseClientKind",
+    "EVOLUTION_STATE_COLLECTION",
+    "EntityNode",
+    "EntityPoint",
+    "ENTITY_COLLECTION",
+    "EvolutionStateStore",
+    "FEEDBACK_EVENT_COLLECTION",
+    "FeedbackEventStore",
+    "FILTERABLE_ENTITY_FIELDS",
+    "FILTERABLE_MEMORY_FIELDS",
     "MemoryDbConfigurationError",
     "MemoryDbError",
     "MemoryDbValidationError",
     "MemoryNotFoundError",
-    "EntityNode",
-    "EntityPoint",
-    "ENTITY_COLLECTION",
-    "FILTERABLE_ENTITY_FIELDS",
-    "FILTERABLE_MEMORY_FIELDS",
     "GraphRelationship",
     "MEMORY_COLLECTION",
     "MemoryNode",

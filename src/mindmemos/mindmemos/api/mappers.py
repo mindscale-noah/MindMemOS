@@ -25,6 +25,8 @@ from ..typing import (
     DeletePipelineResult,
     DreamingPipelineInput,
     DreamingPipelineResult,
+    FeedbackEvoCollectResult,
+    FeedbackEvoPipelineInput,
     FeedbackPipelineInput,
     FeedbackPipelineResult,
     GetPipelineInput,
@@ -42,10 +44,13 @@ from .schemas import (
     AuthContext,
     DeleteRequest,
     DreamingRequest,
+    FeedbackEvoCollectData,
+    FeedbackEvoEvolveData,
     FeedbackRequest,
     GetRequest,
     MemoryListData,
     SearchRequest,
+    SelfEvolveRequest,
     UpdateRequest,
 )
 
@@ -117,6 +122,57 @@ def to_feedback_pipeline_input(req: FeedbackRequest) -> FeedbackPipelineInput:
 
     return FeedbackPipelineInput.model_validate(
         req.model_dump(by_alias=True, exclude=set(_ACTOR_FIELDS))
+    )
+
+
+def to_feedback_evo_pipeline_input(
+    req: SelfEvolveRequest,
+    auth: AuthContext,
+) -> FeedbackEvoPipelineInput:
+    """Build feedback-evo pipeline input from a self-evolve request."""
+
+    return FeedbackEvoPipelineInput(
+        project_id=auth.project_id,
+        user_id=req.user_id,
+        min_signals_to_evolve=req.min_signals_to_evolve,
+        force=req.force,
+    )
+
+
+def to_feedback_evo_collect_api_response(
+    result: FeedbackEvoCollectResult,
+    request_id: str | None,
+) -> ApiResponse[FeedbackEvoCollectData]:
+    """Convert a feedback-evo collect result into an HTTP response envelope."""
+
+    return ApiResponse[FeedbackEvoCollectData](
+        code=result.status,
+        message=result.message,
+        request_id=request_id,
+        data=FeedbackEvoCollectData(
+            event_id=result.event_id,
+            signal_count=result.signal_count,
+            signals=result.signals,
+        ),
+    )
+
+
+def to_feedback_evo_evolve_api_response(
+    result: FeedbackEvoPipelineResult,
+    request_id: str | None,
+) -> ApiResponse[FeedbackEvoEvolveData]:
+    """Convert a self-evolve pipeline result into an HTTP response envelope."""
+
+    return ApiResponse[FeedbackEvoEvolveData](
+        code=result.status,
+        message=result.message,
+        request_id=request_id,
+        data=FeedbackEvoEvolveData(
+            evolved=result.evolved,
+            version=result.version,
+            signal_count=result.signal_count,
+            changes=result.changes,
+        ),
     )
 
 

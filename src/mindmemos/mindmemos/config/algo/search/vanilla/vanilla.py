@@ -72,3 +72,10 @@ class VanillaSearchConfig:
 
     graph_score: float = field(default=0.01)
     """Fallback score assigned to graph candidates when seed score is unavailable."""
+
+    tag_weights: dict[str, float] = field(default_factory=dict)
+    """Score multipliers keyed by memory ``entity_type`` (fallback ``mem_type``).
+
+    Injected live by the ``feedback_evo`` search pipeline from the evolved
+    ``search_config.weights``; applied to retrieval scores before truncation.
+    """

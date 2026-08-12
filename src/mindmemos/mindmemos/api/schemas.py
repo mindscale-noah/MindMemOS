@@ -32,6 +32,7 @@ from ..typing import (
     FileMessage,
     MemoryAddEventItem,
     MemorySearchItem,
+    ParameterChange,
     SkillContext,
     TextMessage,
     UrlMessage,
@@ -249,6 +250,58 @@ class FeedbackRequest(ActorIdentityRequest):
         return messages
 
 
+class SelfEvolveRequest(ActorIdentityRequest):
+    """HTTP body for ``POST /v1/memory/self-evolve``.
+
+    ``project_id`` is taken from the auth context; actor identity is optional
+    (used only to filter the feedback events consumed by the evolution loop).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    min_signals_to_evolve: int | None = Field(
+        default=None,
+        ge=0,
+        description="Override the default signal threshold for this run.",
+    )
+    force: bool = Field(
+        default=False,
+        description="Bypass the signal threshold gate (tests/manual runs).",
+    )
+
+
+class FeedbackEvoCollectRequest(ActorIdentityRequest):
+    """HTTP body for ``POST /v1/memory/feedback-evo/collect``.
+
+    Persists one task-end feedback event for the auth project. The submitted
+    task context is converted into feedback signals by the feedback_evo
+    collector (an LLM signal-detection pass over the conversation), then stored
+    in ``feedback_event_v1`` for the evolution loop.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_messages: list[dict[str, Any]] = Field(
+        min_length=1,
+        description="Full conversation of the finished task.",
+    )
+    task_id: NonEmptyStr | None = Field(
+        default=None,
+        description="Optional identifier of the finished task.",
+    )
+
+
+class EvolutionRollbackRequest(BaseModel):
+    """HTTP body for ``POST /v1/memory/evolution/rollback``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(
+        ge=1,
+        description="Evolution version to restore as the current state.",
+    )
+
+
 class DreamingRequest(ActorIdentityRequest):
     """HTTP body for ``POST /v1/memory/dreaming``.
 
@@ -280,6 +333,39 @@ class MemoryListData(BaseModel):
     """
 
     memories: list[MemorySearchItem] = Field(default_factory=list)
+
+
+class FeedbackEvoCollectData(BaseModel):
+    """``data`` payload for the feedback-evo collect response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str
+    """Id of the persisted feedback event."""
+
+    signal_count: int = 0
+    """Number of feedback signals detected in the submitted task context."""
+
+    signals: list[dict[str, Any]] = Field(default_factory=list)
+    """Detected signals, kept so callers can record per-category counts."""
+
+
+class FeedbackEvoEvolveData(BaseModel):
+    """``data`` payload for the feedback-evo self-evolve response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evolved: bool = False
+    """True when a new evolution version was applied."""
+
+    version: int = 0
+    """New current version, or 0 when nothing was applied."""
+
+    signal_count: int = 0
+    """Number of accumulated feedback signals considered."""
+
+    changes: list[ParameterChange] = Field(default_factory=list)
+    """Applied parameter changes."""
 
 
 class ApiResponse(BaseModel, Generic[T]):

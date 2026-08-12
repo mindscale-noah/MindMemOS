@@ -57,3 +57,11 @@ plugins/openclaw-plugin/dist/
 /results/
 /tmp/
 /data/
+
+# 本地备份（不纳入版本控制）
+local_backup/
+
+# 运行产物、日志与演化状态（不纳入版本控制）
+/runs/
+/logs/
+/config/evolved/

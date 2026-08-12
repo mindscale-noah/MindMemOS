@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends
 from .deps import require_scopes
 from .mappers import (
     to_add_api_response,
+    to_feedback_evo_collect_api_response,
+    to_feedback_evo_evolve_api_response,
     to_memory_list_api_response,
     to_status_api_response,
 )
@@ -23,10 +25,15 @@ from .schemas import (
     AuthContext,
     DeleteRequest,
     DreamingRequest,
+    EvolutionRollbackRequest,
+    FeedbackEvoCollectData,
+    FeedbackEvoCollectRequest,
+    FeedbackEvoEvolveData,
     FeedbackRequest,
     GetRequest,
     MemoryListData,
     SearchRequest,
+    SelfEvolveRequest,
     UpdateRequest,
 )
 from .services import MemoryService, get_memory_service
@@ -43,6 +50,9 @@ SearchResponse = ApiResponse[MemoryListData]
 DeleteResponse = ApiResponse[None]
 UpdateResponse = ApiResponse[None]
 FeedbackResponse = ApiResponse[None]
+SelfEvolveResponse = ApiResponse[FeedbackEvoEvolveData]
+FeedbackEvoCollectResponse = ApiResponse[FeedbackEvoCollectData]
+EvolutionRollbackResponse = ApiResponse[None]
 DreamingResponse = ApiResponse[None]
 SCOPE_MEM_WRITE = "memory:write"
 SCOPE_MEM_READ = "memory:read"
@@ -105,6 +115,36 @@ async def feedback_memory(
     service: MemoryService = Depends(get_memory_service),
 ) -> FeedbackResponse:
     result = await service.feedback(auth, payload)
+    return to_status_api_response(result, auth.request_id)
+
+
+@router.post("/self-evolve", response_model=SelfEvolveResponse)
+async def self_evolve_memory(
+    payload: SelfEvolveRequest,
+    auth: AuthContext = Depends(require_scopes(SCOPE_MEM_WRITE)),
+    service: MemoryService = Depends(get_memory_service),
+) -> SelfEvolveResponse:
+    result = await service.self_evolve(auth, payload)
+    return to_feedback_evo_evolve_api_response(result, auth.request_id)
+
+
+@router.post("/feedback-evo/collect", response_model=FeedbackEvoCollectResponse)
+async def collect_feedback_evo_memory(
+    payload: FeedbackEvoCollectRequest,
+    auth: AuthContext = Depends(require_scopes(SCOPE_MEM_WRITE)),
+    service: MemoryService = Depends(get_memory_service),
+) -> FeedbackEvoCollectResponse:
+    result = await service.collect_feedback_evo(auth, payload)
+    return to_feedback_evo_collect_api_response(result, auth.request_id)
+
+
+@router.post("/evolution/rollback", response_model=EvolutionRollbackResponse)
+async def rollback_evolution_memory(
+    payload: EvolutionRollbackRequest,
+    auth: AuthContext = Depends(require_scopes(SCOPE_MEM_WRITE)),
+    service: MemoryService = Depends(get_memory_service),
+) -> EvolutionRollbackResponse:
+    result = await service.rollback_evolution(auth, payload)
     return to_status_api_response(result, auth.request_id)
 
 

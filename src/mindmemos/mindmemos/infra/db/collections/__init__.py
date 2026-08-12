@@ -10,6 +10,8 @@ from __future__ import annotations
 from .add_record import AddRecordRepository
 from .base import CollectionRepository
 from .entity import EntityRepository
+from .evolution_state import EvolutionStateRepository
+from .feedback_event import FeedbackEventRepository
 from .memory import MemoryRepository
 from .schema_add_buffer import SchemaAddBufferRepository
 from .search_record import SearchRecordRepository
@@ -20,6 +22,8 @@ __all__ = [
     "AddRecordRepository",
     "CollectionRepository",
     "EntityRepository",
+    "EvolutionStateRepository",
+    "FeedbackEventRepository",
     "MemoryRepository",
     "SchemaAddBufferRepository",
     "SearchRecordRepository",

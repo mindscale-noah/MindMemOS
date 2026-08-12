@@ -157,6 +157,8 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
 
         hits = await self._with_graph_related_hits(result.hits, filters, context)
         ranked_hits = _rank_by_score(hits)
+        if scfg.tag_weights:
+            ranked_hits = _apply_tag_weights(ranked_hits, scfg.tag_weights)
         lineage_by_id, derived_to_by_id = await self._lineage_for_existing_hits(ranked_hits, context)
         candidates = [
             _to_memory_search_item(
@@ -436,6 +438,23 @@ def _rank_by_score(hits: list[MemoryDbSearchHit]) -> list[MemoryDbSearchHit]:
             ),
         )
     ]
+
+
+def _apply_tag_weights(
+    hits: list[MemoryDbSearchHit],
+    weights: dict[str, float],
+) -> list[MemoryDbSearchHit]:
+    """Multiply retrieval scores by tag weights and re-rank."""
+
+    weighted: list[MemoryDbSearchHit] = []
+    for hit in hits:
+        memory = hit.memory
+        tag = getattr(memory, "entity_type", None) or getattr(memory, "mem_type", None)
+        multiplier = weights.get(tag, 1.0) if tag is not None else 1.0
+        weighted.append(
+            hit.model_copy(update={"score": (hit.score or 0.0) * multiplier})
+        )
+    return _rank_by_score(weighted)
 
 
 def _lineage_for_hit(

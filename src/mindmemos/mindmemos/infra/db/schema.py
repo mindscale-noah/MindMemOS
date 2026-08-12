@@ -6,6 +6,8 @@ from ...config import QdrantConfig
 from .filters import (
     ADD_RECORD_PAYLOAD_INDEX_SCHEMA,
     ENTITY_PAYLOAD_INDEX_SCHEMA,
+    EVOLUTION_STATE_PAYLOAD_INDEX_SCHEMA,
+    FEEDBACK_EVENT_PAYLOAD_INDEX_SCHEMA,
     MEMORY_PAYLOAD_INDEX_SCHEMA,
     SCHEMA_ADD_BUFFER_PAYLOAD_INDEX_SCHEMA,
     SEARCH_RECORD_PAYLOAD_INDEX_SCHEMA,
@@ -23,6 +25,8 @@ SOURCE_COLLECTION = "source_item_v1"
 ADD_RECORD_COLLECTION = "add_record_v1"
 SCHEMA_ADD_BUFFER_COLLECTION = "schema_add_buffer_v1"
 SEARCH_RECORD_COLLECTION = "search_record_v1"
+FEEDBACK_EVENT_COLLECTION = "feedback_event_v1"
+EVOLUTION_STATE_COLLECTION = "evolution_state_v1"
 SKILL_VERSION_COLLECTION = "skill_version_v1"
 SKILL_BLOB_COLLECTION = "skill_blob_v1"
 SKILL_TRACE_PENDING_COLLECTION = "skill_trace_pending_v1"
@@ -120,6 +124,36 @@ def search_record_collection_spec(cfg: QdrantConfig) -> QdrantCollectionSpec:
     )
 
 
+def feedback_event_collection_spec(cfg: QdrantConfig) -> QdrantCollectionSpec:
+    """Return the Qdrant spec for ``feedback_event_v1``."""
+
+    return QdrantCollectionSpec(
+        name=cfg.feedback_event_collection,
+        vector_size=cfg.vector_size,
+        dense_vector_name=cfg.semantic_vector_name,
+        sparse_vector_name=cfg.bm25_vector_name,
+        distance=cfg.distance,  # type: ignore[arg-type]
+        enable_dense=False,
+        enable_sparse=False,
+        payload_indexes=list(FEEDBACK_EVENT_PAYLOAD_INDEX_SCHEMA),
+    )
+
+
+def evolution_state_collection_spec(cfg: QdrantConfig) -> QdrantCollectionSpec:
+    """Return the Qdrant spec for ``evolution_state_v1``."""
+
+    return QdrantCollectionSpec(
+        name=cfg.evolution_state_collection,
+        vector_size=cfg.vector_size,
+        dense_vector_name=cfg.semantic_vector_name,
+        sparse_vector_name=cfg.bm25_vector_name,
+        distance=cfg.distance,  # type: ignore[arg-type]
+        enable_dense=False,
+        enable_sparse=False,
+        payload_indexes=list(EVOLUTION_STATE_PAYLOAD_INDEX_SCHEMA),
+    )
+
+
 def skill_version_collection_spec(cfg: QdrantConfig) -> QdrantCollectionSpec:
     """Return the Qdrant spec for ``skill_version_v1``.
 
@@ -197,6 +231,8 @@ def all_collection_specs(cfg: QdrantConfig) -> list[QdrantCollectionSpec]:
         add_record_collection_spec(cfg),
         schema_add_buffer_collection_spec(cfg),
         search_record_collection_spec(cfg),
+        feedback_event_collection_spec(cfg),
+        evolution_state_collection_spec(cfg),
         skill_version_collection_spec(cfg),
         skill_blob_collection_spec(cfg),
         skill_trace_pending_collection_spec(cfg),

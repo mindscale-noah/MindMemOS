@@ -867,6 +867,8 @@ class AddCoreBuilder:
                         mem_type=planned.mem_type or "fact",
                         mem_extract_type="vanilla",
                         mem_extract_version="default_add_v1_chunked",
+                        entity_type=getattr(candidate, "entity_type", None),
+                        property_name=getattr(candidate, "property_name", None),
                         metadata=memory_metadata,
                         validate_from=event_time,
                         created_at=now,

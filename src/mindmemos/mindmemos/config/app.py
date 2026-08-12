@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import yaml
 from dotenv import load_dotenv
@@ -269,6 +269,12 @@ class QdrantConfig:
     search_record_collection: str = field(default="search_record_v1")
     """Qdrant search request/response record collection name"""
 
+    feedback_event_collection: str = field(default="feedback_event_v1")
+    """Qdrant feedback event collection name (feedback_evo task-end input)"""
+
+    evolution_state_collection: str = field(default="evolution_state_v1")
+    """Qdrant evolution state collection name (feedback_evo versioned state)"""
+
     skill_version_collection: str = field(default="skill_version_v1")
     """Qdrant skill version metadata collection name"""
 
@@ -413,8 +419,49 @@ class PipelineConfig:
     feedback: str = field(default="default_feedback")
     """Feedback pipeline implementation name."""
 
+    feedback_evo: str = field(default="feedback_evo")
+    """Feedback-driven self-evolution pipeline implementation name."""
+
     dreaming: str = field(default="default_dreaming")
     """Dreaming pipeline implementation name."""
+
+
+@dataclass
+class FeedbackEvoConfig:
+    """Configuration for the ``feedback_evo`` self-evolution mode."""
+
+    enabled: bool = True
+    """Master switch for the feedback-driven evolution loop."""
+
+    min_signals_to_evolve: int = 5
+    """Minimum accumulated signals before an evolution round is allowed."""
+
+    max_changes_per_evolution: int | None = None
+    """Maximum parameter changes per evolution round; None means unlimited."""
+
+    require_signal_confidence: float = 0.7
+    """Minimum aggregated signal confidence required to apply a change."""
+
+    max_numeric_change_ratio: float = 0.5
+    """Maximum relative change for numeric evolvable params (0.5 = +/-50%)."""
+
+    max_entity_type_delta: int = 2
+    """Maximum number of added/removed entity_type vocabulary entries per round."""
+
+    state_store: str = "db_and_file"
+    """Persistence mode: ``db_and_file`` (Qdrant authoritative + file mirror)."""
+
+    file_history_dir: str = "config/evolved"
+    """Directory where evolution version history is mirrored as JSON files."""
+
+    defaults: dict[str, Any] = field(
+        default_factory=lambda: {"add": {}, "search": {}}
+    )
+    """Extra initial values layered on top of the vanilla config copy at seed time.
+
+    Empty by default: seeding copies the current vanilla add/search configs, so
+    evolution starts from a baseline identical to vanilla behavior.
+    """
 
 
 @dataclass
@@ -554,6 +601,9 @@ class MemoryConfig:
 
     pipelines: PipelineConfig = field(default_factory=PipelineConfig)
     """Pipeline implementation selection."""
+
+    feedback_evo: FeedbackEvoConfig = field(default_factory=FeedbackEvoConfig)
+    """Feedback-driven self-evolution configuration."""
 
     auth: AuthConfig = field(default_factory=AuthConfig)
     """HTTP API authentication config."""
