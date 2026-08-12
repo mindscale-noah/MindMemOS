@@ -9,7 +9,14 @@ from ....components.searcher.schema import SchemaSearchExpander, SchemaSearchQue
 from ....components.text import SparseVectorEncoder, TextPreprocessor, detect_prompt_language, get_text_preprocessor
 from ....config import get_config
 from ....config.algo.search import SearchConfig
-from ....llm import EmbedClient, LLMClient, RerankClient, get_embed_client, get_llm_client
+from ....llm import (
+    EmbedClient,
+    LLMClient,
+    RerankClient,
+    get_embed_client,
+    get_llm_client,
+    require_model_endpoint,
+)
 from ....mappers import parse_schema_search_filters
 from ....prompts import SearchPromptSet, get_search_prompts
 from ....typing import (
@@ -89,6 +96,10 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
         request_prompts = self._explicit_prompts or get_search_prompts(detected_lang)
 
         # Resolve project-scoped deps from the request-scoped config (ContextVar).
+        if self._explicit_llm is None:
+            require_model_endpoint("chat")
+        if self._explicit_embed is None:
+            require_model_endpoint("embedding")
         llm = self._explicit_llm or get_llm_client()
         embed = self._explicit_embed or get_embed_client()
         rerank = self._explicit_rerank if self._explicit_rerank is not None else _optional_rerank_client()

@@ -7,6 +7,7 @@ from typing import Any
 from ....llm import LLMClient
 from ....logging import get_logger
 from ....prompts import AddPromptSet
+from ._runtime_clients import provider_binding_runtime_enabled, resolve_llm_client
 from ._schema_utils import dedupe_non_empty, parse_json_object
 from .base import SchemaSearchFieldExtractorProtocol
 
@@ -45,7 +46,7 @@ class SchemaSearchFieldExtractor(SchemaSearchFieldExtractorProtocol):
         if not fields:
             return []
 
-        if augment and self._llm_client is not None and augment_count > 0:
+        if augment and (self._llm_client is not None or provider_binding_runtime_enabled()) and augment_count > 0:
             effective_prompts = prompt_set or self._prompt_set
             if effective_prompts is not None:
                 fields.extend(
@@ -73,7 +74,7 @@ class SchemaSearchFieldExtractor(SchemaSearchFieldExtractorProtocol):
             .replace("{augment_count}", str(augment_count))
         )
         try:
-            response = await self._llm_client.chat(
+            response = await resolve_llm_client(self._llm_client).chat(
                 task="memory.add.search_field_augment",
                 messages=[{"role": "user", "content": prompt}],
                 format_parser=parse_json_object,

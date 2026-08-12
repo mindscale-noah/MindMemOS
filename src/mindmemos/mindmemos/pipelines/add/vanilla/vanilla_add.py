@@ -15,7 +15,12 @@ from ....components.kafka import memory_add_dispatch_key
 from ....components.text import MemoryVectorizer, SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
 from ....config import TextProcessingConfig, VanillaAddConfig, get_config
 from ....errors import ConfigNotInitializedError
-from ....llm import get_embed_client, get_llm_client
+from ....llm import (
+    get_embed_client,
+    get_llm_client,
+    provider_binding_runtime_enabled,
+    require_model_endpoint,
+)
 from ....logging import get_logger, traced
 from ....typing import (
     AddPipelineAsyncResult,
@@ -100,11 +105,9 @@ class VanillaAddPipeline(MemoryDbPipelineMixin):
         self._text_preprocessor = text_preprocessor or get_text_preprocessor(cfg)
         self._sparse_encoder = sparse_encoder or SparseVectorEncoder(cfg)
 
-        # Lazily resolve global LLM/embed singletons when the caller leaves clients unset.
-        resolved_llm = _try_get_llm() if llm_client is _CLIENT_UNSET else llm_client
-        resolved_embed = _try_get_embed() if embed_client is _CLIENT_UNSET else embed_client
-
-        self._memory_extractor = memory_extractor or VanillaMemoryExtractor(llm_client=resolved_llm)
+        self._explicit_llm_client = llm_client
+        self._explicit_embed_client = embed_client
+        self._explicit_memory_extractor = memory_extractor
         self._candidate_deduplicator = candidate_deduplicator or CandidateDeduplicator()
         self._related_memory_recall = related_memory_recall or RelatedMemoryRecall(
             db_reader=self.db_reader,
@@ -113,22 +116,57 @@ class VanillaAddPipeline(MemoryDbPipelineMixin):
         self._safety_gate = safety_gate or AddSafetyGate()
         self._explicit_consistency = consistency
         self._explicit_vanilla_add_config = vanilla_add_config
+        self._builder = None
+        if llm_client is not _CLIENT_UNSET and embed_client is not _CLIENT_UNSET:
+            self._builder = self._build_runtime(llm_client, embed_client)
 
+    def _build_runtime(self, llm_client, embed_client) -> AddCoreBuilder:
+        memory_extractor = self._explicit_memory_extractor or VanillaMemoryExtractor(llm_client=llm_client)
         vectorizer = MemoryVectorizer(
             sparse_encoder=self._sparse_encoder,
-            embed_client=resolved_embed,
+            embed_client=embed_client,
             text_preprocessor=self._text_preprocessor,
         )
-
-        self._builder = AddCoreBuilder(
+        return AddCoreBuilder(
             text_preprocessor=self._text_preprocessor,
-            memory_extractor=self._memory_extractor,
+            memory_extractor=memory_extractor,
             candidate_deduplicator=self._candidate_deduplicator,
             related_memory_recall=self._related_memory_recall,
             safety_gate=self._safety_gate,
             vectorizer=vectorizer,
-            llm_client=resolved_llm,
+            llm_client=llm_client,
         )
+
+    def _resolve_builder(self) -> AddCoreBuilder:
+        """Build model-dependent components from the active request config.
+
+        The pipeline itself is cached across requests. Dynamic provider clients
+        therefore remain local to this invocation and are never assigned to the
+        shared pipeline instance.
+        """
+
+        if self._builder is not None:
+            return self._builder
+
+        dynamic_provider_routing = provider_binding_runtime_enabled()
+        if dynamic_provider_routing:
+            if self._explicit_llm_client is _CLIENT_UNSET:
+                require_model_endpoint("chat")
+            if self._explicit_embed_client is _CLIENT_UNSET:
+                require_model_endpoint("embedding")
+
+        if self._explicit_llm_client is _CLIENT_UNSET:
+            llm_client = get_llm_client() if dynamic_provider_routing else _try_get_llm()
+        else:
+            llm_client = self._explicit_llm_client
+        if self._explicit_embed_client is _CLIENT_UNSET:
+            embed_client = get_embed_client() if dynamic_provider_routing else _try_get_embed()
+        else:
+            embed_client = self._explicit_embed_client
+        builder = self._build_runtime(llm_client, embed_client)
+        if not dynamic_provider_routing:
+            self._builder = builder
+        return builder
 
     def _get_consistency(self) -> Consistency:
         if self._explicit_consistency is not None:
@@ -150,7 +188,8 @@ class VanillaAddPipeline(MemoryDbPipelineMixin):
     ) -> AddPipelineSyncResult:
         """Synchronously write normalized text memories and their mentioned entities."""
 
-        plan, events, update_commands = await self._builder.build(
+        builder = self._resolve_builder()
+        plan, events, update_commands = await builder.build(
             inp,
             context,
             consistency=self._get_consistency(),

@@ -179,6 +179,9 @@ class QdrantStore(Protocol):
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll memories."""
 
+    async def count_memories(self, project_id: str, *, filter_: Any | None = None) -> int:
+        """Count memories."""
+
     async def scroll_add_records(
         self,
         project_id: str,

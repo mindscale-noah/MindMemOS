@@ -8,6 +8,7 @@ from ..config import get_config
 from ..infra.kafka import ConsumedMessage
 from ..logging import get_logger
 from ..pipelines import create_pipeline
+from ..provider_bindings import provider_config_context
 from ..typing import DreamingPipelineInput, MemoryRequestContext
 
 TOPIC = "memory.dreaming"
@@ -26,16 +27,18 @@ async def handle_memory_dreaming(msg: ConsumedMessage) -> None:
     body = msg.json()
     context = MemoryRequestContext.model_validate(body["context"])
     payload = DreamingPipelineInput.model_validate(body.get("input") or {})
-    pipeline = create_pipeline(type="dreaming", name=get_config().pipelines.dreaming)
-    if not hasattr(pipeline, "dream_sync"):
-        raise TypeError("configured dreaming pipeline must expose dream_sync for Kafka worker execution")
+    config_context = await provider_config_context(context)
+    with config_context:
+        pipeline = create_pipeline(type="dreaming", name=get_config().pipelines.dreaming)
+        if not hasattr(pipeline, "dream_sync"):
+            raise TypeError("configured dreaming pipeline must expose dream_sync for Kafka worker execution")
 
-    logger.info(
-        "processing async memory dreaming",
-        request_id=context.request_id,
-        account_id=context.account_id,
-        project_id=context.project_id,
-        topic=msg.topic,
-        offset=msg.offset,
-    )
-    await pipeline.dream_sync(payload, context)
+        logger.info(
+            "processing async memory dreaming",
+            request_id=context.request_id,
+            account_id=context.account_id,
+            project_id=context.project_id,
+            topic=msg.topic,
+            offset=msg.offset,
+        )
+        await pipeline.dream_sync(payload, context)

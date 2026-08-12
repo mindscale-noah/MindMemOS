@@ -112,13 +112,24 @@ Optional plugin config:
   "cli": "mindmemos",
   "topK": 5,
   "addMode": "async",
-  "userId": "optional-user-override",
+  "userId": "alice",
   "appId": "openclaw",
   "sessionId": "optional-session-override",
   "minQueryLength": 2,
   "maxConversationMessages": 80
 }
 ```
+
+`userId` scopes both recall and storage to the same user. Configure it with:
+
+```bash
+openclaw config set plugins.entries.mindmemos-memory.config.userId alice
+openclaw gateway restart
+```
+
+If `userId` is omitted, the plugin runs project-wide searches. Its `memory add`
+calls still inherit the default user from the local `mindmemos` CLI config; if
+neither location provides a user, storage fails because add requires `user_id`.
 
 The `cli` value is spawned by the gateway, which (under launchd/systemd) does
 not inherit your shell `PATH`. The default `"mindmemos"` therefore fails with

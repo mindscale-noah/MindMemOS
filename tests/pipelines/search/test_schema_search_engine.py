@@ -9,6 +9,7 @@ import pytest
 from mindmemos.components.memory_modeling.schema import TemporalEntity
 from mindmemos.config import init_config, reset_config
 from mindmemos.config.algo.search import SearchConfig
+from mindmemos.pipelines.search.base import SearchEngineOptions
 from mindmemos.pipelines.search.schema import SchemaSearchEngine
 from mindmemos.typing.memory import MemoryRequestContext, MemoryView
 from mindmemos.typing.memory_db import MemoryDbSearchHit, MemoryDbSearchResult
@@ -139,6 +140,37 @@ async def test_schema_search_engine_uses_schema_search_config_not_agentic_round_
     assert call["top_k"] is None
     assert call["top_n"] == 5
     assert call["use_reranker"] is None
+
+
+@pytest.mark.asyncio
+async def test_schema_search_uses_explicit_candidate_pool_before_final_top_k(config_scope) -> None:
+    search_config = SearchConfig()
+    query_builder = FakeQueryBuilder(
+        current_time_mode=search_config.schema_search.current_time_mode,
+        min_time_window_days=search_config.schema_search.min_time_window_days,
+    )
+    expander = FakeExpander()
+    engine = SchemaSearchEngine(
+        search_config=search_config,
+        llm_client=SimpleNamespace(),
+        embed_client=SimpleNamespace(),
+        rerank_client=None,
+        entity_manager=FakeEntityManager(),
+        db_reader=SimpleNamespace(),
+        db_writer=SimpleNamespace(),
+    )
+    engine._query_builder = query_builder
+    engine._expander = expander
+
+    await engine.search_candidates(
+        SearchPipelineInput(query="Qdrant", search_pipeline="schema", top_k=1),
+        make_context(),
+        options=SearchEngineOptions(recall_top_k=7, result_top_n=7),
+    )
+
+    call = expander.calls[0]
+    assert call["top_k"] == 7
+    assert call["top_n"] == 7
 
 
 @pytest.mark.asyncio

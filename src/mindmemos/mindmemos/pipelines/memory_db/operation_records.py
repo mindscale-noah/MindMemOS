@@ -170,6 +170,19 @@ class MemoryOperationRecorder:
             },
         )
 
+    async def mark_add_cancelled(self, ctx: MemoryRequestContext, add_record_id: str, reason: str) -> None:
+        """Patch an add record when streaming work is explicitly cancelled."""
+
+        await self._add_records.patch(
+            ctx.project_id,
+            add_record_id,
+            {
+                "status": "cancelled",
+                "error": reason,
+                "task_completed_at": utcnow(),
+            },
+        )
+
     async def record_search(
         self,
         inp: SearchPipelineInput,

@@ -8,7 +8,7 @@ from uuid import uuid4
 from ...components.extractor.schema import memory_embedding_text
 from ...components.text import SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
 from ...config import TextProcessingConfig, get_config
-from ...llm import EmbedClient, get_embed_client
+from ...llm import EmbedClient, get_embed_client, provider_binding_runtime_enabled, require_model_endpoint
 from ...typing import (
     REL_DERIVED_FROM,
     FeedbackActionResult,
@@ -245,7 +245,11 @@ class FeedbackActionExecutor:
     @property
     def _embed_client(self) -> EmbedClient:
         if self.__embed_client is None:
-            self.__embed_client = get_embed_client()
+            require_model_endpoint("embedding")
+            client = get_embed_client()
+            if not provider_binding_runtime_enabled():
+                self.__embed_client = client
+            return client
         return self.__embed_client
 
     @_embed_client.setter

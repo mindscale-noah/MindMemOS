@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-from ...llm import LLMClient, get_llm_client
+from ...llm import LLMClient, get_llm_client, require_model_endpoint
 from ...logging import get_logger
 from ...prompts import CONV_BOUNDARY_DETECTION_PROMPT
 
@@ -83,6 +83,8 @@ class EpisodesChunker:
         resplit_prompt: str | None,
     ) -> list[EpisodeBoundary]:
         prompt = boundary_prompt.replace("{conversation_list}", _format_entries(entries))
+        if self.llm_client is None:
+            require_model_endpoint("chat")
         llm_client = self.llm_client or get_llm_client()
         response = await llm_client.chat(
             task="memory.add.episode_boundary",
@@ -159,6 +161,8 @@ class EpisodesChunker:
             )
 
             try:
+                if self.llm_client is None:
+                    require_model_endpoint("chat")
                 llm_client = self.llm_client or get_llm_client()
                 response = await llm_client.chat(
                     task="memory.add.episode_resplit",

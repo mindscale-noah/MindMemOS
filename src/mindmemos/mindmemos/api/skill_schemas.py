@@ -18,7 +18,7 @@ from ..typing import (
     SkillVersion,
     SkillVersionStatus,
 )
-from .schemas import NonEmptyStr
+from .schemas import ActorIdentityRequest, NonEmptyStr
 
 
 class SkillRegisterRequest(BaseModel):
@@ -83,7 +83,7 @@ class SkillSyncData(BaseModel):
     results: list[SkillSyncResult]
 
 
-class SkillEvolveRequest(BaseModel):
+class SkillEvolveRequest(ActorIdentityRequest):
     """HTTP body for ``POST /v1/skills/evolve``.
 
     ``cloud_skill_id`` selects the injected add traces that drive the
