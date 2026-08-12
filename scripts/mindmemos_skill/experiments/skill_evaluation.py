@@ -34,7 +34,7 @@ from mindmemos_skill.datasets import (
     TaskDataset,
 )
 from mindmemos_skill.llm import LLMCallSink, LLMClient, get_router, llm_run_context
-from mindmemos_skill.typing import Skill, Task, compute_skill_content_hash
+from mindmemos_skill.typing import Skill, SkillInjectionMode, Task, compute_skill_content_hash
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,12 +239,18 @@ def build_agent(
     max_turns: int,
     reasoning_effort: str | None,
     max_completion_tokens: int,
+    skill_injection_mode: SkillInjectionMode = SkillInjectionMode.TOOL,
+    tree_router_temperature: float = 0.0,
+    tree_router_max_tokens: int = 512,
 ) -> ReactAgent:
     return ReactAgent(
         {
             "model": model,
             "max_turns": max_turns,
             "reasoning_effort": reasoning_effort,
+            "skill_injection_mode": skill_injection_mode,
+            "tree_router_temperature": tree_router_temperature,
+            "tree_router_max_tokens": tree_router_max_tokens,
             "model_kwargs": {"max_completion_tokens": max_completion_tokens},
         },
         llm=client,
@@ -342,7 +348,7 @@ def summarize(
     task_means = [mean(values) for values in task_rewards.values()]
     correct = sum(reward > 0 for reward in rewards)
     passed_tasks = sum(any(reward > 0 for reward in values) for values in task_rewards.values())
-    return {
+    summary = {
         "mode": "skill" if skill is not None else "no_skill",
         "skill_content_hash": skill.content_hash if skill is not None else None,
         "tasks": len(task_rewards),
@@ -359,6 +365,25 @@ def summarize(
         "task_mean_reward": distribution(task_means),
         "task_mean_reward_histogram": histogram(task_means),
     }
+    routing = [
+        trajectory.metadata["treeskill_routing"]
+        for outcome in outcomes
+        if (trajectory := outcome.trajectory) is not None
+        and isinstance(trajectory.metadata.get("treeskill_routing"), dict)
+    ]
+    if routing:
+        full_chars = sum(int(item.get("full_char_count", 0)) for item in routing)
+        routed_chars = sum(int(item.get("routed_char_count", 0)) for item in routing)
+        summary["treeskill_routing"] = {
+            "requests": len(routing),
+            "full_char_count": full_chars,
+            "routed_char_count": routed_chars,
+            "context_saving_ratio": 0.0 if full_chars == 0 else 1.0 - (routed_chars / full_chars),
+            "fallback_requests": sum(
+                any(bool(detail.get("fallback_used")) for detail in item.get("skills", {}).values()) for item in routing
+            ),
+        }
+    return summary
 
 
 def distribution(values: Sequence[float]) -> dict[str, Any]:

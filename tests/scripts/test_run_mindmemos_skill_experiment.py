@@ -44,8 +44,7 @@ def test_build_invocation_selects_method_environment_and_boolean_flags(tmp_path:
     assert invocation.environment == "livemath"
     assert invocation.run_id == "livemath_skill_grpo_with_replay_buffer_20260102-030405"
     assert invocation.output_dir == Path(
-        "outputs/livemath/skill_grpo_with_replay_buffer/"
-        "livemath_skill_grpo_with_replay_buffer_20260102-030405"
+        "outputs/livemath/skill_grpo_with_replay_buffer/livemath_skill_grpo_with_replay_buffer_20260102-030405"
     )
     assert invocation.command[:7] == ["uv", "run", "--package", "mindmemos-skill", "--extra", "llm", "python"]
     runner, arguments = runner_command(invocation)
@@ -120,6 +119,21 @@ def test_trace2skill_routes_to_family_runner_and_keeps_test_config(tmp_path: Pat
     assert runner.endswith("scripts/mindmemos_skill/runners/trace2skill.py")
     assert arguments[:2] == ["--algorithm", "trajectory_evidence_patch"]
     assert invocation.command[invocation.command.index("--test-rollouts") + 1] == "1"
+
+
+def test_treeskill_uses_trace2skill_family_and_explicit_router_config(tmp_path: Path) -> None:
+    invocation = SCRIPT.build_invocation(
+        CONFIG_ROOT / "treeskill" / "spreadsheetbench" / "default.yaml",
+        env_file_override=empty_env_file(tmp_path),
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    runner, arguments = runner_command(invocation)
+    assert runner.endswith("scripts/mindmemos_skill/runners/trace2skill.py")
+    assert arguments[:2] == ["--algorithm", "treeskill"]
+    assert invocation.command[invocation.command.index("--tree-router-max-tokens") + 1] == "512"
+    assert invocation.command[invocation.command.index("--annotation-mode") + 1] == "required"
 
 
 @pytest.mark.parametrize(

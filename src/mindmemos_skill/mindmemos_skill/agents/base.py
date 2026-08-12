@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from datetime import UTC, datetime
 from typing import Any, ClassVar, Generic, TypeVar, cast
 
@@ -47,7 +47,7 @@ class Agent(ABC, Generic[AgentConfigT]):
         self.config = cast(AgentConfigT, self.config_type.model_validate(raw_config))
         self._model_profile: dict[str, Any] = {}
         self._skill_runtimes = {
-            mode: runtime_type(mode)
+            mode: self._create_skill_runtime(mode, runtime_type)
             for mode, runtime_type in self.skill_runtime_types.items()
         }
         configured_mode = self.config.skill_injection_mode
@@ -78,6 +78,26 @@ class Agent(ABC, Generic[AgentConfigT]):
 
         runtime = self.get_skill_runtime(mode)
         return runtime.inject(list(skills))
+
+    def inject_skill_request(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        mode: SkillInjectionMode | None = None,
+    ) -> AbstractAsyncContextManager[SkillInjection]:
+        """Resolve query-aware routing and inject Skills for one request."""
+
+        runtime = self.get_skill_runtime(mode)
+        return runtime.injection_scope(request)
+
+    def _create_skill_runtime(
+        self,
+        mode: SkillInjectionMode,
+        runtime_type: type[SkillRuntime],
+    ) -> SkillRuntime:
+        """Construct one runtime; agents may override to inject dependencies."""
+
+        return runtime_type(mode)
 
     def bind_skills(self, trajectory: Trajectory) -> list[SkillBinding]:
         """Delegate binding to the same runtime mode persisted on the trajectory."""

@@ -126,6 +126,11 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
             environments=frozenset({"alfworld", "livemath", "spreadsheetbench"}),
             environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
         ),
+        _trace2skill(
+            "treeskill",
+            environments=frozenset({"spreadsheetbench"}),
+            environment_extras={"spreadsheetbench": ("spreadsheetbench",)},
+        ),
     )
 }
 
@@ -140,9 +145,7 @@ def get_experiment(name: str, *, family: ExperimentFamily | None = None) -> Expe
 
 
 def list_experiments(*, family: ExperimentFamily | None = None) -> list[str]:
-    return sorted(
-        name for name, spec in EXPERIMENTS.items() if family is None or spec.family is family
-    )
+    return sorted(name for name, spec in EXPERIMENTS.items() if family is None or spec.family is family)
 
 
 def dispatch_experiment(family: ExperimentFamily, name: str, argv: Sequence[str]) -> int:

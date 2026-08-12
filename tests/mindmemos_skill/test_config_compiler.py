@@ -74,7 +74,9 @@ def test_component_catalog_keeps_factory_config_capabilities_and_requirements() 
     assert react.config_model is ReactAgentConfig
     assert react.capabilities == frozenset({"execute"})
     assert react.requirements.requires_model_ref is True
-    assert react.requirements.supported_skill_injection_modes == frozenset({"system_prompt", "tool"})
+    assert react.requirements.supported_skill_injection_modes == frozenset(
+        {"system_prompt", "tool", "tree_routed_system_prompt"}
+    )
     assert optimizer.factory is DemoOptimizer
     assert optimizer.config_model is DemoOptimizerConfig
     assert optimizer.capabilities == frozenset({"optimize"})

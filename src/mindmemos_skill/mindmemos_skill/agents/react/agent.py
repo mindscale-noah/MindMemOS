@@ -16,10 +16,11 @@ from ...typing import (
     Trajectory,
 )
 from ..base import Agent
-from ..skill_runtime import SkillInjection
+from ..skill_runtime import SkillRuntime, apply_skill_injection
 from .config import ReactAgentConfig
 from .skill_runtime import ReactSkillRuntime
 from .tool import Tool
+from .tree_skill_runtime import ReactTreeSkillRuntime
 
 _SKILL_TOOL_NAME = "skill"
 
@@ -56,6 +57,7 @@ class ReactAgent(Agent[ReactAgentConfig]):
     skill_runtime_types = {
         SkillInjectionMode.TOOL: ReactSkillRuntime,
         SkillInjectionMode.SYSTEM_PROMPT: ReactSkillRuntime,
+        SkillInjectionMode.TREE_ROUTED_SYSTEM_PROMPT: ReactTreeSkillRuntime,
     }
 
     def __init__(
@@ -65,8 +67,8 @@ class ReactAgent(Agent[ReactAgentConfig]):
         llm: ChatClient,
         tools: Sequence[Tool] = (),
     ) -> None:
-        super().__init__(config)
         self._llm = llm
+        super().__init__(config)
         self._tools: dict[str, Tool] = {}
         for candidate in tools:
             if candidate.name == _SKILL_TOOL_NAME:
@@ -83,8 +85,9 @@ class ReactAgent(Agent[ReactAgentConfig]):
         response_metadata: dict[str, Any] = {}
 
         try:
-            with self.inject_skills(request.skills, mode=config.skill_injection_mode) as injection:
-                messages = self._apply_skill_injection(messages, injection)
+            async with self.inject_skill_request(request, mode=config.skill_injection_mode) as injection:
+                messages = apply_skill_injection(messages, injection)
+                response_metadata.update(injection.metadata)
                 tools = dict(self._tools)
                 tools.update({tool.name: tool for tool in injection.tools})
 
@@ -93,10 +96,12 @@ class ReactAgent(Agent[ReactAgentConfig]):
                     response = await self._call_llm(request, config, messages, schemas)
                     assistant = response.to_assistant_message()
                     messages.append(assistant)
-                    response_metadata = {
-                        "finish_reason": response.finish_reason,
-                        "response_model": response.model,
-                    }
+                    response_metadata.update(
+                        {
+                            "finish_reason": response.finish_reason,
+                            "response_model": response.model,
+                        }
+                    )
 
                     tool_calls = assistant.get("tool_calls") or []
                     if not tool_calls:
@@ -128,6 +133,20 @@ class ReactAgent(Agent[ReactAgentConfig]):
             error_info=error_info,
             metadata=response_metadata,
         )
+
+    def _create_skill_runtime(
+        self,
+        mode: SkillInjectionMode,
+        runtime_type: type[SkillRuntime],
+    ) -> SkillRuntime:
+        if runtime_type is ReactTreeSkillRuntime:
+            return ReactTreeSkillRuntime(
+                mode,
+                llm=self._llm,
+                temperature=self.config.tree_router_temperature,
+                max_tokens=self.config.tree_router_max_tokens,
+            )
+        return super()._create_skill_runtime(mode, runtime_type)
 
     async def _call_llm(
         self,
@@ -246,27 +265,6 @@ class ReactAgent(Agent[ReactAgentConfig]):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": request.task.instruction})
         return messages
-
-    @staticmethod
-    def _apply_skill_injection(
-        messages: list[dict[str, Any]],
-        injection: SkillInjection,
-    ) -> list[dict[str, Any]]:
-        merged = [*injection.system_messages, *messages]
-        suffix = injection.system_prompt_suffix
-        if suffix is None:
-            return merged
-
-        for index, message in enumerate(merged):
-            if message.get("role") != "system":
-                continue
-            content = message.get("content")
-            base_prompt = content if isinstance(content, str) else ""
-            combined = f"{base_prompt.rstrip()}\n\n{suffix}" if base_prompt else suffix
-            merged[index] = {**message, "content": combined}
-            return merged
-
-        return [{"role": "system", "content": suffix}, *merged]
 
     def _trajectory(
         self,

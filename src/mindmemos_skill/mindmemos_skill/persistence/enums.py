@@ -22,6 +22,7 @@ class SkillInjectionMode(StrEnum):
 
     TOOL = "tool"
     SYSTEM_PROMPT = "system_prompt"
+    TREE_ROUTED_SYSTEM_PROMPT = "tree_routed_system_prompt"
     FILESYSTEM = "filesystem"
 
 

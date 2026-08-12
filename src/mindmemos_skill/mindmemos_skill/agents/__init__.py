@@ -7,7 +7,7 @@ from .claude import ClaudeAgentConfig, ClaudeSDKAgentConfig
 from .config import AgentConfig
 from .openclaw import OpenClawAgentConfig
 from .react import ReactAgentConfig, Tool, tool
-from .skill_runtime import SkillInjection, SkillRuntime
+from .skill_runtime import RoutedSkillSnapshot, SkillInjection, SkillRoute, SkillRuntime
 
 __all__ = [
     "Agent",
@@ -17,7 +17,9 @@ __all__ = [
     "ClaudeSDKAgentConfig",
     "OpenClawAgentConfig",
     "ReactAgentConfig",
+    "RoutedSkillSnapshot",
     "SkillInjection",
+    "SkillRoute",
     "SkillRuntime",
     "Tool",
     "get_agent",

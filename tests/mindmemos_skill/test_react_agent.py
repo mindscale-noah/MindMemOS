@@ -107,7 +107,11 @@ async def test_react_agent_runs_openai_tool_loop_and_persists_messages() -> None
 
     assert isinstance(agent, ReactAgent)
     assert agent.supported_skill_injection_modes == frozenset(
-        {SkillInjectionMode.TOOL, SkillInjectionMode.SYSTEM_PROMPT}
+        {
+            SkillInjectionMode.TOOL,
+            SkillInjectionMode.SYSTEM_PROMPT,
+            SkillInjectionMode.TREE_ROUTED_SYSTEM_PROMPT,
+        }
     )
     assert isinstance(agent.get_skill_runtime(SkillInjectionMode.TOOL), ReactSkillRuntime)
     assert trajectory.execution.status is TrajectoryStatus.SUCCEEDED

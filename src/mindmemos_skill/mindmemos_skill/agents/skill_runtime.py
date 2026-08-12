@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any, AsyncIterator, ClassVar
 
 from ..typing import (
+    AgentExecutionRequest,
     Skill,
     SkillBinding,
     SkillInjectionMode,
@@ -26,6 +27,24 @@ class SkillInjection:
     tools: list[Any] = field(default_factory=list)
     skill_names: set[str] = field(default_factory=set)
     workspace: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class RoutedSkillSnapshot:
+    """Ephemeral routed content for one persisted Skill version."""
+
+    skill_name: str
+    content: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class SkillRoute:
+    """Normalized result returned by a query-aware runtime callback."""
+
+    skills: tuple[RoutedSkillSnapshot, ...]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class SkillRuntime(ABC):
@@ -47,6 +66,33 @@ class SkillRuntime(ABC):
     def bind(self, trajectory: Trajectory) -> list[SkillBinding]:
         """Interpret this runtime's evidence and bind loaded Skill versions."""
 
+    async def route(self, request: AgentExecutionRequest) -> SkillRoute | None:
+        """Optionally prepare query-specific Skill content before injection."""
+
+        del request
+        return None
+
+    def inject_routed(
+        self,
+        request: AgentExecutionRequest,
+        route: SkillRoute,
+    ) -> AbstractContextManager[SkillInjection]:
+        """Inject a prepared route; legacy runtimes delegate to full injection."""
+
+        del route
+        return self.inject(request.skills)
+
+    @asynccontextmanager
+    async def injection_scope(self, request: AgentExecutionRequest) -> AsyncIterator[SkillInjection]:
+        """Resolve an optional route and expose one request-scoped injection."""
+
+        route = await self.route(request)
+        manager = self.inject(request.skills) if route is None else self.inject_routed(request, route)
+        with manager as injection:
+            if route is not None:
+                injection.metadata = {**route.metadata, **injection.metadata}
+            yield injection
+
     def _build_bindings(self, trajectory: Trajectory, loaded_names: set[str]) -> list[SkillBinding]:
         """Build canonical bindings after a runtime has interpreted its evidence."""
 
@@ -64,4 +110,31 @@ class SkillRuntime(ABC):
         ]
 
 
-__all__ = ["SkillInjection", "SkillRuntime"]
+def apply_skill_injection(
+    messages: list[dict[str, Any]],
+    injection: SkillInjection,
+) -> list[dict[str, Any]]:
+    """Apply normalized Skill messages and suffix to one conversation."""
+
+    merged = [*injection.system_messages, *messages]
+    suffix = injection.system_prompt_suffix
+    if suffix is None:
+        return merged
+    for index, message in enumerate(merged):
+        if message.get("role") != "system":
+            continue
+        content = message.get("content")
+        base_prompt = content if isinstance(content, str) else ""
+        combined = f"{base_prompt.rstrip()}\n\n{suffix}" if base_prompt else suffix
+        merged[index] = {**message, "content": combined}
+        return merged
+    return [{"role": "system", "content": suffix}, *merged]
+
+
+__all__ = [
+    "RoutedSkillSnapshot",
+    "SkillInjection",
+    "SkillRoute",
+    "SkillRuntime",
+    "apply_skill_injection",
+]

@@ -85,6 +85,7 @@ class SkillUsageType(StrEnum):
 class SkillInjectionMode(StrEnum):
     TOOL = "tool"
     SYSTEM_PROMPT = "system_prompt"
+    TREE_ROUTED_SYSTEM_PROMPT = "tree_routed_system_prompt"
     FILESYSTEM = "filesystem"
 
 
@@ -278,9 +279,7 @@ class SkillTrajectory(ContractModel):
         return self
 
 
-_TRAJECTORY_DERIVED_FIELDS = frozenset(
-    {"trajectory_hash", "metadata_revision", "metadata_updated_at", "received_at"}
-)
+_TRAJECTORY_DERIVED_FIELDS = frozenset({"trajectory_hash", "metadata_revision", "metadata_updated_at", "received_at"})
 
 
 def trajectory_source_payload(value: SkillTrajectory | dict[str, Any]) -> dict[str, JsonValue]:

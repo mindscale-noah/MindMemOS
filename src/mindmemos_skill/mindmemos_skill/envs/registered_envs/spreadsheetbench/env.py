@@ -19,8 +19,9 @@ from pydantic import Field
 
 from ....agents.base import Agent
 from ....agents.react.tool import Tool
+from ....agents.skill_runtime import SkillInjection, apply_skill_injection
 from ....registry import ComponentType, register
-from ....typing import EnvConfig, Reward, Skill, Task, Trajectory
+from ....typing import EnvConfig, Reward, Skill, SkillInjectionMode, Task, Trajectory
 from ...base import BaseEnv, EnvRolloutContext, PreparedRollout
 from .evaluator import compare_workbooks
 from .prompts import build_messages
@@ -82,25 +83,14 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         init_workbook = self._workbook(source_dir, "init")
         golden_workbook = self._workbook(source_dir, "golden")
         shutil.copyfile(init_workbook, workspace / "input.xlsx")
-        skill_directories: dict[str, Path] = {}
-        skills_root = workspace / "skills"
-        skills_root.mkdir()
-        for skill in skills:
-            name = self._safe_path_part(skill.name)
-            directory = skills_root / name
-            directory.mkdir()
-            (directory / "SKILL.md").write_text(skill.content, encoding="utf-8")
-            skill_directories[name] = directory
-        prepared.agent_request.options["skill_injection_mode"] = "tool"
-        tools = SpreadsheetTools(workspace, timeout_seconds=self.config.shell_timeout_seconds).as_tools()
-        if skill_directories:
-            tools.append(SpreadsheetSkillSet(skill_directories).as_tool())
         prepared.runtime_state = {
             "workspace": workspace,
             "golden_workbook": golden_workbook,
-            "skill_names": list(skill_directories),
-            "messages": build_messages(task=task, skill_names=list(skill_directories)),
-            "tools": tools,
+            "skills": list(skills),
+            "skill_names": [],
+            "initial_messages": [],
+            "messages": [],
+            "tools": SpreadsheetTools(workspace, timeout_seconds=self.config.shell_timeout_seconds).as_tools(),
             "error": None,
             "finished": False,
             "turns": 0,
@@ -111,8 +101,44 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
     async def _execute(self, *, agent: Agent[Any], prepared: PreparedRollout) -> Trajectory:
         _configure_default_executor()
         state = prepared.runtime_state
-        messages = list(state["messages"])
-        tools: list[Tool] = state["tools"]
+        mode = self._effective_skill_mode(agent, prepared)
+        if mode is SkillInjectionMode.TREE_ROUTED_SYSTEM_PROMPT:
+            prepared.agent_request.options["skill_injection_mode"] = mode.value
+            messages = build_messages(task=prepared.agent_request.task, skill_names=[])
+            async with agent.inject_skill_request(prepared.agent_request, mode=mode) as injection:
+                return await self._execute_conversation(
+                    agent=agent,
+                    prepared=prepared,
+                    messages=apply_skill_injection(messages, injection),
+                    tools=[*state["tools"], *injection.tools],
+                    injection=injection,
+                )
+
+        prepared.agent_request.options["skill_injection_mode"] = SkillInjectionMode.TOOL.value
+        skill_directories = self._materialize_legacy_skills(state["workspace"], state["skills"])
+        state["skill_names"] = list(skill_directories)
+        tools: list[Tool] = list(state["tools"])
+        if skill_directories:
+            tools.append(SpreadsheetSkillSet(skill_directories).as_tool())
+        return await self._execute_conversation(
+            agent=agent,
+            prepared=prepared,
+            messages=build_messages(task=prepared.agent_request.task, skill_names=list(skill_directories)),
+            tools=tools,
+            injection=None,
+        )
+
+    async def _execute_conversation(
+        self,
+        *,
+        agent: Agent[Any],
+        prepared: PreparedRollout,
+        messages: list[dict[str, Any]],
+        tools: list[Tool],
+        injection: SkillInjection | None,
+    ) -> Trajectory:
+        state = prepared.runtime_state
+        state["initial_messages"] = [dict(message) for message in messages]
         schemas = [tool.to_openai_schema() for tool in tools]
         tools_by_name = {tool.name: tool for tool in tools}
         started_at = time.time()
@@ -135,6 +161,15 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         ended_at = time.time()
         state.update({"messages": messages, "error": error, "finished": finished, "turns": turns})
         self._write_artifacts(prepared)
+        metadata = dict(injection.metadata) if injection is not None else {}
+        metadata.update(
+            {
+                "finished": finished,
+                "turns": turns,
+                "error": error,
+                "instruction_type": prepared.agent_request.task.metadata.get("instruction_type"),
+            }
+        )
         return agent.build_trajectory(
             request=prepared.agent_request,
             messages=messages,
@@ -143,13 +178,27 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
             n_turn=turns,
             is_success=error is None,
             error_info=error,
-            metadata={
-                "finished": finished,
-                "turns": turns,
-                "error": error,
-                "instruction_type": prepared.agent_request.task.metadata.get("instruction_type"),
-            },
+            metadata=metadata,
         )
+
+    @staticmethod
+    def _effective_skill_mode(agent: Agent[Any], prepared: PreparedRollout) -> SkillInjectionMode:
+        raw_mode = prepared.agent_request.options.get("skill_injection_mode")
+        if raw_mode is None:
+            raw_mode = getattr(getattr(agent, "config", None), "skill_injection_mode", None)
+        return SkillInjectionMode(raw_mode) if raw_mode is not None else SkillInjectionMode.TOOL
+
+    def _materialize_legacy_skills(self, workspace: Path, skills: Sequence[Skill]) -> dict[str, Path]:
+        skill_directories: dict[str, Path] = {}
+        skills_root = workspace / "skills"
+        skills_root.mkdir()
+        for skill in skills:
+            name = self._safe_path_part(skill.name)
+            directory = skills_root / name
+            directory.mkdir()
+            (directory / "SKILL.md").write_text(skill.content, encoding="utf-8")
+            skill_directories[name] = directory
+        return skill_directories
 
     async def _evaluate(self, *, trajectory: Trajectory, prepared: PreparedRollout) -> Reward:
         state = prepared.runtime_state
@@ -216,10 +265,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
             json.dumps(messages, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        initial = build_messages(
-            task=prepared.agent_request.task,
-            skill_names=state["skill_names"],
-        )
+        initial = state["initial_messages"]
         (workspace / "target_system_prompt.txt").write_text(initial[0]["content"], encoding="utf-8")
         (workspace / "target_user_prompt.txt").write_text(initial[1]["content"], encoding="utf-8")
 
@@ -369,7 +415,10 @@ class SpreadsheetTools:
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "File path, relative to the working directory."},
-                        "original_text": {"type": "string", "description": "Exact text to replace; must occur exactly once."},
+                        "original_text": {
+                            "type": "string",
+                            "description": "Exact text to replace; must occur exactly once.",
+                        },
                         "replacement_text": {"type": "string", "description": "Text to substitute in."},
                     },
                     "required": ["path", "original_text", "replacement_text"],

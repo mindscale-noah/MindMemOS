@@ -17,12 +17,15 @@ class ReactAgentConfig(AgentConfig):
     skill_injection_mode: Literal[
         SkillInjectionMode.TOOL,
         SkillInjectionMode.SYSTEM_PROMPT,
+        SkillInjectionMode.TREE_ROUTED_SYSTEM_PROMPT,
     ] = SkillInjectionMode.TOOL
     system_prompt: str | None = None
     temperature: float | None = Field(default=None, ge=0)
     top_p: float | None = Field(default=None, ge=0, le=1)
     max_tokens: int | None = Field(default=None, ge=1)
     reasoning_effort: str | None = Field(default=None, min_length=1)
+    tree_router_temperature: float = Field(default=0.0, ge=0)
+    tree_router_max_tokens: int = Field(default=512, ge=1)
     model_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
