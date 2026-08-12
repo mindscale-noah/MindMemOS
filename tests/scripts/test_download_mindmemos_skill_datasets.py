@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -157,6 +158,39 @@ def test_packaged_split_manifests_are_complete_and_disjoint(dataset: str, counts
         assert len(ids) == expected_count
         assert seen.isdisjoint(ids)
         seen.update(ids)
+
+
+def test_trace2skill_spreadsheetbench_split_preserves_released_200_200_order() -> None:
+    root = (
+        REPO_ROOT
+        / "resources"
+        / "mindmemos_skill"
+        / "datasets"
+        / "spreadsheetbench"
+        / "trace2skill_200_200"
+    )
+    manifest = json.loads((root / "split_manifest.json").read_text(encoding="utf-8"))
+    splits = {
+        name: json.loads((root / "splits" / name / "items.json").read_text(encoding="utf-8"))
+        for name in ("train", "val", "test")
+    }
+
+    assert manifest["counts"] == {"train": 200, "val": 200, "test": 200}
+    assert splits["val"] == splits["train"]
+    assert {str(item["id"]) for item in splits["train"]}.isdisjoint(
+        str(item["id"]) for item in splits["test"]
+    )
+    assert [str(splits["train"][0]["id"]), str(splits["train"][-1]["id"])] == ["13-1", "52575"]
+    assert [str(splits["test"][0]["id"]), str(splits["test"][-1]["id"])] == ["52807", "59902"]
+
+    def ordered_id_hash(items: list[dict[str, object]]) -> str:
+        payload = "".join(f"{item['id']}\n" for item in items).encode()
+        return hashlib.sha256(payload).hexdigest()
+
+    hashes = manifest["ordered_id_sha256"]
+    assert ordered_id_hash(splits["train"]) == hashes["train"]
+    assert ordered_id_hash(splits["test"]) == hashes["test"]
+    assert ordered_id_hash([*splits["train"], *splits["test"]]) == hashes["train_then_test"]
 
 
 def test_mindmemos_skill_configs_only_reference_local_resources() -> None:

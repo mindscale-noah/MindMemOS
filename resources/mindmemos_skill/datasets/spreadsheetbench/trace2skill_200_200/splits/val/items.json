@@ -1,0 +1,1002 @@
+[
+  {
+    "id": "13-1",
+    "spreadsheet_path": "spreadsheet/13-1",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "17-35",
+    "spreadsheet_path": "spreadsheet/17-35",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "22-47",
+    "spreadsheet_path": "spreadsheet/22-47",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "23-24",
+    "spreadsheet_path": "spreadsheet/23-24",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "24-23",
+    "spreadsheet_path": "spreadsheet/24-23",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "28-7",
+    "spreadsheet_path": "spreadsheet/28-7",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "41-47",
+    "spreadsheet_path": "spreadsheet/41-47",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "51-12",
+    "spreadsheet_path": "spreadsheet/51-12",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "60-7",
+    "spreadsheet_path": "spreadsheet/60-7",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "262-17",
+    "spreadsheet_path": "spreadsheet/262-17",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "263-1",
+    "spreadsheet_path": "spreadsheet/263-1",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "267-18",
+    "spreadsheet_path": "spreadsheet/267-18",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "267-21",
+    "spreadsheet_path": "spreadsheet/267-21",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "269-43",
+    "spreadsheet_path": "spreadsheet/269-43",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "269-44",
+    "spreadsheet_path": "spreadsheet/269-44",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "279-23",
+    "spreadsheet_path": "spreadsheet/279-23",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "280-17",
+    "spreadsheet_path": "spreadsheet/280-17",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "283-32",
+    "spreadsheet_path": "spreadsheet/283-32",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "290-1",
+    "spreadsheet_path": "spreadsheet/290-1",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "290-27",
+    "spreadsheet_path": "spreadsheet/290-27",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "297-42",
+    "spreadsheet_path": "spreadsheet/297-42",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "304-35",
+    "spreadsheet_path": "spreadsheet/304-35",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "333-29",
+    "spreadsheet_path": "spreadsheet/333-29",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "341-40",
+    "spreadsheet_path": "spreadsheet/341-40",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "384-4",
+    "spreadsheet_path": "spreadsheet/384-4",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "408-5",
+    "spreadsheet_path": "spreadsheet/408-5",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "433-47",
+    "spreadsheet_path": "spreadsheet/433-47",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "455-35",
+    "spreadsheet_path": "spreadsheet/455-35",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "469-9",
+    "spreadsheet_path": "spreadsheet/469-9",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "472-15",
+    "spreadsheet_path": "spreadsheet/472-15",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "477-45",
+    "spreadsheet_path": "spreadsheet/477-45",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "493-18",
+    "spreadsheet_path": "spreadsheet/493-18",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "547-18",
+    "spreadsheet_path": "spreadsheet/547-18",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "61-4",
+    "spreadsheet_path": "spreadsheet/61-4",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "66-24",
+    "spreadsheet_path": "spreadsheet/66-24",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "73-45",
+    "spreadsheet_path": "spreadsheet/73-45",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "79-7",
+    "spreadsheet_path": "spreadsheet/79-7",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "80-42",
+    "spreadsheet_path": "spreadsheet/80-42",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "82-30",
+    "spreadsheet_path": "spreadsheet/82-30",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "82-38",
+    "spreadsheet_path": "spreadsheet/82-38",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "84-40",
+    "spreadsheet_path": "spreadsheet/84-40",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "91-34",
+    "spreadsheet_path": "spreadsheet/91-34",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "97-36",
+    "spreadsheet_path": "spreadsheet/97-36",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "105-24",
+    "spreadsheet_path": "spreadsheet/105-24",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "109-21",
+    "spreadsheet_path": "spreadsheet/109-21",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "118-50",
+    "spreadsheet_path": "spreadsheet/118-50",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "130-9",
+    "spreadsheet_path": "spreadsheet/130-9",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "142-19",
+    "spreadsheet_path": "spreadsheet/142-19",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "146-49",
+    "spreadsheet_path": "spreadsheet/146-49",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "147-48",
+    "spreadsheet_path": "spreadsheet/147-48",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "156-14",
+    "spreadsheet_path": "spreadsheet/156-14",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "157-4",
+    "spreadsheet_path": "spreadsheet/157-4",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "160-6",
+    "spreadsheet_path": "spreadsheet/160-6",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "165-23",
+    "spreadsheet_path": "spreadsheet/165-23",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "168-17",
+    "spreadsheet_path": "spreadsheet/168-17",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "170-13",
+    "spreadsheet_path": "spreadsheet/170-13",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "177-6",
+    "spreadsheet_path": "spreadsheet/177-6",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "178-22",
+    "spreadsheet_path": "spreadsheet/178-22",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "191-40",
+    "spreadsheet_path": "spreadsheet/191-40",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "194-19",
+    "spreadsheet_path": "spreadsheet/194-19",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "203-15",
+    "spreadsheet_path": "spreadsheet/203-15",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "208-20",
+    "spreadsheet_path": "spreadsheet/208-20",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "230-16",
+    "spreadsheet_path": "spreadsheet/230-16",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "236-22",
+    "spreadsheet_path": "spreadsheet/236-22",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "250-20",
+    "spreadsheet_path": "spreadsheet/250-20",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "254-34",
+    "spreadsheet_path": "spreadsheet/254-34",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "108-24",
+    "spreadsheet_path": "spreadsheet/108-24",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "120-24",
+    "spreadsheet_path": "spreadsheet/120-24",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "141-20",
+    "spreadsheet_path": "spreadsheet/141-20",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "142-12",
+    "spreadsheet_path": "spreadsheet/142-12",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "183-8",
+    "spreadsheet_path": "spreadsheet/183-8",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "188-39",
+    "spreadsheet_path": "spreadsheet/188-39",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "192-22",
+    "spreadsheet_path": "spreadsheet/192-22",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "209-30",
+    "spreadsheet_path": "spreadsheet/209-30",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "227-40",
+    "spreadsheet_path": "spreadsheet/227-40",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "247-24",
+    "spreadsheet_path": "spreadsheet/247-24",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "302-1",
+    "spreadsheet_path": "spreadsheet/302-1",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "325-44",
+    "spreadsheet_path": "spreadsheet/325-44",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "334-11",
+    "spreadsheet_path": "spreadsheet/334-11",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "341-14",
+    "spreadsheet_path": "spreadsheet/341-14",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "343-20",
+    "spreadsheet_path": "spreadsheet/343-20",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "353-6",
+    "spreadsheet_path": "spreadsheet/353-6",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "353-29",
+    "spreadsheet_path": "spreadsheet/353-29",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "359-21",
+    "spreadsheet_path": "spreadsheet/359-21",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "367-23",
+    "spreadsheet_path": "spreadsheet/367-23",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "370-43",
+    "spreadsheet_path": "spreadsheet/370-43",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "374-18",
+    "spreadsheet_path": "spreadsheet/374-18",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "374-31",
+    "spreadsheet_path": "spreadsheet/374-31",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "379-36",
+    "spreadsheet_path": "spreadsheet/379-36",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "382-10",
+    "spreadsheet_path": "spreadsheet/382-10",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "382-29",
+    "spreadsheet_path": "spreadsheet/382-29",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "387-16",
+    "spreadsheet_path": "spreadsheet/387-16",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "388-47",
+    "spreadsheet_path": "spreadsheet/388-47",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "395-36",
+    "spreadsheet_path": "spreadsheet/395-36",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "398-14",
+    "spreadsheet_path": "spreadsheet/398-14",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "399-14",
+    "spreadsheet_path": "spreadsheet/399-14",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "402-43",
+    "spreadsheet_path": "spreadsheet/402-43",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "408-39",
+    "spreadsheet_path": "spreadsheet/408-39",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "409-45",
+    "spreadsheet_path": "spreadsheet/409-45",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "414-20",
+    "spreadsheet_path": "spreadsheet/414-20",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "416-15",
+    "spreadsheet_path": "spreadsheet/416-15",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "416-27",
+    "spreadsheet_path": "spreadsheet/416-27",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "423-16",
+    "spreadsheet_path": "spreadsheet/423-16",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "438-18",
+    "spreadsheet_path": "spreadsheet/438-18",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "440-24",
+    "spreadsheet_path": "spreadsheet/440-24",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "448-11",
+    "spreadsheet_path": "spreadsheet/448-11",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "463-17",
+    "spreadsheet_path": "spreadsheet/463-17",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "486-17",
+    "spreadsheet_path": "spreadsheet/486-17",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "488-14",
+    "spreadsheet_path": "spreadsheet/488-14",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "493-5",
+    "spreadsheet_path": "spreadsheet/493-5",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "496-15",
+    "spreadsheet_path": "spreadsheet/496-15",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "496-34",
+    "spreadsheet_path": "spreadsheet/496-34",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "510-3",
+    "spreadsheet_path": "spreadsheet/510-3",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "516-46",
+    "spreadsheet_path": "spreadsheet/516-46",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "524-31",
+    "spreadsheet_path": "spreadsheet/524-31",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "531-18",
+    "spreadsheet_path": "spreadsheet/531-18",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "534-26",
+    "spreadsheet_path": "spreadsheet/534-26",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "535-20",
+    "spreadsheet_path": "spreadsheet/535-20",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "545-35",
+    "spreadsheet_path": "spreadsheet/545-35",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "547-43",
+    "spreadsheet_path": "spreadsheet/547-43",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "560-12",
+    "spreadsheet_path": "spreadsheet/560-12",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "567-21",
+    "spreadsheet_path": "spreadsheet/567-21",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "577-40",
+    "spreadsheet_path": "spreadsheet/577-40",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "585-41",
+    "spreadsheet_path": "spreadsheet/585-41",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": "599-9",
+    "spreadsheet_path": "spreadsheet/599-9",
+    "instruction_type": "Sheet-Level Manipulation"
+  },
+  {
+    "id": 12307,
+    "spreadsheet_path": "spreadsheet/12307",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 15380,
+    "spreadsheet_path": "spreadsheet/15380",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 30930,
+    "spreadsheet_path": "spreadsheet/30930",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 31202,
+    "spreadsheet_path": "spreadsheet/31202",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 33722,
+    "spreadsheet_path": "spreadsheet/33722",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 34033,
+    "spreadsheet_path": "spreadsheet/34033",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 37900,
+    "spreadsheet_path": "spreadsheet/37900",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 38074,
+    "spreadsheet_path": "spreadsheet/38074",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 38462,
+    "spreadsheet_path": "spreadsheet/38462",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 38537,
+    "spreadsheet_path": "spreadsheet/38537",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 38703,
+    "spreadsheet_path": "spreadsheet/38703",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 38823,
+    "spreadsheet_path": "spreadsheet/38823",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 38969,
+    "spreadsheet_path": "spreadsheet/38969",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 38985,
+    "spreadsheet_path": "spreadsheet/38985",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 39046,
+    "spreadsheet_path": "spreadsheet/39046",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 39432,
+    "spreadsheet_path": "spreadsheet/39432",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 39515,
+    "spreadsheet_path": "spreadsheet/39515",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 39667,
+    "spreadsheet_path": "spreadsheet/39667",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 39903,
+    "spreadsheet_path": "spreadsheet/39903",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 39931,
+    "spreadsheet_path": "spreadsheet/39931",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 40478,
+    "spreadsheet_path": "spreadsheet/40478",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 41410,
+    "spreadsheet_path": "spreadsheet/41410",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 41601,
+    "spreadsheet_path": "spreadsheet/41601",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 41691,
+    "spreadsheet_path": "spreadsheet/41691",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 41969,
+    "spreadsheet_path": "spreadsheet/41969",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 42198,
+    "spreadsheet_path": "spreadsheet/42198",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 42526,
+    "spreadsheet_path": "spreadsheet/42526",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 44389,
+    "spreadsheet_path": "spreadsheet/44389",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 45300,
+    "spreadsheet_path": "spreadsheet/45300",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 45635,
+    "spreadsheet_path": "spreadsheet/45635",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 45896,
+    "spreadsheet_path": "spreadsheet/45896",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 46167,
+    "spreadsheet_path": "spreadsheet/46167",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 46240,
+    "spreadsheet_path": "spreadsheet/46240",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 47766,
+    "spreadsheet_path": "spreadsheet/47766",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 47798,
+    "spreadsheet_path": "spreadsheet/47798",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 47842,
+    "spreadsheet_path": "spreadsheet/47842",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 47933,
+    "spreadsheet_path": "spreadsheet/47933",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48080,
+    "spreadsheet_path": "spreadsheet/48080",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48257,
+    "spreadsheet_path": "spreadsheet/48257",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48365,
+    "spreadsheet_path": "spreadsheet/48365",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48588,
+    "spreadsheet_path": "spreadsheet/48588",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48608,
+    "spreadsheet_path": "spreadsheet/48608",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48620,
+    "spreadsheet_path": "spreadsheet/48620",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48643,
+    "spreadsheet_path": "spreadsheet/48643",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48745,
+    "spreadsheet_path": "spreadsheet/48745",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48921,
+    "spreadsheet_path": "spreadsheet/48921",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48924,
+    "spreadsheet_path": "spreadsheet/48924",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48969,
+    "spreadsheet_path": "spreadsheet/48969",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48975,
+    "spreadsheet_path": "spreadsheet/48975",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48982,
+    "spreadsheet_path": "spreadsheet/48982",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 48983,
+    "spreadsheet_path": "spreadsheet/48983",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 49036,
+    "spreadsheet_path": "spreadsheet/49036",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 49196,
+    "spreadsheet_path": "spreadsheet/49196",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 49237,
+    "spreadsheet_path": "spreadsheet/49237",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 49300,
+    "spreadsheet_path": "spreadsheet/49300",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 49333,
+    "spreadsheet_path": "spreadsheet/49333",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 49667,
+    "spreadsheet_path": "spreadsheet/49667",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 49801,
+    "spreadsheet_path": "spreadsheet/49801",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 50088,
+    "spreadsheet_path": "spreadsheet/50088",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 50193,
+    "spreadsheet_path": "spreadsheet/50193",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 50324,
+    "spreadsheet_path": "spreadsheet/50324",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 50526,
+    "spreadsheet_path": "spreadsheet/50526",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 50682,
+    "spreadsheet_path": "spreadsheet/50682",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 50768,
+    "spreadsheet_path": "spreadsheet/50768",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 50796,
+    "spreadsheet_path": "spreadsheet/50796",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 50916,
+    "spreadsheet_path": "spreadsheet/50916",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 50952,
+    "spreadsheet_path": "spreadsheet/50952",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 51090,
+    "spreadsheet_path": "spreadsheet/51090",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 51262,
+    "spreadsheet_path": "spreadsheet/51262",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 51289,
+    "spreadsheet_path": "spreadsheet/51289",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 51359,
+    "spreadsheet_path": "spreadsheet/51359",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 51431,
+    "spreadsheet_path": "spreadsheet/51431",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 51586,
+    "spreadsheet_path": "spreadsheet/51586",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 52216,
+    "spreadsheet_path": "spreadsheet/52216",
+    "instruction_type": "Cell-Level Manipulation"
+  },
+  {
+    "id": 52575,
+    "spreadsheet_path": "spreadsheet/52575",
+    "instruction_type": "Cell-Level Manipulation"
+  }
+]

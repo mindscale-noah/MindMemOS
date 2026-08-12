@@ -1,0 +1,31 @@
+{
+  "benchmark": "SpreadsheetBench-Verified",
+  "manifest_type": "ordered_id_split",
+  "source_revision": "ab0b742b0fc95b946f212d80ac7771b5531272e4",
+  "source_file": "spreadsheetbench_verified_400/dataset.json",
+  "ordering_rule": "Preserve the released dataset.json order without shuffling.",
+  "roles": {
+    "train": "dataset[0:200], used for trajectory collection and evolution",
+    "val": "alias of train, used only for training-set validation",
+    "test": "dataset[200:400], used for held-out evaluation"
+  },
+  "counts": {
+    "train": 200,
+    "val": 200,
+    "test": 200
+  },
+  "ordered_id_sha256": {
+    "train": "71b4d91e27e1324e947f0ad29316e5bcf4406f70e314ed08b4713569f408bb2a",
+    "test": "9df15263275e7c1737bfd14c218477a185d967690ee1418ed185d6181dec99a9",
+    "train_then_test": "02901b7dbaf7110c273e485d1930e5ae61771cc80cfa5d8cb8a3904530d3c8fe"
+  },
+  "item_fields": [
+    "id",
+    "spreadsheet_path",
+    "instruction_type"
+  ],
+  "notes": [
+    "Validation is intentionally not an independent partition.",
+    "This manifest contains task metadata only; workbook payloads must be materialized separately."
+  ]
+}

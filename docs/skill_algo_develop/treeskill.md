@@ -126,6 +126,29 @@ outputs are:
 fields, resources, and TreeSkill metadata. `test/summary.json` includes routed
 and full character totals when routing records are present.
 
+## Trace2Skill-compatible SpreadsheetBench split
+
+The repository also packages the ordered task-ID split used by the TreeSkill
+experiments:
+
+```text
+resources/mindmemos_skill/datasets/spreadsheetbench/trace2skill_200_200/splits/
+```
+
+It preserves the released `dataset.json` ordering without shuffling:
+
+- `train`: positions `0:200`, used for trajectory collection and evolution;
+- `val`: an explicit alias of `train`, used for training-set validation rather
+  than as an independent partition;
+- `test`: positions `200:400`, used for held-out evaluation.
+
+Select it with `--split-dir` when invoking the Python entrypoint. The existing
+`default.yaml` remains a lightweight MindMemOS integration example; using all
+evolution tasks also requires `--train-limit 200` and a compatible
+`--max-trajectories` value. This split aligns task membership and ordering only;
+it does not by itself align model, policy prompting, Skill injection, or
+recalculation behavior.
+
 ## Current boundary
 
 The checked-in end-to-end configuration targets SpreadsheetBench. The core
