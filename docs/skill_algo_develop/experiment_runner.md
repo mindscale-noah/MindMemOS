@@ -82,6 +82,11 @@ rollout.max_concurrent_rollouts: 16 -> --max-concurrent-rollouts 16
 
 `test_rollouts=2` 表示测试集的每个 task 各跑两次；只想测试两个 task 时使用 `test_limit=2`。
 
+演进算法本身不声明环境白名单。以 `skill_grpo_with_replay_buffer` 为例，内置环境名会映射到默认的已注册
+Dataset 和同名 Env；也可以通过 `dataset_ref`、`env_ref` 分别选择其他已注册组件，并通过
+`dataset_options`、`env_options` 传入组件配置。非内置环境所需的可选依赖放入
+`launcher.extra_dependencies`，不写入算法支持列表。
+
 每个 rollout 的交互预算统一使用 `environment_options.max_turns`：一轮表示环境驱动的一次模型决策。
 例如 ALFWorld 的 `max_turns: 50` 最多执行 50 次动作，SpreadsheetBench 的 `max_turns: 30` 最多生成
 30 轮回复/工具调用，LiveMath 的 `max_turns: 1` 只生成一次答案。所有 built-in EnvConfig 和实验 YAML

@@ -145,7 +145,7 @@ def _flatten_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
         for key, value in mapping.items():
             if not isinstance(key, str) or re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", key) is None:
                 raise ValueError(f"invalid parameter key: {'.'.join((*path, str(key)))}")
-            if isinstance(value, dict):
+            if isinstance(value, dict) and key not in {"dataset_options", "env_options"}:
                 visit(value, (*path, key))
                 continue
             flag_name = key.replace("_", "-")
@@ -214,6 +214,9 @@ def _append_option(command: list[str], option: RunnerOption, value: Any) -> None
         command.append(flag)
         command.extend(str(item) for item in value)
         return
+    if isinstance(value, dict):
+        command.extend((flag, json.dumps(value, ensure_ascii=False, separators=(",", ":"))))
+        return
     if value is not None:
         command.extend((flag, str(value)))
 
@@ -259,7 +262,9 @@ def build_invocation(
         available = ", ".join(sorted(RUNNERS))
         raise ValueError(f"unknown experiment method {method!r}; available: {available}")
     spec = RUNNERS[method]
-    if not isinstance(environment_name, str) or environment_name not in spec.environments:
+    if not isinstance(environment_name, str) or not environment_name:
+        raise ValueError("experiment environment must be a non-empty string")
+    if spec.environments is not None and environment_name not in spec.environments:
         available = ", ".join(sorted(spec.environments))
         raise ValueError(f"method {method!r} does not support environment {environment_name!r}; available: {available}")
 
@@ -324,7 +329,14 @@ def build_invocation(
     extra_dependencies = launcher.get("extra_dependencies", [])
     if not isinstance(extra_dependencies, list) or not all(isinstance(item, str) for item in extra_dependencies):
         raise ValueError("launcher.extra_dependencies must be a list of strings")
-    extras = tuple(dict.fromkeys((*spec.extras_for(environment_name), *extra_dependencies)))
+    configured_env_ref = flattened.get("env-ref")
+    dependency_environments = [environment_name]
+    if isinstance(configured_env_ref, str) and configured_env_ref not in dependency_environments:
+        dependency_environments.append(configured_env_ref)
+    resolved_extras = [
+        extra for dependency_environment in dependency_environments for extra in spec.extras_for(dependency_environment)
+    ]
+    extras = tuple(dict.fromkeys((*resolved_extras, *extra_dependencies)))
     command = ["uv", "run", "--package", "mindmemos-skill"]
     for extra in extras:
         command.extend(("--extra", extra))
@@ -333,7 +345,7 @@ def build_invocation(
         _append_option(command, options[name], value)
     command.extend(runner_args or [])
 
-    if environment_name == "alfworld" and "data-root" in flattened:
+    if "alfworld" in extras and "data-root" in flattened:
         data_root = Path(str(flattened["data-root"])).expanduser()
         if not data_root.is_absolute():
             data_root = REPO_ROOT / data_root

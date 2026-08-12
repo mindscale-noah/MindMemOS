@@ -24,7 +24,8 @@ class ExperimentSpec:
     name: str
     family: ExperimentFamily
     module: str
-    environments: frozenset[str]
+    # None means the adapter accepts a configuration-selected registered Dataset/Env.
+    environments: frozenset[str] | None = None
     common_extras: tuple[str, ...] = ("llm",)
     environment_extras: dict[str, tuple[str, ...]] | None = None
     inject_environment_as_benchmark: bool = False
@@ -43,7 +44,7 @@ class ExperimentSpec:
 def _evolve(
     name: str,
     *,
-    environments: frozenset[str],
+    environments: frozenset[str] | None = None,
     environment_extras: dict[str, tuple[str, ...]] | None = None,
     common_extras: tuple[str, ...] = ("llm",),
     inject_environment_as_benchmark: bool = False,
@@ -80,8 +81,7 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
     for spec in (
         _evolve(
             "skill_grpo_with_replay_buffer",
-            environments=frozenset({"livemath", "spreadsheetbench"}),
-            environment_extras={"spreadsheetbench": ("spreadsheetbench",)},
+            environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
             inject_environment_as_benchmark=True,
         ),
         _evolve(
