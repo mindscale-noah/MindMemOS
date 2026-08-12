@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel
 
-from ..errors import PermissionDeniedError
+from ..errors import MemoryNotFoundError, PermissionDeniedError, ResourceNotFoundError
 from ..infra.db import QdrantRecord, build_filter, match_text
 from ..pipelines.memory_db import MemoryDbReader
+from ..provider_bindings import get_provider_binding_service
 from .deps import ensure_scopes, get_internal_request_context
 from .schemas import ApiResponse, AuthContext
 
@@ -30,6 +31,21 @@ class InternalMemoryListData(BaseModel):
 
 InternalMemoryListResponse = ApiResponse[InternalMemoryListData]
 InternalMemoryDetailResponse = ApiResponse[dict[str, Any]]
+ProviderBindingResponse = ApiResponse[dict[str, Any]]
+ProviderBindingListResponse = ApiResponse[dict[str, Any]]
+
+
+class ProviderBindingCreateRequest(BaseModel):
+    """Create a dynamic provider binding."""
+
+    scope: dict[str, Any] = {}
+    routers: dict[str, Any]
+
+
+class ProviderBindingPatchRequest(BaseModel):
+    """Patch a dynamic provider binding."""
+
+    routers: dict[str, Any]
 
 
 @router.get("/projects/{project_id}/memories", response_model=InternalMemoryListResponse)
@@ -63,12 +79,75 @@ async def get_project_memory(
     _ensure_internal_read(ctx, project_id)
     record = await MemoryDbReader().get_memory_record(ctx, memory_id)
     if record is None:
-        raise HTTPException(status_code=404, detail="memory not found")
+        raise ResourceNotFoundError(str(MemoryNotFoundError(memory_id)), code="memory.not_found")
     return InternalMemoryDetailResponse(request_id=ctx.request_id, data=_record_to_item(record))
+
+
+@router.post("/projects/{project_id}/provider-bindings", response_model=ProviderBindingResponse)
+async def create_project_provider_binding(
+    payload: ProviderBindingCreateRequest,
+    project_id: str = Path(min_length=1),
+    ctx: AuthContext = Depends(get_internal_request_context),
+) -> ProviderBindingResponse:
+    """Create or replace one project provider binding for its scope."""
+
+    _ensure_internal_write(ctx, project_id)
+    result = await get_provider_binding_service().create_binding(
+        project_id=project_id,
+        scope=payload.scope,
+        routers=payload.routers,
+        request_id=ctx.request_id,
+    )
+    return ProviderBindingResponse(request_id=ctx.request_id, data=result)
+
+
+@router.patch("/projects/{project_id}/provider-bindings/{binding_id}", response_model=ProviderBindingResponse)
+async def patch_project_provider_binding(
+    payload: ProviderBindingPatchRequest,
+    project_id: str = Path(min_length=1),
+    binding_id: str = Path(min_length=1),
+    ctx: AuthContext = Depends(get_internal_request_context),
+) -> ProviderBindingResponse:
+    """Patch one project provider binding."""
+
+    _ensure_internal_write(ctx, project_id)
+    result = await get_provider_binding_service().patch_binding(
+        project_id=project_id,
+        binding_id=binding_id,
+        routers=payload.routers,
+        request_id=ctx.request_id,
+    )
+    return ProviderBindingResponse(request_id=ctx.request_id, data=result)
+
+
+@router.get("/projects/{project_id}/provider-bindings", response_model=ProviderBindingListResponse)
+async def list_project_provider_bindings(
+    project_id: str = Path(min_length=1),
+    ctx: AuthContext = Depends(get_internal_request_context),
+) -> ProviderBindingListResponse:
+    """List dynamic provider bindings for one project."""
+
+    _ensure_internal_provider_read(ctx, project_id)
+    items = await get_provider_binding_service().list_bindings(project_id=project_id)
+    return ProviderBindingListResponse(request_id=ctx.request_id, data={"items": items})
 
 
 def _ensure_internal_read(ctx: AuthContext, project_id: str) -> None:
     ensure_scopes(ctx, ("memory:read",))
+    _ensure_project_scope(ctx, project_id)
+
+
+def _ensure_internal_provider_read(ctx: AuthContext, project_id: str) -> None:
+    ensure_scopes(ctx, ("provider:read",))
+    _ensure_project_scope(ctx, project_id)
+
+
+def _ensure_internal_write(ctx: AuthContext, project_id: str) -> None:
+    ensure_scopes(ctx, ("provider:write",))
+    _ensure_project_scope(ctx, project_id)
+
+
+def _ensure_project_scope(ctx: AuthContext, project_id: str) -> None:
     if ctx.project_id != project_id:
         raise PermissionDeniedError("project scope mismatch", code="auth.project_scope_mismatch")
 

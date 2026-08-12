@@ -73,8 +73,8 @@ class AuthContext(BaseModel):
     scopes: list[str] = Field(default_factory=list)
 
 
-# Actor identity: ``user_id`` is required for add/search/feedback and optional
-# for dreaming. It is supplied in the request body. The Qdrant payload schema
+# Actor identity: ``user_id`` is required for add/feedback, optional for search
+# and dreaming. It is supplied in the request body. The Qdrant payload schema
 # indexes all four fields as plain KEYWORD values with no storage-level not-null
 # constraint.
 
@@ -83,7 +83,7 @@ class ActorIdentityRequest(BaseModel):
     """Actor identity supplied by request bodies that scope memory operations."""
 
     user_id: NonEmptyStr | None = None
-    """Business actor user ID. Required by add/search/feedback service methods."""
+    """Business actor user ID. Required by add/feedback and optional for search/dreaming."""
 
     app_id: NonEmptyStr | None = None
 
@@ -112,6 +112,9 @@ class AddRequest(ActorIdentityRequest):
 
     metadata: dict[str, Any] = Field(default_factory=dict)
     """Business extension metadata."""
+
+    prompt_language: Literal["EN", "ZH"] | None = None
+    """Optional request-level prompt language for extraction."""
 
     skill_context: list[SkillContext] | None = None
     """Skill references hit in this turn, excluding full text, used for trace binding.
@@ -192,6 +195,42 @@ class GetRequest(BaseModel):
     """Maximum memories to return. None uses the reader default page size."""
 
 
+class MemoryPageRequest(ActorIdentityRequest):
+    """HTTP body for ``POST /v1/memory/list``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, Any] | None = None
+    """Custom structured filter DSL parsed by ``mappers.api.parse_search_dsl``."""
+
+    page: int = Field(default=1, ge=1)
+    """1-based page number."""
+
+    page_size: int = Field(default=20, ge=1)
+    """Number of memories returned per page."""
+
+    include_total: bool = True
+    """Whether to calculate and return total matching memories."""
+
+    include_inactive: bool = False
+    """Whether management list responses include non-active memories."""
+
+
+class MemoryScrollRequest(ActorIdentityRequest):
+    """HTTP body for ``POST /v1/memory/scroll``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, Any] | None = None
+    """Custom structured filter DSL parsed by ``mappers.api.parse_search_dsl``."""
+
+    limit: int = Field(default=100, ge=1)
+    """Maximum memories returned from this cursor position."""
+
+    cursor: NonEmptyStr | None = None
+    """Opaque cursor returned by the previous scroll response."""
+
+
 class DeleteRequest(BaseModel):
     """HTTP body for ``POST /v1/memory/delete``.
 
@@ -205,11 +244,12 @@ class DeleteRequest(BaseModel):
     """Memory ID"""
 
 
-class UpdateRequest(BaseModel):
+class UpdateRequest(ActorIdentityRequest):
     """HTTP body for ``POST /v1/memory/update``.
 
-    Mirrors :class:`mindmemos.typing.service.UpdatePipelineInput`. No actor identity.
-    Converted by ``api.mappers.to_update_pipeline_input``.
+    Mirrors :class:`mindmemos.typing.service.UpdatePipelineInput` plus optional
+    actor identity for dynamic provider binding. Converted by
+    ``api.mappers.to_update_pipeline_input``.
     """
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -217,8 +257,14 @@ class UpdateRequest(BaseModel):
     id: NonEmptyStr = Field(alias="memory_id")
     """Memory ID"""
 
-    content: NonEmptyStr
+    content: NonEmptyStr | None = None
     """Replacement content for the specified memory id."""
+
+    metadata_patch: dict[str, Any] = Field(default_factory=dict)
+    """Optional metadata fields merged into the memory metadata."""
+
+    status: Literal["active", "archived"] | None = None
+    """Optional lifecycle status patch."""
 
 
 class FeedbackRequest(ActorIdentityRequest):
@@ -280,6 +326,21 @@ class MemoryListData(BaseModel):
     """
 
     memories: list[MemorySearchItem] = Field(default_factory=list)
+
+
+class MemoryPageData(MemoryListData):
+    """``data`` payload for ``POST /v1/memory/list``."""
+
+    page: int
+    page_size: int
+    total: int | None = None
+    has_more: bool = False
+
+
+class MemoryScrollData(MemoryListData):
+    """``data`` payload for ``POST /v1/memory/scroll``."""
+
+    next_cursor: str | None = None
 
 
 class ApiResponse(BaseModel, Generic[T]):

@@ -10,6 +10,7 @@ mapping and project scoping live in exactly one place.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -79,6 +80,7 @@ class QdrantEngine:
             if cfg.batch_upsert_enabled
             else None
         )
+        self._collection_locks: dict[str, asyncio.Lock] = {}
 
     @property
     def client(self) -> AsyncQdrantClient:
@@ -92,6 +94,27 @@ class QdrantEngine:
 
         return self._cfg
 
+    async def collection_exists(self, collection: str) -> bool:
+        """Return whether a physical Qdrant collection exists."""
+
+        return bool(await self._client.collection_exists(collection))
+
+    async def collection_names(self) -> list[str]:
+        """Return all physical Qdrant collection names."""
+
+        return [item.name for item in (await self._client.get_collections()).collections]
+
+    async def dense_vector_size(self, collection: str, vector_name: str) -> int | None:
+        """Return one existing dense vector size without creating the collection."""
+
+        if not await self.collection_exists(collection):
+            return None
+        info = await self._client.get_collection(collection)
+        vectors = info.config.params.vectors
+        params = vectors.get(vector_name) if isinstance(vectors, dict) else vectors
+        size = getattr(params, "size", None)
+        return int(size) if isinstance(size, int) and size > 0 else None
+
     async def ensure_collection(self, spec: QdrantCollectionSpec) -> None:
         """Create one collection and its payload indexes (no ``auto_create`` gate).
 
@@ -99,6 +122,13 @@ class QdrantEngine:
         primitive. A collection with neither dense nor sparse vectors is created
         with an empty ``vectors_config`` (payload + filter only).
         """
+
+        lock = self._collection_locks.setdefault(spec.name, asyncio.Lock())
+        async with lock:
+            await self._ensure_collection_locked(spec)
+
+    async def _ensure_collection_locked(self, spec: QdrantCollectionSpec) -> None:
+        """Ensure one collection while its process-local name lock is held."""
 
         exists = await self._client.collection_exists(spec.name)
         if not exists:
@@ -120,18 +150,12 @@ class QdrantEngine:
                     sparse_vectors_config=sparse_vectors_config,
                     on_disk_payload=spec.on_disk_payload,
                 )
-            except Exception as exc:
-                # ``collection_exists`` and ``create_collection`` are separate
-                # RPCs, so a concurrent starter (or a stale gRPC view) can make
-                # ``create_collection`` observe an already-created collection.
-                # Treating ALREADY_EXISTS as success keeps ``ensure_collection``
-                # idempotent across restarts and multi-instance boots.
-                if not _is_collection_already_exists(exc):
+            except Exception:
+                # Another service instance may win the create race after our
+                # existence check. Treat that as success only when Qdrant now
+                # confirms the requested collection exists.
+                if not await self._client.collection_exists(spec.name):
                     raise
-                logger.info(
-                    "qdrant collection already exists, treat create as success",
-                    collection=spec.name,
-                )
         elif spec.on_disk_payload is not None:
             await self._client.update_collection(
                 collection_name=spec.name,
@@ -198,6 +222,22 @@ class QdrantEngine:
             with_vectors=with_vectors,
         )
         return [self.record_from(record) for record in records], next_offset
+
+    async def count(
+        self,
+        collection: str,
+        *,
+        count_filter: qmodels.Filter | None = None,
+        exact: bool = True,
+    ) -> int:
+        """Count points in a collection with an already-built filter."""
+
+        result = await self._client.count(
+            collection_name=collection,
+            count_filter=count_filter,
+            exact=exact,
+        )
+        return int(result.count)
 
     async def query(
         self,
@@ -370,21 +410,6 @@ def _is_retryable_qdrant_error(exc: Exception) -> bool:
             grpc.StatusCode.RESOURCE_EXHAUSTED,
         )
     return _is_http_transport_error(exc)
-
-
-def _is_collection_already_exists(exc: Exception) -> bool:
-    """Return True when Qdrant reports the target collection already exists.
-
-    Both the REST client (``UnexpectedResponse`` with status 409) and the gRPC
-    client (``AioRpcError`` with code ``ALREADY_EXISTS``) surface this as a
-    distinct error, so ``ensure_collection`` can treat it as an idempotent
-    success instead of failing startup.
-    """
-    if isinstance(exc, UnexpectedResponse):
-        return exc.status_code == 409
-    if isinstance(exc, grpc.aio.AioRpcError):
-        return exc.code() == grpc.StatusCode.ALREADY_EXISTS
-    return False
 
 
 def _is_same_project_condition(condition: object, project_id: str) -> bool:

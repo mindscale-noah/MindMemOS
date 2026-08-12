@@ -9,10 +9,10 @@ from urllib.parse import urlparse
 from opentelemetry import trace
 
 from ..config import get_config
-from ..errors import ConfigNotInitializedError, EmbeddingDimensionError
+from ..errors import ApiError, ConfigNotInitializedError, EmbeddingDimensionError
 from ..logging import add_span_event, get_logger, traced, traced_awaitable
 from ..typing import EmbeddingResponse
-from .router import dump_response, get_response_value, litellm_response_headers, usage_tokens
+from .router import dump_response, get_response_value, litellm_response_headers, provider_error_details, usage_tokens
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -23,15 +23,27 @@ logger = get_logger(__name__)
 def _resolved_expected_dim() -> int | None:
     """Resolve the collection dimension every embedding must match.
 
-    Returns ``database.qdrant.vector_size`` when config is bound, or ``None``
-    when config is uninitialized (e.g. unit tests without a config context),
-    in which case dimension validation is skipped.
+    Dynamic provider binding can bind a project-specific embedding dimension
+    while the base Qdrant config remains read-only. In that mode, prefer the
+    request-scoped embedding endpoint dimension. A built-in endpoint may not
+    publish one; dimension-namespaced storage can safely discover its actual
+    dimension from the response and route it to a compatible collection.
+    Static/base-collection mode keeps the original global
+    ``database.qdrant.vector_size`` behavior.
     """
 
     try:
-        return get_config().database.qdrant.vector_size
+        cfg = get_config()
     except ConfigNotInitializedError:
         return None
+    if cfg.provider_binding.enabled:
+        for endpoint in cfg.embed_model_router.endpoints:
+            dimensions = getattr(endpoint, "dimensions", None)
+            if isinstance(dimensions, int) and dimensions > 0:
+                return dimensions
+        if cfg.database.qdrant.project_collection_namespace_enabled:
+            return None
+    return cfg.database.qdrant.vector_size
 
 
 def _input_stats(text: str | list[str]) -> dict[str, int]:
@@ -132,6 +144,11 @@ class EmbedClient:
                 tracer_name=__name__,
             )
         except Exception as exc:
+            error_code, error_message = provider_error_details(
+                exc,
+                fallback_code="embedding.provider_request_failed",
+                fallback_message="Embedding provider request failed",
+            )
             logger.info(
                 "litellm_call",
                 kind="embedding",
@@ -139,9 +156,14 @@ class EmbedClient:
                 model=target,
                 status="error",
                 latency_ms=round((perf_counter() - start) * 1000, 2),
-                error=str(exc),
+                error_code=error_code,
+                error_type=type(exc).__name__,
             )
-            raise
+            raise ApiError(
+                error_message,
+                code=error_code,
+                status_code=502,
+            ) from exc
         embeddings: list[list[float]] = []
         for item in getattr(resp, "data", []) or []:
             if isinstance(item, dict):

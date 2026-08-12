@@ -157,6 +157,14 @@ class SkillTraceSummaryPoint:
 
 
 @dataclass(kw_only=True)
+class ProviderBindingPoint:
+    """Qdrant point for ``provider_binding_v1``."""
+
+    binding_id: str
+    payload: dict[str, Any]
+
+
+@dataclass(kw_only=True)
 class QdrantRecord:
     """Point returned by Qdrant retrieve or scroll operations."""
 

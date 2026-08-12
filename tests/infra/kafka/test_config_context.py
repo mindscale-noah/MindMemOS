@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from aiokafka import TopicPartition
-from mindmemos.config import get_config, init_config, reset_config, update_config
+from mindmemos.config import bind_config_overrides, get_config, init_config, reset_config, update_config
 from mindmemos.config.app import KafkaConfig, KafkaConsumerConfig
-from mindmemos.infra.kafka.config_context import CONFIG_CONTEXT_HEADER
+from mindmemos.errors import InvalidConfigError
+from mindmemos.infra.kafka.config_context import CONFIG_CONTEXT_HEADER, bind_config_context_from_headers
 from mindmemos.infra.kafka.consumer import KafkaConsumer, _is_idle_status
 from mindmemos.infra.kafka.producer import KafkaProducer
 
@@ -73,6 +76,41 @@ class FakeStatusConsumer:
         return self.commits[tp]
 
 
+def _init_project_dimension_config(tmp_path: Path, *, provider_binding_enabled: bool) -> None:
+    source = Path("config/mindmemos/dev.example.yaml").read_text(encoding="utf-8")
+    source = source.replace(
+        "    vector_size: 2560\n",
+        "    vector_size: 2560\n    project_collection_namespace_enabled: true\n",
+        1,
+    )
+    source += f"\nprovider_binding:\n  enabled: {str(provider_binding_enabled).lower()}\n"
+    config_path = tmp_path / "mindmemos.yaml"
+    config_path.write_text(source, encoding="utf-8")
+    init_config(config_path=config_path)
+
+
+def _embedding_context_header(*, allow_project_embedding_dimensions: bool = False) -> dict[str, str]:
+    return {
+        CONFIG_CONTEXT_HEADER: json.dumps(
+            {
+                "allow_project_embedding_dimensions": allow_project_embedding_dimensions,
+                "project_config": {
+                    "embed_model_router": {
+                        "endpoints": [
+                            {
+                                "model": "openai/project-embedding",
+                                "api_key": "test-key",
+                                "api_base": "https://example.test/v1",
+                                "dimensions": 1536,
+                            }
+                        ]
+                    }
+                },
+            }
+        )
+    }
+
+
 @pytest.mark.asyncio
 async def test_producer_injects_current_config_overrides_into_headers() -> None:
     try:
@@ -89,6 +127,27 @@ async def test_producer_injects_current_config_overrides_into_headers() -> None:
         assert headers["x-custom"] == "yes"
         assert CONFIG_CONTEXT_HEADER in headers
         assert '"project_config":{"pipelines":{"get":"project_get"}}' in headers[CONFIG_CONTEXT_HEADER]
+    finally:
+        reset_config()
+
+
+@pytest.mark.asyncio
+async def test_producer_propagates_project_embedding_dimension_permission() -> None:
+    try:
+        init_config(config_path="config/mindmemos/dev.example.yaml")
+        client = FakeProducerClient()
+        producer = KafkaProducer(KafkaConfig())
+        producer._producer = client
+
+        with bind_config_overrides(
+            project_config={"pipelines": {"get": "project_get"}},
+            allow_project_embedding_dimensions=True,
+        ):
+            await producer.send("memory.add", {"ok": True}, wait=True)
+
+        headers = {name: value.decode("utf-8") for name, value in client.calls[0]["headers"]}
+        propagated = json.loads(headers[CONFIG_CONTEXT_HEADER])
+        assert propagated["allow_project_embedding_dimensions"] is True
     finally:
         reset_config()
 
@@ -177,5 +236,26 @@ async def test_consumer_binds_config_context_for_handler_and_restores_afterward(
 
         assert seen == ["header_get"]
         assert get_config().pipelines["get"] == "outer_get"
+    finally:
+        reset_config()
+
+
+def test_kafka_context_accepts_project_embedding_dimension_for_dynamic_binding(tmp_path: Path) -> None:
+    try:
+        _init_project_dimension_config(tmp_path, provider_binding_enabled=True)
+
+        with bind_config_context_from_headers(_embedding_context_header(allow_project_embedding_dimensions=True)):
+            assert get_config().embed_model_router.endpoints[0].dimensions == 1536
+    finally:
+        reset_config()
+
+
+def test_kafka_context_requires_propagated_permission_for_project_embedding_dimension(tmp_path: Path) -> None:
+    try:
+        _init_project_dimension_config(tmp_path, provider_binding_enabled=True)
+
+        with pytest.raises(InvalidConfigError, match="must equal database.qdrant.vector_size"):
+            with bind_config_context_from_headers(_embedding_context_header()):
+                pytest.fail("a static Kafka context must not accept a mismatched embedding dimension")
     finally:
         reset_config()

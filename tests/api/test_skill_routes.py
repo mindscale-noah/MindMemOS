@@ -256,7 +256,10 @@ def test_evolve_async_queues_kafka(monkeypatch):
     producer = AsyncMock()
     monkeypatch.setattr("mindmemos.api.services.skill_service.get_producer", lambda: producer)
 
-    resp = _evolve_app(evolver).post("/v1/skills/evolve", json={"cloud_skill_id": "cs-1", "mode": "async"})
+    resp = _evolve_app(evolver).post(
+        "/v1/skills/evolve",
+        json={"cloud_skill_id": "cs-1", "mode": "async", "user_id": "actor-1"},
+    )
 
     assert resp.status_code == 200
     body = resp.json()
@@ -268,6 +271,7 @@ def test_evolve_async_queues_kafka(monkeypatch):
     assert producer.send.call_args.kwargs["dispatch_key"] == "proj:cs-1"
     assert producer.send.call_args.kwargs["value"]["cloud_skill_id"] == "cs-1"
     assert producer.send.call_args.kwargs["value"]["project_id"] == "proj"
+    assert producer.send.call_args.kwargs["value"]["context"]["user_id"] == "actor-1"
 
 
 def test_evolve_requires_cloud_skill_id():

@@ -6,7 +6,7 @@ import json
 
 from pydantic import BaseModel, Field
 
-from ...llm import LLMClient, get_llm_client
+from ...llm import LLMClient, get_llm_client, provider_binding_runtime_enabled, require_model_endpoint
 from ...prompts.EN.feedback import IMPLICIT_ACTION_PLANNING_PROMPT
 from ...typing import FeedbackActionResult, ImplicitFeedbackRound, ImplicitFeedbackSignal, MemorySearchItem
 
@@ -53,7 +53,11 @@ class ImplicitFeedbackActionPlanner:
     @property
     def _client(self) -> LLMClient:
         if self._llm_client is None:
-            self._llm_client = get_llm_client()
+            require_model_endpoint("chat")
+            client = get_llm_client()
+            if not provider_binding_runtime_enabled():
+                self._llm_client = client
+            return client
         return self._llm_client
 
 

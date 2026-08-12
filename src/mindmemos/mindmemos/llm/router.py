@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Protocol
 
 import litellm
 from litellm import Router
@@ -39,6 +39,16 @@ _LITELLM_PARAM_FIELDS: tuple[str, ...] = (
     "dimensions",
     "num_retries",
 )
+
+
+class ModelRouter(Protocol):
+    """Common async operations used by MindMemOS model clients."""
+
+    async def acompletion(self, **kwargs: Any) -> Any: ...
+
+    async def aembedding(self, **kwargs: Any) -> Any: ...
+
+    async def arerank(self, **kwargs: Any) -> Any: ...
 
 
 def _model_supports_dimensions(model: str, whitelist: list[str]) -> bool:
@@ -81,7 +91,12 @@ def build_litellm_params(
     return params
 
 
-def build_router(router_cfg: ModelRouterConfig, alias: str, *, num_retries: int | None = None) -> tuple[Router, int]:
+def build_router(
+    router_cfg: ModelRouterConfig,
+    alias: str,
+    *,
+    num_retries: int | None = None,
+) -> tuple[ModelRouter, int]:
     """Build a litellm Router whose endpoints share one public alias."""
     model_list = []
     deployment_counts: dict[str, int] = {}
@@ -105,6 +120,7 @@ def build_router(router_cfg: ModelRouterConfig, alias: str, *, num_retries: int 
         model_list=model_list,
         routing_strategy=router_cfg.routing_strategy,
         num_retries=max_retries,
+        retry_after=router_cfg.retry_after,
         allowed_fails=router_cfg.allowed_fails,
         cooldown_time=router_cfg.cool_down,
     )
@@ -118,7 +134,19 @@ def build_router(router_cfg: ModelRouterConfig, alias: str, *, num_retries: int 
 # separate Router; identical configs (even across tenants) share one Router so
 # their cooldown/load state accumulates correctly. The thin LLM/Embed/Rerank
 # client wrappers stay per-request since they hold no cross-request state.
-_ROUTER_CACHE: dict[str, tuple[Router, int]] = {}
+_ROUTER_CACHE: dict[str, tuple[ModelRouter, int]] = {}
+
+
+def build_platform_gateway_router(router_cfg: ModelRouterConfig, alias: str) -> tuple[ModelRouter, int]:
+    """Build the private Platform gateway adapter.
+
+    Imported lazily by the explicit transport branch so standalone deployments
+    never initialize Platform-specific runtime state.
+    """
+
+    from .gateway import build_platform_gateway_router as build_gateway
+
+    return build_gateway(router_cfg, alias)
 
 
 def _router_cache_key(router_cfg: ModelRouterConfig, alias: str, num_retries: int | None) -> str:
@@ -129,6 +157,7 @@ def _router_cache_key(router_cfg: ModelRouterConfig, alias: str, num_retries: in
         "allowed_fails": router_cfg.allowed_fails,
         "cool_down": router_cfg.cool_down,
         "num_retries": num_retries,
+        "retry_after": router_cfg.retry_after,
         "dimensions_supported_models": list(router_cfg.dimensions_supported_models),
         "endpoints": [
             build_litellm_params(ep, dimensions_supported_models=router_cfg.dimensions_supported_models)
@@ -138,13 +167,27 @@ def _router_cache_key(router_cfg: ModelRouterConfig, alias: str, num_retries: in
     return json.dumps(payload, sort_keys=True, default=str)
 
 
-def get_router(router_cfg: ModelRouterConfig, alias: str, *, num_retries: int | None = None) -> tuple[Router, int]:
+def get_router(
+    router_cfg: ModelRouterConfig,
+    alias: str,
+    *,
+    num_retries: int | None = None,
+) -> tuple[ModelRouter, int]:
     """Return a cached Router for this resolved endpoint config, building it once.
 
     The Router is the expensive, stateful piece (cooldowns, load balancing, httpx
     client binding) and is reused across requests with the same effective config;
     request-time config overrides that change endpoints yield a separate Router.
     """
+    transports = {getattr(endpoint, "transport", "litellm") for endpoint in router_cfg.endpoints}
+    unsupported = transports - {"litellm", "platform_gateway"}
+    if unsupported:
+        raise ValueError(f"unsupported model endpoint transport: {sorted(unsupported)}")
+    if "platform_gateway" in transports:
+        if transports != {"platform_gateway"} or len(router_cfg.endpoints) != 1:
+            raise ValueError("platform_gateway router requires exactly one Platform gateway endpoint")
+        return build_platform_gateway_router(router_cfg, alias)
+
     key = _router_cache_key(router_cfg, alias, num_retries)
     cached = _ROUTER_CACHE.get(key)
     if cached is not None:
@@ -201,3 +244,29 @@ def usage_tokens(usage: Any) -> Usage:
         prompt_tokens=get_response_value(usage, "prompt_tokens"),
         total_tokens=get_response_value(usage, "total_tokens"),
     )
+
+
+_SAFE_PROVIDER_ERRORS: dict[str, str] = {
+    "model.provider_authentication_failed": "model provider rejected the configured credential",
+    "model.provider_rate_limited": "model provider rate limit exceeded after retries",
+    "model.provider_timed_out": "model provider request timed out after retries",
+    "model.provider_request_rejected": "model provider rejected the configured model or request",
+    "model.provider_unavailable": "model provider is temporarily unavailable after retries",
+    "model.provider_request_failed": "model provider request failed after retries",
+}
+
+
+def provider_error_details(exc: Exception, *, fallback_code: str, fallback_message: str) -> tuple[str, str]:
+    """Read only platform-owned provider error codes and map them to local safe text."""
+
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            code = payload.get("code")
+            if isinstance(code, str) and code in _SAFE_PROVIDER_ERRORS:
+                return code, _SAFE_PROVIDER_ERRORS[code]
+    return fallback_code, fallback_message

@@ -28,7 +28,9 @@ pipx install mindmemos
 uv tool install mindmemos
 ```
 
-Authenticate once. This writes a local config (API key, default user id, base URL):
+Authenticate once. This writes a local config (API key, default user id, base URL). Operations that require a
+user inherit the default user id, but `memory search` does not: omit `--user-id` for project-wide search or pass
+it explicitly for user-scoped search.
 
 ```bash
 mindmemos auth
@@ -40,7 +42,7 @@ Verify:
 
 ```bash
 mindmemos config show          # masked key, base_url, user_id
-mindmemos memory search "test" # confirms connectivity
+mindmemos memory search "test" # confirms connectivity with a project-wide search
 ```
 
 ---
@@ -56,7 +58,8 @@ General shape: `mindmemos <group> <command> [args] [options]`.
 
 Identity & scoping options (where accepted): `--user-id` (the human the memory
 belongs to), `--app-id`, `--agent-id`, `--session-id`. Project isolation is
-derived from the API key, not from these flags.
+derived from the API key, not from these flags. For `memory search`, `--user-id`
+is per-request and does not inherit the user configured by `mindmemos auth`.
 
 ### Typical flow
 
@@ -107,13 +110,14 @@ project facts, decisions, or past experience related to the current request.
 | `--rerank` | rerank candidates for precision |
 | `--score-threshold N` | minimum rerank relevance score (0–1); only effective with `--rerank` |
 | `--filter '{...}'` | structured filter DSL, JSON object (e.g. `{"memory_type":"semantic"}`) |
-| `--user-id`, `--app-id`, `--agent-id`, `--session-id` | scoping |
+| `--user-id`, `--app-id`, `--agent-id`, `--session-id` | scoping; omit `--user-id` for project-wide search |
 | `--json` | machine-readable output |
 
 ```bash
 mindmemos memory search "what are the user's dietary restrictions?" --top-k 5 --user-id alice
-mindmemos memory search "travel prefs" --rerank --search-strategy agentic --json
-mindmemos memory search "notes" --filter '{"memory_type":"semantic"}'
+mindmemos memory search "travel prefs" --rerank --search-strategy agentic --user-id alice --json
+# project-wide search across all users in the API-key project
+mindmemos memory search "project notes" --filter '{"memory_type":"semantic"}'
 ```
 
 ### `memory get` — list / filter (no query)
@@ -236,9 +240,9 @@ full sync + async example. Minimal sync usage:
 ```python
 from mindmemos_sdk import MindMemOSClient, DialogueMessage
 
-with MindMemOSClient(user_id="alice") as client:   # reads `mindmemos auth` config
+with MindMemOSClient(user_id="alice") as client:   # reads base URL and API key from `mindmemos auth`
     client.memory.add(messages=[DialogueMessage(role="user", content="allergic to peanuts")])
-    hits = client.memory.search("dietary restrictions", top_k=5)
+    hits = client.memory.search("dietary restrictions", top_k=5, user_id="alice")
     for hit in hits.memories:
         print(hit.id, hit.memory)
 ```

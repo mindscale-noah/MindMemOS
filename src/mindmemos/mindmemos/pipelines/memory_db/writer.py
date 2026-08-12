@@ -20,7 +20,7 @@ from ...infra.db import (
     SparseVectorData,
     resolve_database_clients,
 )
-from ...llm import EmbedClient, get_embed_client
+from ...llm import EmbedClient, get_embed_client, provider_binding_runtime_enabled, require_model_endpoint
 from ...logging import get_logger, traced, traced_awaitable
 from ...mappers import to_db_write_primitives, to_entity_node, to_memory_node, to_mutation_result, to_source_node
 from ...typing import (
@@ -72,6 +72,9 @@ class MemoryDbWriter:
 
     def _ensure_embed_client(self) -> EmbedClient:
         if self._embed_client is None:
+            if provider_binding_runtime_enabled():
+                require_model_endpoint("embedding")
+                return get_embed_client()
             self._embed_client = get_embed_client()
         return self._embed_client
 
@@ -132,7 +135,7 @@ class MemoryDbWriter:
 
         for command in plan.memory_deletes:
             try:
-                if prefetch_error is not None and not command.hard:
+                if prefetch_error is not None:
                     raise prefetch_error
                 result = await self._delete_memory_command(ctx, command, memory_records.get(command.memory_id))
                 mutations.append(result)
@@ -172,7 +175,7 @@ class MemoryDbWriter:
         memory_ids = list(
             dict.fromkeys(
                 [command.memory_id for command in plan.memory_updates]
-                + [command.memory_id for command in plan.memory_deletes if not command.hard]
+                + [command.memory_id for command in plan.memory_deletes]
             )
         )
         if not memory_ids:
@@ -394,7 +397,7 @@ class MemoryDbWriter:
 
     @traced("memory_db.delete_memory")
     async def delete_memory(self, ctx: MemoryRequestContext, req: MemoryDbDeleteCommand) -> MemoryDbMutationResult:
-        """Archive or hard delete one memory in the request project."""
+        """Archive one memory in the request project."""
 
         result = await self.apply_mutation_plan(
             ctx,
@@ -409,23 +412,8 @@ class MemoryDbWriter:
         req: MemoryDbMemoryDeleteCommand,
         record: QdrantRecord | None,
     ) -> MemoryDbMutationResult:
-        if req.hard:
-            await self._clients.qdrant.delete_memory(ctx.project_id, req.memory_id)
-            try:
-                await self._clients.neo4j.delete_memory_node(ctx.project_id, req.memory_id)
-            except Exception:
-                if req.consistency == "strong":
-                    raise
-                logger.warning(
-                    "memory graph hard delete failed",
-                    project_id=ctx.project_id,
-                    memory_id=req.memory_id,
-                    exc_info=True,
-                )
-            return to_mutation_result(req.memory_id, changed=True, hard=True)
-
         if record is None:
-            return to_mutation_result(req.memory_id, changed=False, hard=False)
+            return to_mutation_result(req.memory_id, changed=False)
 
         now = datetime.now(UTC)
         metadata = dict(record.payload.get("metadata") or {})
@@ -454,7 +442,7 @@ class MemoryDbWriter:
                 memory_id=req.memory_id,
                 exc_info=True,
             )
-        return to_mutation_result(req.memory_id, changed=True, hard=False)
+        return to_mutation_result(req.memory_id, changed=True)
 
     async def _write_qdrant(
         self,

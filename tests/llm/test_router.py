@@ -1,3 +1,4 @@
+import pytest
 from mindmemos.config.app import ModelEndpointConfig, ModelRouterConfig
 from mindmemos.llm import router
 
@@ -54,6 +55,24 @@ def test_build_router_passes_endpoint_num_retries_to_litellm_params(monkeypatch)
     assert captured["model_list"][0]["litellm_params"]["num_retries"] == 7
 
 
+def test_build_router_passes_configured_minimum_retry_interval(monkeypatch) -> None:
+    captured = {}
+
+    class FakeRouter:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(router, "Router", FakeRouter)
+    cfg = ModelRouterConfig(
+        endpoints=[ModelEndpointConfig(model="gpt-test", api_key="sk", api_base="https://example.test/v1", num_retries=2)],
+        retry_after=1,
+    )
+
+    router.build_router(cfg, "chat")
+
+    assert captured["retry_after"] == 1
+
+
 def test_litellm_param_fields_do_not_allow_stream() -> None:
     assert "stream" not in router._LITELLM_PARAM_FIELDS
 
@@ -93,6 +112,121 @@ def test_get_router_caches_by_resolved_config(monkeypatch) -> None:
         assert len(instances) == 1
     finally:
         router.clear_router_cache()
+
+
+@pytest.mark.parametrize("transport", [None, "litellm"])
+def test_get_router_keeps_static_endpoints_on_cached_litellm_path(monkeypatch, transport) -> None:
+    instances = []
+
+    class FakeRouter:
+        def __init__(self, **kwargs) -> None:
+            instances.append(self)
+
+    monkeypatch.setattr(router, "Router", FakeRouter)
+    monkeypatch.setattr(
+        router,
+        "build_platform_gateway_router",
+        lambda *_args, **_kwargs: pytest.fail("static endpoint entered Platform gateway path"),
+        raising=False,
+    )
+    router.clear_router_cache()
+    endpoint_kwargs = {} if transport is None else {"transport": transport}
+    cfg = ModelRouterConfig(
+        endpoints=[
+            ModelEndpointConfig(
+                model="m",
+                api_key="sk",
+                api_base="https://static.test/v1",
+                **endpoint_kwargs,
+            )
+        ]
+    )
+    try:
+        first, _ = router.get_router(cfg, "chat")
+        second, _ = router.get_router(cfg, "chat")
+    finally:
+        router.clear_router_cache()
+
+    assert first is second
+    assert len(instances) == 1
+
+
+def test_get_router_uses_uncached_request_scoped_platform_gateway_adapter(monkeypatch) -> None:
+    adapters = []
+
+    def build_gateway(router_cfg, alias):
+        adapter = object()
+        adapters.append((router_cfg, alias, adapter))
+        return adapter, 2
+
+    monkeypatch.setattr(router, "build_platform_gateway_router", build_gateway, raising=False)
+    cfg = ModelRouterConfig(
+        endpoints=[
+            ModelEndpointConfig(
+                model="openai/gpt-test",
+                api_key="service-token",
+                api_base="http://backend:8010/litellm_memory_proxy/user-a/v1",
+                transport="platform_gateway",
+                num_retries=2,
+            )
+        ]
+    )
+
+    first, _ = router.get_router(cfg, "chat")
+    second, _ = router.get_router(cfg, "chat")
+
+    assert first is not second
+    assert [item[1] for item in adapters] == ["chat", "chat"]
+
+
+@pytest.mark.parametrize(
+    "endpoint_kwargs",
+    [
+        [
+            {
+                "model": "openai/gpt-test",
+                "api_key": "service-token",
+                "api_base": "http://backend:8010/gateway/user-a/v1",
+                "transport": "platform_gateway",
+            },
+            {"model": "openai/gpt-test", "api_key": "sk", "api_base": "https://static.test/v1"},
+        ],
+        [
+            {
+                "model": "openai/gpt-a",
+                "api_key": "service-token",
+                "api_base": "http://backend:8010/gateway/user-a/v1",
+                "transport": "platform_gateway",
+            },
+            {
+                "model": "openai/gpt-b",
+                "api_key": "service-token",
+                "api_base": "http://backend:8010/gateway/user-a/v1",
+                "transport": "platform_gateway",
+            },
+        ],
+    ],
+)
+def test_get_router_rejects_mixed_or_multi_endpoint_gateway_routes(endpoint_kwargs) -> None:
+    endpoints = [ModelEndpointConfig(**values) for values in endpoint_kwargs]
+    with pytest.raises(ValueError, match="platform_gateway"):
+        router.get_router(ModelRouterConfig(endpoints=endpoints), "chat")
+
+
+def test_get_router_rejects_unknown_transport() -> None:
+    cfg = ModelRouterConfig(
+        endpoints=[
+            ModelEndpointConfig(
+                model="openai/gpt-test",
+                api_key="sk",
+                api_base="https://static.test/v1",
+                transport="unknown",
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="unsupported model endpoint transport"):
+        router.get_router(cfg, "chat")
 
 
 def test_get_router_builds_separate_router_for_different_config(monkeypatch) -> None:

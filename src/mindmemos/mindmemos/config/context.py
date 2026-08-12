@@ -24,6 +24,7 @@ class ConfigOverrides:
 
     tenant_config: dict[str, Any] | None = None
     project_config: dict[str, Any] | None = None
+    allow_project_embedding_dimensions: bool = False
 
     def is_empty(self) -> bool:
         return not self.tenant_config and not self.project_config
@@ -81,11 +82,23 @@ def get_config_overrides() -> ConfigOverrides | None:
 def bind_config_overrides(
     tenant_config: dict[str, Any] | None = None,
     project_config: dict[str, Any] | None = None,
+    *,
+    allow_project_embedding_dimensions: bool = False,
 ) -> Iterator[None]:
     """Temporarily bind config overrides, then restore the previous context."""
 
-    cfg_token = _current.set(_build_scoped_config(tenant_config, project_config))
-    overrides = ConfigOverrides(tenant_config=tenant_config, project_config=project_config)
+    cfg_token = _current.set(
+        _build_scoped_config(
+            tenant_config,
+            project_config,
+            allow_project_embedding_dimensions=allow_project_embedding_dimensions,
+        )
+    )
+    overrides = ConfigOverrides(
+        tenant_config=tenant_config,
+        project_config=project_config,
+        allow_project_embedding_dimensions=allow_project_embedding_dimensions,
+    )
     overrides_token = _current_overrides.set(None if overrides.is_empty() else overrides)
     try:
         yield
@@ -97,6 +110,8 @@ def bind_config_overrides(
 def _build_scoped_config(
     tenant_config: dict[str, Any] | None = None,
     project_config: dict[str, Any] | None = None,
+    *,
+    allow_project_embedding_dimensions: bool = False,
 ) -> MemoryConfig:
     cfg = _global_config
     if cfg is None:
@@ -107,7 +122,7 @@ def _build_scoped_config(
         cfg = OmegaConf.merge(cfg, OmegaConf.create(tenant_config))
     if project_config:
         cfg = OmegaConf.merge(cfg, project_config)
-    validate_config(cfg)
+    validate_config(cfg, allow_project_embedding_dimensions=allow_project_embedding_dimensions)
     return cfg
 
 

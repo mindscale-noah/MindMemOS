@@ -29,8 +29,10 @@ from ...pipelines.skill import (
     get_skill_evolver,
     get_skill_version_store,
 )
+from ...provider_bindings import provider_config_context
 from ...typing import SkillEvolveResult
 from ..deps import annotate_request_trace
+from ..mappers import to_memory_request_context
 from ..schemas import AuthContext
 from ..skill_schemas import (
     SkillContentData,
@@ -161,6 +163,7 @@ class SkillService:
         needed; otherwise it carries the freshly minted version id(s).
         """
         annotate_request_trace(auth)
+        context = to_memory_request_context(auth, request)
 
         if request.mode == "async":
             await get_producer().send(
@@ -170,6 +173,7 @@ class SkillService:
                     "account_id": auth.account_id,
                     "project_id": auth.project_id,
                     "cloud_skill_id": request.cloud_skill_id,
+                    "context": context.model_dump(mode="json"),
                     "submitted_at": datetime.now(UTC).isoformat(),
                 },
                 dispatch_key=f"{auth.project_id}:{request.cloud_skill_id}",
@@ -181,13 +185,15 @@ class SkillService:
                 pending_count=0,
                 threshold=0,
             )
-        try:
-            return await self.evolver.evolve(
-                project_id=auth.project_id,
-                cloud_skill_id=request.cloud_skill_id,
-            )
-        except SkillNotFoundError as exc:
-            raise ResourceNotFoundError(str(exc), code="skill.not_found") from exc
+        config_context = await provider_config_context(context)
+        with config_context:
+            try:
+                return await self.evolver.evolve(
+                    project_id=auth.project_id,
+                    cloud_skill_id=request.cloud_skill_id,
+                )
+            except SkillNotFoundError as exc:
+                raise ResourceNotFoundError(str(exc), code="skill.not_found") from exc
 
     @traced("skill_service.sync")
     async def sync(self, auth: AuthContext, request: SkillSyncRequest) -> SkillSyncData:

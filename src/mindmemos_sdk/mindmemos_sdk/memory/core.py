@@ -13,6 +13,8 @@ from .models import (
     AddResult,
     FeedbackMode,
     GetResult,
+    MemoryPageResult,
+    MemoryScrollResult,
     MemorySearchHit,
     Message,
     SearchResult,
@@ -23,6 +25,8 @@ from .models import (
     build_dreaming_body,
     build_feedback_body,
     build_get_body,
+    build_list_body,
+    build_scroll_body,
     build_search_body,
     build_update_body,
 )
@@ -109,7 +113,7 @@ class MemoryCore:
         return MemoryRequest(
             path="/v1/memory/search",
             body=build_search_body(
-                user_id=self._resolve_user_id(user_id),
+                user_id=user_id,
                 query=query,
                 top_k=top_k,
                 search_strategy=search_strategy,
@@ -133,6 +137,58 @@ class MemoryCore:
             path="/v1/memory/get",
             body=build_get_body(filters=filters, top_k=top_k),
             parse=parse_get_result,
+        )
+
+    def list(
+        self,
+        *,
+        filters: dict[str, Any] | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        include_total: bool = True,
+        user_id: str | None = None,
+        app_id: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> MemoryRequest[MemoryPageResult]:
+        return MemoryRequest(
+            path="/v1/memory/list",
+            body=build_list_body(
+                filters=filters,
+                page=page,
+                page_size=page_size,
+                include_total=include_total,
+                user_id=user_id or self._defaults.user_id,
+                app_id=app_id or self._defaults.app_id,
+                agent_id=agent_id or self._defaults.agent_id,
+                session_id=session_id or self._defaults.session_id,
+            ),
+            parse=parse_memory_page_result,
+        )
+
+    def scroll(
+        self,
+        *,
+        filters: dict[str, Any] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+        user_id: str | None = None,
+        app_id: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> MemoryRequest[MemoryScrollResult]:
+        return MemoryRequest(
+            path="/v1/memory/scroll",
+            body=build_scroll_body(
+                filters=filters,
+                limit=limit,
+                cursor=cursor,
+                user_id=user_id or self._defaults.user_id,
+                app_id=app_id or self._defaults.app_id,
+                agent_id=agent_id or self._defaults.agent_id,
+                session_id=session_id or self._defaults.session_id,
+            ),
+            parse=parse_memory_scroll_result,
         )
 
     def update(self, memory_id: str, content: str) -> MemoryRequest[StatusResult]:
@@ -223,6 +279,27 @@ def parse_get_result(envelope: Envelope) -> GetResult:
     return GetResult(
         request_id=envelope.request_id,
         memories=data.get("memories", []),
+    )
+
+
+def parse_memory_page_result(envelope: Envelope) -> MemoryPageResult:
+    data = envelope.data or {}
+    return MemoryPageResult(
+        request_id=envelope.request_id,
+        memories=data.get("memories", []),
+        page=data.get("page", 1),
+        page_size=data.get("page_size", 20),
+        total=data.get("total"),
+        has_more=bool(data.get("has_more", False)),
+    )
+
+
+def parse_memory_scroll_result(envelope: Envelope) -> MemoryScrollResult:
+    data = envelope.data or {}
+    return MemoryScrollResult(
+        request_id=envelope.request_id,
+        memories=data.get("memories", []),
+        next_cursor=data.get("next_cursor"),
     )
 
 

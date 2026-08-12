@@ -23,7 +23,14 @@ from ...components.extractor.schema import property_relationships
 from ...components.text import SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
 from ...config import DreamingConfig, TextProcessingConfig, get_config
 from ...infra.kafka import get_producer
-from ...llm import EmbedClient, LLMClient, get_embed_client, get_llm_client
+from ...llm import (
+    EmbedClient,
+    LLMClient,
+    get_embed_client,
+    get_llm_client,
+    provider_binding_runtime_enabled,
+    require_model_endpoint,
+)
 from ...logging import get_logger, traced
 from ...prompts.EN.dreaming.action_planning import ACTION_PLANNING_PROMPT
 from ...prompts.EN.dreaming.relation_detection import RELATION_DETECTION_PROMPT
@@ -88,8 +95,13 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
         algo_cfg = None if dreaming_config and text_config else get_config().algo_config
         cfg = text_config or algo_cfg.text_processing
         self._cfg = dreaming_config or algo_cfg.dreaming
-        self._llm_client = llm_client or get_llm_client()
-        self._embed_client = embed_client or get_embed_client()
+        self._explicit_llm_client = llm_client
+        self._explicit_embed_client = embed_client
+        self._llm_client = llm_client
+        self._embed_client = embed_client
+        if not provider_binding_runtime_enabled():
+            self._llm_client = self._llm_client or get_llm_client()
+            self._embed_client = self._embed_client or get_embed_client()
         self._text_preprocessor = text_preprocessor or get_text_preprocessor(cfg)
         self._sparse_encoder = sparse_encoder or SparseVectorEncoder(cfg)
         self._activity_collector = activity_collector
@@ -112,6 +124,26 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
     async def dream_sync(self, _inp: DreamingPipelineInput, context: MemoryRequestContext) -> DreamingPipelineResult:
         summary = await self._consolidate_memory(context)
         return DreamingPipelineResult(status="ok", message=f"consolidation complete: {summary}")
+
+    def _resolve_llm_client(self) -> LLMClient:
+        if self._explicit_llm_client is not None:
+            return self._explicit_llm_client
+        if provider_binding_runtime_enabled():
+            require_model_endpoint("chat")
+            return get_llm_client()
+        if self._llm_client is None:
+            self._llm_client = get_llm_client()
+        return self._llm_client
+
+    def _resolve_embed_client(self) -> EmbedClient:
+        if self._explicit_embed_client is not None:
+            return self._explicit_embed_client
+        if provider_binding_runtime_enabled():
+            require_model_endpoint("embedding")
+            return get_embed_client()
+        if self._embed_client is None:
+            self._embed_client = get_embed_client()
+        return self._embed_client
 
     # -- main orchestration --------------------------------------------------
 
@@ -514,7 +546,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             kwargs: dict[str, Any] = {}
             if self._cfg.consolidation_model:
                 kwargs["model"] = self._cfg.consolidation_model
-            result = await self._llm_client.chat(
+            result = await self._resolve_llm_client().chat(
                 task="memory_relation_detection",
                 messages=[{"role": "system", "content": prompt}],
                 format_parser=relation_detection_parser,
@@ -616,7 +648,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
             kwargs: dict[str, Any] = {}
             if self._cfg.consolidation_model:
                 kwargs["model"] = self._cfg.consolidation_model
-            result = await self._llm_client.chat(
+            result = await self._resolve_llm_client().chat(
                 task="memory_action_planning",
                 messages=[{"role": "system", "content": prompt}],
                 format_parser=_bounded_parser,
@@ -868,7 +900,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
     async def _embed_texts(self, task: str, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        response = await self._embed_client.embed(task=task, text=texts)
+        response = await self._resolve_embed_client().embed(task=task, text=texts)
         return response.embeddings
 
     def _memory_vectors(self, memories: list[MemoryWrite], dense_vectors: list[list[float]]) -> list[VectorWrite]:

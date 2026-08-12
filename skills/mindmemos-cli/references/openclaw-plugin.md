@@ -52,7 +52,7 @@ Optional plugin config:
   "cli": "mindmemos",
   "topK": 5,
   "addMode": "async",
-  "userId": "optional-user-override",
+  "userId": "alice",
   "appId": "openclaw",
   "sessionId": "optional-session-override",
   "minQueryLength": 2,
@@ -63,9 +63,18 @@ Optional plugin config:
 - `cli` — command used to invoke the CLI. Defaults to `mindmemos`. If OpenClaw does not run with the CLI on its PATH, set this to an absolute path or a wrapper command (e.g. `uv run mindmemos` inside the repo).
 - `topK` — number of memories injected per turn.
 - `addMode` — `sync` blocks until extraction finishes; `async` (default) enqueues and returns immediately. Note: in `async` mode the plugin only sees CLI-level failures — a server-side add failure that happens after the CLI exits 0 is not logged by the plugin.
-- `userId` / `appId` / `sessionId` — override scoping; otherwise the plugin derives them.
+- `userId` — scopes both search and add to one user. If omitted, search is project-wide, while add inherits the
+  default user from the local `mindmemos` CLI config. If neither location supplies a user, add fails.
+- `appId` / `sessionId` — override the corresponding plugin context values.
 - `minQueryLength` — skip recall for very short prompts.
 - `maxConversationMessages` — cap on how many trailing messages are persisted per turn.
+
+Configure a stable user scope and restart the gateway:
+
+```bash
+openclaw config set plugins.entries.mindmemos-memory.config.userId alice
+openclaw gateway restart
+```
 
 ## Subagent behavior
 

@@ -14,6 +14,7 @@ from ._lexical import Bm25TextAnalyzer
 from ._normalize import TextNormalizer
 from .preprocessor import TextPreprocessor, get_text_preprocessor
 from .sparse import CorpusStatsProvider, InMemoryCorpusStatsProvider, SparseVectorEncoder
+from .token_estimator import TOKEN_ESTIMATOR_VERSION, estimate_tokens
 from .vectorizer import MemoryVectorizer
 
 __all__ = [
@@ -33,6 +34,8 @@ __all__ = [
     "SparseVectorEncoder",
     "TextNormalizer",
     "TextPreprocessor",
+    "TOKEN_ESTIMATOR_VERSION",
     "digest_text",
     "get_text_preprocessor",
+    "estimate_tokens",
 ]

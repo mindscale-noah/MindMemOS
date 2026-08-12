@@ -32,7 +32,7 @@ from ...components.skill import apply_patch_ops, deserialize_bundle
 from ...config import SkillEvolutionConfig, get_config
 from ...errors import SkillBundleError
 from ...infra.db import get_database_clients
-from ...llm import get_llm_client
+from ...llm import get_llm_client, require_model_endpoint
 from ...logging import get_logger, traced
 from ...mappers import skill_trace_summary_from_record, to_skill_trace_summary_point
 from ...prompts.EN.skills import (
@@ -127,7 +127,10 @@ class SkillEvolver:
     @property
     def llm(self):
         """Return the configured LLM client."""
-        return self._llm if self._llm is not None else get_llm_client()
+        if self._llm is not None:
+            return self._llm
+        require_model_endpoint("chat")
+        return get_llm_client()
 
     @traced("skill_evolver.evolve")
     async def evolve(self, *, project_id: str, cloud_skill_id: str) -> SkillEvolveResult:

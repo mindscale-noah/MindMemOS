@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from numbers import Real
 from typing import Any
 
@@ -101,12 +102,15 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("database.neo4j.read_retry_base_delay", min_value=0, support="non-negative number"),
     RangeRule("chat_model_router.allowed_fails", min_value=0, allow_none=True, support="non-negative integer"),
     RangeRule("chat_model_router.cool_down", min_value=0, allow_none=True, support="non-negative number"),
+    RangeRule("chat_model_router.retry_after", min_value=0, support="non-negative number"),
     RangeRule("chat_model_router.format_parser_max_attempts", min_value=1, support="positive integer >= 1"),
     RangeRule("embed_model_router.allowed_fails", min_value=0, allow_none=True, support="non-negative integer"),
     RangeRule("embed_model_router.cool_down", min_value=0, allow_none=True, support="non-negative number"),
+    RangeRule("embed_model_router.retry_after", min_value=0, support="non-negative number"),
     RangeRule("embed_model_router.format_parser_max_attempts", min_value=1, support="positive integer >= 1"),
     RangeRule("rerank_model_router.allowed_fails", min_value=0, allow_none=True, support="non-negative integer"),
     RangeRule("rerank_model_router.cool_down", min_value=0, allow_none=True, support="non-negative number"),
+    RangeRule("rerank_model_router.retry_after", min_value=0, support="non-negative number"),
     RangeRule("rerank_model_router.format_parser_max_attempts", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.text_processing.explicit_language_confidence", min_value=0, max_value=1),
     RangeRule("algo_config.text_processing.lang_zh_ratio", min_value=0, max_value=1),
@@ -400,7 +404,7 @@ REQUIRED_STRING_PATHS: tuple[str, ...] = (
 )
 
 
-def validate_config(cfg: Any) -> None:
+def validate_config(cfg: Any, *, allow_project_embedding_dimensions: bool = False) -> None:
     """Validate a fully built config object before it becomes the process config."""
 
     _validate_choice_rules(cfg)
@@ -411,7 +415,7 @@ def validate_config(cfg: Any) -> None:
     _validate_model_router("chat_model_router", cfg.chat_model_router)
     _validate_model_router("embed_model_router", cfg.embed_model_router)
     _validate_model_router("rerank_model_router", cfg.rerank_model_router)
-    _validate_embedding_vector_size(cfg)
+    _validate_embedding_vector_size(cfg, allow_project_embedding_dimensions=allow_project_embedding_dimensions)
     _validate_algo(cfg)
     _validate_kafka(cfg.kafka)
 
@@ -491,11 +495,16 @@ def _validate_model_router(path: str, router: Any) -> None:
         _positive_optional(endpoint, "dimensions", f"{prefix}.dimensions")
 
 
-def _validate_embedding_vector_size(cfg: Any) -> None:
+def _validate_embedding_vector_size(cfg: Any, *, allow_project_embedding_dimensions: bool = False) -> None:
+    allow_project_dimension = (
+        allow_project_embedding_dimensions
+        and bool(cfg.provider_binding.enabled)
+        and bool(cfg.database.qdrant.project_collection_namespace_enabled)
+    )
     vector_size = cfg.database.qdrant.vector_size
     for index, endpoint in enumerate(cfg.embed_model_router.endpoints):
         dimensions = endpoint.dimensions
-        if dimensions is not None and dimensions != vector_size:
+        if dimensions is not None and dimensions != vector_size and not allow_project_dimension:
             raise InvalidConfigError(
                 f"embed_model_router.endpoints[{index}].dimensions",
                 support=f"must equal database.qdrant.vector_size ({vector_size})",
@@ -652,6 +661,8 @@ def _validate_range(path: str, value: Any, rule: RangeRule) -> None:
         return
     if isinstance(value, bool) or not isinstance(value, Real):
         raise InvalidConfigError(path, support=rule.support or "number")
+    if not isfinite(value):
+        raise InvalidConfigError(path, support=rule.support or "finite number")
     if rule.min_value is not None:
         too_small = value < rule.min_value if rule.include_min else value <= rule.min_value
         if too_small:

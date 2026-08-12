@@ -1,12 +1,13 @@
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import mindmemos.pipelines.add.schema.schema_add as schema_add
 import pytest
 from mindmemos.components.extractor.schema import _schema_higher_order
 from mindmemos.components.memory_modeling.schema import EntityManager, EntityType
-from mindmemos.config import get_config, init_config, reset_config
+from mindmemos.config import bind_config_overrides, get_config, init_config, reset_config
 from mindmemos.infra import db
 from mindmemos.llm import ChatResponse, EmbeddingResponse
 from mindmemos.pipelines.add import SchemaAddPipeline
@@ -167,6 +168,20 @@ class RecordingFakeEmbed(FakeEmbed):
         return await super().embed(task, text, **kwargs)
 
 
+class RequestScopedLLM(FakeLLM):
+    async def chat(self, task, messages, format_parser=None, **kwargs):
+        if not get_config().chat_model_router.endpoints:
+            raise RuntimeError("No chat model endpoint configured")
+        return await super().chat(task, messages, format_parser=format_parser, **kwargs)
+
+
+class RequestScopedEmbed(FakeEmbed):
+    async def embed(self, task, text, **kwargs):
+        if not get_config().embed_model_router.endpoints:
+            raise RuntimeError("No embed model endpoint configured")
+        return await super().embed(task, text, **kwargs)
+
+
 class FakeQdrant:
     def __init__(self):
         self.add_records = {}
@@ -309,10 +324,10 @@ class FakeWriter:
         mutations = []
         for command in plan.memory_updates:
             self.updated.append(command)
-            mutations.append(MemoryDbMutationResult(memory_id=f"{command.memory_id}-new", changed=True, hard=False))
+            mutations.append(MemoryDbMutationResult(memory_id=f"{command.memory_id}-new", changed=True))
         for command in plan.memory_deletes:
             self.deleted.append(command.memory_id)
-            mutations.append(MemoryDbMutationResult(memory_id=command.memory_id, changed=True, hard=command.hard))
+            mutations.append(MemoryDbMutationResult(memory_id=command.memory_id, changed=True))
         return MemoryDbWriteResult(
             memory_ids=[memory.memory_id for memory in write_plan.memories],
             entity_ids=[entity.entity_id for entity in write_plan.entities],
@@ -329,11 +344,11 @@ class FakeWriter:
 
     async def update_memory(self, ctx, req):
         self.updated.append(req)
-        return SimpleNamespace(status="ok", memory_id=f"{req.memory_id}-new", changed=True, hard=False)
+        return SimpleNamespace(status="ok", memory_id=f"{req.memory_id}-new", changed=True)
 
     async def delete_memory(self, ctx, req):
         self.deleted.append(req.memory_id)
-        return SimpleNamespace(status="ok", memory_id=req.memory_id, changed=True, hard=req.hard)
+        return SimpleNamespace(status="ok", memory_id=req.memory_id, changed=True)
 
 
 class FakeRecorder:
@@ -601,6 +616,143 @@ def config_context():
         yield
     finally:
         reset_config()
+
+
+@pytest.mark.asyncio
+async def test_schema_add_pipeline_resolves_request_scoped_clients_when_provider_binding_enabled(monkeypatch, tmp_path):
+    config_path = tmp_path / "project-namespaced.yaml"
+    config_path.write_text(
+        Path("config/mindmemos/dev.example.yaml")
+        .read_text(encoding="utf-8")
+        .replace("    vector_size: 2560", "    vector_size: 2560\n    project_collection_namespace_enabled: true"),
+        encoding="utf-8",
+    )
+    reset_config()
+    init_config(config_path=config_path)
+    cfg = get_config()
+    cfg.provider_binding.enabled = True
+    cfg.chat_model_router.endpoints.clear()
+    cfg.embed_model_router.endpoints.clear()
+    llm = RequestScopedLLM()
+    embed = RequestScopedEmbed()
+    monkeypatch.setattr(schema_add, "get_llm_client", lambda: llm)
+    monkeypatch.setattr(schema_add, "get_embed_client", lambda: embed)
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    reader = MemoryDbReader(clients=clients)
+    pipeline = SchemaAddPipeline(
+        db_reader=reader,
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    assert pipeline._explicit_llm is None
+    assert pipeline._explicit_embed is None
+
+    with bind_config_overrides(
+        allow_project_embedding_dimensions=True,
+        project_config={
+            "chat_model_router": {
+                "endpoints": [
+                    {
+                        "model": "openai/request-chat",
+                        "api_key": "sk-request",
+                        "api_base": "https://example.test/v1",
+                    }
+                ]
+            },
+            "embed_model_router": {
+                "endpoints": [
+                    {
+                        "model": "openai/request-embed",
+                        "api_key": "sk-request",
+                        "api_base": "https://example.test/v1",
+                        "dimensions": 3,
+                    }
+                ]
+            },
+        }
+    ):
+        runtime = pipeline._resolve_add_runtime(make_context())
+        assert runtime.chunker.llm_client is llm
+        assert runtime.extractor.llm_client is llm
+        assert runtime.planner.llm_client is llm
+        assert runtime.planner.embed_client is embed
+        result = await pipeline.add_sync(
+            AddPipelineInput(
+                mode="sync",
+                timestamp=1770000000000,
+                force_generation=True,
+                messages=[{"role": "user", "content": "I like Qdrant for vector search."}],
+            ),
+            make_context(),
+        )
+
+    assert result.status == "ok"
+    assert writer.calls
+
+
+def test_schema_add_pipeline_resolves_clients_from_current_runtime_when_provider_binding_disabled(monkeypatch):
+    cfg = get_config()
+    cfg.provider_binding.enabled = False
+    llm = RequestScopedLLM()
+    embed = RequestScopedEmbed()
+    monkeypatch.setattr(schema_add, "get_llm_client", lambda: llm)
+    monkeypatch.setattr(schema_add, "get_embed_client", lambda: embed)
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    reader = MemoryDbReader(clients=clients)
+
+    pipeline = SchemaAddPipeline(
+        db_reader=reader,
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    runtime = pipeline._resolve_add_runtime(make_context())
+    assert runtime.chunker.llm_client is llm
+    assert runtime.extractor.llm_client is llm
+    assert runtime.planner.llm_client is llm
+    assert runtime.planner.embed_client is embed
+
+
+@pytest.mark.asyncio
+async def test_schema_add_sync_stream_resolves_explicit_consistency():
+    class FakeBuffer:
+        async def append(self, context, inp, *, force_generation, source_add_record_id):
+            return ["buffer-record-1"]
+
+    class FakeRecorder:
+        async def mark_add_completed(self, context, add_record_id, result):
+            return None
+
+    pipeline = SchemaAddPipeline.__new__(SchemaAddPipeline)
+    pipeline.add_buffer = FakeBuffer()
+    pipeline.recorder = FakeRecorder()
+    pipeline._explicit_consistency = "strong"
+    observed = {}
+
+    async def drain(context, *, consistency, force, progress, cancel_check):
+        observed["consistency"] = consistency
+        return []
+
+    pipeline._ensure_drain_and_wait = drain
+
+    result = await pipeline.add_sync_stream(
+        AddPipelineInput(
+            mode="sync",
+            timestamp=1770000000000,
+            messages=[{"role": "user", "content": "Remember this."}],
+        ),
+        make_context(),
+    )
+
+    assert result.status == "ok"
+    assert observed["consistency"] == "strong"
 
 
 @pytest.mark.asyncio
@@ -931,6 +1083,43 @@ async def test_schema_add_buffer_orders_by_added_time_not_event_time():
     assert [record.payload["event_timestamp_ms"] for record in records] == [1770000000000, 1770000000000]
     assert all(before <= record.payload["added_at"] <= after for record in records)
     assert records[0].buffer_sequence < records[1].buffer_sequence
+
+
+@pytest.mark.asyncio
+async def test_schema_add_buffer_preserves_prompt_language():
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    buffer = AddRecordBuffer(clients=clients)
+    inp = AddPipelineInput(
+        mode="sync",
+        prompt_language="ZH",
+        messages=[{"role": "user", "content": "Prefer stable algorithms."}],
+    )
+
+    await buffer.append(make_context(), inp, force_generation=True)
+
+    records = await buffer.list_buffered(make_context(), limit=10)
+    assert records[0].payload["prompt_language"] == "ZH"
+    assert schema_add._reconstruct_input_from_records(records).prompt_language == "ZH"
+
+
+def test_schema_add_prompt_language_for_records_prefers_explicit_request(monkeypatch):
+    records = [
+        schema_add.BufferedAddRecord(
+            add_record_id="record-1",
+            payload={
+                "prompt_language": "ZH",
+                "messages": [{"role": "user", "content": "Prefer stable algorithms."}],
+            },
+        )
+    ]
+    monkeypatch.setattr(
+        schema_add,
+        "detect_prompt_language",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("language should not be auto-detected")),
+    )
+
+    assert schema_add._prompt_language_for_records(records, "Prefer stable algorithms.") == "ZH"
 
 
 @pytest.mark.asyncio
@@ -1522,7 +1711,7 @@ async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_
 
     with pytest.raises(RuntimeError, match="schema selection failed"):
         await pipeline._generate_episode_memory(
-            [SimpleNamespace()],
+            [SimpleNamespace(payload={})],
             context=make_context(),
             consistency="fast",
             rt=rt,

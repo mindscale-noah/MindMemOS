@@ -56,3 +56,8 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.pytest.ini_options]
+markers = [
+    "llm: tests that call a live LLM (requires LLM_API_KEY or dev.yaml config)",
+]

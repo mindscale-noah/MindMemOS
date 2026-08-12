@@ -24,6 +24,7 @@ def inject_config_context(headers: dict[str, str] | None = None) -> dict[str, st
         {
             "tenant_config": overrides.tenant_config,
             "project_config": overrides.project_config,
+            "allow_project_embedding_dimensions": overrides.allow_project_embedding_dimensions,
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -44,6 +45,7 @@ def bind_config_context_from_headers(headers: dict[str, str]) -> Iterator[None]:
     with bind_config_overrides(
         tenant_config=parsed.get("tenant_config"),
         project_config=parsed.get("project_config"),
+        allow_project_embedding_dimensions=parsed.get("allow_project_embedding_dimensions", False),
     ):
         yield
 
@@ -57,8 +59,11 @@ def _decode_config_context(raw: str) -> dict[str, Any]:
         raise ValueError("invalid kafka config context header")
     tenant_config = parsed.get("tenant_config")
     project_config = parsed.get("project_config")
+    allow_project_embedding_dimensions = parsed.get("allow_project_embedding_dimensions", False)
     if tenant_config is not None and not isinstance(tenant_config, dict):
         raise ValueError("invalid kafka config context header")
     if project_config is not None and not isinstance(project_config, dict):
+        raise ValueError("invalid kafka config context header")
+    if not isinstance(allow_project_embedding_dimensions, bool):
         raise ValueError("invalid kafka config context header")
     return parsed

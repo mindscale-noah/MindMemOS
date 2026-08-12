@@ -164,14 +164,13 @@ class MemoryDbSourceUpdateCommand(BaseModel):
 
 
 class MemoryDbMemoryDeleteCommand(BaseModel):
-    """Purpose: Archive or hard-delete one existing memory.
+    """Purpose: Archive one existing memory.
 
     Used in: delete, feedback delete, dreaming archive, and schema merge
     archive flows.
     """
 
     memory_id: str
-    hard: bool = False
     reason: str = "user_request"
     consistency: ConsistencyMode = "strong"
 
@@ -401,9 +400,6 @@ class MemoryDbMutationResult(BaseModel):
     status: str = "ok"
     memory_id: str
     changed: bool = True
-    hard: bool = False
-
-
 class MemoryDbWriteSummary(BaseModel):
     """Purpose: Summarize a completed write plan dispatch at the DB boundary.
 

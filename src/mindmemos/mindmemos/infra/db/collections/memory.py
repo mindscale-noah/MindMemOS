@@ -11,6 +11,7 @@ from typing import Any
 
 from qdrant_client import models as qmodels
 
+from ..filters import MEMORY_PAYLOAD_INDEX_SCHEMA
 from ..models import MemoryPoint, QdrantRecord, QdrantSearchRecord, SparseVectorData
 from .base import CollectionRepository
 
@@ -25,7 +26,20 @@ class MemoryRepository(CollectionRepository):
     async def upsert(self, points: list[MemoryPoint]) -> None:
         """Upsert many memory points."""
 
-        await self._engine.upsert(self.collection, [self._point(point) for point in points])
+        by_collection: dict[str, list[MemoryPoint]] = {}
+        for point in points:
+            project_id = str(point.payload.get("project_id") or "")
+            vector_size = len(point.semantic_vector or []) or self._cfg.vector_size
+            collection = await self._ensure_project_vector_collection(
+                project_id,
+                vector_size=vector_size,
+                enable_sparse=True,
+                payload_indexes=list(MEMORY_PAYLOAD_INDEX_SCHEMA),
+                on_disk_payload=self._cfg.memory_on_disk_payload,
+            )
+            by_collection.setdefault(collection, []).append(point)
+        for collection, collection_points in by_collection.items():
+            await self._engine.upsert(collection, [self._point(point) for point in collection_points])
 
     async def get(self, project_id: str, memory_id: str, *, with_vectors: bool = False) -> QdrantRecord | None:
         """Retrieve one memory by project and id."""
@@ -52,8 +66,13 @@ class MemoryRepository(CollectionRepository):
     ) -> list[QdrantSearchRecord]:
         """Search via dense semantic vector."""
 
+        collection = self.collection_for_vector_size(len(vector))
+        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(
+            collection
+        ):
+            return []
         return await self._engine.query(
-            self.collection,
+            collection,
             source="semantic",
             query=vector,
             using=self.semantic_vector_name,
@@ -74,8 +93,11 @@ class MemoryRepository(CollectionRepository):
     ) -> list[QdrantSearchRecord]:
         """Search via sparse BM25 vector."""
 
+        collection = await self._collection_holding_project(project_id)
+        if collection is None:
+            return []
         return await self._engine.query(
-            self.collection,
+            collection,
             source="bm25",
             query=self._engine.to_qdrant_sparse(vector),
             using=self.bm25_vector_name,
@@ -98,9 +120,14 @@ class MemoryRepository(CollectionRepository):
     ) -> list[QdrantSearchRecord]:
         """Run Qdrant-side RRF over dense and sparse prefetches."""
 
+        collection = self.collection_for_vector_size(len(dense_vector))
+        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(
+            collection
+        ):
+            return []
         scoped_filter = self._engine.project_filter(project_id, filter_=filter_)
         return await self._engine.query(
-            self.collection,
+            collection,
             source="rrf",
             prefetch=[
                 qmodels.Prefetch(
@@ -127,7 +154,9 @@ class MemoryRepository(CollectionRepository):
         record = await self.get(project_id, memory_id)
         if record is None:
             return
-        await self._engine.set_payload(self.collection, memory_id, payload)
+        collection = await self._collection_holding_project(project_id)
+        if collection is not None:
+            await self._engine.set_payload(collection, memory_id, payload)
 
     async def patch(
         self,
@@ -166,7 +195,9 @@ class MemoryRepository(CollectionRepository):
                     update_vectors=qmodels.UpdateVectors(points=[qmodels.PointVectors(id=memory_id, vector=vectors)])
                 )
             )
-        await self._engine.batch_update(self.collection, operations)
+        collection = await self._collection_holding_project(project_id)
+        if collection is not None:
+            await self._engine.batch_update(collection, operations)
 
     async def delete(self, project_id: str, memory_id: str) -> None:
         """Delete one memory after project ownership is checked."""
@@ -174,7 +205,9 @@ class MemoryRepository(CollectionRepository):
         record = await self.get(project_id, memory_id)
         if record is None:
             return
-        await self._engine.delete(self.collection, [memory_id])
+        collection = await self._collection_holding_project(project_id)
+        if collection is not None:
+            await self._engine.delete(collection, [memory_id])
 
     async def scroll(
         self,
@@ -190,6 +223,11 @@ class MemoryRepository(CollectionRepository):
         return await self._scroll_scoped(
             project_id, filter_=filter_, limit=limit, cursor=cursor, with_vectors=with_vectors
         )
+
+    async def count(self, project_id: str, *, filter_: qmodels.Filter | None = None) -> int:
+        """Count memories in one project."""
+
+        return await self._count_scoped(project_id, filter_=filter_)
 
     def _point(self, point: MemoryPoint) -> qmodels.PointStruct:
         return qmodels.PointStruct(

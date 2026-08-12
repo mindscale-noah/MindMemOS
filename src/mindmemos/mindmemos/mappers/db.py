@@ -179,6 +179,7 @@ def to_add_record_point(
             "task_completed_at": task_completed_at,
             "messages": _model_list_dump(inp.messages),
             "mode": inp.mode,
+            "prompt_language": inp.prompt_language,
             "feedback_processed": False,
             "metadata": dict(inp.metadata),
             "consolidation_status": "pending",
@@ -229,6 +230,7 @@ def to_schema_add_buffer_point(
             "task_completed_at": task_completed_at,
             "messages": _model_list_dump(inp.messages),
             "mode": inp.mode,
+            "prompt_language": inp.prompt_language,
             "force_generation": force_generation,
             "metadata": dict(inp.metadata),
         }

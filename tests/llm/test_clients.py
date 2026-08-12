@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from mindmemos.errors import ApiError
 from mindmemos.llm.chat import LLMClient
 from mindmemos.llm.embedding import EmbedClient
 
@@ -66,11 +68,40 @@ async def test_chat_client_delegates_provider_retry_to_router() -> None:
     router = FailingChatRouter()
     client = LLMClient(router, max_attempts=2)
 
-    with pytest.raises(RuntimeError, match="chat unavailable"):
+    with pytest.raises(ApiError, match="LLM provider request failed"):
         await client.chat(task="test", messages=[{"role": "user", "content": "hello"}])
 
     # The client issues a single acompletion; provider retries are the router's job.
     assert router.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_client_preserves_safe_internal_provider_error_category() -> None:
+    response = httpx.Response(
+        401,
+        json={
+            "code": "model.provider_authentication_failed",
+            "message": "model provider rejected the configured credential",
+            "data": None,
+        },
+        request=httpx.Request("POST", "http://backend/internal-proxy"),
+    )
+
+    class InternalProxyRouter:
+        async def acompletion(self, **_kwargs):
+            error = RuntimeError("credential sk-sensitive was rejected")
+            error.response = response
+            raise error
+
+    with pytest.raises(ApiError) as exc_info:
+        await LLMClient(InternalProxyRouter()).chat(
+            task="test",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    assert exc_info.value.code == "model.provider_authentication_failed"
+    assert exc_info.value.message == "model provider rejected the configured credential"
+    assert "sk-sensitive" not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -179,10 +210,36 @@ async def test_embed_client_delegates_provider_retry_to_router() -> None:
     router = FailingEmbedRouter()
     client = EmbedClient(router)
 
-    with pytest.raises(RuntimeError, match="embedding unavailable"):
+    with pytest.raises(ApiError, match="Embedding provider request failed"):
         await client.embed(task="test", text="hello")
 
     assert router.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_embed_client_preserves_safe_internal_provider_error_category() -> None:
+    response = httpx.Response(
+        429,
+        json={
+            "code": "model.provider_rate_limited",
+            "message": "model provider rate limit exceeded",
+            "data": None,
+        },
+        request=httpx.Request("POST", "http://backend/internal-proxy"),
+    )
+
+    class InternalProxyRouter:
+        async def aembedding(self, **_kwargs):
+            error = RuntimeError("provider response leaked request details")
+            error.response = response
+            raise error
+
+    with pytest.raises(ApiError) as exc_info:
+        await EmbedClient(InternalProxyRouter()).embed(task="test", text="hello")
+
+    assert exc_info.value.code == "model.provider_rate_limited"
+    assert exc_info.value.message == "model provider rate limit exceeded after retries"
+    assert "request details" not in exc_info.value.message
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,14 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 
 
 class _FakeQdrantClient:
-    """Records calls; ``create_collection`` behaviour is configured per test."""
+    """Records calls; ``create_collection`` behaviour is configured per test.
+
+    When ``create_collection`` fails with a Qdrant "already exists" error
+    (REST ``409`` / gRPC ``ALREADY_EXISTS``), the fake simulates the
+    real-world scenario where *another* process instance already created the
+    collection between our existence check and our create call — subsequent
+    ``collection_exists`` queries return ``True`` just like real Qdrant would.
+    """
 
     def __init__(self, *, exists: bool = False, create_error: Exception | None = None) -> None:
         self._exists = exists
@@ -24,14 +31,28 @@ class _FakeQdrantClient:
 
     async def create_collection(self, **kwargs) -> None:
         if self._create_error is not None:
+            # Simulate real Qdrant: after a 409 / ALREADY_EXISTS race the
+            # collection *does* exist (another instance created it).
+            if _is_already_exists_error(self._create_error):
+                self._exists = True
             raise self._create_error
         self.created.append(kwargs)
+        self._exists = True
 
     async def create_payload_index(self, **kwargs) -> None:
         return None
 
     async def update_collection(self, **kwargs) -> None:
         return None
+
+
+def _is_already_exists_error(exc: Exception) -> bool:
+    """Return True when *exc* means the collection already exists in Qdrant."""
+    if isinstance(exc, UnexpectedResponse):
+        return exc.status_code == 409
+    if isinstance(exc, AioRpcError):
+        return exc.code() == StatusCode.ALREADY_EXISTS
+    return False
 
 
 def _spec(name: str = "test_memos") -> QdrantCollectionSpec:
