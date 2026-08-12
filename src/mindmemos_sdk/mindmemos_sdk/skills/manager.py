@@ -31,6 +31,8 @@ from .models import (
     SkillCheckoutPlan,
     SkillContext,
     SkillDiffResult,
+    SkillEvolveData,
+    SkillEvolveMode,
     SkillFlushResult,
     SkillOrigin,
     SkillPendingUpload,
@@ -349,6 +351,19 @@ class SkillManager:
         if record is None:
             raise SkillRegistryError(f"skill not found: {skill_ref}")
         return record
+
+    def evolve(
+        self,
+        skill_ref: str,
+        *,
+        mode: SkillEvolveMode = "sync",
+    ) -> SkillEvolveData:
+        """Trigger cloud evolution for one managed skill without changing local files."""
+
+        record = self.show(skill_ref)
+        if not record.cloud_skill_id:
+            raise SkillRegistryError(f"skill has no cloud_skill_id yet: {skill_ref}")
+        return self._cloud.evolve(record.cloud_skill_id, mode=mode)
 
     def skill_id_for_context(self, context: SkillContext) -> str | None:
         """Find a managed skill matching a detected context."""

@@ -12,7 +12,7 @@ import sys
 
 import pytest
 from mindmemos_sdk.memory import AddResult, DialogueMessage, GetResult, MemorySearchHit, SearchResult, StatusResult
-from mindmemos_sdk.skills import RollbackPlan, SkillDiffResult, SkillRecord
+from mindmemos_sdk.skills import RollbackPlan, SkillDiffResult, SkillEvolveData, SkillRecord
 from mindmemos_sdk.skills.models import HashState, LocalSkillVersion, SkillOrigin, SkillVersionStatus
 
 from mindmemos_sdk import cli
@@ -102,6 +102,9 @@ class _FakeSkills:
 
     def pull(self, *args, **kwargs):
         return self._record("pull", *args, **kwargs)
+
+    def evolve(self, *args, **kwargs):
+        return self._record("evolve", *args, **kwargs)
 
     def push(self, *args, **kwargs):
         return self._record("push", *args, **kwargs)
@@ -233,6 +236,81 @@ def test_skill_pull_and_history(fake_skills, capsys):
     fake_skills([version])
     assert _run(["skill", "history", "sk_1"]) == 0
     assert "v2 parent=v1 status=published" in capsys.readouterr().out
+
+
+def _skill_evolve_data(*, evolved: bool = True) -> SkillEvolveData:
+    return SkillEvolveData(
+        cloud_skill_id="cloud-1",
+        status="ok",
+        evolved=evolved,
+        pending_count=4,
+        threshold=3,
+        new_version_id="v3" if evolved else None,
+        new_version_ids=["v2", "v3"] if evolved else [],
+        summarized_count=3,
+        consumed_count=3,
+    )
+
+
+def test_skill_evolve_defaults_to_sync_and_prints_result(fake_skills, capsys):
+    fake_skills(_skill_evolve_data())
+
+    rc = _run(["skill", "evolve", "demo-main"])
+
+    assert rc == 0
+    assert fake_skills.holder["manager"].calls == [("evolve", ("demo-main",), {"mode": "sync"})]
+    out = capsys.readouterr().out
+    assert "cloud_skill_id: cloud-1" in out
+    assert "status: ok" in out
+    assert "evolved: true" in out
+    assert "pending_count: 4" in out
+    assert "threshold: 3" in out
+    assert 'new_version_id: "v3"' in out
+    assert 'new_version_ids: ["v2", "v3"]' in out
+    assert "summarized_count: 3" in out
+    assert "consumed_count: 3" in out
+
+
+def test_skill_evolve_async_passes_mode_and_false_is_success(fake_skills, capsys):
+    fake_skills(_skill_evolve_data(evolved=False))
+
+    rc = _run(["skill", "evolve", "sk_1", "--async"])
+
+    assert rc == 0
+    assert fake_skills.holder["manager"].calls == [("evolve", ("sk_1",), {"mode": "async"})]
+    out = capsys.readouterr().out
+    assert "evolved: false" in out
+    assert "new_version_id: null" in out
+    assert "new_version_ids: []" in out
+
+
+def test_skill_evolve_sync_flag_passes_mode(fake_skills):
+    fake_skills(_skill_evolve_data())
+
+    rc = _run(["skill", "evolve", "sk_1", "--sync"])
+
+    assert rc == 0
+    assert fake_skills.holder["manager"].calls == [("evolve", ("sk_1",), {"mode": "sync"})]
+
+
+def test_skill_evolve_rejects_conflicting_modes(fake_skills, capsys):
+    fake_skills(_skill_evolve_data())
+
+    with pytest.raises(SystemExit, match="2"):
+        _run(["skill", "evolve", "sk_1", "--sync", "--async"])
+
+    assert fake_skills.holder["manager"].calls == []
+    assert "not allowed with argument --sync" in capsys.readouterr().err
+
+
+def test_skill_evolve_requires_api_key(monkeypatch, tmp_path, capsys):
+    config_manager = cli.ConfigManager(config_dir=tmp_path / "config")
+    monkeypatch.setattr(cli, "ConfigManager", lambda: config_manager)
+
+    rc = _run(["skill", "evolve", "sk_1"])
+
+    assert rc == 1
+    assert "No api_key configured. Run `mindmemos auth` first." in capsys.readouterr().out
 
 
 def test_skill_push_prints_new_version(fake_skills, capsys):

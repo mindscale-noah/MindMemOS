@@ -1,12 +1,57 @@
-# MindMemOS 部署配置说明
+# MindMemOS 部署&配置说明
+
 
 <p align="center">
-  <a href="instruction.md">English</a> | <a href="instruction_ZH.md">简体中文</a>
+  <strong><a href="instruction.md">English</a></strong>
+  &nbsp;&nbsp;│&nbsp;&nbsp;
+  <strong><a href="instruction_ZH.md">简体中文</a></strong>
 </p>
 
-本文先覆盖把服务跑起来必须关注的环境变量和 `config`。当前仓库里的 Docker Compose 主要启动依赖服务（Qdrant、Neo4j、Kafka、ClickHouse、OTel、Grafana），FastAPI 服务本身由 `make dev` / `make api` 通过 `uvicorn` 启动。
+## 1. Overview
 
-## 1. 最小启动流程
+MindMemOS采用 `uv workspace` 管理 3 个核心 Python 包，并按照“服务端、客户端、评测工具”分层：
+
+```text
+业务应用 / Agent ───────────────┐
+Agent 插件 ─────── CLI ─────────┼──> mindmemos_sdk ── HTTP ──> mindmemos
+mindmemos_eval ─────────────────┘
+```
+
+- `mindmemos` 是服务端算法核心包，负责 FastAPI 接口、记忆与 Skill 业务流程、模型调用、数据持久化和异步任务。
+- `mindmemos_sdk` 是面向业务应用和插件的 Python SDK 与 CLI，通过 HTTP 调用 `mindmemos`，不依赖服务端内部实现。
+- `mindmemos_eval` 是独立评测包，依赖 `mindmemos_sdk` 调用服务，负责加载数据集、执行评测流程并统计结果。
+
+运行相关的主要目录如下：
+
+```text
+.
+├── src/
+│   ├── mindmemos/          # 服务端核心包
+│   ├── mindmemos_sdk/      # Python SDK 与 mindmemos CLI
+│   └── mindmemos_eval/     # Benchmark 评测工具
+├── config/
+│   ├── mindmemos/          # 服务端运行与认证配置
+│   ├── mindmemos_eval/     # 评测任务配置
+│   └── presets/            # 算法预设资源
+├── dockers/                # Qdrant、Neo4j、Kafka 和观测组件
+├── plugins/                # Agent 插件集成
+├── Makefile                # 本地服务与依赖启动入口
+└── pyproject.toml          # uv workspace 与开发依赖
+```
+
+主要配置入口如下：
+
+| 适用范围             | 配置文件                             | 说明 |
+|------------------|----------------------------------| --- |
+| `mindmemos`      | `.env`                           | Docker 依赖、服务端口和连接地址。 |
+| `mindmemos`      | `config/mindmemos/dev.yaml`      | 服务端模型、数据库、Pipeline 和运行配置。 |
+| `mindmemos`      | `config/mindmemos/api_keys.yaml` | API key、`project_id`、记忆算法和访问权限。 |
+| `mindmemos`      | `config/presets/*.json`          | 记忆算法预设。 |
+| `mindmemos_sdk`  | `~/.mindmemos/settings.json`     | SDK 与 CLI 的连接信息和默认用户。 |
+| `mindmemos_eval` | `config/mindmemos_eval/*.yaml`   | 评测模型、数据集、并发和算法配置。 |
+
+
+## 2. 最小启动流程
 
 ```bash
 cp .env.example .env
@@ -37,7 +82,7 @@ make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
 make dev-down
 ```
 
-## 2. 必配环境变量
+## 3. 必配环境变量
 
 配置文件选择：
 
@@ -82,7 +127,7 @@ API 监听地址：
 | `MINDMEMOS_API_HOST` | `make dev` / `make api` 启动 FastAPI 的 host | `127.0.0.1` |
 | `MINDMEMOS_API_PORT` | `make dev` / `make api` 启动 FastAPI 的 port | `8000` |
 
-## 3. Docker 相关
+## 4. Docker 相关
 
 本地依赖通过：
 
@@ -111,7 +156,7 @@ Docker Compose 内的核心服务：
 - `kafka.bootstrap_servers`
 - `telemetry.telemetry_endpoint`
 
-## 4. LLM 配置
+## 5. LLM 配置
 
 LLM 用于记忆抽取、schema 处理、dreaming 等生成任务。需要配置 `chat_model_router`：
 
@@ -135,7 +180,7 @@ chat_model_router:
 - `api_key` 不要提交到仓库；本地写在未提交的 `config/mindmemos/dev.yaml` 即可。
 - 可以配置多个 endpoint，router 会按 `routing_strategy` 路由。
 
-## 5. Embedding 配置
+## 6. Embedding 配置
 
 Embedding 是必须配置的；服务启动时会校验 embedding 输出维度和 Qdrant 向量维度是否一致。
 
@@ -164,7 +209,7 @@ database:
 - 如果 embedding 模型支持自定义维度，`dimensions` 和 `vector_size` 也要一致。
 - Qdrant collection 已经用旧维度创建后，单纯改 `vector_size` 不会自动迁移旧 collection；本地开发可以 `make db-clean` 清掉 volume 后重建。
 
-## 6. Rerank 配置（可选）
+## 7. Rerank 配置（可选）
 
 Rerank 用于检索候选结果重排，提升搜索精度，但不是服务启动的硬依赖。没有外部 rerank endpoint 时，基础 add/search 仍可运行；代码会使用现有召回结果或 fallback 逻辑。
 
@@ -216,7 +261,7 @@ algo_config:
 
 强调：`rerank` 是可选增强项。生产环境建议先把 Docker、LLM、Embedding 跑稳，再接入 rerank。
 
-## 7. 认证配置
+## 8. 认证配置
 
 本地默认使用 API key：
 
@@ -237,7 +282,7 @@ auth:
 Authorization: Bearer <api_key>
 ```
 
-## 8. 最小检查清单
+## 9. 最小检查清单
 
 启动前至少确认：
 

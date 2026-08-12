@@ -97,6 +97,13 @@ def _add_skill_commands(subparsers: argparse._SubParsersAction[argparse.Argument
     pull.add_argument("skill", help="SDK local skill id or alias.")
     pull.set_defaults(handler=_handle_skill_pull)
 
+    evolve = skill_subparsers.add_parser("evolve", help="Trigger cloud evolution for a registered skill.")
+    evolve.add_argument("skill", help="SDK local skill id or alias.")
+    evolve_mode = evolve.add_mutually_exclusive_group()
+    evolve_mode.add_argument("--sync", dest="mode", action="store_const", const="sync", help="Wait for evolution.")
+    evolve_mode.add_argument("--async", dest="mode", action="store_const", const="async", help="Queue evolution.")
+    evolve.set_defaults(handler=_handle_skill_evolve, mode="sync")
+
     push = skill_subparsers.add_parser("push", help="Upload local skill changes as a new version.")
     push.add_argument("skill", help="SDK local skill id or alias.")
     push.set_defaults(handler=_handle_skill_push)
@@ -394,6 +401,27 @@ def _handle_skill_pull(args: argparse.Namespace) -> int:
     print(f"Pulled {len(versions)} version(s).")
     for version in versions:
         print(f"- {version.version_id} {version.status.value} {version.content_hash}")
+    return 0
+
+
+def _handle_skill_evolve(args: argparse.Namespace) -> int:
+    manager = _build_skill_manager(require_api_key=True)
+    if manager is None:
+        return 1
+    try:
+        result = manager.evolve(args.skill, mode=args.mode)
+    except MindMemOSSDKError as exc:
+        return _report_api_error("skill evolve", exc)
+
+    print(f"cloud_skill_id: {result.cloud_skill_id}")
+    print(f"status: {result.status}")
+    print(f"evolved: {str(result.evolved).lower()}")
+    print(f"pending_count: {result.pending_count}")
+    print(f"threshold: {result.threshold}")
+    print(f"new_version_id: {json.dumps(result.new_version_id)}")
+    print(f"new_version_ids: {json.dumps(result.new_version_ids)}")
+    print(f"summarized_count: {result.summarized_count}")
+    print(f"consumed_count: {result.consumed_count}")
     return 0
 
 

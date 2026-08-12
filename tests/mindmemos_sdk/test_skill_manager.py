@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pytest
 from mindmemos_sdk.config import ConfigManager
-from mindmemos_sdk.skills import SkillCloudClient, SkillContentData, SkillManager, SkillRecord, SkillRegisterData
+from mindmemos_sdk.errors import SkillRegistryError
+from mindmemos_sdk.skills import (
+    SkillCloudClient,
+    SkillContentData,
+    SkillEvolveData,
+    SkillManager,
+    SkillRecord,
+    SkillRegisterData,
+)
 from mindmemos_sdk.skills.bundle import compute_content_hash, deserialize_bundle
 from mindmemos_sdk.skills.detector import detect_skill_context
 from mindmemos_sdk.skills.history import SkillHistoryStore
@@ -26,6 +34,7 @@ class _FakeCloud(SkillCloudClient):
         self.get_content_calls = []
         self.get_skill_calls = []
         self.sync_calls = []
+        self.evolve_calls = []
         self.delete_calls = []
         self.fail_next_register = False
 
@@ -106,6 +115,16 @@ class _FakeCloud(SkillCloudClient):
             ]
         )
 
+    def evolve(self, cloud_skill_id: str, *, mode: str = "sync"):
+        self.evolve_calls.append((cloud_skill_id, mode))
+        return SkillEvolveData(
+            cloud_skill_id=cloud_skill_id,
+            status="ok",
+            evolved=False,
+            pending_count=2,
+            threshold=3,
+        )
+
     def delete_skill(self, cloud_skill_id: str, *, request_id: str | None = None) -> None:
         self.delete_calls.append((cloud_skill_id, request_id))
 
@@ -172,6 +191,38 @@ def test_alias_can_reference_skill_commands(tmp_path):
     assert manager.show("demo-main").skill_id == record.skill_id
     assert manager.history("demo-main")[0].version_id == "v1"
     assert manager.unregister("demo-main").skill_id == record.skill_id
+
+
+@pytest.mark.parametrize("skill_ref", ["demo-main", "skill-id"])
+def test_evolve_resolves_alias_or_skill_id_and_forwards_cloud_id_and_mode(tmp_path, skill_ref):
+    manager, cloud, _config_manager = _manager(tmp_path)
+    path = _skill_dir(tmp_path)
+    record = manager.register(str(path), alias="demo-main")
+    if skill_ref == "skill-id":
+        skill_ref = record.skill_id
+
+    result = manager.evolve(skill_ref, mode="async")
+
+    assert result.cloud_skill_id == "cloud-1"
+    assert result.evolved is False
+    assert cloud.evolve_calls == [("cloud-1", "async")]
+
+
+def test_evolve_rejects_skill_without_cloud_id(tmp_path):
+    manager, cloud, _config_manager = _manager(tmp_path)
+    path = _skill_dir(tmp_path)
+    manager.registry.upsert(
+        SkillRecord(
+            path=str(path),
+            alias="demo-main",
+            skill_name="demo",
+        )
+    )
+
+    with pytest.raises(SkillRegistryError, match="skill has no cloud_skill_id yet: demo-main"):
+        manager.evolve("demo-main")
+
+    assert cloud.evolve_calls == []
 
 
 def test_pull_and_unregister(tmp_path):

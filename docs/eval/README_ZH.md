@@ -1,6 +1,6 @@
 # MindMemOS 评测指南
 
-本文说明如何对 MindMemOS 跑三个标准 benchmark（LoCoMo、LongMemEval、PersonaMem），以及如何用 `metrics.py` 统计耗时与 token 用量。
+本文集中说明 LoCoMo、LongMemEval、PersonaMem、MemoryAgentBench 和 SpreadsheetBench-Verified 的复现入口，以及如何用 `metrics.py` 统计耗时与 token 用量。
 
 ---
 
@@ -57,14 +57,153 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 
 ---
 
-## 数据集下载
+## 各数据集复现
 
-示例配置中引用的 benchmark 数据集**不在**本仓库中，需自行从各 benchmark 作者（LoCoMo、LongMemEval、PersonaMem）处获取，并按 ``config/mindmemos_eval/memory_evaluation_locomo.example.yaml`` 中的路径放置。
+除非特别说明，下面的命令都从仓库根目录执行。LoCoMo、LongMemEval、PersonaMem 和 MemoryAgentBench 的数据集不随仓库分发，需要先从对应 benchmark 的官方渠道获取。
 
-复制示例配置并填入 LLM key：
-```bash
-cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+> **API key 文件**：`--api-key-output` 会完整写入一个新的 `api_keys.yaml`，仅包含本次评测生成的身份。请使用独立路径，并让服务端的 `auth.api_key_file` 指向该文件；不要覆盖日常开发环境正在使用的 key 文件。
+
+### LoCoMo
+
+1. 将 LoCoMo 数据集放到示例配置默认读取的位置：
+
+   ```text
+   datasets/locomo/locomo10.json
+   ```
+
+2. 复制配置并填入 eval 进程使用的 LLM API key：
+
+   ```bash
+   cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml \
+     config/mindmemos_eval/memory_evaluation_locomo.yaml
+   ```
+
+3. 启动服务后运行：
+
+   ```bash
+   uv run python -m mindmemos_eval.cli memory \
+     --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+     --benchmark-list locomo \
+     --algorithm schema \
+     --manifest-output reports/locomo_schema.jsonl \
+     --api-key-output config/mindmemos/eval_api_keys.yaml
+   ```
+
+### LongMemEval
+
+LongMemEval 与 LoCoMo 共用 `memory_evaluation_locomo.example.yaml`。将数据集路径写入复制后的配置，例如：
+
+```yaml
+benchmarks:
+  longmemeval:
+    dataset: resources/memory/dataset/longmemeval_smoke.json
 ```
+
+运行评测：
+
+```bash
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list longmemeval \
+  --algorithm vanilla \
+  --manifest-output reports/longmemeval_vanilla.jsonl \
+  --api-key-output config/mindmemos/eval_api_keys.yaml
+```
+
+先用 `--limit 2 --session-limit 2` 做全链路冒烟测试，再移除限制运行完整数据集。
+
+### PersonaMem
+
+1. 准备问题和上下文数据：
+
+   ```text
+   resources/memory/dataset/questions_32k.csv
+   resources/memory/dataset/shared_contexts_32k.jsonl
+   ```
+
+2. 复制配置并填入 eval 进程使用的 LLM API key：
+
+   ```bash
+   cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml \
+     config/mindmemos_eval/memory_evaluation_personamem.yaml
+   ```
+
+3. 启动服务后运行：
+
+   ```bash
+   uv run python -m mindmemos_eval.cli memory \
+     --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
+     --benchmark-list personamem \
+     --algorithm schema \
+     --manifest-output reports/personamem_schema.jsonl \
+     --api-key-output config/mindmemos/eval_api_keys.yaml
+   ```
+
+### MemoryAgentBench
+
+1. 复制 MemoryAgentBench 配置：
+
+   ```bash
+   cp config/mindmemos_eval/dreaming_evaluation_mab.example.yaml \
+     config/mindmemos_eval/dreaming_evaluation_mab.yaml
+   ```
+
+2. 按配置中的 `benchmarks.memoryagentbench.dataset` 准备数据文件，并确认 `sub_dataset`、`chunk_size` 与目标实验一致。
+
+3. 运行当前分支支持的 Vanilla 基线：
+
+   ```bash
+   uv run python -m mindmemos_eval.cli memory \
+     --benchmark-config config/mindmemos_eval/dreaming_evaluation_mab.yaml \
+     --benchmark-list memoryagentbench \
+     --algorithm vanilla \
+     --manifest-output reports/memoryagentbench_vanilla.jsonl \
+     --api-key-output config/mindmemos/eval_api_keys.yaml
+   ```
+
+> **当前边界**：上述命令复现 MemoryAgentBench 的 Vanilla 基线。当前 `develop` 分支的 `memory` CLI 尚未暴露 Add → Dreaming → Answer/Search → Score 的完整开关，因此不能仅凭配置文件名复现主 README 表格中的 Vanilla + Dreaming 行。
+
+### SpreadsheetBench-Verified
+
+SpreadsheetBench 使用独立的 Skill evaluator，首次运行时会自动下载并解压 Verified-400 数据集。先执行两条任务的冒烟测试：
+
+```bash
+uv run python -m mindmemos_eval.cli skill spreadsheetbench \
+  --data-root data/SpreadsheetBench \
+  --download \
+  --model gpt-5.4-mini \
+  --api-key <YOUR_KEY> \
+  --base-url https://your-llm-provider/v1 \
+  --limit 2 \
+  --concurrency 1 \
+  --run-dir results/spreadsheetbench_smoke
+```
+
+复现 Init-skill 路径时，加入仓库内置初始 Skill：
+
+```bash
+uv run python -m mindmemos_eval.cli skill spreadsheetbench \
+  --data-root data/SpreadsheetBench \
+  --skill resources/skill_evolve/spreadsheetbench_init_skill/xlsx \
+  --model gpt-5.4-mini \
+  --api-key <YOUR_KEY> \
+  --base-url https://your-llm-provider/v1 \
+  --concurrency 1 \
+  --run-dir results/spreadsheetbench_init
+```
+
+连接 MindMemOS Skill Evolution 服务时，再加入：
+
+```text
+--evolve
+--evolve-every 1
+--evolution-base-url http://127.0.0.1:8000
+--evolution-api-key <MINDMEMOS_API_KEY>
+```
+
+No-skill 基线不传 `--skill`；Init-skill 传入初始 Skill，但不传 `--evolve`。
+
+> **当前边界**：当前 CLI 可以运行 No-skill、Init-skill 和在线 evolution 路径，但没有单独暴露主 README 表格中 Unsup./Sup. 两种实验协议的完整选择参数。对外报告结果时还需记录实际模型、并发、随机种子和重复运行次数。
 
 ---
 
