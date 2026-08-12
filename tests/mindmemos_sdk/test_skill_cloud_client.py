@@ -46,12 +46,26 @@ def test_compatibility_cloud_client_pushes_nested_v2_contract() -> None:
             content=bundle.canonical_json(),
             expected_content_hash=bundle.content_hash,
             version_label="1.0.0",
+            runtime_type="virtual_components",
+            runtime_schema_version=1,
+            runtime_metadata={
+                "components": [
+                    {
+                        "component_id": "demo",
+                        "name": "Demo",
+                        "description": "demo",
+                        "content": "# Demo\n",
+                    }
+                ]
+            },
             created_at="2026-08-07T00:00:00Z",
         )
     )
 
     assert set(captured) == {"operation_id", "version", "bundle"}
     assert captured["version"]["parent_version_ids"] == ["parent-a", "parent-b"]
+    assert captured["version"]["runtime_type"] == "virtual_components"
+    assert captured["version"]["runtime_metadata"]["components"][0]["component_id"] == "demo"
     assert result.cloud_skill_id == "cloud-1"
     assert result.status.value == "draft"
 

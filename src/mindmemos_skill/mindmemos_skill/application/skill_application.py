@@ -94,6 +94,7 @@ from ..remote import (
     RemoteVersionSummary,
     SkillRemotePort,
 )
+from ..skill_runtime import SkillRuntime
 from ..typing import (
     AgentExecutionRequest,
     AlgorithmLog,
@@ -262,6 +263,13 @@ class SkillApplication:
             capabilities.add(SkillApplicationCapability.PUSH.value)
             capabilities.add(SkillApplicationCapability.SYNC.value)
         return frozenset(capabilities)
+
+    def register_skill_runtime(self, runtime: SkillRuntime) -> None:
+        """Register one Runtime scheme across persistence validation and all Agents."""
+
+        self._manager.register_skill_runtime(runtime)
+        for agent in self._runtime.agents.values():
+            agent.register_skill_runtime(runtime)
 
     async def start(self) -> None:
         async with self._lifecycle_lock:
@@ -440,6 +448,9 @@ class SkillApplication:
                 status=version.status,
                 version_revision=version.version_revision,
                 origin=version.origin,
+                runtime_type=version.runtime_type,
+                runtime_schema_version=version.runtime_schema_version,
+                runtime_metadata=version.runtime_metadata,
                 metadata={key: value for key, value in version.metadata.items() if key != "cloud"},
                 created_at=version.created_at,
                 updated_at=version.updated_at,
@@ -544,12 +555,7 @@ class SkillApplication:
             items=[
                 RemoteSyncItem(
                     cloud_skill_id=cloud_skill_id,
-                    known_version_revisions={
-                        version.version_id: int(
-                            version.version_revision
-                        )
-                        for version in versions
-                    },
+                    known_version_revisions={version.version_id: int(version.version_revision) for version in versions},
                 )
             ]
         )
@@ -990,7 +996,13 @@ class SkillApplication:
                     if parent is None:
                         raise SkillConflictError(f"cloud parent version is missing: {parent_id}")
                     parent_snapshot = snapshot_from_record(parent)
-            snapshot = snapshot_from_cloud_bundle(remote_files, parent_snapshot)
+            snapshot = snapshot_from_cloud_bundle(
+                remote_files,
+                parent_snapshot,
+                runtime_type=summary.runtime_type,
+                runtime_schema_version=summary.runtime_schema_version,
+                runtime_metadata=summary.runtime_metadata,
+            )
             snapshots[summary.version_id] = snapshot
             version_label = summary.version_label or frontmatter_value(
                 remote_files["SKILL.md"],
@@ -1011,6 +1023,9 @@ class SkillApplication:
                 resources=serialize_files(snapshot.resources),
                 content_hash=snapshot.content_hash,
                 local_snapshot_hash=snapshot.local_snapshot_hash,
+                runtime_type=summary.runtime_type,
+                runtime_schema_version=summary.runtime_schema_version,
+                runtime_metadata=summary.runtime_metadata,
                 status=summary.status,
                 version_revision=summary.version_revision,
                 version_label=version_label,
@@ -1022,6 +1037,7 @@ class SkillApplication:
                 received_at=summary.received_at,
                 origin=summary.origin,
             )
+            self._manager.validate_skill_runtime(Skill.from_record(record))
             new_versions.append(record)
             local_by_id[summary.version_id] = record
         matched = [summary.version_id for summary in summaries if summary.version_id in existing_updates]
@@ -1046,6 +1062,12 @@ class SkillApplication:
             return "immutable_version_id_mismatch"
         if result.version.content_hash != request.version.content_hash:
             return "immutable_content_hash_mismatch"
+        if (
+            result.version.runtime_type != request.version.runtime_type
+            or result.version.runtime_schema_version != request.version.runtime_schema_version
+            or result.version.runtime_metadata != request.version.runtime_metadata
+        ):
+            return "immutable_runtime_mismatch"
         if result.version.created_at != request.version.created_at:
             return "immutable_created_at_mismatch"
         if request.cloud_skill_id is not None and result.cloud_skill_id != request.cloud_skill_id:
@@ -1133,9 +1155,7 @@ def _order_missing_remote_versions(
     available = set(known_version_ids)
     while remaining:
         ready = [
-            summary
-            for summary in remaining
-            if all(parent_id in available for parent_id in summary.parent_version_ids)
+            summary for summary in remaining if all(parent_id in available for parent_id in summary.parent_version_ids)
         ]
         if not ready:
             unresolved = ", ".join(
@@ -1164,6 +1184,12 @@ def _matched_cloud_version(
         raise SkillConflictError(f"cloud Skill mapping conflicts with local version: {summary.version_id}")
     if existing.content_hash != summary.content_hash:
         raise SkillConflictError(f"cloud content conflicts with immutable local version: {summary.version_id}")
+    if (
+        existing.runtime_type != summary.runtime_type
+        or existing.runtime_schema_version != summary.runtime_schema_version
+        or existing.runtime_metadata != summary.runtime_metadata
+    ):
+        raise SkillConflictError(f"cloud Runtime conflicts with immutable local version: {summary.version_id}")
     return existing.model_copy(
         update={
             "cloud_skill_id": cloud_skill_id,
@@ -1186,7 +1212,10 @@ def _management_sync_state(
         return SkillManagementSyncState.LOCAL_ONLY
     if any(operation.status is PendingSkillOperationStatus.FAILED for operation in operations):
         return SkillManagementSyncState.FAILED
-    if any(operation.status in {PendingSkillOperationStatus.PENDING, PendingSkillOperationStatus.RUNNING} for operation in operations):
+    if any(
+        operation.status in {PendingSkillOperationStatus.PENDING, PendingSkillOperationStatus.RUNNING}
+        for operation in operations
+    ):
         return SkillManagementSyncState.PENDING
     if skill.cloud_skill_id is None:
         return SkillManagementSyncState.LOCAL_ONLY

@@ -69,6 +69,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--validation-rollouts", type=int, default=1)
     parser.add_argument("--test-rollouts", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--env-seed", type=int)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=32)
     parser.add_argument("--max-concurrent-extractions", type=int, default=16)
     parser.add_argument("--reflection", action=argparse.BooleanOptionalAction, default=True)
@@ -154,7 +155,7 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRu
     if args.benchmark == "spreadsheetbench":
         env_options["shell_timeout_seconds"] = args.shell_timeout
     elif args.benchmark == "alfworld":
-        env_options["seed"] = args.seed
+        env_options["seed"] = args.seed if args.env_seed is None else args.env_seed
     else:
         env_options.update({"use_theorem": args.use_theorem, "use_sketch": args.use_sketch})
     return SkillGrpoWithoutReplayBufferRunConfig.model_validate(

@@ -104,6 +104,9 @@ class SkillCloudClient:
             commit_message=request.commit_message,
             status=request.status.value,
             version_revision=request.version_revision,
+            runtime_type=request.runtime_type,
+            runtime_schema_version=request.runtime_schema_version,
+            runtime_metadata=request.runtime_metadata,
             origin=request.origin.value,
             metadata=request.metadata,
             created_at=created_at,
@@ -276,7 +279,9 @@ class SkillCloudClient:
         result = self.sync_cloud(
             SyncCloudRequest(
                 items=[
-                    SyncCloudItem(cloud_skill_id=item.cloud_skill_id, known_version_revisions={item.local_version_id: 0})
+                    SyncCloudItem(
+                        cloud_skill_id=item.cloud_skill_id, known_version_revisions={item.local_version_id: 0}
+                    )
                     for item in normalized
                 ]
             )
@@ -320,6 +325,9 @@ def _sdk_version(version: SkillVersionCore) -> SkillVersion:
         status=version.status.value,
         origin=version.origin.value,
         version_revision=version.version_revision,
+        runtime_type=version.runtime_type,
+        runtime_schema_version=version.runtime_schema_version,
+        runtime_metadata=version.runtime_metadata,
         metadata=version.metadata,
         created_at=version.created_at.isoformat(),
         updated_at=version.updated_at.isoformat(),
@@ -340,6 +348,9 @@ def _sdk_pull_version(version: SkillVersionCore):
         origin=version.origin.value,
         status=version.status.value,
         version_revision=version.version_revision,
+        runtime_type=version.runtime_type,
+        runtime_schema_version=version.runtime_schema_version,
+        runtime_metadata=version.runtime_metadata,
         metadata=version.metadata,
         created_at=version.created_at.isoformat(),
         updated_at=version.updated_at.isoformat(),

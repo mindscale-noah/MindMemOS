@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-from ..contracts import parse_skill_bundle
+from ..contracts import SkillRuntimeSpec, parse_skill_bundle
 from .enums import AgentType, RolloutType, SkillVersionOrigin, SkillVersionStatus, TrajectoryStatus
 
 
@@ -33,6 +33,9 @@ class SkillRecord(PersistenceModel):
     resources: str = "{}"
     content_hash: str = Field(min_length=1)
     local_snapshot_hash: str = Field(min_length=1)
+    runtime_type: str = "static"
+    runtime_schema_version: int = Field(default=1, ge=1)
+    runtime_metadata: dict[str, JsonValue] = Field(default_factory=dict)
     status: SkillVersionStatus = SkillVersionStatus.DRAFT
     version_revision: int = Field(default=0, ge=0)
     version_label: str = Field(min_length=1)
@@ -57,6 +60,11 @@ class SkillRecord(PersistenceModel):
 
     @model_validator(mode="after")
     def validate_record(self) -> SkillRecord:
+        SkillRuntimeSpec(
+            runtime_type=self.runtime_type,
+            runtime_schema_version=self.runtime_schema_version,
+            runtime_metadata=self.runtime_metadata,
+        )
         if self.version_id in self.parent_version_ids:
             raise ValueError("a Skill version cannot be its own parent")
         if len(self.parent_version_ids) != len(set(self.parent_version_ids)):

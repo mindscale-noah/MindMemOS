@@ -101,6 +101,12 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
             environment_extras={"alfworld": ("alfworld",)},
         ),
         _evolve(
+            "task_virtual_skill",
+            environments=frozenset({"alfworld", "livemath", "spreadsheetbench"}),
+            environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
+            inject_environment_as_benchmark=True,
+        ),
+        _evolve(
             "experience_memory_embedding",
             environments=frozenset({"alfworld"}),
             environment_extras={"alfworld": ("alfworld",)},

@@ -57,6 +57,7 @@ _BUILTIN_MODULES = (
     "..algos.evolve.skill_grpo_with_experience_validation",
     "..algos.evolve.skill_grpo_without_replay_buffer",
     "..algos.evolve.skill_grpo_with_replay_buffer",
+    "..algos.evolve.task_virtual_skill",
     "..algos.trace2skill.trajectory_evidence_patch",
 )
 

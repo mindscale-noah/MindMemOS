@@ -48,7 +48,7 @@ class OpenClawAgent(Agent[OpenClawAgentConfig]):
         fallback_messages = [{"role": "user", "content": self._compose_message(request)}]
         try:
             cli = self._resolve_cli(config)
-            with self.inject_skills(request.skills, mode=config.skill_injection_mode) as injection:
+            async with self.on_skill_runtime_task(request, mode=config.skill_injection_mode) as injection:
                 config_path = self._write_overlay_config(request, config, injection.workspace, injection.skill_names)
                 command = self._build_command(cli, request, config)
                 process = await asyncio.create_subprocess_exec(
@@ -87,7 +87,7 @@ class OpenClawAgent(Agent[OpenClawAgentConfig]):
                     error_info = (
                         structured_error or stderr_text or f"OpenClaw CLI exited with code {process.returncode}"
                     )
-                metadata = self._metadata(result, session_file)
+                metadata = {**self._metadata(result, session_file), **injection.metadata}
                 n_turn = count_assistant_turns(native_events)
                 if n_turn == 0:
                     n_turn = sum(message.get("role") == "assistant" for message in messages)

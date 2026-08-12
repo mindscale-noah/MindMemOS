@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import AbstractContextManager, asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, ClassVar, Generic, TypeVar, cast
 
 from pydantic import BaseModel
 
 from ..llm import ChatResponse
+from ..skill_runtime import SkillRuntime as DynamicSkillRuntime
+from ..skill_runtime import build_default_skill_runtime_coordinator
 from ..typing import (
     AgentExecutionRequest,
     AgentProfile,
@@ -23,7 +25,8 @@ from ..typing import (
     TrajectoryStatus,
 )
 from .config import AgentConfig
-from .skill_runtime import SkillInjection, SkillRuntime
+from .skill_runtime import SkillInjection
+from .skill_runtime import SkillRuntime as AgentSkillRuntime
 
 AgentConfigT = TypeVar("AgentConfigT", bound=AgentConfig)
 
@@ -40,16 +43,14 @@ class Agent(ABC, Generic[AgentConfigT]):
 
     agent_type: ClassVar[AgentType] = AgentType.UNKNOWN
     config_type: type[AgentConfig] = AgentConfig
-    skill_runtime_types: ClassVar[Mapping[SkillInjectionMode, type[SkillRuntime]]] = {}
+    skill_runtime_types: ClassVar[Mapping[SkillInjectionMode, type[AgentSkillRuntime]]] = {}
 
     def __init__(self, config: AgentConfigT | Mapping[str, Any]) -> None:
         raw_config = config.model_dump() if isinstance(config, BaseModel) else config
         self.config = cast(AgentConfigT, self.config_type.model_validate(raw_config))
         self._model_profile: dict[str, Any] = {}
-        self._skill_runtimes = {
-            mode: runtime_type(mode)
-            for mode, runtime_type in self.skill_runtime_types.items()
-        }
+        self._dynamic_skill_runtime = build_default_skill_runtime_coordinator()
+        self._skill_runtimes = {mode: runtime_type(mode) for mode, runtime_type in self.skill_runtime_types.items()}
         configured_mode = self.config.skill_injection_mode
         if configured_mode is not None and configured_mode not in self._skill_runtimes:
             supported = ", ".join(sorted(mode.value for mode in self._skill_runtimes)) or "<none>"
@@ -84,6 +85,53 @@ class Agent(ABC, Generic[AgentConfigT]):
 
         runtime = self.get_skill_runtime(trajectory.agent.skill_injection_mode)
         return runtime.bind(trajectory)
+
+    def register_skill_runtime(self, runtime: DynamicSkillRuntime) -> None:
+        """Mount one additional dynamic Skill scheme on this Agent instance."""
+
+        self._dynamic_skill_runtime.registry.register(runtime)
+
+    @asynccontextmanager
+    async def on_skill_runtime_task(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        mode: SkillInjectionMode | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> AsyncIterator[SkillInjection]:
+        """Resolve dynamic Skills, then project them through the Agent-family adapter."""
+
+        adapter = self.get_skill_runtime(mode)
+        async with self._dynamic_skill_runtime.on_task(
+            task=request.task,
+            skills=request.skills,
+            context=context,
+        ) as task_scope:
+            projected = await task_scope.projected_skills(
+                materialize_resources=adapter.mode is SkillInjectionMode.FILESYSTEM
+            )
+            with adapter.inject(projected) as injection:
+                adapter.attach_runtime_task(injection, task_scope)
+                yield injection
+
+    @staticmethod
+    def apply_skill_injection(
+        messages: list[dict[str, Any]],
+        injection: SkillInjection,
+    ) -> list[dict[str, Any]]:
+        merged = [*injection.system_messages, *messages]
+        suffix = injection.system_prompt_suffix
+        if suffix is None:
+            return merged
+        for index, message in enumerate(merged):
+            if message.get("role") != "system":
+                continue
+            content = message.get("content")
+            base_prompt = content if isinstance(content, str) else ""
+            combined = f"{base_prompt.rstrip()}\n\n{suffix}" if base_prompt else suffix
+            merged[index] = {**message, "content": combined}
+            return merged
+        return [{"role": "system", "content": suffix}, *merged]
 
     def _build_trajectory(
         self,
@@ -173,7 +221,7 @@ class Agent(ABC, Generic[AgentConfigT]):
 
         return frozenset(self._skill_runtimes)
 
-    def get_skill_runtime(self, mode: SkillInjectionMode | None = None) -> SkillRuntime:
+    def get_skill_runtime(self, mode: SkillInjectionMode | None = None) -> AgentSkillRuntime:
         """Return the mounted runtime for an explicit or configured mode."""
 
         effective_mode = mode or self.config.skill_injection_mode

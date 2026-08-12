@@ -170,6 +170,9 @@ class LocalSkillVersionMetadata(BaseModel):
     skill_name: str
     content_hash: str
     local_snapshot_hash: str
+    runtime_type: str = "static"
+    runtime_schema_version: int = 1
+    runtime_metadata: dict = Field(default_factory=dict)
     version_label: str | None = None
     commit_message: str | None = None
     origin: SkillOrigin = SkillOrigin.LOCAL
@@ -222,6 +225,9 @@ class RegisterLocalRequest(BaseModel):
     version_label: str | None = None
     commit_message: str | None = None
     duplicate_action: DuplicateSkillAction | None = None
+    runtime_type: str = "static"
+    runtime_schema_version: int = 1
+    runtime_metadata: dict = Field(default_factory=dict)
 
 
 class DuplicateSkillMatch(BaseModel):
@@ -262,6 +268,9 @@ class PublishLocalRequest(BaseModel):
     files: dict[str, str] | None = None
     version_label: str | None = None
     commit_message: str | None = None
+    runtime_type: str | None = None
+    runtime_schema_version: int | None = None
+    runtime_metadata: dict | None = None
 
 
 class PublishLocalResult(BaseModel):
@@ -332,6 +341,9 @@ class PushVersionRequest(BaseModel):
     status: SkillVersionStatus = SkillVersionStatus.DRAFT
     origin: SkillOrigin = SkillOrigin.LOCAL
     version_revision: int = 0
+    runtime_type: str = "static"
+    runtime_schema_version: int = 1
+    runtime_metadata: dict = Field(default_factory=dict)
     metadata: dict = Field(default_factory=dict)
     created_at: str
 
@@ -364,6 +376,9 @@ class PullVersionSummary(BaseModel):
     origin: SkillOrigin
     status: SkillVersionStatus
     version_revision: int = 0
+    runtime_type: str = "static"
+    runtime_schema_version: int = 1
+    runtime_metadata: dict = Field(default_factory=dict)
     metadata: dict = Field(default_factory=dict)
     created_at: str
     updated_at: str | None = None
@@ -485,6 +500,9 @@ class SkillVersion(BaseModel):
     status: SkillVersionStatus
     origin: SkillOrigin
     version_revision: int = 0
+    runtime_type: str = "static"
+    runtime_schema_version: int = 1
+    runtime_metadata: dict = Field(default_factory=dict)
     metadata: dict = Field(default_factory=dict)
     created_at: str
     updated_at: str | None = None

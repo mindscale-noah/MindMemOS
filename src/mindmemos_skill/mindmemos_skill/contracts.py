@@ -23,6 +23,7 @@ _SECRET_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _ABSOLUTE_PATH_PATTERN = re.compile(r"(?:^|[\s\"'])(?:/[A-Za-z0-9_.-]+/|[A-Za-z]:[\\/])")
+_RUNTIME_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 class ContractModel(BaseModel):
@@ -172,6 +173,52 @@ def parse_skill_bundle(value: SkillBundle | str | dict[str, Any]) -> SkillBundle
     return bundle
 
 
+class SkillRuntimeSpec(ContractModel):
+    """Canonical immutable execution contract attached to one Skill version."""
+
+    runtime_type: str = Field(default="static", min_length=1)
+    runtime_schema_version: int = Field(default=1, ge=1)
+    runtime_metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("runtime_type")
+    @classmethod
+    def validate_runtime_type(cls, value: str) -> str:
+        if _RUNTIME_TYPE_PATTERN.fullmatch(value) is None:
+            raise ValueError("runtime_type must use lower snake_case")
+        return value
+
+    @model_validator(mode="after")
+    def validate_static_runtime(self) -> SkillRuntimeSpec:
+        if self.runtime_type == "static" and (self.runtime_schema_version != 1 or self.runtime_metadata):
+            raise ValueError("static runtime requires schema version 1 and empty metadata")
+        return self
+
+    def canonical_dict(self) -> dict[str, JsonValue]:
+        return self.model_dump(mode="json")
+
+    def canonical_bytes(self) -> bytes:
+        return json.dumps(
+            self.canonical_dict(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+
+def canonical_runtime_spec(
+    runtime_type: str = "static",
+    runtime_schema_version: int = 1,
+    runtime_metadata: dict[str, JsonValue] | None = None,
+) -> bytes:
+    """Return the stable bytes used by snapshots and idempotency evidence."""
+
+    return SkillRuntimeSpec(
+        runtime_type=runtime_type,
+        runtime_schema_version=runtime_schema_version,
+        runtime_metadata=runtime_metadata or {},
+    ).canonical_bytes()
+
+
 class SkillVersionCore(ContractModel):
     version_id: str = Field(min_length=1)
     cloud_skill_id: str | None = None
@@ -183,6 +230,9 @@ class SkillVersionCore(ContractModel):
     status: SkillVersionStatus = SkillVersionStatus.DRAFT
     version_revision: int = Field(default=0, ge=0)
     origin: SkillVersionOrigin
+    runtime_type: str = "static"
+    runtime_schema_version: int = Field(default=1, ge=1)
+    runtime_metadata: dict[str, JsonValue] = Field(default_factory=dict)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
@@ -197,6 +247,11 @@ class SkillVersionCore(ContractModel):
 
     @model_validator(mode="after")
     def validate_version(self) -> SkillVersionCore:
+        SkillRuntimeSpec(
+            runtime_type=self.runtime_type,
+            runtime_schema_version=self.runtime_schema_version,
+            runtime_metadata=self.runtime_metadata,
+        )
         if self.version_id in self.parent_version_ids:
             raise ValueError("a Skill version cannot be its own parent")
         if len(self.parent_version_ids) != len(set(self.parent_version_ids)):
@@ -278,9 +333,7 @@ class SkillTrajectory(ContractModel):
         return self
 
 
-_TRAJECTORY_DERIVED_FIELDS = frozenset(
-    {"trajectory_hash", "metadata_revision", "metadata_updated_at", "received_at"}
-)
+_TRAJECTORY_DERIVED_FIELDS = frozenset({"trajectory_hash", "metadata_revision", "metadata_updated_at", "received_at"})
 
 
 def trajectory_source_payload(value: SkillTrajectory | dict[str, Any]) -> dict[str, JsonValue]:
@@ -468,6 +521,7 @@ __all__ = [
     "SkillRemoteOperation",
     "SkillRemoteOperationStatus",
     "SkillRemoteOperationType",
+    "SkillRuntimeSpec",
     "SkillTrajectory",
     "SkillTrajectoryBinding",
     "SkillTrajectoryListRequest",
@@ -484,6 +538,7 @@ __all__ = [
     "TrajectorySource",
     "TrajectoryStatus",
     "canonical_request_hash",
+    "canonical_runtime_spec",
     "compute_trajectory_hash",
     "parse_skill_bundle",
     "trajectory_source_payload",

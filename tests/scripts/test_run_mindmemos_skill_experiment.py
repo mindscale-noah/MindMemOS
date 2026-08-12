@@ -106,6 +106,8 @@ def test_bounded_history_alfworld_configs_select_the_registered_env(config_path:
 
     assert invocation.environment == "alfworld"
     assert invocation.command[invocation.command.index("--env-ref") + 1] == "alfworld_bounded_history"
+    if config_path.parent.parent.name == "skill_grpo_without_replay_buffer":
+        assert invocation.command[invocation.command.index("--env-seed") + 1] == "42"
 
 
 def test_trace2skill_routes_to_family_runner_and_keeps_test_config(tmp_path: Path) -> None:

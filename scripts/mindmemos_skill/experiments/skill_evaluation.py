@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 from collections import Counter
 from collections.abc import Sequence
@@ -34,7 +35,8 @@ from mindmemos_skill.datasets import (
     TaskDataset,
 )
 from mindmemos_skill.llm import LLMCallSink, LLMClient, get_router, llm_run_context
-from mindmemos_skill.typing import Skill, Task, compute_skill_content_hash
+from mindmemos_skill.management import frontmatter_value
+from mindmemos_skill.typing import Skill, Task, Trajectory, compute_skill_content_hash
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +135,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--rollout-retries", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--max-initial-components",
+        type=int,
+        help="override virtual_components eager selection; use 0 for fully model-directed loading",
+    )
 
     parser.add_argument("--max-turns", type=int, required=True)
     parser.add_argument("--env-seed", type=int, default=42)
@@ -194,20 +201,64 @@ def limited_test_tasks(dataset: TaskDataset, limit: int | None) -> list[Task]:
     return tasks if limit is None else tasks[:limit]
 
 
-def build_skill(path: Path, *, run_id: str, benchmark: str) -> Skill:
-    source = path.expanduser()
-    if source.is_dir():
-        source = source / "SKILL.md"
+def _heading_name(content: str) -> str | None:
+    match = re.search(r"^#\s+(.+?)\s*$", content, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _first_paragraph(content: str) -> str | None:
+    for raw in re.split(r"\n\s*\n", content):
+        paragraph = " ".join(line.strip() for line in raw.splitlines()).strip()
+        if not paragraph or paragraph.startswith(("#", "---", "```", "|", "- ", ">")):
+            continue
+        return paragraph
+    return None
+
+
+def build_skill(
+    path: Path,
+    *,
+    run_id: str,
+    benchmark: str,
+    max_initial_components: int | None = None,
+) -> Skill:
+    requested = path.expanduser()
+    source_dir = requested if requested.is_dir() else requested.parent
+    source = requested / "SKILL.md" if requested.is_dir() else requested
     if not source.is_file():
         raise FileNotFoundError(f"Skill file does not exist: {source}")
-    blob = {"SKILL.md": source.read_text(encoding="utf-8")}
+    content = source.read_text(encoding="utf-8")
+    blob = {"SKILL.md": content}
+    runtime_type = "static"
+    runtime_metadata: dict[str, Any] = {}
+    metadata_path = source_dir / "runtime_metadata.json"
+    if metadata_path.is_file():
+        loaded = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise ValueError(f"virtual Skill runtime metadata must be a JSON object: {metadata_path}")
+        runtime_type = "virtual_components"
+        runtime_metadata = loaded
+        if max_initial_components is not None:
+            runtime_metadata = {**runtime_metadata, "max_initial_components": max_initial_components}
+    elif max_initial_components is not None:
+        raise ValueError("--max-initial-components requires a Skill directory with runtime_metadata.json")
+    name = frontmatter_value(content, "name") or _heading_name(content) or source_dir.name
+    description = (
+        frontmatter_value(content, "description")
+        or _first_paragraph(content)
+        or f"Guidance for {benchmark} tasks."
+    )
     return Skill(
         skill_id=f"{benchmark}-evaluation-skill",
         version_id=f"{run_id}:evaluation",
         version_label="0.1.0",
         content_hash=compute_skill_content_hash(blob),
-        name=f"{benchmark}-evaluation",
+        name=name,
+        description=description,
         blob=blob,
+        runtime_type=runtime_type,
+        runtime_schema_version=1,
+        runtime_metadata=runtime_metadata,
         created_at=datetime.now(UTC),
     )
 
@@ -317,7 +368,21 @@ def persist_test_artifacts(
         output_dir.mkdir(parents=True, exist_ok=False)
     summary = summarize(outcomes, rollouts_per_task=rollouts_per_task, skill=skill)
     write_json(output_dir / "summary.json", summary)
-    write_jsonl(output_dir / "results.jsonl", [result_record(outcome) for outcome in outcomes])
+    records = [result_record(outcome, skill=skill) for outcome in outcomes]
+    write_jsonl(output_dir / "results.jsonl", records)
+    write_jsonl(
+        output_dir / "skill_usage.jsonl",
+        [
+            {
+                "task_id": record["task_id"],
+                "rollout_id": record["rollout_id"],
+                "sample_index": record["sample_index"],
+                "reward": record["reward"],
+                **record["skill_loading"],
+            }
+            for record in records
+        ],
+    )
     write_json(output_dir / "skill.json", skill.model_dump(mode="json") if skill is not None else None)
     return summary
 
@@ -342,6 +407,7 @@ def summarize(
     task_means = [mean(values) for values in task_rewards.values()]
     correct = sum(reward > 0 for reward in rewards)
     passed_tasks = sum(any(reward > 0 for reward in values) for values in task_rewards.values())
+    loading_records = [skill_loading_record(outcome.trajectory, skill=skill) for outcome in outcomes]
     return {
         "mode": "skill" if skill is not None else "no_skill",
         "skill_content_hash": skill.content_hash if skill is not None else None,
@@ -358,6 +424,7 @@ def summarize(
         "reward_histogram": histogram(rewards),
         "task_mean_reward": distribution(task_means),
         "task_mean_reward_histogram": histogram(task_means),
+        "skill_loading": summarize_skill_loading(loading_records),
     }
 
 
@@ -376,7 +443,91 @@ def histogram(values: Sequence[float]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda item: float(item[0])))
 
 
-def result_record(outcome: RolloutOutcome) -> dict[str, Any]:
+def _tool_arguments(call: dict[str, Any]) -> dict[str, Any]:
+    function = call.get("function")
+    if not isinstance(function, dict):
+        return {}
+    arguments = function.get("arguments", {})
+    try:
+        loaded = json.loads(arguments) if isinstance(arguments, str) else arguments
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def skill_loading_record(trajectory: Trajectory | None, *, skill: Skill | None) -> dict[str, Any]:
+    skill_calls: list[str | None] = []
+    resource_calls: list[str | None] = []
+    if trajectory is not None:
+        for event in trajectory.events:
+            for raw_call in event.get("tool_calls") or []:
+                if not isinstance(raw_call, dict):
+                    continue
+                function = raw_call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                arguments = _tool_arguments(raw_call)
+                if function.get("name") == "skill":
+                    name = arguments.get("name")
+                    skill_calls.append(name if isinstance(name, str) else None)
+                elif function.get("name") == "load_skill_resource":
+                    resource_id = arguments.get("resource_id")
+                    resource_calls.append(resource_id if isinstance(resource_id, str) else None)
+
+    component_by_resource: dict[str, str] = {}
+    if skill is not None and skill.runtime_type == "virtual_components":
+        components = skill.runtime_metadata.get("components", [])
+        for component in components if isinstance(components, list) else []:
+            if not isinstance(component, dict) or not isinstance(component.get("component_id"), str):
+                continue
+            component_id = component["component_id"]
+            component_by_resource[f"skill-resource:{skill.version_id}:{component_id}"] = component_id
+
+    loaded_resource_ids: list[str] = []
+    if trajectory is not None:
+        runtime_trace = trajectory.metadata.get("skill_runtime")
+        if isinstance(runtime_trace, dict):
+            for item in runtime_trace.get("skills", []):
+                if isinstance(item, dict) and item.get("version_id") == (skill.version_id if skill else None):
+                    loaded_resource_ids.extend(
+                        value for value in item.get("loaded_resource_ids", []) if isinstance(value, str)
+                    )
+    requested_components = [component_by_resource.get(value, value) for value in resource_calls if value]
+    loaded_components = [component_by_resource.get(value, value) for value in loaded_resource_ids]
+    total_calls = len(skill_calls) + len(resource_calls)
+    return {
+        "total_load_calls": total_calls,
+        "skill_tool_call_count": len(skill_calls),
+        "virtual_skill_load_call_count": len(resource_calls),
+        "requested_skill_names": [value for value in skill_calls if value],
+        "requested_virtual_skill_ids": requested_components,
+        "loaded_virtual_skill_ids": sorted(set(loaded_components)),
+        "loaded_any_skill": total_calls > 0,
+    }
+
+
+def summarize_skill_loading(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    total = len(records)
+    total_load_calls = sum(int(record["total_load_calls"]) for record in records)
+    loaded_rollouts = sum(bool(record["loaded_any_skill"]) for record in records)
+    virtual_calls = Counter(
+        component_id for record in records for component_id in record["requested_virtual_skill_ids"]
+    )
+    skill_calls = Counter(name for record in records for name in record["requested_skill_names"])
+    return {
+        "total_load_calls": total_load_calls,
+        "skill_tool_calls": sum(int(record["skill_tool_call_count"]) for record in records),
+        "virtual_skill_load_calls": sum(int(record["virtual_skill_load_call_count"]) for record in records),
+        "rollouts_with_load": loaded_rollouts,
+        "rollouts_without_load": total - loaded_rollouts,
+        "load_rate": loaded_rollouts / total if total else 0.0,
+        "mean_load_calls_per_rollout": total_load_calls / total if total else 0.0,
+        "skill_tool_calls_by_name": dict(sorted(skill_calls.items())),
+        "virtual_skill_load_calls_by_id": dict(sorted(virtual_calls.items())),
+    }
+
+
+def result_record(outcome: RolloutOutcome, *, skill: Skill | None = None) -> dict[str, Any]:
     trajectory = outcome.trajectory
     last_attempt = outcome.attempts[-1] if outcome.attempts else None
     return {
@@ -389,6 +540,7 @@ def result_record(outcome: RolloutOutcome) -> dict[str, Any]:
         "completed": trajectory is not None,
         "error_type": last_attempt.error_type if trajectory is None and last_attempt is not None else None,
         "error": last_attempt.error if trajectory is None and last_attempt is not None else None,
+        "skill_loading": skill_loading_record(trajectory, skill=skill),
         "trajectory": trajectory.model_dump(mode="json") if trajectory is not None else None,
     }
 
@@ -416,7 +568,16 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         shuffle_choices=args.shuffle_choices,
     )
     tasks = limited_test_tasks(dataset, args.test_limit)
-    skill = None if args.no_skill else build_skill(args.skill, run_id=args.run_id, benchmark=args.benchmark)
+    skill = (
+        None
+        if args.no_skill
+        else build_skill(
+            args.skill,
+            run_id=args.run_id,
+            benchmark=args.benchmark,
+            max_initial_components=args.max_initial_components,
+        )
+    )
     args.output_dir.mkdir(parents=True, exist_ok=False)
     write_json(
         args.output_dir / "arguments.json",
@@ -482,5 +643,7 @@ __all__ = [
     "evaluate_test_tasks",
     "limited_test_tasks",
     "persist_test_artifacts",
+    "skill_loading_record",
     "summarize",
+    "summarize_skill_loading",
 ]

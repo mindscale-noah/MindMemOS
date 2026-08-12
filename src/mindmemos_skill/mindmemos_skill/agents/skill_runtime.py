@@ -7,6 +7,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
+from ..skill_runtime import SkillRuntimeTask
 from ..typing import (
     Skill,
     SkillBinding,
@@ -26,6 +27,7 @@ class SkillInjection:
     tools: list[Any] = field(default_factory=list)
     skill_names: set[str] = field(default_factory=set)
     workspace: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class SkillRuntime(ABC):
@@ -46,6 +48,11 @@ class SkillRuntime(ABC):
     @abstractmethod
     def bind(self, trajectory: Trajectory) -> list[SkillBinding]:
         """Interpret this runtime's evidence and bind loaded Skill versions."""
+
+    def attach_runtime_task(self, injection: SkillInjection, task: SkillRuntimeTask) -> None:
+        """Project dynamic resources into this Agent-family injection shape."""
+
+        injection.metadata["skill_runtime"] = task.trace()
 
     def _build_bindings(self, trajectory: Trajectory, loaded_names: set[str]) -> list[SkillBinding]:
         """Build canonical bindings after a runtime has interpreted its evidence."""
