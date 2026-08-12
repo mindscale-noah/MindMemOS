@@ -177,6 +177,7 @@ def environment_options(
     use_theorem: bool,
     use_sketch: bool,
     transactional_recalculation: bool = False,
+    trace2skill_reference_mode: bool = False,
 ) -> dict[str, Any]:
     options: dict[str, Any] = {"max_turns": max_turns}
     if benchmark == "alfworld":
@@ -185,6 +186,8 @@ def environment_options(
         options["shell_timeout_seconds"] = shell_timeout
         if transactional_recalculation:
             options["transactional_recalculation"] = True
+        if trace2skill_reference_mode:
+            options["trace2skill_reference_mode"] = True
     if benchmark == "livemath":
         options.update({"use_theorem": use_theorem, "use_sketch": use_sketch})
     return options
@@ -197,13 +200,34 @@ def limited_test_tasks(dataset: TaskDataset, limit: int | None) -> list[Task]:
     return tasks if limit is None else tasks[:limit]
 
 
-def build_skill(path: Path, *, run_id: str, benchmark: str) -> Skill:
+def build_skill(
+    path: Path,
+    *,
+    run_id: str,
+    benchmark: str,
+    include_resources: bool = False,
+) -> Skill:
     source = path.expanduser()
+    source_dir = source if source.is_dir() else source.parent
     if source.is_dir():
         source = source / "SKILL.md"
     if not source.is_file():
         raise FileNotFoundError(f"Skill file does not exist: {source}")
+    if include_resources and source.name != "SKILL.md":
+        raise ValueError("resource-bearing Skill packages must use a file named SKILL.md")
     blob = {"SKILL.md": source.read_text(encoding="utf-8")}
+    resources: dict[str, str] = {}
+    if include_resources:
+        for candidate in sorted(source_dir.rglob("*")):
+            if not candidate.is_file() or candidate == source:
+                continue
+            relative = candidate.relative_to(source_dir).as_posix()
+            if relative == "SKILL.md":
+                continue
+            try:
+                resources[relative] = candidate.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
     return Skill(
         skill_id=f"{benchmark}-evaluation-skill",
         version_id=f"{run_id}:evaluation",
@@ -211,6 +235,7 @@ def build_skill(path: Path, *, run_id: str, benchmark: str) -> Skill:
         content_hash=compute_skill_content_hash(blob),
         name=f"{benchmark}-evaluation",
         blob=blob,
+        resources=resources,
         created_at=datetime.now(UTC),
     )
 

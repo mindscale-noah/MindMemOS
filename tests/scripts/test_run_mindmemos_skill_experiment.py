@@ -137,6 +137,26 @@ def test_treeskill_uses_trace2skill_family_and_explicit_router_config(tmp_path: 
     assert "--transactional-recalculation" in invocation.command
 
 
+def test_treeskill_reference_config_pins_full_200_200_policy_and_analysis_contract(tmp_path: Path) -> None:
+    invocation = SCRIPT.build_invocation(
+        CONFIG_ROOT / "treeskill" / "spreadsheetbench" / "trace2skill_reference.yaml",
+        env_file_override=empty_env_file(tmp_path),
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    command = invocation.command
+    assert command[command.index("--train-limit") + 1] == "200"
+    assert command[command.index("--test-limit") + 1] == "200"
+    assert command[command.index("--seed") + 1] == "41"
+    assert command[command.index("--max-turns") + 1] == "100"
+    assert command[command.index("--analysis-concurrency") + 1] == "128"
+    assert command[command.index("--analysis-adapter") + 1] == "spreadsheetbench_reference"
+    assert "--trace2skill-reference-mode" in command
+    assert command[command.index("--localization-max-tokens") + 1] == "2048"
+    assert command[command.index("--fusion-max-tokens") + 1] == "4096"
+
+
 @pytest.mark.parametrize(
     "config_path",
     sorted(path.relative_to(CONFIG_ROOT) for path in CONFIG_ROOT.glob("*/*/*.yaml")),

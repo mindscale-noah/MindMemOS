@@ -59,4 +59,17 @@ def parse_model(text: str, model_type: type[ModelT]) -> ModelT:
     return model_type.model_validate(extract_json_object(text))
 
 
-__all__ = ["extract_json_object", "parse_model"]
+def strict_json_schema_response_format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """Return the OpenAI-compatible strict JSON-schema request shape."""
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
+__all__ = ["extract_json_object", "parse_model", "strict_json_schema_response_format"]

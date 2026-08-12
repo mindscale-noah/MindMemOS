@@ -95,4 +95,21 @@ def compare_workbooks(
         output.close()
 
 
-__all__ = ["compare_workbooks"]
+def workbook_used_ranges(golden_path: str | Path) -> str:
+    """Return the released evaluator's full-sheet fallback answer position."""
+
+    openpyxl = _openpyxl()
+    workbook = openpyxl.load_workbook(golden_path, data_only=True)
+    try:
+        ranges: list[str] = []
+        for sheet_name in workbook.sheetnames:
+            worksheet = workbook[sheet_name]
+            if worksheet.max_row and worksheet.max_column:
+                end_column = openpyxl.utils.get_column_letter(worksheet.max_column)
+                ranges.append(f"'{sheet_name}'!A1:{end_column}{worksheet.max_row}")
+        return ",".join(ranges) if ranges else "A1:Z100"
+    finally:
+        workbook.close()
+
+
+__all__ = ["compare_workbooks", "workbook_used_ranges"]

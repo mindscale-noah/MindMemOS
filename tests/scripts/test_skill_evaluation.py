@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from experiments import skill_evaluation as evaluation
+from experiments import treeskill as treeskill_experiment
 from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.contracts import (
     RolloutAttempt,
     RolloutOutcome,
@@ -126,7 +129,61 @@ def test_build_skill_accepts_skill_directory(tmp_path: Path) -> None:
     skill_dir = tmp_path / "demo"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+    (skill_dir / "helper.py").write_text("print('helper')\n", encoding="utf-8")
 
     skill = evaluation.build_skill(skill_dir, run_id="run", benchmark="alfworld")
 
     assert skill.content == "# Demo\n"
+    assert skill.resources == {}
+
+
+def test_build_skill_can_include_package_resources_explicitly(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "demo"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+    (skill_dir / "helper.py").write_text("print('helper')\n", encoding="utf-8")
+
+    skill = evaluation.build_skill(
+        skill_dir,
+        run_id="run",
+        benchmark="spreadsheetbench",
+        include_resources=True,
+    )
+
+    assert skill.resources == {"helper.py": "print('helper')\n"}
+
+
+def test_reference_configuration_requires_exact_local_skill_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill_dir = tmp_path / "xlsx"
+    skill_dir.mkdir()
+    files = {
+        "SKILL.md": "# Spreadsheet\n",
+        "recalc.py": "print('recalc')\n",
+        "LICENSE.txt": "local license\n",
+    }
+    for name, content in files.items():
+        (skill_dir / name).write_text(content, encoding="utf-8")
+    monkeypatch.setattr(
+        treeskill_experiment,
+        "_REFERENCE_SKILL_SHA256",
+        {name: hashlib.sha256(content.encode()).hexdigest() for name, content in files.items()},
+    )
+    args = SimpleNamespace(
+        analysis_adapter="spreadsheetbench_reference",
+        trace2skill_reference_mode=True,
+        benchmark="spreadsheetbench",
+    )
+    skill = evaluation.build_skill(
+        skill_dir,
+        run_id="run",
+        benchmark="spreadsheetbench",
+        include_resources=True,
+    )
+
+    treeskill_experiment._validate_reference_configuration(args, skill)
+    changed = skill.model_copy(update={"resources": {**skill.resources, "extra.txt": "unexpected"}})
+    with pytest.raises(ValueError, match="unexpected text resources"):
+        treeskill_experiment._validate_reference_configuration(args, changed)

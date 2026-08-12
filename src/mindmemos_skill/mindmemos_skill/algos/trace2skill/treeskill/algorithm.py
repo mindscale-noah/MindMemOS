@@ -12,7 +12,7 @@ from ....registry import ComponentRequirements, ComponentType, register
 from ....typing import SkillCandidate, Trace2SkillInput, normalize_skill_text
 from ..collection import ScheduledTrajectoryCollector, TrajectoryCollectionResult, TrajectoryCollector
 from ..evidence import select_evidence
-from .analysis import ChatModel, TreeSkillTrajectoryAnalyzer
+from .analysis import ChatModel, TrajectoryAnalyzer, TreeSkillTrajectoryAnalyzer
 from .config import TreeSkillConfig
 from .fusion import TreeSkillNodeFuser
 from .localization import TreeSkillEvidenceLocator
@@ -45,6 +45,7 @@ class TreeSkill:
         config: TreeSkillConfig,
         context: AlgorithmContext,
         collector: TrajectoryCollector | None = None,
+        analyzer: TrajectoryAnalyzer | None = None,
     ) -> None:
         self._config = config
         self._context = context
@@ -55,6 +56,14 @@ class TreeSkill:
         self._collector = collector
         if self._collector is None and config.collection is not None:
             self._collector = ScheduledTrajectoryCollector(agents=context.agents, config=config.collection)
+        self._analyzer = analyzer or TreeSkillTrajectoryAnalyzer(
+            chat_model=self._chat_model,
+            task=self._config.analysis_task,
+            concurrency=self._config.analysis_concurrency,
+            success_score_threshold=self._config.success_score_threshold,
+            temperature=self._config.analysis_temperature,
+            max_tokens=self._config.analysis_max_tokens,
+        )
 
     async def optimize(self, request: Trace2SkillInput) -> TreeSkillOutput:
         run_id = request.run_id or f"treeskill-{uuid4().hex}"
@@ -98,14 +107,11 @@ class TreeSkill:
                 reason="skill_has_no_content_bearing_markdown_headings",
             )
 
-        analyses, analysis_failures = await TreeSkillTrajectoryAnalyzer(
-            chat_model=self._chat_model,
-            task=self._config.analysis_task,
-            concurrency=self._config.analysis_concurrency,
-            success_score_threshold=self._config.success_score_threshold,
-            temperature=self._config.analysis_temperature,
-            max_tokens=self._config.analysis_max_tokens,
-        ).analyze(selection.evidence)
+        trajectories_by_id = {trajectory.trajectory_id: trajectory for trajectory in trajectories}
+        analyses, analysis_failures = await self._analyzer.analyze(
+            selection.evidence,
+            trajectories_by_id=trajectories_by_id,
+        )
         if not analyses:
             return self._unchanged(
                 request=request,

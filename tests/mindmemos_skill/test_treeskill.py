@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from mindmemos_skill.agents.react import ReactAgent
+from mindmemos_skill.algos.trace2skill.contracts import TraceEvidence
 from mindmemos_skill.algos.trace2skill.treeskill import (
     TreeMetadataError,
     TreeSkill,
@@ -19,6 +20,7 @@ from mindmemos_skill.algos.trace2skill.treeskill import (
     parse_tree_with_metadata,
     render_selected_subtrees,
 )
+from mindmemos_skill.algos.trace2skill.treeskill.localization import TreeSkillEvidenceLocator
 from mindmemos_skill.algos.trace2skill.treeskill.models import (
     AnalysisItem,
     LocatedEvidence,
@@ -39,6 +41,11 @@ from mindmemos_skill.algos.trace2skill.treeskill.tree import (
     update_node_content,
 )
 from mindmemos_skill.envs import EnvRolloutContext, SpreadsheetBenchEnv
+from mindmemos_skill.envs.registered_envs.spreadsheetbench.analysis import SpreadsheetBenchReferenceAnalyzer
+from mindmemos_skill.envs.registered_envs.spreadsheetbench.trace2skill_compat import (
+    PolicyResponseType,
+    parse_policy_response,
+)
 from mindmemos_skill.llm import ChatResponse
 from mindmemos_skill.registry import ComponentType, get_component
 from mindmemos_skill.typing import (
@@ -103,6 +110,22 @@ def test_treeskill_prompt_resources_match_reference_files() -> None:
     assert LOCALIZATION_SYSTEM_PROMPT == resources.joinpath("locating_system_prompt.txt").read_text()
     assert NODE_FUSION_SYSTEM_PROMPT == resources.joinpath("node_fusion_system_prompt.txt").read_text()
     assert ROUTING_SYSTEM_PROMPT == resources.joinpath("tree_only_skill_routing_system_prompt.txt").read_text().rstrip()
+
+
+def test_spreadsheetbench_reference_prompt_resources_are_pinned() -> None:
+    prompt_package = "mindmemos_skill.envs.registered_envs.spreadsheetbench.prompt_templates"
+    expected_hashes = {
+        "trace2skill_preloaded_system_prompt.txt": ("8db86cc7c8c881d082f50fcf0efe2da828529c14b783706445f76211e261f4bc"),
+        "trace2skill_no_skill_system_prompt.txt": ("d78f50a08e928e1a134b87e1ed36384be62354b6a630375ca4abfd09ff08b7ff"),
+        "error_analysis_system.txt": "744654d1956a6cf4fdf8fb7be5065855a182a28319ec8e9b33fa0cfe81742d3c",
+        "error_analysis_user.txt": "dfbb3b7e34a6647f6ce362104fa645061cfb00c02e0a38e438c0733a66c5e5b4",
+        "success_analysis_system_llm.txt": ("0ba6a3a530e1cd50f4afdadd8af3448bf7f363a82fade2499b57e49655777f70"),
+        "success_analysis_user_llm.txt": ("3c91275e61cf55df71fd37dd9c8be5026638f0c8edc60e033e18a45f6bbcb318"),
+    }
+    resources = files(prompt_package)
+
+    for name, expected in expected_hashes.items():
+        assert hashlib.sha256(resources.joinpath(name).read_bytes()).hexdigest() == expected
 
 
 def test_treeskill_user_prompts_match_reference_payloads() -> None:
@@ -174,6 +197,22 @@ def test_treeskill_user_prompts_match_reference_payloads() -> None:
         "Route skill subtrees for this spreadsheet task.\n\n"
         + json.dumps(expected_routing, ensure_ascii=False, indent=2)
     )
+
+
+def test_trace2skill_policy_parser_ignores_braces_in_strings_and_repairs_outer_brace() -> None:
+    parsed = parse_policy_response(
+        """Thought: inspect the row.
+Action:
+{
+  "name": "bash",
+  "arguments": {"command": "python -c \\"print(f'Row {row}: {row_data}')\\""}
+"""
+    )
+
+    assert parsed.response_type is PolicyResponseType.ACTION
+    assert parsed.action is not None
+    assert parsed.action.name == "bash"
+    assert "{row_data}" in parsed.action.arguments["command"]
 
 
 def test_markdown_tree_round_trip_mutation_and_ordered_rendering() -> None:
@@ -329,6 +368,318 @@ async def test_treeskill_evolves_candidate_without_mutating_base_skill() -> None
         "treeskill_evidence_localization",
         "treeskill_node_fusion",
     ]
+    assert model.calls[1]["response_format"]["type"] == "json_schema"
+    assert model.calls[2]["response_format"]["type"] == "json_schema"
+
+
+@pytest.mark.asyncio
+async def test_treeskill_locator_retries_with_larger_budget_and_keeps_valid_items() -> None:
+    tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
+    record = TrajectoryAnalysisRecord(
+        instance_id="trajectory-1",
+        task_id="task-1",
+        record_source="success",
+        items=(
+            AnalysisItem(
+                item_id="i1",
+                kind="success_memory",
+                title="Inspect",
+                description="Inspection supported execution.",
+                content="Inspect the workbook before editing.",
+            ),
+        ),
+    )
+    model = ScriptedChatModel(
+        [
+            "not json",
+            json.dumps(
+                {
+                    "instance_id": "trajectory-1",
+                    "evidence": [
+                        {
+                            "evidence_id": "e1",
+                            "reusable_lesson": "Inspect the workbook before editing.",
+                            "target_node_id": "001",
+                            "rationale": "Workbook-level guidance.",
+                        },
+                        {
+                            "evidence_id": "e2",
+                            "reusable_lesson": "Unknown placement must not discard e1.",
+                            "target_node_id": "999",
+                            "rationale": "Invalid target for regression coverage.",
+                        },
+                    ],
+                }
+            ),
+        ]
+    )
+
+    located, failures = await TreeSkillEvidenceLocator(
+        chat_model=model,
+        task="locate",
+        concurrency=1,
+        temperature=0.0,
+        max_tokens=2048,
+    ).locate(tree, [record])
+
+    assert [item.evidence_id for item in located] == ["e1"]
+    assert len(failures) == 1
+    assert "unknown target_node_id" in failures[0].error
+    assert [call["max_tokens"] for call in model.calls] == [2048, 4096]
+    assert all(call["response_format"]["type"] == "json_schema" for call in model.calls)
+    assert model.calls[0]["messages"] == model.calls[1]["messages"]
+
+
+@pytest.mark.asyncio
+async def test_spreadsheetbench_reference_analyzer_matches_success_and_agentic_error_paths(tmp_path: Path) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = tmp_path / "source"
+    source.mkdir()
+    for path, value in (
+        (workspace / "input.xlsx", 1),
+        (workspace / "output.xlsx", 0),
+        (workspace / "gold.xlsx", 1),
+        (source / "case_golden.xlsx", 1),
+    ):
+        workbook = openpyxl.Workbook()
+        workbook.active["A1"] = value
+        workbook.save(path)
+        workbook.close()
+    now = datetime(2026, 8, 12, tzinfo=UTC)
+    success = Trajectory(
+        trajectory_id="success-1",
+        task=Task(task_id="task-success", instruction="Preserve A1."),
+        rollout=Rollout(rollout_id="rollout-success"),
+        environment=Environment(env_ref="spreadsheetbench", running_dir=str(workspace)),
+        events=[{"role": "assistant", "content": "Inspected and saved the workbook."}],
+        reward=Reward(score=1.0),
+        execution=ExecutionInfo(
+            status=TrajectoryStatus.SUCCEEDED,
+            started_at=now,
+            finished_at=now,
+            n_turn=1,
+        ),
+    )
+    failure = Trajectory(
+        trajectory_id="failure-1",
+        task=Task(
+            task_id="task-failure",
+            instruction="Preserve A1.",
+            metadata={"src_dir": str(source), "answer_position": "A1", "answer_sheet": "Sheet"},
+        ),
+        rollout=Rollout(rollout_id="rollout-failure"),
+        environment=Environment(env_ref="spreadsheetbench", running_dir=str(workspace)),
+        events=[{"role": "assistant", "content": "Wrote the wrong value."}],
+        reward=Reward(score=0.0),
+        execution=ExecutionInfo(
+            status=TrajectoryStatus.SUCCEEDED,
+            started_at=now,
+            finished_at=now,
+            n_turn=1,
+        ),
+    )
+    model = ScriptedChatModel(
+        [
+            """# Success Memory Item 1
+
+## Title
+Inspect before saving
+
+## Description
+Workbook inspection supported the successful edit.
+
+## Content
+Inspect the target cells before saving the output.
+""",
+            "Action:\n"
+            + json.dumps(
+                {
+                    "name": "bash",
+                    "arguments": {"command": "cp agent_work/gold.xlsx agent_work/output_fixed.xlsx"},
+                }
+            ),
+            (
+                "Action:\n"
+                + json.dumps(
+                    {
+                        "name": "evaluate_output",
+                        "arguments": {
+                            "output_file": "agent_work/output_fixed.xlsx",
+                            "ground_truth": "agent_work/gold.xlsx",
+                            "answer_position": "Sheet!A1",
+                        },
+                    }
+                )
+            ),
+            """# Failure Cause Item 1
+
+## Title
+Wrong target value
+
+## Description
+The edit wrote a value inconsistent with the requested preservation.
+
+## Content
+The agent overwrote a cell that should have been preserved.
+
+# Failure Memory Item 1
+
+## Title
+Verify preserved cells
+
+## Description
+Verify cells that must remain unchanged before completion.
+
+## Content
+Compare preserved cells before and after editing and correct accidental overwrites.
+
+ACTION: TASK_COMPLETE
+""",
+        ]
+    )
+    analyzer = SpreadsheetBenchReferenceAnalyzer(
+        chat_model=model,
+        task="analysis",
+        output_root=tmp_path / "analysis",
+        concurrency=1,
+        success_score_threshold=1.0,
+        temperature=1.0,
+        max_tokens=16384,
+        max_turns=5,
+    )
+
+    records, failures = await analyzer.analyze(
+        [
+            TraceEvidence(trajectory_id="success-1", task_id="task-success", transcript="", score=1.0),
+            TraceEvidence(trajectory_id="failure-1", task_id="task-failure", transcript="", score=0.0),
+        ],
+        trajectories_by_id={"success-1": success, "failure-1": failure},
+    )
+
+    assert failures == []
+    assert [record.record_source for record in records] == ["success", "error"]
+    assert [item.kind for item in records[1].items] == ["failure_cause", "failure_memory"]
+    failure_dir = tmp_path / "analysis" / "error" / "failure-1"
+    assert (failure_dir / "evaluate_passed.flag").read_text(encoding="utf-8") == "PASS\n"
+    assert (failure_dir / "agent_work" / "output_fixed.xlsx").is_file()
+
+
+def test_spreadsheetbench_reference_evaluator_uses_full_workbook_when_position_is_empty(
+    tmp_path: Path,
+) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    analysis_dir = tmp_path / "analysis"
+    analysis_dir.mkdir()
+    for name, value in (("gold.xlsx", 1), ("output.xlsx", 0)):
+        workbook = openpyxl.Workbook()
+        workbook.active["A1"] = value
+        workbook.save(analysis_dir / name)
+        workbook.close()
+
+    observation, passed = SpreadsheetBenchReferenceAnalyzer._evaluate_output(
+        analysis_dir,
+        {"output_file": "output.xlsx", "ground_truth": "gold.xlsx"},
+        "",
+    )
+
+    assert passed is False
+    assert observation.startswith("Result: FAIL")
+
+
+@pytest.mark.asyncio
+async def test_spreadsheetbench_reference_policy_preloads_skill_and_exposes_only_bash(tmp_path: Path) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    source = tmp_path / "source"
+    source.mkdir()
+    workbook = openpyxl.Workbook()
+    workbook.active["A1"] = 1
+    workbook.save(source / "case_init.xlsx")
+    workbook.save(source / "case_golden.xlsx")
+    workbook.close()
+
+    skill = make_skill("# Spreadsheet\n\nInspect before editing.\n")
+    llm = ScriptedChatModel(
+        [
+            'Action:\n{"name":"bash","arguments":{"command":"cp input.xlsx output.xlsx"}}',
+            "ACTION: TASK_COMPLETE",
+        ]
+    )
+    agent = ReactAgent(
+        {"model": "fake", "max_turns": 2, "skill_injection_mode": "system_prompt"},
+        llm=llm,
+    )
+    task = Task(
+        task_id="sheet-reference",
+        instruction="Preserve A1.",
+        metadata={
+            "src_dir": str(source),
+            "answer_position": "A1",
+            "answer_sheet": "Sheet",
+            "instruction_type": "Cell-Level Manipulation",
+        },
+    )
+
+    trajectory = await SpreadsheetBenchEnv({"max_turns": 2, "trace2skill_reference_mode": True}).rollout(
+        agent,
+        task,
+        [skill],
+        context=EnvRolloutContext(
+            rollout=Rollout(rollout_id="reference-rollout"),
+            workspace_root=tmp_path / "runs",
+            env_ref="spreadsheetbench",
+        ),
+    )
+
+    assert trajectory.reward.score == 1.0
+    assert trajectory.agent.skill_injection_mode is SkillInjectionMode.SYSTEM_PROMPT
+    assert len(llm.calls) == 2
+    assert all("tools" not in call for call in llm.calls)
+    assert "Inspect before editing." in llm.calls[0]["messages"][0]["content"]
+    assert "### answer_position\nA1" in llm.calls[0]["messages"][1]["content"]
+    workspace = Path(trajectory.environment.running_dir or "")
+    assert (workspace / "preloaded_skills" / "spreadsheet" / "references" / "helper.py").is_file()
+    assert (workspace / "gold.xlsx").is_file()
+
+
+@pytest.mark.asyncio
+async def test_spreadsheetbench_reference_policy_retries_missing_output_once(tmp_path: Path) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    source = tmp_path / "source"
+    source.mkdir()
+    workbook = openpyxl.Workbook()
+    workbook.active["A1"] = 1
+    workbook.save(source / "case_init.xlsx")
+    workbook.save(source / "case_golden.xlsx")
+    workbook.close()
+
+    llm = ScriptedChatModel(["ACTION: TASK_COMPLETE", "ACTION: TASK_COMPLETE"])
+    agent = ReactAgent(
+        {"model": "fake", "max_turns": 4, "skill_injection_mode": "system_prompt"},
+        llm=llm,
+    )
+    task = Task(
+        task_id="sheet-missing-output",
+        instruction="Preserve A1.",
+        metadata={"src_dir": str(source), "answer_position": "A1"},
+    )
+
+    trajectory = await SpreadsheetBenchEnv({"max_turns": 4, "trace2skill_reference_mode": True}).rollout(
+        agent,
+        task,
+        [make_skill("# Spreadsheet\n")],
+        context=EnvRolloutContext(
+            rollout=Rollout(rollout_id="missing-output-rollout"),
+            workspace_root=tmp_path / "runs",
+            env_ref="spreadsheetbench",
+        ),
+    )
+
+    assert len(llm.calls) == 2
+    assert trajectory.reward.score == 0.0
+    assert trajectory.execution.error_info is not None
+    assert "Output file was not created" in trajectory.execution.error_info
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,9 @@ from typing import Any
 
 from mindmemos_skill.algos.trace2skill import TaskCollectionConfig
 from mindmemos_skill.algos.trace2skill.treeskill import TreeSkill, TreeSkillConfig
+from mindmemos_skill.envs.registered_envs.spreadsheetbench.analysis import (
+    SpreadsheetBenchReferenceAnalyzer,
+)
 from mindmemos_skill.envs.registered_envs.spreadsheetbench.recalculation import (
     preflight_recalculation_runtime,
 )
@@ -47,6 +50,24 @@ class _AlgorithmContext:
     config_hash: str
 
 
+class _ConfiguredChatModel:
+    """Apply endpoint generation defaults while allowing each stage to override them."""
+
+    def __init__(self, client: Any, defaults: dict[str, Any]) -> None:
+        self._client = client
+        self._defaults = dict(defaults)
+
+    async def chat(self, task: str, messages: list[dict[str, Any]], **kwargs: Any) -> Any:
+        return await self._client.chat(task=task, messages=messages, **{**self._defaults, **kwargs})
+
+
+_REFERENCE_SKILL_SHA256 = {
+    "SKILL.md": "5184db470b1eec15c64e4135a107797928dbed44996c31067353effa8d125252",
+    "recalc.py": "ab1ef0c94536bb23b6c6a3d32769b0401ec3cc85e73c247d574dd84ec73af15d",
+    "LICENSE.txt": "79f6d8f5b427252fa3b1c11ecdbdb6bf610b944f7530b4de78f770f38741cfaa",
+}
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark", choices=("spreadsheetbench",), required=True)
@@ -63,6 +84,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--request-timeout", type=float, default=1800.0)
     parser.add_argument("--model-retries", type=int, default=3)
     parser.add_argument("--max-completion-tokens", type=int, default=16384)
+    parser.add_argument("--target-generation-config", type=Path)
+    parser.add_argument("--optimizer-generation-config", type=Path)
 
     parser.add_argument("--train-limit", type=int, default=8)
     parser.add_argument("--collection-rollouts", type=int, default=1)
@@ -78,6 +101,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--localization-temperature", type=float, default=0.0)
     parser.add_argument("--fusion-temperature", type=float, default=0.0)
     parser.add_argument("--analysis-max-tokens", type=int, default=4096)
+    parser.add_argument("--analysis-max-turns", type=int, default=20)
+    parser.add_argument(
+        "--analysis-adapter",
+        choices=("generic", "spreadsheetbench_reference"),
+        default="generic",
+    )
     parser.add_argument("--localization-max-tokens", type=int, default=2048)
     parser.add_argument("--fusion-max-tokens", type=int, default=4096)
 
@@ -98,6 +127,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    parser.add_argument(
+        "--trace2skill-reference-mode",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--use-sketch", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--shuffle-choices", action=argparse.BooleanOptionalAction, default=True)
@@ -113,6 +147,48 @@ def _limited_train_tasks(tasks: list[Any], limit: int) -> list[Any]:
 def _config_hash(args: argparse.Namespace) -> str:
     payload = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _generation_config(path: Path | None, *, seed: int) -> dict[str, Any]:
+    if path is None:
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"generation config must contain a JSON object: {path}")
+    return {**payload, "seed": seed}
+
+
+def _validate_reference_configuration(args: argparse.Namespace, skill: Skill) -> None:
+    if args.analysis_adapter == "spreadsheetbench_reference" and not args.trace2skill_reference_mode:
+        raise ValueError("--analysis-adapter spreadsheetbench_reference requires --trace2skill-reference-mode")
+    if not args.trace2skill_reference_mode:
+        return
+    if args.benchmark != "spreadsheetbench":
+        raise ValueError("--trace2skill-reference-mode is only supported for SpreadsheetBench")
+
+    package = {"SKILL.md": skill.content, **skill.resources}
+    missing = sorted(set(_REFERENCE_SKILL_SHA256) - set(package))
+    if missing:
+        raise ValueError(
+            "Trace2Skill reference mode requires the complete authorized Human-Written skill package; "
+            f"missing: {', '.join(missing)}"
+        )
+    unexpected = sorted(set(package) - set(_REFERENCE_SKILL_SHA256))
+    if unexpected:
+        raise ValueError(
+            "Trace2Skill reference mode requires the unmodified authorized Human-Written skill package; "
+            f"unexpected text resources: {', '.join(unexpected)}"
+        )
+    mismatched = [
+        name
+        for name, expected in _REFERENCE_SKILL_SHA256.items()
+        if hashlib.sha256(package[name].encode("utf-8")).hexdigest() != expected
+    ]
+    if mismatched:
+        raise ValueError(
+            "Trace2Skill reference mode requires the unmodified authorized Human-Written skill package; "
+            f"content mismatch: {', '.join(sorted(mismatched))}"
+        )
 
 
 def _candidate_skill(base: Skill, candidate: SkillCandidate | None, *, run_id: str) -> Skill:
@@ -148,7 +224,13 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     train_tasks = _limited_train_tasks(dataset.train_tasks(), args.train_limit)
     test_tasks = limited_test_tasks(dataset, args.test_limit)
-    base_skill = build_skill(args.initial_skill, run_id=args.run_id, benchmark=args.benchmark)
+    base_skill = build_skill(
+        args.initial_skill,
+        run_id=args.run_id,
+        benchmark=args.benchmark,
+        include_resources=args.trace2skill_reference_mode,
+    )
+    _validate_reference_configuration(args, base_skill)
     env_options = environment_options(
         args.benchmark,
         max_turns=args.max_turns,
@@ -157,7 +239,10 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         use_theorem=args.use_theorem,
         use_sketch=args.use_sketch,
         transactional_recalculation=args.transactional_recalculation,
+        trace2skill_reference_mode=args.trace2skill_reference_mode,
     )
+    target_generation = _generation_config(args.target_generation_config, seed=args.seed)
+    optimizer_generation = _generation_config(args.optimizer_generation_config, seed=args.seed)
 
     args.output_dir.mkdir(parents=True, exist_ok=False)
     write_json(
@@ -182,18 +267,23 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         model_retries=args.model_retries,
         call_sink=sink,
     )
+    configured_optimizer = _ConfiguredChatModel(optimizer_client, optimizer_generation)
+    configured_target = _ConfiguredChatModel(target_client, target_generation)
     collection_agent = build_agent(
-        client=target_client,
+        client=configured_target,
         model=args.target_model,
         max_turns=args.max_turns,
-        reasoning_effort=args.reasoning_effort,
+        reasoning_effort=args.reasoning_effort or None,
         max_completion_tokens=args.max_completion_tokens,
+        skill_injection_mode=(
+            SkillInjectionMode.SYSTEM_PROMPT if args.trace2skill_reference_mode else SkillInjectionMode.TOOL
+        ),
     )
     routed_agent = build_agent(
-        client=target_client,
+        client=configured_target,
         model=args.target_model,
         max_turns=args.max_turns,
-        reasoning_effort=args.reasoning_effort,
+        reasoning_effort=args.reasoning_effort or None,
         max_completion_tokens=args.max_completion_tokens,
         skill_injection_mode=SkillInjectionMode.TREE_ROUTED_SYSTEM_PROMPT,
         tree_router_temperature=args.tree_router_temperature,
@@ -228,13 +318,27 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         ),
     )
     write_json(args.output_dir / "run_config.json", config.model_dump(mode="json"))
+    analyzer = None
+    if args.analysis_adapter == "spreadsheetbench_reference":
+        analyzer = SpreadsheetBenchReferenceAnalyzer(
+            chat_model=configured_optimizer,
+            task=config.analysis_task,
+            output_root=args.output_dir / "analysis",
+            concurrency=args.analysis_concurrency,
+            success_score_threshold=args.success_score_threshold,
+            temperature=args.analysis_temperature,
+            max_tokens=args.analysis_max_tokens,
+            max_turns=args.analysis_max_turns,
+            shell_timeout_seconds=args.shell_timeout,
+        )
     algorithm = TreeSkill(
         config=config,
         context=_AlgorithmContext(
-            models={"chat": optimizer_client},
+            models={"chat": configured_optimizer},
             agents={"react": collection_agent},
             config_hash=_config_hash(args),
         ),
+        analyzer=analyzer,
     )
     try:
         result = await algorithm.optimize(

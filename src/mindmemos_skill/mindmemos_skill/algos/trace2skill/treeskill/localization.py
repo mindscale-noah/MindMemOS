@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .analysis import ChatModel
-from .json_utils import parse_model
+from .json_utils import extract_json_object, strict_json_schema_response_format
 from .models import LocalizationFailure, LocatedEvidence, TrajectoryAnalysisRecord
 from .prompts import LOCALIZATION_SYSTEM_PROMPT, localization_user_prompt
 from .tree import MarkdownSkillTree
@@ -22,18 +23,28 @@ class _RawEvidence(BaseModel):
     rationale: str = Field(min_length=1)
 
 
-class _RawLocalization(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    instance_id: str = Field(min_length=1)
-    evidence: tuple[_RawEvidence, ...] = ()
-
-    @model_validator(mode="after")
-    def validate_unique_evidence_ids(self) -> _RawLocalization:
-        ids = [item.evidence_id for item in self.evidence]
-        if len(ids) != len(set(ids)):
-            raise ValueError("localization evidence_id values must be unique within a record")
-        return self
+_LOCALIZATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["instance_id", "evidence"],
+    "properties": {
+        "instance_id": {"type": "string"},
+        "evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["evidence_id", "reusable_lesson", "target_node_id", "rationale"],
+                "properties": {
+                    "evidence_id": {"type": "string"},
+                    "reusable_lesson": {"type": "string"},
+                    "target_node_id": {"type": "string"},
+                    "rationale": {"type": "string"},
+                },
+            },
+        },
+    },
+}
 
 
 class TreeSkillEvidenceLocator:
@@ -72,45 +83,88 @@ class TreeSkillEvidenceLocator:
                 {"role": "user", "content": localization_user_prompt(tree, record)},
             ]
 
-            def parse(text: str) -> _RawLocalization:
-                payload = parse_model(text, _RawLocalization)
-                if payload.instance_id != record.instance_id:
-                    raise ValueError("localization instance_id does not match the analysis record")
-                unknown = [item.target_node_id for item in payload.evidence if item.target_node_id not in known_ids]
-                if unknown:
-                    raise ValueError(f"localization returned unknown target node ids: {sorted(set(unknown))}")
-                return payload
-
-            try:
-                async with semaphore:
-                    response = await self._chat_model.chat(
-                        task=self._task,
-                        messages=messages,
-                        format_parser=parse,
-                        feedback_on_parse_error=True,
-                        temperature=self._temperature,
-                        max_tokens=self._max_tokens,
-                    )
-                payload = getattr(response, "parsed", None) or parse(response.content or "")
-                located = [
-                    LocatedEvidence(
-                        instance_id=record.instance_id,
-                        evidence_id=item.evidence_id,
-                        record_source=record.record_source,
-                        reusable_lesson=item.reusable_lesson,
-                        target_node_id=item.target_node_id,
-                        rationale=item.rationale,
-                    )
-                    for item in payload.evidence
-                ]
-                return located, None
-            except Exception as exc:
-                return [], LocalizationFailure(instance_id=record.instance_id, error=f"{type(exc).__name__}: {exc}")
+            last_error: Exception | None = None
+            async with semaphore:
+                for _attempt, token_budget in ((1, self._max_tokens), (2, min(self._max_tokens * 2, 8192))):
+                    try:
+                        response = await self._chat_model.chat(
+                            task=self._task,
+                            messages=list(messages),
+                            temperature=self._temperature,
+                            max_tokens=token_budget,
+                            response_format=strict_json_schema_response_format(
+                                "tree_fusion_locator",
+                                _LOCALIZATION_SCHEMA,
+                            ),
+                        )
+                        located, rejected = _parse_localization_items(
+                            response.content or "",
+                            record=record,
+                            known_ids=known_ids,
+                        )
+                        rejection = (
+                            LocalizationFailure(
+                                instance_id=record.instance_id,
+                                error="; ".join(rejected),
+                            )
+                            if rejected
+                            else None
+                        )
+                        return located, rejection
+                    except Exception as exc:
+                        last_error = exc
+            assert last_error is not None
+            return [], LocalizationFailure(
+                instance_id=record.instance_id,
+                error=f"{type(last_error).__name__}: {last_error}",
+            )
 
         results = await asyncio.gather(*(run(record) for record in records))
         evidence = [item for items, _ in results for item in items]
         failures = [failure for _, failure in results if failure is not None]
         return evidence, failures
+
+
+def _parse_localization_items(
+    text: str,
+    *,
+    record: TrajectoryAnalysisRecord,
+    known_ids: set[str],
+) -> tuple[list[LocatedEvidence], list[str]]:
+    payload = extract_json_object(text)
+    if payload.get("instance_id") != record.instance_id:
+        raise ValueError("localization instance_id does not match the analysis record")
+    raw_items = payload.get("evidence")
+    if not isinstance(raw_items, list):
+        raise ValueError("localization evidence must be a list")
+
+    located: list[LocatedEvidence] = []
+    rejected: list[str] = []
+    seen_ids: set[str] = set()
+    for index, raw in enumerate(raw_items, start=1):
+        try:
+            item = _RawEvidence.model_validate(raw)
+        except ValidationError as exc:
+            rejected.append(f"evidence[{index}] is invalid: {exc.errors()[0]['msg']}")
+            continue
+        if item.evidence_id in seen_ids:
+            rejected.append(f"evidence[{index}] duplicates evidence_id {item.evidence_id!r}")
+            continue
+        seen_ids.add(item.evidence_id)
+        if item.target_node_id not in known_ids:
+            rejected.append(f"{item.evidence_id}: unknown target_node_id {item.target_node_id!r}")
+            continue
+        located.append(
+            LocatedEvidence(
+                instance_id=record.instance_id,
+                evidence_id=item.evidence_id,
+                record_source=record.record_source,
+                reusable_lesson=item.reusable_lesson,
+                target_node_id=item.target_node_id,
+                rationale=item.rationale,
+            )
+        )
+    return located, rejected
 
 
 __all__ = ["TreeSkillEvidenceLocator"]

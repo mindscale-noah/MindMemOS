@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from .analysis import ChatModel
-from .json_utils import parse_model
+from .json_utils import parse_model, strict_json_schema_response_format
 from .models import (
     AppliedEditRecord,
     FusionFailure,
@@ -20,6 +20,46 @@ from .tree import (
     create_child_subtree,
     update_node_content,
 )
+
+_NEW_CHILD_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["heading", "content", "children"],
+    "properties": {
+        "heading": {"type": "string"},
+        "content": {"type": "string"},
+        "children": {"type": "array", "items": {"$ref": "#/$defs/new_child"}},
+    },
+}
+
+_NODE_FUSION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["rationale", "edits"],
+    "$defs": {"new_child": _NEW_CHILD_SCHEMA},
+    "properties": {
+        "rationale": {"type": "string"},
+        "edits": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["operation", "rationale"],
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["update_node", "create_child", "reject"],
+                    },
+                    "content": {"type": "string"},
+                    "new_child": {"$ref": "#/$defs/new_child"},
+                    "rationale": {"type": "string"},
+                },
+            },
+        },
+    },
+}
 
 
 class TreeSkillNodeFuser:
@@ -71,12 +111,14 @@ class TreeSkillNodeFuser:
                 response = await self._chat_model.chat(
                     task=self._task,
                     messages=messages,
-                    format_parser=lambda text: parse_model(text, NodeFusionDecision),
-                    feedback_on_parse_error=True,
                     temperature=self._temperature,
                     max_tokens=self._max_tokens,
+                    response_format=strict_json_schema_response_format(
+                        "tree_fusion_node_edit",
+                        _NODE_FUSION_SCHEMA,
+                    ),
                 )
-                decision = getattr(response, "parsed", None) or parse_model(response.content or "", NodeFusionDecision)
+                decision = parse_model(response.content or "", NodeFusionDecision)
             except Exception as exc:
                 failures.append(FusionFailure(target_node_id=target_id, error=f"{type(exc).__name__}: {exc}"))
                 continue

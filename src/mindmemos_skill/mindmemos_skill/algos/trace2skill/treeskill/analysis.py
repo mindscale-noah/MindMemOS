@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Any, Protocol
 
+from ....typing import Trajectory
 from ..contracts import TraceEvidence
 from .json_utils import parse_model
 from .models import TrajectoryAnalysisRecord
@@ -13,6 +15,15 @@ from .prompts import ANALYSIS_SYSTEM_PROMPT, analysis_user_prompt
 
 class ChatModel(Protocol):
     async def chat(self, task: str, messages: list[dict[str, Any]], **kwargs: Any) -> Any: ...
+
+
+class TrajectoryAnalyzer(Protocol):
+    async def analyze(
+        self,
+        evidence: list[TraceEvidence],
+        *,
+        trajectories_by_id: Mapping[str, Trajectory],
+    ) -> tuple[list[TrajectoryAnalysisRecord], list[str]]: ...
 
 
 class TreeSkillTrajectoryAnalyzer:
@@ -38,7 +49,10 @@ class TreeSkillTrajectoryAnalyzer:
     async def analyze(
         self,
         evidence: list[TraceEvidence],
+        *,
+        trajectories_by_id: Mapping[str, Trajectory],
     ) -> tuple[list[TrajectoryAnalysisRecord], list[str]]:
+        del trajectories_by_id
         semaphore = asyncio.Semaphore(self._concurrency)
 
         async def run(item: TraceEvidence) -> tuple[TrajectoryAnalysisRecord | None, str | None]:
@@ -79,4 +93,4 @@ class TreeSkillTrajectoryAnalyzer:
         return "success" if evidence.score >= self._success_score_threshold else "error"
 
 
-__all__ = ["ChatModel", "TreeSkillTrajectoryAnalyzer"]
+__all__ = ["ChatModel", "TrajectoryAnalyzer", "TreeSkillTrajectoryAnalyzer"]

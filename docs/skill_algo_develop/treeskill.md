@@ -161,6 +161,72 @@ outputs are:
 fields, resources, and TreeSkill metadata. `test/summary.json` includes routed
 and full character totals when routing records are present.
 
+## Trace2Skill-reference SpreadsheetBench mode
+
+The opt-in reference mode aligns the policy and analysis boundary used for the
+TreeSkill SpreadsheetBench comparison while leaving the lightweight default
+configuration unchanged. It provides:
+
+- full preloading of the Human-Written `SKILL.md` during trajectory collection;
+- the released text ReAct policy contract and bash-only action space;
+- the released one-call success-analysis prompt;
+- the released agentic, evaluator-gated failure-analysis prompt and tools;
+- Qwen3.5 instruct decoding for the policy and thinking decoding for analysis
+  and TreeSkill evolution;
+- strict JSON-schema output for evidence localization and node fusion; and
+- one bounded localization retry with twice the first-attempt output budget.
+
+The Human-Written spreadsheet Skill is not redistributed by this repository.
+Place a legally authorized, unmodified copy at:
+
+```text
+data/mindmemos_skill/authorized_skills/xlsx/
+  SKILL.md
+  recalc.py
+  LICENSE.txt
+```
+
+Reference mode verifies all three files before creating an output directory.
+This protects experiments from silently using a partial or modified starting
+Skill. The package resources are preserved in the evolved candidate and are
+materialized for both full-Skill collection and routed evaluation. Other
+MindMemOS experiments continue to load only `SKILL.md` unless resource loading
+is explicitly requested by this mode.
+
+Resolve the seed-41 command without starting an experiment:
+
+```bash
+UV_CACHE_DIR=/tmp/mindmemos-skill-uv-cache \
+scripts/run_mindmemos_skill_experiment.sh \
+  --config config/mindmemos_skill/treeskill/spreadsheetbench/trace2skill_reference.yaml \
+  --dry-run
+```
+
+Run seeds 41, 42, and 43 separately with the same configuration:
+
+```bash
+scripts/run_mindmemos_skill_experiment.sh \
+  --config config/mindmemos_skill/treeskill/spreadsheetbench/trace2skill_reference.yaml
+
+scripts/run_mindmemos_skill_experiment.sh \
+  --config config/mindmemos_skill/treeskill/spreadsheetbench/trace2skill_reference.yaml \
+  --set rollout.seed=42
+
+scripts/run_mindmemos_skill_experiment.sh \
+  --config config/mindmemos_skill/treeskill/spreadsheetbench/trace2skill_reference.yaml \
+  --set rollout.seed=43
+```
+
+The reference configuration uses ordered tasks `0:200` for collection and
+evolution, ordered tasks `200:400` for routed held-out evaluation, one rollout
+per task, `max_turns=100`, 16 policy workers, and the published generation
+settings. The 128-way analysis setting controls bounded asynchronous LLM
+requests; localization and fusion remain independently bounded.
+
+This mode aligns the implemented P0 and P1 contracts. It does not claim that a
+single local run reproduces every paper table, infrastructure condition, or
+model-server implementation.
+
 ## Trace2Skill-compatible SpreadsheetBench split
 
 The repository also packages the ordered task-ID split used by the TreeSkill
@@ -178,11 +244,10 @@ It preserves the released `dataset.json` ordering without shuffling:
 - `test`: positions `200:400`, used for held-out evaluation.
 
 Select it with `--split-dir` when invoking the Python entrypoint. The existing
-`default.yaml` remains a lightweight MindMemOS integration example; using all
-evolution tasks also requires `--train-limit 200` and a compatible
-`--max-trajectories` value. This split aligns task membership and ordering only;
-it does not by itself align model, policy prompting, Skill injection, or
-recalculation behavior.
+`default.yaml` remains a lightweight MindMemOS integration example. The
+`trace2skill_reference.yaml` configuration additionally aligns the full
+collection, analysis, generation, and held-out settings described above. Using
+the split alone aligns task membership and ordering only.
 
 ## Current boundary
 

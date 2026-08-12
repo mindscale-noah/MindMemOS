@@ -25,6 +25,12 @@ from ....typing import EnvConfig, Reward, Skill, SkillInjectionMode, Task, Traje
 from ...base import BaseEnv, EnvRolloutContext, PreparedRollout
 from .evaluator import compare_workbooks
 from .prompts import build_messages
+from .trace2skill_compat import (
+    PolicyResponseType,
+    build_reference_messages,
+    parse_policy_response,
+    run_reference_bash,
+)
 
 _INSTALL_RE = re.compile(
     r"^(?:sudo\s+)?(?:\w+=\S+\s+)*(?:(?:python[\d.]*\s+-m\s+)?pip[\d.]*\s+(?:install|uninstall)|"
@@ -82,6 +88,7 @@ class SpreadsheetBenchEnvConfig(EnvConfig):
     max_turns: int = Field(default=15, ge=1)
     shell_timeout_seconds: int = Field(default=120, ge=1)
     transactional_recalculation: bool = False
+    trace2skill_reference_mode: bool = False
 
 
 @register(type=ComponentType.ENV, name="spreadsheetbench")
@@ -131,6 +138,8 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         _configure_default_executor()
         state = prepared.runtime_state
         mode = self._effective_skill_mode(agent, prepared)
+        if self.config.trace2skill_reference_mode:
+            return await self._execute_reference_policy(agent=agent, prepared=prepared, mode=mode)
         if mode is SkillInjectionMode.TREE_ROUTED_SYSTEM_PROMPT:
             prepared.agent_request.options["skill_injection_mode"] = mode.value
             messages = self._build_messages(prepared, skill_names=[])
@@ -155,6 +164,137 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
             messages=self._build_messages(prepared, skill_names=list(skill_directories)),
             tools=tools,
             injection=None,
+        )
+
+    async def _execute_reference_policy(
+        self,
+        *,
+        agent: Agent[Any],
+        prepared: PreparedRollout,
+        mode: SkillInjectionMode,
+    ) -> Trajectory:
+        if mode not in {
+            SkillInjectionMode.SYSTEM_PROMPT,
+            SkillInjectionMode.TREE_ROUTED_SYSTEM_PROMPT,
+        }:
+            raise ValueError(
+                "trace2skill_reference_mode requires system_prompt or tree_routed_system_prompt Skill injection"
+            )
+        prepared.agent_request.options["skill_injection_mode"] = mode.value
+        async with agent.inject_skill_request(prepared.agent_request, mode=mode) as injection:
+            if mode is SkillInjectionMode.SYSTEM_PROMPT:
+                directories = self._materialize_reference_skills(
+                    prepared.runtime_state["workspace"],
+                    prepared.runtime_state["skills"],
+                )
+                skill_content, skill_dir = self._single_reference_skill(prepared.runtime_state["skills"], directories)
+            else:
+                skill_content, skill_dir = self._routed_reference_skill(prepared, injection)
+            messages = build_reference_messages(
+                task=prepared.agent_request.task,
+                working_dir=prepared.runtime_state["workspace"],
+                input_file=prepared.runtime_state["workspace"] / "input.xlsx",
+                output_file=prepared.runtime_state["workspace"] / "output.xlsx",
+                spreadsheet_content=str(
+                    prepared.agent_request.metadata["treeskill_routing_context"]["spreadsheet_content"]
+                ),
+                skill_content=skill_content,
+                skill_dir=skill_dir,
+                transactional_recalculation=self.config.transactional_recalculation,
+            )
+            return await self._execute_reference_conversation(
+                agent=agent,
+                prepared=prepared,
+                messages=messages,
+                injection=injection,
+            )
+
+    async def _execute_reference_conversation(
+        self,
+        *,
+        agent: Agent[Any],
+        prepared: PreparedRollout,
+        messages: list[dict[str, Any]],
+        injection: SkillInjection,
+    ) -> Trajectory:
+        state = prepared.runtime_state
+        state["initial_messages"] = [dict(message) for message in messages]
+        started_at = time.time()
+        error: str | None = None
+        finished = False
+        missing_output_reminded = False
+        turns = 0
+        try:
+            for turns in range(1, self.config.max_turns + 1):
+                response = await agent.respond(prepared.agent_request, messages, tools=None)
+                content = response.content or ""
+                messages.append({"role": "assistant", "content": content})
+                parsed = parse_policy_response(content)
+                if parsed.response_type is PolicyResponseType.TASK_COMPLETE:
+                    if (state["workspace"] / "output.xlsx").is_file():
+                        finished = True
+                        break
+                    if missing_output_reminded:
+                        error = f"Output file was not created: {state['workspace'] / 'output.xlsx'}"
+                        break
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[System Check] The output file was NOT created at: "
+                                f"{state['workspace'] / 'output.xlsx'}\n"
+                                "Please return to work again until you create the output file at the exact path "
+                                "specified above, then signal ACTION: TASK_COMPLETE again."
+                            ),
+                        }
+                    )
+                    missing_output_reminded = True
+                    continue
+                if parsed.response_type is PolicyResponseType.FORMAT_ERROR:
+                    messages.append({"role": "user", "content": parsed.error_message or "Invalid action format."})
+                    continue
+
+                assert parsed.action is not None
+                if parsed.action.name != "bash":
+                    observation = f"Error: unknown tool {parsed.action.name!r}; only 'bash' is available"
+                else:
+                    command = parsed.action.arguments.get("command")
+                    if not isinstance(command, str) or not command.strip():
+                        observation = "Error: bash arguments.command must be a non-empty string"
+                    else:
+                        observation = await asyncio.to_thread(
+                            run_reference_bash,
+                            command,
+                            working_dir=state["workspace"],
+                            timeout_seconds=self.config.shell_timeout_seconds,
+                        )
+                messages.append({"role": "user", "content": f"Observation: {observation}"})
+            if not finished and error is None:
+                error = f"ReAct agent reached max_turns={self.config.max_turns} before creating output.xlsx"
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        ended_at = time.time()
+        state.update({"messages": messages, "error": error, "finished": finished, "turns": turns})
+        self._write_artifacts(prepared)
+        metadata = dict(injection.metadata)
+        metadata.update(
+            {
+                "finished": finished,
+                "turns": turns,
+                "error": error,
+                "instruction_type": prepared.agent_request.task.metadata.get("instruction_type"),
+                "trace2skill_reference_mode": True,
+            }
+        )
+        return agent.build_trajectory(
+            request=prepared.agent_request,
+            messages=messages,
+            started_at=started_at,
+            ended_at=ended_at,
+            n_turn=turns,
+            is_success=error is None,
+            error_info=error,
+            metadata=metadata,
         )
 
     def _build_messages(self, prepared: PreparedRollout, *, skill_names: list[str]) -> list[dict[str, str]]:
@@ -237,6 +377,50 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
             skill_directories[name] = directory
         return skill_directories
 
+    def _materialize_reference_skills(self, workspace: Path, skills: Sequence[Skill]) -> dict[str, Path]:
+        directories: dict[str, Path] = {}
+        skills_root = workspace / "preloaded_skills"
+        skills_root.mkdir()
+        for skill in skills:
+            name = self._safe_path_part(skill.name)
+            directory = skills_root / name
+            directory.mkdir()
+            root = directory.resolve()
+            for relative, content in {**skill.blob, **skill.resources}.items():
+                destination = (directory / relative).resolve()
+                if not destination.is_relative_to(root):
+                    raise ValueError(f"Skill resource escapes its package: {relative!r}")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(content, encoding="utf-8")
+            directories[skill.name] = directory
+        return directories
+
+    @staticmethod
+    def _single_reference_skill(skills: Sequence[Skill], directories: Mapping[str, Path]) -> tuple[str, Path | None]:
+        if not skills:
+            return "", None
+        if len(skills) != 1:
+            raise ValueError("trace2skill_reference_mode supports exactly one preloaded Skill")
+        skill = skills[0]
+        return skill.content, directories[skill.name]
+
+    @staticmethod
+    def _routed_reference_skill(
+        prepared: PreparedRollout,
+        injection: SkillInjection,
+    ) -> tuple[str, Path | None]:
+        loaded = injection.metadata.get("treeskill_routing", {}).get("loaded_skill_names", [])
+        if not loaded:
+            return "", None
+        if len(loaded) != 1:
+            raise ValueError("trace2skill_reference_mode supports exactly one routed Skill")
+        root = prepared.runtime_state["workspace"] / "treeskill_routed_skills"
+        candidates = sorted(root.glob("*/SKILL.md"))
+        if len(candidates) != 1:
+            raise ValueError(f"expected one routed SKILL.md, found {len(candidates)}")
+        path = candidates[0]
+        return path.read_text(encoding="utf-8"), path.parent
+
     async def _evaluate(self, *, trajectory: Trajectory, prepared: PreparedRollout) -> Reward:
         state = prepared.runtime_state
         task = prepared.agent_request.task
@@ -293,8 +477,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
             raise FileNotFoundError(f"No {kind} workbook in {source_dir}")
         return hits[0]
 
-    @staticmethod
-    def _write_artifacts(prepared: PreparedRollout) -> None:
+    def _write_artifacts(self, prepared: PreparedRollout) -> None:
         state = prepared.runtime_state
         workspace: Path = state["workspace"]
         messages = state["messages"]
@@ -305,6 +488,8 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         initial = state["initial_messages"]
         (workspace / "target_system_prompt.txt").write_text(initial[0]["content"], encoding="utf-8")
         (workspace / "target_user_prompt.txt").write_text(initial[1]["content"], encoding="utf-8")
+        if self.config.trace2skill_reference_mode:
+            shutil.copyfile(state["golden_workbook"], workspace / "gold.xlsx")
 
 
 class SpreadsheetTools:

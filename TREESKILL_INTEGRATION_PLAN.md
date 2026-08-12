@@ -133,3 +133,34 @@ metadata causes an auditable full-Skill fallback.
 - Legacy SpreadsheetBench tool injection remains unchanged.
 - The unified experiment entrypoint resolves the TreeSkill configuration in
   `--dry-run` mode without requiring a large model or private dataset.
+
+## P0-P1 Reference Alignment
+
+The reference-compatible SpreadsheetBench path is opt-in and is implemented
+without changing the default experiment configuration or legacy Skill
+injection modes.
+
+### P0: execution and analysis parity
+
+- Training collection preloads the complete Human-Written Skill and exposes
+  the released bash-only text ReAct action space.
+- The starting package must contain the exact authorized `SKILL.md`,
+  `recalc.py`, and `LICENSE.txt`; it is validated locally and is not
+  redistributed by MindMemOS.
+- Successful trajectories use the released one-call success-analysis prompt.
+- Failed trajectories use the released agentic error-analysis prompt with a
+  staged trajectory workspace, bash inspection, and official workbook
+  comparison before records are admitted.
+- The reference configuration fixes ordered train `0:200`, held-out
+  `200:400`, seeds 41/42/43, one rollout, 100 policy turns, and the Qwen3.5
+  instruct/thinking generation settings. Seed 41 is the checked-in default;
+  seeds 42 and 43 are explicit configuration overrides.
+
+### P1: structured TreeSkill evolution
+
+- Evidence localization and node fusion request strict JSON-schema output.
+- Localization gets one bounded retry with a doubled output-token budget.
+- Localization validates evidence items independently so one malformed item
+  does not discard valid items from the same trajectory record.
+- The existing TreeSkill localization, bottom-up fusion, metadata, and runtime
+  routing contracts remain unchanged outside this structured-output boundary.
