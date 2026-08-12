@@ -113,12 +113,25 @@ class QdrantEngine:
                 sparse_vectors_config = {
                     spec.sparse_vector_name: qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
                 }
-            await self._client.create_collection(
-                collection_name=spec.name,
-                vectors_config=vectors_config,
-                sparse_vectors_config=sparse_vectors_config,
-                on_disk_payload=spec.on_disk_payload,
-            )
+            try:
+                await self._client.create_collection(
+                    collection_name=spec.name,
+                    vectors_config=vectors_config,
+                    sparse_vectors_config=sparse_vectors_config,
+                    on_disk_payload=spec.on_disk_payload,
+                )
+            except Exception as exc:
+                # ``collection_exists`` and ``create_collection`` are separate
+                # RPCs, so a concurrent starter (or a stale gRPC view) can make
+                # ``create_collection`` observe an already-created collection.
+                # Treating ALREADY_EXISTS as success keeps ``ensure_collection``
+                # idempotent across restarts and multi-instance boots.
+                if not _is_collection_already_exists(exc):
+                    raise
+                logger.info(
+                    "qdrant collection already exists, treat create as success",
+                    collection=spec.name,
+                )
         elif spec.on_disk_payload is not None:
             await self._client.update_collection(
                 collection_name=spec.name,
@@ -357,6 +370,21 @@ def _is_retryable_qdrant_error(exc: Exception) -> bool:
             grpc.StatusCode.RESOURCE_EXHAUSTED,
         )
     return _is_http_transport_error(exc)
+
+
+def _is_collection_already_exists(exc: Exception) -> bool:
+    """Return True when Qdrant reports the target collection already exists.
+
+    Both the REST client (``UnexpectedResponse`` with status 409) and the gRPC
+    client (``AioRpcError`` with code ``ALREADY_EXISTS``) surface this as a
+    distinct error, so ``ensure_collection`` can treat it as an idempotent
+    success instead of failing startup.
+    """
+    if isinstance(exc, UnexpectedResponse):
+        return exc.status_code == 409
+    if isinstance(exc, grpc.aio.AioRpcError):
+        return exc.code() == grpc.StatusCode.ALREADY_EXISTS
+    return False
 
 
 def _is_same_project_condition(condition: object, project_id: str) -> bool:
