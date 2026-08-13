@@ -233,7 +233,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 sequence_start=0,
                 group_size=args.rollouts,
                 agent_ref="react",
-                env_ref="alfworld",
+                env_ref="alfworld_bounded_history",
                 seed=args.seed,
                 env_options={"max_turns": args.max_turns, "seed": args.env_seed},
             )

@@ -41,7 +41,7 @@ class ChatModelWithDefaults:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--env-ref", default="alfworld", help="registered ALFWorld Env")
+    parser.add_argument("--env-ref", default="alfworld_bounded_history", help="registered ALFWorld Env")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--split-dir", type=Path, required=True)
     parser.add_argument("--initial-skill", type=Path, required=True)

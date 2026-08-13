@@ -74,7 +74,7 @@ def test_replay_buffer_does_not_restrict_environment_or_dataset(tmp_path: Path) 
                     "initial_skill": "SKILL.md",
                 },
                 "environment_options": {
-                    "env_ref": "alfworld",
+                    "env_ref": "alfworld_bounded_history",
                     "env_options": {"seed": 7},
                     "max_turns": 50,
                 },
@@ -92,7 +92,7 @@ def test_replay_buffer_does_not_restrict_environment_or_dataset(tmp_path: Path) 
     assert invocation.environment == "custom-environment"
     assert invocation.command[invocation.command.index("--benchmark") + 1] == "custom-environment"
     assert invocation.command[invocation.command.index("--dataset-ref") + 1] == "alfworld_path_split"
-    assert invocation.command[invocation.command.index("--env-ref") + 1] == "alfworld"
+    assert invocation.command[invocation.command.index("--env-ref") + 1] == "alfworld_bounded_history"
     assert invocation.command[invocation.command.index("--dataset-options") + 1] == (
         '{"split_dir":"custom/splits","alfworld_data":"custom/data"}'
     )

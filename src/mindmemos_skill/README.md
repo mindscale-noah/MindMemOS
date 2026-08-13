@@ -203,7 +203,7 @@ interprets OpenClaw `read` / `write` / `edit` calls and emits canonical
 ## Environment registry
 
 Built-in benchmark environments are selected by name. `livemath` and the
-lean-history ALFWorld protocol registered as `alfworld` are currently shipped:
+bounded-history ALFWorld protocol registered as `alfworld_bounded_history` are currently shipped:
 
 ```python
 from mindmemos_skill.envs import get_env

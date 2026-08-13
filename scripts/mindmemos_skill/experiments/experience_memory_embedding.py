@@ -294,7 +294,7 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRu
                 "validation": {"name": "fixed_group", "params": {"group_size": 1}},
             },
             "dataset": {
-                "env_ref": "alfworld",
+                "env_ref": "alfworld_bounded_history",
                 "agent_ref": "react",
                 "env_options": {
                     "max_turns": args.max_turns,
@@ -528,7 +528,7 @@ def fixed_group_specs(
             sequence_start=sequence_start,
             group_size=group_size,
             agent_ref="react",
-            env_ref="alfworld",
+            env_ref="alfworld_bounded_history",
             seed=seed,
             agent_options={},
             env_options={"max_turns": max_turns, "seed": seed},

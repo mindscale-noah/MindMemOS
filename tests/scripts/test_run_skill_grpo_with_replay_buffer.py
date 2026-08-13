@@ -97,8 +97,6 @@ def test_alfworld_dataset_and_env_are_selected_by_configuration(tmp_path: Path) 
         [
             "--benchmark",
             "alfworld",
-            "--env-ref",
-            "alfworld_bounded_history",
             "--data-root",
             str(tmp_path / "alfworld"),
             "--split-dir",

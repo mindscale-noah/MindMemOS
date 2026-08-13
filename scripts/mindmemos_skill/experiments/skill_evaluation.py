@@ -113,7 +113,7 @@ class EvaluationProgress:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark", choices=("alfworld", "livemath", "spreadsheetbench"), required=True)
-    parser.add_argument("--env-ref", help="registered Env override; defaults to --benchmark")
+    parser.add_argument("--env-ref", help="registered Env override; ALFWorld defaults to alfworld_bounded_history")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--split-dir", type=Path)
     skill_group = parser.add_mutually_exclusive_group(required=True)
@@ -329,7 +329,8 @@ async def evaluate_test_tasks(
             sequence_start=0,
             group_size=config.rollouts,
             agent_ref="react",
-            env_ref=config.env_ref or config.benchmark,
+            env_ref=config.env_ref
+            or ("alfworld_bounded_history" if config.benchmark == "alfworld" else config.benchmark),
             seed=config.seed,
             env_options=config.env_options or {},
         )

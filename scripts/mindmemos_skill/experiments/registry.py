@@ -33,7 +33,8 @@ class ExperimentSpec:
     def extras_for(self, environment: str) -> tuple[str, ...]:
         extras = list(self.common_extras)
         if self.environment_extras is not None:
-            extras.extend(self.environment_extras.get(environment, ()))
+            dependency_environment = "alfworld" if environment == "alfworld_bounded_history" else environment
+            extras.extend(self.environment_extras.get(dependency_environment, ()))
         return tuple(dict.fromkeys(extras))
 
     @property

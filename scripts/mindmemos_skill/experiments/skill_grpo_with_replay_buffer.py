@@ -180,7 +180,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--benchmark", required=True, help="environment alias used for artifact names and defaults")
     parser.add_argument("--dataset-ref", help="registered dataset name; defaults from --benchmark when built in")
     parser.add_argument("--dataset-options", type=_json_object, default={}, help="JSON options for the dataset factory")
-    parser.add_argument("--env-ref", help="registered Env name; defaults to --benchmark")
+    parser.add_argument("--env-ref", help="registered Env name; ALFWorld defaults to alfworld_bounded_history")
     parser.add_argument("--env-options", type=_json_object, default={}, help="JSON options for the Env factory")
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--split-dir", type=Path)
@@ -385,7 +385,8 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoRunConfig:
                 "test": {"name": "fixed_group", "params": {"group_size": args.test_rollouts}},
             },
             "dataset": {
-                "env_ref": args.env_ref or args.benchmark,
+                "env_ref": args.env_ref
+                or ("alfworld_bounded_history" if args.benchmark == "alfworld" else args.benchmark),
                 "agent_ref": "react",
                 "env_options": env_options,
                 "agent_options": {},

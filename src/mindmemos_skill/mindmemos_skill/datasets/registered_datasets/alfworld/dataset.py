@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ....envs.registered_envs.alfworld import SYSTEM_PROMPT
+from ....envs.registered_envs.alfworld_bounded_history import ALFWORLD_SYSTEM_PROMPT
 from ....registry import ComponentType, register
 from ....typing import Task
 from ...base import TaskDataset
@@ -67,7 +67,7 @@ class ALFWorldPathSplitDataset(TaskDataset):
                 f"Complete the ALFWorld household task from gamefile "
                 f"{gamefile}. Task type: {task_type}."
             ),
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=ALFWORLD_SYSTEM_PROMPT,
             tags=[split],
             metadata={
                 "benchmark": "ALFWorld",

@@ -8,6 +8,7 @@ parameters:
     data_root: data/mindmemos_skill/alfworld
     split_dir: resources/mindmemos_skill/datasets/alfworld/splits
     initial_skill: resources/mindmemos_skill/skills/alfworld/SKILL.md
+    env_ref: alfworld_bounded_history
   models:
     target_model: openai/gpt-5.4-mini
     optimizer_model: openai/gpt-5.4-mini
