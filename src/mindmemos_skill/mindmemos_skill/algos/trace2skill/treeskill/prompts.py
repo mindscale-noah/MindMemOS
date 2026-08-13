@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from importlib.resources import files
 from typing import Any
@@ -62,7 +63,7 @@ def analysis_user_prompt(evidence: TraceEvidence, *, source: str) -> str:
 
 def localization_user_prompt(tree: MarkdownSkillTree, record: TrajectoryAnalysisRecord) -> str:
     payload = {
-        "analysis_record": record.model_dump(mode="json"),
+        "analysis_record": _reference_analysis_record(record),
         "skill_tree": tree_prompt_payload(tree),
     }
     return (
@@ -70,6 +71,33 @@ def localization_user_prompt(tree: MarkdownSkillTree, record: TrajectoryAnalysis
         "Use the recursive skill tree to choose existing fusion target nodes.\n\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
+
+
+def _reference_analysis_record(record: TrajectoryAnalysisRecord) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for index, item in enumerate(record.items, start=1):
+        number = item.number
+        if number is None:
+            match = re.search(r"(\d+)$", item.item_id)
+            number = int(match.group(1)) if match else index
+        rendered: dict[str, Any] = {
+            "type": item.kind,
+            "number": number,
+            "title": item.title,
+            "description": item.description,
+            "content": item.content,
+        }
+        if item.kind == "failure_cause":
+            rendered["relation_to_skill"] = item.relation_to_skill
+        elif item.kind == "failure_memory":
+            rendered["skill_reflection"] = item.skill_reflection
+        items.append(rendered)
+    return {
+        "record_source": record.record_source,
+        "instance_id": record.instance_id,
+        "source_file": record.source_file,
+        "items": items,
+    }
 
 
 def fusion_user_prompt(

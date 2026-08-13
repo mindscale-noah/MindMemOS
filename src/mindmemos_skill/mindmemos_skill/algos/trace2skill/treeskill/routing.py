@@ -85,12 +85,10 @@ class TreeSkillRouter:
                         "content": routing_user_prompt(tree, task, routing_context),
                     },
                 ],
-                format_parser=parse,
-                feedback_on_parse_error=True,
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
             )
-            payload = getattr(response, "parsed", None) or parse(response.content or "")
+            payload = parse(response.content or "")
         except Exception as exc:
             return _full_result(skill.content, reason=f"router_failed: {type(exc).__name__}: {exc}")
 

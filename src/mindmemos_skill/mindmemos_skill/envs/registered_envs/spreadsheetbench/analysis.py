@@ -49,6 +49,7 @@ class SpreadsheetBenchReferenceAnalyzer:
         self,
         *,
         chat_model: ChatModel,
+        failure_chat_model: ChatModel | None = None,
         task: str,
         output_root: Path,
         concurrency: int,
@@ -58,7 +59,8 @@ class SpreadsheetBenchReferenceAnalyzer:
         max_turns: int = 20,
         shell_timeout_seconds: int = 120,
     ) -> None:
-        self._chat_model = chat_model
+        self._success_chat_model = chat_model
+        self._failure_chat_model = failure_chat_model or chat_model
         self._task = task
         self._output_root = output_root
         self._concurrency = concurrency
@@ -124,7 +126,7 @@ class SpreadsheetBenchReferenceAnalyzer:
             ),
             encoding="utf-8",
         )
-        response = await self._chat_model.chat(
+        response = await self._success_chat_model.chat(
             task=f"{self._task}:success",
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             temperature=self._temperature,
@@ -139,6 +141,7 @@ class SpreadsheetBenchReferenceAnalyzer:
             instance_id=evidence.trajectory_id,
             task_id=evidence.task_id,
             record_source="success",
+            source_file="success_analysis.md",
             items=tuple(items),
         )
 
@@ -172,7 +175,7 @@ class SpreadsheetBenchReferenceAnalyzer:
         report = ""
         completion_reminded = False
         for _turn in range(1, self._max_turns + 1):
-            response = await self._chat_model.chat(
+            response = await self._failure_chat_model.chat(
                 task=f"{self._task}:error",
                 messages=list(messages),
                 temperature=self._temperature,
@@ -240,6 +243,7 @@ class SpreadsheetBenchReferenceAnalyzer:
             instance_id=evidence.trajectory_id,
             task_id=evidence.task_id,
             record_source="error",
+            source_file="analysis_report.md",
             items=tuple(_parse_error_items(report)),
         )
 
@@ -321,16 +325,26 @@ def _parse_error_items(text: str) -> list[AnalysisItem]:
     for match in _ERROR_ITEM_PATTERN.finditer(_strip_response_wrappers(text)):
         heading, number, body = match.groups()
         kind = "failure_cause" if heading == "Failure Cause Item" else "failure_memory"
-        fields = {name: _extract_section(body, name) for name in ("Title", "Description", "Content")}
-        if not all(fields.values()):
-            continue
+        fields = {
+            name: _extract_section(body, name)
+            for name in (
+                "Title",
+                "Description",
+                "Content",
+                "Relation to Skill",
+                "Skill Reflection",
+            )
+        }
         result.append(
             AnalysisItem(
                 item_id=f"{kind}_{number}",
                 kind=kind,
+                number=int(number),
                 title=fields["Title"],
                 description=fields["Description"],
                 content=fields["Content"],
+                relation_to_skill=fields["Relation to Skill"] if kind == "failure_cause" else "",
+                skill_reflection=fields["Skill Reflection"] if kind == "failure_memory" else "",
             )
         )
     return result
@@ -346,19 +360,23 @@ def _parse_success_items(text: str) -> list[AnalysisItem]:
         section_matches = list(_SUCCESS_SECTION_PATTERN.finditer(body))
         for section_index, section in enumerate(section_matches):
             end = section_matches[section_index + 1].start() if section_index + 1 < len(section_matches) else len(body)
-            sections[section.group(2)] = body[section.end() : end].strip().strip("-_")
-        if not all(sections.get(name) for name in ("Title", "Description", "Content")):
-            continue
+            sections[section.group(2)] = _clean_success_section(body[section.end() : end])
         result.append(
             AnalysisItem(
                 item_id=f"success_memory_{match.group(1)}",
                 kind="success_memory",
-                title=sections["Title"],
-                description=sections["Description"],
-                content=sections["Content"],
+                number=int(match.group(1)),
+                title=sections.get("Title", ""),
+                description=sections.get("Description", ""),
+                content=sections.get("Content", ""),
             )
         )
     return result
+
+
+def _clean_success_section(text: str) -> str:
+    cleaned = re.sub(r"\n(?:---+|\*\*\*+|___+)\s*\Z", "", text.strip())
+    return cleaned.strip()
 
 
 def _extract_section(body: str, name: str) -> str:

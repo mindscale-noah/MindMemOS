@@ -20,6 +20,7 @@ from mindmemos_skill.algos.trace2skill.treeskill import (
     parse_tree_with_metadata,
     render_selected_subtrees,
 )
+from mindmemos_skill.algos.trace2skill.treeskill.fusion import TreeSkillNodeFuser
 from mindmemos_skill.algos.trace2skill.treeskill.localization import TreeSkillEvidenceLocator
 from mindmemos_skill.algos.trace2skill.treeskill.models import (
     AnalysisItem,
@@ -34,6 +35,7 @@ from mindmemos_skill.algos.trace2skill.treeskill.prompts import (
     localization_user_prompt,
     routing_user_prompt,
 )
+from mindmemos_skill.algos.trace2skill.treeskill.routing import TreeSkillRouter
 from mindmemos_skill.algos.trace2skill.treeskill.tree import (
     NewTreeNode,
     create_child_subtree,
@@ -42,6 +44,7 @@ from mindmemos_skill.algos.trace2skill.treeskill.tree import (
 )
 from mindmemos_skill.envs import EnvRolloutContext, SpreadsheetBenchEnv
 from mindmemos_skill.envs.registered_envs.spreadsheetbench.analysis import SpreadsheetBenchReferenceAnalyzer
+from mindmemos_skill.envs.registered_envs.spreadsheetbench.evaluator import compare_workbooks
 from mindmemos_skill.envs.registered_envs.spreadsheetbench.trace2skill_compat import (
     PolicyResponseType,
     parse_policy_response,
@@ -146,7 +149,20 @@ def test_treeskill_user_prompts_match_reference_payloads() -> None:
         ),
     )
     expected_localization = {
-        "analysis_record": record.model_dump(mode="json"),
+        "analysis_record": {
+            "record_source": "success",
+            "instance_id": "trajectory-1",
+            "source_file": "",
+            "items": [
+                {
+                    "type": "success_memory",
+                    "number": 1,
+                    "title": "Verify formulas",
+                    "description": "Verification supported the successful result.",
+                    "content": "Recalculate and verify formula outputs.",
+                }
+            ],
+        },
         "skill_tree": tree_payload,
     }
     assert localization_user_prompt(tree, record) == (
@@ -408,6 +424,12 @@ async def test_treeskill_locator_retries_with_larger_budget_and_keeps_valid_item
                             "target_node_id": "999",
                             "rationale": "Invalid target for regression coverage.",
                         },
+                        {
+                            "evidence_id": "e3",
+                            "reusable_lesson": "Compare the result with the ground truth workbook.",
+                            "target_node_id": "001",
+                            "rationale": "Analysis-only guidance must not become skill content.",
+                        },
                     ],
                 }
             ),
@@ -425,6 +447,7 @@ async def test_treeskill_locator_retries_with_larger_budget_and_keeps_valid_item
     assert [item.evidence_id for item in located] == ["e1"]
     assert len(failures) == 1
     assert "unknown target_node_id" in failures[0].error
+    assert "ground-truth or gold-answer reference" in failures[0].error
     assert [call["max_tokens"] for call in model.calls] == [2048, 4096]
     assert all(call["response_format"]["type"] == "json_schema" for call in model.calls)
     assert model.calls[0]["messages"] == model.calls[1]["messages"]
@@ -480,7 +503,7 @@ async def test_spreadsheetbench_reference_analyzer_matches_success_and_agentic_e
             n_turn=1,
         ),
     )
-    model = ScriptedChatModel(
+    success_model = ScriptedChatModel(
         [
             """# Success Memory Item 1
 
@@ -492,7 +515,11 @@ Workbook inspection supported the successful edit.
 
 ## Content
 Inspect the target cells before saving the output.
-""",
+"""
+        ]
+    )
+    failure_model = ScriptedChatModel(
+        [
             "Action:\n"
             + json.dumps(
                 {
@@ -524,6 +551,9 @@ The edit wrote a value inconsistent with the requested preservation.
 ## Content
 The agent overwrote a cell that should have been preserved.
 
+## Relation to Skill
+The existing preservation guidance was not followed.
+
 # Failure Memory Item 1
 
 ## Title
@@ -535,12 +565,16 @@ Verify cells that must remain unchanged before completion.
 ## Content
 Compare preserved cells before and after editing and correct accidental overwrites.
 
+## Skill Reflection
+The skill should emphasize verification after saving.
+
 ACTION: TASK_COMPLETE
 """,
         ]
     )
     analyzer = SpreadsheetBenchReferenceAnalyzer(
-        chat_model=model,
+        chat_model=success_model,
+        failure_chat_model=failure_model,
         task="analysis",
         output_root=tmp_path / "analysis",
         concurrency=1,
@@ -561,6 +595,12 @@ ACTION: TASK_COMPLETE
     assert failures == []
     assert [record.record_source for record in records] == ["success", "error"]
     assert [item.kind for item in records[1].items] == ["failure_cause", "failure_memory"]
+    assert records[0].source_file == "success_analysis.md"
+    assert records[1].source_file == "analysis_report.md"
+    assert records[1].items[0].relation_to_skill == "The existing preservation guidance was not followed."
+    assert records[1].items[1].skill_reflection == "The skill should emphasize verification after saving."
+    assert [call["task"] for call in success_model.calls] == ["analysis:success"]
+    assert [call["task"] for call in failure_model.calls] == ["analysis:error"] * 3
     failure_dir = tmp_path / "analysis" / "error" / "failure-1"
     assert (failure_dir / "evaluate_passed.flag").read_text(encoding="utf-8") == "PASS\n"
     assert (failure_dir / "agent_work" / "output_fixed.xlsx").is_file()
@@ -586,6 +626,86 @@ def test_spreadsheetbench_reference_evaluator_uses_full_workbook_when_position_i
 
     assert passed is False
     assert observation.startswith("Result: FAIL")
+
+
+def test_spreadsheetbench_reference_evaluator_supports_whole_column_ranges(tmp_path: Path) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    golden_path = tmp_path / "golden.xlsx"
+    output_path = tmp_path / "output.xlsx"
+    for path, sheet4_value in ((golden_path, 42), (output_path, 0)):
+        workbook = openpyxl.Workbook()
+        workbook.active.title = "Sheet3"
+        workbook.active["G3"] = 7
+        workbook.create_sheet("Sheet4")["G3"] = sheet4_value
+        workbook.save(path)
+        workbook.close()
+
+    passed, detail = compare_workbooks(
+        golden_path,
+        output_path,
+        "Sheet3'!A:G,'Sheet4'!A:G",
+    )
+
+    assert passed is False
+    assert "Sheet4!G3" in detail
+
+
+@pytest.mark.asyncio
+async def test_node_fusion_rejects_analysis_artifacts_in_updates_and_new_subtrees() -> None:
+    tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
+    model = ScriptedChatModel(
+        [
+            json.dumps(
+                {
+                    "rationale": "Attempt analysis-only edits.",
+                    "edits": [
+                        {
+                            "operation": "update_node",
+                            "content": "Compare the workbook with the ground truth output.",
+                            "rationale": "Evaluator-derived guidance.",
+                        },
+                        {
+                            "operation": "create_child",
+                            "new_child": {
+                                "heading": "Verification",
+                                "content": "",
+                                "children": [
+                                    {
+                                        "heading": "Gold answer workflow",
+                                        "content": "Use evaluator data.",
+                                        "children": [],
+                                    }
+                                ],
+                            },
+                            "rationale": "Evaluator-derived subtree.",
+                        },
+                    ],
+                }
+            )
+        ]
+    )
+    evidence = [
+        LocatedEvidence(
+            instance_id="trajectory-1",
+            evidence_id="e1",
+            record_source="error",
+            reusable_lesson="Verify the workbook.",
+            target_node_id="001",
+            rationale="Workbook-level guidance.",
+        )
+    ]
+
+    final_tree, edits, failures = await TreeSkillNodeFuser(
+        chat_model=model,
+        task="fuse",
+        temperature=0.0,
+        max_tokens=4096,
+    ).fuse(tree, evidence)
+
+    assert final_tree.full_content == tree.full_content
+    assert failures == []
+    assert [edit.accepted for edit in edits] == [False, False]
+    assert all("ground-truth or gold-answer reference" in edit.message for edit in edits)
 
 
 @pytest.mark.asyncio
@@ -724,6 +844,24 @@ async def test_react_tree_routing_is_query_aware_ephemeral_and_auditable(tmp_pat
     assert trajectory.injected_skills[0].version_id == "version-tree-1"
     assert trajectory.skill_bindings[0].usage is SkillUsageType.INJECTED
     assert trajectory.skill_bindings[0].injection_mode is SkillInjectionMode.TREE_ROUTED_SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_tree_router_invalid_json_uses_one_call_then_full_skill_fallback() -> None:
+    content = "# Skill\n\n## Keep\n\nSelected rule.\n"
+    tree = parse_skill_markdown(content)
+    skill = make_skill(content, metadata={"treeskill": compile_tree_metadata(tree)})
+    model = ScriptedChatModel(["not json"])
+
+    result = await TreeSkillRouter(chat_model=model).route(
+        skill=skill,
+        task=Task(task_id="route-task", instruction="Apply the rule."),
+    )
+
+    assert len(model.calls) == 1
+    assert "format_parser" not in model.calls[0]
+    assert result.fallback_used is True
+    assert result.skill_content == content
 
 
 @pytest.mark.asyncio

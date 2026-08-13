@@ -268,6 +268,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         call_sink=sink,
     )
     configured_optimizer = _ConfiguredChatModel(optimizer_client, optimizer_generation)
+    configured_optimizer_instruct = _ConfiguredChatModel(optimizer_client, target_generation)
     configured_target = _ConfiguredChatModel(target_client, target_generation)
     collection_agent = build_agent(
         client=configured_target,
@@ -322,6 +323,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.analysis_adapter == "spreadsheetbench_reference":
         analyzer = SpreadsheetBenchReferenceAnalyzer(
             chat_model=configured_optimizer,
+            failure_chat_model=configured_optimizer_instruct,
             task=config.analysis_task,
             output_root=args.output_dir / "analysis",
             concurrency=args.analysis_concurrency,

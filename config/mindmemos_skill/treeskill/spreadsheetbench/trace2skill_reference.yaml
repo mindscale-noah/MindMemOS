@@ -33,7 +33,7 @@ parameters:
     localization_temperature: 0.0
     fusion_temperature: 0.0
     analysis_max_tokens: 16384
-    analysis_max_turns: 20
+    analysis_max_turns: 100
     localization_max_tokens: 2048
     fusion_max_tokens: 4096
   routing:

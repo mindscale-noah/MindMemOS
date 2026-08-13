@@ -18,9 +18,12 @@ class AnalysisItem(_StrictModel):
 
     item_id: str = Field(min_length=1)
     kind: Literal["failure_cause", "failure_memory", "success_memory", "unlabeled_memory"]
-    title: str = Field(min_length=1)
-    description: str = Field(min_length=1)
-    content: str = Field(min_length=1)
+    number: int | None = Field(default=None, ge=1)
+    title: str = ""
+    description: str = ""
+    content: str = ""
+    relation_to_skill: str = ""
+    skill_reflection: str = ""
 
 
 class TrajectoryAnalysisRecord(_StrictModel):
@@ -29,6 +32,7 @@ class TrajectoryAnalysisRecord(_StrictModel):
     instance_id: str = Field(min_length=1)
     task_id: str = Field(min_length=1)
     record_source: Literal["error", "success", "unlabeled"]
+    source_file: str = ""
     items: tuple[AnalysisItem, ...] = ()
 
 

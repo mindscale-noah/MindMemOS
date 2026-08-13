@@ -151,6 +151,7 @@ def test_treeskill_reference_config_pins_full_200_200_policy_and_analysis_contra
     assert command[command.index("--seed") + 1] == "41"
     assert command[command.index("--max-turns") + 1] == "100"
     assert command[command.index("--analysis-concurrency") + 1] == "128"
+    assert command[command.index("--analysis-max-turns") + 1] == "100"
     assert command[command.index("--analysis-adapter") + 1] == "spreadsheetbench_reference"
     assert "--trace2skill-reference-mode" in command
     assert command[command.index("--localization-max-tokens") + 1] == "2048"

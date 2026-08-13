@@ -12,6 +12,7 @@ from .json_utils import extract_json_object, strict_json_schema_response_format
 from .models import LocalizationFailure, LocatedEvidence, TrajectoryAnalysisRecord
 from .prompts import LOCALIZATION_SYSTEM_PROMPT, localization_user_prompt
 from .tree import MarkdownSkillTree
+from .validation import analysis_artifact_reason
 
 
 class _RawEvidence(BaseModel):
@@ -153,6 +154,10 @@ def _parse_localization_items(
         seen_ids.add(item.evidence_id)
         if item.target_node_id not in known_ids:
             rejected.append(f"{item.evidence_id}: unknown target_node_id {item.target_node_id!r}")
+            continue
+        artifact_reason = analysis_artifact_reason(item.reusable_lesson)
+        if artifact_reason:
+            rejected.append(f"{item.evidence_id}: {artifact_reason}")
             continue
         located.append(
             LocatedEvidence(

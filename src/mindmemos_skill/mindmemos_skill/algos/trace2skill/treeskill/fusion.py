@@ -20,6 +20,7 @@ from .tree import (
     create_child_subtree,
     update_node_content,
 )
+from .validation import analysis_artifact_reason
 
 _NEW_CHILD_SCHEMA = {
     "type": "object",
@@ -141,9 +142,31 @@ class TreeSkillNodeFuser:
                 try:
                     if edit.operation == "update_node":
                         assert edit.content is not None
+                        artifact_reason = analysis_artifact_reason(edit.content)
+                        if artifact_reason:
+                            records.append(
+                                AppliedEditRecord(
+                                    target_node_id=target_id,
+                                    operation=edit.operation,
+                                    accepted=False,
+                                    message=artifact_reason,
+                                )
+                            )
+                            continue
                         current = update_node_content(current, target_id, edit.content)
                     else:
                         assert edit.new_child is not None
+                        artifact_reason = _new_child_artifact_reason(edit.new_child)
+                        if artifact_reason:
+                            records.append(
+                                AppliedEditRecord(
+                                    target_node_id=target_id,
+                                    operation=edit.operation,
+                                    accepted=False,
+                                    message=artifact_reason,
+                                )
+                            )
+                            continue
                         current = create_child_subtree(current, target_id, _new_tree_node(edit.new_child))
                 except Exception as exc:
                     records.append(
@@ -172,6 +195,17 @@ def _new_tree_node(spec: NewChildSpec) -> NewTreeNode:
         content=spec.content,
         children=tuple(_new_tree_node(child) for child in spec.children),
     )
+
+
+def _new_child_artifact_reason(spec: NewChildSpec) -> str:
+    reason = analysis_artifact_reason(spec.heading) or analysis_artifact_reason(spec.content)
+    if reason:
+        return reason
+    for child in spec.children:
+        reason = _new_child_artifact_reason(child)
+        if reason:
+            return reason
+    return ""
 
 
 __all__ = ["TreeSkillNodeFuser"]

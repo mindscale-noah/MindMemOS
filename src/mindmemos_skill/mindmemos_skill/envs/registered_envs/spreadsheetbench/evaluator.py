@@ -44,15 +44,19 @@ def _same_value(left: Any, right: Any) -> bool:
     return type(left) is type(right) and left == right
 
 
-def _cells(cell_range: str) -> list[str]:
+def _cells(cell_range: str, *, max_row: int, max_column: int) -> list[str]:
     if ":" not in cell_range:
         return [cell_range]
     openpyxl = _openpyxl()
     start, end = cell_range.split(":", 1)
-    start_column = openpyxl.utils.column_index_from_string("".join(filter(str.isalpha, start)))
-    end_column = openpyxl.utils.column_index_from_string("".join(filter(str.isalpha, end)))
-    start_row = int("".join(filter(str.isdigit, start)))
-    end_row = int("".join(filter(str.isdigit, end)))
+    start_column_name = "".join(filter(str.isalpha, start)) or "A"
+    end_column_name = "".join(filter(str.isalpha, end)) or openpyxl.utils.get_column_letter(max_column)
+    start_row_text = "".join(filter(str.isdigit, start)) or "1"
+    end_row_text = "".join(filter(str.isdigit, end)) or str(max_row)
+    start_column = openpyxl.utils.column_index_from_string(start_column_name)
+    end_column = openpyxl.utils.column_index_from_string(end_column_name)
+    start_row = int(start_row_text)
+    end_row = int(end_row_text)
     return [
         f"{openpyxl.utils.get_column_letter(column)}{row}"
         for column in range(start_column, end_column + 1)
@@ -84,8 +88,13 @@ def compare_workbooks(
             cell_range = cell_range.strip().strip("'\"")
             if sheet not in output.sheetnames:
                 return False, f"worksheet not found: {sheet}"
-            for cell in _cells(cell_range):
-                expected = golden[sheet][cell].value
+            golden_sheet = golden[sheet]
+            for cell in _cells(
+                cell_range,
+                max_row=golden_sheet.max_row,
+                max_column=golden_sheet.max_column,
+            ):
+                expected = golden_sheet[cell].value
                 actual = output[sheet][cell].value
                 if not _same_value(expected, actual):
                     return False, f"value@{sheet}!{cell}: gt={expected!r} pred={actual!r}"
