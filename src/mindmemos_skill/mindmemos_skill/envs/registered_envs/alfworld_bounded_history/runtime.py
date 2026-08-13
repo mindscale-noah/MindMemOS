@@ -1,4 +1,4 @@
-"""Single-game ALFWorld runtime preserving Skill-GRPO step semantics."""
+"""Single-game runtime for the bounded-history ALFWorld environment."""
 
 from __future__ import annotations
 

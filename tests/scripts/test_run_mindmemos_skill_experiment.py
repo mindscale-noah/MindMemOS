@@ -57,6 +57,49 @@ def test_build_invocation_selects_method_environment_and_boolean_flags(tmp_path:
     assert "--no-use-theorem" in invocation.command
 
 
+def test_replay_buffer_does_not_restrict_environment_or_dataset(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "experiment.yaml",
+        {
+            "version": 1,
+            "method": "skill_grpo_with_replay_buffer",
+            "environment": "custom-environment",
+            "parameters": {
+                "dataset": {
+                    "dataset_ref": "alfworld_path_split",
+                    "dataset_options": {
+                        "split_dir": "custom/splits",
+                        "alfworld_data": "custom/data",
+                    },
+                    "initial_skill": "SKILL.md",
+                },
+                "environment_options": {
+                    "env_ref": "alfworld_bounded_history",
+                    "env_options": {"seed": 7},
+                    "max_turns": 50,
+                },
+            },
+        },
+    )
+
+    invocation = SCRIPT.build_invocation(
+        config_path,
+        env_file_override=empty_env_file(tmp_path),
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    assert invocation.environment == "custom-environment"
+    assert invocation.command[invocation.command.index("--benchmark") + 1] == "custom-environment"
+    assert invocation.command[invocation.command.index("--dataset-ref") + 1] == "alfworld_path_split"
+    assert invocation.command[invocation.command.index("--env-ref") + 1] == "alfworld_bounded_history"
+    assert invocation.command[invocation.command.index("--dataset-options") + 1] == (
+        '{"split_dir":"custom/splits","alfworld_data":"custom/data"}'
+    )
+    assert invocation.command[invocation.command.index("--env-options") + 1] == '{"seed":7}'
+    assert invocation.resolved_config["resolved"]["extras"] == ["llm", "alfworld"]
+
+
 def test_runner_directory_contains_only_the_two_algorithm_family_scripts() -> None:
     runner_dir = SCRIPT_PATH.parent / "runners"
 
@@ -106,6 +149,8 @@ def test_bounded_history_alfworld_configs_select_the_registered_env(config_path:
 
     assert invocation.environment == "alfworld"
     assert invocation.command[invocation.command.index("--env-ref") + 1] == "alfworld_bounded_history"
+    if config_path.parent.parent.name == "skill_grpo_without_replay_buffer":
+        assert invocation.command[invocation.command.index("--env-seed") + 1] == "42"
 
 
 def test_trace2skill_routes_to_family_runner_and_keeps_test_config(tmp_path: Path) -> None:

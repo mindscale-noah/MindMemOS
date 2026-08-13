@@ -63,9 +63,10 @@ class ClaudeSDKAgent(Agent[ClaudeSDKAgentConfig]):
         result_text: str = ""
         is_success = False
         error_info: str | None = None
+        runtime_metadata: dict[str, Any] = {}
 
         try:
-            with self.inject_skills(request.skills, mode=config.skill_injection_mode) as injection:
+            async with self.on_skill_runtime_task(request, mode=config.skill_injection_mode) as injection:
                 session_id, num_turns, result_text, is_success, error_info = await self._run_query(
                     request=request,
                     config=config,
@@ -77,6 +78,7 @@ class ClaudeSDKAgent(Agent[ClaudeSDKAgentConfig]):
                     user_message_type=UserMessage,
                     trajectory_messages=trajectory_messages,
                 )
+                runtime_metadata = dict(injection.metadata)
         except Exception as exc:
             is_success = False
             error_info = f"Claude Agent SDK query failed: {exc}"
@@ -96,7 +98,7 @@ class ClaudeSDKAgent(Agent[ClaudeSDKAgentConfig]):
             n_turn=num_turns or 1,
             is_success=is_success,
             error_info=error_info if not is_success else None,
-            metadata={"session_id": session_id} if session_id else None,
+            metadata={**runtime_metadata, **({"session_id": session_id} if session_id else {})},
         )
 
     async def _run_query(

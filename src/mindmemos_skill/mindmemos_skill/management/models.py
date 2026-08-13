@@ -8,7 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from ..persistence import SkillRecord, SkillRemoteOperationRecord, SkillSyncStateRecord, SkillVersionStatus
 
@@ -37,6 +37,9 @@ class SkillSnapshot(BaseModel):
     files: list[SnapshotFile]
     content_hash: str
     local_snapshot_hash: str
+    runtime_type: str = "static"
+    runtime_schema_version: int = 1
+    runtime_metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     @property
     def file_contents(self) -> dict[str, str]:
@@ -100,6 +103,9 @@ class RegisterSkillRequest(BaseModel):
     version_label: str | None = None
     commit_message: str | None = None
     duplicate_action: DuplicateAction | None = None
+    runtime_type: str = "static"
+    runtime_schema_version: int = Field(default=1, ge=1)
+    runtime_metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class RegisterSkillResult(BaseModel):
@@ -118,6 +124,9 @@ class PublishSkillRequest(BaseModel):
     files: dict[str, str] | None = None
     version_label: str | None = None
     commit_message: str | None = None
+    runtime_type: str | None = None
+    runtime_schema_version: int | None = Field(default=None, ge=1)
+    runtime_metadata: dict[str, JsonValue] | None = None
 
 
 class PublishSkillResult(BaseModel):

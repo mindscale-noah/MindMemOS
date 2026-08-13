@@ -33,12 +33,14 @@ from .repository import SkillRepository
 from .service import LocalSkillManager
 from .snapshot import (
     read_skill_snapshot,
+    snapshot_from_candidate,
     snapshot_from_cloud_bundle,
     snapshot_from_cloud_content,
     snapshot_from_editor,
     snapshot_from_editor_files,
     snapshot_from_record,
     snapshot_metadata,
+    snapshot_with_runtime,
 )
 
 __all__ = [
@@ -76,11 +78,13 @@ __all__ = [
     "resolve_detected_contexts",
     "serialize_files",
     "snapshot_from_cloud_bundle",
+    "snapshot_from_candidate",
     "snapshot_from_cloud_content",
     "snapshot_from_editor",
     "snapshot_from_editor_files",
     "snapshot_metadata",
     "snapshot_from_record",
+    "snapshot_with_runtime",
     "push_operation_id",
     "trajectory_report_operation_id",
 ]

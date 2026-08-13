@@ -9,6 +9,7 @@ logic:
   domain: '$ALFWORLD_DATA/logic/alfred.pddl'
   grammar: '$ALFWORLD_DATA/logic/alfred.twl2'
 
+# Simulator configuration owned by the bounded-history environment.
 env:
   type: 'AlfredTWEnv'
   domain_randomization: False

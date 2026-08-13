@@ -16,7 +16,7 @@ from ....agents.base import Agent
 from ....registry import ComponentType, register
 from ....typing import EnvConfig, Reward, Skill, Task, Trajectory
 from ...base import BaseEnv, EnvRolloutContext, PreparedRollout
-from ..alfworld.runtime import ALFWorldSimulator, project_action
+from .runtime import ALFWorldSimulator, project_action
 
 ALFWORLD_SYSTEM_PROMPT = "You are an expert agent operating in the ALFRED Embodied Environment."
 
@@ -75,10 +75,14 @@ class ALFWorldBoundedHistoryEnv(BaseEnv[ALFWorldBoundedHistoryEnvConfig]):
         sample_index = context.metadata.get("sample_index", context.rollout.attempt_no)
         if not isinstance(sample_index, int):
             raise TypeError("ALFWorld context metadata sample_index must be an integer")
+        system = ALFWORLD_SYSTEM_PROMPT
+        if task.system_prompt and task.system_prompt.strip() != ALFWORLD_SYSTEM_PROMPT:
+            system = f"{system}\n\n{task.system_prompt.strip()}"
         prepared.runtime_state = {
             "sample_index": sample_index,
             "simulator": None,
             "skill_content": skills[0].content if skills else "",
+            "system": system,
             "won": False,
             "turns": 0,
             "invalid_actions": 0,
@@ -113,7 +117,7 @@ class ALFWorldBoundedHistoryEnv(BaseEnv[ALFWorldBoundedHistoryEnvConfig]):
                 )
                 user_prompt = build_bounded_history_user_prompt(state["skill_content"], observation_prompt)
                 messages = [
-                    {"role": "system", "content": ALFWORLD_SYSTEM_PROMPT},
+                    {"role": "system", "content": state["system"]},
                     {"role": "user", "content": user_prompt},
                 ]
                 try:

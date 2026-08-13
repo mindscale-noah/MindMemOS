@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import random
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from typing import Any
 
 import pytest
 from mindmemos_skill.agents.react import ReactAgent
+from mindmemos_skill.agents.skill_runtime import SkillInjection
 from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer import (
     MappingAgentResolver,
     SkillGrpoEvolveInput,
@@ -60,7 +62,7 @@ from mindmemos_skill.envs import BaseEnv, EnvRolloutContext, PreparedRollout, Sp
 from mindmemos_skill.envs.registered_envs.livemath import SYSTEM_PROMPT as LIVEMATH_SYSTEM
 from mindmemos_skill.envs.registered_envs.spreadsheetbench import SYSTEM_PROMPT as SPREADSHEET_SYSTEM
 from mindmemos_skill.llm import ChatResponse, current_llm_run_id
-from mindmemos_skill.persistence.enums import TrajectoryStatus
+from mindmemos_skill.persistence.enums import SkillInjectionMode, TrajectoryStatus
 from mindmemos_skill.typing import (
     AgentProfile,
     EnvConfig,
@@ -582,6 +584,20 @@ class SpreadsheetScriptAgent:
                 ],
             )
         return ChatResponse(finish_reason="stop", content="done")
+
+    def on_skill_runtime_task(self, request, *, context=None):
+        del request, context
+
+        @asynccontextmanager
+        async def scope():
+            yield SkillInjection(mode=SkillInjectionMode.TOOL)
+
+        return scope()
+
+    @staticmethod
+    def apply_skill_injection(messages, injection):
+        del injection
+        return messages
 
     def build_trajectory(
         self,

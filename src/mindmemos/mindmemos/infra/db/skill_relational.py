@@ -44,6 +44,7 @@ from mindmemos_skill.infra.database import (
     TableRegistry,
     TableSpec,
 )
+from mindmemos_skill.skill_runtime import SkillRuntimeRegistry, build_default_skill_runtime_registry
 
 from ...errors import SkillConflictError, SkillNotFoundError, SkillVersionNotFoundError
 
@@ -69,6 +70,9 @@ def build_cloud_skill_tables() -> TableRegistry:
                     _text("name", nullable=False),
                     _text("bundle", nullable=False),
                     _text("content_hash", nullable=False),
+                    _text("runtime_type", nullable=False, default="static"),
+                    _integer("runtime_schema_version", nullable=False, default=1),
+                    _json("runtime_metadata", nullable=False, default={}),
                     _text("version_label", nullable=False),
                     _text("commit_message"),
                     _text("status", nullable=False, default=SkillVersionStatus.DRAFT.value),
@@ -228,11 +232,13 @@ class SkillRelationalRepository:
         clock=None,
         id_generator=None,
         sanitizer: TrajectorySanitizer | None = None,
+        runtime_registry: SkillRuntimeRegistry | None = None,
     ) -> None:
         self._database = database
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_generator = id_generator or (lambda: str(uuid.uuid4()))
         self._sanitizer = sanitizer or TrajectorySanitizer()
+        self._runtime_registry = runtime_registry or build_default_skill_runtime_registry()
 
     async def ensure_schema(self) -> None:
         await self._database.ensure_schema(build_cloud_skill_tables())
@@ -250,6 +256,11 @@ class SkillRelationalRepository:
         operation_type: SkillRemoteOperationType = SkillRemoteOperationType.PUSH_VERSION,
     ) -> SkillVersionCore:
         canonical_bundle = parse_skill_bundle(bundle)
+        self._runtime_registry.validate_spec(
+            runtime_type=version.runtime_type,
+            schema_version=version.runtime_schema_version,
+            metadata=version.runtime_metadata,
+        )
         if canonical_bundle.content_hash != version.content_hash:
             raise SkillConflictError("Skill bundle hash does not match version content_hash")
         request_payload = {
@@ -791,9 +802,7 @@ class SkillRelationalRepository:
             operation_id,
             {
                 "status": (
-                    SkillRemoteOperationStatus.FAILED.value
-                    if failed
-                    else SkillRemoteOperationStatus.NO_CHANGE.value
+                    SkillRemoteOperationStatus.FAILED.value if failed else SkillRemoteOperationStatus.NO_CHANGE.value
                 ),
                 "result": result,
                 "error_code": error_code,
@@ -864,6 +873,9 @@ class SkillRelationalRepository:
                     commit_message=f"evolve {algorithm} from {base.version_id}",
                     status=SkillVersionStatus.DRAFT,
                     origin=SkillVersionOrigin.EVOLUTION,
+                    runtime_type=base.runtime_type,
+                    runtime_schema_version=base.runtime_schema_version,
+                    runtime_metadata=base.runtime_metadata,
                     metadata={
                         "evolution": {
                             "operation_id": operation_id,
@@ -904,9 +916,7 @@ class SkillRelationalRepository:
                     page=Page(limit=500),
                 ),
             )
-            existing_labels = {
-                _version_from_payload(record.payload).version_label for record in existing_records
-            }
+            existing_labels = {_version_from_payload(record.payload).version_label for record in existing_records}
             if existing_labels & {item.version_label for item in stored}:
                 raise SkillConflictError("evolution candidate version label already exists")
             await transaction.upsert_records(
@@ -963,9 +973,7 @@ class SkillRelationalRepository:
         }
         fingerprint = canonical_request_hash(query_identity)
         after = _decode_trajectory_cursor(cursor, fingerprint)
-        binding_filters: list[Predicate] = [
-            Predicate(field="cloud_skill_id", op="eq", value=cloud_skill_id)
-        ]
+        binding_filters: list[Predicate] = [Predicate(field="cloud_skill_id", op="eq", value=cloud_skill_id)]
         if version_id is not None:
             version = await self.get_version(project_id, version_id)
             if version.cloud_skill_id != cloud_skill_id:

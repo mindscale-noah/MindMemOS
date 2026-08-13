@@ -184,7 +184,9 @@ class SkillRepository:
 
     async def begin_push(self, skill_ref: str, *, version_id: str | None, now):
         skill_id = await self.resolve_skill_id(skill_ref)
-        version = await self.get_version(version_id) if version_id else await self.get_latest_available_version(skill_id)
+        version = (
+            await self.get_version(version_id) if version_id else await self.get_latest_available_version(skill_id)
+        )
         if version.skill_id != skill_id:
             raise SkillConflictError(f"version {version.version_id} does not belong to Skill {skill_id}")
         operation_id = push_operation_id(skill_id, version.version_id)
@@ -194,6 +196,9 @@ class SkillRepository:
                 "version_id": version.version_id,
                 "content_hash": version.content_hash,
                 "parent_version_ids": version.parent_version_ids,
+                "runtime_type": version.runtime_type,
+                "runtime_schema_version": version.runtime_schema_version,
+                "runtime_metadata": version.runtime_metadata,
             }
         )
         async with self._database.transaction() as transaction:

@@ -228,6 +228,63 @@ async def test_react_agent_exposes_injected_skill_as_reserved_tool_and_binds_ver
 
 
 @pytest.mark.asyncio
+async def test_react_agent_loads_dynamic_skill_resource_through_generic_runtime_tool() -> None:
+    skill = Skill(
+        skill_id="skill-dynamic",
+        version_id="version-dynamic",
+        version_label="1.0.0",
+        content_hash="sha256:dynamic",
+        name="dynamic-demo",
+        blob={"SKILL.md": "Static fallback instructions."},
+        runtime_type="virtual_components",
+        runtime_schema_version=1,
+        runtime_metadata={
+            "max_initial_components": 0,
+            "components": [
+                {
+                    "component_id": "verify",
+                    "name": "Verify answer",
+                    "description": "verify arithmetic output",
+                    "content": "Check the arithmetic before answering.",
+                }
+            ],
+        },
+        created_at=datetime(2026, 8, 12, tzinfo=UTC),
+    )
+    resource_id = "skill-resource:version-dynamic:verify"
+    llm = FakeChatClient(
+        [
+            assistant(
+                tool_calls=[
+                    tool_call(
+                        "load_skill_resource",
+                        f'{{"resource_id":"{resource_id}"}}',
+                        call_id="resource-call",
+                    )
+                ]
+            ),
+            assistant(content="5"),
+        ]
+    )
+
+    trajectory = await ReactAgent({}, llm=llm).execute(make_request(skills=[skill]))
+
+    schemas = {item["function"]["name"]: item for item in llm.calls[0]["tools"]}
+    assert schemas["load_skill_resource"]["function"]["parameters"]["properties"]["resource_id"]["enum"] == [
+        resource_id
+    ]
+    delivered = next(
+        event
+        for event in trajectory.events
+        if event.get("role") == "user" and "Check the arithmetic before answering." in event.get("content", "")
+    )
+    assert f"Loaded Skill resource '{resource_id}'" in delivered["content"]
+    assert trajectory.metadata["skill_runtime"]["skills"][0]["loaded_resource_ids"] == [resource_id]
+    assert trajectory.skill_bindings[0].version_id == "version-dynamic"
+    assert trajectory.skill_bindings[0].usage is SkillUsageType.INJECTED
+
+
+@pytest.mark.asyncio
 async def test_react_agent_only_binds_a_successfully_loaded_skill_result() -> None:
     skill = Skill(
         skill_id="skill-1",

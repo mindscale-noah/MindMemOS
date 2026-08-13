@@ -19,6 +19,7 @@ from ..persistence import (
     SkillVersionStatus,
     bootstrap_skill_database,
 )
+from ..skill_runtime import SkillRuntime, SkillRuntimeRegistry, build_default_skill_runtime_registry
 from ..typing import Skill, SkillCandidate, compute_skill_content_hash
 from .bundle import frontmatter_value, next_version_label, parse_version_label, serialize_files
 from .installer import SkillInstaller
@@ -42,10 +43,12 @@ from .models import (
 from .repository import SkillRepository
 from .snapshot import (
     read_skill_snapshot,
+    snapshot_from_candidate,
     snapshot_from_editor,
     snapshot_from_editor_files,
     snapshot_from_record,
     snapshot_metadata,
+    snapshot_with_runtime,
 )
 
 _ALIAS_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -62,12 +65,20 @@ class LocalSkillManager:
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[], str] | None = None,
         owns_database: bool = False,
+        runtime_registry: SkillRuntimeRegistry | None = None,
     ) -> None:
         self.repository = repository
         self._installer = SkillInstaller(managed_root=managed_root)
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_generator = id_generator or (lambda: str(uuid.uuid4()))
         self._owns_database = owns_database
+        self._runtime_registry = runtime_registry or build_default_skill_runtime_registry()
+
+    def register_skill_runtime(self, runtime: SkillRuntime) -> None:
+        self._runtime_registry.register(runtime)
+
+    def validate_skill_runtime(self, skill: Skill) -> None:
+        self._runtime_registry.validate(skill)
 
     @classmethod
     async def open(cls, database_path: str | Path | None = None) -> LocalSkillManager:
@@ -81,7 +92,12 @@ class LocalSkillManager:
             self._owns_database = False
 
     async def register(self, request: RegisterSkillRequest) -> RegisterSkillResult:
-        snapshot = read_skill_snapshot(request.source_path)
+        snapshot = snapshot_with_runtime(
+            read_skill_snapshot(request.source_path),
+            runtime_type=request.runtime_type,
+            runtime_schema_version=request.runtime_schema_version,
+            runtime_metadata=request.runtime_metadata,
+        )
         matches = await self.repository.find_snapshot_matches(snapshot.local_snapshot_hash)
         if matches and request.duplicate_action is None:
             raise SkillConflictError(
@@ -109,6 +125,7 @@ class LocalSkillManager:
             parent_version_ids=[],
             created_at=now,
         )
+        self._runtime_registry.validate(Skill.from_record(record))
         await self.repository.create_version(record, now=now, pending_operation=_push_operation(record, now))
         return RegisterSkillResult(action="created", skill_id=skill_id, version_id=version_id)
 
@@ -128,6 +145,21 @@ class LocalSkillManager:
             snapshot = snapshot_from_editor_files(request.files, inherited)
         else:
             snapshot = snapshot_from_editor(request.content or "", inherited)
+        runtime_values = (request.runtime_type, request.runtime_schema_version, request.runtime_metadata)
+        if any(value is not None for value in runtime_values):
+            if any(value is None for value in runtime_values):
+                raise SkillConflictError(
+                    "publish Runtime override requires runtime_type, runtime_schema_version and runtime_metadata together"
+                )
+            assert request.runtime_type is not None
+            assert request.runtime_schema_version is not None
+            assert request.runtime_metadata is not None
+            snapshot = snapshot_with_runtime(
+                snapshot,
+                runtime_type=request.runtime_type,
+                runtime_schema_version=request.runtime_schema_version,
+                runtime_metadata=request.runtime_metadata,
+            )
         versions = await self.repository.list_versions(skill_id)
         version_label = (
             request.version_label
@@ -148,6 +180,7 @@ class LocalSkillManager:
             created_at=now,
             cloud_skill_id=await self.repository.get_cloud_skill_id(skill_id),
         )
+        self._runtime_registry.validate(Skill.from_record(record))
         await self.repository.create_version(record, now=now, pending_operation=_push_operation(record, now))
         return PublishSkillResult(
             skill_id=skill_id,
@@ -230,9 +263,18 @@ class LocalSkillManager:
     async def persist_algorithm_candidate(self, candidate: SkillCandidate, *, base_version_id: str) -> Skill:
         """Create one canonical immutable version from an unpersisted algorithm candidate."""
 
-        base = Skill.from_record(await self.repository.get_version(base_version_id))
+        base_record = await self.repository.get_version(base_version_id)
+        base = Skill.from_record(base_record)
         versions = await self.repository.list_versions(base.skill_id)
         now = self._clock()
+        candidate_snapshot = snapshot_from_candidate(
+            blob=candidate.blob,
+            resources=candidate.resources,
+            runtime_type=candidate.runtime_type,
+            runtime_schema_version=candidate.runtime_schema_version,
+            runtime_metadata=candidate.runtime_metadata,
+            inherited=snapshot_from_record(base_record),
+        )
         evolved = base.model_copy(
             update={
                 "version_id": self._id_generator(),
@@ -241,16 +283,21 @@ class LocalSkillManager:
                 "blob": candidate.blob,
                 "resources": candidate.resources,
                 "content_hash": compute_skill_content_hash(candidate.blob),
+                "runtime_type": candidate.runtime_type,
+                "runtime_schema_version": candidate.runtime_schema_version,
+                "runtime_metadata": candidate.runtime_metadata,
                 "status": SkillVersionStatus.DRAFT,
                 "version_label": next_version_label([version.version_label for version in versions]),
                 "commit_message": candidate.commit_message,
                 "metadata": {**base.metadata, **candidate.metadata},
+                "local_metadata": {"snapshot": snapshot_metadata(candidate_snapshot)},
                 "created_at": now,
                 "updated_at": now,
                 "origin": SkillVersionOrigin.EVOLUTION,
             }
         )
         record = evolved.to_record()
+        self._runtime_registry.validate(evolved)
         await self.repository.create_version(record, now=now, pending_operation=_push_operation(record, now))
         return Skill.from_record(record)
 
@@ -307,6 +354,9 @@ class LocalSkillManager:
             resources=serialize_files(snapshot.resources),
             content_hash=bundle.content_hash,
             local_snapshot_hash=snapshot.local_snapshot_hash,
+            runtime_type=snapshot.runtime_type,
+            runtime_schema_version=snapshot.runtime_schema_version,
+            runtime_metadata=snapshot.runtime_metadata,
             status=SkillVersionStatus.DRAFT,
             version_label=version_label,
             commit_message=commit_message,
@@ -341,6 +391,9 @@ def _push_operation(record: SkillRecord, now: datetime) -> PendingSkillOperation
             "version_id": record.version_id,
             "content_hash": record.content_hash,
             "parent_version_ids": record.parent_version_ids,
+            "runtime_type": record.runtime_type,
+            "runtime_schema_version": record.runtime_schema_version,
+            "runtime_metadata": record.runtime_metadata,
         }
     )
     return PendingSkillOperation(

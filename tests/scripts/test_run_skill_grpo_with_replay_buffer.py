@@ -11,6 +11,7 @@ from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.contracts import
     BatchEvolutionRecord,
     EvolutionEvent,
 )
+from mindmemos_skill.datasets import ALFWorldPathSplitDataset
 from mindmemos_skill.typing import Skill, compute_skill_content_hash
 
 
@@ -89,6 +90,38 @@ def test_clear_incomplete_rollout_workspaces_preserves_checkpointed_rollouts(tmp
     assert preserved.is_dir()
     assert not partial.exists()
     assert unrelated.is_dir()
+
+
+def test_alfworld_dataset_and_env_are_selected_by_configuration(tmp_path: Path) -> None:
+    args = SCRIPT.parse_args(
+        [
+            "--benchmark",
+            "alfworld",
+            "--data-root",
+            str(tmp_path / "alfworld"),
+            "--split-dir",
+            str(tmp_path / "splits"),
+            "--initial-skill",
+            str(tmp_path / "SKILL.md"),
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--run-id",
+            "run",
+            "--max-turns",
+            "50",
+            "--env-seed",
+            "42",
+        ]
+    )
+
+    dataset = SCRIPT.build_dataset(args)
+    config = SCRIPT.build_run_config(args)
+
+    assert isinstance(dataset, ALFWorldPathSplitDataset)
+    assert dataset.split_dir == tmp_path / "splits"
+    assert dataset.alfworld_data == tmp_path / "alfworld"
+    assert config.dataset.env_ref == "alfworld_bounded_history"
+    assert config.dataset.env_options == {"max_turns": 50, "seed": 42}
 
 
 @pytest.mark.asyncio

@@ -8,8 +8,6 @@ from experiments import skill_grpo_with_experience_validation as adapter
 def test_bounded_history_env_and_seed_reach_experience_validation_run_config(tmp_path: Path) -> None:
     args = adapter.parse_args(
         [
-            "--env-ref",
-            "alfworld_bounded_history",
             "--data-root",
             str(tmp_path / "data"),
             "--split-dir",

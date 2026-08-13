@@ -82,9 +82,11 @@ def test_cli_defaults_to_requested_qwen_embedding_model(monkeypatch, tmp_path: P
             str(tmp_path / "SKILL.md"),
             "--output-dir",
             str(tmp_path / "output"),
-            "--run-id",
-            "run",
-        ],
+                "--run-id",
+                "run",
+                "--max-turns",
+                "50",
+            ],
     )
 
     args = SCRIPT.parse_args()
@@ -92,6 +94,7 @@ def test_cli_defaults_to_requested_qwen_embedding_model(monkeypatch, tmp_path: P
     assert args.embedding_model == "openai/qwen3-embedding-4b"
     assert args.top_k == 3
     assert args.train_rollouts == 4
+    assert SCRIPT.build_run_config(args).dataset.env_ref == "alfworld_bounded_history"
 
 
 def test_rendered_guidance_marks_retrieved_items_as_conditional() -> None:

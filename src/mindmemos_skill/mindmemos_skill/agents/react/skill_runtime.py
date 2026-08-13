@@ -12,11 +12,13 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
+from ...skill_runtime import SkillRuntimeTask
 from ...typing import Skill, SkillBinding, SkillInjectionMode, Trajectory
 from ..skill_runtime import SkillInjection, SkillRuntime
 from .tool import Tool
 
 _SKILL_TOOL_NAME = "skill"
+_RESOURCE_TOOL_NAME = "load_skill_resource"
 _LOADED_SKILL_PREFIX = "Loaded skill "
 
 
@@ -111,7 +113,7 @@ def _build_skill_tool(directories: Mapping[str, Path]) -> Tool:
         name=_SKILL_TOOL_NAME,
         description=(
             "Load an expert skill to get detailed instructions and the absolute path to its reusable reference scripts. "
-            f"Call this before starting the task. Available skills: {available}."
+            f"Load one only when its catalog description is relevant to the current task. Available skills: {available}."
         ),
         parameters={
             "type": "object",
@@ -187,7 +189,70 @@ class ReactSkillRuntime(SkillRuntime):
             if self.mode is SkillInjectionMode.SYSTEM_PROMPT
             else _extract_loaded_skill_names(trajectory.events)
         )
+        runtime_trace = trajectory.metadata.get("skill_runtime")
+        if isinstance(runtime_trace, Mapping):
+            for item in runtime_trace.get("skills", []):
+                if not isinstance(item, Mapping) or not item.get("loaded_resource_ids"):
+                    continue
+                version_id = item.get("version_id")
+                loaded_names.update(
+                    skill.name for skill in trajectory.injected_skills if skill.version_id == version_id
+                )
         return self._build_bindings(trajectory, loaded_names)
+
+    def attach_runtime_task(self, injection: SkillInjection, task: SkillRuntimeTask) -> None:
+        super().attach_runtime_task(injection, task)
+        descriptors = [descriptor for session in task.sessions for descriptor in session.resources]
+        if not descriptors:
+            return
+        if any(getattr(tool, "name", None) == _RESOURCE_TOOL_NAME for tool in injection.tools):
+            raise ValueError(f"duplicate runtime tool name: {_RESOURCE_TOOL_NAME}")
+        available = {item.resource_id: item for item in descriptors}
+
+        async def load_skill_resource(resource_id: str) -> str:
+            payload = await task.load(resource_id)
+            injection.metadata["skill_runtime"] = task.trace()
+            return f"Loaded Skill resource '{resource_id}'.\nMedia type: {payload.media_type}\n\n{payload.content}"
+
+        injection.tools.append(
+            Tool(
+                name=_RESOURCE_TOOL_NAME,
+                description="Load one additional resource advertised by the active task-assembled Skills.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "resource_id": {
+                            "type": "string",
+                            "enum": list(available),
+                            "description": "Opaque resource ID from the active Skill catalog.",
+                        }
+                    },
+                    "required": ["resource_id"],
+                },
+                func=load_skill_resource,
+                deliver_result_as_user=True,
+            )
+        )
+        lines = ["<available_skill_resources>"]
+        for item in descriptors:
+            lines.extend(
+                [
+                    f'  <resource id="{escape(item.resource_id)}">',
+                    f"    <name>{escape(item.name)}</name>",
+                    f"    <description>{escape(item.description)}</description>",
+                    "  </resource>",
+                ]
+            )
+        lines.extend(
+            [
+                "</available_skill_resources>",
+                "Use `load_skill_resource` when additional guidance becomes relevant.",
+            ]
+        )
+        catalog = "\n".join(lines)
+        injection.system_prompt_suffix = (
+            f"{injection.system_prompt_suffix}\n\n{catalog}" if injection.system_prompt_suffix else catalog
+        )
 
 
 __all__ = ["ReactSkillRuntime"]

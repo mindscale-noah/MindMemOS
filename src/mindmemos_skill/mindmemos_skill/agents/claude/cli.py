@@ -55,14 +55,16 @@ class ClaudeAgent(Agent[ClaudeAgentConfig]):
             return self._error_result(request, started_at, trajectory_messages, str(exc))
 
         timeout = config.timeout_seconds
+        runtime_metadata: dict[str, Any] = {}
         try:
-            with self.inject_skills(request.skills, mode=config.skill_injection_mode) as injection:
+            async with self.on_skill_runtime_task(request, mode=config.skill_injection_mode) as injection:
                 returncode, stdout, stderr = await self._run_cli(
                     request=request,
                     config=config,
                     cli=cli,
                     skill_workspace=injection.workspace,
                 )
+                runtime_metadata = dict(injection.metadata)
         except asyncio.TimeoutError:
             return self._error_result(
                 request,
@@ -100,7 +102,7 @@ class ClaudeAgent(Agent[ClaudeAgentConfig]):
             n_turn=num_turns,
             is_success=is_success,
             error_info=stderr_text if not is_success else None,
-            metadata={"session_id": session_id} if session_id else None,
+            metadata={**runtime_metadata, **({"session_id": session_id} if session_id else {})},
         )
 
     async def _run_cli(

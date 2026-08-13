@@ -7,9 +7,9 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-from ..contracts import SkillBundle
+from ..contracts import SkillBundle, SkillRuntimeSpec
 from ..persistence.enums import SkillInjectionMode, SkillVersionOrigin, SkillVersionStatus
 
 if TYPE_CHECKING:
@@ -83,6 +83,10 @@ class Skill(BaseModel):
     resources: dict[str, str] = Field(default_factory=dict)
     """不属于核心 Skill bundle、但算法执行时需要的辅助文本资源。"""
 
+    runtime_type: str = "static"
+    runtime_schema_version: int = Field(default=1, ge=1)
+    runtime_metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
     commit_message: str | None = None
     created_at: datetime
     updated_at: datetime | None = None
@@ -105,6 +109,11 @@ class Skill(BaseModel):
 
     @model_validator(mode="after")
     def validate_aggregate(self) -> Skill:
+        SkillRuntimeSpec(
+            runtime_type=self.runtime_type,
+            runtime_schema_version=self.runtime_schema_version,
+            runtime_metadata=self.runtime_metadata,
+        )
         if set(self.blob) != {"SKILL.md"}:
             raise ValueError("Skill bundle must contain exactly one SKILL.md file")
         invalid_paths = [path for path in (*self.blob, *self.resources) if not path]
@@ -125,6 +134,9 @@ class Skill(BaseModel):
 
         from ..persistence.models import SkillRecord
 
+        local_snapshot = self.local_metadata.get("snapshot")
+        local_snapshot_hash = local_snapshot.get("local_snapshot_hash") if isinstance(local_snapshot, dict) else None
+
         return SkillRecord(
             skill_id=self.skill_id,
             version_id=self.version_id,
@@ -136,8 +148,12 @@ class Skill(BaseModel):
             bundle=SkillBundle.from_files(self.blob).canonical_json(),
             resources=serialize_skill_files(self.resources),
             content_hash=self.content_hash,
+            runtime_type=self.runtime_type,
+            runtime_schema_version=self.runtime_schema_version,
+            runtime_metadata=self.runtime_metadata,
             local_snapshot_hash=str(
                 self.local_metadata.get("local_snapshot_hash")
+                or local_snapshot_hash
                 or self.metadata.get("snapshot", {}).get("local_snapshot_hash")
                 or self.content_hash
             ),
@@ -171,6 +187,9 @@ class Skill(BaseModel):
             alias=record.alias,
             blob={item.path: item.content for item in SkillBundle.model_validate_json(record.bundle).files},
             resources=json.loads(record.resources),
+            runtime_type=record.runtime_type,
+            runtime_schema_version=record.runtime_schema_version,
+            runtime_metadata=record.runtime_metadata,
             commit_message=record.commit_message,
             created_at=record.created_at,
             updated_at=record.updated_at,

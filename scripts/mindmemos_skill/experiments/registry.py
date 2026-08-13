@@ -24,7 +24,8 @@ class ExperimentSpec:
     name: str
     family: ExperimentFamily
     module: str
-    environments: frozenset[str]
+    # None means the adapter accepts a configuration-selected registered Dataset/Env.
+    environments: frozenset[str] | None = None
     common_extras: tuple[str, ...] = ("llm",)
     environment_extras: dict[str, tuple[str, ...]] | None = None
     inject_environment_as_benchmark: bool = False
@@ -32,7 +33,8 @@ class ExperimentSpec:
     def extras_for(self, environment: str) -> tuple[str, ...]:
         extras = list(self.common_extras)
         if self.environment_extras is not None:
-            extras.extend(self.environment_extras.get(environment, ()))
+            dependency_environment = "alfworld" if environment == "alfworld_bounded_history" else environment
+            extras.extend(self.environment_extras.get(dependency_environment, ()))
         return tuple(dict.fromkeys(extras))
 
     @property
@@ -43,7 +45,7 @@ class ExperimentSpec:
 def _evolve(
     name: str,
     *,
-    environments: frozenset[str],
+    environments: frozenset[str] | None = None,
     environment_extras: dict[str, tuple[str, ...]] | None = None,
     common_extras: tuple[str, ...] = ("llm",),
     inject_environment_as_benchmark: bool = False,
@@ -80,8 +82,7 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
     for spec in (
         _evolve(
             "skill_grpo_with_replay_buffer",
-            environments=frozenset({"livemath", "spreadsheetbench"}),
-            environment_extras={"spreadsheetbench": ("spreadsheetbench",)},
+            environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
             inject_environment_as_benchmark=True,
         ),
         _evolve(
@@ -99,6 +100,12 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
             "trajectory_memory",
             environments=frozenset({"alfworld"}),
             environment_extras={"alfworld": ("alfworld",)},
+        ),
+        _evolve(
+            "task_virtual_skill",
+            environments=frozenset({"alfworld", "livemath", "spreadsheetbench"}),
+            environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
+            inject_environment_as_benchmark=True,
         ),
         _evolve(
             "experience_memory_embedding",

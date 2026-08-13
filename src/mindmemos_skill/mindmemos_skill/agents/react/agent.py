@@ -16,7 +16,6 @@ from ...typing import (
     Trajectory,
 )
 from ..base import Agent
-from ..skill_runtime import SkillInjection
 from .config import ReactAgentConfig
 from .skill_runtime import ReactSkillRuntime
 from .tool import Tool
@@ -83,8 +82,8 @@ class ReactAgent(Agent[ReactAgentConfig]):
         response_metadata: dict[str, Any] = {}
 
         try:
-            with self.inject_skills(request.skills, mode=config.skill_injection_mode) as injection:
-                messages = self._apply_skill_injection(messages, injection)
+            async with self.on_skill_runtime_task(request, mode=config.skill_injection_mode) as injection:
+                messages = self.apply_skill_injection(messages, injection)
                 tools = dict(self._tools)
                 tools.update({tool.name: tool for tool in injection.tools})
 
@@ -96,6 +95,7 @@ class ReactAgent(Agent[ReactAgentConfig]):
                     response_metadata = {
                         "finish_reason": response.finish_reason,
                         "response_model": response.model,
+                        **injection.metadata,
                     }
 
                     tool_calls = assistant.get("tool_calls") or []
@@ -246,27 +246,6 @@ class ReactAgent(Agent[ReactAgentConfig]):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": request.task.instruction})
         return messages
-
-    @staticmethod
-    def _apply_skill_injection(
-        messages: list[dict[str, Any]],
-        injection: SkillInjection,
-    ) -> list[dict[str, Any]]:
-        merged = [*injection.system_messages, *messages]
-        suffix = injection.system_prompt_suffix
-        if suffix is None:
-            return merged
-
-        for index, message in enumerate(merged):
-            if message.get("role") != "system":
-                continue
-            content = message.get("content")
-            base_prompt = content if isinstance(content, str) else ""
-            combined = f"{base_prompt.rstrip()}\n\n{suffix}" if base_prompt else suffix
-            merged[index] = {**message, "content": combined}
-            return merged
-
-        return [{"role": "system", "content": suffix}, *merged]
 
     def _trajectory(
         self,

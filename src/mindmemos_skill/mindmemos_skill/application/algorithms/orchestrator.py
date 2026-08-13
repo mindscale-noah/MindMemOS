@@ -212,6 +212,9 @@ class SkillAlgorithmOrchestrator:
         return SkillCandidate(
             blob=output.final_skill.blob,
             resources=output.final_skill.resources,
+            runtime_type=output.final_skill.runtime_type,
+            runtime_schema_version=output.final_skill.runtime_schema_version,
+            runtime_metadata=output.final_skill.runtime_metadata,
             commit_message=output.final_skill.commit_message or f"evolve: {request.algorithm_name}",
             metadata={
                 **output.final_skill.metadata,

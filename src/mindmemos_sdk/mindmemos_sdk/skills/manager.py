@@ -281,6 +281,9 @@ class SkillManager:
                     version_label=request.version_label,
                     commit_message=request.commit_message,
                     duplicate_action=_duplicate_action(request.duplicate_action),
+                    runtime_type=request.runtime_type,
+                    runtime_schema_version=request.runtime_schema_version,
+                    runtime_metadata=request.runtime_metadata,
                 )
             )
         )
@@ -316,6 +319,9 @@ class SkillManager:
                     files=request.files,
                     version_label=request.version_label,
                     commit_message=request.commit_message,
+                    runtime_type=request.runtime_type,
+                    runtime_schema_version=request.runtime_schema_version,
+                    runtime_metadata=request.runtime_metadata,
                 )
             )
         )
@@ -507,6 +513,9 @@ class SkillManager:
             skill_name=record.name,
             content_hash=record.content_hash,
             local_snapshot_hash=snapshot.local_snapshot_hash,
+            runtime_type=record.runtime_type,
+            runtime_schema_version=record.runtime_schema_version,
+            runtime_metadata=record.runtime_metadata,
             version_label=record.version_label,
             commit_message=record.commit_message,
             origin=SkillOrigin(record.origin.value),
@@ -547,6 +556,9 @@ class _SyncCloudRemoteAdapter:
                 status=SkillVersionStatus(version.status.value),
                 origin=SkillOrigin(version.origin.value),
                 version_revision=version.version_revision,
+                runtime_type=version.runtime_type,
+                runtime_schema_version=version.runtime_schema_version,
+                runtime_metadata=version.runtime_metadata,
                 metadata=version.metadata,
                 created_at=_iso(version.created_at),
             )
@@ -600,10 +612,10 @@ class _SyncCloudRemoteAdapter:
             ]
         )
 
+
 def _is_remote_capable(cloud: object) -> bool:
     return any(
-        callable(getattr(cloud, name, None))
-        for name in ("push_version", "pull_versions", "pull_content", "sync_cloud")
+        callable(getattr(cloud, name, None)) for name in ("push_version", "pull_versions", "pull_content", "sync_cloud")
     )
 
 

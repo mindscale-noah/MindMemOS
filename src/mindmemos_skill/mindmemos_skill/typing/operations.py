@@ -7,7 +7,7 @@ from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-from ..contracts import SkillBundle
+from ..contracts import SkillBundle, SkillRuntimeSpec
 from .skill import Skill
 from .task import Task
 from .trajectory import Trajectory
@@ -96,6 +96,9 @@ class SkillCandidate(BaseModel):
 
     blob: dict[str, str]
     resources: dict[str, str] = Field(default_factory=dict)
+    runtime_type: str = "static"
+    runtime_schema_version: int = Field(default=1, ge=1)
+    runtime_metadata: dict[str, JsonValue] = Field(default_factory=dict)
     commit_message: str | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
@@ -107,6 +110,11 @@ class SkillCandidate(BaseModel):
 
     @model_validator(mode="after")
     def validate_files(self) -> SkillCandidate:
+        SkillRuntimeSpec(
+            runtime_type=self.runtime_type,
+            runtime_schema_version=self.runtime_schema_version,
+            runtime_metadata=self.runtime_metadata,
+        )
         if set(self.blob) != {"SKILL.md"}:
             raise ValueError("Skill candidate blob must contain exactly one SKILL.md file")
         invalid_paths = [path for path in (*self.blob, *self.resources) if not path]

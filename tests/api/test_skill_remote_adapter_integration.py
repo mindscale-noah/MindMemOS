@@ -76,7 +76,24 @@ async def test_application_push_sync_and_status_cas_against_relational_cloud(tmp
         remote=build_skill_remote_port(connection),
     )
     try:
-        registered = await application.register(RegisterSkillRequest(source_path=source, alias="demo"))
+        registered = await application.register(
+            RegisterSkillRequest(
+                source_path=source,
+                alias="demo",
+                runtime_type="virtual_components",
+                runtime_schema_version=1,
+                runtime_metadata={
+                    "components": [
+                        {
+                            "component_id": "root",
+                            "name": "Root guidance",
+                            "description": "root procedure",
+                            "content": "Root\n",
+                        }
+                    ]
+                },
+            )
+        )
         pushed_root = await application.push("demo")
         cloud_bundle = await repository.get_bundle("project", pushed_root.version_id)
         await application.sync("demo")
@@ -107,3 +124,5 @@ async def test_application_push_sync_and_status_cas_against_relational_cloud(tmp
     assert status.status_code == 200
     assert latest.version_id == child.version_id
     assert latest.status.value == "published"
+    assert latest.runtime_type == "virtual_components"
+    assert latest.runtime_metadata["components"][0]["component_id"] == "root"

@@ -197,7 +197,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 "workspace_root": args.output_dir / "workspace",
             },
             "dataset": {
-                "env_ref": "alfworld",
+                "env_ref": "alfworld_bounded_history",
                 "agent_ref": "react",
                 "env_options": {
                     "max_turns": args.max_turns,

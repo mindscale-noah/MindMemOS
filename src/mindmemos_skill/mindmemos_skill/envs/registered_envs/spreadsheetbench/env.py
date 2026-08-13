@@ -82,25 +82,15 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         init_workbook = self._workbook(source_dir, "init")
         golden_workbook = self._workbook(source_dir, "golden")
         shutil.copyfile(init_workbook, workspace / "input.xlsx")
-        skill_directories: dict[str, Path] = {}
-        skills_root = workspace / "skills"
-        skills_root.mkdir()
-        for skill in skills:
-            name = self._safe_path_part(skill.name)
-            directory = skills_root / name
-            directory.mkdir()
-            (directory / "SKILL.md").write_text(skill.content, encoding="utf-8")
-            skill_directories[name] = directory
         prepared.agent_request.options["skill_injection_mode"] = "tool"
         tools = SpreadsheetTools(workspace, timeout_seconds=self.config.shell_timeout_seconds).as_tools()
-        if skill_directories:
-            tools.append(SpreadsheetSkillSet(skill_directories).as_tool())
         prepared.runtime_state = {
             "workspace": workspace,
             "golden_workbook": golden_workbook,
-            "skill_names": list(skill_directories),
-            "messages": build_messages(task=task, skill_names=list(skill_directories)),
+            "messages": build_messages(task=task, skill_names=[]),
+            "initial_messages": [],
             "tools": tools,
+            "skill_runtime": {},
             "error": None,
             "finished": False,
             "turns": 0,
@@ -112,24 +102,30 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         _configure_default_executor()
         state = prepared.runtime_state
         messages = list(state["messages"])
-        tools: list[Tool] = state["tools"]
-        schemas = [tool.to_openai_schema() for tool in tools]
-        tools_by_name = {tool.name: tool for tool in tools}
         started_at = time.time()
         error: str | None = None
         finished = False
         turns = 0
         try:
-            for turns in range(1, self.config.max_turns + 1):
-                response = await agent.respond(prepared.agent_request, messages, tools=schemas)
-                assistant = response.to_assistant_message()
-                messages.append(assistant)
-                calls = assistant.get("tool_calls") or []
-                if not calls:
-                    finished = True
-                    break
-                for call in calls:
-                    messages.extend(await self._call_tool(call, tools_by_name))
+            async with agent.on_skill_runtime_task(prepared.agent_request) as injection:
+                messages = agent.apply_skill_injection(state["messages"], injection)
+                state["initial_messages"] = list(messages)
+                tools: list[Tool] = [*state["tools"], *injection.tools]
+                tools_by_name = {tool.name: tool for tool in tools}
+                if len(tools_by_name) != len(tools):
+                    raise ValueError("Skill Runtime tool conflicts with a SpreadsheetBench tool")
+                schemas = [tool.to_openai_schema() for tool in tools]
+                for turns in range(1, self.config.max_turns + 1):
+                    response = await agent.respond(prepared.agent_request, messages, tools=schemas)
+                    assistant = response.to_assistant_message()
+                    messages.append(assistant)
+                    calls = assistant.get("tool_calls") or []
+                    if not calls:
+                        finished = True
+                        break
+                    for call in calls:
+                        messages.extend(await self._call_tool(call, tools_by_name))
+                state["skill_runtime"] = injection.metadata.get("skill_runtime", {})
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
         ended_at = time.time()
@@ -148,6 +144,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
                 "turns": turns,
                 "error": error,
                 "instruction_type": prepared.agent_request.task.metadata.get("instruction_type"),
+                "skill_runtime": state["skill_runtime"],
             },
         )
 
@@ -216,10 +213,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
             json.dumps(messages, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        initial = build_messages(
-            task=prepared.agent_request.task,
-            skill_names=state["skill_names"],
-        )
+        initial = state["initial_messages"] or build_messages(task=prepared.agent_request.task, skill_names=[])
         (workspace / "target_system_prompt.txt").write_text(initial[0]["content"], encoding="utf-8")
         (workspace / "target_user_prompt.txt").write_text(initial[1]["content"], encoding="utf-8")
 
@@ -369,7 +363,10 @@ class SpreadsheetTools:
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "File path, relative to the working directory."},
-                        "original_text": {"type": "string", "description": "Exact text to replace; must occur exactly once."},
+                        "original_text": {
+                            "type": "string",
+                            "description": "Exact text to replace; must occur exactly once.",
+                        },
                         "replacement_text": {"type": "string", "description": "Text to substitute in."},
                     },
                     "required": ["path", "original_text", "replacement_text"],

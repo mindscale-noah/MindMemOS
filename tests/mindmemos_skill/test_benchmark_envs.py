@@ -10,12 +10,7 @@ from mindmemos_skill.agents import Agent, AgentConfig, AgentExecutionRequest, Sk
 from mindmemos_skill.agents.react import ReactAgent
 from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.prompts import experience_extraction_messages
 from mindmemos_skill.datasets import LiveMathIdSplitDataset
-from mindmemos_skill.envs import ALFWorldBoundedHistoryEnv, ALFWorldEnv, EnvRolloutContext, LiveMathEnv
-from mindmemos_skill.envs.registered_envs.alfworld import (
-    SYSTEM_PROMPT as ALFWORLD_SYSTEM_PROMPT,
-)
-from mindmemos_skill.envs.registered_envs.alfworld import format_observation
-from mindmemos_skill.envs.registered_envs.alfworld.env import ALFWorldEnvConfig
+from mindmemos_skill.envs import ALFWorldBoundedHistoryEnv, EnvRolloutContext, LiveMathEnv
 from mindmemos_skill.envs.registered_envs.alfworld_bounded_history import (
     ALFWORLD_SYSTEM_PROMPT as BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT,
 )
@@ -78,14 +73,12 @@ class RecordingChatClient:
 
 
 def test_builtin_env_configs_only_accept_max_turns() -> None:
-    config_types = (ALFWorldEnvConfig, ALFWorldBoundedHistoryEnvConfig, LiveMathEnvConfig, SpreadsheetBenchEnvConfig)
+    config_types = (ALFWorldBoundedHistoryEnvConfig, LiveMathEnvConfig, SpreadsheetBenchEnvConfig)
 
     for config_type in config_types:
         assert "max_turns" in config_type.model_fields
         assert "max_steps" not in config_type.model_fields
 
-    with pytest.raises(ValueError, match="max_steps"):
-        ALFWorldEnvConfig.model_validate({"max_steps": 3})
     with pytest.raises(ValueError, match="max_steps"):
         ALFWorldBoundedHistoryEnvConfig.model_validate({"max_steps": 3})
 
@@ -277,17 +270,6 @@ class FakeALFWorldSimulator:
         self.closed = True
 
 
-class FakeALFWorldEnv(ALFWorldEnv):
-    def __init__(self, config, simulator: FakeALFWorldSimulator) -> None:
-        super().__init__(config)
-        self.simulator = simulator
-        self.build_args: tuple[Task, int] | None = None
-
-    def _build_simulator(self, task: Task, sample_index: int):
-        self.build_args = (task, sample_index)
-        return self.simulator
-
-
 class FakeALFWorldBoundedHistoryEnv(ALFWorldBoundedHistoryEnv):
     def __init__(self, config, simulator: FakeALFWorldSimulator) -> None:
         super().__init__(config)
@@ -297,74 +279,6 @@ class FakeALFWorldBoundedHistoryEnv(ALFWorldBoundedHistoryEnv):
     def _build_simulator(self, task: Task, sample_index: int):
         self.build_args = (task, sample_index)
         return self.simulator
-
-
-@pytest.mark.asyncio
-async def test_alfworld_is_lean_history_and_preserves_step_and_final_rewards(tmp_path) -> None:
-    simulator = FakeALFWorldSimulator()
-    env = FakeALFWorldEnv({"max_turns": 3, "seed": 42}, simulator)
-    agent = ScriptedMessageAgent(
-        [
-            "I forgot the tags.",
-            "<think>open it now</think><action>open cabinet 1</action>",
-        ]
-    )
-    task = Task(
-        task_id="valid_seen:1",
-        instruction="Complete the ALFWorld task.",
-        system_prompt=ALFWORLD_SYSTEM_PROMPT,
-        tags=["validation"],
-        metadata={
-            "gamefile": "/json_2.1.1/valid_seen/task/game.tw-pddl",
-            "resolved_gamefile": "/data/task/game.tw-pddl",
-            "task_type": "pick_and_place",
-        },
-    )
-    skill = make_skill("route", "Open closed receptacles before placing objects.")
-
-    trajectory = await env.rollout(
-        agent,
-        task,
-        [skill],
-        context=EnvRolloutContext(
-            rollout=Rollout(rollout_id="rollout-alf"),
-            workspace_root=tmp_path,
-            metadata={"sample_index": 3},
-        ),
-    )
-
-    system = trajectory.events[0]["content"]
-    assert system.startswith(ALFWORLD_SYSTEM_PROMPT)
-    assert "## Skill Knowledge" in system
-    assert "### Skill: 000_route" in system
-    first_user = format_observation(
-        "Welcome. Your task is to: put the mug in the cabinet.",
-        ["help", "look", "go to cabinet 1"],
-    )
-    second_user = format_observation(
-        "You see a closed cabinet.",
-        ["look", "open cabinet 1"],
-    )
-    fallback = "<think>missing action tag</think><action>look</action>"
-    assert agent.calls[0] == ([{"role": "system", "content": system}, {"role": "user", "content": first_user}], [])
-    assert agent.calls[1][0] == [
-        {"role": "system", "content": system},
-        {"role": "user", "content": first_user},
-        {"role": "assistant", "content": fallback},
-        {"role": "user", "content": second_user},
-    ]
-    assert trajectory.events[-1] == {
-        "role": "assistant",
-        "content": "<think>open it now</think><action>open cabinet 1</action>",
-    }
-    assert simulator.responses == [fallback, "<think>open it now</think><action>open cabinet 1</action>"]
-    assert simulator.closed is True
-    assert env.build_args == (task, 3)
-    assert trajectory.metadata["conversation"][0]["reward"] == 0.0
-    assert trajectory.metadata["conversation"][1]["reward"] == 10.0
-    assert trajectory.metadata["invalid_actions"] == 1
-    assert trajectory.reward.score == 1.0
-    assert trajectory.reward.metadata["won"] is True
 
 
 @pytest.mark.asyncio
@@ -380,6 +294,7 @@ async def test_alfworld_bounded_history_matches_agent_inputs_and_extraction_traj
     task = Task(
         task_id="valid_seen:bounded-history",
         instruction="Complete the ALFWorld task.",
+        system_prompt="Previous attempt failed. Open the cabinet before placing the mug.",
         tags=["validation"],
         metadata={
             "gamefile": "/json_2.1.1/valid_seen/task/game.tw-pddl",
@@ -437,17 +352,21 @@ Now it's your turn to take an action.
 You should first reason step-by-step about the current situation. This reasoning process MUST be enclosed within <think> </think> tags.
 Once you've finished your reasoning, you should choose an admissible action for current step and present it within <action> </action> tags.
 """
+    system = (
+        f"{BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT}\n\n"
+        "Previous attempt failed. Open the cabinet before placing the mug."
+    )
     assert agent.calls == [
         (
             [
-                {"role": "system", "content": BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": first_user},
             ],
             None,
         ),
         (
             [
-                {"role": "system", "content": BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": second_user},
             ],
             None,
@@ -484,6 +403,7 @@ Once you've finished your reasoning, you should choose an admissible action for 
         max_experiences=3,
     )[1]["content"]
     assert BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT not in extraction_user
+    assert "Previous attempt failed" not in extraction_user
     assert "[step 0 think] inspect first" in extraction_user
     assert "[step 0 action] look" in extraction_user
     assert "[step 0 obs]    You see a closed cabinet." in extraction_user

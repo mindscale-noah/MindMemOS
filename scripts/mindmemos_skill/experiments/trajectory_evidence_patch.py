@@ -175,7 +175,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         rewrite_skill=args.rewrite_skill,
         collection=TaskCollectionConfig(
             agent_ref="react",
-            env_ref=args.benchmark,
+            env_ref="alfworld_bounded_history" if args.benchmark == "alfworld" else args.benchmark,
             samples_per_task=args.collection_rollouts,
             max_concurrent_rollouts=args.max_concurrent_rollouts,
             timeout_seconds=args.rollout_timeout,

@@ -20,6 +20,7 @@ from .contracts import (
     SkillRemoteOperation,
     SkillRemoteOperationStatus,
     SkillRemoteOperationType,
+    SkillRuntimeSpec,
     SkillTrajectory,
     SkillTrajectoryBinding,
     SkillTrajectoryListRequest,
@@ -30,6 +31,7 @@ from .contracts import (
     TrajectorySanitizer,
     TrajectorySource,
     canonical_request_hash,
+    canonical_runtime_spec,
     compute_trajectory_hash,
     parse_skill_bundle,
 )
@@ -101,6 +103,20 @@ from .remote import (
     serialize_remote_skill_content,
 )
 from .service import SkillAlgorithms
+from .skill_runtime import (
+    SkillResourceDescriptor,
+    SkillResourcePayload,
+    SkillRuntime,
+    SkillRuntimeCoordinator,
+    SkillRuntimeRegistry,
+    SkillRuntimeRequest,
+    SkillRuntimeSession,
+    VirtualComponent,
+    VirtualComponentsMetadata,
+    VirtualComponentsRuntime,
+    build_default_skill_runtime_coordinator,
+    build_default_skill_runtime_registry,
+)
 
 __all__ = [
     "CLOUD_SKILL_ROOT_FILE",
@@ -117,6 +133,7 @@ __all__ = [
     "SkillRemoteOperation",
     "SkillRemoteOperationStatus",
     "SkillRemoteOperationType",
+    "SkillRuntimeSpec",
     "SkillTrajectory",
     "SkillTrajectoryBinding",
     "SkillTrajectoryListRequest",
@@ -127,6 +144,7 @@ __all__ = [
     "TrajectorySanitizer",
     "TrajectorySource",
     "canonical_request_hash",
+    "canonical_runtime_spec",
     "compute_trajectory_hash",
     "parse_skill_bundle",
     "SkillApplication",
@@ -186,4 +204,16 @@ __all__ = [
     "get_env",
     "list_agents",
     "list_envs",
+    "SkillResourceDescriptor",
+    "SkillResourcePayload",
+    "SkillRuntime",
+    "SkillRuntimeCoordinator",
+    "SkillRuntimeRegistry",
+    "SkillRuntimeRequest",
+    "SkillRuntimeSession",
+    "VirtualComponent",
+    "VirtualComponentsMetadata",
+    "VirtualComponentsRuntime",
+    "build_default_skill_runtime_coordinator",
+    "build_default_skill_runtime_registry",
 ]

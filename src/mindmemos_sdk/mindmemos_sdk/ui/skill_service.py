@@ -54,6 +54,8 @@ class SkillVersionView(BaseModel):
     commit_message: str | None = None
     content_hash: str
     local_snapshot_hash: str
+    runtime_type: str = "static"
+    runtime_schema_version: int = 1
     origin: str
     status: str
     is_latest: bool
@@ -282,6 +284,8 @@ class LocalSkillUIService:
             commit_message=record.commit_message,
             content_hash=record.content_hash,
             local_snapshot_hash=snapshot.local_snapshot_hash,
+            runtime_type=record.runtime_type,
+            runtime_schema_version=record.runtime_schema_version,
             origin=record.origin.value,
             status=record.status.value,
             is_latest=record.version_id == aggregate.latest_version.version_id,

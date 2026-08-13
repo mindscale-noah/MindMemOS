@@ -10,6 +10,7 @@ import stat
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from ..contracts import SkillRuntimeSpec
 from ..errors import SkillSnapshotError
 from ..persistence import SkillRecord
 from .bundle import compute_content_hash, deserialize_files, normalize_text
@@ -60,6 +61,35 @@ def snapshot_from_editor(content: str, inherited: SkillSnapshot) -> SkillSnapsho
     return snapshot_from_editor_files(files, inherited)
 
 
+def snapshot_from_candidate(
+    *,
+    blob: dict[str, str],
+    resources: dict[str, str],
+    runtime_type: str,
+    runtime_schema_version: int,
+    runtime_metadata: dict[str, Any],
+    inherited: SkillSnapshot | None = None,
+) -> SkillSnapshot:
+    """Build a complete snapshot for an algorithm-produced candidate."""
+
+    inherited_by_path = {item.path: item for item in inherited.files} if inherited is not None else {}
+    files: list[SnapshotFile] = []
+    for path, content in sorted({**blob, **resources}.items()):
+        item = _snapshot_file(path, normalize_text(content))
+        previous = inherited_by_path.get(path)
+        if previous is not None:
+            item = item.model_copy(update={"mode": previous.mode, "media_type": previous.media_type})
+        files.append(item)
+    return _build_snapshot(
+        blob=blob,
+        resources=resources,
+        files=files,
+        runtime_type=runtime_type,
+        runtime_schema_version=runtime_schema_version,
+        runtime_metadata=runtime_metadata,
+    )
+
+
 def snapshot_from_editor_files(files: dict[str, str], inherited: SkillSnapshot) -> SkillSnapshot:
     """Build a complete edited snapshot while preserving its file manifest."""
 
@@ -72,13 +102,14 @@ def snapshot_from_editor_files(files: dict[str, str], inherited: SkillSnapshot) 
     files = [item.model_copy(deep=True) for item in inherited.files]
     for index, item in enumerate(files):
         raw = normalized[item.path].encode("utf-8")
-        files[index] = item.model_copy(
-            update={"content_hash": hashlib.sha256(raw).hexdigest(), "byte_size": len(raw)}
-        )
+        files[index] = item.model_copy(update={"content_hash": hashlib.sha256(raw).hexdigest(), "byte_size": len(raw)})
     return _build_snapshot(
         blob={"SKILL.md": normalized["SKILL.md"]},
         resources={path: content for path, content in normalized.items() if path != "SKILL.md"},
         files=files,
+        runtime_type=inherited.runtime_type,
+        runtime_schema_version=inherited.runtime_schema_version,
+        runtime_metadata=inherited.runtime_metadata,
     )
 
 
@@ -94,6 +125,10 @@ def snapshot_from_cloud_content(
 def snapshot_from_cloud_bundle(
     blob: dict[str, str],
     inherited: SkillSnapshot | None,
+    *,
+    runtime_type: str = "static",
+    runtime_schema_version: int = 1,
+    runtime_metadata: dict[str, Any] | None = None,
 ) -> SkillSnapshot:
     """Install a complete cloud bundle while retaining private local resources.
 
@@ -112,6 +147,9 @@ def snapshot_from_cloud_bundle(
         blob=normalized_blob,
         resources=resources,
         files=files,
+        runtime_type=runtime_type,
+        runtime_schema_version=runtime_schema_version,
+        runtime_metadata=runtime_metadata or {},
     )
 
 
@@ -128,13 +166,41 @@ def snapshot_from_record(record: SkillRecord) -> SkillSnapshot:
         files = [SnapshotFile.model_validate(item) for item in raw_files]
     except ValueError as exc:
         raise SkillSnapshotError(f"version {record.version_id} has invalid snapshot metadata") from exc
-    snapshot = _build_snapshot(blob=blob, resources=resources, files=files)
+    snapshot = _build_snapshot(
+        blob=blob,
+        resources=resources,
+        files=files,
+        runtime_type=record.runtime_type,
+        runtime_schema_version=record.runtime_schema_version,
+        runtime_metadata=record.runtime_metadata,
+    )
     expected_hash = metadata.get("local_snapshot_hash")
     if snapshot.content_hash != record.content_hash:
         raise SkillSnapshotError(f"version {record.version_id} content hash is corrupt")
     if snapshot.local_snapshot_hash != expected_hash:
         raise SkillSnapshotError(f"version {record.version_id} local snapshot hash is corrupt")
+    if record.local_snapshot_hash != expected_hash:
+        raise SkillSnapshotError(f"version {record.version_id} snapshot hash columns disagree")
     return snapshot
+
+
+def snapshot_with_runtime(
+    snapshot: SkillSnapshot,
+    *,
+    runtime_type: str,
+    runtime_schema_version: int,
+    runtime_metadata: dict[str, Any],
+) -> SkillSnapshot:
+    """Return the same file snapshot bound to a different immutable Runtime contract."""
+
+    return _build_snapshot(
+        blob=snapshot.blob,
+        resources=snapshot.resources,
+        files=[item.model_copy(deep=True) for item in snapshot.files],
+        runtime_type=runtime_type,
+        runtime_schema_version=runtime_schema_version,
+        runtime_metadata=runtime_metadata,
+    )
 
 
 def snapshot_metadata(snapshot: SkillSnapshot) -> dict[str, Any]:
@@ -156,7 +222,15 @@ def _build_snapshot(
     blob: dict[str, str],
     resources: dict[str, str],
     files: list[SnapshotFile],
+    runtime_type: str = "static",
+    runtime_schema_version: int = 1,
+    runtime_metadata: dict[str, Any] | None = None,
 ) -> SkillSnapshot:
+    runtime = SkillRuntimeSpec(
+        runtime_type=runtime_type,
+        runtime_schema_version=runtime_schema_version,
+        runtime_metadata=runtime_metadata or {},
+    )
     normalized_blob = {validate_snapshot_path(path): normalize_text(text) for path, text in blob.items()}
     normalized_resources = {validate_snapshot_path(path): normalize_text(text) for path, text in resources.items()}
     if set(normalized_blob) != {"SKILL.md"}:
@@ -174,30 +248,44 @@ def _build_snapshot(
         if item.content_hash != hashlib.sha256(raw).hexdigest() or item.byte_size != len(raw):
             raise SkillSnapshotError(f"snapshot file metadata does not match content: {item.path}")
     content_hash = compute_content_hash(normalized_blob)
-    canonical = json.dumps(
-        {
-            "content_hash": content_hash,
-            "files": [
-                {
-                    "path": item.path,
-                    "content_hash": item.content_hash,
-                    "mode": item.mode,
-                    "role": item.role.value,
-                }
-                for item in normalized_files
-            ],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
+    local_snapshot_hash = _local_snapshot_hash(
+        content_hash=content_hash,
+        files=normalized_files,
+        runtime=runtime,
     )
     return SkillSnapshot(
         blob=normalized_blob,
         resources=normalized_resources,
         files=normalized_files,
         content_hash=content_hash,
-        local_snapshot_hash=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        local_snapshot_hash=local_snapshot_hash,
+        runtime_type=runtime.runtime_type,
+        runtime_schema_version=runtime.runtime_schema_version,
+        runtime_metadata=runtime.runtime_metadata,
     )
+
+
+def _local_snapshot_hash(
+    *,
+    content_hash: str,
+    files: list[SnapshotFile],
+    runtime: SkillRuntimeSpec,
+) -> str:
+    payload: dict[str, Any] = {
+        "content_hash": content_hash,
+        "files": [
+            {
+                "path": item.path,
+                "content_hash": item.content_hash,
+                "mode": item.mode,
+                "role": item.role.value,
+            }
+            for item in files
+        ],
+        "runtime": runtime.canonical_dict(),
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _iter_files(root: Path) -> list[Path]:
@@ -252,9 +340,11 @@ __all__ = [
     "read_skill_snapshot",
     "snapshot_from_cloud_bundle",
     "snapshot_from_cloud_content",
+    "snapshot_from_candidate",
     "snapshot_from_editor",
     "snapshot_from_editor_files",
     "snapshot_from_record",
+    "snapshot_with_runtime",
     "snapshot_metadata",
     "validate_snapshot_path",
 ]

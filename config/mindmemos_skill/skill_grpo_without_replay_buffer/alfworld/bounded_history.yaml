@@ -35,6 +35,7 @@ parameters:
     fail_fast: false
   environment_options:
     max_turns: 50
+    env_seed: 42
   algorithm:
     max_experiences_per_task: 3
     max_patch_edits: 6

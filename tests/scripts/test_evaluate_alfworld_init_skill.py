@@ -26,7 +26,7 @@ def make_outcome(task_id: str, sample_index: int, reward: float) -> RolloutOutco
         skills=[],
         sample_index=sample_index,
         agent_ref="react",
-        env_ref="alfworld",
+        env_ref="alfworld_bounded_history",
     )
     now = datetime.now(UTC)
     trajectory = Trajectory(

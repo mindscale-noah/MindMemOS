@@ -46,7 +46,7 @@ class ChatModelWithDefaults:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark", choices=("alfworld", "livemath", "spreadsheetbench"), required=True)
-    parser.add_argument("--env-ref", help="registered Env override; defaults to --benchmark")
+    parser.add_argument("--env-ref", help="registered Env override; ALFWorld defaults to alfworld_bounded_history")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--split-dir", type=Path)
     parser.add_argument("--initial-skill", type=Path, required=True)
@@ -69,6 +69,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--validation-rollouts", type=int, default=1)
     parser.add_argument("--test-rollouts", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--env-seed", type=int)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=32)
     parser.add_argument("--max-concurrent-extractions", type=int, default=16)
     parser.add_argument("--reflection", action=argparse.BooleanOptionalAction, default=True)
@@ -154,7 +155,7 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRu
     if args.benchmark == "spreadsheetbench":
         env_options["shell_timeout_seconds"] = args.shell_timeout
     elif args.benchmark == "alfworld":
-        env_options["seed"] = args.seed
+        env_options["seed"] = args.seed if args.env_seed is None else args.env_seed
     else:
         env_options.update({"use_theorem": args.use_theorem, "use_sketch": args.use_sketch})
     return SkillGrpoWithoutReplayBufferRunConfig.model_validate(
@@ -192,7 +193,8 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRu
                 "test": {"name": "fixed_group", "params": {"group_size": args.test_rollouts}},
             },
             "dataset": {
-                "env_ref": args.env_ref or args.benchmark,
+                "env_ref": args.env_ref
+                or ("alfworld_bounded_history" if args.benchmark == "alfworld" else args.benchmark),
                 "agent_ref": "react",
                 "env_options": env_options,
                 "agent_options": {},
