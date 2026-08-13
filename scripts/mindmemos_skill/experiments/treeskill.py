@@ -62,7 +62,7 @@ class _ConfiguredChatModel:
 
 
 _REFERENCE_SKILL_SHA256 = {
-    "SKILL.md": "5184db470b1eec15c64e4135a107797928dbed44996c31067353effa8d125252",
+    "SKILL.md": "35d45452ebb3963706ff26fc5892b3216b8d5e4c0c06145a7c563ed747bf4468",
     "recalc.py": "ab1ef0c94536bb23b6c6a3d32769b0401ec3cc85e73c247d574dd84ec73af15d",
     "LICENSE.txt": "79f6d8f5b427252fa3b1c11ecdbdb6bf610b944f7530b4de78f770f38741cfaa",
 }

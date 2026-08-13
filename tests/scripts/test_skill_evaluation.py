@@ -160,17 +160,12 @@ def test_reference_configuration_requires_exact_local_skill_package(
     skill_dir = tmp_path / "xlsx"
     skill_dir.mkdir()
     files = {
-        "SKILL.md": "# Spreadsheet\n",
+        "SKILL.md": "# Spreadsheet\n\n\n",
         "recalc.py": "print('recalc')\n",
         "LICENSE.txt": "local license\n",
     }
     for name, content in files.items():
         (skill_dir / name).write_text(content, encoding="utf-8")
-    monkeypatch.setattr(
-        treeskill_experiment,
-        "_REFERENCE_SKILL_SHA256",
-        {name: hashlib.sha256(content.encode()).hexdigest() for name, content in files.items()},
-    )
     args = SimpleNamespace(
         analysis_adapter="spreadsheetbench_reference",
         trace2skill_reference_mode=True,
@@ -181,6 +176,12 @@ def test_reference_configuration_requires_exact_local_skill_package(
         run_id="run",
         benchmark="spreadsheetbench",
         include_resources=True,
+    )
+    canonical_package = {"SKILL.md": skill.content, **skill.resources}
+    monkeypatch.setattr(
+        treeskill_experiment,
+        "_REFERENCE_SKILL_SHA256",
+        {name: hashlib.sha256(content.encode()).hexdigest() for name, content in canonical_package.items()},
     )
 
     treeskill_experiment._validate_reference_configuration(args, skill)
