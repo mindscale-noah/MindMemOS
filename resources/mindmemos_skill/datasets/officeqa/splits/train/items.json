@@ -1,0 +1,402 @@
+[
+  {
+    "id": "UID0002",
+    "uid": "UID0002",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1944_01.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/january-1944-6565?page=18",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0007",
+    "uid": "UID0007",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1950_02.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/february-1950-6637?page=15",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0014",
+    "uid": "UID0014",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1942_07.txt\r\ntreasury_bulletin_2001_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/july-1942-6547?page=76\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2001-7108?page=17&deep=true",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0017",
+    "uid": "UID0017",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1982_08.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/august-1982-7028?page=13",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0018",
+    "uid": "UID0018",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1985_03.txt\r\ntreasury_bulletin_1986_03.txt\r\ntreasury_bulletin_1987_03.txt\r\ntreasury_bulletin_1988_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1985-7040?page=22\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1986-7045?page=26\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1987-7049?page=24\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1988-7052?page=36",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0019",
+    "uid": "UID0019",
+    "category": "hard",
+    "source_files": "treasury_bulletin_2016_09.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/september-2016-533966?page=54\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/september-2016-533966?page=58",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0026",
+    "uid": "UID0026",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1963_01.txt\r\ntreasury_bulletin_1962_01.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/january-1963-6793?page=88\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/january-1962-6781?page=82&deep=true",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0028",
+    "uid": "UID0028",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1970_06.txt\r\ntreasury_bulletin_1964_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/june-1970-6882?page=89&deep=true\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/december-1964-6816?page=25&deep=true",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0030",
+    "uid": "UID0030",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1990_09.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/september-1990-7062?page=19&deep=true",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0031",
+    "uid": "UID0031",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1992_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1992-7068?page=158&deep=true",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0033",
+    "uid": "UID0033",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1977_04.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1977-6964?page=9",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0034",
+    "uid": "UID0034",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1992_06.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/june-1992-7069?page=32",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0044",
+    "uid": "UID0044",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1939_04.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1939-6506?page=61",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0046",
+    "uid": "UID0046",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1988_09.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/september-1988-7054?page=37",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0049",
+    "uid": "UID0049",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1942_02.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/february-1942-6542?page=19&deep=true",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0056",
+    "uid": "UID0056",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1991_09.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/september-1991-7066?page=30&deep=true",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0063",
+    "uid": "UID0063",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1990_06.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/june-1990-7061?page=127",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0065",
+    "uid": "UID0065",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1998_06.txt\r\ntreasury_bulletin_1995_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/june-1998-7094?page=7\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/december-1995-7084?page=16",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0073",
+    "uid": "UID0073",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1982_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1982-7023?page=24",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0079",
+    "uid": "UID0079",
+    "category": "easy",
+    "source_files": "treasury_bulletin_2011_12.txt\r\ntreasury_bulletin_2013_12.txt\r\ntreasury_bulletin_2015_12.txt\r\ntreasury_bulletin_2017_12.txt\r\ntreasury_bulletin_2019_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2011-7149?page=25\r\n \r\n https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2013-7155?page=24\r\n \r\n https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2015-519209?page=23\r\n \r\n https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2017-575188?page=23\r\n \r\n https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2019-584842?page=22",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0083",
+    "uid": "UID0083",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1981_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-1981-7020?page=24",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0085",
+    "uid": "UID0085",
+    "category": "hard",
+    "source_files": "treasury_bulletin_2019_12.txt\r\ntreasury_bulletin_2018_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2019-584842?page=23\r\n\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2018-581283?page=22",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0087",
+    "uid": "UID0087",
+    "category": "easy",
+    "source_files": "treasury_bulletin_2013_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2013-7155?page=17",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0092",
+    "uid": "UID0092",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1987_12.txt\r\ntreasury_bulletin_1992_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-1987-7051?page=69\r\n\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/december-1992-7071?page=84",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0098",
+    "uid": "UID0098",
+    "category": "easy",
+    "source_files": "treasury_bulletin_2020_12.txt\r\ntreasury_bulletin_2024_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2020-598551?page=21\r\n \r\n https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2024-679984?page=22",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0101",
+    "uid": "UID0101",
+    "category": "hard",
+    "source_files": "treasury_bulletin_2011_12.txt\r\ntreasury_bulletin_2019_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2011-7149?page=25\r\n \r\n https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2019-584842?page=22",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0110",
+    "uid": "UID0110",
+    "category": "hard",
+    "source_files": "treasury_bulletin_2020_03.txt\r\ntreasury_bulletin_2016_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-2020-587316?page=10\r\n \r\n https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-2016-527290?page=9",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0115",
+    "uid": "UID0115",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1980_02.txt\r\ntreasury_bulletin_1981_02.txt\r\ntreasury_bulletin_1982_02.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/february-1980-6998?page=27\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/february-1981-7010?page=38\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/february-1982-7022?page=31",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0122",
+    "uid": "UID0122",
+    "category": "hard",
+    "source_files": "treasury_bulletin_2001_03.txt\r\ntreasury_bulletin_2002_03.txt\r\ntreasury_bulletin_2003_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-2001-7105?page=112\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/march-2002-7110?page=115\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/march-2003-7109?page=113",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0123",
+    "uid": "UID0123",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1941_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-1941-6540?page=91",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0133",
+    "uid": "UID0133",
+    "category": "hard",
+    "source_files": "treasury_bulletin_2004_09.txt\r\ntreasury_bulletin_2013_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/september-2004-7119?page=63\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/december-2013-7155?page=68",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0141",
+    "uid": "UID0141",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1962_04.txt\r\ntreasury_bulletin_1963_04.txt\r\ntreasury_bulletin_1964_04.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1962-6784?page=75\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1963-6796?page=79\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1964-6808?page=82",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0144",
+    "uid": "UID0144",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1980_11.txt\r\ntreasury_bulletin_1981_11.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/november-1980-7007?page=76\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/november-1981-7019?page=67",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0145",
+    "uid": "UID0145",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1943_01.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/january-1943-6553?page=41",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0150",
+    "uid": "UID0150",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1972_04.txt\r\ntreasury_bulletin_1973_04.txt\r\ntreasury_bulletin_1974_04.txt\r\ntreasury_bulletin_1975_04.txt\r\ntreasury_bulletin_1976_04.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1972-6905?page=89\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1973-6916?page=91\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1974-6927?page=88\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1975-6940?page=88\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1976-6952?page=104",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0151",
+    "uid": "UID0151",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1953_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1953-6674?page=54",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0162",
+    "uid": "UID0162",
+    "category": "easy",
+    "source_files": "treasury_bulletin_2011_06.txt\r\ntreasury_bulletin_2012_06.txt\r\ntreasury_bulletin_2013_06.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/june-2011-7129?page=105\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/june-2012-7151?page=105\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/june-2013-7153?page=104",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0163",
+    "uid": "UID0163",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1981_12.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/december-1981-7020?page=28",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0165",
+    "uid": "UID0165",
+    "category": "hard",
+    "source_files": "treasury_bulletin_2010_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-2010-7143?page=49",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0166",
+    "uid": "UID0166",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1943_03.txt\r\ntreasury_bulletin_1944_03.txt\r\ntreasury_bulletin_1945_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1943-6555?page=68\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1944-6567?page=83\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1945-6577?page=71",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0169",
+    "uid": "UID0169",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1982_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1982-7023?page=73",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0189",
+    "uid": "UID0189",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1970_08.txt\r\ntreasury_bulletin_1970_09.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/august-1970-6884?page=70\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/september-1970-6885?page=70",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0195",
+    "uid": "UID0195",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1956_08.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/august-1956-6715?page=59",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0202",
+    "uid": "UID0202",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1939_07.txt\r\ntreasury_bulletin_1939_08.txt\r\ntreasury_bulletin_1939_09.txt\r\ntreasury_bulletin_1939_10.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/july-1939-6509?page=99\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/august-1939-6510?page=107\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/september-1939-6511?page=60\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/october-1939-6520?page=62",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0212",
+    "uid": "UID0212",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1964_01.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/january-1964-6805?page=99",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0222",
+    "uid": "UID0222",
+    "category": "hard",
+    "source_files": "treasury_bulletin_2001_06.txt\r\ntreasury_bulletin_2006_06.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/june-2001-7106?page=50\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/june-2006-7126?page=50",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0228",
+    "uid": "UID0228",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1956_03.txt\r\ntreasury_bulletin_1956_04.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1956-6710?page=22\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/april-1956-6711?page=22",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0229",
+    "uid": "UID0229",
+    "category": "easy",
+    "source_files": "treasury_bulletin_2005_03.txt\r\ntreasury_bulletin_2006_03.txt\r\ntreasury_bulletin_2007_03.txt\r\ntreasury_bulletin_2008_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-2005-7121?page=109\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/march-2006-7125?page=106\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/march-2007-7130?page=109\r\nhttps://fraser.stlouisfed.org/title/treasury-bulletin-407/march-2008-7134?page=107",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0238",
+    "uid": "UID0238",
+    "category": "hard",
+    "source_files": "treasury_bulletin_1982_03.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/march-1982-7023?page=44",
+    "source_split": "train"
+  },
+  {
+    "id": "UID0241",
+    "uid": "UID0241",
+    "category": "easy",
+    "source_files": "treasury_bulletin_1963_06.txt",
+    "source_docs": "https://fraser.stlouisfed.org/title/treasury-bulletin-407/june-1963-6798?page=13",
+    "source_split": "train"
+  }
+]

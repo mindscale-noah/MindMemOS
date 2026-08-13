@@ -84,10 +84,18 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         shutil.copyfile(init_workbook, workspace / "input.xlsx")
         prepared.agent_request.options["skill_injection_mode"] = "tool"
         tools = SpreadsheetTools(workspace, timeout_seconds=self.config.shell_timeout_seconds).as_tools()
+        skill_names = [skill.name for skill in skills]
+        messages = build_messages(task=task, skill_names=skill_names)
+        if task.system_prompt:
+            messages[0] = {
+                **messages[0],
+                "content": f"{messages[0]['content'].rstrip()}\n\n{task.system_prompt.strip()}",
+            }
         prepared.runtime_state = {
             "workspace": workspace,
             "golden_workbook": golden_workbook,
-            "messages": build_messages(task=task, skill_names=[]),
+            "skill_names": skill_names,
+            "messages": messages,
             "initial_messages": [],
             "tools": tools,
             "skill_runtime": {},
@@ -213,7 +221,10 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
             json.dumps(messages, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        initial = state["initial_messages"] or build_messages(task=prepared.agent_request.task, skill_names=[])
+        initial = state["initial_messages"] or build_messages(
+            task=prepared.agent_request.task,
+            skill_names=state["skill_names"],
+        )
         (workspace / "target_system_prompt.txt").write_text(initial[0]["content"], encoding="utf-8")
         (workspace / "target_user_prompt.txt").write_text(initial[1]["content"], encoding="utf-8")
 

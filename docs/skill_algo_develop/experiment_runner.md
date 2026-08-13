@@ -43,7 +43,14 @@ uv run --package mindmemos-skill --extra dataset-download python \
 
 uv run --package mindmemos-skill --extra dataset-download python \
   scripts/benchmark_download/download_mindmemos_skill_datasets.py livemath spreadsheetbench
+
+uv run --package mindmemos-skill --extra dataset-download python \
+  scripts/benchmark_download/download_mindmemos_skill_datasets.py officeqa
 ```
+
+OfficeQA 是 gated Hugging Face 数据集；下载前需要接受 `databricks/officeqa` 条款，并通过 `HF_TOKEN`
+提供有权限的账号令牌。下载器会落盘 `officeqa_full.csv`、本地 Treasury bulletin 文本语料和按页解析 JSON。
+若用 `--data-root` 改变 OfficeQA 下载位置，实验还需同时覆盖 `environment_options.docs_root`。
 
 脚本可在 Windows、Linux 和 macOS 的 Python 3.11–3.13 环境运行，默认目录正好对应仓库内 YAML；
 可用 `--data-root <目录>` 改变下载根目录，此时运行实验时也要通过 `--set dataset.data_root=<目录>` 覆盖。

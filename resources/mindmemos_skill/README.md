@@ -8,10 +8,12 @@ resources/mindmemos_skill/
 ├── datasets/
 │   ├── alfworld/{split_manifest.json,splits/{train,val,test}/items.json}
 │   ├── livemath/{split_manifest.json,splits/{train,val,test}/items.json}
+│   ├── officeqa/{split_manifest.json,splits/{train,val,test}/items.json}
 │   └── spreadsheetbench/{split_manifest.json,splits/{train,val,test}/items.json}
 └── skills/
     ├── alfworld/SKILL.md
     ├── livemath/SKILL.md
+    ├── officeqa/SKILL.md
     └── spreadsheetbench/SKILL.md
 ```
 
@@ -23,6 +25,7 @@ resources/mindmemos_skill/
 
 - ALFWorld：<https://github.com/alfworld/alfworld>，通过官方 `alfworld-download` 下载。
 - LiveMathematicianBench：<https://huggingface.co/datasets/LiveMathematicianBench/LiveMathematicianBench>。
+- OfficeQA：<https://huggingface.co/datasets/databricks/officeqa>，需要先接受数据集条款并设置 `HF_TOKEN`。
 - SpreadsheetBench Verified-400：<https://huggingface.co/datasets/KAKA22/SpreadsheetBench>。
 
 下载命令见 `docs/skill_algo_develop/experiment_runner.md`。不要把 `data/mindmemos_skill/`、Hugging Face 缓存或

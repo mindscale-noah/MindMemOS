@@ -44,8 +44,7 @@ def test_build_invocation_selects_method_environment_and_boolean_flags(tmp_path:
     assert invocation.environment == "livemath"
     assert invocation.run_id == "livemath_skill_grpo_with_replay_buffer_20260102-030405"
     assert invocation.output_dir == Path(
-        "outputs/livemath/skill_grpo_with_replay_buffer/"
-        "livemath_skill_grpo_with_replay_buffer_20260102-030405"
+        "outputs/livemath/skill_grpo_with_replay_buffer/livemath_skill_grpo_with_replay_buffer_20260102-030405"
     )
     assert invocation.command[:7] == ["uv", "run", "--package", "mindmemos-skill", "--extra", "llm", "python"]
     runner, arguments = runner_command(invocation)
@@ -129,6 +128,22 @@ def test_skill_evaluation_can_switch_to_true_no_skill_mode(tmp_path: Path) -> No
     assert "--no-skill" in invocation.command
     assert "--skill" not in invocation.command
     assert invocation.command[invocation.command.index("--test-limit") + 1] == "2"
+
+
+@pytest.mark.parametrize("environment", ["alfworld", "livemath", "spreadsheetbench"])
+def test_tree_skill_grpo_configs_use_the_evolve_runner(environment: str, tmp_path: Path) -> None:
+    invocation = SCRIPT.build_invocation(
+        CONFIG_ROOT / "tree_skill_grpo" / environment / "default.yaml",
+        env_file_override=empty_env_file(tmp_path),
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    runner, arguments = runner_command(invocation)
+    assert runner.endswith("scripts/mindmemos_skill/runners/evolve.py")
+    assert arguments[:2] == ["--algorithm", "tree_skill_grpo"]
+    assert invocation.command[invocation.command.index("--batch-size") + 1] == "40"
+    assert invocation.command[invocation.command.index("--max-task-attempts") + 1] == "4"
 
 
 @pytest.mark.parametrize(

@@ -87,7 +87,7 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         ),
         _evolve(
             "skill_grpo_without_replay_buffer",
-            environments=frozenset({"alfworld", "livemath", "spreadsheetbench"}),
+            environments=frozenset({"alfworld", "livemath", "officeqa", "spreadsheetbench"}),
             environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
             inject_environment_as_benchmark=True,
         ),
@@ -108,6 +108,12 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
             inject_environment_as_benchmark=True,
         ),
         _evolve(
+            "tree_skill_grpo",
+            environments=frozenset({"alfworld", "livemath", "spreadsheetbench"}),
+            environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
+            inject_environment_as_benchmark=True,
+        ),
+        _evolve(
             "experience_memory_embedding",
             environments=frozenset({"alfworld"}),
             environment_extras={"alfworld": ("alfworld",)},
@@ -119,7 +125,7 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         ),
         _evolve(
             "skill_evaluation",
-            environments=frozenset({"alfworld", "livemath", "spreadsheetbench"}),
+            environments=frozenset({"alfworld", "livemath", "officeqa", "spreadsheetbench"}),
             environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
             inject_environment_as_benchmark=True,
         ),

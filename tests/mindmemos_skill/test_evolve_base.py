@@ -65,6 +65,7 @@ def test_builtin_evolve_algorithms_are_application_configurable() -> None:
         "skill_grpo_with_replay_buffer",
         "skill_grpo_without_replay_buffer",
         "skill_grpo_with_experience_validation",
+        "tree_skill_grpo",
     ):
         component = get_component(type=ComponentType.ALGO, name=name)
         assert component.config_model is not None

@@ -31,6 +31,7 @@ from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.rollout import (
 from mindmemos_skill.datasets import (
     ALFWorldPathSplitDataset,
     LiveMathIdSplitDataset,
+    OfficeQAIdSplitDataset,
     SpreadsheetBenchIdSplitDataset,
     TaskDataset,
 )
@@ -142,6 +143,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
 
     parser.add_argument("--max-turns", type=int, required=True)
+    parser.add_argument("--docs-root", type=Path)
     parser.add_argument("--env-seed", type=int, default=42)
     parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
@@ -172,6 +174,8 @@ def build_dataset(
         )
     if benchmark == "spreadsheetbench":
         return SpreadsheetBenchIdSplitDataset(data_root=data_root, split_dir=split_dir)
+    if benchmark == "officeqa":
+        return OfficeQAIdSplitDataset(data_root=data_root, split_dir=split_dir)
     raise ValueError(f"unsupported benchmark: {benchmark!r}")
 
 
@@ -183,6 +187,7 @@ def environment_options(
     shell_timeout: int,
     use_theorem: bool,
     use_sketch: bool,
+    docs_root: Path | None = None,
 ) -> dict[str, Any]:
     options: dict[str, Any] = {"max_turns": max_turns}
     if benchmark == "alfworld":
@@ -191,6 +196,10 @@ def environment_options(
         options["shell_timeout_seconds"] = shell_timeout
     if benchmark == "livemath":
         options.update({"use_theorem": use_theorem, "use_sketch": use_sketch})
+    if benchmark == "officeqa":
+        if docs_root is None:
+            raise ValueError("officeqa requires --docs-root")
+        options["docs_root"] = str(docs_root)
     return options
 
 
@@ -244,9 +253,7 @@ def build_skill(
         raise ValueError("--max-initial-components requires a Skill directory with runtime_metadata.json")
     name = frontmatter_value(content, "name") or _heading_name(content) or source_dir.name
     description = (
-        frontmatter_value(content, "description")
-        or _first_paragraph(content)
-        or f"Guidance for {benchmark} tasks."
+        frontmatter_value(content, "description") or _first_paragraph(content) or f"Guidance for {benchmark} tasks."
     )
     return Skill(
         skill_id=f"{benchmark}-evaluation-skill",
@@ -618,6 +625,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 shell_timeout=args.shell_timeout,
                 use_theorem=args.use_theorem,
                 use_sketch=args.use_sketch,
+                docs_root=args.docs_root,
             ),
         ),
     )

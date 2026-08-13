@@ -27,7 +27,14 @@ SPREADSHEETBENCH_REPO_ID = "KAKA22/SpreadsheetBench"
 SPREADSHEETBENCH_REVISION = "ab0b742b0fc95b946f212d80ac7771b5531272e4"
 SPREADSHEETBENCH_ARCHIVE = "spreadsheetbench_verified_400.tar.gz"
 
-_DATASET_NAMES = ("alfworld", "livemath", "spreadsheetbench")
+OFFICEQA_REPO_ID = "databricks/officeqa"
+OFFICEQA_REVISION = "8ecbf18d3833daf4750a903d14963e4c4c1d4cd8"
+OFFICEQA_PAYLOAD_FILES = ("officeqa_full.csv", "officeqa_pro.csv")
+OFFICEQA_DOCS_PATTERN = "treasury_bulletins_parsed/transformed/*.txt"
+OFFICEQA_PARSED_PATTERN = "treasury_bulletins_parsed/jsons/*.json"
+OFFICEQA_EXPECTED_DOC_COUNT = 697
+
+_DATASET_NAMES = ("alfworld", "livemath", "officeqa", "spreadsheetbench")
 _ALFWORLD_EXPECTED_PATHS = (
     "json_2.1.1/train",
     "json_2.1.1/valid_seen",
@@ -151,6 +158,72 @@ def download_spreadsheetbench(data_root: Path, *, force: bool = False) -> Path:
     return target
 
 
+def download_officeqa(data_root: Path, *, force: bool = False) -> Path:
+    """Materialize the gated OfficeQA CSVs and transformed Treasury text corpus."""
+
+    target = data_root / "officeqa"
+    docs_target = target / "officeqa_docs_official"
+    transformed_target = docs_target / "transformed"
+    parsed_target = docs_target / "jsons"
+    existing_docs = list(transformed_target.glob("*.txt")) if transformed_target.is_dir() else []
+    existing_parsed = list(parsed_target.glob("*.json")) if parsed_target.is_dir() else []
+    if (
+        not force
+        and all((target / name).is_file() for name in OFFICEQA_PAYLOAD_FILES)
+        and len(existing_docs) == OFFICEQA_EXPECTED_DOC_COUNT
+        and len(existing_parsed) == OFFICEQA_EXPECTED_DOC_COUNT
+    ):
+        print(f"OfficeQA is ready: {target}")
+        return target
+
+    _, snapshot_download = _huggingface_hub()
+    try:
+        snapshot = Path(
+            snapshot_download(
+                repo_id=OFFICEQA_REPO_ID,
+                repo_type="dataset",
+                revision=OFFICEQA_REVISION,
+                allow_patterns=[
+                    *OFFICEQA_PAYLOAD_FILES,
+                    OFFICEQA_DOCS_PATTERN,
+                    OFFICEQA_PARSED_PATTERN,
+                ],
+                force_download=force,
+            )
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "OfficeQA is gated on Hugging Face. Set HF_TOKEN for an account that accepted "
+            "the databricks/officeqa dataset terms."
+        ) from exc
+
+    for name in OFFICEQA_PAYLOAD_FILES:
+        source = snapshot / name
+        if not source.is_file():
+            raise FileNotFoundError(f"OfficeQA snapshot is missing {name}")
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target / name)
+
+    docs_source = snapshot / "treasury_bulletins_parsed" / "transformed"
+    parsed_source = snapshot / "treasury_bulletins_parsed" / "jsons"
+    source_docs = sorted(docs_source.glob("*.txt"))
+    source_parsed = sorted(parsed_source.glob("*.json"))
+    if len(source_docs) != OFFICEQA_EXPECTED_DOC_COUNT or len(source_parsed) != OFFICEQA_EXPECTED_DOC_COUNT:
+        raise RuntimeError(
+            "OfficeQA snapshot contains "
+            f"{len(source_docs)} transformed documents and {len(source_parsed)} parsed documents; "
+            f"expected {OFFICEQA_EXPECTED_DOC_COUNT} of each"
+        )
+    transformed_target.mkdir(parents=True, exist_ok=True)
+    parsed_target.mkdir(parents=True, exist_ok=True)
+    for source in source_docs:
+        shutil.copy2(source, transformed_target / source.name)
+    for source in source_parsed:
+        shutil.copy2(source, parsed_target / source.name)
+    print(f"OfficeQA is ready: {target}")
+    return target
+
+
 def _safe_extract_tar(archive_path: Path, destination: Path) -> None:
     """Extract regular files and directories while rejecting links and path traversal."""
     destination = destination.resolve()
@@ -179,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     downloaders = {
         "alfworld": download_alfworld,
         "livemath": download_livemath,
+        "officeqa": download_officeqa,
         "spreadsheetbench": download_spreadsheetbench,
     }
     for name in selected:

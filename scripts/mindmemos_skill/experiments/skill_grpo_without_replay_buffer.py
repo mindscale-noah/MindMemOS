@@ -23,6 +23,7 @@ from mindmemos_skill.algos.evolve.skill_grpo_without_replay_buffer import (
 from mindmemos_skill.datasets import (
     ALFWorldPathSplitDataset,
     LiveMathIdSplitDataset,
+    OfficeQAIdSplitDataset,
     SpreadsheetBenchIdSplitDataset,
     TaskDataset,
 )
@@ -79,6 +80,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fail-fast", action=argparse.BooleanOptionalAction, default=False)
 
     parser.add_argument("--max-turns", type=int, required=True)
+    parser.add_argument("--docs-root", type=Path)
     parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--use-sketch", action=argparse.BooleanOptionalAction, default=False)
@@ -99,6 +101,8 @@ def build_dataset(args: argparse.Namespace) -> TaskDataset:
     if args.benchmark == "alfworld":
         split_dir = args.split_dir or Path("data/ALFWorld/alfworld_path_split")
         return ALFWorldPathSplitDataset(split_dir=split_dir, alfworld_data=args.data_root)
+    if args.benchmark == "officeqa":
+        return OfficeQAIdSplitDataset(data_root=args.data_root, split_dir=args.split_dir)
     split_dir = args.split_dir or Path("data/LiveMath/livemathematicianbench_id_split")
     return LiveMathIdSplitDataset(
         data_path=args.data_root,
@@ -156,6 +160,8 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRu
         env_options["shell_timeout_seconds"] = args.shell_timeout
     elif args.benchmark == "alfworld":
         env_options["seed"] = args.seed if args.env_seed is None else args.env_seed
+    elif args.benchmark == "officeqa":
+        env_options["docs_root"] = str(args.docs_root or args.data_root / "officeqa_docs_official")
     else:
         env_options.update({"use_theorem": args.use_theorem, "use_sketch": args.use_sketch})
     return SkillGrpoWithoutReplayBufferRunConfig.model_validate(

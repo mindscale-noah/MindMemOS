@@ -24,7 +24,7 @@ def test_default_cli_downloads_all_datasets_to_repo_data_root() -> None:
 
     assert args.datasets == []
     assert args.data_root == REPO_ROOT / "data" / "mindmemos_skill"
-    assert SCRIPT._DATASET_NAMES == ("alfworld", "livemath", "spreadsheetbench")
+    assert SCRIPT._DATASET_NAMES == ("alfworld", "livemath", "officeqa", "spreadsheetbench")
 
 
 def test_safe_extract_tar_extracts_regular_files(tmp_path: Path) -> None:
@@ -54,7 +54,9 @@ def test_safe_extract_tar_rejects_path_traversal(tmp_path: Path) -> None:
     assert not (tmp_path / "escape.txt").exists()
 
 
-def test_alfworld_download_uses_platform_resolved_console_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_alfworld_download_uses_platform_resolved_console_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls: list[tuple[list[str], bool]] = []
 
     def fake_run(command: list[str], *, check: bool) -> None:
@@ -136,11 +138,47 @@ def test_spreadsheetbench_download_materializes_expected_layout(
     assert (target / "spreadsheetbench_verified_400" / "dataset.json").read_bytes() == payload
 
 
+def test_officeqa_download_materializes_gated_payload_and_corpus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = tmp_path / "snapshot"
+    for name in SCRIPT.OFFICEQA_PAYLOAD_FILES:
+        path = snapshot / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("uid,question,answer\n", encoding="utf-8")
+    docs = snapshot / "treasury_bulletins_parsed" / "transformed"
+    parsed = snapshot / "treasury_bulletins_parsed" / "jsons"
+    docs.mkdir(parents=True)
+    parsed.mkdir(parents=True)
+    for index in range(SCRIPT.OFFICEQA_EXPECTED_DOC_COUNT):
+        (docs / f"treasury_bulletin_{index:04d}.txt").write_text("evidence\n", encoding="utf-8")
+        (parsed / f"treasury_bulletin_{index:04d}.json").write_text('{"document":{"elements":[]}}\n')
+
+    def fake_snapshot_download(**kwargs: object) -> str:
+        assert kwargs["repo_id"] == SCRIPT.OFFICEQA_REPO_ID
+        assert kwargs["revision"] == SCRIPT.OFFICEQA_REVISION
+        assert SCRIPT.OFFICEQA_DOCS_PATTERN in kwargs["allow_patterns"]
+        assert SCRIPT.OFFICEQA_PARSED_PATTERN in kwargs["allow_patterns"]
+        return str(snapshot)
+
+    monkeypatch.setattr(SCRIPT, "_huggingface_hub", lambda: (None, fake_snapshot_download))
+    target = SCRIPT.download_officeqa(tmp_path / "payloads")
+
+    assert target == tmp_path / "payloads" / "officeqa"
+    assert (target / "officeqa_full.csv").is_file()
+    assert (
+        len(list((target / "officeqa_docs_official" / "transformed").glob("*.txt")))
+        == SCRIPT.OFFICEQA_EXPECTED_DOC_COUNT
+    )
+    assert len(list((target / "officeqa_docs_official" / "jsons").glob("*.json"))) == SCRIPT.OFFICEQA_EXPECTED_DOC_COUNT
+
+
 @pytest.mark.parametrize(
     ("dataset", "counts"),
     [
         ("alfworld", {"train": 39, "val": 18, "test": 134}),
         ("livemath", {"train": 35, "val": 18, "test": 124}),
+        ("officeqa", {"train": 50, "val": 24, "test": 172}),
         ("spreadsheetbench", {"train": 80, "val": 40, "test": 280}),
     ],
 )
@@ -164,6 +202,7 @@ def test_mindmemos_skill_configs_only_reference_local_resources() -> None:
     expected_data_roots = {
         "alfworld": "data/mindmemos_skill/alfworld",
         "livemath": "data/mindmemos_skill/livemath/raw",
+        "officeqa": "data/mindmemos_skill/officeqa",
         "spreadsheetbench": "data/mindmemos_skill/spreadsheetbench",
     }
     for config_path in config_root.glob("*/*/*.yaml"):
@@ -187,6 +226,8 @@ def test_download_revisions_match_packaged_manifests() -> None:
     spreadsheetbench = json.loads(
         (resource_root / "spreadsheetbench" / "split_manifest.json").read_text(encoding="utf-8")
     )
+    officeqa = json.loads((resource_root / "officeqa" / "split_manifest.json").read_text(encoding="utf-8"))
 
     assert livemath["source_revision"] == SCRIPT.LIVEMATH_REVISION
+    assert officeqa["source_revision"] == SCRIPT.OFFICEQA_REVISION
     assert spreadsheetbench["source_revision"] == SCRIPT.SPREADSHEETBENCH_REVISION

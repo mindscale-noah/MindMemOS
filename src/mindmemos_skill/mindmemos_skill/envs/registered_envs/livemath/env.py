@@ -47,10 +47,13 @@ class LiveMathEnv(BaseEnv[LiveMathEnvConfig]):
         sample_index = context.metadata.get("sample_index", context.rollout.attempt_no)
         if not isinstance(sample_index, int):
             raise TypeError("LiveMath context metadata sample_index must be an integer")
+        system = build_system(skill_text(skills))
+        if task.system_prompt:
+            system = f"{system.rstrip()}\n\n{task.system_prompt.strip()}"
         prepared.runtime_state = {
             "item": item,
             "sample_index": sample_index,
-            "system": build_system(skill_text(skills)),
+            "system": system,
             "user": build_user(item, self.config.use_theorem, self.config.use_sketch),
             "response": "",
             "error": None,

@@ -7,6 +7,8 @@ from .registered_envs import (
     ALFWorldBoundedHistoryEnvConfig,
     LiveMathEnv,
     LiveMathEnvConfig,
+    OfficeQAEnv,
+    OfficeQAEnvConfig,
     SpreadsheetBenchEnv,
     SpreadsheetBenchEnvConfig,
 )
@@ -19,6 +21,8 @@ __all__ = [
     "EnvRolloutContext",
     "LiveMathEnv",
     "LiveMathEnvConfig",
+    "OfficeQAEnv",
+    "OfficeQAEnvConfig",
     "PreparedRollout",
     "SpreadsheetBenchEnv",
     "SpreadsheetBenchEnvConfig",
