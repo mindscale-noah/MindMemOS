@@ -325,10 +325,6 @@ mindmemos skill unregister my-skill
   <img src="./assets/feishu-group-small.png" alt="MindMemOS 飞书群二维码">
 </p>
 
-## 📄 License
-
-本项目采用 MIT License 开源。
-
 ## 📝 引用
 
 如果您的研究使用了 MindMemOS，请引用我们的技术报告：
@@ -344,3 +340,7 @@ mindmemos skill unregister my-skill
   url          = {https://arxiv.org/abs/2608.12428},
 }
 ```
+
+## 📄 License
+
+本项目采用 MIT License 开源。

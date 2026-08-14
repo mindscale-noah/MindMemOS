@@ -332,10 +332,6 @@ Join the MindMemOS Feishu group for project updates, usage discussions, and comm
   <img src="./assets/feishu-group-small.png" alt="MindMemOS Feishu group QR code">
 </p>
 
-## 📄 License
-
-This project is open source under the MIT License.
-
 ## 📝 Citation
 
 If you find MindMemOS useful in your research, please cite our technical report:
@@ -351,3 +347,7 @@ If you find MindMemOS useful in your research, please cite our technical report:
   url          = {https://arxiv.org/abs/2608.12428},
 }
 ```
+
+## 📄 License
+
+This project is open source under the MIT License.
