@@ -44,10 +44,18 @@ class ChatModelWithDefaults:
         return await self._client.chat(task, messages, **{**self._defaults, **kwargs})
 
 
+def _json_object(value: str) -> dict[str, Any]:
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("expected a JSON object")
+    return parsed
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--benchmark", choices=("alfworld", "livemath", "spreadsheetbench"), required=True)
+    parser.add_argument("--benchmark", choices=("alfworld", "livemath", "officeqa", "spreadsheetbench"), required=True)
     parser.add_argument("--env-ref", help="registered Env override; ALFWorld defaults to alfworld_bounded_history")
+    parser.add_argument("--env-options", type=_json_object, default={}, help="JSON options merged into the Env config")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--split-dir", type=Path)
     parser.add_argument("--initial-skill", type=Path, required=True)
@@ -155,15 +163,17 @@ def limited(items: list[Any], limit: int | None) -> list[Any]:
 
 
 def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRunConfig:
-    env_options: dict[str, Any] = {"max_turns": args.max_turns}
+    env_options = dict(args.env_options or {})
+    env_options.setdefault("max_turns", args.max_turns)
     if args.benchmark == "spreadsheetbench":
-        env_options["shell_timeout_seconds"] = args.shell_timeout
+        env_options.setdefault("shell_timeout_seconds", args.shell_timeout)
     elif args.benchmark == "alfworld":
-        env_options["seed"] = args.seed if args.env_seed is None else args.env_seed
+        env_options.setdefault("seed", args.seed if args.env_seed is None else args.env_seed)
     elif args.benchmark == "officeqa":
-        env_options["docs_root"] = str(args.docs_root or args.data_root / "officeqa_docs_official")
+        env_options.setdefault("docs_root", str(args.docs_root or args.data_root / "officeqa_docs_official"))
     else:
-        env_options.update({"use_theorem": args.use_theorem, "use_sketch": args.use_sketch})
+        env_options.setdefault("use_theorem", args.use_theorem)
+        env_options.setdefault("use_sketch", args.use_sketch)
     return SkillGrpoWithoutReplayBufferRunConfig.model_validate(
         {
             "algorithm": {

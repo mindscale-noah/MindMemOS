@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -128,6 +129,54 @@ def test_skill_evaluation_can_switch_to_true_no_skill_mode(tmp_path: Path) -> No
     assert "--no-skill" in invocation.command
     assert "--skill" not in invocation.command
     assert invocation.command[invocation.command.index("--test-limit") + 1] == "2"
+
+
+def test_officeqa_custom_search_uses_env_file_without_putting_secrets_in_command(tmp_path: Path) -> None:
+    env_file = tmp_path / ".skill.env"
+    env_file.write_text(
+        "OFFICEQA_SERPAPI_PROTOCOL=serper\n"
+        "OFFICEQA_SERPAPI_BASE_URL=https://search.example.test\n"
+        "OFFICEQA_SERPAPI_API_KEY=dummy-secret\n",
+        encoding="utf-8",
+    )
+    invocation = SCRIPT.build_invocation(
+        CONFIG_ROOT / "skill_evaluation" / "officeqa" / "default.yaml",
+        env_file_override=env_file,
+        overrides=["environment_options.env_options.search_mode=custom_search"],
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    serialized_options = invocation.command[invocation.command.index("--env-options") + 1]
+    assert json.loads(serialized_options)["search_mode"] == "custom_search"
+    assert invocation.environment_values["OFFICEQA_SERPAPI_PROTOCOL"] == "serper"
+    assert invocation.environment_values["OFFICEQA_SERPAPI_BASE_URL"] == "https://search.example.test"
+    assert invocation.environment_values["OFFICEQA_SERPAPI_API_KEY"] == "dummy-secret"
+    assert "dummy-secret" not in " ".join(invocation.command)
+
+
+@pytest.mark.parametrize(
+    "config_path",
+    [
+        CONFIG_ROOT / "skill_evaluation" / "officeqa" / "default.yaml",
+        CONFIG_ROOT / "skill_grpo_without_replay_buffer" / "officeqa" / "default.yaml",
+    ],
+)
+def test_officeqa_configs_forward_custom_search_env_options(config_path: Path, tmp_path: Path) -> None:
+    invocation = SCRIPT.build_invocation(
+        config_path,
+        env_file_override=empty_env_file(tmp_path),
+        overrides=["environment_options.env_options.search_mode=custom_search"],
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    serialized_options = invocation.command[invocation.command.index("--env-options") + 1]
+    options = json.loads(serialized_options)
+    assert options["search_mode"] == "custom_search"
+    assert options["search_api_protocol_env"] == "OFFICEQA_SERPAPI_PROTOCOL"
+    assert options["search_api_base_url_env"] == "OFFICEQA_SERPAPI_BASE_URL"
+    assert options["search_api_key_env"] == "OFFICEQA_SERPAPI_API_KEY"
 
 
 @pytest.mark.parametrize("environment", ["alfworld", "livemath", "spreadsheetbench"])

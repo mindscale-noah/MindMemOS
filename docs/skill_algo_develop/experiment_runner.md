@@ -52,6 +52,34 @@ OfficeQA 是 gated Hugging Face 数据集；下载前需要接受 `databricks/of
 提供有权限的账号令牌。下载器会落盘 `officeqa_full.csv`、本地 Treasury bulletin 文本语料和按页解析 JSON。
 若用 `--data-root` 改变 OfficeQA 下载位置，实验还需同时覆盖 `environment_options.docs_root`。
 
+OfficeQA 默认使用本地文档工具。要启用 controller-managed Web Search，在 `.skill.env` 中配置协议、
+可覆盖的 base URL 和 key。官方 Serper 配置为：
+
+```dotenv
+OFFICEQA_SERPAPI_PROTOCOL=serper
+OFFICEQA_SERPAPI_BASE_URL=https://google.serper.dev
+OFFICEQA_SERPAPI_API_KEY=<your-key>
+```
+
+兼容 Yibu SerpAPI 网关时配置为：
+
+```dotenv
+OFFICEQA_SERPAPI_PROTOCOL=yibu
+OFFICEQA_SERPAPI_BASE_URL=https://yibuapi.com/serpapi
+OFFICEQA_SERPAPI_API_KEY=<your-key>
+```
+
+base URL 不写死，运行时会按协议补 `/search`。通过临时覆盖开启搜索：
+
+```bash
+scripts/run_mindmemos_skill_experiment.sh \
+  --config config/mindmemos_skill/skill_evaluation/officeqa/default.yaml \
+  --set environment_options.env_options.search_mode=custom_search
+```
+
+Serper 使用 `POST /search`、`X-API-KEY` 和 JSON body；Yibu 使用 `GET /search` 与 Bearer token。
+密钥只从 `.skill.env` 或进程环境读取，不写入 YAML、命令行或持久化实验配置。
+
 脚本可在 Windows、Linux 和 macOS 的 Python 3.11–3.13 环境运行，默认目录正好对应仓库内 YAML；
 可用 `--data-root <目录>` 改变下载根目录，此时运行实验时也要通过 `--set dataset.data_root=<目录>` 覆盖。
 下载是幂等的，完整数据已存在时会跳过；只有明确需要刷新缓存时才使用 `--force`。

@@ -52,7 +52,7 @@ class TestEvaluationConfig:
     env_options: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
-        if self.benchmark not in {"alfworld", "livemath", "spreadsheetbench"}:
+        if self.benchmark not in {"alfworld", "livemath", "officeqa", "spreadsheetbench"}:
             raise ValueError(f"unsupported benchmark: {self.benchmark!r}")
         if self.rollouts < 1:
             raise ValueError("test rollouts must be at least 1")
@@ -111,10 +111,18 @@ class EvaluationProgress:
         self._last_rendered = self.completed
 
 
+def _json_object(value: str) -> dict[str, Any]:
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("expected a JSON object")
+    return parsed
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--benchmark", choices=("alfworld", "livemath", "spreadsheetbench"), required=True)
+    parser.add_argument("--benchmark", choices=("alfworld", "livemath", "officeqa", "spreadsheetbench"), required=True)
     parser.add_argument("--env-ref", help="registered Env override; ALFWorld defaults to alfworld_bounded_history")
+    parser.add_argument("--env-options", type=_json_object, default={}, help="JSON options merged into the Env config")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--split-dir", type=Path)
     skill_group = parser.add_mutually_exclusive_group(required=True)
@@ -188,18 +196,22 @@ def environment_options(
     use_theorem: bool,
     use_sketch: bool,
     docs_root: Path | None = None,
+    configured_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    options: dict[str, Any] = {"max_turns": max_turns}
+    options = dict(configured_options or {})
+    options.setdefault("max_turns", max_turns)
     if benchmark == "alfworld":
-        options["seed"] = env_seed
+        options.setdefault("seed", env_seed)
     if benchmark == "spreadsheetbench":
-        options["shell_timeout_seconds"] = shell_timeout
+        options.setdefault("shell_timeout_seconds", shell_timeout)
     if benchmark == "livemath":
-        options.update({"use_theorem": use_theorem, "use_sketch": use_sketch})
+        options.setdefault("use_theorem", use_theorem)
+        options.setdefault("use_sketch", use_sketch)
     if benchmark == "officeqa":
-        if docs_root is None:
-            raise ValueError("officeqa requires --docs-root")
-        options["docs_root"] = str(docs_root)
+        if docs_root is not None:
+            options.setdefault("docs_root", str(docs_root))
+        if "docs_root" not in options:
+            raise ValueError("officeqa requires --docs-root or env_options.docs_root")
     return options
 
 
@@ -626,6 +638,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 use_theorem=args.use_theorem,
                 use_sketch=args.use_sketch,
                 docs_root=args.docs_root,
+                configured_options=args.env_options,
             ),
         ),
     )
