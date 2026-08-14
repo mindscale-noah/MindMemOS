@@ -2,6 +2,7 @@
 
 from .algorithm import TreeSkill
 from .config import TreeSkillConfig
+from .errors import TreeSkillModelRequestError
 from .models import (
     AnalysisItem,
     AppliedEditRecord,
@@ -33,6 +34,7 @@ __all__ = [
     "TreeRoutingResult",
     "TreeSkill",
     "TreeSkillConfig",
+    "TreeSkillModelRequestError",
     "TreeSkillOutput",
     "TreeSkillReport",
     "TreeSkillRouter",

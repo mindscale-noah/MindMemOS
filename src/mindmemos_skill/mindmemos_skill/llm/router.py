@@ -50,6 +50,10 @@ def _load_litellm() -> Any:
     litellm.drop_params = True
     litellm.suppress_debug_info = True
     litellm.turn_off_message_logging = True
+    # LiteLLM's aiohttp transport can create short-lived sessions under highly
+    # concurrent local OpenAI-compatible workloads. Use its pooled HTTPX path,
+    # which matches the direct OpenAI client used by the reference pipeline.
+    litellm.disable_aiohttp_transport = True
     # LiteLLM logs one INFO record for every completion, which overwhelms
     # long-running concurrent benchmark output. Keep warnings and errors.
     for logger_name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy"):
@@ -183,6 +187,14 @@ def get_router(router_config: ConfigObject, alias: str, *, num_retries: int | No
 def clear_router_cache() -> None:
     """Drop cached routers so refreshed configuration takes effect."""
     _ROUTER_CACHE.clear()
+
+
+async def close_litellm_clients() -> None:
+    """Close LiteLLM's pooled async clients at an experiment boundary."""
+
+    litellm = _load_litellm()
+    await litellm.close_litellm_async_clients()
+    clear_router_cache()
 
 
 def dump_response(obj: Any) -> dict[str, Any]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from .analysis import ChatModel
+from .errors import TreeSkillModelRequestError
 from .json_utils import parse_model, strict_json_schema_response_format
 from .models import (
     AppliedEditRecord,
@@ -119,6 +120,13 @@ class TreeSkillNodeFuser:
                         _NODE_FUSION_SCHEMA,
                     ),
                 )
+            except Exception as exc:
+                raise TreeSkillModelRequestError(
+                    stage="node fusion",
+                    item_id=target_id,
+                    cause=exc,
+                ) from exc
+            try:
                 decision = parse_model(response.content or "", NodeFusionDecision)
             except Exception as exc:
                 failures.append(FusionFailure(target_node_id=target_id, error=f"{type(exc).__name__}: {exc}"))

@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .analysis import ChatModel
+from .errors import TreeSkillModelRequestError
 from .json_utils import extract_json_object, strict_json_schema_response_format
 from .models import LocalizationFailure, LocatedEvidence, TrajectoryAnalysisRecord
 from .prompts import LOCALIZATION_SYSTEM_PROMPT, localization_user_prompt
@@ -85,6 +86,7 @@ class TreeSkillEvidenceLocator:
             ]
 
             last_error: Exception | None = None
+            request_error: Exception | None = None
             async with semaphore:
                 for _attempt, token_budget in ((1, self._max_tokens), (2, min(self._max_tokens * 2, 8192))):
                     try:
@@ -98,6 +100,12 @@ class TreeSkillEvidenceLocator:
                                 _LOCALIZATION_SCHEMA,
                             ),
                         )
+                    except Exception as exc:
+                        last_error = exc
+                        request_error = exc
+                        continue
+                    request_error = None
+                    try:
                         located, rejected = _parse_localization_items(
                             response.content or "",
                             record=record,
@@ -114,13 +122,26 @@ class TreeSkillEvidenceLocator:
                         return located, rejection
                     except Exception as exc:
                         last_error = exc
+            if request_error is not None:
+                raise TreeSkillModelRequestError(
+                    stage="evidence localization",
+                    item_id=record.instance_id,
+                    cause=request_error,
+                ) from request_error
             assert last_error is not None
             return [], LocalizationFailure(
                 instance_id=record.instance_id,
                 error=f"{type(last_error).__name__}: {last_error}",
             )
 
-        results = await asyncio.gather(*(run(record) for record in records))
+        tasks = [asyncio.create_task(run(record)) for record in records]
+        try:
+            results = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         evidence = [item for items, _ in results for item in items]
         failures = [failure for _, failure in results if failure is not None]
         return evidence, failures

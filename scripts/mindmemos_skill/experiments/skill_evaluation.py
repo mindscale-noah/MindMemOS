@@ -34,7 +34,13 @@ from mindmemos_skill.datasets import (
     TaskDataset,
 )
 from mindmemos_skill.llm import LLMCallSink, LLMClient, get_router, llm_run_context
-from mindmemos_skill.typing import Skill, SkillInjectionMode, Task, compute_skill_content_hash
+from mindmemos_skill.typing import (
+    Skill,
+    SkillInjectionMode,
+    Task,
+    TrajectoryStatus,
+    compute_skill_content_hash,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +87,7 @@ class EvaluationProgress:
         reward = reward_of(outcome)
         self.completed += 1
         self.correct += int(reward > 0)
-        self.errors += int(outcome.trajectory is None)
+        self.errors += int(not execution_succeeded(outcome))
         self.reward_sum += reward
         self._render(force=self.completed == self.total)
 
@@ -330,13 +336,16 @@ async def evaluate_test_tasks(
             outcomes = await scheduler.run(specs)
     finally:
         progress.close()
-    return persist_test_artifacts(
+    summary = persist_test_artifacts(
         output_dir=output_dir,
         outcomes=outcomes,
         skill=skill,
         rollouts_per_task=config.rollouts,
         create_output_dir=False,
     )
+    if summary["execution_exceptions"]:
+        raise RuntimeError(f"test evaluation encountered execution exceptions; see {output_dir / 'results.jsonl'}")
+    return summary
 
 
 def persist_test_artifacts(
@@ -363,6 +372,13 @@ def reward_of(outcome: RolloutOutcome) -> float:
     return float(trajectory.reward.score)
 
 
+def execution_succeeded(outcome: RolloutOutcome) -> bool:
+    """Return whether the Agent completed execution, not merely returned evidence."""
+
+    trajectory = outcome.trajectory
+    return trajectory is not None and trajectory.execution.status is TrajectoryStatus.SUCCEEDED
+
+
 def summarize(
     outcomes: Sequence[RolloutOutcome],
     *,
@@ -382,8 +398,14 @@ def summarize(
         "tasks": len(task_rewards),
         "rollouts_per_task": rollouts_per_task,
         "total": len(outcomes),
-        "completed": sum(outcome.trajectory is not None for outcome in outcomes),
-        "failed": sum(outcome.trajectory is None for outcome in outcomes),
+        "completed": sum(execution_succeeded(outcome) for outcome in outcomes),
+        "failed": sum(not execution_succeeded(outcome) for outcome in outcomes),
+        "trajectories_returned": sum(outcome.trajectory is not None for outcome in outcomes),
+        "trajectory_exceptions": sum(outcome.trajectory is None for outcome in outcomes),
+        "execution_exceptions": sum(
+            outcome.trajectory is not None and bool(outcome.trajectory.metadata.get("execution_exception_type"))
+            for outcome in outcomes
+        ),
         "correct": correct,
         "accuracy": correct / len(outcomes) if outcomes else 0.0,
         "pass_at_k": passed_tasks / len(task_rewards) if task_rewards else 0.0,
@@ -432,6 +454,16 @@ def histogram(values: Sequence[float]) -> dict[str, int]:
 def result_record(outcome: RolloutOutcome) -> dict[str, Any]:
     trajectory = outcome.trajectory
     last_attempt = outcome.attempts[-1] if outcome.attempts else None
+    completed = execution_succeeded(outcome)
+    if trajectory is not None and not completed:
+        error_type = "TrajectoryExecutionFailed"
+        error = trajectory.execution.error_info
+    elif trajectory is None and last_attempt is not None:
+        error_type = last_attempt.error_type
+        error = last_attempt.error
+    else:
+        error_type = None
+        error = None
     return {
         "split": "test",
         "task_id": outcome.spec.task.task_id,
@@ -439,9 +471,9 @@ def result_record(outcome: RolloutOutcome) -> dict[str, Any]:
         "sample_index": outcome.spec.sample_index,
         "skill_content_hashes": [skill.content_hash for skill in outcome.spec.skills],
         "reward": reward_of(outcome),
-        "completed": trajectory is not None,
-        "error_type": last_attempt.error_type if trajectory is None and last_attempt is not None else None,
-        "error": last_attempt.error if trajectory is None and last_attempt is not None else None,
+        "completed": completed,
+        "error_type": error_type,
+        "error": error,
         "trajectory": trajectory.model_dump(mode="json") if trajectory is not None else None,
     }
 

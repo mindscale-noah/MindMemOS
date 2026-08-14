@@ -15,6 +15,7 @@ from mindmemos_skill.algos.trace2skill.treeskill import (
     TreeMetadataError,
     TreeSkill,
     TreeSkillConfig,
+    TreeSkillModelRequestError,
     compile_tree_metadata,
     parse_skill_markdown,
     parse_tree_with_metadata,
@@ -79,6 +80,17 @@ class ScriptedChatModel:
         parser = kwargs.get("format_parser")
         parsed = parser(content) if parser is not None else None
         return ChatResponse(finish_reason="stop", content=content, model="fake", parsed=parsed)
+
+
+class FailingChatModel:
+    def __init__(self, message: str = "endpoint unavailable") -> None:
+        self.message = message
+        self.calls = 0
+
+    async def chat(self, task: str, messages: list[dict[str, Any]], **kwargs: Any) -> ChatResponse:
+        del task, messages, kwargs
+        self.calls += 1
+        raise RuntimeError(self.message)
 
 
 def make_skill(content: str, *, metadata: dict[str, Any] | None = None) -> Skill:
@@ -593,17 +605,100 @@ ACTION: TASK_COMPLETE
     )
 
     assert failures == []
-    assert [record.record_source for record in records] == ["success", "error"]
-    assert [item.kind for item in records[1].items] == ["failure_cause", "failure_memory"]
-    assert records[0].source_file == "success_analysis.md"
-    assert records[1].source_file == "analysis_report.md"
-    assert records[1].items[0].relation_to_skill == "The existing preservation guidance was not followed."
-    assert records[1].items[1].skill_reflection == "The skill should emphasize verification after saving."
+    assert [record.record_source for record in records] == ["error", "success"]
+    assert [item.kind for item in records[0].items] == ["failure_cause", "failure_memory"]
+    assert records[0].source_file == "analysis_report.md"
+    assert records[1].source_file == "success_analysis.md"
+    assert records[0].items[0].relation_to_skill == "The existing preservation guidance was not followed."
+    assert records[0].items[1].skill_reflection == "The skill should emphasize verification after saving."
     assert [call["task"] for call in success_model.calls] == ["analysis:success"]
     assert [call["task"] for call in failure_model.calls] == ["analysis:error"] * 3
     failure_dir = tmp_path / "analysis" / "error" / "failure-1"
     assert (failure_dir / "evaluate_passed.flag").read_text(encoding="utf-8") == "PASS\n"
     assert (failure_dir / "agent_work" / "output_fixed.xlsx").is_file()
+
+
+@pytest.mark.asyncio
+async def test_spreadsheetbench_reference_analysis_propagates_model_request_failures(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 12, tzinfo=UTC)
+    trajectory = Trajectory(
+        trajectory_id="success-1",
+        task=Task(task_id="task-success", instruction="Preserve A1."),
+        rollout=Rollout(rollout_id="rollout-success"),
+        environment=Environment(env_ref="spreadsheetbench"),
+        events=[{"role": "assistant", "content": "Saved the workbook."}],
+        reward=Reward(score=1.0),
+        execution=ExecutionInfo(
+            status=TrajectoryStatus.SUCCEEDED,
+            started_at=now,
+            finished_at=now,
+            n_turn=1,
+        ),
+    )
+    model = FailingChatModel()
+    analyzer = SpreadsheetBenchReferenceAnalyzer(
+        chat_model=model,
+        task="analysis",
+        output_root=tmp_path / "analysis",
+        concurrency=128,
+        success_score_threshold=1.0,
+        temperature=1.0,
+        max_tokens=16384,
+    )
+
+    with pytest.raises(TreeSkillModelRequestError, match="success analysis model request failed"):
+        await analyzer.analyze(
+            [TraceEvidence(trajectory_id="success-1", task_id="task-success", transcript="", score=1.0)],
+            trajectories_by_id={"success-1": trajectory},
+        )
+
+
+@pytest.mark.asyncio
+async def test_treeskill_locator_and_fuser_propagate_model_request_failures() -> None:
+    tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
+    record = TrajectoryAnalysisRecord(
+        instance_id="trajectory-1",
+        task_id="task-1",
+        record_source="success",
+        items=(
+            AnalysisItem(
+                item_id="i1",
+                kind="success_memory",
+                content="Inspect the workbook before editing.",
+            ),
+        ),
+    )
+    locator_model = FailingChatModel()
+    with pytest.raises(TreeSkillModelRequestError, match="evidence localization model request failed"):
+        await TreeSkillEvidenceLocator(
+            chat_model=locator_model,
+            task="locate",
+            concurrency=16,
+            temperature=0.0,
+            max_tokens=2048,
+        ).locate(tree, [record])
+    assert locator_model.calls == 2
+
+    fuser_model = FailingChatModel()
+    with pytest.raises(TreeSkillModelRequestError, match="node fusion model request failed"):
+        await TreeSkillNodeFuser(
+            chat_model=fuser_model,
+            task="fuse",
+            temperature=0.0,
+            max_tokens=4096,
+        ).fuse(
+            tree,
+            [
+                LocatedEvidence(
+                    instance_id="trajectory-1",
+                    evidence_id="e1",
+                    record_source="success",
+                    reusable_lesson="Inspect the workbook before editing.",
+                    target_node_id="001",
+                    rationale="Workbook-level guidance.",
+                )
+            ],
+        )
 
 
 def test_spreadsheetbench_reference_evaluator_uses_full_workbook_when_position_is_empty(
@@ -800,6 +895,44 @@ async def test_spreadsheetbench_reference_policy_retries_missing_output_once(tmp
     assert trajectory.reward.score == 0.0
     assert trajectory.execution.error_info is not None
     assert "Output file was not created" in trajectory.execution.error_info
+    assert "execution_exception_type" not in trajectory.metadata
+
+
+@pytest.mark.asyncio
+async def test_spreadsheetbench_reference_policy_marks_model_request_exceptions(tmp_path: Path) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    source = tmp_path / "source"
+    source.mkdir()
+    workbook = openpyxl.Workbook()
+    workbook.active["A1"] = 1
+    workbook.save(source / "case_init.xlsx")
+    workbook.save(source / "case_golden.xlsx")
+    workbook.close()
+
+    agent = ReactAgent(
+        {"model": "fake", "max_turns": 2, "skill_injection_mode": "system_prompt"},
+        llm=FailingChatModel(),
+    )
+    task = Task(
+        task_id="sheet-model-failure",
+        instruction="Preserve A1.",
+        metadata={"src_dir": str(source), "answer_position": "A1"},
+    )
+
+    trajectory = await SpreadsheetBenchEnv({"max_turns": 2, "trace2skill_reference_mode": True}).rollout(
+        agent,
+        task,
+        [make_skill("# Spreadsheet\n")],
+        context=EnvRolloutContext(
+            rollout=Rollout(rollout_id="model-failure-rollout"),
+            workspace_root=tmp_path / "runs",
+            env_ref="spreadsheetbench",
+        ),
+    )
+
+    assert trajectory.execution.status is TrajectoryStatus.FAILED
+    assert trajectory.metadata["execution_exception_type"] == "RuntimeError"
+    assert trajectory.execution.error_info == "RuntimeError: endpoint unavailable"
 
 
 @pytest.mark.asyncio

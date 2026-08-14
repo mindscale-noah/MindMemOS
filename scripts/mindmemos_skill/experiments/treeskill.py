@@ -13,14 +13,20 @@ from pathlib import Path
 from typing import Any
 
 from mindmemos_skill.algos.trace2skill import TaskCollectionConfig
-from mindmemos_skill.algos.trace2skill.treeskill import TreeSkill, TreeSkillConfig
+from mindmemos_skill.algos.trace2skill.treeskill import (
+    TreeSkill,
+    TreeSkillConfig,
+    compile_tree_metadata,
+    parse_skill_markdown,
+    parse_tree_with_metadata,
+)
 from mindmemos_skill.envs.registered_envs.spreadsheetbench.analysis import (
     SpreadsheetBenchReferenceAnalyzer,
 )
 from mindmemos_skill.envs.registered_envs.spreadsheetbench.recalculation import (
     preflight_recalculation_runtime,
 )
-from mindmemos_skill.llm import DatabaseLLMCallSink
+from mindmemos_skill.llm import DatabaseLLMCallSink, close_litellm_clients
 from mindmemos_skill.persistence import bootstrap_skill_database
 from mindmemos_skill.typing import (
     Skill,
@@ -209,6 +215,23 @@ def _candidate_skill(base: Skill, candidate: SkillCandidate | None, *, run_id: s
     )
 
 
+def _with_compiled_treeskill_metadata(skill: Skill) -> Skill:
+    """Attach canonical metadata so an unchanged Skill remains routable."""
+
+    tree = parse_skill_markdown(skill.content)
+    if not tree.nodes:
+        raise ValueError("TreeSkill requires at least one content-bearing Markdown heading")
+    return skill.model_copy(
+        update={
+            "metadata": {
+                **skill.metadata,
+                "treeskill": compile_tree_metadata(tree),
+            }
+        },
+        deep=True,
+    )
+
+
 async def run(args: argparse.Namespace) -> dict[str, Any]:
     if not os.getenv("OPENAI_API_KEY"):
         raise ValueError("OPENAI_API_KEY is required")
@@ -224,11 +247,13 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     train_tasks = _limited_train_tasks(dataset.train_tasks(), args.train_limit)
     test_tasks = limited_test_tasks(dataset, args.test_limit)
-    base_skill = build_skill(
-        args.initial_skill,
-        run_id=args.run_id,
-        benchmark=args.benchmark,
-        include_resources=args.trace2skill_reference_mode,
+    base_skill = _with_compiled_treeskill_metadata(
+        build_skill(
+            args.initial_skill,
+            run_id=args.run_id,
+            benchmark=args.benchmark,
+            include_resources=args.trace2skill_reference_mode,
+        )
     )
     _validate_reference_configuration(args, base_skill)
     env_options = environment_options(
@@ -351,6 +376,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
         final_skill = _candidate_skill(base_skill, result.candidate, run_id=args.run_id)
+        parse_tree_with_metadata(final_skill.content, final_skill.metadata.get("treeskill"))
         test_summary = await evaluate_test_tasks(
             run_id=args.run_id,
             tasks=test_tasks,
@@ -368,7 +394,10 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             ),
         )
     finally:
-        await database.close()
+        try:
+            await database.close()
+        finally:
+            await close_litellm_clients()
 
     write_json(args.output_dir / "result.json", result.model_dump(mode="json"))
     write_json(args.output_dir / "final_skill.json", final_skill.model_dump(mode="json"))

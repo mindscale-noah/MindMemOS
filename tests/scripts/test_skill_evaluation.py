@@ -15,10 +15,18 @@ from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.contracts import
     RolloutPhase,
     RolloutSpec,
 )
-from mindmemos_skill.typing import ExecutionInfo, Reward, Rollout, Task, Trajectory
+from mindmemos_skill.typing import ExecutionInfo, Reward, Rollout, Task, Trajectory, TrajectoryStatus
 
 
-def _outcome(task_id: str, sample_index: int, score: float, *, completed: bool = True) -> RolloutOutcome:
+def _outcome(
+    task_id: str,
+    sample_index: int,
+    score: float,
+    *,
+    completed: bool = True,
+    execution_status: TrajectoryStatus = TrajectoryStatus.SUCCEEDED,
+    execution_exception_type: str | None = None,
+) -> RolloutOutcome:
     now = datetime.now(UTC)
     task = Task(task_id=task_id, instruction=task_id)
     spec = RolloutSpec(
@@ -37,7 +45,15 @@ def _outcome(task_id: str, sample_index: int, score: float, *, completed: bool =
             task=task,
             rollout=Rollout(rollout_id=spec.rollout_id),
             reward=Reward(score=score),
-            execution=ExecutionInfo(started_at=now, finished_at=now),
+            execution=ExecutionInfo(
+                status=execution_status,
+                started_at=now,
+                finished_at=now,
+                error_info="request failed" if execution_status is TrajectoryStatus.FAILED else None,
+            ),
+            metadata=(
+                {"execution_exception_type": execution_exception_type} if execution_exception_type is not None else {}
+            ),
         )
         if completed
         else None
@@ -73,6 +89,43 @@ def test_no_skill_summary_counts_requested_rollouts_and_failures() -> None:
     assert summary["failed"] == 1
     assert summary["accuracy"] == 0.5
     assert summary["pass_at_k"] == 1.0
+
+
+def test_summary_treats_returned_failed_trajectory_as_failed_execution() -> None:
+    outcome = _outcome(
+        "task-1",
+        0,
+        0.0,
+        execution_status=TrajectoryStatus.FAILED,
+        execution_exception_type="RuntimeError",
+    )
+
+    summary = evaluation.summarize([outcome], rollouts_per_task=1, skill=None)
+    record = evaluation.result_record(outcome)
+
+    assert summary["completed"] == 0
+    assert summary["failed"] == 1
+    assert summary["trajectories_returned"] == 1
+    assert summary["trajectory_exceptions"] == 0
+    assert summary["execution_exceptions"] == 1
+    assert record["completed"] is False
+    assert record["error_type"] == "TrajectoryExecutionFailed"
+    assert record["error"] == "request failed"
+
+
+def test_summary_does_not_treat_normal_task_failure_as_execution_exception() -> None:
+    outcome = _outcome(
+        "task-1",
+        0,
+        0.0,
+        execution_status=TrajectoryStatus.FAILED,
+    )
+
+    summary = evaluation.summarize([outcome], rollouts_per_task=1, skill=None)
+
+    assert summary["completed"] == 0
+    assert summary["failed"] == 1
+    assert summary["execution_exceptions"] == 0
 
 
 @pytest.mark.asyncio
@@ -188,3 +241,15 @@ def test_reference_configuration_requires_exact_local_skill_package(
     changed = skill.model_copy(update={"resources": {**skill.resources, "extra.txt": "unexpected"}})
     with pytest.raises(ValueError, match="unexpected text resources"):
         treeskill_experiment._validate_reference_configuration(args, changed)
+
+
+def test_compiled_initial_treeskill_metadata_survives_unchanged_candidate(tmp_path: Path) -> None:
+    skill_path = tmp_path / "SKILL.md"
+    skill_path.write_text("# Workbook\n\nInspect first.\n", encoding="utf-8")
+    base = evaluation.build_skill(skill_path, run_id="run", benchmark="spreadsheetbench")
+    prepared = treeskill_experiment._with_compiled_treeskill_metadata(base)
+    unchanged = treeskill_experiment._candidate_skill(prepared, None, run_id="run")
+
+    metadata = unchanged.metadata["treeskill"]
+    tree = treeskill_experiment.parse_tree_with_metadata(unchanged.content, metadata)
+    assert tree.node_by_id["001"].heading == "Workbook"

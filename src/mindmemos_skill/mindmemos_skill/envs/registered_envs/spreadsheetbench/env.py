@@ -221,6 +221,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         state["initial_messages"] = [dict(message) for message in messages]
         started_at = time.time()
         error: str | None = None
+        execution_exception_type: str | None = None
         finished = False
         missing_output_reminded = False
         turns = 0
@@ -272,6 +273,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
             if not finished and error is None:
                 error = f"ReAct agent reached max_turns={self.config.max_turns} before creating output.xlsx"
         except Exception as exc:
+            execution_exception_type = type(exc).__name__
             error = f"{type(exc).__name__}: {exc}"
         ended_at = time.time()
         state.update({"messages": messages, "error": error, "finished": finished, "turns": turns})
@@ -286,6 +288,8 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
                 "trace2skill_reference_mode": True,
             }
         )
+        if execution_exception_type is not None:
+            metadata["execution_exception_type"] = execution_exception_type
         return agent.build_trajectory(
             request=prepared.agent_request,
             messages=messages,
@@ -320,6 +324,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         tools_by_name = {tool.name: tool for tool in tools}
         started_at = time.time()
         error: str | None = None
+        execution_exception_type: str | None = None
         finished = False
         turns = 0
         try:
@@ -334,6 +339,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
                 for call in calls:
                     messages.extend(await self._call_tool(call, tools_by_name))
         except Exception as exc:
+            execution_exception_type = type(exc).__name__
             error = f"{type(exc).__name__}: {exc}"
         ended_at = time.time()
         state.update({"messages": messages, "error": error, "finished": finished, "turns": turns})
@@ -347,6 +353,8 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
                 "instruction_type": prepared.agent_request.task.metadata.get("instruction_type"),
             }
         )
+        if execution_exception_type is not None:
+            metadata["execution_exception_type"] = execution_exception_type
         return agent.build_trajectory(
             request=prepared.agent_request,
             messages=messages,

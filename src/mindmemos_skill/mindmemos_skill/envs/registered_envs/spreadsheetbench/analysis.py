@@ -13,6 +13,7 @@ from typing import Any
 
 from ....algos.trace2skill.contracts import TraceEvidence
 from ....algos.trace2skill.treeskill.analysis import ChatModel
+from ....algos.trace2skill.treeskill.errors import TreeSkillModelRequestError
 from ....algos.trace2skill.treeskill.models import AnalysisItem, TrajectoryAnalysisRecord
 from ....typing import Trajectory
 from .evaluator import compare_workbooks, workbook_used_ranges
@@ -92,6 +93,8 @@ class SpreadsheetBenchReferenceAnalyzer:
                     else:
                         raise ValueError("SpreadsheetBench reference analysis requires outcome labels")
                 return record, None
+            except TreeSkillModelRequestError:
+                raise
             except Exception as exc:
                 failure_dir = self._output_root / "failures"
                 failure_dir.mkdir(parents=True, exist_ok=True)
@@ -101,7 +104,28 @@ class SpreadsheetBenchReferenceAnalyzer:
                 )
                 return None, item.trajectory_id
 
-        results = await asyncio.gather(*(run(item) for item in evidence))
+        async def run_phase(items: list[TraceEvidence]) -> list[tuple[TrajectoryAnalysisRecord | None, str | None]]:
+            tasks = [asyncio.create_task(run(item)) for item in items]
+            try:
+                return await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+
+        error_evidence = [
+            item for item in evidence if item.score is not None and item.score < self._success_score_threshold
+        ]
+        success_evidence = [
+            item for item in evidence if item.score is not None and item.score >= self._success_score_threshold
+        ]
+        unlabeled_evidence = [item for item in evidence if item.score is None]
+        results: list[tuple[TrajectoryAnalysisRecord | None, str | None]] = []
+        # Match the Spreadsheet pipeline: finish error analysis before starting
+        # the independent one-call success-analysis stage.
+        for phase in (error_evidence, success_evidence, unlabeled_evidence):
+            results.extend(await run_phase(phase))
         records = [record for record, _ in results if record is not None]
         failures = [trajectory_id for _, trajectory_id in results if trajectory_id is not None]
         return records, failures
@@ -126,12 +150,19 @@ class SpreadsheetBenchReferenceAnalyzer:
             ),
             encoding="utf-8",
         )
-        response = await self._success_chat_model.chat(
-            task=f"{self._task}:success",
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            temperature=self._temperature,
-            max_tokens=self._max_tokens,
-        )
+        try:
+            response = await self._success_chat_model.chat(
+                task=f"{self._task}:success",
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+            )
+        except Exception as exc:
+            raise TreeSkillModelRequestError(
+                stage="success analysis",
+                item_id=evidence.trajectory_id,
+                cause=exc,
+            ) from exc
         report = response.content or ""
         (output_dir / "success_analysis.md").write_text(report, encoding="utf-8")
         items = _parse_success_items(report)
@@ -175,12 +206,19 @@ class SpreadsheetBenchReferenceAnalyzer:
         report = ""
         completion_reminded = False
         for _turn in range(1, self._max_turns + 1):
-            response = await self._failure_chat_model.chat(
-                task=f"{self._task}:error",
-                messages=list(messages),
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-            )
+            try:
+                response = await self._failure_chat_model.chat(
+                    task=f"{self._task}:error",
+                    messages=list(messages),
+                    temperature=self._temperature,
+                    max_tokens=self._max_tokens,
+                )
+            except Exception as exc:
+                raise TreeSkillModelRequestError(
+                    stage="error analysis",
+                    item_id=evidence.trajectory_id,
+                    cause=exc,
+                ) from exc
             content = response.content or ""
             messages.append({"role": "assistant", "content": content})
             parsed = parse_policy_response(content)
