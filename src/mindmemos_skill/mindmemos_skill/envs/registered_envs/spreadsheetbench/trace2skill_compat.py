@@ -156,6 +156,12 @@ def run_reference_bash(command: str, *, working_dir: Path, timeout_seconds: int)
     return _truncate_observation(output)
 
 
+def format_reference_observation(observation: str) -> str:
+    """Wrap reference-agent feedback in the released ReAct observation format."""
+
+    return f"Observation: {observation}"
+
+
 def _strip_frontmatter(content: str) -> str:
     if not content.startswith("---"):
         return content
@@ -230,6 +236,7 @@ __all__ = [
     "PolicyResponseType",
     "TASK_COMPLETE_SIGNAL",
     "build_reference_messages",
+    "format_reference_observation",
     "parse_policy_response",
     "run_reference_bash",
 ]

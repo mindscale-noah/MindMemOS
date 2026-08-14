@@ -47,7 +47,9 @@ from mindmemos_skill.envs import EnvRolloutContext, SpreadsheetBenchEnv
 from mindmemos_skill.envs.registered_envs.spreadsheetbench.analysis import SpreadsheetBenchReferenceAnalyzer
 from mindmemos_skill.envs.registered_envs.spreadsheetbench.evaluator import compare_workbooks
 from mindmemos_skill.envs.registered_envs.spreadsheetbench.trace2skill_compat import (
+    FORMAT_ERROR_MESSAGE,
     PolicyResponseType,
+    format_reference_observation,
     parse_policy_response,
 )
 from mindmemos_skill.llm import ChatResponse
@@ -241,6 +243,12 @@ Action:
     assert parsed.action is not None
     assert parsed.action.name == "bash"
     assert "{row_data}" in parsed.action.arguments["command"]
+
+
+def test_trace2skill_reference_feedback_uses_observation_protocol() -> None:
+    assert format_reference_observation(FORMAT_ERROR_MESSAGE).startswith(
+        "Observation: Failed to parse your action."
+    )
 
 
 def test_markdown_tree_round_trip_mutation_and_ordered_rendering() -> None:
@@ -532,6 +540,7 @@ Inspect the target cells before saving the output.
     )
     failure_model = ScriptedChatModel(
         [
+            "Action:\n{not valid JSON}",
             "Action:\n"
             + json.dumps(
                 {
@@ -612,7 +621,10 @@ ACTION: TASK_COMPLETE
     assert records[0].items[0].relation_to_skill == "The existing preservation guidance was not followed."
     assert records[0].items[1].skill_reflection == "The skill should emphasize verification after saving."
     assert [call["task"] for call in success_model.calls] == ["analysis:success"]
-    assert [call["task"] for call in failure_model.calls] == ["analysis:error"] * 3
+    assert [call["task"] for call in failure_model.calls] == ["analysis:error"] * 4
+    assert failure_model.calls[1]["messages"][-1]["content"].startswith(
+        "Observation: Failed to parse your action."
+    )
     failure_dir = tmp_path / "analysis" / "error" / "failure-1"
     assert (failure_dir / "evaluate_passed.flag").read_text(encoding="utf-8") == "PASS\n"
     assert (failure_dir / "agent_work" / "output_fixed.xlsx").is_file()
@@ -856,6 +868,51 @@ async def test_spreadsheetbench_reference_policy_preloads_skill_and_exposes_only
     workspace = Path(trajectory.environment.running_dir or "")
     assert (workspace / "preloaded_skills" / "spreadsheet" / "references" / "helper.py").is_file()
     assert (workspace / "gold.xlsx").is_file()
+
+
+@pytest.mark.asyncio
+async def test_spreadsheetbench_reference_policy_formats_parse_errors_as_observations(tmp_path: Path) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    source = tmp_path / "source"
+    source.mkdir()
+    workbook = openpyxl.Workbook()
+    workbook.active["A1"] = 1
+    workbook.save(source / "case_init.xlsx")
+    workbook.save(source / "case_golden.xlsx")
+    workbook.close()
+
+    llm = ScriptedChatModel(
+        [
+            "Action:\n{not valid JSON}",
+            'Action:\n{"name":"bash","arguments":{"command":"cp input.xlsx output.xlsx"}}',
+            "ACTION: TASK_COMPLETE",
+        ]
+    )
+    agent = ReactAgent(
+        {"model": "fake", "max_turns": 3, "skill_injection_mode": "system_prompt"},
+        llm=llm,
+    )
+    task = Task(
+        task_id="sheet-format-retry",
+        instruction="Preserve A1.",
+        metadata={"src_dir": str(source), "answer_position": "A1"},
+    )
+
+    trajectory = await SpreadsheetBenchEnv({"max_turns": 3, "trace2skill_reference_mode": True}).rollout(
+        agent,
+        task,
+        [make_skill("# Spreadsheet\n")],
+        context=EnvRolloutContext(
+            rollout=Rollout(rollout_id="format-retry-rollout"),
+            workspace_root=tmp_path / "runs",
+            env_ref="spreadsheetbench",
+        ),
+    )
+
+    assert trajectory.reward.score == 1.0
+    assert llm.calls[1]["messages"][-1]["content"].startswith(
+        "Observation: Failed to parse your action."
+    )
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,7 @@ from .evaluator import compare_workbooks, workbook_used_ranges
 from .trace2skill_compat import (
     TASK_COMPLETE_SIGNAL,
     PolicyResponseType,
+    format_reference_observation,
     parse_policy_response,
     run_reference_bash,
 )
@@ -242,7 +243,14 @@ class SpreadsheetBenchReferenceAnalyzer:
                 completion_reminded = True
                 continue
             if parsed.response_type is PolicyResponseType.FORMAT_ERROR:
-                messages.append({"role": "user", "content": parsed.error_message or "Invalid action format."})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": format_reference_observation(
+                            parsed.error_message or "Invalid action format."
+                        ),
+                    }
+                )
                 continue
 
             assert parsed.action is not None
@@ -267,7 +275,7 @@ class SpreadsheetBenchReferenceAnalyzer:
                 passed = passed or passed_now
             else:
                 observation = f"Error: unknown tool {parsed.action.name!r}"
-            messages.append({"role": "user", "content": f"Observation: {observation}"})
+            messages.append({"role": "user", "content": format_reference_observation(observation)})
 
         (output_dir / "error_analysis_chat.json").write_text(
             json.dumps(messages, ensure_ascii=False, indent=2),

@@ -28,6 +28,7 @@ from .prompts import build_messages
 from .trace2skill_compat import (
     PolicyResponseType,
     build_reference_messages,
+    format_reference_observation,
     parse_policy_response,
     run_reference_bash,
 )
@@ -252,7 +253,14 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
                     missing_output_reminded = True
                     continue
                 if parsed.response_type is PolicyResponseType.FORMAT_ERROR:
-                    messages.append({"role": "user", "content": parsed.error_message or "Invalid action format."})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": format_reference_observation(
+                                parsed.error_message or "Invalid action format."
+                            ),
+                        }
+                    )
                     continue
 
                 assert parsed.action is not None
@@ -269,7 +277,7 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
                             working_dir=state["workspace"],
                             timeout_seconds=self.config.shell_timeout_seconds,
                         )
-                messages.append({"role": "user", "content": f"Observation: {observation}"})
+                messages.append({"role": "user", "content": format_reference_observation(observation)})
             if not finished and error is None:
                 error = f"ReAct agent reached max_turns={self.config.max_turns} before creating output.xlsx"
         except Exception as exc:
