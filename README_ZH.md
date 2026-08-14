@@ -44,22 +44,6 @@
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
 - **2026-06-30**：MindMemOS 正式发布！
 
-## 📝 引用
-
-如果您的研究使用了 MindMemOS，请引用我们的技术报告：
-
-```bibtex
-@misc{liang2026mindmemos,
-  title        = {MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents},
-  author       = {Liang, Kaichao and Cui, Yuqi and Kong, Hao and Huang, Xinyuan and Hou, Guohaotian and Kang, Qingcan and Chen, Liang and Yin, Yiyang and Ye, Ke and Guo, Jiaquan and Chen, Da and Zeng, Lingan and Peng, Yixing and Yao, Rong and Kai, Shixiong and Yuan, Mingxuan},
-  year         = {2026},
-  eprint       = {2608.12428},
-  archivePrefix= {arXiv},
-  primaryClass = {cs.AI},
-  url          = {https://arxiv.org/abs/2608.12428},
-}
-```
-
 ## 🌟 Core Features
 
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。
@@ -344,3 +328,19 @@ mindmemos skill unregister my-skill
 ## 📄 License
 
 本项目采用 MIT License 开源。
+
+## 📝 引用
+
+如果您的研究使用了 MindMemOS，请引用我们的技术报告：
+
+```bibtex
+@misc{liang2026mindmemos,
+  title        = {MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents},
+  author       = {Liang, Kaichao and Cui, Yuqi and Kong, Hao and Huang, Xinyuan and Hou, Guohaotian and Kang, Qingcan and Chen, Liang and Yin, Yiyang and Ye, Ke and Guo, Jiaquan and Chen, Da and Zeng, Lingan and Peng, Yixing and Yao, Rong and Kai, Shixiong and Yuan, Mingxuan},
+  year         = {2026},
+  eprint       = {2608.12428},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.AI},
+  url          = {https://arxiv.org/abs/2608.12428},
+}
+```
