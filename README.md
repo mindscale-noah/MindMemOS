@@ -40,8 +40,25 @@
 
 ## 📰 News
 
+- **2026-08-14**: We released the [MindMemOS 1.0 technical report](https://arxiv.org/abs/2608.12428), *MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents*.
 - **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.
 - **2026-06-30**: MindMemOS was officially released!
+
+## 📝 Citation
+
+If you find MindMemOS useful in your research, please cite our technical report:
+
+```bibtex
+@misc{liang2026mindmemos,
+  title        = {MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents},
+  author       = {Liang, Kaichao and Cui, Yuqi and Kong, Hao and Huang, Xinyuan and Hou, Guohaotian and Kang, Qingcan and Chen, Liang and Yin, Yiyang and Ye, Ke and Guo, Jiaquan and Chen, Da and Zeng, Lingan and Peng, Yixing and Yao, Rong and Kai, Shixiong and Yuan, Mingxuan},
+  year         = {2026},
+  eprint       = {2608.12428},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.AI},
+  url          = {https://arxiv.org/abs/2608.12428},
+}
+```
 
 ## 🌟 Core Features
 
