@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -59,17 +60,37 @@ def test_recalculation_prompt_is_shared_without_changing_default_prompt(tmp_path
     assert recalculation.STATUS_FILENAME in routed_suffix
     assert f"./{recalculation.TASK_LOCAL_HELPER_FILENAME}" in routed_suffix
     assert str(Path(recalculation.__file__).resolve()) not in routed_suffix
-    assert (tmp_path / recalculation.TASK_LOCAL_HELPER_FILENAME).resolve() == Path(recalculation.__file__).resolve()
+    task_local_helper = tmp_path / recalculation.TASK_LOCAL_HELPER_FILENAME
+    assert task_local_helper.is_file()
+    assert not task_local_helper.is_symlink()
+    assert str(Path(recalculation.__file__).resolve()) not in task_local_helper.read_text(encoding="utf-8")
     assert "Do not substitute another helper or change its paths" in routed_suffix
 
 
-def test_task_local_recalculation_launcher_fallback_is_idempotent(tmp_path: Path) -> None:
-    with patch.object(Path, "symlink_to", side_effect=OSError("symlinks unavailable")):
-        first = recalculation.stage_task_local_helper(tmp_path)
-        second = recalculation.stage_task_local_helper(tmp_path)
+def test_task_local_recalculation_launcher_is_idempotent(tmp_path: Path) -> None:
+    first = recalculation.stage_task_local_helper(tmp_path)
+    second = recalculation.stage_task_local_helper(tmp_path)
 
     assert first == second
-    assert "runpy.run_path" in first.read_text(encoding="utf-8")
+    assert "from mindmemos_skill" in first.read_text(encoding="utf-8")
+
+
+def test_task_local_recalculation_launcher_executes_canonical_helper(tmp_path: Path) -> None:
+    workbook = tmp_path / "output.xlsx"
+    status_path = tmp_path / "status.json"
+    _write_workbook(workbook, formula=False)
+    helper = recalculation.stage_task_local_helper(tmp_path)
+
+    result = subprocess.run(
+        [sys.executable, str(helper), str(workbook), "--status-path", str(status_path)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "not_needed"
 
 
 def test_formula_free_workbook_is_not_modified_or_launched(tmp_path: Path) -> None:

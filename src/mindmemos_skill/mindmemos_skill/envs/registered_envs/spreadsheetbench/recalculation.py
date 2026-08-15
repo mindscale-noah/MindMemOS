@@ -26,20 +26,18 @@ TASK_LOCAL_HELPER_FILENAME = ".treeskill_recalculate.py"
 def stage_task_local_helper(working_dir: str | Path) -> Path:
     """Expose the canonical helper through a stable path inside one task workspace."""
 
-    source = Path(__file__).resolve()
     destination = Path(working_dir).absolute() / TASK_LOCAL_HELPER_FILENAME
-    fallback_launcher = f"import runpy\nrunpy.run_path({str(source)!r}, run_name='__main__')\n"
-    if destination.is_symlink() or destination.exists():
-        if destination.is_symlink() and destination.resolve() == source:
-            return destination
-        if destination.is_file() and destination.read_text(encoding="utf-8") == fallback_launcher:
+    launcher = (
+        "from mindmemos_skill.envs.registered_envs.spreadsheetbench.recalculation import main\n\n"
+        "if __name__ == '__main__':\n"
+        "    raise SystemExit(main())\n"
+    )
+    if destination.exists():
+        if destination.is_file() and destination.read_text(encoding="utf-8") == launcher:
             return destination
         raise FileExistsError(f"task-local recalculation helper already exists: {destination}")
 
-    try:
-        destination.symlink_to(source)
-    except OSError:
-        destination.write_text(fallback_launcher, encoding="utf-8")
+    destination.write_text(launcher, encoding="utf-8")
     return destination
 
 
