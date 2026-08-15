@@ -55,10 +55,21 @@ def test_recalculation_prompt_is_shared_without_changing_default_prompt(tmp_path
     routed_suffix = routed[1]["content"].split("### formula_recalculation", 1)[1]
     full_suffix = full[1]["content"].split("### formula_recalculation", 1)[1]
     assert routed_suffix == full_suffix
-    assert str((tmp_path / "output.xlsx").resolve()) in routed_suffix
-    assert str((tmp_path / recalculation.STATUS_FILENAME).resolve()) in routed_suffix
-    assert str(Path(recalculation.__file__).resolve()) in routed_suffix
-    assert "Do not run a relative `python recalc.py ...` command" in routed_suffix
+    assert "output.xlsx" in routed_suffix
+    assert recalculation.STATUS_FILENAME in routed_suffix
+    assert f"./{recalculation.TASK_LOCAL_HELPER_FILENAME}" in routed_suffix
+    assert str(Path(recalculation.__file__).resolve()) not in routed_suffix
+    assert (tmp_path / recalculation.TASK_LOCAL_HELPER_FILENAME).resolve() == Path(recalculation.__file__).resolve()
+    assert "Do not substitute another helper or change its paths" in routed_suffix
+
+
+def test_task_local_recalculation_launcher_fallback_is_idempotent(tmp_path: Path) -> None:
+    with patch.object(Path, "symlink_to", side_effect=OSError("symlinks unavailable")):
+        first = recalculation.stage_task_local_helper(tmp_path)
+        second = recalculation.stage_task_local_helper(tmp_path)
+
+    assert first == second
+    assert "runpy.run_path" in first.read_text(encoding="utf-8")
 
 
 def test_formula_free_workbook_is_not_modified_or_launched(tmp_path: Path) -> None:

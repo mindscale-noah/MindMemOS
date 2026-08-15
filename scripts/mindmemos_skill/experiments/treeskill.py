@@ -295,6 +295,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     configured_optimizer = _ConfiguredChatModel(optimizer_client, optimizer_generation)
     configured_optimizer_instruct = _ConfiguredChatModel(optimizer_client, target_generation)
     configured_target = _ConfiguredChatModel(target_client, target_generation)
+    reference_policy_temperature = 0.7 if args.trace2skill_reference_mode else None
+    reference_policy_stop = ("Observation:",) if args.trace2skill_reference_mode else None
     collection_agent = build_agent(
         client=configured_target,
         model=args.target_model,
@@ -304,6 +306,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         skill_injection_mode=(
             SkillInjectionMode.SYSTEM_PROMPT if args.trace2skill_reference_mode else SkillInjectionMode.TOOL
         ),
+        temperature=reference_policy_temperature,
+        stop=reference_policy_stop,
     )
     routed_agent = build_agent(
         client=configured_target,
@@ -314,6 +318,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         skill_injection_mode=SkillInjectionMode.TREE_ROUTED_SYSTEM_PROMPT,
         tree_router_temperature=args.tree_router_temperature,
         tree_router_max_tokens=args.tree_router_max_tokens,
+        temperature=reference_policy_temperature,
+        stop=reference_policy_stop,
     )
     config = TreeSkillConfig(
         min_trajectories=args.min_trajectories,

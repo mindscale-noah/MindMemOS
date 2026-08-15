@@ -276,7 +276,12 @@ def build_agent(
     skill_injection_mode: SkillInjectionMode = SkillInjectionMode.TOOL,
     tree_router_temperature: float = 0.0,
     tree_router_max_tokens: int = 512,
+    temperature: float | None = None,
+    stop: Sequence[str] | None = None,
 ) -> ReactAgent:
+    model_kwargs: dict[str, Any] = {"max_completion_tokens": max_completion_tokens}
+    if stop is not None:
+        model_kwargs["stop"] = list(stop)
     return ReactAgent(
         {
             "model": model,
@@ -285,7 +290,8 @@ def build_agent(
             "skill_injection_mode": skill_injection_mode,
             "tree_router_temperature": tree_router_temperature,
             "tree_router_max_tokens": tree_router_max_tokens,
-            "model_kwargs": {"max_completion_tokens": max_completion_tokens},
+            "temperature": temperature,
+            "model_kwargs": model_kwargs,
         },
         llm=client,
     )

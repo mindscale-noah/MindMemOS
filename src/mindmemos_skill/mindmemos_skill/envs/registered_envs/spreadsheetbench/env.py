@@ -90,6 +90,7 @@ class SpreadsheetBenchEnvConfig(EnvConfig):
     shell_timeout_seconds: int = Field(default=120, ge=1)
     transactional_recalculation: bool = False
     trace2skill_reference_mode: bool = False
+    reference_stagnation_limit: int = Field(default=5, ge=2)
 
 
 @register(type=ComponentType.ENV, name="spreadsheetbench")
@@ -225,7 +226,20 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         execution_exception_type: str | None = None
         finished = False
         missing_output_reminded = False
+        last_interaction_signature: str | None = None
+        repeated_interactions = 0
+        stagnation_detected = False
         turns = 0
+
+        def repeated_without_progress(signature: str) -> bool:
+            nonlocal last_interaction_signature, repeated_interactions
+            if signature == last_interaction_signature:
+                repeated_interactions += 1
+            else:
+                last_interaction_signature = signature
+                repeated_interactions = 1
+            return repeated_interactions >= self.config.reference_stagnation_limit
+
         try:
             for turns in range(1, self.config.max_turns + 1):
                 response = await agent.respond(prepared.agent_request, messages, tools=None)
@@ -253,14 +267,20 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
                     missing_output_reminded = True
                     continue
                 if parsed.response_type is PolicyResponseType.FORMAT_ERROR:
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": format_reference_observation(
-                                parsed.error_message or "Invalid action format."
-                            ),
-                        }
+                    feedback = format_reference_observation(parsed.error_message or "Invalid action format.")
+                    messages.append({"role": "user", "content": feedback})
+                    signature = json.dumps(
+                        {"response_type": "format_error", "response": content, "feedback": feedback},
+                        sort_keys=True,
+                        ensure_ascii=False,
                     )
+                    if repeated_without_progress(signature):
+                        stagnation_detected = True
+                        error = (
+                            "ReAct agent repeated an identical format error "
+                            f"{self.config.reference_stagnation_limit} consecutive times"
+                        )
+                        break
                     continue
 
                 assert parsed.action is not None
@@ -277,7 +297,26 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
                             working_dir=state["workspace"],
                             timeout_seconds=self.config.shell_timeout_seconds,
                         )
-                messages.append({"role": "user", "content": format_reference_observation(observation)})
+                feedback = format_reference_observation(observation)
+                messages.append({"role": "user", "content": feedback})
+                signature = json.dumps(
+                    {
+                        "response_type": "action",
+                        "name": parsed.action.name,
+                        "arguments": parsed.action.arguments,
+                        "observation": observation,
+                    },
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    default=str,
+                )
+                if repeated_without_progress(signature):
+                    stagnation_detected = True
+                    error = (
+                        "ReAct agent repeated an identical action/result pair "
+                        f"{self.config.reference_stagnation_limit} consecutive times"
+                    )
+                    break
             if not finished and error is None:
                 error = f"ReAct agent reached max_turns={self.config.max_turns} before creating output.xlsx"
         except Exception as exc:
@@ -296,6 +335,8 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
                 "trace2skill_reference_mode": True,
             }
         )
+        if stagnation_detected:
+            metadata["stagnation_detected"] = True
         if execution_exception_type is not None:
             metadata["execution_exception_type"] = execution_exception_type
         return agent.build_trajectory(

@@ -206,6 +206,22 @@ def test_build_skill_can_include_package_resources_explicitly(tmp_path: Path) ->
     assert skill.resources == {"helper.py": "print('helper')\n"}
 
 
+def test_build_agent_can_pin_reference_policy_decoding() -> None:
+    agent = evaluation.build_agent(
+        client=object(),
+        model="fake",
+        max_turns=100,
+        reasoning_effort=None,
+        max_completion_tokens=16384,
+        temperature=0.7,
+        stop=("Observation:",),
+    )
+
+    assert agent.config.temperature == 0.7
+    assert agent.config.model_kwargs["stop"] == ["Observation:"]
+    assert agent.config.model_kwargs["max_completion_tokens"] == 16384
+
+
 def test_reference_configuration_requires_exact_local_skill_package(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

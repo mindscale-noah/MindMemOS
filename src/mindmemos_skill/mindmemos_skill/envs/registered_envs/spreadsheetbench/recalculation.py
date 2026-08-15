@@ -20,6 +20,27 @@ from typing import Any
 EXCEL_ERRORS = ("#VALUE!", "#DIV/0!", "#REF!", "#NAME?", "#NULL!", "#NUM!", "#N/A")
 LIBREOFFICE_PROGRAM_RELATIVE_PATH = Path("libreoffice-appimage/squashfs-root/opt/libreoffice24.2/program")
 STATUS_FILENAME = ".tree_only_recalc_status.json"
+TASK_LOCAL_HELPER_FILENAME = ".treeskill_recalculate.py"
+
+
+def stage_task_local_helper(working_dir: str | Path) -> Path:
+    """Expose the canonical helper through a stable path inside one task workspace."""
+
+    source = Path(__file__).resolve()
+    destination = Path(working_dir).absolute() / TASK_LOCAL_HELPER_FILENAME
+    fallback_launcher = f"import runpy\nrunpy.run_path({str(source)!r}, run_name='__main__')\n"
+    if destination.is_symlink() or destination.exists():
+        if destination.is_symlink() and destination.resolve() == source:
+            return destination
+        if destination.is_file() and destination.read_text(encoding="utf-8") == fallback_launcher:
+            return destination
+        raise FileExistsError(f"task-local recalculation helper already exists: {destination}")
+
+    try:
+        destination.symlink_to(source)
+    except OSError:
+        destination.write_text(fallback_launcher, encoding="utf-8")
+    return destination
 
 
 def append_recalculation_instructions(
@@ -30,16 +51,20 @@ def append_recalculation_instructions(
 ) -> str:
     """Append the canonical transactional recalculation command to a task prompt."""
 
-    helper_path = Path(__file__).resolve()
-    output_path = Path(output_file).resolve()
-    status_path = Path(working_dir).resolve() / STATUS_FILENAME
+    workspace = Path(working_dir).absolute()
+    helper_path = stage_task_local_helper(workspace)
+    output_path = Path(output_file).absolute()
+    status_path = workspace / STATUS_FILENAME
+    output_argument = (
+        output_path.relative_to(workspace).as_posix() if output_path.is_relative_to(workspace) else str(output_path)
+    )
     command = shlex.join(
         [
             str(Path(sys.executable).resolve()),
-            str(helper_path),
-            str(output_path),
+            f"./{helper_path.name}",
+            output_argument,
             "--status-path",
-            str(status_path),
+            status_path.name,
         ]
     )
     return (
@@ -48,8 +73,8 @@ def append_recalculation_instructions(
         "If you create or modify formulas in the output workbook, save it and then "
         "run this exact command before signaling completion:\n"
         f"{command}\n\n"
-        "This command is the canonical recalculation command for this run. Do not run "
-        "a relative `python recalc.py ...` command. A `success` or `not_needed` JSON "
+        "This command is the canonical task-local recalculation command for this run. "
+        "Do not substitute another helper or change its paths. A `success` or `not_needed` JSON "
         "status permits completion. If it reports `errors_found` or `failure`, inspect "
         "the reported problem, correct the workbook when possible using task-visible "
         "information, and rerun the same command."

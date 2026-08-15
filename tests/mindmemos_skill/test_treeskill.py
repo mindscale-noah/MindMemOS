@@ -246,9 +246,7 @@ Action:
 
 
 def test_trace2skill_reference_feedback_uses_observation_protocol() -> None:
-    assert format_reference_observation(FORMAT_ERROR_MESSAGE).startswith(
-        "Observation: Failed to parse your action."
-    )
+    assert format_reference_observation(FORMAT_ERROR_MESSAGE).startswith("Observation: Failed to parse your action.")
 
 
 def test_markdown_tree_round_trip_mutation_and_ordered_rendering() -> None:
@@ -622,9 +620,7 @@ ACTION: TASK_COMPLETE
     assert records[0].items[1].skill_reflection == "The skill should emphasize verification after saving."
     assert [call["task"] for call in success_model.calls] == ["analysis:success"]
     assert [call["task"] for call in failure_model.calls] == ["analysis:error"] * 4
-    assert failure_model.calls[1]["messages"][-1]["content"].startswith(
-        "Observation: Failed to parse your action."
-    )
+    assert failure_model.calls[1]["messages"][-1]["content"].startswith("Observation: Failed to parse your action.")
     failure_dir = tmp_path / "analysis" / "error" / "failure-1"
     assert (failure_dir / "evaluate_passed.flag").read_text(encoding="utf-8") == "PASS\n"
     assert (failure_dir / "agent_work" / "output_fixed.xlsx").is_file()
@@ -864,6 +860,9 @@ async def test_spreadsheetbench_reference_policy_preloads_skill_and_exposes_only
     assert len(llm.calls) == 2
     assert all("tools" not in call for call in llm.calls)
     assert "Inspect before editing." in llm.calls[0]["messages"][0]["content"]
+    assert llm.calls[0]["messages"][1]["content"].startswith(
+        "Task: Below is the spreadsheet manipulation question you need to solve:"
+    )
     assert "### answer_position\nA1" in llm.calls[0]["messages"][1]["content"]
     workspace = Path(trajectory.environment.running_dir or "")
     assert (workspace / "preloaded_skills" / "spreadsheet" / "references" / "helper.py").is_file()
@@ -910,9 +909,49 @@ async def test_spreadsheetbench_reference_policy_formats_parse_errors_as_observa
     )
 
     assert trajectory.reward.score == 1.0
-    assert llm.calls[1]["messages"][-1]["content"].startswith(
-        "Observation: Failed to parse your action."
+    assert llm.calls[1]["messages"][-1]["content"].startswith("Observation: Failed to parse your action.")
+
+
+@pytest.mark.asyncio
+async def test_spreadsheetbench_reference_policy_stops_identical_action_result_loops(tmp_path: Path) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    source = tmp_path / "source"
+    source.mkdir()
+    workbook = openpyxl.Workbook()
+    workbook.active["A1"] = 1
+    workbook.save(source / "case_init.xlsx")
+    workbook.save(source / "case_golden.xlsx")
+    workbook.close()
+
+    repeated_action = 'Action:\n{"name":"bash","arguments":{"command":"false"}}'
+    llm = ScriptedChatModel([repeated_action] * 5)
+    agent = ReactAgent(
+        {"model": "fake", "max_turns": 100, "skill_injection_mode": "system_prompt"},
+        llm=llm,
     )
+    task = Task(
+        task_id="sheet-stagnation",
+        instruction="Preserve A1.",
+        metadata={"src_dir": str(source), "answer_position": "A1"},
+    )
+
+    trajectory = await SpreadsheetBenchEnv(
+        {"max_turns": 100, "trace2skill_reference_mode": True, "reference_stagnation_limit": 5}
+    ).rollout(
+        agent,
+        task,
+        [make_skill("# Spreadsheet\n")],
+        context=EnvRolloutContext(
+            rollout=Rollout(rollout_id="stagnation-rollout"),
+            workspace_root=tmp_path / "runs",
+            env_ref="spreadsheetbench",
+        ),
+    )
+
+    assert len(llm.calls) == 5
+    assert trajectory.metadata["stagnation_detected"] is True
+    assert trajectory.execution.error_info is not None
+    assert "identical action/result pair 5 consecutive times" in trajectory.execution.error_info
 
 
 @pytest.mark.asyncio

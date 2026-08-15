@@ -73,7 +73,7 @@ def build_reference_messages(
     template = files(f"{__package__}.prompt_templates").joinpath(prompt_name).read_text(encoding="utf-8")
     system = template.replace("{skill_content}", _strip_frontmatter(skill_content))
     system = system.replace("{skill_dir}", str(skill_dir.resolve()) if skill_dir is not None else "")
-    user = f"""Below is the spreadsheet manipulation question you need to solve:
+    user = f"""Task: Below is the spreadsheet manipulation question you need to solve:
 
 ### working_directory
 {working_dir.resolve()}
