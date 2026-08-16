@@ -21,6 +21,7 @@ from mindmemos_skill.envs.registered_envs.alfworld_bounded_history.env import AL
 from mindmemos_skill.envs.registered_envs.livemath import build_system, build_user, evaluate, refinement
 from mindmemos_skill.envs.registered_envs.livemath.env import LiveMathEnvConfig
 from mindmemos_skill.envs.registered_envs.spreadsheetbench.env import SpreadsheetBenchEnvConfig
+from mindmemos_skill.envs.registered_envs.spreadsheetbench.prompts import build_messages as spreadsheetbench_messages
 from mindmemos_skill.llm import ChatResponse
 from mindmemos_skill.typing import (
     Rollout,
@@ -81,6 +82,22 @@ def test_builtin_env_configs_only_accept_max_turns() -> None:
 
     with pytest.raises(ValueError, match="max_steps"):
         ALFWorldBoundedHistoryEnvConfig.model_validate({"max_steps": 3})
+
+
+def test_spreadsheetbench_prompt_exposes_qualified_answer_position() -> None:
+    task = Task(
+        task_id="case-1",
+        instruction="Fill the requested output cells.",
+        metadata={"answer_position": "B2:B5", "answer_sheet": "Results"},
+    )
+
+    messages = spreadsheetbench_messages(task=task, skill_names=[])
+
+    assert (
+        "Answer position (cells to verify) — these are the cells that will be graded, "
+        "so make sure their final computed values are correct:\nResults!B2:B5"
+        in messages[1]["content"]
+    )
 
 
 def test_alfworld_bounded_history_prompt_keeps_only_two_recent_steps() -> None:
