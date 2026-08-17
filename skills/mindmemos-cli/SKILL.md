@@ -1,6 +1,6 @@
 ---
 name: mindmemos-cli
-description: Give an AI agent persistent, cross-session long-term memory through MindMemOS. Covers installing and authenticating the mindmemos CLI, the full command interface (add / search / get / update / delete / feedback / dreaming) with parameters and examples, guidance on which capability to use when, plus a Python SDK example. To wire memory into a specific agent host (OpenClaw, Codex, Claude, etc.), see references/.
+description: Give an AI agent persistent, cross-session long-term memory through MindMemOS. Covers installing and authenticating the mindmemos CLI, the full command interface (add / search / get / update / delete / feedback / dreaming) with parameters and examples, guidance on which capability to use when, plus a Python SDK example. To wire memory into a specific agent host (OpenClaw, DeepSeek Harness, Codex, Claude, etc.), see references/.
 ---
 
 # MindMemOS CLI
@@ -18,14 +18,14 @@ live under `references/` — see [Host integrations](#host-integrations).
 
 ## Install the CLI
 
-The CLI ships as the Python package `mindmemos` and exposes a `mindmemos`
+The CLI ships as the Python package `mindmemos-sdk` and exposes a `mindmemos`
 executable.
 
 ```bash
-pip install mindmemos
+pip install mindmemos-sdk
 # or, isolated so it's on PATH globally (recommended):
-pipx install mindmemos
-uv tool install mindmemos
+pipx install mindmemos-sdk
+uv tool install mindmemos-sdk
 ```
 
 Authenticate once. This writes a local config (API key, default user id, base URL). Operations that require a
@@ -256,5 +256,6 @@ automatically (rather than calling the CLI by hand), follow the host-specific
 guide. All hosts depend on the CLI installed and authenticated above.
 
 - **OpenClaw** — [references/openclaw-plugin.md](references/openclaw-plugin.md)
+- **DeepSeek Harness** — [references/deepseek-harness-plugin.md](references/deepseek-harness-plugin.md)
 - _Codex_ — planned
 - _Claude_ — planned
