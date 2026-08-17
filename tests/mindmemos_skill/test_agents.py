@@ -99,6 +99,7 @@ def test_list_agents_uses_agent_type_values() -> None:
     assert list_agents() == [
         AgentType.CLAUDE.value,
         AgentType.CLAUDE_SDK.value,
+        AgentType.DEEPSEEK_HARNESS.value,
         AgentType.OPENCLAW.value,
         AgentType.REACT.value,
     ]

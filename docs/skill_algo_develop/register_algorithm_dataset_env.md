@@ -9,7 +9,7 @@
 | 注册表 | 位置 | 负责内容 |
 | --- | --- | --- |
 | 组件注册表 | `src/mindmemos_skill/mindmemos_skill/registry/_registry.py` | 让 Application 和运行时按名称构造 `ALGO`、`DATASET`、`ENV`、`AGENT` |
-| 实验注册表 | `scripts/mindmemos_skill/experiments/registry.py` | 让统一实验入口按 `method` 选择算法 adapter、家族 runner、支持的环境和可选依赖 |
+| 实验注册表 | `scripts/mindmemos_skill/experiments/registry.py` | 让统一实验入口按 `method` 选择算法 adapter、家族 runner 和内置环境的可选依赖 |
 
 `@register(...)` 只完成包内组件注册，不会自动生成 CLI、实验参数、Dataset 构造逻辑或 YAML。一个算法如果只供 `SkillApplication` 使用，只注册组件即可；如果还要通过 `scripts/run_mindmemos_skill_experiment.sh` 运行，则必须同时注册实验 adapter。
 
@@ -128,16 +128,18 @@ runtime:
 ```python
 _evolve(
     "my_algorithm",
-    environments=frozenset({"mybench"}),
     environment_extras={"mybench": ("mybench",)},
     inject_environment_as_benchmark=True,
 )
 ```
 
-- `environments` 是该方法允许的顶层 `environment`。
 - `environment_extras` 中的值必须对应 `src/mindmemos_skill/pyproject.toml` 已定义的 optional dependency extra。
-- adapter 接受 `--benchmark`，且其值应等于顶层 `environment` 时，设置 `inject_environment_as_benchmark=True`。
+- adapter 接受 `--benchmark`，并希望把顶层 `environment` 作为内置组件默认值时，设置
+  `inject_environment_as_benchmark=True`。显式 `parameters.dataset.benchmark` 可以覆盖该默认值。
 - `common_extras` 默认包含 `llm`；不需要 LLM 或需要额外通用依赖时可显式覆盖。
+
+实验注册表不维护算法到环境的支持白名单。adapter 应接受 `dataset_ref`、`dataset_options`、`env_ref`、
+`env_options`，并通过组件注册表解析，不得用 `argparse choices` 或 benchmark 分支拒绝自定义组件。
 
 不要新增算法专属 Shell 脚本，也不要在 `scripts/mindmemos_skill/runners/` 增加第三个文件；该目录固定只有 `evolve.py` 和 `trace2skill.py`。
 
@@ -202,7 +204,9 @@ dataset = create(
 )
 ```
 
-当前实验 adapters 仍显式实现各 benchmark 的 `argparse` 参数和 `build_dataset(...)` 分支，因此仅注册 Dataset 不会让统一实验入口自动识别它。需要在所有支持该 Dataset 的 adapter 中补充 CLI choice、构造参数和路径默认值。顶层 `environment: mybench` 是实验环境名，不是 Dataset 的组件注册名 `mybench_split`。
+统一实验 adapters 通过 `dataset_ref` 和 `dataset_options` 创建注册 Dataset。内置 benchmark 可以省略
+`dataset_ref` 使用默认映射；自定义 benchmark 必须显式提供注册名。顶层 `environment: mybench` 是默认
+benchmark 标签，不是 Dataset 的组件注册名 `mybench_split`。
 
 大型原始数据放在被 Git 忽略的 `data/mindmemos_skill/`，固定划分和初始 Skill 放在 `resources/mindmemos_skill/`；不要把数据下载、网络访问或模型调用放进 Dataset 构造函数。
 
@@ -287,8 +291,9 @@ env = get_env(name="mybench", config={"success_marker": "PASS"})
 2. 再定义 Env，验证 prompt/action/feedback/reward 和 trajectory metadata。
 3. 更新两个 `registered_*` 父包的导入和公开导出。
 4. 先用 `create(ComponentType.DATASET, ...)` 与 `get_env(...)` 做包内 smoke test。
-5. 在目标算法 adapter 中增加 benchmark 参数、Dataset 构造和 `env_options`。
-6. 在实验注册表中把新环境加入目标算法的 `environments`，并声明 optional extra。
+5. 在实验 YAML 中填写 `dataset_ref`、`dataset_options`、`env_ref` 和 `env_options`。
+6. 内置环境依赖在实验注册表的 `environment_extras` 声明；外部组件使用
+   `launcher.extra_dependencies` 和 `launcher.component_modules`。
 7. 增加 `config/mindmemos_skill/<method>/<environment>/<name>.yaml`。
 8. 先执行 `--dry-run`，确认 method、environment、extra、最终参数、runner 和输出路径，再运行最小 smoke experiment。
 

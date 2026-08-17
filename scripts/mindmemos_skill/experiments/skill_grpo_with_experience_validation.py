@@ -21,12 +21,13 @@ from mindmemos_skill.algos.evolve.skill_grpo_with_experience_validation import (
 )
 from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer import MappingAgentResolver, RegistryEnvFactory
 from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.contracts import RolloutPhase
-from mindmemos_skill.datasets import ALFWorldPathSplitDataset
+from mindmemos_skill.datasets import TaskDataset
 from mindmemos_skill.llm import DatabaseLLMCallSink, LLMCallSink, LLMClient, get_router
 from mindmemos_skill.logging import AlgorithmLogger
 from mindmemos_skill.persistence import bootstrap_skill_database
 from mindmemos_skill.typing import Skill, compute_skill_content_hash
 
+from .component_selection import build_registered_dataset, build_registered_env_options, json_object
 from .skill_evaluation import persist_test_artifacts
 
 
@@ -41,9 +42,13 @@ class ChatModelWithDefaults:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--env-ref", default="alfworld_bounded_history", help="registered ALFWorld Env")
-    parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--split-dir", type=Path, required=True)
+    parser.add_argument("--benchmark", required=True, help="artifact label and built-in component default")
+    parser.add_argument("--dataset-ref", help="registered Dataset name")
+    parser.add_argument("--dataset-options", type=json_object, default={}, help="JSON options for the Dataset factory")
+    parser.add_argument("--env-ref", help="registered Env override; ALFWorld defaults to alfworld_bounded_history")
+    parser.add_argument("--env-options", type=json_object, default={}, help="JSON options for the Env factory")
+    parser.add_argument("--data-root", type=Path)
+    parser.add_argument("--split-dir", type=Path)
     parser.add_argument("--initial-skill", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
@@ -62,18 +67,42 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=32)
     parser.add_argument("--max-concurrent-extractions", type=int, default=16)
+    parser.add_argument("--reflection", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-concurrent-reflections", type=int, default=8)
     parser.add_argument("--rollout-retries", type=int, default=3)
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--fail-fast", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--max-turns", type=int, required=True)
-    parser.add_argument("--env-seed", type=int, default=42)
+    parser.add_argument("--docs-root", type=Path)
+    parser.add_argument("--env-seed", type=int)
+    parser.add_argument("--shell-timeout", type=int, default=120)
+    parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-sketch", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--shuffle-choices", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-experiences-per-task", type=int, default=3)
+    parser.add_argument("--max-tool-observation-chars", type=int)
+    parser.add_argument(
+        "--previous-batch-invalid-experience-feedback",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
     parser.add_argument("--max-patch-edits", type=int, default=6)
     parser.add_argument("--patch-attempts", type=int, default=2)
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
     return parser.parse_args(argv)
+
+
+def build_dataset(args: argparse.Namespace) -> TaskDataset:
+    return build_registered_dataset(
+        benchmark=args.benchmark,
+        dataset_ref=args.dataset_ref,
+        dataset_options=args.dataset_options,
+        data_root=args.data_root,
+        split_dir=args.split_dir,
+        seed=args.seed,
+        shuffle_choices=args.shuffle_choices,
+    )
 
 
 def build_client(
@@ -96,27 +125,42 @@ def build_skill(args: argparse.Namespace) -> Skill:
     blob = {"SKILL.md": content}
     now = datetime.now(UTC)
     return Skill(
-        skill_id="alfworld-skill",
+        skill_id=f"{args.benchmark}-skill",
         version_id=f"{args.run_id}:base",
         version_label="0.1.0",
         content_hash=compute_skill_content_hash(blob),
-        name="alfworld",
+        name=args.benchmark,
         blob=blob,
         created_at=now,
     )
 
 
 def build_run_config(args: argparse.Namespace) -> SkillGrpoWithExperienceValidationRunConfig:
+    env_ref, env_options = build_registered_env_options(
+        benchmark=args.benchmark,
+        env_ref=args.env_ref,
+        env_options=args.env_options,
+        max_turns=args.max_turns,
+        env_seed=args.seed if args.env_seed is None else args.env_seed,
+        shell_timeout=args.shell_timeout,
+        use_theorem=args.use_theorem,
+        use_sketch=args.use_sketch,
+        docs_root=args.docs_root,
+    )
     return SkillGrpoWithExperienceValidationRunConfig.model_validate(
         {
             "algorithm": {
                 "reflection": {
-                    "enabled": True,
+                    "enabled": args.reflection,
                     "max_concurrent_reflections": args.max_concurrent_reflections,
                 },
                 "experience": {
                     "max_experiences_per_task": args.max_experiences_per_task,
                     "max_concurrent_extractions": args.max_concurrent_extractions,
+                    "max_tool_observation_chars": args.max_tool_observation_chars,
+                },
+                "previous_batch_invalid_experience_feedback": {
+                    "enabled": args.previous_batch_invalid_experience_feedback,
                 },
                 "patch": {"max_edits": args.max_patch_edits, "max_attempts": args.patch_attempts},
             },
@@ -138,12 +182,9 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithExperienceValidat
                 "test": {"name": "fixed_group", "params": {"group_size": args.test_rollouts}},
             },
             "dataset": {
-                "env_ref": args.env_ref,
+                "env_ref": env_ref,
                 "agent_ref": "react",
-                "env_options": {
-                    "max_turns": args.max_turns,
-                    "seed": args.env_seed,
-                },
+                "env_options": env_options,
                 "agent_options": {},
             },
         }
@@ -151,7 +192,54 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithExperienceValidat
 
 
 def write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def write_text_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(content, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+class BatchCheckpointWriter:
+    """Persist the exact Skill and audit record immediately after every batch."""
+
+    def __init__(self, *, output_dir: Path) -> None:
+        self.output_dir = output_dir
+
+    async def handle(self, event: Any) -> None:
+        if event.name == "invalid_experience_feedback_generated":
+            batch_index = int(event.payload["source_batch_index"])
+            batch_dir = self.output_dir / "batch_artifacts" / f"batch_{batch_index + 1:04d}"
+            write_json_atomic(
+                batch_dir / "invalid_experience_feedback.json",
+                {"run_id": event.run_id, **event.payload},
+            )
+            return
+        if event.name != "checkpoint_ready":
+            return
+        batch_index = int(event.payload["batch_index"])
+        checkpoint = {
+            "run_id": event.run_id,
+            "batch_index": batch_index,
+            "current_skill": event.payload["current_skill"],
+            "batch": event.payload["batch"],
+        }
+        batch_dir = self.output_dir / "batch_artifacts" / f"batch_{batch_index + 1:04d}"
+        write_json_atomic(batch_dir / "checkpoint.json", checkpoint)
+        write_json_atomic(batch_dir / "skill.json", checkpoint["current_skill"])
+        write_json_atomic(batch_dir / "batch.json", checkpoint["batch"])
+        write_text_atomic(batch_dir / "skill.md", checkpoint["current_skill"]["blob"]["SKILL.md"])
+        write_json_atomic(self.output_dir / "checkpoint.json", checkpoint)
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -160,10 +248,11 @@ async def run(args: argparse.Namespace) -> None:
     if args.train_limit is not None and args.train_limit < 1:
         raise ValueError("train-limit must be positive")
     started_at = monotonic()
-    dataset = ALFWorldPathSplitDataset(split_dir=args.split_dir, alfworld_data=args.data_root)
+    dataset = build_dataset(args)
     train_tasks = dataset.train_tasks()
     if args.train_limit is not None:
         train_tasks = train_tasks[: args.train_limit]
+    validation_tasks = dataset.validation_tasks()
     test_tasks = dataset.test_tasks()
     if args.test_limit is not None:
         if args.test_limit < 1:
@@ -179,6 +268,10 @@ async def run(args: argparse.Namespace) -> None:
     )
     write_json(args.output_dir / "run_config.json", config.model_dump(mode="json"))
     write_json(args.output_dir / "base_skill.json", base_skill.model_dump(mode="json"))
+    write_json(
+        args.output_dir / "dataset_counts.json",
+        {"train": len(train_tasks), "validation": len(validation_tasks), "test": len(test_tasks)},
+    )
 
     database = await bootstrap_skill_database(args.output_dir / "state.db")
     call_sink = DatabaseLLMCallSink(database)
@@ -197,10 +290,12 @@ async def run(args: argparse.Namespace) -> None:
         },
         llm=target_client,
     )
+    checkpoint_writer = BatchCheckpointWriter(output_dir=args.output_dir)
     algorithm = SkillGrpoWithExperienceValidation(
         chat_model=optimizer_client,
         agent_resolver=MappingAgentResolver({"react": agent}),
         env_factory=RegistryEnvFactory(),
+        on_event=checkpoint_writer.handle,
         logger=AlgorithmLogger(
             algorithm_name=SkillGrpoWithExperienceValidation.algorithm_name,
             algorithm_version=config.algorithm.version,
@@ -235,6 +330,33 @@ async def run(args: argparse.Namespace) -> None:
     extracted_by_source = Counter(
         experience.source.value for batch in result.batches for experience in batch.experiences
     )
+    rejected_by_source = Counter(
+        validation.source.value
+        for batch in result.batches
+        for validation in batch.experience_validations
+        if validation.decision.value == "rejected"
+    )
+    batch_summaries = []
+    for batch in result.batches:
+        extracted = Counter(experience.source.value for experience in batch.experiences)
+        accepted = Counter(experience.source.value for experience in batch.accepted_experiences)
+        rejected = Counter(
+            validation.source.value
+            for validation in batch.experience_validations
+            if validation.decision.value == "rejected"
+        )
+        batch_summaries.append(
+            {
+                "epoch": batch.epoch,
+                "batch_index": batch.batch_index,
+                "extracted_by_source": dict(extracted),
+                "accepted_by_source": dict(accepted),
+                "rejected_by_source": dict(rejected),
+                "applied_edits": len(batch.applied_edits),
+                "patch_decision": batch.patch_decision.value,
+                "skill_hash_after": batch.skill_hash_after,
+            }
+        )
     write_json(
         args.output_dir / "summary.json",
         {
@@ -243,6 +365,8 @@ async def run(args: argparse.Namespace) -> None:
             "metrics": result.metrics.model_dump(mode="json"),
             "extracted_by_source": dict(extracted_by_source),
             "accepted_by_source": dict(accepted_by_source),
+            "rejected_by_source": dict(rejected_by_source),
+            "batches": batch_summaries,
             "final_skill_hash": result.final_skill.content_hash,
             "test": test_summary,
             "elapsed_seconds": monotonic() - started_at,

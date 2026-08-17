@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
-from typing import Any
 
 from ....persistence.enums import SkillVersionOrigin, SkillVersionStatus
 from ....typing import Skill, compute_skill_content_hash
 from ..skill_grpo_with_replay_buffer.contracts import RolloutOutcome
 from .contracts import (
+    ExperienceExtractionPayload,
     ExperienceSource,
     ExperienceValidationDecision,
     ExperienceValidationRecord,
@@ -21,27 +20,10 @@ def render_experience_guidance(content: str) -> str:
     """Render only reusable lesson/reason fields for agent injection."""
 
     try:
-        payload: Any = json.loads(content)
-    except (TypeError, ValueError):
-        return content.strip()
-    if not isinstance(payload, dict):
-        return content.strip()
-    items = payload.get("experiences")
-    if not isinstance(items, list):
-        return content.strip()
-    lines: list[str] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        lesson = item.get("lesson")
-        reason = item.get("reason")
-        if not isinstance(lesson, str) or not lesson.strip():
-            continue
-        line = f"- {lesson.strip()}"
-        if isinstance(reason, str) and reason.strip():
-            line += f" Rationale: {reason.strip()}"
-        lines.append(line)
-    return "\n".join(lines)
+        payload = ExperienceExtractionPayload.model_validate_json(content)
+    except ValueError:
+        return ""
+    return "\n".join(f"- {item.lesson} Rationale: {item.reason}" for item in payload.experiences)
 
 
 def inject_experience(

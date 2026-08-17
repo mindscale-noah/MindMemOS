@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -99,6 +100,88 @@ def test_replay_buffer_does_not_restrict_environment_or_dataset(tmp_path: Path) 
     assert invocation.resolved_config["resolved"]["extras"] == ["llm", "alfworld"]
 
 
+@pytest.mark.parametrize(
+    "config_path",
+    [
+        CONFIG_ROOT / "skill_grpo_with_replay_buffer" / "alfworld" / "gpt54mini_epoch4.yaml",
+        CONFIG_ROOT / "skill_grpo_without_replay_buffer" / "alfworld" / "default.yaml",
+        CONFIG_ROOT / "skill_grpo_with_experience_validation" / "alfworld" / "default.yaml",
+        CONFIG_ROOT / "task_virtual_skill" / "spreadsheetbench" / "default.yaml",
+        CONFIG_ROOT / "tree_skill_grpo" / "alfworld" / "default.yaml",
+        CONFIG_ROOT / "trajectory_memory" / "alfworld" / "default.yaml",
+        CONFIG_ROOT / "experience_memory_embedding" / "alfworld" / "default.yaml",
+        CONFIG_ROOT / "initial_skill_evaluation" / "alfworld" / "default.yaml",
+        CONFIG_ROOT / "skill_evaluation" / "alfworld" / "default.yaml",
+        CONFIG_ROOT / "trajectory_evidence_patch" / "alfworld" / "default.yaml",
+    ],
+)
+def test_registered_component_experiments_accept_custom_dataset_and_env(config_path: Path, tmp_path: Path) -> None:
+    invocation = SCRIPT.build_invocation(
+        config_path,
+        overrides=[
+            "environment=custom-benchmark",
+            "dataset.dataset_ref=user_dataset",
+            "dataset.env_ref=user_env",
+        ],
+        env_file_override=empty_env_file(tmp_path),
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    assert invocation.environment == "custom-benchmark"
+    assert invocation.command[invocation.command.index("--benchmark") + 1] == "custom-benchmark"
+    assert invocation.command[invocation.command.index("--dataset-ref") + 1] == "user_dataset"
+    assert invocation.command[invocation.command.index("--env-ref") + 1] == "user_env"
+
+
+def test_experience_validation_can_enable_previous_batch_invalid_feedback_by_override(tmp_path: Path) -> None:
+    invocation = SCRIPT.build_invocation(
+        CONFIG_ROOT / "skill_grpo_with_experience_validation" / "alfworld" / "default.yaml",
+        overrides=["algorithm.previous_batch_invalid_experience_feedback=true"],
+        env_file_override=empty_env_file(tmp_path),
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    assert "--previous-batch-invalid-experience-feedback" in invocation.command
+
+
+def test_launcher_passes_external_component_modules_to_runner(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "experiment.yaml",
+        {
+            "version": 1,
+            "method": "skill_grpo_with_replay_buffer",
+            "environment": "custom-benchmark",
+            "launcher": {
+                "component_modules": ["acme_skill_components", "team_benchmark.components"],
+                "extra_dependencies": ["acme-benchmark"],
+            },
+            "parameters": {
+                "dataset": {
+                    "dataset_ref": "user_dataset",
+                    "dataset_options": {"source": "fixture"},
+                    "initial_skill": "SKILL.md",
+                },
+                "environment_options": {
+                    "env_ref": "user_env",
+                    "env_options": {"mode": "test"},
+                    "max_turns": 3,
+                },
+            },
+        },
+    )
+
+    invocation = SCRIPT.build_invocation(config_path, timestamp="stamp", base_environment={})
+
+    assert json.loads(invocation.environment_values["MINDMEMOS_SKILL_COMPONENT_MODULES"]) == [
+        "acme_skill_components",
+        "team_benchmark.components",
+    ]
+    assert invocation.command[:7] == ["uv", "run", "--package", "mindmemos-skill", "--extra", "llm", "--extra"]
+    assert "acme-benchmark" in invocation.command
+
+
 def test_runner_directory_contains_only_the_two_algorithm_family_scripts() -> None:
     runner_dir = SCRIPT_PATH.parent / "runners"
 
@@ -144,6 +227,37 @@ def test_tree_skill_grpo_configs_use_the_evolve_runner(environment: str, tmp_pat
     assert arguments[:2] == ["--algorithm", "tree_skill_grpo"]
     assert invocation.command[invocation.command.index("--batch-size") + 1] == "40"
     assert invocation.command[invocation.command.index("--max-task-attempts") + 1] == "4"
+
+
+def test_spreadsheetbench_experience_validation_config_uses_expected_controls(tmp_path: Path) -> None:
+    invocation = SCRIPT.build_invocation(
+        CONFIG_ROOT / "skill_grpo_with_experience_validation" / "spreadsheetbench" / "default.yaml",
+        env_file_override=empty_env_file(tmp_path),
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    assert invocation.environment == "spreadsheetbench"
+    assert invocation.resolved_config["resolved"]["extras"] == ["llm", "spreadsheetbench"]
+    assert invocation.command[invocation.command.index("--benchmark") + 1] == "spreadsheetbench"
+    assert invocation.command[invocation.command.index("--epochs") + 1] == "4"
+    assert invocation.command[invocation.command.index("--train-rollouts") + 1] == "4"
+    assert invocation.command[invocation.command.index("--test-rollouts") + 1] == "3"
+    assert invocation.command[invocation.command.index("--max-experiences-per-task") + 1] == "3"
+    assert invocation.command[invocation.command.index("--max-tool-observation-chars") + 1] == "24000"
+    assert invocation.command[invocation.command.index("--max-turns") + 1] == "30"
+
+
+def test_spreadsheetbench_experience_validation_can_disable_tool_observation_limit(tmp_path: Path) -> None:
+    invocation = SCRIPT.build_invocation(
+        CONFIG_ROOT / "skill_grpo_with_experience_validation" / "spreadsheetbench" / "default.yaml",
+        overrides=["algorithm.max_tool_observation_chars=null"],
+        env_file_override=empty_env_file(tmp_path),
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+
+    assert "--max-tool-observation-chars" not in invocation.command
 
 
 @pytest.mark.parametrize(

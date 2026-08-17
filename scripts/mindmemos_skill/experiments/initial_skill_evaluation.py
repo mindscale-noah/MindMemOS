@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Script-side evaluation of the ALFWorld test split with one fixed initial Skill."""
+"""Script-side evaluation of one registered test split with a fixed initial Skill."""
 
 from __future__ import annotations
 
@@ -24,15 +24,21 @@ from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.rollout import (
     RolloutScheduler,
     RolloutStrategyRegistry,
 )
-from mindmemos_skill.datasets import ALFWorldPathSplitDataset
 from mindmemos_skill.llm import LLMClient, get_router, llm_run_context
 from mindmemos_skill.typing import Skill, compute_skill_content_hash
+
+from .component_selection import build_registered_dataset, build_registered_env_options, json_object
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--split-dir", type=Path, required=True)
+    parser.add_argument("--benchmark", default="alfworld", help="artifact label and built-in component default")
+    parser.add_argument("--dataset-ref", help="registered Dataset name")
+    parser.add_argument("--dataset-options", type=json_object, default={}, help="JSON options for the Dataset factory")
+    parser.add_argument("--env-ref", help="registered Env name; ALFWorld defaults to alfworld_bounded_history")
+    parser.add_argument("--env-options", type=json_object, default={}, help="JSON options for the Env factory")
+    parser.add_argument("--data-root", type=Path)
+    parser.add_argument("--split-dir", type=Path)
     parser.add_argument("--initial-skill", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
@@ -47,23 +53,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--rollout-retries", type=int, default=1)
     parser.add_argument("--max-turns", type=int, required=True)
+    parser.add_argument("--docs-root", type=Path)
+    parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--env-seed", type=int, default=42)
+    parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-sketch", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--shuffle-choices", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--test-limit", type=int)
     parser.add_argument("--progress-every", type=int, default=10)
     return parser.parse_args(argv)
 
 
-def build_skill(path: Path, run_id: str) -> Skill:
+def build_skill(path: Path, run_id: str, benchmark: str = "alfworld") -> Skill:
     content = path.read_text(encoding="utf-8")
     blob = {"SKILL.md": content}
     return Skill(
-        skill_id="alfworld-skill",
+        skill_id=f"{benchmark}-skill",
         version_id=f"{run_id}:init",
         version_label="0.1.0",
         content_hash=compute_skill_content_hash(blob),
-        name="ALFWorld Embodied Agent Skill",
-        description="Initial ALFWorld strategy aligned with the Skill-GRPO baseline.",
+        name=f"{benchmark} Skill",
+        description=f"Initial guidance for {benchmark} tasks.",
         blob=blob,
         created_at=datetime.now(UTC),
     )
@@ -191,10 +202,17 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.progress_every < 1:
         raise ValueError("progress-every must be at least 1")
 
-    os.environ["ALFWORLD_DATA"] = str(args.data_root.expanduser().resolve())
-    dataset = ALFWorldPathSplitDataset(split_dir=args.split_dir, alfworld_data=args.data_root)
+    dataset = build_registered_dataset(
+        benchmark=args.benchmark,
+        dataset_ref=args.dataset_ref,
+        dataset_options=args.dataset_options,
+        data_root=args.data_root,
+        split_dir=args.split_dir,
+        seed=args.seed,
+        shuffle_choices=args.shuffle_choices,
+    )
     tasks = limited(dataset.test_tasks(), args.test_limit)
-    skill = build_skill(args.initial_skill, args.run_id)
+    skill = build_skill(args.initial_skill, args.run_id, args.benchmark)
     args.output_dir.mkdir(parents=True, exist_ok=False)
     write_json(
         args.output_dir / "arguments.json",
@@ -220,6 +238,17 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         llm=build_client(args),
     )
+    env_ref, env_options = build_registered_env_options(
+        benchmark=args.benchmark,
+        env_ref=args.env_ref,
+        env_options=args.env_options,
+        max_turns=args.max_turns,
+        env_seed=args.env_seed,
+        shell_timeout=args.shell_timeout,
+        use_theorem=args.use_theorem,
+        use_sketch=args.use_sketch,
+        docs_root=args.docs_root,
+    )
     specs = (
         RolloutStrategyRegistry.with_builtins()
         .get("fixed_group")
@@ -233,9 +262,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 sequence_start=0,
                 group_size=args.rollouts,
                 agent_ref="react",
-                env_ref="alfworld_bounded_history",
+                env_ref=env_ref,
                 seed=args.seed,
-                env_options={"max_turns": args.max_turns, "seed": args.env_seed},
+                env_options=env_options,
             )
         )
     )

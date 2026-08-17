@@ -28,16 +28,17 @@ from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.rollout import (
     RegistryEnvFactory,
     RolloutScheduler,
 )
-from mindmemos_skill.datasets import (
-    ALFWorldPathSplitDataset,
-    LiveMathIdSplitDataset,
-    OfficeQAIdSplitDataset,
-    SpreadsheetBenchIdSplitDataset,
-    TaskDataset,
-)
+from mindmemos_skill.datasets import TaskDataset
 from mindmemos_skill.llm import LLMCallSink, LLMClient, get_router, llm_run_context
 from mindmemos_skill.management import frontmatter_value
 from mindmemos_skill.typing import Skill, Task, Trajectory, compute_skill_content_hash
+
+from .component_selection import (
+    build_registered_dataset,
+    build_registered_env_options,
+    json_object,
+    resolve_env_ref,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,8 +53,6 @@ class TestEvaluationConfig:
     env_options: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
-        if self.benchmark not in {"alfworld", "livemath", "spreadsheetbench"}:
-            raise ValueError(f"unsupported benchmark: {self.benchmark!r}")
         if self.rollouts < 1:
             raise ValueError("test rollouts must be at least 1")
         if self.max_concurrent_rollouts < 1:
@@ -113,9 +112,12 @@ class EvaluationProgress:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--benchmark", choices=("alfworld", "livemath", "spreadsheetbench"), required=True)
+    parser.add_argument("--benchmark", required=True, help="artifact label and built-in component default")
+    parser.add_argument("--dataset-ref", help="registered Dataset name")
+    parser.add_argument("--dataset-options", type=json_object, default={}, help="JSON options for the Dataset factory")
     parser.add_argument("--env-ref", help="registered Env override; ALFWorld defaults to alfworld_bounded_history")
-    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--env-options", type=json_object, default={}, help="JSON options for the Env factory")
+    parser.add_argument("--data-root", type=Path)
     parser.add_argument("--split-dir", type=Path)
     skill_group = parser.add_mutually_exclusive_group(required=True)
     skill_group.add_argument("--skill", type=Path, help="SKILL.md file or directory containing it")
@@ -125,6 +127,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     parser.add_argument("--target-model", default="openai/gpt-5.4-mini")
     parser.add_argument("--api-base", default=os.getenv("OPENAI_ENDPOINT") or os.getenv("OPENAI_BASE_URL"))
+    parser.add_argument(
+        "--agent-type",
+        choices=("react", "deepseek_harness"),
+        default="react",
+        help="agent family that executes the rollouts (default: react)",
+    )
     parser.add_argument("--reasoning-effort", default="medium")
     parser.add_argument("--request-timeout", type=float, default=1800.0)
     parser.add_argument("--model-retries", type=int, default=3)
@@ -155,28 +163,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def build_dataset(
     benchmark: str,
     *,
-    data_root: Path,
+    data_root: Path | None,
     split_dir: Path | None,
     seed: int,
     shuffle_choices: bool,
+    dataset_ref: str | None = None,
+    dataset_options: dict[str, Any] | None = None,
 ) -> TaskDataset:
-    if benchmark == "alfworld":
-        return ALFWorldPathSplitDataset(
-            split_dir=split_dir or Path("data/ALFWorld/alfworld_path_split"),
-            alfworld_data=data_root,
-        )
-    if benchmark == "livemath":
-        return LiveMathIdSplitDataset(
-            data_path=data_root,
-            split_dir=split_dir or Path("data/LiveMath/livemathematicianbench_id_split"),
-            seed=seed,
-            shuffle_choices=shuffle_choices,
-        )
-    if benchmark == "spreadsheetbench":
-        return SpreadsheetBenchIdSplitDataset(data_root=data_root, split_dir=split_dir)
-    if benchmark == "officeqa":
-        return OfficeQAIdSplitDataset(data_root=data_root, split_dir=split_dir)
-    raise ValueError(f"unsupported benchmark: {benchmark!r}")
+    return build_registered_dataset(
+        benchmark=benchmark,
+        dataset_ref=dataset_ref,
+        dataset_options=dataset_options,
+        data_root=data_root,
+        split_dir=split_dir,
+        seed=seed,
+        shuffle_choices=shuffle_choices,
+    )
 
 
 def environment_options(
@@ -188,19 +190,20 @@ def environment_options(
     use_theorem: bool,
     use_sketch: bool,
     docs_root: Path | None = None,
+    env_ref: str | None = None,
+    configured_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    options: dict[str, Any] = {"max_turns": max_turns}
-    if benchmark == "alfworld":
-        options["seed"] = env_seed
-    if benchmark == "spreadsheetbench":
-        options["shell_timeout_seconds"] = shell_timeout
-    if benchmark == "livemath":
-        options.update({"use_theorem": use_theorem, "use_sketch": use_sketch})
-    if benchmark == "officeqa":
-        if docs_root is None:
-            raise ValueError("officeqa requires --docs-root")
-        options["docs_root"] = str(docs_root)
-    return options
+    return build_registered_env_options(
+        benchmark=benchmark,
+        env_ref=env_ref,
+        env_options=configured_options,
+        max_turns=max_turns,
+        env_seed=env_seed,
+        shell_timeout=shell_timeout,
+        use_theorem=use_theorem,
+        use_sketch=use_sketch,
+        docs_root=docs_root,
+    )[1]
 
 
 def limited_test_tasks(dataset: TaskDataset, limit: int | None) -> list[Task]:
@@ -292,12 +295,30 @@ def build_client(
 
 def build_agent(
     *,
-    client: LLMClient,
+    agent_type: str,
+    client: LLMClient | None,
     model: str,
     max_turns: int,
     reasoning_effort: str | None,
     max_completion_tokens: int,
-) -> ReactAgent:
+    timeout_seconds: float | None = None,
+) -> Agent[Any]:
+    if agent_type == "deepseek_harness":
+        from mindmemos_skill.agents import get_agent
+        from mindmemos_skill.typing import AgentType
+
+        # The harness forwards the model id to its own gateway; Skill text
+        # reaches interactive environments through the system message they own.
+        return get_agent(
+            agent_type=AgentType.DEEPSEEK_HARNESS,
+            config={
+                "model": model,
+                "provider": "deepseek-official",
+                "timeout_seconds": timeout_seconds or 300.0,
+            },
+        )
+    if client is None:
+        raise ValueError("react agent requires an LLM client")
     return ReactAgent(
         {
             "model": model,
@@ -307,6 +328,15 @@ def build_agent(
         },
         llm=client,
     )
+
+
+def validate_agent_benchmark_compatibility(*, agent_type: str, benchmark: str) -> None:
+    """Reject environments whose conversation/tool contract headless DSH cannot preserve."""
+
+    if agent_type == "deepseek_harness" and benchmark != "livemath":
+        raise ValueError(
+            "deepseek_harness skill evaluation currently supports only the one-turn, text-only livemath environment"
+        )
 
 
 async def evaluate_test_tasks(
@@ -568,12 +598,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("OPENAI_API_KEY is required")
     if not args.api_base:
         raise ValueError("--api-base, OPENAI_ENDPOINT, or OPENAI_BASE_URL is required")
+    validate_agent_benchmark_compatibility(agent_type=args.agent_type, benchmark=args.benchmark)
     dataset = build_dataset(
         args.benchmark,
         data_root=args.data_root,
         split_dir=args.split_dir,
         seed=args.seed,
         shuffle_choices=args.shuffle_choices,
+        dataset_ref=args.dataset_ref,
+        dataset_options=args.dataset_options,
     )
     tasks = limited_test_tasks(dataset, args.test_limit)
     skill = (
@@ -591,18 +624,22 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         args.output_dir / "arguments.json",
         {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
     )
-    client = build_client(
+    # The harness agent drives the gateway itself; the litellm client is only
+    # needed by the native ReAct agent.
+    client = None if args.agent_type == "deepseek_harness" else build_client(
         model=args.target_model,
         api_base=args.api_base,
         request_timeout=args.request_timeout,
         model_retries=args.model_retries,
     )
     agent = build_agent(
+        agent_type=args.agent_type,
         client=client,
         model=args.target_model,
         max_turns=args.max_turns,
         reasoning_effort=args.reasoning_effort,
         max_completion_tokens=args.max_completion_tokens,
+        timeout_seconds=args.request_timeout,
     )
     summary = await evaluate_test_tasks(
         run_id=args.run_id,
@@ -612,7 +649,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         output_dir=args.output_dir / "test",
         config=TestEvaluationConfig(
             benchmark=args.benchmark,
-            env_ref=args.env_ref,
+            env_ref=resolve_env_ref(benchmark=args.benchmark, env_ref=args.env_ref),
             rollouts=args.test_rollouts,
             max_concurrent_rollouts=args.max_concurrent_rollouts,
             rollout_timeout=args.rollout_timeout,
@@ -626,6 +663,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 use_theorem=args.use_theorem,
                 use_sketch=args.use_sketch,
                 docs_root=args.docs_root,
+                env_ref=args.env_ref,
+                configured_options=args.env_options,
             ),
         ),
     )
@@ -655,4 +694,5 @@ __all__ = [
     "skill_loading_record",
     "summarize",
     "summarize_skill_loading",
+    "validate_agent_benchmark_compatibility",
 ]

@@ -568,7 +568,9 @@ evolve 统一 runner 的 `final_skill` 默认只写运行 artifact；只有经 `
 6. 使用 `llm_run_context(run_id)`；算法入口已经包装时不要重复改变 run_id。
 7. 将 result、summary、final Skill、展开后的配置和 checkpoint 写入输出目录。
 8. 适配器需要轨迹进入正式 Skill 存储时，显式连接 `record_trajectory` sink；经 Application 编排运行时由编排层统一落库。
-9. 在 `scripts/mindmemos_skill/experiments/registry.py` 注册方法、所属家族与支持的环境；不要把实验编排放进 `mindmemos_skill` 包，也不要新增第三个家族 runner 脚本。
+9. 在 `scripts/mindmemos_skill/experiments/registry.py` 注册方法、所属家族与内置环境依赖；adapter 通过
+   `dataset_ref`、`env_ref` 接受自定义注册组件，不维护算法环境白名单。不要把实验编排放进
+   `mindmemos_skill` 包，也不要新增第三个家族 runner 脚本。
 10. 添加 `config/mindmemos_skill/<method>/<environment>/<name>.yaml` 和 runner/config 构建测试，并验证最终 Skill 的 `test/summary.json`、`results.jsonl` 和 `skill.json`。
 
 Application 已提供统一的 `evolve` capability、正式日志、轨迹存储和最终版本持久化。新增 evolver 必须能由 `config + AlgorithmBuildContext` 构造，并通过 `run_evolve()` 完成一次组合测试。统一 runner 入口和配置规则见 [`experiment_runner.md`](experiment_runner.md)；runner 是额外的运维/实验入口，不替代产品编排，也不要新增算法专属 Python/Shell runner。

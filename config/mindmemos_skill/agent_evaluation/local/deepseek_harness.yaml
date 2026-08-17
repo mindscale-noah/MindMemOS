@@ -1,0 +1,16 @@
+version: 1
+method: agent_evaluation
+environment: local
+launcher:
+  env_file: .skill.env
+parameters:
+  runtime:
+    env_file: .skill.env
+    output_dir: results/agent_skill_eval/{timestamp}
+  models:
+    model: deepseek-v4-flash
+  evaluation:
+    agents:
+      - deepseek-harness
+    timeout: 300
+    strict: false

@@ -122,6 +122,16 @@ def test_parser_only_accepts_max_turns(tmp_path: Path) -> None:
         evaluation.parse_args([*common, "--max-turns", "40", "--max-steps", "50"])
 
 
+def test_deepseek_harness_is_limited_to_one_turn_text_only_livemath() -> None:
+    evaluation.validate_agent_benchmark_compatibility(agent_type="deepseek_harness", benchmark="livemath")
+
+    with pytest.raises(ValueError, match="supports only.*livemath"):
+        evaluation.validate_agent_benchmark_compatibility(
+            agent_type="deepseek_harness",
+            benchmark="spreadsheetbench",
+        )
+
+
 def test_build_skill_accepts_skill_directory(tmp_path: Path) -> None:
     skill_dir = tmp_path / "demo"
     skill_dir.mkdir()

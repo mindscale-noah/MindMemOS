@@ -20,23 +20,23 @@ from mindmemos_skill.algos.evolve.task_virtual_skill import (
     TaskVirtualSkillResult,
     TaskVirtualSkillRunConfig,
 )
-from mindmemos_skill.datasets import (
-    ALFWorldPathSplitDataset,
-    LiveMathIdSplitDataset,
-    SpreadsheetBenchIdSplitDataset,
-    TaskDataset,
-)
+from mindmemos_skill.datasets import TaskDataset
 from mindmemos_skill.llm import DatabaseLLMCallSink, LLMCallSink, LLMClient, get_router
 from mindmemos_skill.persistence import bootstrap_skill_database
 from mindmemos_skill.skill_runtime.runtimes.virtual_components import VirtualComponentsMetadata
 from mindmemos_skill.typing import Skill, compute_skill_content_hash
 
+from .component_selection import build_registered_dataset, build_registered_env_options, json_object
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--benchmark", choices=("alfworld", "livemath", "spreadsheetbench"), required=True)
+    parser.add_argument("--benchmark", required=True, help="artifact label and built-in component default")
+    parser.add_argument("--dataset-ref", help="registered Dataset name")
+    parser.add_argument("--dataset-options", type=json_object, default={}, help="JSON options for the Dataset factory")
     parser.add_argument("--env-ref", help="registered Env override; ALFWorld defaults to alfworld_bounded_history")
-    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--env-options", type=json_object, default={}, help="JSON options for the Env factory")
+    parser.add_argument("--data-root", type=Path)
     parser.add_argument("--split-dir", type=Path)
     parser.add_argument("--initial-skill", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -78,6 +78,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-concurrent-merges", type=int, default=4)
 
     parser.add_argument("--max-turns", type=int, required=True)
+    parser.add_argument("--docs-root", type=Path)
     parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--env-seed", type=int)
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
@@ -88,15 +89,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def build_dataset(args: argparse.Namespace) -> TaskDataset:
-    if args.benchmark == "spreadsheetbench":
-        return SpreadsheetBenchIdSplitDataset(data_root=args.data_root, split_dir=args.split_dir)
-    if args.benchmark == "alfworld":
-        split_dir = args.split_dir or Path("data/ALFWorld/alfworld_path_split")
-        return ALFWorldPathSplitDataset(split_dir=split_dir, alfworld_data=args.data_root)
-    split_dir = args.split_dir or Path("data/LiveMath/livemathematicianbench_id_split")
-    return LiveMathIdSplitDataset(
-        data_path=args.data_root,
-        split_dir=split_dir,
+    return build_registered_dataset(
+        benchmark=args.benchmark,
+        dataset_ref=args.dataset_ref,
+        dataset_options=args.dataset_options,
+        data_root=args.data_root,
+        split_dir=args.split_dir,
         seed=args.seed,
         shuffle_choices=args.shuffle_choices,
     )
@@ -130,13 +128,17 @@ def build_skill(args: argparse.Namespace) -> Skill:
 
 
 def build_config(args: argparse.Namespace) -> TaskVirtualSkillRunConfig:
-    env_options: dict[str, Any] = {"max_turns": args.max_turns}
-    if args.benchmark == "spreadsheetbench":
-        env_options["shell_timeout_seconds"] = args.shell_timeout
-    elif args.benchmark == "alfworld":
-        env_options["seed"] = args.seed if args.env_seed is None else args.env_seed
-    else:
-        env_options.update({"use_theorem": args.use_theorem, "use_sketch": args.use_sketch})
+    env_ref, env_options = build_registered_env_options(
+        benchmark=args.benchmark,
+        env_ref=args.env_ref,
+        env_options=args.env_options,
+        max_turns=args.max_turns,
+        env_seed=args.seed if args.env_seed is None else args.env_seed,
+        shell_timeout=args.shell_timeout,
+        use_theorem=args.use_theorem,
+        use_sketch=args.use_sketch,
+        docs_root=args.docs_root,
+    )
     return TaskVirtualSkillRunConfig.model_validate(
         {
             "batch": {
@@ -171,8 +173,7 @@ def build_config(args: argparse.Namespace) -> TaskVirtualSkillRunConfig:
                 "max_concurrent_merges": args.max_concurrent_merges,
             },
             "dataset": {
-                "env_ref": args.env_ref
-                or ("alfworld_bounded_history" if args.benchmark == "alfworld" else args.benchmark),
+                "env_ref": env_ref,
                 "agent_ref": "react",
                 "env_options": env_options,
                 "agent_options": {},

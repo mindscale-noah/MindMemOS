@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from importlib import import_module
@@ -48,8 +50,10 @@ class ComponentSpec:
 
 _COMPONENT_REGISTRY: dict[ComponentType, dict[str, ComponentSpec]] = {}
 _BUILTINS_LOADED = False
+_EXTERNAL_MODULES_LOADED: set[str] = set()
 _BUILTIN_MODULES = (
     "..agents.claude",
+    "..agents.deepseek_harness",
     "..agents.openclaw",
     "..agents.react",
     "..envs.registered_envs",
@@ -191,15 +195,24 @@ def load_builtin_components() -> None:
     """Import built-in component modules so their decorators run."""
 
     global _BUILTINS_LOADED
-    if _BUILTINS_LOADED:
-        return
-
-    # Import built-in components so their @register decorators fire.
-    # Mark the registry loaded only after every import succeeds so a partial
-    # import cannot permanently hide missing components.
-    for module_name in _BUILTIN_MODULES:
-        import_module(module_name, package=__package__)
-    _BUILTINS_LOADED = True
+    if not _BUILTINS_LOADED:
+        # Import built-in components so their @register decorators fire.
+        # Mark the registry loaded only after every import succeeds so a partial
+        # import cannot permanently hide missing components.
+        for module_name in _BUILTIN_MODULES:
+            import_module(module_name, package=__package__)
+        _BUILTINS_LOADED = True
+    raw_external_modules = os.getenv("MINDMEMOS_SKILL_COMPONENT_MODULES")
+    if raw_external_modules:
+        external_modules = json.loads(raw_external_modules)
+        if not isinstance(external_modules, list) or not all(
+            isinstance(module_name, str) and module_name for module_name in external_modules
+        ):
+            raise ValueError("MINDMEMOS_SKILL_COMPONENT_MODULES must be a JSON list of non-empty module names")
+        for module_name in external_modules:
+            if module_name not in _EXTERNAL_MODULES_LOADED:
+                import_module(module_name)
+                _EXTERNAL_MODULES_LOADED.add(module_name)
 
 
 __all__ = [

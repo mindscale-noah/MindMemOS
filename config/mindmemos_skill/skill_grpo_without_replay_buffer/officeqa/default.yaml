@@ -35,6 +35,14 @@ parameters:
   environment_options:
     max_turns: 24
     docs_root: data/mindmemos_skill/officeqa/officeqa_docs_official
+    env_options:
+      search_mode: offline
+      max_queries_per_turn: 4
+      search_api_base_url_env: OFFICEQA_SERPAPI_BASE_URL
+      search_api_key_env: OFFICEQA_SERPAPI_API_KEY
+      search_api_protocol_env: OFFICEQA_SERPAPI_PROTOCOL
+      search_max_num_results: 4
+      search_timeout_seconds: 20
   algorithm:
     max_experiences_per_task: 3
     max_patch_edits: 6

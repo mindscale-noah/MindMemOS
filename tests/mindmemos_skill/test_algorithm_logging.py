@@ -54,3 +54,25 @@ async def test_algorithm_logger_writes_console_and_sqlite(tmp_path: Path) -> Non
     output = console.getvalue()
     assert "INFO demo_algorithm phase.phase_completed status=succeeded" in output
     assert output.endswith(": phase train completed\n")
+
+
+@pytest.mark.asyncio
+async def test_algorithm_logger_can_keep_durable_record_without_console_noise(tmp_path: Path) -> None:
+    database = await bootstrap_skill_database(tmp_path / "state.db")
+    console = StringIO()
+    logger = AlgorithmLogger(algorithm_name="demo_algorithm", database=database, console=console)
+
+    try:
+        record = await logger.log(
+            component_name="rollout",
+            step_name="rollout_completed",
+            message="verbose rollout detail",
+            payload={"run_id": "run-1"},
+            console=False,
+        )
+        rows = await database.get_records(ALGORITHM_LOG_TABLE, DatabaseScope(), [record.log_id])
+    finally:
+        await database.close()
+
+    assert len(rows) == 1
+    assert console.getvalue() == ""
