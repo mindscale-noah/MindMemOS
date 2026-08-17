@@ -240,7 +240,7 @@ def test_spreadsheetbench_experience_validation_config_uses_expected_controls(tm
     assert invocation.environment == "spreadsheetbench"
     assert invocation.resolved_config["resolved"]["extras"] == ["llm", "spreadsheetbench"]
     assert invocation.command[invocation.command.index("--benchmark") + 1] == "spreadsheetbench"
-    assert invocation.command[invocation.command.index("--epochs") + 1] == "4"
+    assert invocation.command[invocation.command.index("--epochs") + 1] == "2"
     assert invocation.command[invocation.command.index("--train-rollouts") + 1] == "4"
     assert invocation.command[invocation.command.index("--test-rollouts") + 1] == "3"
     assert invocation.command[invocation.command.index("--max-experiences-per-task") + 1] == "3"

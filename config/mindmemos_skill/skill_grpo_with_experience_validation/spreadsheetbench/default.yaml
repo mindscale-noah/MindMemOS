@@ -16,7 +16,7 @@ parameters:
     model_retries: 10
     max_completion_tokens: 16384
   training:
-    epochs: 4
+    epochs: 2
     batch_size: 40
     mini_batch_size: 8
     train_rollouts: 4
@@ -24,10 +24,10 @@ parameters:
   evaluation:
     test_rollouts: 3
   rollout:
-    max_concurrent_rollouts: 32
-    max_concurrent_extractions: 16
+    max_concurrent_rollouts: 64
+    max_concurrent_extractions: 32
     reflection: true
-    max_concurrent_reflections: 8
+    max_concurrent_reflections: 32
     rollout_retries: 3
     fail_fast: false
   environment_options:

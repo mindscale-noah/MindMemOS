@@ -17,21 +17,22 @@ parameters:
     model_retries: 10
     max_completion_tokens: 16384
   training:
-    epochs: 4
+    epochs: 2
     batch_size: 40
     mini_batch_size: 8
     train_rollouts: 4
     seed: 0
   evaluation:
-    test_rollouts: 1
+    test_rollouts: 3
   rollout:
-    max_concurrent_rollouts: 32
-    max_concurrent_extractions: 16
-    max_concurrent_reflections: 8
+    max_concurrent_rollouts: 64
+    max_concurrent_extractions: 32
+    max_concurrent_reflections: 32
     rollout_retries: 3
     fail_fast: false
   environment_options:
     max_turns: 50
+    env_seed: 42
   algorithm:
     max_experiences_per_task: 3
     max_patch_edits: 6

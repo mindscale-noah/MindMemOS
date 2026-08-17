@@ -1,0 +1,42 @@
+version: 1
+method: skill_grpo_with_experience_validation
+environment: officeqa
+launcher:
+  env_file: .skill.env
+parameters:
+  dataset:
+    dataset_ref: officeqa_id_split
+    data_root: data/mindmemos_skill/officeqa
+    split_dir: resources/mindmemos_skill/datasets/officeqa/splits
+    initial_skill: resources/mindmemos_skill/skills/officeqa/SKILL.md
+  models:
+    target_model: openai/gpt-5.4-mini
+    optimizer_model: openai/gpt-5.4-mini
+    reasoning_effort: medium
+    request_timeout: 1800
+    model_retries: 10
+    max_completion_tokens: 16384
+  training:
+    epochs: 2
+    batch_size: 40
+    mini_batch_size: 8
+    train_rollouts: 4
+    seed: 0
+  evaluation:
+    test_rollouts: 3
+  rollout:
+    max_concurrent_rollouts: 64
+    max_concurrent_extractions: 32
+    max_concurrent_reflections: 32
+    rollout_retries: 3
+    fail_fast: false
+  environment_options:
+    env_ref: officeqa
+    max_turns: 24
+    docs_root: data/mindmemos_skill/officeqa/officeqa_docs_official
+    env_options:
+      search_mode: offline
+  algorithm:
+    max_experiences_per_task: 3
+    max_patch_edits: 6
+    patch_attempts: 2
