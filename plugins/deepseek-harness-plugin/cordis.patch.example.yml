@@ -29,7 +29,3 @@
         appId: deepseek-harness
         minQueryLength: 2
         maxConversationMessages: 80
-        # Supported Python range for the mindmemos CLI, matching the SDK's
-        # requires-python = ">=3.11,<3.14" (min inclusive, max exclusive).
-        minPythonVersion: '3.11'
-        maxPythonVersion: '3.14'

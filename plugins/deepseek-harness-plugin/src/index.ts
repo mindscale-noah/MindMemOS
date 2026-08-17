@@ -30,10 +30,22 @@ type MemorySearchResult = {
   memories?: MemoryHit[];
 };
 
+type ToolCall = {
+  tool: string;
+  args: Record<string, unknown>;
+  callId?: string;
+};
+
 type MemoryMessage = {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   timestamp: number;
+  /** Structured tool calls issued by this assistant message, in order. */
+  toolCalls?: ToolCall[];
+  /** Call id pairing a `tool` message with the `tool-call` it answers. */
+  toolCallId?: string;
+  /** Whether this `tool` message is an error result. */
+  isError?: boolean;
 };
 
 type SkillContext = {
@@ -55,7 +67,7 @@ export const inject = ["agents"];
 
 /** Resolved plugin configuration, filled in by the {@link Config} schema before {@link apply} runs. */
 export interface Config {
-  /** Command used to invoke the CLI (or an absolute path / wrapper command). */
+  /** Executable used to invoke the CLI — a name on `PATH` or an absolute path, not a shell command with arguments. */
   cli: string;
   /** Number of memories injected per turn. */
   topK: number;
@@ -71,10 +83,6 @@ export interface Config {
   minQueryLength: number;
   /** Cap on how many trailing messages are persisted per turn. */
   maxConversationMessages: number;
-  /** Minimum supported Python version for the mindmemos CLI (inclusive; the SDK requires >=3.11). */
-  minPythonVersion: string;
-  /** Maximum supported Python version for the mindmemos CLI (exclusive; the SDK requires <3.14). */
-  maxPythonVersion: string;
 }
 
 /** Schemastery schema for {@link Config}; cordis validates and defaults the entry config with it. */
@@ -87,8 +95,6 @@ export const Config: z<Config> = z.object({
   sessionId: z.string(),
   minQueryLength: z.natural().min(1).default(2),
   maxConversationMessages: z.natural().min(1).default(80),
-  minPythonVersion: z.string().pattern(/^3\.1[1-4]$/).default("3.11"),
-  maxPythonVersion: z.string().pattern(/^3\.1[1-4]$/).default("3.14"),
 });
 
 export function apply(ctx: Context, config: Config): void {
@@ -196,7 +202,10 @@ async function addConversation(config: Config, messages: MemoryMessage[], sessio
     args.push("--skill-context-json", JSON.stringify(skillContext));
   }
   args.push("--metadata-json", JSON.stringify({ source: "deepseek-harness-plugin" }));
-  await spawnFileOk(config.cli, args, `${JSON.stringify(messages)}\n`);
+  // The structured tool-call fields are detection-only; strip them so the CLI
+  // sees the same message shape it always has.
+  const payload = messages.map(({ role, content, timestamp }) => ({ role, content, timestamp }));
+  await spawnFileOk(config.cli, args, `${JSON.stringify(payload)}\n`);
 }
 
 function formatMemoryContext(memories: MemoryHit[], userId: string | undefined): string {
@@ -259,11 +268,29 @@ function messageFromEvent(event: SessionEvent): MemoryMessage | null {
     }
     case "assistant/message": {
       const content = textFromContent(event.data.message.content);
-      return content ? { role: "assistant", content, timestamp: event.time } : null;
+      if (!content) {
+        return null;
+      }
+      return {
+        role: "assistant",
+        content,
+        timestamp: event.time,
+        toolCalls: toolCallsFromContent(event.data.message.content),
+      };
     }
     case "tool/result": {
       const content = textFromContent(event.data.message.content);
-      return content ? { role: "tool", content, timestamp: event.time } : null;
+      if (!content) {
+        return null;
+      }
+      const resultBlock = event.data.message.content[0];
+      return {
+        role: "tool",
+        content,
+        timestamp: event.time,
+        toolCallId: String(event.data.message.source.callId),
+        isError: resultBlock?.isError === true || event.data.error !== undefined,
+      };
     }
     default:
       return null;
@@ -317,35 +344,41 @@ function errorMessage(error: unknown): string {
 /**
  * Detect skill references from the collected turn messages, mirroring the
  * OpenClaw plugin so the same `--skill-context-json` reaches the CLI. dsh's
- * file tools are also named `read`/`write`/`edit`, so the tool-name matching is
- * shared; only `edit` differs — it takes `old_string`/`new_string` rather than a
- * whole `content`/`replacement`, so `new_string` is treated as the new content.
+ * file tools are also named `read`/`write`/`edit`, but a single assistant
+ * message may carry several parallel tool calls alongside text blocks, so
+ * detection walks the structured tool calls captured on each message instead of
+ * re-parsing the flattened text. `read` results are paired with the call that
+ * produced them by call id, and `edit` content is reconstructed from the base
+ * content captured earlier in the turn (see {@link editedContent}).
  */
 function detectSkillContext(messages: MemoryMessage[]): SkillContext[] {
   const candidates = new Map<string, { path: string; content: string; usage: "injected" | "modified" }>();
-  for (let i = 0; i < messages.length; i += 1) {
-    const message = messages[i];
+  const results = toolResultsByCallId(messages);
+  for (const message of messages) {
     if (message.role !== "assistant") {
       continue;
     }
-    const call = parseToolCall(message.content);
-    if (!call) {
-      continue;
-    }
-    const path = toolArgPath(call.args);
-    if (!path || !isSkillMdPath(path)) {
-      continue;
-    }
-    const key = skillDirKey(path);
-    if (call.tool === "read") {
-      const content = messages[i + 1]?.role === "tool" ? messages[i + 1].content : "";
-      if (content) {
-        candidates.set(key, { path, content, usage: strongestUsage(candidates.get(key)?.usage, "injected") });
+    for (const call of message.toolCalls ?? []) {
+      const path = toolArgPath(call.args);
+      if (!path || !isSkillMdPath(path)) {
+        continue;
       }
-    } else if (call.tool === "write" || call.tool === "edit") {
-      const content = call.tool === "edit" ? editContent(call.args) : toolArgText(call.args, "content");
-      if (content) {
-        candidates.set(key, { path, content, usage: "modified" });
+      const key = skillDirKey(path);
+      if (call.tool === "read") {
+        const result = call.callId ? results.get(call.callId) : undefined;
+        if (result && !result.isError && result.content) {
+          candidates.set(key, { path, content: result.content, usage: strongestUsage(candidates.get(key)?.usage, "injected") });
+        }
+      } else if (call.tool === "write") {
+        const content = toolArgText(call.args, "content");
+        if (content) {
+          candidates.set(key, { path, content, usage: "modified" });
+        }
+      } else if (call.tool === "edit") {
+        const content = editedContent(candidates.get(key)?.content, call.args);
+        if (content) {
+          candidates.set(key, { path, content, usage: "modified" });
+        }
       }
     }
   }
@@ -361,21 +394,44 @@ function detectSkillContext(messages: MemoryMessage[]): SkillContext[] {
   });
 }
 
-function parseToolCall(content: string): { tool: string; args: Record<string, unknown> } | null {
-  const match = content.match(/^\s*\[tool_call\]\s*([A-Za-z0-9_.-]+)\((.*)\)\s*$/s);
-  if (!match) {
-    return null;
+/** Structured tool calls from an assistant message's content blocks, in order. */
+function toolCallsFromContent(content: readonly ContentBlock[]): ToolCall[] {
+  const calls: ToolCall[] = [];
+  for (const block of content) {
+    if (block.type !== "tool-call") {
+      continue;
+    }
+    const args = parseToolArgs(block.arguments);
+    if (args === null) {
+      continue;
+    }
+    calls.push({ tool: block.name.toLowerCase(), args, callId: String(block.id) });
   }
-  let parsed: unknown;
+  return calls;
+}
+
+/** Parse a tool call's raw JSON `arguments` string into a record; `null` when malformed. */
+function parseToolArgs(raw: string): Record<string, unknown> | null {
+  if (!raw.trim()) {
+    return {};
+  }
   try {
-    parsed = match[2].trim() ? JSON.parse(match[2]) : {};
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
   }
-  if (!isRecord(parsed)) {
-    return null;
+}
+
+/** Index tool results by the call id they answer, so parallel reads pair with the right content. */
+function toolResultsByCallId(messages: MemoryMessage[]): Map<string, { content: string; isError: boolean }> {
+  const results = new Map<string, { content: string; isError: boolean }>();
+  for (const message of messages) {
+    if (message.role === "tool" && message.toolCallId) {
+      results.set(message.toolCallId, { content: message.content, isError: message.isError === true });
+    }
   }
-  return { tool: match[1].toLowerCase(), args: parsed };
+  return results;
 }
 
 function toolArgPath(args: Record<string, unknown>): string {
@@ -393,15 +449,24 @@ function toolArgText(args: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-/** New content of an `edit` call. dsh's `edit` carries `new_string`; OpenClaw-style tools carry a whole content/replacement field. */
-function editContent(args: Record<string, unknown>): string {
-  for (const key of ["content", "new_content", "replacement", "replace", "new_string"]) {
-    const value = toolArgText(args, key);
-    if (value) {
-      return value;
-    }
+/**
+ * Reconstruct the full content an `edit` call produces. dsh's `edit` only carries
+ * the `old_string`/`new_string` find-and-replace fragment, so hashing `new_string`
+ * alone would mint a content hash matching no real SKILL.md. Rebuild the file by
+ * replacing `old_string` with `new_string` in the `base` content captured from an
+ * earlier `read`/`write`/`edit` in the same turn. Returns "" when the base is
+ * missing or `old_string` does not occur in it — the caller then drops the
+ * candidate instead of emitting a `modified` context it cannot reconstruct.
+ */
+function editedContent(base: string | undefined, args: Record<string, unknown>): string {
+  const oldString = toolArgText(args, "old_string");
+  const newString = toolArgText(args, "new_string");
+  if (!base || !oldString || !base.includes(oldString)) {
+    return "";
   }
-  return "";
+  // A function replacement keeps `newString` literal — a string replacement would
+  // treat `$&`/`$1`/`$$` in the skill text as special patterns and mangle it.
+  return base.replace(oldString, () => newString);
 }
 
 function isSkillMdPath(path: unknown): path is string {

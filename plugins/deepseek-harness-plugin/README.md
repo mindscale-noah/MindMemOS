@@ -29,6 +29,17 @@ Confirm it works from the shell dsh will run under:
 mindmemos config show
 ```
 
+## Install the plugin
+
+Install the published package in the project where dsh runs:
+
+```bash
+npm install @mindmemos/deepseek-harness-plugin
+```
+
+For local development before publishing, build from this repo instead (see
+[Build](#build)) and register the built entry by `file://` URL.
+
 ## Build
 
 ```bash
@@ -74,7 +85,7 @@ the row.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `cli` | `mindmemos` | Command used to invoke the CLI. Set to an absolute path or a wrapper (`uv run mindmemos`) when it is not on dsh's `PATH`. |
+| `cli` | `mindmemos` | Executable used to invoke the CLI — a name on dsh's `PATH` or an absolute path. It is not a shell command, so a wrapper like `uv run mindmemos` will not work; point it at the real executable instead. |
 | `topK` | `5` | Number of memories injected per turn. |
 | `addMode` | `async` | `sync` blocks until extraction finishes; `async` enqueues and returns. In `async` mode only CLI-level failures are visible to the plugin. |
 | `userId` | *(none)* | Scopes both search and add to one user. Omit for project-wide search; add then inherits the CLI's default user. |
@@ -82,8 +93,6 @@ the row.
 | `sessionId` | *(none)* | Override the harness session id used as the CLI session scope. |
 | `minQueryLength` | `2` | Skip recall for prompts shorter than this many characters. |
 | `maxConversationMessages` | `80` | Cap on how many trailing messages are persisted per turn. |
-| `minPythonVersion` | `3.11` | Minimum supported Python version for the `mindmemos` CLI (inclusive). |
-| `maxPythonVersion` | `3.14` | Maximum supported Python version for the `mindmemos` CLI (exclusive; the SDK requires `<3.14`). |
 
 ## How it works
 
@@ -141,8 +150,10 @@ the row.
 ## Troubleshooting
 
 - **`ENOENT` / `command not found`** — dsh's `PATH` may not include the CLI
-  (common for GUI-launched dsh). Set `cli` to an absolute path from
-  `which mindmemos`, or a wrapper that resolves it.
+  (common for GUI-launched dsh). Set `cli` to the executable's absolute path
+  (`which mindmemos`, or `uv run which mindmemos` inside a uv project). `cli` is
+  a single executable path, not a shell command, so a wrapper like
+  `uv run mindmemos` will fail with `ENOENT`.
 - **Recall never fires** — check `minQueryLength` and that `cli` resolves
   (`mindmemos config show` from dsh's environment).
 - **Recall works but nothing is stored** — the store only runs when a turn

@@ -64,13 +64,13 @@ appId: deepseek-harness
 sessionId: optional-session-override
 minQueryLength: 2
 maxConversationMessages: 80
-minPythonVersion: '3.11'
-maxPythonVersion: '3.14'
 ```
 
-- `cli` — command used to invoke the CLI. Defaults to `mindmemos`. If dsh does
-  not run with the CLI on its PATH, set this to an absolute path or a wrapper
-  (e.g. `uv run mindmemos` inside the repo).
+- `cli` — executable used to invoke the CLI. Defaults to `mindmemos` (a name on
+  dsh's PATH). If dsh does not run with the CLI on its PATH, set this to the
+  executable's absolute path (`which mindmemos`, or `uv run which mindmemos`
+  inside the repo). It is a single executable path, not a shell command, so a
+  wrapper like `uv run mindmemos` will fail with `ENOENT`.
 - `topK` — number of memories injected per turn.
 - `addMode` — `sync` blocks until extraction finishes; `async` (default) enqueues
   and returns. In `async` mode only CLI-level failures are visible to the plugin.
@@ -81,9 +81,6 @@ maxPythonVersion: '3.14'
 - `minQueryLength` — skip recall for very short prompts.
 - `maxConversationMessages` — cap on how many trailing messages are persisted per
   turn.
-- `minPythonVersion` / `maxPythonVersion` — supported Python range for the CLI,
-  matching the SDK's `requires-python = ">=3.11,<3.14"` (min inclusive, max
-  exclusive).
 
 ## How it works
 
@@ -103,9 +100,9 @@ maxPythonVersion: '3.14'
   …` / `[mindmemos-memory] memory add failed: …` warnings, including the CLI's
   stderr and exit code.
 - `ENOENT` / `command not found` — dsh's `PATH` may not include the CLI (common
-  for GUI-launched dsh). Set `cli` to an absolute path from `which mindmemos`, or
-  a wrapper that resolves it (`uv run mindmemos` when dsh's working directory is
-  this repo).
+  for GUI-launched dsh). Set `cli` to the executable's absolute path from
+  `which mindmemos` (or `uv run which mindmemos` when dsh's working directory is
+  this repo). `cli` is a single executable path, not a shell command.
 - **Recall never fires** — check `minQueryLength` and that `cli` resolves
   (`mindmemos config show` from dsh's environment).
 - **Recall works but nothing is stored** — the store only runs when a turn
