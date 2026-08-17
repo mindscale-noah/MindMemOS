@@ -227,6 +227,38 @@ This mode aligns the implemented P0 and P1 contracts. It does not claim that a
 single local run reproduces every paper table, infrastructure condition, or
 model-server implementation.
 
+### Recorded Qwen3.5-9B reference run
+
+The completed seed-41 run below used code revision
+`d4a8b5a36c9ef5623f132e352d1e36a8fb868869`, the reference configuration
+above, Qwen3.5-9B at revision
+`c202236235762e1c871ad0ccb60c8ee5ba337b9a`, and the ordered `0:200` training
+and `200:400` held-out split. Failed held-out outputs were counted as failed
+tasks.
+
+| Field | Result |
+| --- | ---: |
+| Run ID | `mindmemos-treeskill-qwen9b-seed41-23463` |
+| Held-out Vrf | **44.00% (88/200)** |
+| Completed / failed held-out tasks | 193 / 7 |
+| Initial / final tree nodes | 35 / 49 |
+| Average full Skill context | 32,209 characters |
+| Average routed Skill context | 24,546.95 characters |
+| Context saving | 23.79% |
+| Full-Skill routing fallbacks | 0 / 200 |
+
+The durable result is stored at:
+
+```text
+outputs/treeskill_reference_9b/
+  mindmemos-treeskill-qwen9b-seed41-23463/pipeline/summary.json
+```
+
+The run completed end to end, but not every training trajectory contributed to
+evolution: 65 trajectory analyses failed, followed by five evidence-localization
+failures and three node-fusion failures. These counts are retained here so the
+44.00% result is not mistaken for a failure-free execution.
+
 ## Trace2Skill-compatible SpreadsheetBench split
 
 The repository also packages the ordered task-ID split used by the TreeSkill
