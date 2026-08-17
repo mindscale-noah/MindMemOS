@@ -110,6 +110,13 @@ class EvaluationProgress:
         self._last_rendered = self.completed
 
 
+def _json_object(value: str) -> dict[str, Any]:
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("expected a JSON object")
+    return parsed
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark", required=True, help="artifact label and built-in component default")
