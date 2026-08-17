@@ -91,13 +91,25 @@ def test_spreadsheetbench_prompt_exposes_qualified_answer_position() -> None:
         metadata={"answer_position": "B2:B5", "answer_sheet": "Results"},
     )
 
-    messages = spreadsheetbench_messages(task=task, skill_names=[])
+    messages = spreadsheetbench_messages(task=task, skill_names=[], expose_answer_position=True)
 
     assert (
         "Answer position (cells to verify) — these are the cells that will be graded, "
         "so make sure their final computed values are correct:\nResults!B2:B5"
         in messages[1]["content"]
     )
+
+
+def test_spreadsheetbench_prompt_hides_answer_position_by_default() -> None:
+    task = Task(
+        task_id="case-1",
+        instruction="Fill the requested output cells.",
+        metadata={"answer_position": "B2:B5", "answer_sheet": "Results"},
+    )
+
+    messages = spreadsheetbench_messages(task=task, skill_names=[])
+
+    assert "Answer position" not in messages[1]["content"]
 
 
 def test_alfworld_bounded_history_prompt_keeps_only_two_recent_steps() -> None:

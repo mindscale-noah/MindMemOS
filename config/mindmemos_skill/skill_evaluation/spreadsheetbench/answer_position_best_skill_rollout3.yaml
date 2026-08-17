@@ -25,3 +25,5 @@ parameters:
   environment_options:
     max_turns: 30
     shell_timeout: 120
+    env_options:
+      expose_answer_position: true

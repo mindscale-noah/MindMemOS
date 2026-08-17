@@ -19,7 +19,7 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_messages(*, task: Task, skill_names: list[str]) -> list[dict[str, str]]:
+def build_messages(*, task: Task, skill_names: list[str], expose_answer_position: bool = False) -> list[dict[str, str]]:
     system = SYSTEM_PROMPT
     if skill_names:
         names = ", ".join(skill_names)
@@ -32,7 +32,7 @@ def build_messages(*, task: Task, skill_names: list[str]) -> list[dict[str, str]
         "The source file 'input.xlsx' is in your working directory.",
         f"Task:\n{task.instruction}",
     ]
-    answer_position = str(task.metadata.get("answer_position") or "").strip()
+    answer_position = str(task.metadata.get("answer_position") or "").strip() if expose_answer_position else ""
     answer_sheet = str(task.metadata.get("answer_sheet") or "").strip()
     if answer_position and answer_sheet and "!" not in answer_position:
         answer_position = f"{answer_sheet}!{answer_position}"
