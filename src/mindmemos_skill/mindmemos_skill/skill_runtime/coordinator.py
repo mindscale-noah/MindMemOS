@@ -70,6 +70,7 @@ class SkillRuntimeTask:
                     "runtime_schema_version": session.skill.runtime_schema_version,
                     "available_resource_ids": [item.resource_id for item in session.resources],
                     "loaded_resource_ids": sorted(session.loaded_resource_ids),
+                    "metadata": session.trace_metadata,
                 }
                 for session in self.sessions
             ]
@@ -92,7 +93,7 @@ class SkillRuntimeCoordinator:
         try:
             for skill in skills:
                 runtime = self.registry.resolve(skill.runtime_type)
-                runtime.parse_metadata(skill.runtime_schema_version, skill.runtime_metadata)
+                runtime.validate_skill(skill)
                 session = await runtime.on_task(SkillRuntimeRequest(task=task, skill=skill, context=context or {}))
                 if session.skill.version_id != skill.version_id:
                     raise RuntimeError("Skill Runtime session changed immutable version identity")

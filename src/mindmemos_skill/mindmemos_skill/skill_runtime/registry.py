@@ -37,11 +37,7 @@ class SkillRuntimeRegistry:
         return runtime
 
     def validate(self, skill: Skill) -> None:
-        self.validate_spec(
-            runtime_type=skill.runtime_type,
-            schema_version=skill.runtime_schema_version,
-            metadata=skill.runtime_metadata,
-        )
+        self.resolve(skill.runtime_type).validate_skill(skill)
 
     def validate_spec(
         self,

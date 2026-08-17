@@ -16,6 +16,19 @@ from .trajectory_evidence_patch import (
     TrajectoryEvidencePatchReport,
     TrajectorySummary,
 )
+from .treeskill import (
+    TreeMetadataError,
+    TreeSkill,
+    TreeSkillConfig,
+    TreeSkillModelRequestError,
+    TreeSkillOutput,
+    TreeSkillReport,
+    TreeSkillRouter,
+    compile_tree_metadata,
+    parse_skill_markdown,
+    parse_tree_with_metadata,
+    render_selected_subtrees,
+)
 
 __all__ = [
     "AnnotationMode",
@@ -25,6 +38,13 @@ __all__ = [
     "TaskCollectionConfig",
     "Trace2SkillAlgorithm",
     "TraceEvidence",
+    "TreeMetadataError",
+    "TreeSkill",
+    "TreeSkillConfig",
+    "TreeSkillModelRequestError",
+    "TreeSkillOutput",
+    "TreeSkillReport",
+    "TreeSkillRouter",
     "TrajectoryCollectionResult",
     "TrajectoryCollector",
     "TrajectoryEvidencePatch",
@@ -32,4 +52,8 @@ __all__ = [
     "TrajectoryEvidencePatchOutput",
     "TrajectoryEvidencePatchReport",
     "TrajectorySummary",
+    "compile_tree_metadata",
+    "parse_skill_markdown",
+    "parse_tree_with_metadata",
+    "render_selected_subtrees",
 ]

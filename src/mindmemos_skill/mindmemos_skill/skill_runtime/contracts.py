@@ -53,10 +53,12 @@ class SkillRuntimeSession(ABC):
         skill: Skill,
         initial_content: str,
         resources: list[SkillResourceDescriptor] | None = None,
+        trace_metadata: dict[str, JsonValue] | None = None,
     ) -> None:
         self.skill = skill
         self.initial_content = initial_content
         self.resources = list(resources or [])
+        self.trace_metadata = dict(trace_metadata or {})
         self.loaded_resource_ids: set[str] = set()
         self._closed = False
 
@@ -108,6 +110,11 @@ class SkillRuntime(ABC):
                 f"supported: {supported}"
             )
         return model.model_validate(dict(metadata))
+
+    def validate_skill(self, skill: Skill) -> None:
+        """Validate one complete Skill against this Runtime's execution contract."""
+
+        self.parse_metadata(skill.runtime_schema_version, skill.runtime_metadata)
 
     @abstractmethod
     async def on_task(self, request: SkillRuntimeRequest) -> SkillRuntimeSession:
