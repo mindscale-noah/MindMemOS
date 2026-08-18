@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Script-side ALFWorld trajectory library and paired top-k retrieval experiment."""
+"""Script-side trajectory library and paired top-k retrieval experiment."""
 
 from __future__ import annotations
 
@@ -19,10 +19,11 @@ from mindmemos_skill.algos.evolve.trajectory_memory import (
     TrajectoryMemoryRunConfig,
     reconstruct_replay_free_trajectories,
 )
-from mindmemos_skill.datasets import ALFWorldPathSplitDataset
 from mindmemos_skill.llm import DatabaseLLMCallSink, EmbedClient, LLMCallSink, LLMClient, get_router, llm_run_context
 from mindmemos_skill.persistence import bootstrap_skill_database
 from mindmemos_skill.typing import Skill, compute_skill_content_hash
+
+from .component_selection import build_registered_dataset, build_registered_env_options, json_object
 
 
 class ChatModelWithDefaults:
@@ -36,8 +37,13 @@ class ChatModelWithDefaults:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--split-dir", type=Path, required=True)
+    parser.add_argument("--benchmark", default="alfworld", help="artifact label and built-in component default")
+    parser.add_argument("--dataset-ref", help="registered Dataset name")
+    parser.add_argument("--dataset-options", type=json_object, default={}, help="JSON options for the Dataset factory")
+    parser.add_argument("--env-ref", help="registered Env name; ALFWorld defaults to alfworld_bounded_history")
+    parser.add_argument("--env-options", type=json_object, default={}, help="JSON options for the Env factory")
+    parser.add_argument("--data-root", type=Path)
+    parser.add_argument("--split-dir", type=Path)
     parser.add_argument("--initial-skill", type=Path, required=True)
     parser.add_argument("--source-run-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -60,7 +66,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rollout-retries", type=int, default=1)
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--max-turns", type=int, required=True)
+    parser.add_argument("--docs-root", type=Path)
+    parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--env-seed", type=int, default=42)
+    parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-sketch", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--shuffle-choices", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
     return parser.parse_args(argv)
@@ -98,11 +109,11 @@ def build_skill(args: argparse.Namespace) -> Skill:
     blob = {"SKILL.md": args.initial_skill.read_text(encoding="utf-8")}
     now = datetime.now(UTC)
     return Skill(
-        skill_id="alfworld-skill",
+        skill_id=f"{args.benchmark}-skill",
         version_id=f"{args.run_id}:base",
         version_label="0.1.0",
         content_hash=compute_skill_content_hash(blob),
-        name="alfworld",
+        name=args.benchmark,
         blob=blob,
         created_at=now,
     )
@@ -137,8 +148,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("OPENAI_API_KEY is required")
     if not args.api_base:
         raise ValueError("--api-base, OPENAI_ENDPOINT, or OPENAI_BASE_URL is required")
-    os.environ["ALFWORLD_DATA"] = str(args.data_root.expanduser().resolve())
-    dataset = ALFWorldPathSplitDataset(split_dir=args.split_dir, alfworld_data=args.data_root)
+    dataset = build_registered_dataset(
+        benchmark=args.benchmark,
+        dataset_ref=args.dataset_ref,
+        dataset_options=args.dataset_options,
+        data_root=args.data_root,
+        split_dir=args.split_dir,
+        seed=args.env_seed,
+        shuffle_choices=args.shuffle_choices,
+    )
     train_tasks = limited(dataset.train_tasks(), args.train_limit)
     test_tasks = limited(dataset.test_tasks(), args.test_limit)
     base_skill = build_skill(args)
@@ -181,6 +199,17 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         llm=target_client,
     )
+    env_ref, env_options = build_registered_env_options(
+        benchmark=args.benchmark,
+        env_ref=args.env_ref,
+        env_options=args.env_options,
+        max_turns=args.max_turns,
+        env_seed=args.env_seed,
+        shell_timeout=args.shell_timeout,
+        use_theorem=args.use_theorem,
+        use_sketch=args.use_sketch,
+        docs_root=args.docs_root,
+    )
     config = TrajectoryMemoryRunConfig.model_validate(
         {
             "algorithm": {
@@ -197,12 +226,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 "workspace_root": args.output_dir / "workspace",
             },
             "dataset": {
-                "env_ref": "alfworld_bounded_history",
+                "env_ref": env_ref,
                 "agent_ref": "react",
-                "env_options": {
-                    "max_turns": args.max_turns,
-                    "seed": args.env_seed,
-                },
+                "env_options": env_options,
                 "agent_options": {},
             },
         }

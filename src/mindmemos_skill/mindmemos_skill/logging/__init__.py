@@ -51,8 +51,9 @@ class AlgorithmLogger:
         status: str | None = None,
         payload: dict[str, Any] | None = None,
         level: LogLevel = LogLevel.INFO,
+        console: bool = True,
     ) -> AlgorithmLogRecord:
-        """Write a log to every configured backend and return its durable row."""
+        """Persist a structured log, optionally print it, and return its durable row."""
 
         record = AlgorithmLogRecord(
             log_id=str(uuid.uuid4()),
@@ -67,7 +68,8 @@ class AlgorithmLogger:
                 "message": message,
             },
         )
-        self._write_console(record)
+        if console:
+            self._write_console(record)
         if self._database is not None:
             await self._database.upsert_records(ALGORITHM_LOG_TABLE, [to_database_record(record)])
         return record

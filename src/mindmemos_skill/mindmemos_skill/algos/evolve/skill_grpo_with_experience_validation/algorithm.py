@@ -6,6 +6,7 @@ import asyncio
 import statistics
 from collections import Counter
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Any
@@ -35,6 +36,7 @@ from .config import SkillGrpoWithExperienceValidationRunConfig
 from .contracts import (
     BatchEvolutionRecord,
     EvolutionMetrics,
+    ExperienceExtractionPayload,
     ExperienceSource,
     ExperienceValidationDecision,
     ExperienceValidationRecord,
@@ -44,11 +46,83 @@ from .contracts import (
     SkillGrpoWithExperienceValidationEvolveResult,
 )
 from .experience import ExperienceExtractor
+from .invalid_experience_feedback import InvalidExperienceFeedbackSummarizer
 from .patch import PatchProposer
 from .reflection import REFLECTION_PROMPT_VERSION, ReflectionGenerator, previous_answer, task_with_reflection
 from .validation import assess_experience, inject_experience, rejected_empty_experience
 
 EventCallback = Callable[[EvolutionEvent], Awaitable[None]]
+
+
+@dataclass
+class _RolloutProgressScope:
+    scope: str
+    phase: str
+    complete_on_success: bool
+    total_tasks: int
+    total_rollouts: int
+    rollout_ids: set[str]
+    remaining_rollouts_by_task: Counter[str]
+    completed_tasks: set[str] = field(default_factory=set)
+    completed_rollouts: int = 0
+
+
+class _RolloutProgressTracker:
+    """Turn concurrent rollout callbacks into one readable update per completed task."""
+
+    def __init__(self, *, success_reward: float) -> None:
+        self._success_reward = success_reward
+        self._scope_by_rollout_id: dict[str, str] = {}
+        self._scopes: dict[str, _RolloutProgressScope] = {}
+
+    def register(self, *, scope: str, phase: RolloutPhase, specs: list[RolloutSpec], complete_on_success: bool) -> None:
+        remaining_rollouts_by_task = Counter(spec.task.task_id for spec in specs)
+        rollout_ids = {spec.rollout_id for spec in specs}
+        self._scopes[scope] = _RolloutProgressScope(
+            scope=scope,
+            phase=phase.value,
+            complete_on_success=complete_on_success,
+            total_tasks=len(remaining_rollouts_by_task),
+            total_rollouts=len(specs),
+            rollout_ids=rollout_ids,
+            remaining_rollouts_by_task=remaining_rollouts_by_task,
+        )
+        self._scope_by_rollout_id.update({rollout_id: scope for rollout_id in rollout_ids})
+
+    def record(self, outcome: RolloutOutcome) -> dict[str, Any] | None:
+        scope_name = self._scope_by_rollout_id.get(outcome.spec.rollout_id)
+        if scope_name is None:
+            return None
+        scope = self._scopes[scope_name]
+        task_id = outcome.spec.task.task_id
+        scope.completed_rollouts += 1
+        scope.remaining_rollouts_by_task[task_id] -= 1
+        score = outcome.trajectory.reward.score if outcome.trajectory is not None else None
+        task_completed = scope.remaining_rollouts_by_task[task_id] == 0 or (
+            scope.complete_on_success and score is not None and score >= self._success_reward
+        )
+        if not task_completed or task_id in scope.completed_tasks:
+            return None
+
+        scope.completed_tasks.add(task_id)
+        completed_tasks = len(scope.completed_tasks)
+        remaining_tasks = scope.total_tasks - completed_tasks
+        payload = {
+            "scope": scope.scope,
+            "phase": scope.phase,
+            "task_id": task_id,
+            "completed_tasks": completed_tasks,
+            "total_tasks": scope.total_tasks,
+            "remaining_tasks": remaining_tasks,
+            "completed_rollouts": scope.completed_rollouts,
+            "total_rollouts": scope.total_rollouts,
+            "score": score,
+        }
+        if remaining_tasks == 0:
+            self._scopes.pop(scope_name, None)
+            for rollout_id in scope.rollout_ids:
+                self._scope_by_rollout_id.pop(rollout_id, None)
+        return payload
 
 
 @register(
@@ -115,16 +189,22 @@ class SkillGrpoWithExperienceValidation:
     ) -> SkillGrpoWithExperienceValidationEvolveResult:
         self._validate_request(request)
         config = request.config
+        progress = _RolloutProgressTracker(success_reward=config.training.success_reward)
         scheduler = RolloutScheduler(
             agent_resolver=self._agent_resolver,
             env_factory=self._env_factory,
             config=config.rollout,
-            on_outcome=self._rollout_event_callback(request.run_id),
+            on_outcome=self._rollout_event_callback(request.run_id, progress),
         )
         extractor = ExperienceExtractor(
             self._chat_model,
             max_experiences=config.algorithm.experience.max_experiences_per_task,
             max_concurrency=config.algorithm.experience.max_concurrent_extractions,
+            max_tool_observation_chars=config.algorithm.experience.max_tool_observation_chars,
+        )
+        invalid_feedback_config = config.algorithm.previous_batch_invalid_experience_feedback
+        invalid_feedback_summarizer = (
+            InvalidExperienceFeedbackSummarizer(self._chat_model) if invalid_feedback_config.enabled else None
         )
         proposer = PatchProposer(
             self._chat_model,
@@ -148,6 +228,7 @@ class SkillGrpoWithExperienceValidation:
         rollout_sequence = 0
         all_outcomes: list[RolloutOutcome] = []
         batches: list[BatchEvolutionRecord] = []
+        previous_batch_invalid_experience_feedback = None
 
         await self._emit(
             request.run_id,
@@ -174,6 +255,7 @@ class SkillGrpoWithExperienceValidation:
                 rollout_sequence=rollout_sequence,
                 reflector=reflector,
                 reflective=reflection_config.enabled,
+                progress=progress,
             )
             all_outcomes.extend(train_outcomes)
             await self._emit(
@@ -206,14 +288,32 @@ class SkillGrpoWithExperienceValidation:
                 current_skill,
                 mini_batch_size=config.training.mini_batch_size,
                 success_reward=config.training.success_reward,
+                previous_batch_invalid_experience_feedback=previous_batch_invalid_experience_feedback,
             )
+            atomic_experience_count = 0
+            for group_index, experience in enumerate(experiences):
+                group_experience_count = self._experience_item_count(experience)
+                atomic_experience_count += group_experience_count
+                await self._emit(
+                    request.run_id,
+                    "experience_extraction_group_completed",
+                    {
+                        "batch_index": batch.batch_index,
+                        "group_index": group_index,
+                        "group_count": len(experiences),
+                        "source": experience.source.value,
+                        "task_ids": experience.task_ids,
+                        "experience_count": group_experience_count,
+                    },
+                )
             await self._emit_stage(
                 request.run_id,
                 "experience_extraction",
                 "completed",
                 batch.batch_index,
                 duration_seconds=monotonic() - stage_started_at,
-                experience_count=len(experiences),
+                experience_set_count=len(experiences),
+                experience_count=atomic_experience_count,
                 experience_sources=dict(Counter(experience.source.value for experience in experiences)),
             )
 
@@ -266,6 +366,7 @@ class SkillGrpoWithExperienceValidation:
                         baseline_attempt=baseline_attempt,
                         rollout_sequence=sequence_start,
                         reflector=reflector,
+                        progress=progress,
                     )
                 )
 
@@ -278,6 +379,19 @@ class SkillGrpoWithExperienceValidation:
                 validations.append(validation)
                 if validation.decision is ExperienceValidationDecision.ACCEPTED:
                     accepted_experiences.append(experience)
+
+            if invalid_feedback_summarizer is not None:
+                previous_batch_invalid_experience_feedback = await invalid_feedback_summarizer.summarize(
+                    batch_index=batch.batch_index,
+                    experiences=experiences,
+                    validations=validations,
+                )
+                if previous_batch_invalid_experience_feedback is not None:
+                    await self._emit(
+                        request.run_id,
+                        "invalid_experience_feedback_generated",
+                        previous_batch_invalid_experience_feedback.event_payload(),
+                    )
 
             patch = None
             candidate_edits = []
@@ -308,6 +422,7 @@ class SkillGrpoWithExperienceValidation:
                     "completed",
                     batch.batch_index,
                     duration_seconds=monotonic() - stage_started_at,
+                    accepted_experience_count=len(accepted_experiences),
                     proposed_edits=patch.proposed_edit_count,
                     applied_edits=len(candidate_edits),
                 )
@@ -348,6 +463,18 @@ class SkillGrpoWithExperienceValidation:
                     "skill_hash_after": current_skill.content_hash,
                 },
             )
+            if self._on_event is not None:
+                await self._on_event(
+                    EvolutionEvent(
+                        run_id=request.run_id,
+                        name="checkpoint_ready",
+                        payload={
+                            "batch_index": batch.batch_index,
+                            "current_skill": current_skill.model_dump(mode="json"),
+                            "batch": record.model_dump(mode="json"),
+                        },
+                    )
+                )
 
         test_score = None
         if request.test_tasks:
@@ -362,6 +489,7 @@ class SkillGrpoWithExperienceValidation:
                 rollout_sequence=rollout_sequence,
                 reflector=reflector,
                 reflective=False,
+                progress=progress,
             )
             all_outcomes.extend(test_outcomes)
             test_score = self._mean_score(test_outcomes)
@@ -371,7 +499,16 @@ class SkillGrpoWithExperienceValidation:
         await self._emit(
             request.run_id,
             "run_finished",
-            {"changed": changed, "final_skill_hash": current_skill.content_hash, "metrics": metrics.model_dump()},
+            {
+                "changed": changed,
+                "final_skill_hash": current_skill.content_hash,
+                "metrics": metrics.model_dump(),
+                "patches_generated": sum(batch.patch is not None for batch in batches),
+                "patches_applied": sum(batch.patch_decision is PatchDecision.APPLIED for batch in batches),
+                "patch_edits_proposed": sum(
+                    batch.patch.proposed_edit_count for batch in batches if batch.patch is not None
+                ),
+            },
         )
         return SkillGrpoWithExperienceValidationEvolveResult(
             run_id=request.run_id,
@@ -398,6 +535,7 @@ class SkillGrpoWithExperienceValidation:
         baseline_attempt: int | None,
         rollout_sequence: int,
         reflector: ReflectionGenerator,
+        progress: _RolloutProgressTracker,
     ) -> tuple[int, ExtractedExperienceSet, ExperienceValidationRecord, list[RolloutOutcome]]:
         if skill is None:
             injected_outcomes: list[RolloutOutcome] = []
@@ -419,6 +557,7 @@ class SkillGrpoWithExperienceValidation:
                 baseline_outcomes=baseline_outcomes,
                 rollout_sequence=rollout_sequence,
                 reflector=reflector,
+                progress=progress,
             )
             expected_next_sequence = rollout_sequence + len(tasks) * group_size
             if next_sequence != expected_next_sequence:
@@ -444,6 +583,8 @@ class SkillGrpoWithExperienceValidation:
                 "decision": validation.decision.value,
                 "baseline_success_rate": validation.baseline_success_rate,
                 "injected_success_rate": validation.injected_success_rate,
+                "baseline_score_mean": self._mean_score(baseline_outcomes),
+                "injected_score_mean": self._mean_score(injected_outcomes),
                 "baseline_first_success_attempt": validation.baseline_first_success_attempt,
                 "injected_first_success_attempt": validation.injected_first_success_attempt,
                 "reason": validation.reason,
@@ -465,6 +606,7 @@ class SkillGrpoWithExperienceValidation:
         baseline_outcomes: list[RolloutOutcome],
         rollout_sequence: int,
         reflector: ReflectionGenerator,
+        progress: _RolloutProgressTracker,
     ) -> tuple[list[RolloutOutcome], int]:
         strategy = request.config.rollout.experience_validation
         scope = f"batch_{batch_index}_experience_{experience_index}_{experience.source.value}"
@@ -485,6 +627,12 @@ class SkillGrpoWithExperienceValidation:
         )
         specs = self._strategies.get(strategy.name).plan(plan)
         specs = self._pair_validation_seeds(specs, baseline_outcomes, experience.source)
+        progress.register(
+            scope=scope,
+            phase=RolloutPhase.VALIDATION,
+            specs=specs,
+            complete_on_success=experience.source is ExperienceSource.CONTRAST,
+        )
         await self._emit(
             request.run_id,
             "experience_validation_started",
@@ -522,6 +670,7 @@ class SkillGrpoWithExperienceValidation:
         rollout_sequence: int,
         reflector: ReflectionGenerator,
         reflective: bool,
+        progress: _RolloutProgressTracker,
     ) -> tuple[list[RolloutOutcome], int]:
         group_size = self._positive_int(strategy_config.params.get("group_size", 1), "group_size")
         plan = FixedGroupPlan(
@@ -540,6 +689,7 @@ class SkillGrpoWithExperienceValidation:
             env_options=request.config.dataset.env_options,
         )
         specs = self._strategies.get(strategy_config.name).plan(plan)
+        progress.register(scope=scope, phase=phase, specs=specs, complete_on_success=reflective)
         await self._emit(
             request.run_id,
             "phase_started",
@@ -702,7 +852,9 @@ class SkillGrpoWithExperienceValidation:
         score = outcome.trajectory.reward.score if outcome.trajectory is not None else None
         return score is not None and score >= success_reward
 
-    def _rollout_event_callback(self, run_id: str) -> Callable[[RolloutOutcome], Awaitable[None]]:
+    def _rollout_event_callback(
+        self, run_id: str, progress: _RolloutProgressTracker
+    ) -> Callable[[RolloutOutcome], Awaitable[None]]:
         async def callback(outcome: RolloutOutcome) -> None:
             score = outcome.trajectory.reward.score if outcome.trajectory is not None else None
             await self._emit(
@@ -715,11 +867,15 @@ class SkillGrpoWithExperienceValidation:
                     "attempts": len(outcome.attempts),
                     "score": score,
                 },
+                console=False,
             )
+            progress_payload = progress.record(outcome)
+            if progress_payload is not None:
+                await self._emit(run_id, "rollout_task_progress", progress_payload)
 
         return callback
 
-    async def _emit(self, run_id: str, name: str, payload: dict[str, Any]) -> None:
+    async def _emit(self, run_id: str, name: str, payload: dict[str, Any], *, console: bool = True) -> None:
         status = None
         if name.endswith("_started"):
             status = "started"
@@ -734,6 +890,7 @@ class SkillGrpoWithExperienceValidation:
             level=LogLevel.ERROR if name.endswith("_failed") else LogLevel.INFO,
             message=self._log_message(name, payload),
             payload={"run_id": run_id, **payload},
+            console=console and name not in {"experience_validation_started", "reflection_generated"},
         )
         if self._on_event is not None:
             await self._on_event(EvolutionEvent(run_id=run_id, name=name, payload=payload))
@@ -745,27 +902,89 @@ class SkillGrpoWithExperienceValidation:
                 f"run started: batches={payload['total_batches']}, reflection={payload['reflection_enabled']}, "
                 "validation_set_gate=false, experience_validation=true"
             )
+        if name == "phase_started":
+            return (
+                f"rollout phase started [{payload['scope']}/{payload['phase']}]: "
+                f"planned_rollouts={payload['rollout_count']}"
+            )
+        if name == "phase_completed":
+            return (
+                f"rollout phase completed [{payload['scope']}/{payload['phase']}]: "
+                f"actual_rollouts={payload['rollout_count']}, "
+                f"reward_mean={format_log_value(payload['score_mean'])}"
+            )
+        if name == "batch_rollout_summary":
+            return SkillGrpoWithExperienceValidation._batch_rollout_summary_message(
+                int(payload["batch_index"]), payload
+            )
+        if name == "stage_started":
+            return f"{payload['stage']} started (batch={int(payload['batch_index']) + 1})"
         if name in {"rollout_completed", "rollout_failed"}:
             return (
                 f"rollout {payload['rollout_id']}: phase={payload['phase']}, task={payload['task_id']}, "
                 f"score={format_log_value(payload['score'])}"
             )
+        if name == "rollout_task_progress":
+            return (
+                f"rollout progress [{payload['scope']}/{payload['phase']}]: "
+                f"tasks={payload['completed_tasks']}/{payload['total_tasks']} completed, "
+                f"remaining={payload['remaining_tasks']}, "
+                f"latest={payload['task_id']}, "
+                f"score={format_log_value(payload['score'])}"
+            )
+        if name == "experience_extraction_group_completed":
+            return (
+                f"experience group {int(payload['group_index']) + 1}/{payload['group_count']} "
+                f"(batch={int(payload['batch_index']) + 1}, source={payload['source']}, "
+                f"tasks={len(payload['task_ids'])}): extracted={payload['experience_count']}"
+            )
         if name == "experience_validation_completed":
             return (
-                f"experience {int(payload['experience_index']) + 1} ({payload['source']}) "
-                f"{payload['decision']}: {payload['reason']}"
+                f"experience gate {int(payload['experience_index']) + 1} ({payload['source']}): "
+                f"reward_mean={format_log_value(payload['baseline_score_mean'])}->"
+                f"{format_log_value(payload['injected_score_mean'])}, "
+                f"success_rate={format_log_value(payload['baseline_success_rate'])}->"
+                f"{format_log_value(payload['injected_success_rate'])}, "
+                f"first_success={format_log_value(payload['baseline_first_success_attempt'])}->"
+                f"{format_log_value(payload['injected_first_success_attempt'])}, "
+                f"decision={payload['decision']}; {payload['reason']}"
+            )
+        if name == "stage_completed" and payload["stage"] == "experience_extraction":
+            return (
+                f"experience extraction completed (batch={int(payload['batch_index']) + 1}): "
+                f"sets={payload['experience_set_count']}, experiences={payload['experience_count']}, "
+                f"sources={format_log_value(payload['experience_sources'])}, "
+                f"elapsed={float(payload['duration_seconds']):.1f}s"
+            )
+        if name == "stage_completed" and payload["stage"] == "patch_proposal":
+            return (
+                f"skill patch generated (batch={int(payload['batch_index']) + 1}): "
+                f"accepted_experience_sets={payload['accepted_experience_count']}, "
+                f"proposed_edits={payload['proposed_edits']}, applied_edits={payload['applied_edits']}, "
+                f"elapsed={float(payload['duration_seconds']):.1f}s"
+            )
+        if name == "invalid_experience_feedback_generated":
+            return (
+                f"invalid experience feedback generated (batch={int(payload['source_batch_index']) + 1}): "
+                f"rejected_sets={payload['rejected_experience_count']}, "
+                f"correct={payload['baseline_success_count']}->{payload['injected_success_count']}, "
+                f"degraded={payload['degraded_success_count']}"
             )
         if name == "batch_completed":
             return (
-                f"batch {int(payload['batch_index']) + 1}: experiences={payload['experience_count']}, "
-                f"accepted={payload['accepted_experience_count']}, edits={payload['applied_edit_count']}"
+                f"batch {int(payload['batch_index']) + 1} completed: "
+                f"experience_sets={payload['experience_count']}, "
+                f"accepted_sets={payload['accepted_experience_count']}, "
+                f"patch={payload['patch_decision']}, applied_edits={payload['applied_edit_count']}"
             )
         if name == "run_finished":
             metrics = payload["metrics"]
             return (
                 f"run finished: batches={metrics['batches_completed']}, "
-                f"experiences={metrics['experiences_accepted']}/{metrics['experiences_extracted']} accepted, "
-                f"edits={metrics['edits_applied']}, test={format_log_value(metrics['test_score'])}"
+                f"experience_sets={metrics['experiences_accepted']}/{metrics['experiences_extracted']} accepted, "
+                f"skill_patches={payload['patches_applied']}/{payload['patches_generated']} applied, "
+                f"edits={metrics['edits_applied']}/{payload['patch_edits_proposed']} applied, "
+                f"test={format_log_value(metrics['test_score'])}"
             )
         return name
 
@@ -810,6 +1029,10 @@ class SkillGrpoWithExperienceValidation:
             if outcome.trajectory is not None and outcome.trajectory.reward.score is not None
         ]
         return statistics.fmean(scores) if scores else None
+
+    @staticmethod
+    def _experience_item_count(experience: ExtractedExperienceSet) -> int:
+        return len(ExperienceExtractionPayload.model_validate_json(experience.content).experiences)
 
     @staticmethod
     def _metrics(
@@ -869,6 +1092,22 @@ class SkillGrpoWithExperienceValidation:
                 "unsolved": solved_at_attempt.get(None, 0),
             },
         }
+
+    @staticmethod
+    def _batch_rollout_summary_message(batch_index: int, summary: dict[str, Any]) -> str:
+        histogram = summary["solved_at_attempt_histogram"]
+        rollouts_per_case = summary["rollouts_per_case"]
+        solved_distribution = ", ".join(
+            f"attempt {attempt}={histogram[str(attempt)]} tasks" for attempt in range(1, rollouts_per_case + 1)
+        )
+        reached_final_attempt = histogram[str(rollouts_per_case)] + histogram["unsolved"]
+        return (
+            f"batch {batch_index + 1} rollout summary: solved at {solved_distribution}; "
+            f"unsolved after {rollouts_per_case} attempts={histogram['unsolved']} tasks, "
+            f"reached attempt {rollouts_per_case}={reached_final_attempt} tasks; "
+            f"actual_rollouts={summary['actual_rollout_count']}, "
+            f"early_stopped_rollouts={summary['early_stopped_rollout_count']}"
+        )
 
     @staticmethod
     def _positive_int(value: object, name: str) -> int:

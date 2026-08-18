@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from mindmemos_skill.envs import (
     ALFWorldBoundedHistoryEnv,
@@ -51,6 +53,27 @@ def test_builtin_and_package_external_envs_use_the_same_registry() -> None:
 
     assert isinstance(env, ExternalEnv)
     assert env.config.marker == "selected-by-name"
+
+
+def test_component_modules_environment_imports_external_registration(monkeypatch, tmp_path) -> None:
+    module_name = "test_user_component_module"
+    (tmp_path / f"{module_name}.py").write_text(
+        """
+from mindmemos_skill.envs import BaseEnv, PreparedRollout
+from mindmemos_skill.registry import ComponentType, register
+from mindmemos_skill.typing import EnvConfig, Reward, Trajectory
+
+@register(type=ComponentType.ENV, name="test_module_env")
+class ModuleEnv(BaseEnv[EnvConfig]):
+    async def _evaluate(self, *, trajectory: Trajectory, prepared: PreparedRollout) -> Reward:
+        return Reward(score=1.0)
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("MINDMEMOS_SKILL_COMPONENT_MODULES", json.dumps([module_name]))
+
+    assert "test_module_env" in list_envs()
 
 
 def test_builtin_envs_live_in_independent_registered_env_packages() -> None:

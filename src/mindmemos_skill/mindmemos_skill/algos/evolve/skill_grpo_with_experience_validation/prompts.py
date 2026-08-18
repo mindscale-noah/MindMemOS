@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import json
+from typing import TYPE_CHECKING, Any
+
 from ....typing import Skill, Trajectory
 from ..skill_grpo_with_replay_buffer.prompts import _render_events
 from .contracts import ExtractedExperienceSet
+
+if TYPE_CHECKING:
+    from .invalid_experience_feedback import PreviousBatchInvalidExperienceFeedback
 
 COMMON_OUTPUT = """
 # Output contract
@@ -13,8 +19,8 @@ Return exactly one valid JSON object and no other text:
   "experiences": [
     {
       "topic": "short task-independent label",
-      "lesson": "concise reusable guidance",
       "reason": "causal explanation grounded in the supplied evidence",
+      "lesson": "concise reusable guidance",
       "evidence": [
         {"task_id": "id", "rollout": 1, "observation": "observable behavior"}
       ]
@@ -109,14 +115,23 @@ def cross_task_messages(
     items: list[tuple[str, Trajectory]],
     source: str,
     max_experiences: int,
+    max_tool_observation_chars: int | None = None,
+    previous_batch_invalid_experience_feedback: PreviousBatchInvalidExperienceFeedback | None = None,
 ) -> list[dict[str, str]]:
     system = CROSS_TASK_SUCCESS_SYSTEM if source == "success" else CROSS_TASK_FAILURE_SYSTEM
     blocks = [
-        _trajectory_block(index, task_id, trajectory, skill)
+        _trajectory_block(
+            index,
+            task_id,
+            trajectory,
+            skill,
+            max_tool_observation_chars=max_tool_observation_chars,
+        )
         for index, (task_id, trajectory) in enumerate(items, start=1)
     ]
+    feedback = _invalid_experience_feedback_suffix(previous_batch_invalid_experience_feedback)
     user = (
-        f"# Current Skill\n\n{skill.content}\n\n"
+        f"# Current Skill\n\n{skill.content}{feedback}\n\n"
         f"# {source.title()} trajectories from {len(items)} tasks\n\n" + "\n\n".join(blocks)
     )
     return [
@@ -131,17 +146,30 @@ def failure_to_success_messages(
     task_id: str,
     trajectories: list[Trajectory],
     max_experiences: int,
+    max_tool_observation_chars: int | None = None,
+    previous_batch_invalid_experience_feedback: PreviousBatchInvalidExperienceFeedback | None = None,
 ) -> list[dict[str, str]]:
     blocks = [
-        _trajectory_block(index, task_id, trajectory, skill) for index, trajectory in enumerate(trajectories, start=1)
+        _trajectory_block(
+            index,
+            task_id,
+            trajectory,
+            skill,
+            max_tool_observation_chars=max_tool_observation_chars,
+        )
+        for index, trajectory in enumerate(trajectories, start=1)
     ]
+    feedback = _invalid_experience_feedback_suffix(previous_batch_invalid_experience_feedback)
     user = (
         f"# Task\n\n{trajectories[0].task.instruction}\n\n"
-        f"# Current Skill\n\n{skill.content}\n\n"
+        f"# Current Skill\n\n{skill.content}{feedback}\n\n"
         f"# Chronological rollouts ({len(trajectories)} total)\n\n" + "\n\n".join(blocks)
     )
     return [
-        {"role": "system", "content": FAILURE_TO_SUCCESS_SYSTEM.replace("{max_experiences}", str(max_experiences))},
+        {
+            "role": "system",
+            "content": FAILURE_TO_SUCCESS_SYSTEM.replace("{max_experiences}", str(max_experiences)),
+        },
         {"role": "user", "content": user},
     ]
 
@@ -160,7 +188,14 @@ def experience_patch_messages(
     ]
 
 
-def _trajectory_block(index: int, task_id: str, trajectory: Trajectory, skill: Skill) -> str:
+def _trajectory_block(
+    index: int,
+    task_id: str,
+    trajectory: Trajectory,
+    skill: Skill,
+    *,
+    max_tool_observation_chars: int | None,
+) -> str:
     error = trajectory.execution.error_info or trajectory.metadata.get("error")
     error_block = f"\n\n### Error\n\n{error}" if error else ""
     return (
@@ -169,8 +204,52 @@ def _trajectory_block(index: int, task_id: str, trajectory: Trajectory, skill: S
         f"### Task\n\n{trajectory.task.instruction}\n\n"
         f"### Verified score\n\n{trajectory.reward.score}"
         f"{error_block}\n\n"
-        f"### Agent trajectory\n\n{_render_events(trajectory.events, skill.content)}"
+        "### Agent trajectory\n\n"
+        f"{_render_extraction_events(trajectory.events, skill.content, max_tool_observation_chars)}"
     )
+
+
+def _render_extraction_events(
+    events: list[dict[str, Any]],
+    skill_content: str,
+    max_tool_observation_chars: int | None,
+) -> str:
+    if max_tool_observation_chars is None:
+        return _render_events(events, skill_content)
+
+    bounded_events: list[dict[str, Any]] = []
+    for event in events:
+        if str(event.get("role") or "").lower() != "tool":
+            bounded_events.append(event)
+            continue
+        content = event.get("content")
+        if content in (None, ""):
+            bounded_events.append(event)
+            continue
+        rendered_content = (
+            content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, indent=2, default=str)
+        )
+        truncated_content = _truncate_middle(rendered_content, max_tool_observation_chars)
+        bounded_events.append(
+            event if truncated_content == rendered_content else {**event, "content": truncated_content}
+        )
+    return _render_events(bounded_events, skill_content)
+
+
+def _truncate_middle(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    marker = f"\n...[tool observation middle truncated; original_chars={len(text)}]...\n"
+    available = max_chars - len(marker)
+    if available <= 1:
+        return marker[:max_chars]
+    head_chars = (available + 1) // 2
+    tail_chars = available - head_chars
+    return text[:head_chars] + marker + text[-tail_chars:]
+
+
+def _invalid_experience_feedback_suffix(feedback: PreviousBatchInvalidExperienceFeedback | None) -> str:
+    return f"\n\n{feedback.render_for_extraction()}" if feedback is not None else ""
 
 
 __all__ = ["cross_task_messages", "experience_patch_messages", "failure_to_success_messages"]

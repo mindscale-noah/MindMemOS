@@ -13,6 +13,7 @@ class AgentType(StrEnum):
     OPENCLAW = "openclaw"
     OPENCODE = "opencode"
     GEMINI_CLI = "gemini_cli"
+    DEEPSEEK_HARNESS = "deepseek_harness"
     CUSTOM = "custom"
     UNKNOWN = "unknown"
 

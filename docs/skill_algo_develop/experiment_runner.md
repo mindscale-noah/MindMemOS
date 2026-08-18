@@ -52,6 +52,32 @@ OfficeQA 是 gated Hugging Face 数据集；下载前需要接受 `databricks/of
 提供有权限的账号令牌。下载器会落盘 `officeqa_full.csv`、本地 Treasury bulletin 文本语料和按页解析 JSON。
 若用 `--data-root` 改变 OfficeQA 下载位置，实验还需同时覆盖 `environment_options.docs_root`。
 
+OfficeQA 默认使用本地文档工具。要按 controller-managed 协议启用 Serper Web Search，在 `.skill.env`
+中配置 base URL 和 key；官方 Serper 的配置如下，也可以把 base URL 换成遵循同一协议的其他地址：
+
+```dotenv
+OFFICEQA_SERPAPI_PROTOCOL=serper
+OFFICEQA_SERPAPI_BASE_URL=https://google.serper.dev
+OFFICEQA_SERPAPI_API_KEY=<your-key>
+```
+
+使用 Yibu 时改为：
+
+```dotenv
+OFFICEQA_SERPAPI_PROTOCOL=yibu
+OFFICEQA_SERPAPI_BASE_URL=https://yibuapi.com/serpapi
+OFFICEQA_SERPAPI_API_KEY=<your-key>
+```
+
+然后对任一 OfficeQA 配置追加：
+
+```bash
+--set environment_options.env_options.search_mode=custom_search
+```
+
+`serper` 使用 `POST {"q": ..., "num": ...}` 与 `X-API-KEY`；`yibu` 使用 GET 查询参数与
+`Authorization: Bearer`。两者都不支持 Chat Completions。
+
 脚本可在 Windows、Linux 和 macOS 的 Python 3.11–3.13 环境运行，默认目录正好对应仓库内 YAML；
 可用 `--data-root <目录>` 改变下载根目录，此时运行实验时也要通过 `--set dataset.data_root=<目录>` 覆盖。
 下载是幂等的，完整数据已存在时会跳过；只有明确需要刷新缓存时才使用 `--force`。
@@ -80,7 +106,8 @@ parameters:
 
 `parameters` 下的分组只用于提高可读性，叶子键会转换成同名 CLI 参数，例如 `training.batch_size` 转为 `--batch-size`。不同分组不能出现同名叶子键。`run_id` 和 `output_dir` 默认自动生成为 `<environment>_<method>_<timestamp>` 和 `outputs/<environment>/<method>/<run_id>`；需要固定时可在任意参数分组中显式设置 `run_id`、`output_dir`，字符串可使用 `{timestamp}`、`{method}`、`{environment}`、`{run_id}` 模板变量。字符串中的 `$NAME` 或 `${NAME}` 从进程环境或 `launcher.env_file` 展开。
 
-顶层 `method` 选择 adapter，`environment` 选择 dataset/Env 组合；`parameters` 分组名不参与 CLI，只展开叶子。例如：
+顶层 `method` 选择 adapter，`environment` 只作为内置组件默认值和 artifact 标签；真正执行的组件由
+`dataset_ref` 和 `env_ref` 决定。`parameters` 分组名不参与 CLI，只展开叶子。例如：
 
 ```text
 evaluation.test_rollouts: 2  -> --test-rollouts 2
@@ -89,10 +116,36 @@ rollout.max_concurrent_rollouts: 16 -> --max-concurrent-rollouts 16
 
 `test_rollouts=2` 表示测试集的每个 task 各跑两次；只想测试两个 task 时使用 `test_limit=2`。
 
-演进算法本身不声明环境白名单。以 `skill_grpo_with_replay_buffer` 为例，内置环境名会映射到默认的已注册
-Dataset 和同名 Env；也可以通过 `dataset_ref`、`env_ref` 分别选择其他已注册组件，并通过
-`dataset_options`、`env_options` 传入组件配置。非内置环境所需的可选依赖放入
-`launcher.extra_dependencies`，不写入算法支持列表。
+实验方法不声明环境白名单，也不会因为顶层 `environment`、Dataset 或 Env 名称是自定义值而拒绝运行。
+内置环境名会映射到默认的已注册 Dataset 和 Env；自定义环境必须通过 `dataset_ref`、`env_ref` 选择已注册
+组件，并通过 `dataset_options`、`env_options` 原样传入组件工厂。自定义组件不会收到 `data_root`、
+`split_dir`、`max_turns` 等内置 benchmark 兼容参数，所需参数必须全部写入对应 options。
+
+外部 Python 包提供组件时，把触发 `@register(...)` 的模块写入 `launcher.component_modules`；该包必须已在
+运行环境中，或通过 `src/mindmemos_skill/pyproject.toml` 中已声明的 optional-dependency extra 安装，并把
+extra 名写入 `launcher.extra_dependencies`：
+
+```yaml
+version: 1
+method: skill_grpo_without_replay_buffer
+environment: customer-benchmark
+launcher:
+  env_file: .skill.env
+  extra_dependencies: [customer-benchmark]
+  component_modules: [customer_benchmark.mindmemos_components]
+parameters:
+  dataset:
+    dataset_ref: customer_dataset
+    dataset_options: {manifest: data/customer/splits.json}
+    initial_skill: resources/customer/SKILL.md
+  environment_options:
+    env_ref: customer_env
+    env_options: {endpoint: "http://127.0.0.1:9000"}
+    max_turns: 20
+```
+
+`component_modules` 在实验子进程启动后导入，因此模块及其依赖必须能由最终 `uv run` 环境加载。对于直接
+放入 `registered_datasets/`、`registered_envs/` 并由父包导入的内置扩展，不需要填写该字段。
 
 每个 rollout 的交互预算统一使用 `environment_options.max_turns`：一轮表示环境驱动的一次模型决策。
 例如 ALFWorld 的 `max_turns: 50` 最多执行 50 次动作，SpreadsheetBench 的 `max_turns: 30` 最多生成
@@ -115,6 +168,20 @@ scripts/run_mindmemos_skill_experiment.sh \
 ```bash
 scripts/run_mindmemos_skill_experiment.sh --config <config.yaml> --dry-run
 ```
+
+`skill_grpo_with_experience_validation` 的“上一 batch 无效经验反馈”默认关闭。启用时，只汇总当前 batch
+中实际执行过注入验证且被门控拒绝的经验（包括性能持平的拒绝项），记录注入前后正确数和劣化数，并只把
+该摘要注入紧邻的下一 batch 经验提取 prompt；不会累计更早 batch：
+
+```bash
+scripts/run_mindmemos_skill_experiment.sh \
+  --config config/mindmemos_skill/skill_grpo_with_experience_validation/alfworld/default.yaml \
+  --set algorithm.previous_batch_invalid_experience_feedback=true
+```
+
+该算法还可通过 `algorithm.max_tool_observation_chars` 限制经验提取 prompt 中单个工具返回的长度。超过限制时
+只保留开头和结尾，并在中间写入截断标记；rollout 实际看到的内容和持久化的原始轨迹不受影响。
+SpreadsheetBench 默认配置为 `24000`，设为 `null` 可完全关闭该限制。
 
 排错时必须先看 dry-run 中的 `method`、`environment`、`run_id`、`output_dir` 和最终 `command`。它能发现参数名错误、环境不匹配、错误 Skill 路径以及加载了哪个 family runner，但不会发起模型请求。
 

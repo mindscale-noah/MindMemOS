@@ -45,7 +45,6 @@ from mindmemos_skill.algos.evolve.skill_grpo_without_replay_buffer.reflection im
     task_with_reflection,
 )
 from mindmemos_skill.algos.evolve.trajectory_memory.memory import task_retrieval_key
-from mindmemos_skill.datasets import ALFWorldPathSplitDataset
 from mindmemos_skill.llm import (
     DatabaseLLMCallSink,
     EmbedClient,
@@ -57,6 +56,8 @@ from mindmemos_skill.llm import (
 from mindmemos_skill.persistence import bootstrap_skill_database
 from mindmemos_skill.typing import Skill, Task, compute_skill_content_hash
 from pydantic import BaseModel, ConfigDict, Field
+
+from .component_selection import build_registered_dataset, build_registered_env_options, json_object
 
 
 class _StrictModel(BaseModel):
@@ -103,8 +104,13 @@ class ChatModelWithDefaults:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--split-dir", type=Path, required=True)
+    parser.add_argument("--benchmark", default="alfworld", help="artifact label and built-in component default")
+    parser.add_argument("--dataset-ref", help="registered Dataset name")
+    parser.add_argument("--dataset-options", type=json_object, default={}, help="JSON options for the Dataset factory")
+    parser.add_argument("--env-ref", help="registered Env name; ALFWorld defaults to alfworld_bounded_history")
+    parser.add_argument("--env-options", type=json_object, default={}, help="JSON options for the Env factory")
+    parser.add_argument("--data-root", type=Path)
+    parser.add_argument("--split-dir", type=Path)
     parser.add_argument("--initial-skill", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
@@ -142,7 +148,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rollout-retries", type=int, default=3)
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--max-turns", type=int, required=True)
+    parser.add_argument("--docs-root", type=Path)
+    parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--env-seed", type=int)
+    parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-sketch", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--shuffle-choices", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
     return parser.parse_args(argv)
@@ -251,11 +263,11 @@ def build_skill(args: argparse.Namespace) -> Skill:
     blob = {"SKILL.md": args.initial_skill.read_text(encoding="utf-8")}
     now = datetime.now(UTC)
     return Skill(
-        skill_id="alfworld-skill",
+        skill_id=f"{args.benchmark}-skill",
         version_id=f"{args.run_id}:base",
         version_label="0.1.0",
         content_hash=compute_skill_content_hash(blob),
-        name="alfworld",
+        name=args.benchmark,
         blob=blob,
         created_at=now,
     )
@@ -264,6 +276,17 @@ def build_skill(args: argparse.Namespace) -> Skill:
 def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRunConfig:
     """Reuse existing rollout/extraction contracts while disabling patch validation."""
 
+    env_ref, env_options = build_registered_env_options(
+        benchmark=args.benchmark,
+        env_ref=args.env_ref,
+        env_options=args.env_options,
+        max_turns=args.max_turns,
+        env_seed=args.seed if args.env_seed is None else args.env_seed,
+        shell_timeout=args.shell_timeout,
+        use_theorem=args.use_theorem,
+        use_sketch=args.use_sketch,
+        docs_root=args.docs_root,
+    )
     return SkillGrpoWithoutReplayBufferRunConfig.model_validate(
         {
             "algorithm": {
@@ -294,12 +317,9 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoWithoutReplayBufferRu
                 "validation": {"name": "fixed_group", "params": {"group_size": 1}},
             },
             "dataset": {
-                "env_ref": "alfworld_bounded_history",
+                "env_ref": env_ref,
                 "agent_ref": "react",
-                "env_options": {
-                    "max_turns": args.max_turns,
-                    "seed": args.seed,
-                },
+                "env_options": env_options,
                 "agent_options": {},
             },
         }
@@ -515,7 +535,8 @@ def fixed_group_specs(
     group_size: int,
     sequence_start: int,
     seed: int,
-    max_turns: int,
+    env_ref: str,
+    env_options: dict[str, Any],
 ) -> list[RolloutSpec]:
     strategies = RolloutStrategyRegistry.with_builtins()
     return strategies.get("fixed_group").plan(
@@ -528,10 +549,10 @@ def fixed_group_specs(
             sequence_start=sequence_start,
             group_size=group_size,
             agent_ref="react",
-            env_ref="alfworld_bounded_history",
+            env_ref=env_ref,
             seed=seed,
             agent_options={},
-            env_options={"max_turns": max_turns, "seed": seed},
+            env_options=env_options,
         )
     )
 
@@ -640,12 +661,21 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         raise FileNotFoundError(f"resume database does not exist: {args.resume_experience_db}")
 
     started_at = monotonic()
-    os.environ["ALFWORLD_DATA"] = str(args.data_root.expanduser().resolve())
-    dataset = ALFWorldPathSplitDataset(split_dir=args.split_dir, alfworld_data=args.data_root)
+    dataset = build_registered_dataset(
+        benchmark=args.benchmark,
+        dataset_ref=args.dataset_ref,
+        dataset_options=args.dataset_options,
+        data_root=args.data_root,
+        split_dir=args.split_dir,
+        seed=args.seed,
+        shuffle_choices=args.shuffle_choices,
+    )
     train_tasks = _limited(dataset.train_tasks(), args.train_limit)
     test_tasks = _limited(dataset.test_tasks(), args.test_limit)
     base_skill = build_skill(args)
     config = build_run_config(args)
+    env_ref = config.dataset.env_ref
+    env_options = config.dataset.env_options
 
     args.output_dir.mkdir(parents=True, exist_ok=False)
     write_json(args.output_dir / "arguments.json", _safe_arguments(args))
@@ -699,7 +729,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 group_size=args.train_rollouts,
                 sequence_start=0,
                 seed=args.seed,
-                max_turns=args.max_turns,
+                env_ref=env_ref,
+                env_options=env_options,
             )
             if args.resume_experience_db is not None:
                 train_outcomes = []
@@ -750,7 +781,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                     group_size=args.test_rollouts,
                     sequence_start=sequence_start,
                     seed=args.seed,
-                    max_turns=args.max_turns,
+                    env_ref=env_ref,
+                    env_options=env_options,
                 )
                 baseline_outcomes = await scheduler.run(baseline_specs)
                 sequence_start += len(baseline_specs)
@@ -769,7 +801,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                     group_size=args.test_rollouts,
                     sequence_start=sequence_start,
                     seed=args.seed,
-                    max_turns=args.max_turns,
+                    env_ref=env_ref,
+                    env_options=env_options,
                 )
                 memory_specs.extend(specs)
                 sequence_start += len(specs)

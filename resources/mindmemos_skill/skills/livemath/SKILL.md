@@ -13,5 +13,4 @@
 - Pay close attention to equality cases, extremal conditions, and whether a result applies to the full family or only a restricted subfamily.
 
 ## Final Answer
-- Output 2–5 concise bullet points summarizing the key reasoning, important considerations, and evidence that support your conclusion firstly, enclosed inside `<think>...</think>` tags.
 - Output the final answer as the single option label only.

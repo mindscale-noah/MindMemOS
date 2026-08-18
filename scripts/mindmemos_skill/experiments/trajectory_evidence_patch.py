@@ -21,6 +21,7 @@ from mindmemos_skill.llm import DatabaseLLMCallSink
 from mindmemos_skill.persistence import bootstrap_skill_database
 from mindmemos_skill.typing import Skill, SkillCandidate, Trace2SkillInput, compute_skill_content_hash
 
+from .component_selection import json_object, resolve_env_ref
 from .skill_evaluation import (
     TestEvaluationConfig,
     build_agent,
@@ -43,8 +44,12 @@ class _AlgorithmContext:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--benchmark", choices=("alfworld", "livemath", "spreadsheetbench"), required=True)
-    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--benchmark", required=True, help="artifact label and built-in component default")
+    parser.add_argument("--dataset-ref", help="registered Dataset name")
+    parser.add_argument("--dataset-options", type=json_object, default={}, help="JSON options for the Dataset factory")
+    parser.add_argument("--env-ref", help="registered Env name; ALFWorld defaults to alfworld_bounded_history")
+    parser.add_argument("--env-options", type=json_object, default={}, help="JSON options for the Env factory")
+    parser.add_argument("--data-root", type=Path)
     parser.add_argument("--split-dir", type=Path)
     parser.add_argument("--initial-skill", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -76,6 +81,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
 
     parser.add_argument("--max-turns", type=int, required=True)
+    parser.add_argument("--docs-root", type=Path)
     parser.add_argument("--env-seed", type=int, default=42)
     parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
@@ -124,6 +130,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         split_dir=args.split_dir,
         seed=args.seed,
         shuffle_choices=args.shuffle_choices,
+        dataset_ref=args.dataset_ref,
+        dataset_options=args.dataset_options,
     )
     train_tasks = _limited_train_tasks(dataset.train_tasks(), args.train_limit)
     test_tasks = limited_test_tasks(dataset, args.test_limit)
@@ -135,7 +143,11 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         shell_timeout=args.shell_timeout,
         use_theorem=args.use_theorem,
         use_sketch=args.use_sketch,
+        docs_root=args.docs_root,
+        env_ref=args.env_ref,
+        configured_options=args.env_options,
     )
+    env_ref = resolve_env_ref(benchmark=args.benchmark, env_ref=args.env_ref)
 
     args.output_dir.mkdir(parents=True, exist_ok=False)
     write_json(
@@ -159,6 +171,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         call_sink=sink,
     )
     agent = build_agent(
+        agent_type="react",
         client=target_client,
         model=args.target_model,
         max_turns=args.max_turns,
@@ -175,7 +188,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         rewrite_skill=args.rewrite_skill,
         collection=TaskCollectionConfig(
             agent_ref="react",
-            env_ref="alfworld_bounded_history" if args.benchmark == "alfworld" else args.benchmark,
+            env_ref=env_ref,
             samples_per_task=args.collection_rollouts,
             max_concurrent_rollouts=args.max_concurrent_rollouts,
             timeout_seconds=args.rollout_timeout,
@@ -212,6 +225,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             output_dir=args.output_dir / "test",
             config=TestEvaluationConfig(
                 benchmark=args.benchmark,
+                env_ref=env_ref,
                 rollouts=args.test_rollouts,
                 max_concurrent_rollouts=args.max_concurrent_rollouts,
                 rollout_timeout=args.rollout_timeout,

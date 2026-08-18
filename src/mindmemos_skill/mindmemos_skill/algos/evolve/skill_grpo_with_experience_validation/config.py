@@ -53,6 +53,13 @@ class ExperienceConfig(_StrictModel):
 
     max_experiences_per_task: int = Field(default=3, ge=1)
     max_concurrent_extractions: int | None = Field(default=None, ge=1)
+    max_tool_observation_chars: int | None = Field(default=None, ge=256)
+
+
+class PreviousBatchInvalidExperienceFeedbackConfig(_StrictModel):
+    """Optional feedback from rejected experiences in only the preceding batch."""
+
+    enabled: bool = False
 
 
 class TrainingConfig(SharedTrainingConfig):
@@ -68,6 +75,9 @@ class SkillGrpoWithExperienceValidationConfig(_StrictModel):
     experience: ExperienceConfig = Field(default_factory=ExperienceConfig)
     patch: PatchConfig = Field(default_factory=PatchConfig)
     reflection: ReflectionConfig = Field(default_factory=ReflectionConfig)
+    previous_batch_invalid_experience_feedback: PreviousBatchInvalidExperienceFeedbackConfig = Field(
+        default_factory=PreviousBatchInvalidExperienceFeedbackConfig
+    )
 
 
 class SkillGrpoWithExperienceValidationRunConfig(_StrictModel):
@@ -85,6 +95,7 @@ class SkillGrpoWithExperienceValidationRunConfig(_StrictModel):
 
 __all__ = [
     "ExperienceConfig",
+    "PreviousBatchInvalidExperienceFeedbackConfig",
     "ReflectionConfig",
     "RolloutConfig",
     "SkillGrpoWithExperienceValidationConfig",

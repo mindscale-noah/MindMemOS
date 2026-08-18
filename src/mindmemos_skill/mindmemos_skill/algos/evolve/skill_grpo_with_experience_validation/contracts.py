@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from ....typing import EvolveInput, EvolveOutput, Task
 from ..skill_grpo_with_replay_buffer.contracts import (
@@ -18,6 +19,30 @@ from .config import SkillGrpoWithExperienceValidationRunConfig
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+
+class _StrictExtractionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class ExperienceEvidence(_StrictExtractionModel):
+    task_id: NonEmptyText
+    rollout: int = Field(ge=1)
+    observation: NonEmptyText
+
+
+class ExperienceItem(_StrictExtractionModel):
+    topic: NonEmptyText
+    lesson: NonEmptyText
+    reason: NonEmptyText
+    evidence: list[ExperienceEvidence] = Field(min_length=1)
+
+
+class ExperienceExtractionPayload(_StrictExtractionModel):
+    experiences: list[ExperienceItem]
 
 
 class ExperienceSource(StrEnum):
@@ -98,6 +123,9 @@ class SkillGrpoWithExperienceValidationEvolveResult(EvolveOutput):
 __all__ = [
     "BatchEvolutionRecord",
     "EvolutionMetrics",
+    "ExperienceEvidence",
+    "ExperienceExtractionPayload",
+    "ExperienceItem",
     "ExperienceSource",
     "ExperienceValidationDecision",
     "ExperienceValidationRecord",

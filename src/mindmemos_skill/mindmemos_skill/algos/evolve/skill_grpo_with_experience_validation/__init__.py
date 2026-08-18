@@ -2,6 +2,7 @@
 
 from .algorithm import SkillGrpoWithExperienceValidation
 from .config import (
+    PreviousBatchInvalidExperienceFeedbackConfig,
     ReflectionConfig,
     SkillGrpoWithExperienceValidationConfig,
     SkillGrpoWithExperienceValidationRunConfig,
@@ -26,6 +27,7 @@ __all__ = [
     "ExperienceValidationRecord",
     "ExtractedExperienceSet",
     "PatchDecision",
+    "PreviousBatchInvalidExperienceFeedbackConfig",
     "ReflectionConfig",
     "SkillGrpoWithExperienceValidation",
     "SkillGrpoWithExperienceValidationConfig",

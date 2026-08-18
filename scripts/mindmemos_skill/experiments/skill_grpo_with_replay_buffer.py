@@ -11,7 +11,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
-from typing import Any, cast
+from typing import Any
 
 from mindmemos_skill.agents.react import ReactAgent
 from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer import (
@@ -32,19 +32,12 @@ from mindmemos_skill.datasets import TaskDataset
 from mindmemos_skill.llm import DatabaseLLMCallSink, EmbedClient, LLMCallSink, LLMClient, get_router
 from mindmemos_skill.logging import AlgorithmLogger
 from mindmemos_skill.persistence import bootstrap_skill_database
-from mindmemos_skill.registry import ComponentType, create
 from mindmemos_skill.typing import Skill, compute_skill_content_hash
 
+from .component_selection import build_registered_dataset, build_registered_env_options, json_object
 from .skill_evaluation import persist_test_artifacts
 
 _ROLLOUT_PHASE_DIRECTORIES = ("train", "validation", "test", "ablation_before", "ablation_after")
-_DEFAULT_DATASET_REFS = {
-    "alfworld": "alfworld_path_split",
-    "livemath": "livemath_id_split",
-    "spreadsheetbench": "spreadsheetbench_id_split",
-}
-
-
 class ChatModelWithDefaults:
     """Attach optimizer-only request options to every algorithm chat call."""
 
@@ -179,9 +172,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark", required=True, help="environment alias used for artifact names and defaults")
     parser.add_argument("--dataset-ref", help="registered dataset name; defaults from --benchmark when built in")
-    parser.add_argument("--dataset-options", type=_json_object, default={}, help="JSON options for the dataset factory")
+    parser.add_argument("--dataset-options", type=json_object, default={}, help="JSON options for the dataset factory")
     parser.add_argument("--env-ref", help="registered Env name; ALFWorld defaults to alfworld_bounded_history")
-    parser.add_argument("--env-options", type=_json_object, default={}, help="JSON options for the Env factory")
+    parser.add_argument("--env-options", type=json_object, default={}, help="JSON options for the Env factory")
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--split-dir", type=Path)
     parser.add_argument("--initial-skill", type=Path, required=True)
@@ -213,6 +206,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fail-fast", action=argparse.BooleanOptionalAction, default=False)
 
     parser.add_argument("--max-turns", type=int, required=True)
+    parser.add_argument("--docs-root", type=Path)
     parser.add_argument("--shell-timeout", type=int, default=120)
     parser.add_argument("--use-theorem", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--use-sketch", action=argparse.BooleanOptionalAction, default=False)
@@ -236,44 +230,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _json_object(value: str) -> dict[str, Any]:
-    parsed = json.loads(value)
-    if not isinstance(parsed, dict):
-        raise argparse.ArgumentTypeError("expected a JSON object")
-    return parsed
-
-
 def build_dataset(args: argparse.Namespace) -> TaskDataset:
-    dataset_ref = args.dataset_ref or _DEFAULT_DATASET_REFS.get(args.benchmark)
-    if dataset_ref is None:
-        raise ValueError(f"benchmark {args.benchmark!r} has no default dataset; set --dataset-ref")
-
-    options = dict(args.dataset_options)
-    if dataset_ref == "alfworld_path_split":
-        options.setdefault("split_dir", args.split_dir or Path("data/ALFWorld/alfworld_path_split"))
-        if args.data_root is not None:
-            options.setdefault("alfworld_data", args.data_root)
-    elif dataset_ref == "livemath_id_split":
-        if args.data_root is None and "data_path" not in options:
-            raise ValueError("livemath_id_split requires --data-root or dataset_options.data_path")
-        if args.data_root is not None:
-            options.setdefault("data_path", args.data_root)
-        options.setdefault("split_dir", args.split_dir or Path("data/LiveMath/livemathematicianbench_id_split"))
-        options.setdefault("seed", args.seed)
-        options.setdefault("shuffle_choices", args.shuffle_choices)
-    elif dataset_ref == "spreadsheetbench_id_split":
-        if args.data_root is None and "data_root" not in options:
-            raise ValueError("spreadsheetbench_id_split requires --data-root or dataset_options.data_root")
-        if args.data_root is not None:
-            options.setdefault("data_root", args.data_root)
-        if args.split_dir is not None:
-            options.setdefault("split_dir", args.split_dir)
-    else:
-        if args.data_root is not None:
-            options.setdefault("data_root", args.data_root)
-        if args.split_dir is not None:
-            options.setdefault("split_dir", args.split_dir)
-    return cast(TaskDataset, create(type=ComponentType.DATASET, name=dataset_ref, **options))
+    return build_registered_dataset(
+        benchmark=args.benchmark,
+        dataset_ref=args.dataset_ref,
+        dataset_options=args.dataset_options,
+        data_root=args.data_root,
+        split_dir=args.split_dir,
+        seed=args.seed,
+        shuffle_choices=args.shuffle_choices,
+    )
 
 
 def build_client(
@@ -332,15 +298,17 @@ def limited(items: list[Any], limit: int | None) -> list[Any]:
 
 
 def build_run_config(args: argparse.Namespace) -> SkillGrpoRunConfig:
-    env_options: dict[str, Any] = dict(args.env_options)
-    env_options.setdefault("max_turns", args.max_turns)
-    if args.benchmark == "spreadsheetbench":
-        env_options.setdefault("shell_timeout_seconds", args.shell_timeout)
-    elif args.benchmark == "alfworld":
-        env_options.setdefault("seed", args.seed if args.env_seed is None else args.env_seed)
-    elif args.benchmark == "livemath":
-        env_options.setdefault("use_theorem", args.use_theorem)
-        env_options.setdefault("use_sketch", args.use_sketch)
+    env_ref, env_options = build_registered_env_options(
+        benchmark=args.benchmark,
+        env_ref=args.env_ref,
+        env_options=args.env_options,
+        max_turns=args.max_turns,
+        env_seed=args.seed if args.env_seed is None else args.env_seed,
+        shell_timeout=args.shell_timeout,
+        use_theorem=args.use_theorem,
+        use_sketch=args.use_sketch,
+        docs_root=args.docs_root,
+    )
     return SkillGrpoRunConfig.model_validate(
         {
             "algorithm": {
@@ -385,8 +353,7 @@ def build_run_config(args: argparse.Namespace) -> SkillGrpoRunConfig:
                 "test": {"name": "fixed_group", "params": {"group_size": args.test_rollouts}},
             },
             "dataset": {
-                "env_ref": args.env_ref
-                or ("alfworld_bounded_history" if args.benchmark == "alfworld" else args.benchmark),
+                "env_ref": env_ref,
                 "agent_ref": "react",
                 "env_options": env_options,
                 "agent_options": {},

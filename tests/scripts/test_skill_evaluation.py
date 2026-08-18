@@ -122,6 +122,54 @@ def test_parser_only_accepts_max_turns(tmp_path: Path) -> None:
         evaluation.parse_args([*common, "--max-turns", "40", "--max-steps", "50"])
 
 
+def test_deepseek_harness_is_limited_to_one_turn_text_only_livemath() -> None:
+    evaluation.validate_agent_benchmark_compatibility(agent_type="deepseek_harness", benchmark="livemath")
+
+    with pytest.raises(ValueError, match="supports only.*livemath"):
+        evaluation.validate_agent_benchmark_compatibility(
+            agent_type="deepseek_harness",
+            benchmark="spreadsheetbench",
+        )
+
+
+def test_officeqa_env_options_enable_custom_search(tmp_path: Path) -> None:
+    args = evaluation.parse_args(
+        [
+            "--benchmark",
+            "officeqa",
+            "--data-root",
+            str(tmp_path / "data"),
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--run-id",
+            "run",
+            "--skill",
+            str(tmp_path / "SKILL.md"),
+            "--max-turns",
+            "24",
+            "--docs-root",
+            str(tmp_path / "docs"),
+            "--env-options",
+            '{"search_mode":"custom_search","search_api_protocol_env":"CUSTOM_PROTOCOL"}',
+        ]
+    )
+
+    options = evaluation.environment_options(
+        args.benchmark,
+        max_turns=args.max_turns,
+        env_seed=args.env_seed,
+        shell_timeout=args.shell_timeout,
+        use_theorem=args.use_theorem,
+        use_sketch=args.use_sketch,
+        docs_root=args.docs_root,
+        configured_options=args.env_options,
+    )
+
+    assert options["search_mode"] == "custom_search"
+    assert options["search_api_protocol_env"] == "CUSTOM_PROTOCOL"
+    assert options["docs_root"] == str(tmp_path / "docs")
+
+
 def test_build_skill_accepts_skill_directory(tmp_path: Path) -> None:
     skill_dir = tmp_path / "demo"
     skill_dir.mkdir()

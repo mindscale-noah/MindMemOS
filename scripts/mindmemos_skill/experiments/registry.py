@@ -24,8 +24,6 @@ class ExperimentSpec:
     name: str
     family: ExperimentFamily
     module: str
-    # None means the adapter accepts a configuration-selected registered Dataset/Env.
-    environments: frozenset[str] | None = None
     common_extras: tuple[str, ...] = ("llm",)
     environment_extras: dict[str, tuple[str, ...]] | None = None
     inject_environment_as_benchmark: bool = False
@@ -45,7 +43,6 @@ class ExperimentSpec:
 def _evolve(
     name: str,
     *,
-    environments: frozenset[str] | None = None,
     environment_extras: dict[str, tuple[str, ...]] | None = None,
     common_extras: tuple[str, ...] = ("llm",),
     inject_environment_as_benchmark: bool = False,
@@ -54,7 +51,6 @@ def _evolve(
         name=name,
         family=ExperimentFamily.EVOLVE,
         module=f"experiments.{name}",
-        environments=environments,
         common_extras=common_extras,
         environment_extras=environment_extras,
         inject_environment_as_benchmark=inject_environment_as_benchmark,
@@ -64,14 +60,12 @@ def _evolve(
 def _trace2skill(
     name: str,
     *,
-    environments: frozenset[str],
     environment_extras: dict[str, tuple[str, ...]] | None = None,
 ) -> ExperimentSpec:
     return ExperimentSpec(
         name=name,
         family=ExperimentFamily.TRACE2SKILL,
         module=f"experiments.{name}",
-        environments=environments,
         environment_extras=environment_extras,
         inject_environment_as_benchmark=True,
     )
@@ -87,56 +81,50 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         ),
         _evolve(
             "skill_grpo_without_replay_buffer",
-            environments=frozenset({"alfworld", "livemath", "officeqa", "spreadsheetbench"}),
             environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
             inject_environment_as_benchmark=True,
         ),
         _evolve(
             "skill_grpo_with_experience_validation",
-            environments=frozenset({"alfworld"}),
-            environment_extras={"alfworld": ("alfworld",)},
+            environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
+            inject_environment_as_benchmark=True,
         ),
         _evolve(
             "trajectory_memory",
-            environments=frozenset({"alfworld"}),
             environment_extras={"alfworld": ("alfworld",)},
+            inject_environment_as_benchmark=True,
         ),
         _evolve(
             "task_virtual_skill",
-            environments=frozenset({"alfworld", "livemath", "spreadsheetbench"}),
             environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
             inject_environment_as_benchmark=True,
         ),
         _evolve(
             "tree_skill_grpo",
-            environments=frozenset({"alfworld", "livemath", "spreadsheetbench"}),
             environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
             inject_environment_as_benchmark=True,
         ),
         _evolve(
             "experience_memory_embedding",
-            environments=frozenset({"alfworld"}),
             environment_extras={"alfworld": ("alfworld",)},
+            inject_environment_as_benchmark=True,
         ),
         _evolve(
             "initial_skill_evaluation",
-            environments=frozenset({"alfworld"}),
             environment_extras={"alfworld": ("alfworld",)},
+            inject_environment_as_benchmark=True,
         ),
         _evolve(
             "skill_evaluation",
-            environments=frozenset({"alfworld", "livemath", "officeqa", "spreadsheetbench"}),
             environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
             inject_environment_as_benchmark=True,
         ),
         _evolve(
             "agent_evaluation",
-            environments=frozenset({"local"}),
             common_extras=("llm", "claude-sdk"),
         ),
         _trace2skill(
             "trajectory_evidence_patch",
-            environments=frozenset({"alfworld", "livemath", "spreadsheetbench"}),
             environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
         ),
     )
@@ -153,9 +141,7 @@ def get_experiment(name: str, *, family: ExperimentFamily | None = None) -> Expe
 
 
 def list_experiments(*, family: ExperimentFamily | None = None) -> list[str]:
-    return sorted(
-        name for name, spec in EXPERIMENTS.items() if family is None or spec.family is family
-    )
+    return sorted(name for name, spec in EXPERIMENTS.items() if family is None or spec.family is family)
 
 
 def dispatch_experiment(family: ExperimentFamily, name: str, argv: Sequence[str]) -> int:

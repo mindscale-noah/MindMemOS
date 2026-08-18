@@ -213,11 +213,21 @@ def _assess_trajectory(
         event.get("role") == "system" and isinstance(event.get("content"), str) and expected_token in event["content"]
         for event in trajectory.events
     )
-    native_discovery_observable = mode is not SkillInjectionMode.SYSTEM_PROMPT
+    is_deepseek_filesystem = (
+        trajectory.agent.agent_type is AgentType.DEEPSEEK_HARNESS and mode is SkillInjectionMode.FILESYSTEM
+    )
+    native_discovery_observable = mode is not SkillInjectionMode.SYSTEM_PROMPT and not is_deepseek_filesystem
     skill_discovered = bool(tool_calls and binding_loaded) if native_discovery_observable else None
-    skill_injected = binding_loaded and (bool(tool_calls) or prompt_exposure)
     skill_applied = final_answer == expected_token
     agent_ran = trajectory.execution.status is TrajectoryStatus.SUCCEEDED and bool(final_answer)
+    requested_skill_present = any(skill.name == SKILL_NAME for skill in trajectory.injected_skills)
+    if is_deepseek_filesystem:
+        # Headless DSH exposes only its final stdout, not its internal skill(...)
+        # call.  The random token exists solely inside the mounted Skill, so an
+        # exact answer is the end-to-end discovery and injection proof.
+        skill_injected = requested_skill_present and skill_applied
+    else:
+        skill_injected = binding_loaded and (bool(tool_calls) or prompt_exposure)
     passed = bool(
         agent_ran and skill_injected and skill_applied and trajectory_valid and (skill_discovered is not False)
     )
@@ -240,6 +250,7 @@ def _assess_trajectory(
             "injection_mode": binding.injection_mode.value if binding and binding.injection_mode else None,
             "final_answer_matches_private_token": skill_applied,
             "native_discovery_observable": native_discovery_observable,
+            "private_token_is_end_to_end_discovery_proof": is_deepseek_filesystem and skill_applied,
         },
         "error": trajectory.execution.error_info or trajectory_error,
     }
@@ -310,6 +321,8 @@ async def _run_case(
         config.update({"timeout_seconds": timeout, "dangerously_skip_permissions": True})
     elif agent_type is AgentType.CLAUDE_SDK:
         config.update({"permission_mode": "bypassPermissions"})
+    elif agent_type is AgentType.DEEPSEEK_HARNESS:
+        config.update({"timeout_seconds": timeout})
 
     started_at = datetime.now(UTC)
     trajectory: Trajectory | None = None
@@ -336,7 +349,11 @@ async def _run_case(
                 "checks": {
                     "agent_ran": False,
                     "skill_injected": False,
-                    "native_skill_discovery": False if mode is not SkillInjectionMode.SYSTEM_PROMPT else None,
+                    "native_skill_discovery": (
+                        None
+                        if mode is SkillInjectionMode.SYSTEM_PROMPT or agent_type is AgentType.DEEPSEEK_HARNESS
+                        else False
+                    ),
                     "skill_applied_to_task": False,
                     "trajectory_produced_and_round_trips": False,
                 },
@@ -362,7 +379,7 @@ def _selected_cases(
 ) -> list[tuple[str, AgentType, SkillInjectionMode]]:
     requested = set(agent_names)
     if "all" in requested:
-        requested = {"react", "claude", "claude-sdk"}
+        requested = {"react", "claude", "claude-sdk", "deepseek-harness"}
 
     cases: list[tuple[str, AgentType, SkillInjectionMode]] = []
     if "react" in requested:
@@ -373,6 +390,8 @@ def _selected_cases(
         cases.append(("claude_cli_filesystem", AgentType.CLAUDE, SkillInjectionMode.FILESYSTEM))
     if "claude-sdk" in requested:
         cases.append(("claude_sdk_filesystem", AgentType.CLAUDE_SDK, SkillInjectionMode.FILESYSTEM))
+    if "deepseek-harness" in requested:
+        cases.append(("deepseek_harness_filesystem", AgentType.DEEPSEEK_HARNESS, SkillInjectionMode.FILESYSTEM))
     return cases
 
 
@@ -383,7 +402,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--agents",
         nargs="+",
-        choices=("all", "react", "claude", "claude-sdk"),
+        choices=("all", "react", "claude", "claude-sdk", "deepseek-harness"),
         default=["all"],
     )
     parser.add_argument(
@@ -463,7 +482,9 @@ async def _async_main(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         },
         "cases": results,
         "notes": [
-            "For tool/filesystem injection, native Skill discovery requires family-specific Skill tool evidence.",
+            "When the agent exposes it, tool/filesystem discovery requires family-specific Skill tool evidence.",
+            "DeepSeek Harness headless exposes final stdout only; its private-token match is the end-to-end "
+            "filesystem discovery proof, so native tool-call discovery is recorded as unobservable.",
             "For system_prompt injection, discovery is not separately observable; the check records prompt exposure and adherence.",
         ],
     }

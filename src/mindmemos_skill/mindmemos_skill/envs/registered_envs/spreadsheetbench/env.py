@@ -59,6 +59,7 @@ def _is_utf8(value: bytes) -> bool:
 class SpreadsheetBenchEnvConfig(EnvConfig):
     max_turns: int = Field(default=15, ge=1)
     shell_timeout_seconds: int = Field(default=120, ge=1)
+    expose_answer_position: bool = False
 
 
 @register(type=ComponentType.ENV, name="spreadsheetbench")
@@ -85,7 +86,11 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         prepared.agent_request.options["skill_injection_mode"] = "tool"
         tools = SpreadsheetTools(workspace, timeout_seconds=self.config.shell_timeout_seconds).as_tools()
         skill_names = [skill.name for skill in skills]
-        messages = build_messages(task=task, skill_names=skill_names)
+        messages = build_messages(
+            task=task,
+            skill_names=skill_names,
+            expose_answer_position=self.config.expose_answer_position,
+        )
         if task.system_prompt:
             messages[0] = {
                 **messages[0],

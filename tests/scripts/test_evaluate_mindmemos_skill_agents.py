@@ -122,3 +122,29 @@ def test_assessment_passes_only_with_native_discovery_adherence_and_round_trip()
     }
     assert ignored["passed"] is False
     assert ignored["checks"]["skill_applied_to_task"] is False
+
+
+def test_deepseek_headless_private_token_is_end_to_end_filesystem_proof() -> None:
+    token = "MINDMEMOS_SKILL_EVAL_PASS_TEST"
+    trajectory = _trajectory(expected_token=token, final_answer=token)
+    trajectory.agent = AgentProfile(
+        agent_type=AgentType.DEEPSEEK_HARNESS,
+        skill_injection_mode=SkillInjectionMode.FILESYSTEM,
+    )
+    trajectory.events = [
+        {"role": "system", "content": "Use the requested injected Skill."},
+        {"role": "user", "content": f"Use {SKILL_NAME}."},
+        {"role": "assistant", "content": token},
+    ]
+    trajectory.skill_bindings = []
+
+    assessed = _assess_trajectory(
+        trajectory,
+        expected_token=token,
+        mode=SkillInjectionMode.FILESYSTEM,
+    )
+
+    assert assessed["passed"] is True
+    assert assessed["checks"]["skill_injected"] is True
+    assert assessed["checks"]["native_skill_discovery"] is None
+    assert assessed["evidence"]["private_token_is_end_to_end_discovery_proof"] is True

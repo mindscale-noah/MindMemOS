@@ -86,7 +86,7 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
     launcher = loaded.get("launcher", {})
     if not isinstance(launcher, dict):
         raise ValueError("experiment config launcher must be a mapping")
-    unknown_launcher = sorted(set(launcher) - {"env_file", "extra_dependencies"})
+    unknown_launcher = sorted(set(launcher) - {"env_file", "extra_dependencies", "component_modules"})
     if unknown_launcher:
         raise ValueError(f"unknown launcher config keys: {', '.join(unknown_launcher)}")
     return loaded
@@ -264,10 +264,6 @@ def build_invocation(
     spec = RUNNERS[method]
     if not isinstance(environment_name, str) or not environment_name:
         raise ValueError("experiment environment must be a non-empty string")
-    if spec.environments is not None and environment_name not in spec.environments:
-        available = ", ".join(sorted(spec.environments))
-        raise ValueError(f"method {method!r} does not support environment {environment_name!r}; available: {available}")
-
     environment_values = dict(base_environment or os.environ)
     launcher = config.get("launcher", {})
     configured_env_file = env_file_override or launcher.get("env_file")
@@ -290,9 +286,7 @@ def build_invocation(
     options = inspect_runner_options(spec.implementation_path)
 
     if spec.inject_environment_as_benchmark:
-        configured_benchmark = flattened.setdefault("benchmark", environment_name)
-        if configured_benchmark != environment_name:
-            raise ValueError("parameters.dataset.benchmark must match top-level environment")
+        flattened.setdefault("benchmark", environment_name)
 
     if "run-id" in options:
         run_id_template = flattened.get("run-id", "{environment}_{method}_{timestamp}")
@@ -329,6 +323,11 @@ def build_invocation(
     extra_dependencies = launcher.get("extra_dependencies", [])
     if not isinstance(extra_dependencies, list) or not all(isinstance(item, str) for item in extra_dependencies):
         raise ValueError("launcher.extra_dependencies must be a list of strings")
+    component_modules = launcher.get("component_modules", [])
+    if not isinstance(component_modules, list) or not all(isinstance(item, str) and item for item in component_modules):
+        raise ValueError("launcher.component_modules must be a list of non-empty module names")
+    if component_modules:
+        environment_values["MINDMEMOS_SKILL_COMPONENT_MODULES"] = json.dumps(component_modules)
     configured_env_ref = flattened.get("env-ref")
     dependency_environments = [environment_name]
     if isinstance(configured_env_ref, str) and configured_env_ref not in dependency_environments:
