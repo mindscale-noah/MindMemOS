@@ -249,7 +249,21 @@ mindmemos memory search "咖啡偏好" --top-k 5
 <details>
 <summary><b>直接手动安装（不推荐）</b></summary>
 
-前置步骤：先在本机用 `mindmemos auth` 配置好 base_url、API key 和 user_id（指向云端或本地服务都行）。
+**先安装 SDK 并完成 auth 配置（必须）**：插件通过 `mindmemos` CLI 与本机通信，所以要先安装 Python SDK 并保证 `mindmemos` 命令可用：
+
+```bash
+pip install mindmemos-sdk    # 或 uv add mindmemos-sdk
+mindmemos --version          # 确认命令已可用
+```
+
+然后用 `mindmemos auth` 配置好 base_url、API key 和 user_id（指向云端或本地服务都行）:
+
+```bash
+mindmemos auth
+mindmemos config show        # 确认配置生效
+```
+
+> 没完成这两步就装插件，日志会直接报错（找不到 `mindmemos` 命令 / 未配置认证），插件无法正常读写记忆。
 
 安装并启用插件：
 

@@ -259,7 +259,21 @@ The `memory` subcommand also supports get / update / delete / feedback / dreamin
 <details>
 <summary><b>Manual installation (not recommended)</b></summary>
 
-Prerequisite: first configure `base_url`, API key, and `user_id` locally with `mindmemos auth` (pointing at either the cloud or a local service).
+**First install the SDK and complete `auth` configuration (required)**: the plugin communicates with the local machine through the `mindmemos` CLI, so you must install the Python SDK first and make sure the `mindmemos` command is available:
+
+```bash
+pip install mindmemos-sdk    # or: uv add mindmemos-sdk
+mindmemos --version          # confirm the command is available
+```
+
+Then configure `base_url`, API key, and `user_id` with `mindmemos auth` (pointing at either the cloud or a local service):
+
+```bash
+mindmemos auth
+mindmemos config show        # confirm the configuration took effect
+```
+
+> Skipping these two steps before installing the plugin causes the logs to error out (`mindmemos` command not found / auth not configured), and the plugin will not be able to read or write memories properly.
 
 Install and enable the plugin:
 
