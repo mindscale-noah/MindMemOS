@@ -56,8 +56,22 @@
 </p>
 
 ## 🚀 快速开始
+
+MindMemOS 有**两种部署方式**（官方云服务、本地自部署）和**三种接入方式**（HTTP 接口、Python SDK / CLI、Agent 插件），可以任意组合，服务端与客户端是同一套协议：
+
+| 接入方式 | 用途 | 云端 base_url | 本地 base_url |
+| :--- | :--- | :--- | :--- |
+| [HTTP 接口](https://mindmemos.cn/api-docs) | 业务应用直接调用 | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+| [Python SDK / CLI](https://pypi.org/project/mindmemos-sdk/) | 业务应用集成 | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+| [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) | Agent 自动写入/召回记忆 | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+
+想省去部署直接体验，可以先用官方云服务（在 [官网](https://mindmemos.cn) 申请 API key）；需要私有化或离线使用，按下面的本地部署启动。
+
 ### 1. 本地部署
+
 MindMemOS 使用 `uv` 管理依赖和执行本地命令。详细配置方法可以查看[docs/deploy/instruction_ZH.md](docs/deploy/instruction_ZH.md)。
+
+默认端口 8000：FastAPI `http://127.0.0.1:8000`，API 文档 `http://127.0.0.1:8000/docs`。
 
 #### 1.1 准备配置文件
 ```bash
@@ -74,12 +88,10 @@ cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
 
 #### 1.2 启动服务
 
-启动本地服务：
+启动本地服务（默认端口：8000）：
 ```bash
-make dev
+make dev  # 会先启动全量 Docker 依赖，再启动 FastAPI。
 ```
-
-`make dev` 会先启动全量 Docker 依赖，再启动 FastAPI。
 
 只启动核心依赖时使用：
 
@@ -88,19 +100,49 @@ make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
 ```
 
-默认本地服务端口8000：
-
-```text
-FastAPI:   http://127.0.0.1:8000
-```
-
-停止本地服务：
+#### 1.3 停止服务
 
 ```bash
 make dev-down
 ```
 
-#### 1.3 配置 SDK
+### 2. 接入方式
+
+云服务和本地自部署使用同一套接入协议，本地 key 来自 `config/mindmemos/api_keys.yaml`，云端 key 在 [官网](https://mindmemos.cn) 申请。
+
+#### 2.1 HTTP 接口调用
+
+HTTP 接口是基础接入方式，SDK 与插件底层也走 HTTP。先用 curl 调通接口做验证（服务起来后），再接入业务。调用前定义地址与 key，本地或云端二选一：
+
+```bash
+export BASE_URL=http://127.0.0.1:8000   # 本地自部署；云端改为 https://mindmemos.cn
+export API_KEY=dev-api-key-001          # 本地示例 key；云端改为官网申请的 key
+```
+
+写入一条记忆：
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/memory/add" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "u_123",
+    "messages": [{"role": "user", "content": "我喜欢喝冰美式。"}]
+  }'
+```
+
+检索记忆：
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/memory/search" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "用户喜欢喝什么咖啡？", "top_k": 3}'
+```
+
+PowerShell 等其他环境 / 语言的 HTTP 调用格式，以及其余接口（get / list / delete / update / feedback / dreaming / skills 等）都见 [API 文档](https://mindmemos.cn/api-docs)。
+
+#### 2.2 配置 SDK
 
 安装 Python SDK：
 
@@ -142,7 +184,7 @@ with MindMemOSClient(
 
 显式传入的参数优先于 `~/.mindmemos/settings.json` 中的配置。
 
-#### 1.4 通过 SDK 写入和检索记忆
+#### 2.3 通过 SDK 写入和检索记忆
 
 完成上述配置后，`MindMemOSClient()` 会自动读取服务地址、API key 和默认 `user_id`。SDK 会自动添加认证请求头，无需手动拼接 HTTP 请求：
 
@@ -189,64 +231,61 @@ with MindMemOSClient() as client:
 
 本地服务与云端服务使用同一套 SDK 调用逻辑，切换时只需重新配置 `base_url` 和对应的 API key。
 
-#### 1.5 通过 CLI 调用
+#### 2.4 通过 CLI 调用
 
-完成 `mindmemos auth` 后，也可以通过SDK提供的CLI命令直接写入和检索记忆：
+完成 `mindmemos auth` 后，也可以通过 SDK 提供的 CLI 直接写入和检索记忆：
 
 ```bash
 mindmemos memory add --content "我喜欢喝冰美式"
 mindmemos memory search "咖啡偏好" --top-k 5
 ```
 
-也可以通过 CLI 查看、更新、删除记忆，提交反馈或触发 Dreaming：
+`memory` 子命令还支持 get / update / delete / feedback / dreaming，`skill` 子命令支持 register / list / evolve / push / pull / history 等，完整命令、参数与故障排查见 [CLI 使用说明](docs/cli/instruction_ZH.md)。
+
+#### 2.5 OpenClaw 插件
+
+**推荐使用我们提供的 [`mindmemos-cli` skill](skills/mindmemos-cli/SKILL.md) 安装**：把 `skills/mindmemos-cli/` 部署到你的 Agent 的 skills 目录后，让 Agent 按其指引操作即可，skill 内的 [参考文档](skills/mindmemos-cli/references/openclaw-plugin.md) 覆盖了安装、授权与常见故障排查。
+
+<details>
+<summary><b>直接手动安装（不推荐）</b></summary>
+
+**先安装 SDK 并完成 auth 配置（必须）**：插件通过 `mindmemos` CLI 与本机通信，所以要先安装 Python SDK 并保证 `mindmemos` 命令可用：
 
 ```bash
-mindmemos memory get --top-k 10  # 查看记忆
-mindmemos memory update <memory_id> --content "我现在更喜欢拿铁"  # 更新记忆
-mindmemos memory delete <memory_id>  # 删除记忆
-mindmemos memory feedback --text "刚才召回的偏好不准确" \
-  --messages-json '[{"role":"user","content":"刚才召回的偏好不准确"}]'  # 提交显式反馈
-mindmemos memory feedback  # 提交隐式反馈
-mindmemos memory dreaming  # 巩固记忆
+pip install mindmemos-sdk    # 或 uv add mindmemos-sdk
+mindmemos --version          # 确认命令已可用
 ```
 
-通过 Skill CLI 可以注册本地 Skill，并使用注册时设置的 alias 进行后续管理：
+然后用 `mindmemos auth` 配置好 base_url、API key 和 user_id（指向云端或本地服务都行）:
 
 ```bash
-mindmemos skill register ./path/to/skill --alias my-skill
-mindmemos skill list
-mindmemos skill show my-skill
+mindmemos auth
+mindmemos config show        # 确认配置生效
 ```
 
-触发 Skill Evolution 时默认使用同步模式，也可以将演进任务异步入队：
+> 没完成这两步就装插件，日志会直接报错（找不到 `mindmemos` 命令 / 未配置认证），插件无法正常读写记忆。
+
+安装并启用插件：
 
 ```bash
-mindmemos skill evolve my-skill
-mindmemos skill evolve my-skill --async
+openclaw plugins install @mindmemos/openclaw-plugin
+openclaw plugins enable mindmemos-memory
 ```
 
-本地 Skill 修改后，可以将其推送为新版本；也可以拉取云端版本信息并更新本地文件：
+（`@mindmemos/openclaw-plugin` 是 npm 包名，`mindmemos-memory` 是插件 id。）手动安装容易踩下面两个坑，需要注意：
 
-```bash
-mindmemos skill push my-skill
-mindmemos skill pull my-skill
-mindmemos skill update my-skill
-mindmemos skill update --all
-```
+- **写入权限（必配）**：插件的 `agent_end` 写入勾子需要 `allowConversationAccess` 授权，否则看起来一切正常、但回合结束后记忆实际上没有落库：
+  ```bash
+  openclaw config set plugins.entries.mindmemos-memory.hooks.allowConversationAccess true
+  openclaw gateway restart
+  ```
+- **`cli` 的 PATH**：GUI 方式启动的 OpenClaw 进程不继承终端 PATH，`mindmemos` 命令需显式配置为绝对路径或用 `uv run mindmemos` 包装，否则日志报 `ENOENT`。
 
-`pull` 只拉取云端版本元数据，不会修改本地文件；`update` 会先展示更新计划并在确认后应用。查看版本历史、比较版本或回滚时使用：
+安装启用并重启 gateway 后，插件会在每次用户回合前检索并注入相关记忆，回合结束后自动写回对话。
 
-```bash
-mindmemos skill history my-skill
-mindmemos skill diff my-skill --to <version_id>
-mindmemos skill rollback my-skill --to <version_id>
-```
+完整命令、配置项与故障排查见 [OpenClaw 插件集成文档](skills/mindmemos-cli/references/openclaw-plugin.md)。
 
-不再需要 SDK 管理某个 Skill 时，可以取消注册；默认不会删除本地 Skill 文件：
-
-```bash
-mindmemos skill unregister my-skill
-```
+</details>
 
 ## 📊 Benchmark
 

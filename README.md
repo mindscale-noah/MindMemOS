@@ -57,6 +57,16 @@
 
 ## 🚀 Quick Start
 
+MindMemOS offers **two deployment modes** (official cloud service, local self-hosting) and **three access methods** (HTTP API, Python SDK / CLI, agent plugin). Any combination works — server and client speak the same protocol:
+
+| Access Method | Use Case | Cloud base_url | Local base_url |
+| :--- | :--- | :--- | :--- |
+| [HTTP API](https://mindmemos.cn/api-docs) | Call directly from business apps | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+| [Python SDK / CLI](https://pypi.org/project/mindmemos-sdk/) | Integrate into business apps | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+| [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) | Agent auto-recalls / writes memory | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+
+To try it without deploying, use the official cloud service (request an API key on the [website](https://mindmemos.cn)); for on-premises or offline use, start with Local Deployment below.
+
 ### 1. Local Deployment
 
 MindMemOS uses `uv` to manage dependencies and run local commands. For detailed configuration instructions, see [docs/deploy/instruction.md](docs/deploy/instruction.md).
@@ -105,7 +115,43 @@ Stop the local service:
 make dev-down
 ```
 
-#### 1.3 Configure the SDK
+### 2. Access Methods
+
+Cloud and local self-hosting use the same access protocol. Local keys come from `config/mindmemos/api_keys.yaml`; cloud keys are obtained from the [website](https://mindmemos.cn).
+
+#### 2.1 HTTP API
+
+HTTP is the base access method — the SDK and plugins also talk HTTP underneath. Once the service is up, first use curl to verify the endpoints work, then wire up your business logic. Define the address and key before calling (pick local or cloud):
+
+```bash
+export BASE_URL=http://127.0.0.1:8000   # Local self-host; change to https://mindmemos.cn for cloud
+export API_KEY=dev-api-key-001          # Local example key; use a website-issued key for cloud
+```
+
+Add a memory:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/memory/add" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "u_123",
+    "messages": [{"role": "user", "content": "I like iced Americanos."}]
+  }'
+```
+
+Search memories:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/memory/search" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What kind of coffee does the user like?", "top_k": 3}'
+```
+
+A `code` of `ok` with readable memory content means the access works. curl is just a smoke-test helper; the shown format is for bash. Other environments / languages and the remaining endpoints (get / list / delete / update / feedback / dreaming / skills, etc.) are all covered in the [API docs](https://mindmemos.cn/api-docs).
+
+#### 2.2 Configure the SDK
 
 Install the Python SDK:
 
@@ -148,7 +194,7 @@ with MindMemOSClient(
 
 Explicit parameters take precedence over values in `~/.mindmemos/settings.json`.
 
-#### 1.4 Add and Search Memories with the SDK
+#### 2.3 Add and Search Memories with the SDK
 
 After completing the configuration above, `MindMemOSClient()` automatically reads the service address, API key, and default `user_id`. The SDK adds the authentication header automatically, so there is no need to construct HTTP requests manually:
 
@@ -195,7 +241,7 @@ with MindMemOSClient() as client:
 
 Local and cloud services use the same SDK call pattern. To switch between them, reconfigure only the `base_url` and corresponding API key.
 
-#### 1.5 Use the CLI
+#### 2.4 Use the CLI
 
 After running `mindmemos auth`, you can also add and search memories directly with the CLI included in the SDK:
 
@@ -204,55 +250,52 @@ mindmemos memory add --content "I like iced Americanos"
 mindmemos memory search "coffee preferences" --top-k 5
 ```
 
-The CLI can also view, update, and delete memories, submit feedback, or trigger Dreaming:
+The `memory` subcommand also supports get / update / delete / feedback / dreaming, and the `skill` subcommand supports register / list / evolve / push / pull / history and more. For the full command list, parameter reference, and troubleshooting, see the [CLI Guide](docs/cli/instruction.md).
+
+#### 2.5 OpenClaw Plugin
+
+**Installing via our [`mindmemos-cli` skill](skills/mindmemos-cli/SKILL.md) is recommended**: deploy `skills/mindmemos-cli/` to your agent's skills directory and let the agent follow its instructions. The skill's [reference docs](skills/mindmemos-cli/references/openclaw-plugin.md) cover installation, permissions, and common troubleshooting.
+
+<details>
+<summary><b>Manual installation (not recommended)</b></summary>
+
+**First install the SDK and complete `auth` configuration (required)**: the plugin communicates with the local machine through the `mindmemos` CLI, so you must install the Python SDK first and make sure the `mindmemos` command is available:
 
 ```bash
-mindmemos memory get --top-k 10  # View memories
-mindmemos memory update <memory_id> --content "I now prefer lattes"  # Update a memory
-mindmemos memory delete <memory_id>  # Delete a memory
-mindmemos memory feedback --text "The preference retrieved just now was inaccurate" \
-  --messages-json '[{"role":"user","content":"The preference retrieved just now was inaccurate"}]'  # Submit explicit feedback
-mindmemos memory feedback  # Submit implicit feedback
-mindmemos memory dreaming  # Consolidate memories
+pip install mindmemos-sdk    # or: uv add mindmemos-sdk
+mindmemos --version          # confirm the command is available
 ```
 
-Use the Skill CLI to register a local Skill and manage it later through the alias set during registration:
+Then configure `base_url`, API key, and `user_id` with `mindmemos auth` (pointing at either the cloud or a local service):
 
 ```bash
-mindmemos skill register ./path/to/skill --alias my-skill
-mindmemos skill list
-mindmemos skill show my-skill
+mindmemos auth
+mindmemos config show        # confirm the configuration took effect
 ```
 
-Skill Evolution uses synchronous mode by default. You can also enqueue the evolution task asynchronously:
+> Skipping these two steps before installing the plugin causes the logs to error out (`mindmemos` command not found / auth not configured), and the plugin will not be able to read or write memories properly.
+
+Install and enable the plugin:
 
 ```bash
-mindmemos skill evolve my-skill
-mindmemos skill evolve my-skill --async
+openclaw plugins install @mindmemos/openclaw-plugin
+openclaw plugins enable mindmemos-memory
 ```
 
-After modifying a local Skill, push it as a new version. You can also retrieve cloud version information and update local files:
+(`@mindmemos/openclaw-plugin` is the npm package name; `mindmemos-memory` is the plugin id.) Manual installation easily runs into two pitfalls:
 
-```bash
-mindmemos skill push my-skill
-mindmemos skill pull my-skill
-mindmemos skill update my-skill
-mindmemos skill update --all
-```
+- **Write permission (required)**: the plugin's `agent_end` write hook needs `allowConversationAccess`; otherwise everything looks fine, but memories are never actually stored after a turn:
+  ```bash
+  openclaw config set plugins.entries.mindmemos-memory.hooks.allowConversationAccess true
+  openclaw gateway restart
+  ```
+- **`cli` PATH**: an OpenClaw process launched from the GUI does not inherit your terminal PATH. Configure `mindmemos` as an absolute path or wrap it with `uv run mindmemos`, or the logs will report `ENOENT`.
 
-`pull` retrieves only cloud version metadata and does not modify local files. `update` first shows an update plan and applies it after confirmation. Use the following commands to view version history, compare versions, or roll back:
+Once installed, enabled, and the gateway restarted, the plugin recalls and injects relevant memories before each user turn and writes the conversation back automatically when the turn ends.
 
-```bash
-mindmemos skill history my-skill
-mindmemos skill diff my-skill --to <version_id>
-mindmemos skill rollback my-skill --to <version_id>
-```
+Full commands, configuration options, and troubleshooting are in the [OpenClaw plugin integration docs](skills/mindmemos-cli/references/openclaw-plugin.md).
 
-When a Skill no longer needs to be managed by the SDK, unregister it. Local Skill files are preserved by default:
-
-```bash
-mindmemos skill unregister my-skill
-```
+</details>
 
 ## 📊 Benchmark
 
