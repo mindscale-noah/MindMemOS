@@ -15,6 +15,9 @@
   <a href="https://www.npmjs.com/package/@mindmemos/openclaw-plugin">
     <img src="https://img.shields.io/npm/v/%40mindmemos%2Fopenclaw-plugin?label=npm%20plugin&labelColor=gray&logo=npm&logoColor=white" alt="MindMemOS OpenClaw 插件 npm 版本">
   </a>
+  <a href="https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin">
+    <img src="https://img.shields.io/npm/v/%40mindmemos%2Fdeepseek-harness-plugin?label=dsh%20plugin&labelColor=gray&logo=npm&logoColor=white" alt="MindMemOS DeepSeek Harness 插件 npm 版本">
+  </a>
   <a href="#license">
     <img src="https://img.shields.io/badge/license-MIT-blue.svg?labelColor=gray" alt="MIT License">
   </a>
@@ -40,6 +43,7 @@
 
 ## 📰 News
 
+- **2026-08-18**：我们发布了 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，让 DeepSeek Harness（dsh）Agent 自动召回并写入 MindMemOS 记忆。
 - **2026-08-14**：我们发布了 [MindMemOS 1.0 技术报告](https://arxiv.org/abs/2608.12428)《MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents》。
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
 - **2026-06-30**：MindMemOS 正式发布！
@@ -49,7 +53,7 @@
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。
 - **记忆系统可自主演化**：通过 schema learning、dreaming、feedback 持续优化记忆质量，自动学习高频记忆点、离线巩固合并记忆，并从交互纠错中反向优化 add/search 流程。
 - **记忆与 Skills 联动**：经验记忆可以沉淀为 skill candidates；skills 的执行结果、失败轨迹和用户反馈也会回流到记忆系统，推动 skills 持续演进。
-- **插件集成能力**：支持通过插件将 MindMemOS 接入不同 Agent 与工作流，在交互前检索并注入相关记忆、回合结束后自动写回对话，当前已提供 [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin)，并持续扩展更多集成。
+- **插件集成能力**：支持通过插件将 MindMemOS 接入不同 Agent 与工作流，在交互前检索并注入相关记忆、回合结束后自动写回对话，当前已提供 [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) 和 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，并持续扩展更多集成。
 
 <p align="center">
   <img src="./assets/mindmemos-benchmark-overview.png" alt="MindMemOS 基准测试结果概览">
@@ -64,6 +68,7 @@ MindMemOS 有**两种部署方式**（官方云服务、本地自部署）和**�
 | [HTTP 接口](https://mindmemos.cn/api-docs) | 业务应用直接调用 | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
 | [Python SDK / CLI](https://pypi.org/project/mindmemos-sdk/) | 业务应用集成 | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
 | [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) | Agent 自动写入/召回记忆 | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+| [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) | Agent 自动写入/召回记忆（dsh） | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
 
 想省去部署直接体验，可以先用官方云服务（在 [官网](https://mindmemos.cn) 申请 API key）；需要私有化或离线使用，按下面的本地部署启动。
 
@@ -284,6 +289,52 @@ openclaw plugins enable mindmemos-memory
 安装启用并重启 gateway 后，插件会在每次用户回合前检索并注入相关记忆，回合结束后自动写回对话。
 
 完整命令、配置项与故障排查见 [OpenClaw 插件集成文档](skills/mindmemos-cli/references/openclaw-plugin.md)。
+
+</details>
+
+#### 2.6 DeepSeek Harness 插件
+
+**推荐使用我们提供的 [`mindmemos-cli` skill](skills/mindmemos-cli/SKILL.md) 安装**：把 `skills/mindmemos-cli/` 部署到你的 Agent 的 skills 目录后，让 Agent 按其指引操作即可，skill 内的 [参考文档](skills/mindmemos-cli/references/deepseek-harness-plugin.md) 覆盖了安装与常见故障排查。
+
+<details>
+<summary><b>直接手动安装（不推荐）</b></summary>
+
+**先安装 SDK 并完成 auth 配置（必须）**：插件通过 `mindmemos` CLI 与本机通信，所以要先安装 Python SDK 并保证 `mindmemos` 命令可用：
+
+```bash
+pip install mindmemos-sdk    # 或 uv add mindmemos-sdk
+mindmemos --version          # 确认命令已可用
+```
+
+然后用 `mindmemos auth` 配置好 base_url、API key 和 user_id（指向云端或本地服务都行）:
+
+```bash
+mindmemos auth
+mindmemos config show        # 确认配置生效
+```
+
+> 没完成这两步就装插件，日志会直接报错（找不到 `mindmemos` 命令 / 未配置认证），插件无法正常读写记忆。
+
+把插件安装进 dsh profile（`dsh plugin` 会转发给 pnpm，把包装进该 profile 的 `node_modules`）：
+
+```bash
+dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
+```
+
+（`@mindmemos/deepseek-harness-plugin` 是 npm 包名，`mindmemos-memory` 是插件 id。）dsh 通过分层的 `cordis.patch.yml` 组合插件，因此需要在 profile 补丁（`~/.dsh/profiles/<name>/cordis.patch.yml`）里加一条 `insert` 来注册插件：
+
+```yaml
+- insert:
+    - id: mindmemos-memory
+      name: '@mindmemos/deepseek-harness-plugin'
+      config:
+        userId: alice
+        appId: deepseek-harness
+```
+
+用该 profile 重启 dsh。注册完成后，插件会在每次用户回合前检索并注入相关记忆，回合结束后自动写回对话。
+
+完整命令、配置项与故障排查见 [DeepSeek Harness 插件集成文档](skills/mindmemos-cli/references/deepseek-harness-plugin.md)。
 
 </details>
 
