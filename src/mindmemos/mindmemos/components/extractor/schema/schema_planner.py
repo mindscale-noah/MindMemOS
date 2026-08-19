@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
-import random
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -19,33 +16,20 @@ from ....typing import (
     FieldCondition,
     GraphRelationship,
     MemoryAddEventItem,
-    MemoryDbDeleteCommand,
-    MemoryDbMutationPlan,
-    MemoryDbMutationResult,
-    MemoryDbUpdateCommand,
     MemoryDbWritePlan,
     MemoryRequestContext,
-    MemoryView,
     MemoryWrite,
     SearchFilter,
 )
-from ...memory_modeling.schema import Edge, get_entity_manager, memory_timestamp
+from ...memory_modeling.schema import Edge, get_entity_manager
 from ...text import SparseVectorEncoder, TextPreprocessor
 from ._runtime_clients import resolve_embed_client, resolve_llm_client
-from ._schema_higher_order import SchemaHigherOrderGenerator
-from ._schema_merge_policy import SchemaMergePolicy
-from ._schema_property_similarity import SchemaPropertySimilaritySearcher
-from ._schema_update_ops import SchemaMemoryUpdate
 from ._schema_utils import (
+    base_entity_name,
     base_metadata,
     dedupe_entity_relationships,
-    dedupe_non_empty,
     edge_relationships,
-    entity_embedding_text,
-    exact_candidate,
     format_candidate_episodes,
-    format_property_delete_context,
-    fuzzy_match_candidate,
     merge_description,
     parse_json_object,
     property_relationships,
@@ -70,7 +54,7 @@ async def _report_progress(
 
 
 class SchemaAddPlanner:
-    """Build write plans for schema add extracted entities."""
+    """Build write plans for schema add extracted entities using rule-based fusion."""
 
     def __init__(
         self,
@@ -81,23 +65,12 @@ class SchemaAddPlanner:
         db_writer: Any,
         entity_manager: Any,
         prompt_set: AddPromptSet,
-        enable_entity_merge_decision: bool,
         entity_recall_top_k: int,
-        max_merge_retries: int,
-        use_property_merge: bool,
-        secondary_search_limit: int,
-        secondary_search_retries: int,
-        higher_order_enabled: bool,
-        higher_order_top_k: int,
-        higher_order_min_evidence_count: int,
         episode_edge_top_k: int,
         text_preprocessor: TextPreprocessor,
         sparse_encoder: SparseVectorEncoder,
-        max_entity_resolve_concurrency: int = 10,
         max_entities_per_conversation: int = 200,
         max_properties_per_entity: int = 15,
-        secondary_search_retry_backoff_base: float = 0.2,
-        secondary_search_retry_backoff_max: float = 5.0,
     ) -> None:
         self.llm_client = llm_client
         self.embed_client = embed_client
@@ -105,44 +78,123 @@ class SchemaAddPlanner:
         self.db_writer = db_writer
         self.entity_manager = entity_manager
         self.prompt_set = prompt_set
-        self.enable_entity_merge_decision = enable_entity_merge_decision
         self.entity_recall_top_k = entity_recall_top_k
-        self.max_merge_retries = max_merge_retries
-        self.use_property_merge = use_property_merge
-        self.secondary_search_limit = secondary_search_limit
-        self.secondary_search_retries = secondary_search_retries
-        self.higher_order_enabled = higher_order_enabled
-        self.higher_order_top_k = higher_order_top_k
-        self.higher_order_min_evidence_count = higher_order_min_evidence_count
         self.episode_edge_top_k = episode_edge_top_k
-        self.max_entity_resolve_concurrency = max_entity_resolve_concurrency
         self.max_entities_per_conversation = max_entities_per_conversation
         self.max_properties_per_entity = max_properties_per_entity
-        self.secondary_search_retry_backoff_base = secondary_search_retry_backoff_base
-        self.secondary_search_retry_backoff_max = secondary_search_retry_backoff_max
         self._text_preprocessor = text_preprocessor
         self._sparse_encoder = sparse_encoder
-        self._merge_policy = SchemaMergePolicy()
-        self._property_similarity = SchemaPropertySimilaritySearcher(
-            db_reader=self.db_reader,
-            embed_texts=self._embed_texts,
-        )
-        self._higher_order_generator = SchemaHigherOrderGenerator(
-            llm_client=self.llm_client,
-            db_reader=self.db_reader,
-            prompt_set=self.prompt_set,
-            embed_texts=self._embed_texts,
-            list_entity_memories=self._list_entity_memories,
-            memory_factory=self._memory_from_property,
-            enabled=self.higher_order_enabled,
-            top_k=self.higher_order_top_k,
-            min_evidence_count=self.higher_order_min_evidence_count,
-        )
         self._write_plan_builder = SchemaWritePlanBuilder(
             text_preprocessor=self._text_preprocessor,
             sparse_encoder=self._sparse_encoder,
             embed_texts=self._embed_texts,
         )
+
+    async def recall_reference_entities(
+        self,
+        *,
+        conversation_text: str,
+        context: MemoryRequestContext,
+    ) -> list[EntityView]:
+        """Recall non-episode entities close to the raw conversation text.
+
+        Replaces the previous per-entity candidate recall: a single dense search
+        over the whole conversation supplies the reference entities injected into
+        the entity-generation prompt and used for rule-based merge decisions.
+        """
+        query_text = conversation_text[:4000]
+        vectors = await self._embed_texts("memory.add.entity", [query_text])
+        query_vector = vectors[0] if vectors else []
+        if not query_vector:
+            return []
+
+        must: list[FieldCondition] = []
+        if context.user_id:
+            must.append(FieldCondition(field="user_id", op="match", value=context.user_id))
+        filters = SearchFilter(
+            must=must,
+            must_not=[FieldCondition(field="entity_type", op="match", value="episodes")],
+        )
+        result = await self.db_reader.search_entities_dense(
+            context,
+            query=query_text,
+            query_vector=query_vector,
+            filters=filters,
+            limit=self.entity_recall_top_k,
+        )
+        return [hit.entity for hit in result.hits if hit.entity is not None]
+
+    async def plan_episode_edges(
+        self,
+        *,
+        episode_name: str,
+        episode_description: str,
+        context: MemoryRequestContext,
+        prompt_set: AddPromptSet | None = None,
+    ) -> list[tuple[EntityView, str]]:
+        """Plan edges between the new episode and historical episodes (二.1.c).
+
+        Returns ``(target_episode, relation)`` pairs. The episode EntityWrite is not
+        built yet, so graph relationships are materialized later in
+        :meth:`build_write_plan`.
+        """
+        if self.episode_edge_top_k <= 0:
+            return []
+
+        query_text = (episode_description or episode_name)[:4000]
+        vectors = await self._embed_texts("memory.add.entity", [query_text])
+        query_vector = vectors[0] if vectors else []
+        if not query_vector:
+            return []
+
+        episode_must: list[FieldCondition] = [
+            FieldCondition(field="entity_type", op="match", value="episodes"),
+        ]
+        if context.user_id:
+            episode_must.append(FieldCondition(field="user_id", op="match", value=context.user_id))
+        try:
+            result = await self.db_reader.search_entities_dense(
+                context,
+                query=query_text,
+                query_vector=query_vector,
+                filters=SearchFilter(must=episode_must),
+                limit=self.episode_edge_top_k,
+            )
+            candidates = [hit.entity for hit in result.hits if hit.entity and hit.entity.entity_type == "episodes"]
+        except Exception:
+            logger.warning("episode edge candidate search failed", exc_info=True)
+            return []
+
+        if not candidates:
+            return []
+
+        prompts = prompt_set or self.prompt_set
+        prompt = (
+            prompts.episode_edge.replace("{new_episode_name}", episode_name)
+            .replace("{new_episode_description}", episode_description or "")
+            .replace("{candidate_episodes}", format_candidate_episodes(candidates))
+        )
+        try:
+            response = await resolve_llm_client(self.llm_client).chat(
+                task="memory.add.episode_edge",
+                messages=[{"role": "user", "content": prompt}],
+                format_parser=parse_json_object,
+            )
+            edges = response.parsed if isinstance(response.parsed, list) else []
+        except Exception:
+            logger.warning("episode edge LLM failed; no episode edges created", exc_info=True)
+            return []
+
+        candidate_by_id = {candidate.entity_id: candidate for candidate in candidates}
+        planned: list[tuple[EntityView, str]] = []
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            target = candidate_by_id.get(str(edge.get("target_episode_id") or ""))
+            if target is None:
+                continue
+            planned.append((target, str(edge.get("relation") or "related_to")))
+        return planned
 
     async def build_write_plan(
         self,
@@ -150,15 +202,17 @@ class SchemaAddPlanner:
         raw_entities: list[dict[str, Any]],
         raw_edges: list[dict[str, Any]],
         episode_entity: dict[str, Any],
+        reference_entities: list[EntityView],
+        episode_edges: list[tuple[EntityView, str]],
         context: MemoryRequestContext,
         request_metadata: dict[str, Any],
         created_at: datetime,
         episode_time: str = "",
         prompt_set: AddPromptSet | None = None,
         progress: ProgressReporter | None = None,
-    ) -> tuple[MemoryDbWritePlan, list[MemoryAddEventItem], list[str], list[SchemaMemoryUpdate]]:
+    ) -> tuple[MemoryDbWritePlan, list[MemoryAddEventItem]]:
         """Build a complete database write plan from extracted schema entities."""
-        prompts = prompt_set or self.prompt_set
+        del prompt_set  # rule-based planning no longer needs per-call prompts
         await _report_progress(
             progress,
             "memory_planning",
@@ -166,20 +220,16 @@ class SchemaAddPlanner:
             60,
             {"message_i18n": {"zh": "正在整理记忆结构", "en": "Planning memory structure"}},
         )
-        merge_context = await self._merge_policy.prepare(
-            raw_entities=raw_entities,
-            raw_edges=raw_edges,
-            episode_entity=episode_entity,
-        )
+
+        reference_by_name: dict[str, EntityView] = {ref.entity_name: ref for ref in reference_entities}
+
         memories: list[MemoryWrite] = []
         entities: list[EntityWrite] = []
         relationships: list[GraphRelationship] = []
         events: list[MemoryAddEventItem] = []
         entity_by_name: dict[str, EntityWrite] = {}
-        pending_archives: list[str] = []
-        pending_updates: list[SchemaMemoryUpdate] = []
 
-        raw_entity_list = list(merge_context.raw_entities)
+        raw_entity_list = list(raw_entities)
         if len(raw_entity_list) > self.max_entities_per_conversation:
             logger.warning(
                 "entity_count_exceeds_limit",
@@ -188,81 +238,28 @@ class SchemaAddPlanner:
             )
             raw_entity_list = raw_entity_list[: self.max_entities_per_conversation]
 
-        extraction_entities = raw_entity_list + [merge_context.episode_entity]
-        entity_embedding_texts = [entity_embedding_text(entity) for entity in extraction_entities]
-        await _report_progress(
-            progress,
-            "embedding",
-            "Generating entity embeddings.",
-            72,
-            {"message_i18n": {"zh": "正在生成实体向量", "en": "Generating entity embeddings"}},
-        )
-        entity_vectors = await self._embed_texts("memory.add.entity", entity_embedding_texts)
-        entity_vector_by_name = {
-            entity.get("name", ""): vector for entity, vector in zip(extraction_entities, entity_vectors, strict=True)
-        }
-
-        resolve_sem = asyncio.Semaphore(self.max_entity_resolve_concurrency)
-
-        async def _resolve_one(entity: dict[str, Any]) -> EntityWrite:
-            async with resolve_sem:
-                return await self._resolve_entity_write(
-                    entity,
-                    context=context,
-                    created_at=created_at,
-                    query_vector=entity_vector_by_name.get(entity.get("name", "")) or [],
-                    request_metadata=request_metadata,
-                    prompt_set=prompts,
-                )
-
-        resolve_tasks = [_resolve_one(entity) for entity in raw_entity_list]
-        entity_write_results = await asyncio.gather(*resolve_tasks, return_exceptions=True)
-        for entity, result in zip(raw_entity_list, entity_write_results, strict=True):
-            if isinstance(result, Exception):
-                logger.error("entity_resolve_failed", entity_name=entity.get("name"), error=str(result))
-                continue
-            entities.append(result)
-            entity_by_name[entity.get("name", "")] = result
+        for entity in raw_entity_list:
+            original_name = str(entity.get("name") or "")
+            entity_write = self._resolve_entity_write(
+                entity,
+                reference_by_name=reference_by_name,
+                context=context,
+                created_at=created_at,
+                request_metadata=request_metadata,
+            )
+            entities.append(entity_write)
+            entity_by_name[entity_write.entity_name] = entity_write
+            if original_name and original_name != entity_write.entity_name:
+                entity_by_name[original_name] = entity_write
 
         episode_write = self._new_entity_write(
-            merge_context.episode_entity,
+            episode_entity,
             context=context,
             created_at=created_at,
             request_metadata=request_metadata,
         )
         entities.append(episode_write)
-        entity_by_name[merge_context.episode_entity["name"]] = episode_write
-        merge_context.entity_by_name = dict(entity_by_name)
-
-        episode_edge_task = asyncio.create_task(
-            self._episode_edge_relationships(
-                episode_write=episode_write,
-                query_vector=entity_vector_by_name.get(merge_context.episode_entity.get("name", "")) or [],
-                context=context,
-                prompt_set=prompts,
-            )
-        )
-
-        async def _process_one(entity: dict[str, Any], entity_write: EntityWrite):
-            async with resolve_sem:
-                return await self._process_entity_properties(
-                    entity=entity,
-                    entity_write=entity_write,
-                    context=context,
-                    created_at=created_at,
-                    episode_time=episode_time,
-                    request_metadata=request_metadata,
-                    prompt_set=prompts,
-                )
-
-        prop_tasks = []
-        prop_entity_writes = []
-        for entity in extraction_entities:
-            entity_write = entity_by_name.get(entity.get("name", ""))
-            if entity_write is None:
-                continue
-            prop_tasks.append(_process_one(entity, entity_write))
-            prop_entity_writes.append(entity_write)
+        entity_by_name[episode_entity["name"]] = episode_write
 
         await _report_progress(
             progress,
@@ -271,47 +268,46 @@ class SchemaAddPlanner:
             78,
             {"message_i18n": {"zh": "正在处理记忆属性", "en": "Processing memory properties"}},
         )
-        prop_results = await asyncio.gather(*prop_tasks, return_exceptions=True)
-        for entity_write, result in zip(prop_entity_writes, prop_results, strict=True):
-            if isinstance(result, Exception):
-                logger.error("property_processing_failed", entity_name=entity_write.entity_name, error=str(result))
-                continue
-            entity_memories, archive_ids, higher_memories, higher_archives, update_ops = result
-            pending_archives.extend(archive_ids)
-            pending_archives.extend(higher_archives)
-            pending_updates.extend(update_ops)
-            all_prop_memories: list[MemoryWrite] = []
-            for memory in entity_memories:
+        for entity_write in entities:
+            raw_properties = self._properties_for_entity(raw_entity_list, episode_entity, entity_write)
+            prop_memories = self._build_property_memories(
+                entity_write=entity_write,
+                properties=raw_properties,
+                context=context,
+                created_at=created_at,
+                request_metadata=request_metadata,
+            )
+            for memory in prop_memories:
                 memories.append(memory)
-                all_prop_memories.append(memory)
                 relationships.extend(property_relationships(context.project_id, entity_write.entity_id, memory))
-            for memory in higher_memories:
-                memories.append(memory)
-                all_prop_memories.append(memory)
-                relationships.extend(property_relationships(context.project_id, entity_write.entity_id, memory))
-            if all_prop_memories:
+            if prop_memories:
                 events.append(
                     MemoryAddEventItem(
                         operation="add",
-                        content=_format_entity_add_content(entity_write, all_prop_memories),
+                        content=_format_entity_add_content(entity_write, prop_memories),
                         memory_id=entity_write.entity_id,
                         mem_type=schema_memory_type(entity_write.entity_type),
-                        related_memory_ids=[m.memory_id for m in all_prop_memories],
+                        related_memory_ids=[memory.memory_id for memory in prop_memories],
                     )
                 )
 
-        relationships.extend(edge_relationships(merge_context.raw_edges, entity_by_name, context.project_id))
-        await _report_progress(
-            progress,
-            "relationship_building",
-            "Building memory relationships.",
-            84,
-            {"message_i18n": {"zh": "正在建立记忆关系", "en": "Building memory relationships"}},
-        )
-        episode_edge_relationships = await episode_edge_task
-        relationships.extend(episode_edge_relationships)
+        # Entity-to-entity edges may reference new entities or recalled reference
+        # entities. Combine both into one name -> DTO map for resolution.
+        dto_by_name: dict[str, EntityView | EntityWrite] = dict(reference_by_name)
+        dto_by_name.update(entity_by_name)
+        relationships.extend(edge_relationships(raw_edges, dto_by_name, context.project_id))
+
+        # Episode-to-episode edges planned during 二.1.c.
+        for target, relation in episode_edges:
+            relationship = Edge.from_entity_dtos(
+                episode_write,
+                target,
+                description=relation,
+            ).to_graph_relationship(project_id=context.project_id)
+            relationship.metadata["edge_source"] = "episode_edge_prompt"
+            relationships.append(relationship)
+
         relationships = dedupe_entity_relationships(relationships)
-        merge_context.pending_archives = list(pending_archives)
         await _report_progress(
             progress,
             "embedding",
@@ -324,346 +320,102 @@ class SchemaAddPlanner:
             entities=entities,
             relationships=relationships,
             project_id=context.project_id,
-            entity_context_memories=memories + [update.memory for update in pending_updates],
+            entity_context_memories=memories,
         )
-        return (
-            plan,
-            events,
-            pending_archives,
-            pending_updates,
-        )
+        return plan, events
 
-    async def _process_entity_properties(
+    def _properties_for_entity(
         self,
-        *,
-        entity: dict[str, Any],
+        raw_entity_list: list[dict[str, Any]],
+        episode_entity: dict[str, Any],
         entity_write: EntityWrite,
-        context: MemoryRequestContext,
-        created_at: datetime,
-        episode_time: str = "",
-        request_metadata: dict[str, Any],
-        prompt_set: AddPromptSet | None = None,
-    ) -> tuple[list[MemoryWrite], list[str], list[MemoryWrite], list[str], list[SchemaMemoryUpdate]]:
-        raw_properties = entity.get("properties", [])
-        if len(raw_properties) > self.max_properties_per_entity:
-            logger.warning(
-                "property_count_exceeds_limit",
-                entity_name=entity_write.entity_name,
-                count=len(raw_properties),
-                limit=self.max_properties_per_entity,
-            )
-            raw_properties = raw_properties[: self.max_properties_per_entity]
-        # Shallow-copy so both the property-write path and higher-order generation see the
-        # capped properties, without mutating the extractor's original entity dict.
-        capped_entity = {**entity, "properties": raw_properties}
+    ) -> list[dict[str, Any]]:
+        if entity_write.entity_type == "episodes":
+            return episode_entity.get("properties", [])
+        for entity in raw_entity_list:
+            if entity.get("name") == entity_write.entity_name or (
+                entity.get("name") and entity_write.metadata.get("latest_raw_entity_name") == entity.get("name")
+            ):
+                raw_properties = entity.get("properties", [])
+                if len(raw_properties) > self.max_properties_per_entity:
+                    raw_properties = raw_properties[: self.max_properties_per_entity]
+                return raw_properties
+        return []
 
-        entity_memories, archive_ids, entity_updates = await self._apply_property_operations(
-            entity_write=entity_write,
-            properties=raw_properties,
-            context=context,
-            created_at=created_at,
-            request_metadata=request_metadata,
-            prompt_set=prompt_set,
-        )
-        higher_memories, higher_archives, higher_updates = await self._higher_order_generator.generate(
-            entity_write=entity_write,
-            raw_entity=capped_entity,
-            context=context,
-            created_at=created_at,
-            episode_time=episode_time,
-            request_metadata=request_metadata,
-            prompt_set=prompt_set,
-        )
-        return entity_memories, archive_ids, higher_memories, higher_archives, entity_updates + higher_updates
-
-    async def _resolve_entity_write(
+    def _resolve_entity_write(
         self,
         entity: dict[str, Any],
         *,
+        reference_by_name: dict[str, EntityView],
         context: MemoryRequestContext,
         created_at: datetime,
-        query_vector: list[float],
         request_metadata: dict[str, Any],
-        prompt_set: AddPromptSet | None = None,
     ) -> EntityWrite:
-        """Resolve whether an extracted entity should create or update an entity record."""
-        candidates = await self._recall_entity_candidates(entity, context=context, query_vector=query_vector)
-        name2id: dict[str, EntityView] = {}
-        for candidate in candidates:
-            if candidate.entity_name not in name2id:
-                name2id[candidate.entity_name] = candidate
+        """Resolve whether an extracted entity creates or updates an entity record."""
+        operation = entity.get("operation")
+        merge_target = str(entity.get("merge_target") or "")
 
-        exact = exact_candidate(entity, candidates)
-        if exact is not None:
-            return await self._entity_write_from_view(
-                exact, entity, context=context, created_at=created_at, prompt_set=prompt_set
-            )
+        if operation == "update" and merge_target:
+            target = reference_by_name.get(merge_target)
+            if target is not None:
+                return self._entity_write_from_view(target, entity, context=context, created_at=created_at)
 
-        decision = await self._llm_single_entity_decision(entity, candidates, name2id, prompt_set=prompt_set)
-        action = decision.get("action", "create")
+        return self._resolve_create(entity, reference_by_name, context, created_at, request_metadata)
 
-        if action == "update":
-            target_name = decision.get("target_entity", "")
-            return await self._execute_update(
-                entity,
-                target_name=target_name,
-                name2id=name2id,
-                context=context,
-                created_at=created_at,
-                request_metadata=request_metadata,
-                query_vector=query_vector,
-                prompt_set=prompt_set,
-            )
-
-        return await self._execute_create(
-            entity,
-            name2id=name2id,
-            context=context,
-            created_at=created_at,
-            request_metadata=request_metadata,
-            query_vector=query_vector,
-            skip_duplicate_check=False,
-            prompt_set=prompt_set,
-        )
-
-    async def _llm_single_entity_decision(
+    def _resolve_create(
         self,
         entity: dict[str, Any],
-        candidates: list[EntityView],
-        name2id: dict[str, EntityView],
-        *,
-        prompt_set: AddPromptSet | None = None,
-    ) -> dict[str, Any]:
-        """Ask the LLM whether an extracted entity should create or update a candidate."""
-        if not candidates or not self.enable_entity_merge_decision:
-            return {"action": "create", "relation_candidates": []}
-
-        existing_text = "\n".join(
-            f"- name: {c.entity_name}, entity_type: {c.entity_type}, Description: {c.description or ''}"
-            for c in candidates
-            if c.entity_type != "episodes"
-        )
-        if not existing_text.strip():
-            existing_text = "No existing entities."
-
-        prompts = prompt_set or self.prompt_set
-        prompt = (
-            prompts.single_entity_merge.replace("{entity_name}", str(entity.get("name", "")))
-            .replace("{entity_type}", str(entity.get("entity_type", "")))
-            .replace("{entity_description}", str(entity.get("description", ""))[:200])
-            .replace("{existing_entities}", existing_text)
-        )
-
-        for attempt in range(self.max_merge_retries):
-            try:
-                response = await resolve_llm_client(self.llm_client).chat(
-                    task="memory.add.entity_merge",
-                    messages=[{"role": "user", "content": prompt}],
-                    format_parser=parse_json_object,
-                )
-                decision = response.parsed if isinstance(response.parsed, dict) else {}
-                if "action" not in decision:
-                    prompt += f"\nPrevious answer: {decision}. ERROR: Must be a JSON object with 'action' field."
-                    continue
-
-                action = decision.get("action")
-                if action == "update":
-                    target = str(decision.get("target_entity", ""))
-                    if target in name2id:
-                        return decision
-                    matched = fuzzy_match_candidate(target, name2id)
-                    if matched:
-                        logger.info("UPDATE target fuzzy matched", target=target, matched=matched)
-                        decision["target_entity"] = matched
-                        return decision
-                    logger.warning("UPDATE target not in candidates, retrying", target=target)
-                    prompt += (
-                        f"\nPrevious answer: {json.dumps(decision, ensure_ascii=False)}. "
-                        f"ERROR: target_entity '{target}' not in candidate list. "
-                        f"Available: {list(name2id.keys())}. Please fix."
-                    )
-                    continue
-                elif action == "create":
-                    return decision
-                else:
-                    prompt += f"\nPrevious answer invalid. action must be 'create' or 'update'."
-                    continue
-            except Exception:
-                logger.error("entity merge decision failed", attempt=attempt + 1, exc_info=True)
-
-        entity_name = str(entity.get("name", ""))
-        for c in candidates:
-            if c.entity_name == entity_name and c.entity_name in name2id:
-                logger.warning(
-                    "all merge retries exhausted, defaulting to UPDATE for same-name candidate", entity_name=entity_name
-                )
-                return {"action": "update", "target_entity": entity_name, "relation_candidates": []}
-
-        logger.error("all merge retries exhausted, defaulting to CREATE", entity_name=entity_name)
-        return {"action": "create", "relation_candidates": []}
-
-    async def _execute_create(
-        self,
-        entity: dict[str, Any],
-        *,
-        name2id: dict[str, EntityView],
+        reference_by_name: dict[str, EntityView],
         context: MemoryRequestContext,
         created_at: datetime,
         request_metadata: dict[str, Any],
-        query_vector: list[float],
-        skip_duplicate_check: bool,
-        prompt_set: AddPromptSet | None = None,
     ) -> EntityWrite:
-        """Create an entity write, with duplicate-name handling."""
-        entity_name = str(entity.get("name", ""))
+        """Create a new entity, with rule-based same-name disambiguation."""
+        entity_name = str(entity.get("name") or "")
         entity_type = entity.get("entity_type", "")
 
-        if not skip_duplicate_check:
-            if entity_name in name2id and name2id[entity_name] is not None:
-                existing = name2id[entity_name]
-                resolution = resolve_duplicate_name(entity, existing)
-                if resolution["action"] == "merge":
-                    logger.info(
-                        "duplicate name in candidates, converting to UPDATE",
-                        entity_name=entity_name,
-                        target_id=existing.entity_id,
-                    )
-                    return await self._entity_write_from_view(
-                        existing, entity, context=context, created_at=created_at, prompt_set=prompt_set
-                    )
-                else:
-                    new_name = resolution["new_name"]
-                    logger.info("duplicate name in candidates, renaming", old=entity_name, new=new_name)
-                    entity["name"] = new_name
+        existing = self._reference_by_base_name(entity_name, entity_type, reference_by_name)
+        if existing is not None:
+            resolution = resolve_duplicate_name(entity, existing)
+            if resolution["action"] == "merge":
+                logger.info(
+                    "duplicate name in references, converting to UPDATE",
+                    entity_name=entity_name,
+                    target_id=existing.entity_id,
+                )
+                return self._entity_write_from_view(existing, entity, context=context, created_at=created_at)
+            entity["name"] = resolution["new_name"]
 
-            existing_view = await self._find_entity_by_name(
-                entity_name,
-                context=context,
-                query_vector=query_vector,
-                entity_type=entity_type,
-            )
-            if existing_view is not None:
-                resolution = resolve_duplicate_name(entity, existing_view)
-                if resolution["action"] == "merge":
-                    logger.info(
-                        "duplicate name in DB, converting to UPDATE",
-                        entity_name=entity_name,
-                        target_id=existing_view.entity_id,
-                    )
-                    return await self._entity_write_from_view(
-                        existing_view, entity, context=context, created_at=created_at, prompt_set=prompt_set
-                    )
-                else:
-                    new_name = resolution["new_name"]
-                    logger.info("duplicate name in DB, renaming", old=entity_name, new=new_name)
-                    entity["name"] = new_name
-
-        return self._new_entity_write(entity, context=context, created_at=created_at, request_metadata=request_metadata)
-
-    async def _execute_update(
-        self,
-        entity: dict[str, Any],
-        *,
-        target_name: str,
-        name2id: dict[str, EntityView],
-        context: MemoryRequestContext,
-        created_at: datetime,
-        request_metadata: dict[str, Any],
-        query_vector: list[float],
-        prompt_set: AddPromptSet | None = None,
-    ) -> EntityWrite:
-        """Update an existing entity, falling back to create when no target is found."""
-        target_view: EntityView | None = None
-
-        if target_name in name2id:
-            target_view = name2id[target_name]
-            logger.info(
-                "UPDATE target matched from candidates", target_name=target_name, target_id=target_view.entity_id
-            )
-
-        if target_view is None:
-            target_view = await self._find_entity_by_name(
-                target_name,
-                context=context,
-                query_vector=query_vector,
-            )
-
-        if target_view is None:
-            logger.warning("UPDATE target not found, converting to CREATE", target_name=target_name)
-            return await self._execute_create(
-                entity,
-                name2id=name2id,
-                context=context,
-                created_at=created_at,
-                request_metadata=request_metadata,
-                query_vector=query_vector,
-                skip_duplicate_check=True,
-                prompt_set=prompt_set,
-            )
-
-        return await self._entity_write_with_description_update(
-            target_view,
+        return self._new_entity_write(
             entity,
             context=context,
             created_at=created_at,
-            prompt_set=prompt_set,
+            request_metadata=request_metadata,
         )
 
-    async def _find_entity_by_name(
+    def _reference_by_base_name(
         self,
         name: str,
-        *,
-        context: MemoryRequestContext,
-        query_vector: list[float],
-        entity_type: str | None = None,
+        entity_type: str | None,
+        reference_by_name: dict[str, EntityView],
     ) -> EntityView | None:
-        """Find an entity by exact name through dense recall plus name filtering."""
-        if not query_vector:
-            return None
-        filters: SearchFilter | None = None
-        if context.user_id:
-            filters = SearchFilter(must=[FieldCondition(field="user_id", op="match", value=context.user_id)])
-        for attempt in range(self.secondary_search_retries):
-            try:
-                result = await self.db_reader.search_entities_dense(
-                    context,
-                    query=f"name: {name}",
-                    query_vector=query_vector,
-                    filters=filters,
-                    limit=self.secondary_search_limit,
-                )
-                for hit in result.hits:
-                    if hit.entity and hit.entity.entity_name == name:
-                        if entity_type is None or hit.entity.entity_type == entity_type:
-                            return hit.entity
-                if attempt < self.secondary_search_retries - 1:
-                    delay = min(
-                        self.secondary_search_retry_backoff_base * (2**attempt),
-                        self.secondary_search_retry_backoff_max,
-                    )
-                    await asyncio.sleep(delay * random.random())
-            except Exception:
-                logger.warning("entity name search failed", attempt=attempt + 1, exc_info=True)
+        base = base_entity_name(name)
+        for ref in reference_by_name.values():
+            if base_entity_name(ref.entity_name) == base and (not entity_type or ref.entity_type == entity_type):
+                return ref
         return None
 
-    async def _entity_write_with_description_update(
+    def _entity_write_from_view(
         self,
         target: EntityView,
         new_entity: dict[str, Any],
         *,
         context: MemoryRequestContext,
         created_at: datetime,
-        prompt_set: AddPromptSet | None = None,
     ) -> EntityWrite:
-        """Build an update EntityWrite and merge the description with the LLM."""
+        """Build an update EntityWrite with a rule-based description merge."""
         em = get_entity_manager(project_id=context.project_id)
-        description = await self._llm_description_update(
-            entity_name=target.entity_name,
-            entity_type=target.entity_type or "",
-            current_description=target.description or "",
-            properties=new_entity.get("properties", []),
-            prompt_set=prompt_set,
-        )
+        description = merge_description(target.description or "", new_entity.get("description") or "")
         metadata = dict(target.metadata)
         metadata.update(
             {
@@ -691,624 +443,6 @@ class SchemaAddPlanner:
             created_at=target.created_at or created_at,
             update_at=created_at,
         )
-
-    async def _llm_description_update(
-        self,
-        *,
-        entity_name: str,
-        entity_type: str,
-        current_description: str,
-        properties: list[dict[str, Any]],
-        prompt_set: AddPromptSet | None = None,
-    ) -> str:
-        """Ask the LLM to merge new properties into an existing entity description."""
-        props_lines = []
-        for prop in properties:
-            prop_name = prop.get("property_name", "")
-            value = prop.get("value", "")
-            if value:
-                props_lines.append(f"- {prop_name}: {value}")
-        latest_props_text = "\n".join(props_lines) if props_lines else "No properties."
-
-        prompts = prompt_set or self.prompt_set
-        prompt = (
-            prompts.des_update.replace("{entity_name}", entity_name)
-            .replace("{entity_type}", entity_type)
-            .replace("{current_description}", current_description)
-            .replace("{latest_properties}", latest_props_text)
-        )
-        try:
-            response = await resolve_llm_client(self.llm_client).chat(
-                task="memory.add.description_update",
-                messages=[{"role": "user", "content": prompt}],
-            )
-            content = response.content.strip()
-            if "<description>" in content:
-                content = content.split("<description>")[1]
-            if "</description>" in content:
-                content = content.split("</description>")[0]
-            return content[:2000]
-        except Exception:
-            logger.warning("description update LLM failed; falling back to concatenation", exc_info=True)
-            return (
-                merge_description(current_description, " ".join(str(p.get("value") or "") for p in properties))
-                or current_description
-            )
-
-    async def _apply_property_operations(
-        self,
-        *,
-        entity_write: EntityWrite,
-        properties: list[dict[str, Any]],
-        context: MemoryRequestContext,
-        created_at: datetime,
-        request_metadata: dict[str, Any],
-        prompt_set: AddPromptSet | None = None,
-    ) -> tuple[list[MemoryWrite], list[str], list[SchemaMemoryUpdate]]:
-        """Convert extracted properties into memory writes and archive operations."""
-        if not self.use_property_merge or not properties:
-            return (
-                [
-                    self._memory_from_property(
-                        entity_write=entity_write,
-                        prop=prop,
-                        context=context,
-                        created_at=created_at,
-                        request_metadata=request_metadata,
-                    )
-                    for prop in properties
-                    if prop.get("operation") != "delete"
-                ],
-                [],
-                [],
-            )
-
-        set_props = [prop for prop in properties if prop.get("operation") != "delete"]
-        delete_archives = await self._property_delete_archives(
-            entity_write=entity_write,
-            properties=[prop for prop in properties if prop.get("operation") == "delete"],
-            context=context,
-            prompt_set=prompt_set,
-        )
-        if not set_props:
-            return [], delete_archives, []
-
-        similarity_results = await self._property_similarity.find_for_merge(
-            context=context,
-            entity_id=entity_write.entity_id,
-            properties=set_props,
-            limit=5,
-        )
-
-        existing_map: dict[str, dict[str, Any]] = {}
-        new_with_similar: list[dict[str, Any]] = []
-        direct_props: list[dict[str, Any]] = []
-        p_counter = 0
-
-        for result in similarity_results:
-            prop = result.property
-            similar = [match.memory for match in result.matches]
-            if not similar:
-                direct_props.append(prop)
-            else:
-                for memory in similar:
-                    if memory.memory_id not in existing_map:
-                        p_counter += 1
-                        existing_map[memory.memory_id] = {
-                            "p_id": f"p{p_counter}",
-                            "memory_id": memory.memory_id,
-                            "property_name": memory.property_name or "",
-                            "timestamp": memory_timestamp(memory),
-                            "value": memory.content,
-                            "memory": memory,
-                        }
-                new_with_similar.append(prop)
-
-        if not new_with_similar:
-            return (
-                [
-                    self._memory_from_property(
-                        entity_write=entity_write,
-                        prop=prop,
-                        context=context,
-                        created_at=created_at,
-                        request_metadata=request_metadata,
-                    )
-                    for prop in direct_props
-                    if prop.get("operation") != "delete"
-                ],
-                delete_archives,
-                [],
-            )
-
-        existing_list = sorted(existing_map.values(), key=lambda x: x["p_id"])
-        existing_text = "".join(
-            f'{e["p_id"]}: [{e["property_name"]}] time={e["timestamp"]}, value="{e["value"]}"\n' for e in existing_list
-        )
-        n_items: list[dict[str, Any]] = []
-        new_text = ""
-        for i, prop in enumerate(new_with_similar):
-            n_id = f"n{i + 1}"
-            new_text += f'{n_id}: [{prop.get("property_name", "")}] time={prop.get("time", "")}, value="{prop.get("value", "")}"\n'
-            n_items.append({"n_id": n_id, "prop": prop})
-
-        prompts = prompt_set or self.prompt_set
-        prompt = (
-            prompts.property_merge_decision.replace("{entity_name}", entity_write.entity_name)
-            .replace("{entity_type}", entity_write.entity_type or "")
-            .replace("{existing_properties}", existing_text)
-            .replace("{new_properties}", new_text)
-        )
-
-        try:
-            response = await resolve_llm_client(self.llm_client).chat(
-                task="memory.add.property_merge",
-                messages=[{"role": "user", "content": prompt}],
-                format_parser=parse_json_object,
-            )
-            decision = response.parsed if isinstance(response.parsed, dict) else {"existing": [], "new": []}
-        except Exception:
-            logger.warning("property merge LLM failed, appending all", exc_info=True)
-            all_props = direct_props + [item["prop"] for item in n_items]
-            return (
-                [
-                    self._memory_from_property(
-                        entity_write=entity_write,
-                        prop=prop,
-                        context=context,
-                        created_at=created_at,
-                        request_metadata=request_metadata,
-                    )
-                    for prop in all_props
-                    if prop.get("operation") != "delete"
-                ],
-                delete_archives,
-                [],
-            )
-
-        final_memories = [
-            self._memory_from_property(
-                entity_write=entity_write,
-                prop=prop,
-                context=context,
-                created_at=created_at,
-                request_metadata=request_metadata,
-            )
-            for prop in direct_props
-            if prop.get("operation") != "delete"
-        ]
-        archive_ids = list(delete_archives)
-        update_ops: list[SchemaMemoryUpdate] = []
-        used_update_targets: set[str] = set()
-        p_id_to_info = {e["p_id"]: e for e in existing_list}
-        n_id_to_item = {item["n_id"]: item for item in n_items}
-        deleted_n_ids: set[str] = set()
-        updated_n_ids: set[str] = set()
-
-        def queue_update(target_info: dict[str, Any], memory: MemoryWrite, *, reason: str) -> bool:
-            target_memory_id = str(target_info["memory_id"])
-            if target_memory_id in used_update_targets:
-                logger.warning(
-                    "property_merge_update_target_already_used",
-                    target_memory_id=target_memory_id,
-                    entity_id=entity_write.entity_id,
-                )
-                return False
-            used_update_targets.add(target_memory_id)
-            update_ops.append(SchemaMemoryUpdate(target_memory_id=target_memory_id, memory=memory, reason=reason))
-            return True
-
-        for existing_decision in decision.get("existing", []):
-            p_info = p_id_to_info.get(str(existing_decision.get("id", "")))
-            if not p_info:
-                continue
-            op = existing_decision.get("op")
-            if op == "delete":
-                archive_ids.append(p_info["memory_id"])
-            elif op == "update":
-                merged_value = str(existing_decision.get("value") or p_info["value"])
-                memory = self._memory_from_property(
-                    entity_write=entity_write,
-                    prop={
-                        "property_name": p_info["property_name"],
-                        "value": merged_value,
-                        "time": p_info["timestamp"],
-                        "operation": "update",
-                    },
-                    context=context,
-                    created_at=created_at,
-                    request_metadata=request_metadata,
-                    memory_id=str(p_info["memory_id"]),
-                    extra_metadata={
-                        "property_merge_action": "update",
-                        "merged_from_memory_ids": [p_info["memory_id"]],
-                    },
-                )
-                queue_update(p_info, memory, reason="schema_add_property_merge")
-
-        for new_decision in decision.get("new", []):
-            n_id = str(new_decision.get("id", ""))
-            item = n_id_to_item.get(n_id)
-            if not item:
-                continue
-            op = new_decision.get("op")
-            if op == "delete":
-                deleted_n_ids.add(n_id)
-            elif op == "update":
-                target_p_id = str(new_decision.get("target", ""))
-                p_info = p_id_to_info.get(target_p_id)
-                merged_value = str(new_decision.get("value") or "")
-                if not p_info or not merged_value:
-                    continue
-                updated_n_ids.add(n_id)
-                memory = self._memory_from_property(
-                    entity_write=entity_write,
-                    prop={
-                        "property_name": p_info["property_name"],
-                        "value": merged_value,
-                        "time": p_info["timestamp"],
-                        "operation": "update",
-                    },
-                    context=context,
-                    created_at=created_at,
-                    request_metadata=request_metadata,
-                    memory_id=str(p_info["memory_id"]),
-                    extra_metadata={
-                        "property_merge_action": "update",
-                        "merged_from_memory_ids": [p_info["memory_id"]],
-                    },
-                )
-                queue_update(p_info, memory, reason="schema_add_property_merge")
-
-        for item in n_items:
-            if item["n_id"] in deleted_n_ids or item["n_id"] in updated_n_ids:
-                continue
-            final_memories.append(
-                self._memory_from_property(
-                    entity_write=entity_write,
-                    prop=item["prop"],
-                    context=context,
-                    created_at=created_at,
-                    request_metadata=request_metadata,
-                )
-            )
-
-        return final_memories, dedupe_non_empty(archive_ids), update_ops
-
-    async def _property_delete_archives(
-        self,
-        *,
-        entity_write: EntityWrite,
-        properties: list[dict[str, Any]],
-        context: MemoryRequestContext,
-        prompt_set: AddPromptSet | None = None,
-    ) -> list[str]:
-        """Plan archives for extracted delete operations."""
-        if not properties:
-            return []
-
-        delete_context: list[dict[str, Any]] = []
-        memory_by_key: dict[tuple[str, str], str] = {}
-        for prop in properties:
-            value = str(prop.get("value") or prop.get("property_name") or "")
-            if not value:
-                continue
-            similar_matches = await self._property_similarity.find_delete_candidates(
-                context=context,
-                entity_id=entity_write.entity_id,
-                prop=prop,
-                limit=5,
-            )
-
-            similar_history = []
-            for match in similar_matches:
-                memory = match.memory
-                timestamp = memory_timestamp(memory)
-                similar_history.append(
-                    {
-                        "property_name": memory.property_name or "",
-                        "timestamp": timestamp,
-                        "value": memory.content,
-                        "similarity": match.score,
-                    }
-                )
-                memory_by_key[(memory.property_name or "", timestamp)] = memory.memory_id
-            if similar_history:
-                delete_context.append(
-                    {
-                        "property_name": prop.get("property_name") or "",
-                        "new_value": value,
-                        "similar_history": similar_history,
-                    }
-                )
-
-        if not delete_context:
-            return []
-
-        context_text = format_property_delete_context(delete_context)
-        prompts = prompt_set or self.prompt_set
-        prompt = prompts.property_delete_decision.replace("{entity_name}", entity_write.entity_name).replace(
-            "{context_text}", context_text
-        )
-        try:
-            response = await resolve_llm_client(self.llm_client).chat(
-                task="memory.add.property_delete",
-                messages=[{"role": "user", "content": prompt}],
-                format_parser=parse_json_object,
-            )
-            decisions = response.parsed if isinstance(response.parsed, list) else []
-        except Exception:
-            logger.warning("property delete LLM failed; keeping existing memories", exc_info=True)
-            return []
-
-        archive_ids: list[str] = []
-        for decision in decisions:
-            if not isinstance(decision, dict):
-                continue
-            memory_id = memory_by_key.get(
-                (str(decision.get("property_name") or ""), str(decision.get("timestamp") or ""))
-            )
-            if memory_id:
-                archive_ids.append(memory_id)
-        return dedupe_non_empty(archive_ids)
-
-    async def _recall_entity_candidates(
-        self,
-        entity: dict[str, Any],
-        *,
-        context: MemoryRequestContext,
-        query_vector: list[float],
-    ) -> list[EntityView]:
-        """Recall existing entities that are semantically close to a new entity."""
-        if not query_vector:
-            return []
-        must: list[FieldCondition] = []
-        if context.user_id:
-            must.append(FieldCondition(field="user_id", op="match", value=context.user_id))
-        filters = SearchFilter(
-            must=must,
-            must_not=[FieldCondition(field="entity_type", op="match", value="episodes")],
-        )
-        result = await self.db_reader.search_entities_dense(
-            context,
-            query=entity_embedding_text(entity),
-            query_vector=query_vector,
-            filters=filters,
-            limit=self.entity_recall_top_k,
-        )
-        return [hit.entity for hit in result.hits if hit.entity is not None]
-
-    async def _list_entity_memories(
-        self,
-        entity_id: str,
-        *,
-        context: MemoryRequestContext,
-        limit: int,
-    ) -> list[MemoryView]:
-        try:
-            memories, _ = await self.db_reader.list_memories(
-                context,
-                filters=SearchFilter(must=[FieldCondition(field="entity_id", op="match", value=entity_id)]),
-                limit=limit,
-            )
-            return memories
-        except Exception:
-            logger.warning("entity memory list fallback failed", exc_info=True)
-            return []
-
-    async def _episode_edge_relationships(
-        self,
-        *,
-        episode_write: EntityWrite,
-        query_vector: list[float],
-        context: MemoryRequestContext,
-        prompt_set: AddPromptSet | None = None,
-    ) -> list[GraphRelationship]:
-        """Build semantic relationships between a new episode and historical episodes."""
-        if not query_vector or self.episode_edge_top_k <= 0:
-            return []
-        try:
-            episode_must: list[FieldCondition] = [
-                FieldCondition(field="entity_type", op="match", value="episodes"),
-            ]
-            if context.user_id:
-                episode_must.append(FieldCondition(field="user_id", op="match", value=context.user_id))
-            result = await self.db_reader.search_entities_dense(
-                context,
-                query=episode_write.description or episode_write.entity_name,
-                query_vector=query_vector,
-                filters=SearchFilter(must=episode_must),
-                limit=self.episode_edge_top_k,
-            )
-            candidates = [
-                hit.entity
-                for hit in result.hits
-                if hit.entity
-                and hit.entity.entity_id != episode_write.entity_id
-                and hit.entity.entity_type == "episodes"
-            ]
-        except Exception:
-            logger.warning("episode edge candidate search failed", exc_info=True)
-            return []
-
-        if not candidates:
-            return []
-
-        prompts = prompt_set or self.prompt_set
-        prompt = (
-            prompts.episode_edge.replace("{new_episode_name}", episode_write.entity_name)
-            .replace("{new_episode_description}", episode_write.description or "")
-            .replace("{candidate_episodes}", format_candidate_episodes(candidates))
-        )
-        try:
-            response = await resolve_llm_client(self.llm_client).chat(
-                task="memory.add.episode_edge",
-                messages=[{"role": "user", "content": prompt}],
-                format_parser=parse_json_object,
-            )
-            edges = response.parsed if isinstance(response.parsed, list) else []
-        except Exception:
-            logger.warning("episode edge LLM failed; no episode edges created", exc_info=True)
-            return []
-
-        candidate_by_id = {candidate.entity_id: candidate for candidate in candidates}
-        relationships: list[GraphRelationship] = []
-        for edge in edges:
-            if not isinstance(edge, dict):
-                continue
-            target_id = str(edge.get("target_episode_id") or "")
-            target = candidate_by_id.get(target_id)
-            if target is None:
-                continue
-            relation = str(edge.get("relation") or "related_to")
-            relationship = Edge.from_entity_dtos(
-                episode_write,
-                target,
-                description=relation,
-            ).to_graph_relationship(project_id=context.project_id)
-            relationship.metadata["edge_source"] = "episode_edge_prompt"
-            relationships.append(relationship)
-        return relationships
-
-    async def archive_memories(self, context: MemoryRequestContext, memory_ids: list[str], *, consistency: str) -> None:
-        """Soft-delete the specified memory records."""
-        commands = self.build_archive_memory_commands(memory_ids, consistency=consistency)
-        if not commands:
-            return
-
-        try:
-            result = await self.db_writer.apply_mutation_plan(
-                context,
-                MemoryDbMutationPlan(memory_deletes=commands),
-                consistency=consistency,
-            )
-        except Exception as exc:
-            logger.warning("archive_memory_failed", memory_ids=memory_ids, error=str(exc))
-            return
-        for command, mutation in zip(commands, result.mutations, strict=False):
-            if not mutation.changed:
-                logger.warning("archive_memory_noop", memory_id=command.memory_id)
-        for error in result.errors:
-            logger.warning("archive_memory_failed", error=error)
-
-    def build_archive_memory_commands(self, memory_ids: list[str], *, consistency: str) -> list[MemoryDbDeleteCommand]:
-        """Build archive commands for schema-add memory merge/delete operations."""
-
-        return [
-            MemoryDbDeleteCommand(
-                memory_id=memory_id,
-                reason="schema_add_property_merge",
-                consistency=consistency,
-            )
-            for memory_id in dedupe_non_empty(memory_ids)
-        ]
-
-    async def update_memories(
-        self,
-        context: MemoryRequestContext,
-        updates: list[SchemaMemoryUpdate],
-        *,
-        consistency: str,
-    ) -> list[MemoryAddEventItem]:
-        """Apply schema-add one-to-one memory updates through MemoryDbWriter."""
-
-        if not updates:
-            return []
-
-        commands = await self.build_memory_update_commands(context, updates, consistency=consistency)
-        write_result = await self.db_writer.apply_mutation_plan(
-            context,
-            MemoryDbMutationPlan(memory_updates=commands),
-            consistency=consistency,
-        )
-        return self.memory_update_events(updates, write_result.mutations)
-
-    async def build_memory_update_commands(
-        self,
-        context: MemoryRequestContext,
-        updates: list[SchemaMemoryUpdate],
-        *,
-        consistency: str,
-    ) -> list[MemoryDbUpdateCommand]:
-        """Build memory update commands for schema-add one-to-one memory updates."""
-
-        if not updates:
-            return []
-
-        vectors = await self._write_plan_builder.build_memory_vectors(
-            [update.memory for update in updates],
-            project_id=context.project_id,
-        )
-        vector_by_memory_id = {vector.memory_id: vector for vector in vectors}
-        commands: list[MemoryDbUpdateCommand] = []
-        for update in updates:
-            vector = vector_by_memory_id.get(update.memory.memory_id)
-            sparse_vectors = (
-                {
-                    "bm25_indices": vector.bm25_indices,
-                    "bm25_values": vector.bm25_values,
-                }
-                if vector
-                else None
-            )
-            commands.append(
-                MemoryDbUpdateCommand(
-                    memory_id=update.target_memory_id,
-                    content=update.memory.content,
-                    metadata_patch=dict(update.memory.metadata or {}),
-                    payload_patch=_memory_payload_patch(update.memory),
-                    dense_vector=vector.semantic_vector if vector else None,
-                    sparse_vectors=sparse_vectors,
-                    reason=update.reason,
-                    consistency=consistency,
-                )
-            )
-        return commands
-
-    def memory_update_events(
-        self,
-        updates: list[SchemaMemoryUpdate],
-        results: list[MemoryDbMutationResult],
-    ) -> list[MemoryAddEventItem]:
-        """Build public add events from schema-add memory update results."""
-
-        entity_groups: dict[str, list[tuple[SchemaMemoryUpdate, MemoryDbMutationResult]]] = {}
-        for update, result in zip(updates, results, strict=False):
-            if not result.changed:
-                logger.warning(
-                    "schema_memory_update_not_applied",
-                    target_memory_id=update.target_memory_id,
-                    entity_id=update.memory.entity_id,
-                )
-                continue
-            eid = update.memory.entity_id or ""
-            entity_groups.setdefault(eid, []).append((update, result))
-
-        events: list[MemoryAddEventItem] = []
-        for entity_id, items in entity_groups.items():
-            first_memory = items[0][0].memory
-            entity_name = (first_memory.metadata or {}).get("entity_name", "")
-            entity_type = first_memory.entity_type or ""
-
-            content = f"Entity: {entity_name} (Type: {entity_type})"
-            related: list[str] = []
-            for update, result in items:
-                prop_name = update.memory.property_name or update.memory.mem_type or ""
-                if update.memory.content:
-                    content += f"\n   Property '{prop_name}': {update.memory.content}"
-                related.append(result.memory_id)
-                related.append(update.target_memory_id)
-
-            events.append(
-                MemoryAddEventItem(
-                    operation="update",
-                    content=content,
-                    memory_id=entity_id,
-                    mem_type=schema_memory_type(entity_type),
-                    related_memory_ids=list(dict.fromkeys(related)),
-                )
-            )
-        return events
 
     def _new_entity_write(
         self,
@@ -1349,51 +483,27 @@ class SchemaAddPlanner:
             created_at=created_at,
         )
 
-    async def _entity_write_from_view(
+    def _build_property_memories(
         self,
-        target: EntityView,
-        new_entity: dict[str, Any],
         *,
+        entity_write: EntityWrite,
+        properties: list[dict[str, Any]],
         context: MemoryRequestContext,
         created_at: datetime,
-        prompt_set: AddPromptSet | None = None,
-    ) -> EntityWrite:
-        """Build an update EntityWrite from an existing entity view and a raw entity."""
-        em = get_entity_manager(project_id=context.project_id)
-        description = await self._llm_description_update(
-            entity_name=target.entity_name,
-            entity_type=target.entity_type or "",
-            current_description=target.description or "",
-            properties=new_entity.get("properties", []),
-            prompt_set=prompt_set,
-        )
-        metadata = dict(target.metadata)
-        metadata.update(
-            {
-                "add_algorithm": "schema_add_v1",
-                "merge_action": "update",
-                "latest_raw_entity_name": new_entity.get("name"),
-                "record_time": new_entity.get("record_time"),
-            }
-        )
-        return EntityWrite(
-            entity_id=target.entity_id,
-            account_id=target.account_id or context.account_id,
-            project_id=context.project_id,
-            api_key_uuid=target.api_key_uuid or context.api_key_uuid,
-            user_id=target.user_id or context.user_id,
-            app_id=target.app_id or context.app_id,
-            session_id=target.session_id or context.session_id,
-            agent_id=target.agent_id or context.agent_id,
-            request_id=context.request_id,
-            entity_name=target.entity_name,
-            entity_type=target.entity_type or new_entity.get("entity_type"),
-            description=description,
-            schema_version=em.file_path.name,
-            metadata=metadata,
-            created_at=target.created_at or created_at,
-            update_at=created_at,
-        )
+        request_metadata: dict[str, Any],
+    ) -> list[MemoryWrite]:
+        """Convert extracted properties into memory writes (no LLM merge/delete)."""
+        return [
+            self._memory_from_property(
+                entity_write=entity_write,
+                prop=prop,
+                context=context,
+                created_at=created_at,
+                request_metadata=request_metadata,
+            )
+            for prop in properties
+            if prop.get("operation") != "delete"
+        ]
 
     def _memory_from_property(
         self,
@@ -1472,25 +582,3 @@ def _format_entity_add_content(entity_write: EntityWrite, prop_memories: list[Me
         if memory.content:
             block += f"\n   Property '{prop_name}': {memory.content}"
     return block
-
-
-def _memory_payload_patch(memory: MemoryWrite) -> dict[str, Any]:
-    patch = {
-        "account_id": memory.account_id,
-        "project_id": memory.project_id,
-        "api_key_uuid": memory.api_key_uuid,
-        "user_id": memory.user_id,
-        "app_id": memory.app_id,
-        "session_id": memory.session_id,
-        "agent_id": memory.agent_id,
-        "request_id": memory.request_id,
-        "mem_type": memory.mem_type,
-        "mem_extract_type": memory.mem_extract_type,
-        "mem_extract_version": memory.mem_extract_version,
-        "validate_from": memory.validate_from,
-        "validate_to": memory.validate_to,
-        "property_name": memory.property_name,
-        "entity_id": memory.entity_id,
-        "entity_type": memory.entity_type,
-    }
-    return {key: value for key, value in patch.items() if value is not None}

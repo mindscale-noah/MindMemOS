@@ -8,7 +8,6 @@ from .chunker import EpisodesChunkerConfig
 from .drain import DrainConfig
 from .episode_edge import SchemaAddEpisodeEdgeConfig
 from .extraction import SchemaAddExtractionConfig
-from .higher_order import SchemaAddHigherOrderConfig
 from .merge import SchemaAddMergeConfig
 
 
@@ -18,7 +17,6 @@ class SchemaAddConfig:
 
     extraction: SchemaAddExtractionConfig = field(default_factory=SchemaAddExtractionConfig)
     merge: SchemaAddMergeConfig = field(default_factory=SchemaAddMergeConfig)
-    higher_order: SchemaAddHigherOrderConfig = field(default_factory=SchemaAddHigherOrderConfig)
     episode_edge: SchemaAddEpisodeEdgeConfig = field(default_factory=SchemaAddEpisodeEdgeConfig)
     drain: DrainConfig = field(default_factory=DrainConfig)
     chunker: EpisodesChunkerConfig = field(default_factory=EpisodesChunkerConfig)

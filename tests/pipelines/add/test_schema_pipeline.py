@@ -5,8 +5,7 @@ from types import SimpleNamespace
 
 import mindmemos.pipelines.add.schema.schema_add as schema_add
 import pytest
-from mindmemos.components.extractor.schema import _schema_higher_order
-from mindmemos.components.memory_modeling.schema import EntityManager, EntityType
+from mindmemos.components.memory_modeling.schema import EntityManager
 from mindmemos.config import bind_config_overrides, get_config, init_config, reset_config
 from mindmemos.infra import db
 from mindmemos.llm import ChatResponse, EmbeddingResponse
@@ -55,7 +54,6 @@ class FakeLLM:
         elif task == "memory.add.entity_generation":
             content = """
             {
-              "message_mapping": {},
               "entities": [
                 {
                   "name": "User",
@@ -73,8 +71,8 @@ class FakeLLM:
               "edges": []
             }
             """
-        elif task == "memory.add.episode_description":
-            content = '{"title":"User Preference About Qdrant","content":"The user said they like Qdrant."}'
+        elif task == "memory.add.episode_entity":
+            content = '{"title":"User Preference About Qdrant","content":"The user said they like Qdrant.","search_fields":["Qdrant","preference"]}'
         elif task == "memory.add.episode_objectify":
             content = "On 2026-05-28, the user said they like Qdrant for vector search."
         else:
@@ -98,7 +96,6 @@ class ManyPropertiesLLM(FakeLLM):
             ]
             content = json.dumps(
                 {
-                    "message_mapping": {},
                     "entities": [
                         {
                             "name": "User",
@@ -464,28 +461,10 @@ class FakeReader(MemoryDbReader):
         return self._list_memories[:limit], None
 
 
-class PropertyMergeLLM(FakeLLM):
-    async def chat(self, task, messages, format_parser=None, **kwargs):
-        if task == "memory.add.property_merge":
-            content = '{"existing":[{"id":"p1","op":"delete"}],"new":[{"id":"n1","op":"update","target":"p2","value":"merged preference"}]}'
-            parsed = format_parser(content) if format_parser else None
-            return ChatResponse(finish_reason="stop", content=content, parsed=parsed)
-        return await super().chat(task, messages, format_parser=format_parser, **kwargs)
-
-
 class EmptyBoundaryLLM(FakeLLM):
     async def chat(self, task, messages, format_parser=None, **kwargs):
         if task == "memory.add.episode_boundary":
             content = "[]"
-            parsed = format_parser(content) if format_parser else None
-            return ChatResponse(finish_reason="stop", content=content, parsed=parsed)
-        return await super().chat(task, messages, format_parser=format_parser, **kwargs)
-
-
-class HigherOrderLLM(FakeLLM):
-    async def chat(self, task, messages, format_parser=None, **kwargs):
-        if task == "memory.add.higher_order_generation":
-            content = '{"updates":[{"property_name":"preference_summary","action":"update","value":"User consistently prefers vector databases. Evidence: Qdrant memories in 2026. Confidence: high.","reasoning":"Repeated preference evidence."}]}'
             parsed = format_parser(content) if format_parser else None
             return ChatResponse(finish_reason="stop", content=content, parsed=parsed)
         return await super().chat(task, messages, format_parser=format_parser, **kwargs)
@@ -507,7 +486,6 @@ class DuplicateEdgeLLM(FakeLLM):
         if task == "memory.add.entity_generation":
             content = """
             {
-              "message_mapping": {},
               "entities": [
                 {
                   "name": "User",
@@ -562,7 +540,6 @@ class MixedSchemaTypeLLM(FakeLLM):
         if task == "memory.add.entity_generation":
             content = """
             {
-              "message_mapping": {},
               "entities": [
                 {
                   "name": "User",
@@ -673,7 +650,7 @@ async def test_schema_add_pipeline_resolves_request_scoped_clients_when_provider
                     }
                 ]
             },
-        }
+        },
     ):
         runtime = pipeline._resolve_add_runtime(make_context())
         assert runtime.chunker.llm_client is llm
@@ -856,9 +833,7 @@ async def test_schema_add_pipeline_caps_properties_per_entity():
     # Non-schema property names (p0..p19) are rewritten to "default_property" by the
     # normalizer, so we verify the cap by counting default_property memories on the person
     # entity instead of checking for the raw p0..p14 names.
-    default_count = sum(
-        1 for m in plan.memories if m.property_name == "default_property" and m.entity_type == "person"
-    )
+    default_count = sum(1 for m in plan.memories if m.property_name == "default_property" and m.entity_type == "person")
     assert default_count == 15, f"cap should keep 15, got {default_count}"
 
 
@@ -899,7 +874,7 @@ async def test_schema_add_pipeline_passes_locomo_named_speakers_to_extractor():
         "memory.add.schema_selection",
         "memory.add.entity_generation",
         "memory.add.episode_objectify",
-        "memory.add.episode_description",
+        "memory.add.episode_entity",
     ]:
         prompt = llm.prompts_by_task[task][0]
         assert caroline_line in prompt
@@ -1431,7 +1406,8 @@ async def test_schema_add_pipeline_forces_split_when_llm_returns_no_boundary_at_
             mode="async",
             timestamp=1770000000000,
             messages=[
-                {"role": "user", "content": f"message {index}"} for index in range(get_config().algo_config.add.schema.chunker.max_episode_length)
+                {"role": "user", "content": f"message {index}"}
+                for index in range(get_config().algo_config.add.schema.chunker.max_episode_length)
             ],
         ),
         make_context(),
@@ -1440,164 +1416,6 @@ async def test_schema_add_pipeline_forces_split_when_llm_returns_no_boundary_at_
     assert len(writer.calls) == 1
     assert qdrant.add_records == {}
     assert all(payload["buffer_status"] == "processed" for payload in qdrant.schema_buffer_records.values())
-
-
-@pytest.mark.asyncio
-async def test_schema_add_pipeline_property_merge_archives_existing_and_writes_merged_value():
-    writer = FakeWriter()
-    qdrant = FakeQdrant()
-    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
-    existing_one = MemoryView(
-        memory_id="mem-old-1",
-        project_id="proj-1",
-        content="old plan",
-        mem_type="fact",
-        status="active",
-        property_name="plan_event",
-        entity_id="entity-user",
-        entity_type="person",
-        created_at=datetime(2026, 5, 1, tzinfo=UTC),
-        metadata={"property_time": "2026-05-01"},
-    )
-    existing_two = MemoryView(
-        memory_id="mem-old-2",
-        project_id="proj-1",
-        content="old preference",
-        mem_type="fact",
-        status="active",
-        property_name="preference",
-        entity_id="entity-user",
-        entity_type="person",
-        created_at=datetime(2026, 5, 2, tzinfo=UTC),
-        metadata={"property_time": "2026-05-02"},
-    )
-    reader = FakeReader(
-        entity_candidates=[
-            EntityView(
-                entity_id="entity-user",
-                project_id="proj-1",
-                entity_name="User",
-                entity_type="person",
-                description="Existing user",
-            )
-        ],
-        property_hits=[existing_one, existing_two],
-    )
-    pipeline = SchemaAddPipeline(
-        db_reader=reader,
-        db_writer=writer,
-        add_buffer=AddRecordBuffer(clients=clients),
-        llm_client=PropertyMergeLLM(),
-        embed_client=FakeEmbed(),
-        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
-        use_property_merge=True,
-    )
-
-    await pipeline.add_sync(
-        AddPipelineInput(
-            mode="sync",
-            timestamp=1770000000000,
-            force_generation=True,
-            messages=[{"role": "user", "content": "I like Qdrant even more now."}],
-        ),
-        make_context(),
-    )
-
-    assert writer.deleted == ["mem-old-1"]
-    assert len(writer.updated) == 1
-    update_command = writer.updated[0]
-    assert update_command.memory_id == "mem-old-2"
-    assert update_command.content == "merged preference"
-    assert update_command.metadata_patch["property_merge_action"] == "update"
-    assert update_command.metadata_patch["merged_from_memory_ids"] == ["mem-old-2"]
-    assert "merged_from_new_property" not in update_command.metadata_patch
-    assert update_command.payload_patch["property_name"] == "preference"
-    _, plan, _ = writer.calls[0]
-    preference_memories = [memory for memory in plan.memories if memory.property_name == "preference"]
-    assert preference_memories == []
-
-
-@pytest.mark.asyncio
-async def test_schema_add_pipeline_higher_order_runs_for_updated_entity(monkeypatch):
-    writer = FakeWriter()
-    qdrant = FakeQdrant()
-    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
-    first_order = MemoryView(
-        memory_id="mem-first",
-        project_id="proj-1",
-        content="User likes Qdrant for vector search.",
-        mem_type="fact",
-        status="active",
-        property_name="preference",
-        entity_id="entity-user",
-        entity_type="person",
-        created_at=datetime(2026, 5, 1, tzinfo=UTC),
-        metadata={"property_time": "2026-05-01"},
-    )
-    current_higher = MemoryView(
-        memory_id="mem-ho-old",
-        project_id="proj-1",
-        content="User likes databases.",
-        mem_type="fact",
-        status="active",
-        property_name="preference_summary",
-        entity_id="entity-user",
-        entity_type="person",
-        created_at=datetime(2026, 5, 2, tzinfo=UTC),
-        metadata={"property_time": "2026-05-02", "higher_order": True},
-    )
-    reader = FakeReader(
-        entity_candidates=[
-            EntityView(
-                entity_id="entity-user",
-                project_id="proj-1",
-                entity_name="User",
-                entity_type="person",
-                description="Existing user",
-            )
-        ],
-        property_hits=[first_order],
-        list_memories=[first_order, current_higher],
-    )
-    manager = EntityManager("config/presets/entity_modeling_locomo.json")
-    user_entity = manager.get("person")
-    assert isinstance(user_entity, EntityType)
-    user_entity.dynamic_property["preference_summary"] = {
-        "type": "string",
-        "order": 2,
-        "desc": "Higher order user preference summary.",
-    }
-    # Higher-order generation resolves the project entity manager via the global accessor in
-    # _schema_higher_order (not the injected manager), so patch it to return the test manager
-    # that has preference_summary registered.
-    monkeypatch.setattr(_schema_higher_order, "get_entity_manager", lambda *args, **kwargs: manager)
-    pipeline = SchemaAddPipeline(
-        db_reader=reader,
-        db_writer=writer,
-        add_buffer=AddRecordBuffer(clients=clients),
-        llm_client=HigherOrderLLM(),
-        embed_client=FakeEmbed(),
-        entity_manager=manager,
-        higher_order_enabled=True,
-    )
-
-    await pipeline.add_sync(
-        AddPipelineInput(
-            mode="sync",
-            timestamp=1770000000000,
-            force_generation=True,
-            messages=[{"role": "user", "content": "Qdrant is still my favorite vector database."}],
-        ),
-        make_context(),
-    )
-
-    assert "mem-ho-old" not in writer.deleted
-    higher_update = next(command for command in writer.updated if command.memory_id == "mem-ho-old")
-    assert higher_update.metadata_patch["higher_order"] is True
-    assert higher_update.reason == "schema_add_higher_order_update"
-    _, plan, _ = writer.calls[0]
-    higher_memories = [memory for memory in plan.memories if memory.property_name == "preference_summary"]
-    assert higher_memories == []
 
 
 @pytest.mark.asyncio
@@ -1636,7 +1454,7 @@ async def test_schema_add_pipeline_marks_episode_failed_when_generation_fails():
 @pytest.mark.asyncio
 async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_error(monkeypatch):
     """P1 fix: when a parallel schema-selection task fails, the still-running
-    objectify/description tasks are cancelled (not orphaned) and the original
+    objectify/entity tasks are cancelled (not orphaned) and the original
     exception propagates unwrapped instead of an ExceptionGroup, so the outer
     episode-retry loop keeps its semantics.
 
@@ -1655,7 +1473,7 @@ async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_
 
     def _mark_started(name: str) -> None:
         started.add(name)
-        if {"objectify", "description"} <= started:
+        if {"objectify", "entity"} <= started:
             both_started.set()
 
     class TrackingExtractor:
@@ -1678,19 +1496,29 @@ async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_
             finished.add("objectify")
             return "objectified"
 
-        async def generate_episode_description(self, conversation_text, dialogue_timestamp, *, prompt_set):
-            _mark_started("description")
+        async def generate_episode_entity(self, conversation_text, dialogue_timestamp, max_fields, *, prompt_set):
+            _mark_started("entity")
             try:
                 await asyncio.sleep(0.3)
             except asyncio.CancelledError:
                 raise
-            finished.add("description")
-            return {"title": "t", "content": "c"}
+            finished.add("entity")
+            return {"title": "t", "content": "c", "search_fields": []}
+
+    class TrackingPlanner:
+        async def plan_episode_edges(self, *, episode_name, episode_description, context, prompt_set):
+            await asyncio.sleep(0.3)
+            return []
+
+        async def recall_reference_entities(self, *, conversation_text, context):
+            await asyncio.sleep(0.3)
+            return []
 
     pipeline = SchemaAddPipeline.__new__(SchemaAddPipeline)
     rt = SimpleNamespace(
         extractor=TrackingExtractor(),
-        use_search_fields=False,
+        planner=TrackingPlanner(),
+        search_fields_max=10,
         project_em=object(),
     )
 
@@ -1720,5 +1548,5 @@ async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_
     # Give any stranded (non-cancelled) tasks time to finish so the
     # assertion reliably distinguishes "cancelled" from "orphaned".
     await asyncio.sleep(0.5)
-    assert {"objectify", "description"} <= started
+    assert {"objectify", "entity"} <= started
     assert finished == set()

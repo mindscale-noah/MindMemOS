@@ -5,14 +5,20 @@ You are a professional entity and relationship extraction expert, responsible fo
 # Task Description
 You will receive:
 1. Entity Schema definitions (including supported entity types and their properties)
-2. A segment of dialogue text
+2. Reference entities already stored in memory (with their names, types, and descriptions)
+3. A segment of dialogue text
 
-Your goal is to extract ALL entities mentioned in the dialogue that conform to the schema, along with all their relevant properties. Be thorough - do not omit any potentially useful information.
+Your goal is to extract ALL entities mentioned in the dialogue that conform to the schema, along with all their relevant properties, and to decide whether each extracted entity is NEW or an UPDATE to an existing reference entity. Be thorough - do not omit any potentially useful information.
 
 # Entity Schema
 The schema defines the allowed entity types and their properties. Use these as reference, but also identify any implicit entities that can be derived from the dialogue.
 
 {entity_schema}
+
+# Reference Entities (already in memory)
+These entities already exist in the memory store. If a dialogue entity refers to the SAME real-world thing as one of them, mark it as an update and set `merge_target` to that reference entity's exact name.
+
+{reference_entities}
 
 # Extraction Principles
 
@@ -204,6 +210,14 @@ GOOD extraction:
 - **`default_property` is a PROPERTY NAME, NOT an entity type.** It is used when an entity's type is already determined, but a specific piece of information does not fit any of the defined property categories for that type.
 - Each default_property value must still be a semantically complete statement following the same rule as general property values.
 
+## 7. New vs Update Decision (Reference Entity Matching)
+For every extracted entity, decide whether it is NEW or an UPDATE to one of the reference entities:
+
+- **update**: Set `operation` to `"update"` and `merge_target` to the EXACT `name` of the reference entity it matches. Use this ONLY when the dialogue entity and the reference entity are the SAME real-world thing (same person, same organization, same object, etc.) — even if the dialogue uses a different surface name. The extracted `name` may differ from `merge_target` (aliases), but `merge_target` MUST be a reference entity name.
+- **new**: Set `operation` to `"new"` and omit `merge_target`. Use this when no reference entity matches, OR when uncertain — creating a duplicate is cheaper than corrupting an existing entity.
+
+Do NOT merge two DISTINCT real-world entities just because they share a type or a broad topic.
+
 # Time Handling Rules (Multi-Precision Support)
 **IMPORTANT**: The system supports multiple time precisions. Choose the appropriate precision based on information provided in the dialogue:
 
@@ -276,55 +290,17 @@ GOOD extraction:
    - "called three times during the conversation" not just "called multiple times"
    - "usually has coffee at 8 AM" includes both the activity and timing pattern
 
-# Message Mapping Requirements ⚠️ Critical
-Before generating the final answer, you must output a message mapping dictionary `message_mapping` explaining how each message maps to which entity's properties.
-
-## Mapping Format Requirements
-```json
-{
-  "message_mapping": {
-    "0": {
-      "mappings": [
-        {"entity": "Entity Name", "property": "Property Name"},
-        {"entity": "Entity Name", "property": "Property Name"}
-      ],
-      "reason": "Mapping reason explanation"
-    },
-    "1": {
-      "mappings": [
-        {"entity": "Entity Name", "property": "Property Name"}
-      ],
-      "reason": "Mapping reason explanation"
-    },
-    "2": {
-      "mappings": [],
-      "reason": "No mapping reason explanation (e.g., pure congratulations, no substantial information)"
-    }
-  },
-  "mapping_comments": "Overall mapping explanation"
-}
-```
-
-## Mapping Principles
-1. **Index reference**: Use message indices "0", "1", "2", "3" etc. to reference messages, indices must be consecutive starting from 0
-2. **Comprehensive mapping**: One message can correspond to multiple entities and properties, must list all
-3. **Exclude episodes type**: **STRICTLY FORBIDDEN to map to episodes entities**, episodes entities are used to save original dialogue and not in property extraction consideration
-4. **Exclude invalid information**: Pure interjections, questions, greetings, congratulations and other messages without specific information content may not be mapped
-5. **Valid information identification**: Only map messages containing concrete facts, states, events, plans and other substantial information
-6. **Multiple values per property**: Same entity's same property can have multiple values from different messages - this is allowed and should be mapped separately
-7. **Reason explanation**: Every message must have a reason field explaining why it maps to these properties (or why it doesn't map)
-
 # Output Format
-Output clean JSON with `message_mapping`, `entities` and `edges` top-level fields.
-- **message_mapping**: Dictionary mapping message indices to entity properties as specified above
-- **entities**: Each entity must have: name, entity_type, description, properties
-- **edges**: Each edge must have proper link information. Edge `link_description` must describe a **factual relationship** (e.g., "works at", "owns", "lives in", "adopted from"), NOT a speech act (e.g., "asked about", "mentioned", "talked about", "congratulated on"). If the only connection between two entities is that one person asked about or mentioned the other, do NOT create an edge.
+Output clean JSON with `entities` and `edges` top-level fields.
+- **entities**: Each entity must have: name, entity_type, description, operation ("new" | "update"), and properties. For `update` entities, also include `merge_target` (the exact reference entity name). Do NOT generate "episodes" type entities.
+- **edges**: Each edge must have proper link information. Edge `link_description` must describe a **factual relationship** (e.g., "works at", "owns", "lives in", "adopted from"), NOT a speech act (e.g., "asked about", "mentioned", "talked about", "congratulated on"). If the only connection between two entities is that one person asked about or mentioned the other, do NOT create an edge. Edges may connect two new entities, or a new entity and a reference entity (use the reference entity's exact name).
 - Each property must have: property_name, value, time
 - Use string values only for all properties
 
 # Example
 
 ## Input Dialogue (timestamp: 2024-03-20)
+Reference entities: none (empty).
 Alice: I moved from Beijing to Shanghai yesterday, started working at Alibaba in 2023.
 Bob: Congratulations! How's the work?
 Alice: It's great! I'm working with Li Ming and Wang Hua on the cloud migration project.
@@ -332,30 +308,12 @@ Alice: It's great! I'm working with Li Ming and Wang Hua on the cloud migration 
 ## Correct Output (note time precision — do NOT generate episodes entities, the system handles them separately)
 ```json
 {
-  "message_mapping": {
-    "0": {
-      "mappings": [
-        {"entity": "Alice", "property": "location_event"},
-        {"entity": "Alice", "property": "position_event"}
-      ],
-      "reason": "Contains concrete facts about location change and work history"
-    },
-    "1": {
-      "mappings": [],
-      "reason": "Pure congratulations and question without substantial factual information"
-    },
-    "2": {
-      "mappings": [
-        {"entity": "Alice", "property": "experience"}
-      ],
-      "reason": "Contains information about current project work and colleagues"
-    }
-  },
   "entities": [
     {
       "name": "Alice",
       "entity_type": "person",
       "description": "Person who moved from Beijing to Shanghai",
+      "operation": "new",
       "properties": [
         {
           "property_name": "location_event",
@@ -378,24 +336,28 @@ Alice: It's great! I'm working with Li Ming and Wang Hua on the cloud migration 
       "name": "Alibaba",
       "entity_type": "organization",
       "description": "Company where Alice works",
+      "operation": "new",
       "properties": []
     },
     {
       "name": "Li Ming",
       "entity_type": "person",
       "description": "Alice's colleague at Alibaba",
+      "operation": "new",
       "properties": []
     },
     {
       "name": "Wang Hua",
       "entity_type": "person",
       "description": "Alice's colleague at Alibaba",
+      "operation": "new",
       "properties": []
     },
     {
       "name": "Cloud Migration Project",
       "entity_type": "project",
       "description": "Project Alice is working on with Li Ming and Wang Hua at Alibaba",
+      "operation": "new",
       "properties": [
         {
           "property_name": "project_member",

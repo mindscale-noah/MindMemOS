@@ -103,21 +103,9 @@ algorithm_profiles:
             entity_modeling_path: config/presets/entity_modeling_locomo.json
             extraction:
               enable_schema_selection: true
-              use_search_fields: true
               search_fields_max: 10
-              episode_search_fields_augment: true
-              episode_augment_count: 4
             merge:
-              enable_entity_merge_decision: true
               entity_recall_top_k: 15
-              max_merge_retries: 8
-              use_property_merge: false
-              secondary_search_limit: 30
-              secondary_search_retries: 3
-            higher_order:
-              enabled: true
-              top_k: 10
-              min_evidence_count: 2
             episode_edge:
               top_k: 10
             chunker:

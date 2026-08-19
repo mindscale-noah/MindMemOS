@@ -151,21 +151,9 @@ algo_config:
       entity_modeling_path: config/presets/schema_general.json
       extraction:
         enable_schema_selection: true
-        use_search_fields: true
         search_fields_max: 10
-        episode_search_fields_augment: true
-        episode_augment_count: 4
       merge:
-        enable_entity_merge_decision: true
         entity_recall_top_k: 15
-        max_merge_retries: 8
-        use_property_merge: false
-        secondary_search_limit: 30
-        secondary_search_retries: 3
-      higher_order:
-        enabled: true
-        top_k: 10
-        min_evidence_count: 2
       episode_edge:
         top_k: 10
       chunker:
@@ -175,7 +163,7 @@ algo_config:
         max_buffer_size: 1000
         split_on_user_speaker: true
         max_minutes_from_first: 30
-        streaming_window_size: 15
+        streaming_window_size: 50
       drain:
         episode_generation_max_retries: 3
     vanilla:

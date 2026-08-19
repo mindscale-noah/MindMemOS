@@ -7,12 +7,14 @@ def test_add_prompt_selector_keeps_english_and_chinese_prompts() -> None:
 
     assert "conversation analysis expert" in en_prompts.conv_boundary_detection
     assert "professional entity and relationship extraction expert" in en_prompts.entity_generation
-    assert "higher-order personal traits" in en_prompts.higher_order_generation
-    assert "memory property merge expert" in en_prompts.property_merge_decision
-    assert "search optimization expert" in en_prompts.search_field_generation
+    assert "episodic memory expert" in en_prompts.episode_entity
+    assert "memory relationship expert" in en_prompts.episode_edge
+    assert "episodic memory generation expert" in en_prompts.episode_objectify
+    assert "memory extraction schema expert" in en_prompts.schema_selection_for_generation
     assert zh_prompts.conv_boundary_detection
     assert zh_prompts.entity_generation
-    assert zh_prompts.higher_order_generation
-    assert zh_prompts.property_merge_decision
-    assert zh_prompts.search_field_generation
+    assert zh_prompts.episode_entity
+    assert zh_prompts.episode_edge
+    assert zh_prompts.episode_objectify
+    assert zh_prompts.schema_selection_for_generation
     assert zh_prompts.conv_boundary_detection != en_prompts.conv_boundary_detection

@@ -10,7 +10,6 @@ from .schema import (
     SchemaAddConfig,
     SchemaAddEpisodeEdgeConfig,
     SchemaAddExtractionConfig,
-    SchemaAddHigherOrderConfig,
     SchemaAddMergeConfig,
 )
 from .vanilla import VanillaAddConfig
@@ -31,7 +30,6 @@ __all__ = [
     "SchemaAddConfig",
     "SchemaAddEpisodeEdgeConfig",
     "SchemaAddExtractionConfig",
-    "SchemaAddHigherOrderConfig",
     "SchemaAddMergeConfig",
     "VanillaAddConfig",
 ]

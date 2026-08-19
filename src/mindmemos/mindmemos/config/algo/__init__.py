@@ -7,7 +7,6 @@ from .add import (
     SchemaAddConfig,
     SchemaAddEpisodeEdgeConfig,
     SchemaAddExtractionConfig,
-    SchemaAddHigherOrderConfig,
     SchemaAddMergeConfig,
     VanillaAddConfig,
 )
@@ -48,7 +47,6 @@ __all__ = [
     "SchemaAddConfig",
     "SchemaAddEpisodeEdgeConfig",
     "SchemaAddExtractionConfig",
-    "SchemaAddHigherOrderConfig",
     "SchemaAddMergeConfig",
     "SchemaSearchConfig",
     "SearchConfig",
