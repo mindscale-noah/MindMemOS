@@ -18,6 +18,9 @@
   <a href="https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin">
     <img src="https://img.shields.io/npm/v/%40mindmemos%2Fdeepseek-harness-plugin?label=dsh%20plugin&labelColor=gray&logo=npm&logoColor=white" alt="MindMemOS DeepSeek Harness 插件 npm 版本">
   </a>
+  <a href="https://arxiv.org/abs/2608.12428">
+    <img src="https://img.shields.io/badge/arXiv-2608.12428-B31B1B.svg?labelColor=gray" alt="arXiv:2608.12428">
+  </a>
   <a href="#license">
     <img src="https://img.shields.io/badge/license-MIT-blue.svg?labelColor=gray" alt="MIT License">
   </a>
