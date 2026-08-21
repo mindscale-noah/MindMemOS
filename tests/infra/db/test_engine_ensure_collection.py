@@ -1,11 +1,14 @@
 """Ensure-collection idempotency tests for :class:`QdrantEngine`."""
 
+from types import SimpleNamespace
+
 import pytest
 from grpc import StatusCode
 from grpc.aio import AioRpcError
 from mindmemos.config import QdrantConfig
 from mindmemos.infra.db.engine import QdrantEngine
-from mindmemos.infra.db.models import QdrantCollectionSpec
+from mindmemos.infra.db.models import PayloadIndexSpec, QdrantCollectionSpec
+from qdrant_client import models as qmodels
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 
@@ -24,6 +27,11 @@ class _FakeQdrantClient:
         self._create_error = create_error
         self.created: list[dict] = []
         self.exists_calls: list[str] = []
+        self.get_calls: list[str] = []
+        self.indexes_created: list[dict] = []
+        self.updated: list[dict] = []
+        self.payload_schema: dict = {}
+        self.on_disk_payload = None
 
     async def collection_exists(self, collection_name: str, **kwargs) -> bool:
         self.exists_calls.append(collection_name)
@@ -39,11 +47,22 @@ class _FakeQdrantClient:
         self.created.append(kwargs)
         self._exists = True
 
+    async def get_collection(self, collection_name: str):
+        self.get_calls.append(collection_name)
+        return SimpleNamespace(
+            config=SimpleNamespace(
+                params=SimpleNamespace(on_disk_payload=self.on_disk_payload),
+            ),
+            payload_schema=self.payload_schema,
+        )
+
     async def create_payload_index(self, **kwargs) -> None:
-        return None
+        self.indexes_created.append(kwargs)
+        self.payload_schema[kwargs["field_name"]] = SimpleNamespace()
 
     async def update_collection(self, **kwargs) -> None:
-        return None
+        self.updated.append(kwargs)
+        self.on_disk_payload = kwargs["collection_params"].on_disk_payload
 
 
 def _is_already_exists_error(exc: Exception) -> bool:
@@ -87,6 +106,33 @@ async def test_ensure_collection_skips_create_when_exists():
 
     assert client.created == []
     assert client.exists_calls == ["test_memos"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_collection_is_idempotent_when_schema_already_matches():
+    client = _FakeQdrantClient(exists=True)
+    client.on_disk_payload = False
+    client.payload_schema = {"project_id": SimpleNamespace()}
+    engine = _engine(client)
+    spec = QdrantCollectionSpec(
+        name="test_memos",
+        vector_size=2,
+        enable_dense=True,
+        on_disk_payload=False,
+        payload_indexes=[
+            PayloadIndexSpec(
+                field_name="project_id",
+                field_schema=qmodels.PayloadSchemaType.KEYWORD,
+            )
+        ],
+    )
+
+    await engine.ensure_collection(spec)
+    await engine.ensure_collection(spec)
+
+    assert client.updated == []
+    assert client.indexes_created == []
+    assert client.get_calls == ["test_memos"]
 
 
 @pytest.mark.asyncio
