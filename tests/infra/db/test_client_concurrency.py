@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from mindmemos.config import Neo4jConfig, QdrantConfig
@@ -100,6 +101,12 @@ async def test_qdrant_engine_updates_existing_collection_payload_storage():
 
         async def collection_exists(self, collection_name):
             return True
+
+        async def get_collection(self, collection_name):
+            return SimpleNamespace(
+                config=SimpleNamespace(params=SimpleNamespace(on_disk_payload=True)),
+                payload_schema={},
+            )
 
         async def update_collection(self, **kwargs):
             self.updated.append(kwargs)
