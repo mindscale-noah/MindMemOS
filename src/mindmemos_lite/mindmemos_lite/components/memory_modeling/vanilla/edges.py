@@ -13,6 +13,7 @@ from ....typing import (
     REL_MENTIONED_IN_SOURCE,
     REL_MENTIONS,
     REL_RELATES_TO,
+    REL_TASK_EXPERIENCE,
     Entity,
     GraphNodeRef,
     GraphRelationship,
@@ -115,6 +116,29 @@ def build_relates_to_edge(
         project_id=context.project_id,
         edge_type=edge_type,
         metadata={"source": source},
+    )
+
+
+def build_task_experience_edge(
+    task_entity_id: str,
+    experience_memory_id: str,
+    task_text: str,
+    context: MemoryRequestContext,
+) -> GraphRelationship:
+    """Build a task Entity --TASK_EXPERIENCE--> experience Memory relationship.
+
+    ``edge_type`` and ``entity_id`` feed the stable edge identity so re-importing
+    the same (task, experience) pair upserts the same graph edge instead of
+    duplicating it.
+    """
+    return GraphRelationship(
+        source=GraphNodeRef(kind="Entity", project_id=context.project_id, node_id=task_entity_id),
+        target=GraphNodeRef(kind="Memory", project_id=context.project_id, node_id=experience_memory_id),
+        rel_type=REL_TASK_EXPERIENCE,
+        project_id=context.project_id,
+        edge_type="task_experience",
+        entity_id=task_entity_id,
+        metadata={"task_text": task_text},
     )
 
 

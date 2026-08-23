@@ -40,6 +40,8 @@ from .schemas import (
     MemoryLineageResponse,
     MemoryListData,
     SearchRequest,
+    TaskEntityResponse,
+    TaskSearchGroupData,
     TextMessageInput,
     UpdateRequest,
     UrlMessageInput,
@@ -76,6 +78,7 @@ def to_add_command(payload: AddRequest) -> AddMemoryRequest:
         ),
         score=payload.score,
         task_id=payload.task_id,
+        task=payload.task,
     )
 
 
@@ -89,6 +92,7 @@ def to_search_command(payload: SearchRequest) -> SearchMemoryRequest:
         rerank=payload.rerank,
         score_threshold=payload.score_threshold,
         max_rounds=payload.max_rounds,
+        task_top_k=payload.task_top_k,
     )
 
 
@@ -153,7 +157,23 @@ def to_memory_list_response(result: MemoryListResult, request_id: str) -> ApiRes
         code=result.status,
         message=result.message or "",
         request_id=request_id,
-        data=MemoryListData(memories=[_to_memory_item(item) for item in result.memories]),
+        data=MemoryListData(
+            memories=[_to_memory_item(item) for item in result.memories],
+            task=(
+                TaskEntityResponse(entity_id=result.task_id, entity_name=result.task_name or "", entity_type="task")
+                if result.task_id
+                else None
+            ),
+            tasks=[
+                TaskSearchGroupData(
+                    task=TaskEntityResponse(
+                        entity_id=group.task_id, entity_name=group.task_name or "", entity_type="task"
+                    ),
+                    memories=[_to_memory_item(item) for item in group.memories],
+                )
+                for group in result.tasks
+            ],
+        ),
     )
 
 

@@ -25,6 +25,7 @@ from .pipelines import MemoryModePipelineConfig, MixedAddPipelineConfig, Pipelin
 from .validation import validate_config, validate_tree
 from .vanilla import (
     DreamingConfig,
+    TrajectoryAddConfig,
     VanillaAddConfig,
     VanillaAddRecallConfig,
     VanillaAddSafetyGateConfig,
@@ -51,6 +52,7 @@ __all__ = [
     "PgVectorConfig",
     "REPO_ROOT",
     "TextProcessingConfig",
+    "TrajectoryAddConfig",
     "VanillaAddConfig",
     "VanillaAddRecallConfig",
     "VanillaAddSafetyGateConfig",

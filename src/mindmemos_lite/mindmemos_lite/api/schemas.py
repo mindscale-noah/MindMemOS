@@ -60,6 +60,7 @@ class AddRequest(ActorIdentityRequest):
     skill_context: list[SkillContextInput] = Field(default_factory=list)
     score: float | None = None
     task_id: NonEmptyStr | None = None
+    task: NonEmptyStr | None = None
 
 
 class SearchRequest(ActorIdentityRequest):
@@ -71,6 +72,7 @@ class SearchRequest(ActorIdentityRequest):
     rerank: bool = False
     score_threshold: float | None = Field(default=None, ge=0, le=1)
     max_rounds: int = Field(default=3, ge=1)
+    task_top_k: int | None = Field(default=None, ge=1)
 
 
 class GetRequest(_StrictModel):
@@ -152,6 +154,21 @@ class AddData(BaseModel):
 
 class MemoryListData(BaseModel):
     memories: list[MemoryItemResponse] = Field(default_factory=list)
+    task: TaskEntityResponse | None = None
+    """When the configured search pipeline matched a task entity, its identity."""
+    tasks: list[TaskSearchGroupData] = Field(default_factory=list)
+    """Task experience search: every matched task plus its one-hop experiences."""
+
+
+class TaskEntityResponse(BaseModel):
+    entity_id: str
+    entity_name: str
+    entity_type: str = "task"
+
+
+class TaskSearchGroupData(BaseModel):
+    task: TaskEntityResponse
+    memories: list[MemoryItemResponse] = Field(default_factory=list)
 
 
 class ApiResponse(BaseModel, Generic[T]):
@@ -171,5 +188,7 @@ __all__ = [
     "GetRequest",
     "MemoryListData",
     "SearchRequest",
+    "TaskEntityResponse",
+    "TaskSearchGroupData",
     "UpdateRequest",
 ]

@@ -13,6 +13,7 @@ from .search import (
     VANILLA_RECALL_SIZE_MAX,
     VanillaSearchConfig,
 )
+from .trajectory import TrajectoryAddConfig
 
 
 @dataclass
@@ -23,6 +24,7 @@ class VanillaAlgorithmConfig(MindMemOSConfig):
     add: VanillaAddConfig = field(default_factory=VanillaAddConfig)
     search: VanillaSearchConfig = field(default_factory=VanillaSearchConfig)
     dreaming: DreamingConfig = field(default_factory=DreamingConfig)
+    trajectory: TrajectoryAddConfig = field(default_factory=TrajectoryAddConfig)
 
 
 __all__ = [
@@ -32,6 +34,7 @@ __all__ = [
     "VANILLA_RECALL_SIZE_MAX",
     "TextProcessingConfig",
     "DreamingConfig",
+    "TrajectoryAddConfig",
     "VanillaAddConfig",
     "VanillaAddRecallConfig",
     "VanillaAddSafetyGateConfig",

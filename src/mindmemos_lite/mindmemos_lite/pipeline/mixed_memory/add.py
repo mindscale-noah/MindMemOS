@@ -40,6 +40,11 @@ class MixedAddPipeline(PipelineBase):
             )
             for mode in routing.mixed_add.modes
         }
+        task_requiring = [name for name, pipeline in pipelines.items() if getattr(pipeline, "requires_task", False)]
+        if task_requiring:
+            raise ValueError(
+                f"task-requiring add pipelines cannot run via mixed fan-out: {', '.join(task_requiring)}"
+            )
         return cls(pipelines=pipelines)
 
     @property

@@ -12,7 +12,7 @@ small and independent of a particular storage backend.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self
 
 from ..service.schema import (
     DeleteMemoryRequest,
@@ -49,6 +49,9 @@ class PipelineBase:
     constructor; algorithms that need configuration should override this
     classmethod.
     """
+
+    requires_task: ClassVar[bool] = False
+    """Whether an add pipeline needs a non-empty ``task`` input (e.g. trajectory_add)."""
 
     @classmethod
     def from_config(cls, config: Any, **kwargs: Any) -> Self:

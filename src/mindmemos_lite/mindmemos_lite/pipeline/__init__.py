@@ -12,7 +12,7 @@ from .base import (
     SkillEvolvePipeline,
     UpdatePipeline,
 )
-from .registry import PipelineType, create_pipeline, load_builtin_pipelines, register
+from .registry import PipelineType, create_pipeline, load_builtin_pipelines, pipeline_requires_task, register
 
 __all__ = [
     "AddPipeline",
@@ -28,5 +28,6 @@ __all__ = [
     "UpdatePipeline",
     "create_pipeline",
     "load_builtin_pipelines",
+    "pipeline_requires_task",
     "register",
 ]

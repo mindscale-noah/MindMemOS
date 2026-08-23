@@ -108,7 +108,13 @@ database:
     sparse_weight: 1.0
 
 pipelines:
-  # Inferred adds enter MixedAddPipeline. Start with vanilla as its only child mode.
+  # Inferred adds run the trajectory task+experience pipeline by default and
+  # therefore require a non-empty `task` on each add request.
+  default_add_pipeline: trajectory_add
+  # Search treats the query as a task text and returns that task's experiences.
+  # Configure vanilla_search for a generic hybrid search, or mode_search for
+  # request-time memory_mode routing.
+  default_search_pipeline: task_experience_search
   default_search_mode: vanilla
   modes:
     vanilla:
@@ -202,6 +208,13 @@ algo_config:
       min_content_chars: 1
       min_update_confidence: 0.7
       min_merge_confidence: 0.8
+
+  trajectory:
+    experience_recall_top_k: 5
+    embedding_batch_size: 32
+    min_content_chars: 1
+    enable_task_entity_embedding: true
+    task_search_score_threshold: 0.45
 
   search:
     recall_size: 20

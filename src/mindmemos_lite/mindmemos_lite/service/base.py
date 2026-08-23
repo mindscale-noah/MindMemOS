@@ -38,6 +38,7 @@ from .schema import (
     MemoryItem,
     MemoryLineage,
     MemoryListResult,
+    MemoryTaskGroup,
     RequestContext,
     SearchMemoryRequest,
 )
@@ -47,6 +48,15 @@ MEMORY_ADD_TASK = "memory.add"
 
 class BaseMemoryService(ABC):
     """Default add/search service orchestration shared by all algorithms."""
+
+    _default_add_pipeline_requires_task: bool = False
+    """Whether the effective default add pipeline requires a non-empty ``task``.
+
+    Subclasses resolve this from the configured pipeline's capabilities during
+    construction; ``add()`` enforces it for inferred adds. Declared at class
+    level so instances built without ``__init__`` (e.g. test doubles) default
+    to not requiring a task.
+    """
 
     def __init__(
         self,
@@ -77,6 +87,12 @@ class BaseMemoryService(ABC):
     async def add(self, context: RequestContext, request: AddMemoryRequest) -> AddMemoryResult:
         """Run add with the default operation-record and async-task lifecycle."""
 
+        if request.infer and self._default_add_pipeline_requires_task and not (request.task or "").strip():
+            raise ValueError(
+                "the configured default add pipeline requires a non-empty 'task' "
+                "(set pipelines.default_add_pipeline, or pass task= on the request)"
+            )
+
         pipeline_context = self.to_pipeline_context(context)
         messages = [_pipeline_message(message) for message in request.messages]
         if not request.infer:
@@ -85,6 +101,7 @@ class BaseMemoryService(ABC):
             messages=messages,
             mode=request.mode,
             metadata=dict(request.metadata),
+            task=request.task,
         )
         add_record_id = str(uuid4())
         request_submitted_at = _utcnow()
@@ -138,6 +155,7 @@ class BaseMemoryService(ABC):
             score_threshold=request.score_threshold,
             agentic=request.search_strategy == "agentic",
             max_rounds=request.max_rounds,
+            task_top_k=request.task_top_k,
         )
         request_submitted_at = _utcnow()
         try:
@@ -304,27 +322,40 @@ def _add_service_result(result: AddPipelineSyncResult | AddPipelineAsyncResult) 
 
 
 def _search_service_result(result: SearchPipelineResult) -> MemoryListResult:
+    task = getattr(result, "task_entity", None)
+    tasks = tuple(
+        MemoryTaskGroup(
+            task_id=group.task_entity.entity_id if group.task_entity else "",
+            task_name=group.task_entity.entity_name if group.task_entity else "",
+            memories=tuple(_to_memory_item(item) for item in group.memories),
+        )
+        for group in getattr(result, "tasks", ())
+    )
     return MemoryListResult(
         status=result.status,
-        memories=tuple(
-            MemoryItem(
-                memory_id=item.id,
-                content=item.memory,
-                memory_type=item.memory_type,
-                updated_at=parse_display_time(item.last_update_at),
-                event_time=parse_display_time(item.event_time),
-                source_timestamp=parse_display_time(item.source_timestamp),
-                lineage=(
-                    MemoryLineage(
-                        role=item.lineage.role,
-                        derived_from_memory_ids=tuple(item.lineage.derived_from_memory_ids),
-                        derived_to_memory_ids=tuple(item.lineage.derived_to_memory_ids),
-                    )
-                    if item.lineage is not None
-                    else None
-                ),
+        memories=tuple(_to_memory_item(item) for item in result.memories),
+        task_id=task.entity_id if task else None,
+        task_name=task.entity_name if task else None,
+        tasks=tasks,
+    )
+
+
+def _to_memory_item(item) -> MemoryItem:
+    return MemoryItem(
+        memory_id=item.id,
+        content=item.memory,
+        memory_type=item.memory_type,
+        updated_at=parse_display_time(item.last_update_at),
+        event_time=parse_display_time(item.event_time),
+        source_timestamp=parse_display_time(item.source_timestamp),
+        lineage=(
+            MemoryLineage(
+                role=item.lineage.role,
+                derived_from_memory_ids=tuple(item.lineage.derived_from_memory_ids),
+                derived_to_memory_ids=tuple(item.lineage.derived_to_memory_ids),
             )
-            for item in result.memories
+            if item.lineage is not None
+            else None
         ),
     )
 

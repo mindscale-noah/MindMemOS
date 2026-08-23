@@ -49,6 +49,7 @@ from ..typing import (
     MemoryDbWriteResult,
     MemoryRequestContext,
     MemoryView,
+    REL_TASK_EXPERIENCE,
     SearchFilter,
 )
 from .v2 import ENTITY_TABLE, MEMORY_TABLE, SOURCE_TABLE
@@ -569,6 +570,150 @@ class MemoryPersistence:
                 )
             rows.append(row)
         return rows
+
+    async def find_task_entity(
+        self,
+        ctx: MemoryRequestContext,
+        task_text: str,
+        *,
+        limit: int = 5,
+    ):
+        """Find task entities matching a task text.
+
+        The task text is matched exactly against ``entity_name`` first; when no
+        exact row exists a case-insensitive substring match is used so partial /
+        paraphrase task texts still surface existing tasks.
+        """
+        if not task_text.strip():
+            return []
+        scope = self._scope(ctx)
+        page = Page(limit=max(1, limit))
+        task_filter = lambda operator: FilterGroup(
+            operator="and",
+            clauses=(
+                Predicate(field="entity_type", op="eq", value="task"),
+                Predicate(field="entity_name", op=operator, value=task_text),
+            ),
+        )
+        records, _ = await self._service.query_records(
+            ENTITY_TABLE,
+            RecordQuery(scope=scope, filters=task_filter("eq"), page=page),
+        )
+        if records:
+            return records
+        records, _ = await self._service.query_records(
+            ENTITY_TABLE,
+            RecordQuery(scope=scope, filters=task_filter("icontains"), page=page),
+        )
+        # When several tasks contain the query text, prefer the shortest name:
+        # it is the most specific (least likely to be an unrelated superstring).
+        return sorted(
+            records,
+            key=lambda record: len(str(record.payload.get("entity_name") or "")),
+        )
+
+    async def search_task_entities(
+        self,
+        ctx: MemoryRequestContext,
+        task_text: str,
+        *,
+        dense_vector: list[float] | None = None,
+        sparse_indices: list[int] | None = None,
+        sparse_values: list[float] | None = None,
+        top_k: int = 10,
+        score_threshold: float | None = None,
+    ):
+        """Retrieve task entities closest to the query.
+
+        Mirrors vanilla's hybrid search: when dense + BM25 sparse inputs are both
+        available it fuses the two channels over the entity table (RRF, like
+        vanilla search); otherwise it degrades to dense-only, then to name
+        lookup. Candidates below the dense ``score_threshold`` floor are dropped
+        so unrelated queries return nothing.
+        """
+        scope = self._scope(ctx)
+        filters = _filter_expression(
+            SearchFilter(
+                must=[
+                    FieldCondition(field="entity_type", op="match", value="task"),
+                    FieldCondition(field="status", op="match", value="active"),
+                ]
+            )
+        )
+
+        use_hybrid = dense_vector is not None and sparse_indices is not None and sparse_values is not None
+        if dense_vector is None and sparse_indices is not None:
+            # No dense channel available; a lone sparse channel is meaningless here.
+            return await self.find_task_entity(ctx, task_text, limit=top_k)
+        if dense_vector is None:
+            return await self.find_task_entity(ctx, task_text, limit=top_k)
+
+        mode = "hybrid" if use_hybrid else "dense"
+        prefetch = max(top_k, 10)
+        hits = await self._service.search_vectors(
+            VectorQuery(
+                table=ENTITY_TABLE,
+                scope=scope,
+                vector_name="semantic",
+                dense_vector=tuple(dense_vector),
+                sparse_indices=tuple(sparse_indices) if use_hybrid else None,
+                sparse_values=tuple(sparse_values) if use_hybrid else None,
+                mode=mode,
+                filters=filters,
+                top_k=prefetch,
+                dense_limit=prefetch,
+                sparse_limit=prefetch if use_hybrid else None,
+            )
+        )
+
+        records: list = []
+        for hit in hits:
+            if score_threshold is not None:
+                native = None
+                if use_hybrid:
+                    native = (hit.debug.get("native_scores") or {}).get("dense")
+                else:
+                    native = hit.score
+                if native is None or native < score_threshold:
+                    continue
+            records.append(hit.record)
+        return records[: max(1, top_k)]
+
+    async def get_task_experiences(
+        self,
+        ctx: MemoryRequestContext,
+        task_entity_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[MemoryView]:
+        """Return the experiences reachable one ``TASK_EXPERIENCE`` hop away.
+
+        This is the "task → its lessons" read: seed the graph at the task
+        entity, walk the TASK_EXPERIENCE edges outward, and hydrate the
+        experience memories. Requires the graph tables to be enabled.
+        """
+        if not self._service.graph_enabled:
+            return []
+        graph_scope = self._scope(ctx)
+        result = await self._service.traverse(
+            GraphTraversalQuery(
+                scope=graph_scope,
+                seeds=(GraphNodeRef(scope=graph_scope, kind="Entity", node_id=task_entity_id),),
+                steps=(
+                    GraphStep(
+                        relations=(REL_TASK_EXPERIENCE,),
+                        direction="out",
+                        target_kinds=("Memory",),
+                        min_hops=1,
+                        max_hops=1,
+                    ),
+                ),
+                result_uniqueness="end_node",
+                limit=max(1, limit),
+            )
+        )
+        memory_ids = [path.end.ref.node_id for path in result.paths if path.end.ref.kind == "Memory"]
+        return await self.get_memories(ctx, memory_ids)
 
     async def _write_graph(self, ctx: MemoryRequestContext, plan: MemoryDbMutationPlan) -> None:
         relationships = [command.relationship for command in plan.relationship_writes]

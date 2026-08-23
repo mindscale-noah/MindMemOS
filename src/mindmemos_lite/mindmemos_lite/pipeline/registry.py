@@ -72,6 +72,21 @@ def create_pipeline(
     )
 
 
+def pipeline_requires_task(*, type: PipelineType, name: str) -> bool:
+    """Return whether a registered pipeline class declares ``requires_task``.
+
+    Reads the class attribute without constructing an instance, so callers can
+    enforce a mandatory ``task`` field based purely on the configured pipeline.
+    """
+
+    load_builtin_pipelines()
+    pipeline_cls = _PIPELINE_REGISTRY.get(type, {}).get(name)
+    if pipeline_cls is None:
+        available = ", ".join(sorted(_PIPELINE_REGISTRY.get(type, {}))) or "<none>"
+        raise ValueError(f"Unknown {type} pipeline {name!r}. Available {type} pipelines: {available}")
+    return bool(getattr(pipeline_cls, "requires_task", False))
+
+
 def load_builtin_pipelines() -> None:
     """Import registered algorithm modules when the Lite package provides them.
 
@@ -88,6 +103,8 @@ def load_builtin_pipelines() -> None:
         ".feedback.default",
         ".mixed_memory.add",
         ".mixed_memory.search",
+        ".task_experience.add",
+        ".task_experience.search",
         ".vanilla_memory.add",
         ".vanilla_memory.search",
     )
@@ -101,5 +118,6 @@ __all__ = [
     "PipelineType",
     "create_pipeline",
     "load_builtin_pipelines",
+    "pipeline_requires_task",
     "register",
 ]

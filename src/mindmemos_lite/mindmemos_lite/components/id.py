@@ -48,3 +48,26 @@ def generate_memory_id(project_id: str, request_id: str, content_hash: str) -> s
     """
     key = f"{project_id}:{request_id}:{content_hash}"
     return str(uuid5(NAMESPACE_URL, key))
+
+
+def generate_experience_id(project_id: str, canonical_content: str) -> str:
+    """Return a deterministic experience-memory ID independent of the add request.
+
+    Unlike ``generate_memory_id`` the key deliberately excludes ``request_id`` so
+    the exact same (normalized) experience text maps to the same memory node
+    across trajectory imports. Cross-import reuse of semantically-similar
+    experiences is primarily handled by recall + LLM dedup, not by this ID.
+    """
+    key = f"{project_id}:experience:{canonical_content}"
+    return str(uuid5(NAMESPACE_URL, key))
+
+
+def generate_trajectory_source_id(project_id: str, message_index: int, content_hash: str) -> str:
+    """Return a deterministic trajectory-source node ID.
+
+    Re-importing the same trajectory message must reuse the same Source node, so
+    the key is derived from message index + content hash and deliberately omits
+    the ad-hoc request ID used by ``generate_source_id``.
+    """
+    key = f"{project_id}:trajectory:source:{message_index}:{content_hash}"
+    return str(uuid5(NAMESPACE_URL, key))

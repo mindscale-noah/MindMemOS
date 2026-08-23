@@ -222,11 +222,13 @@ class AddMemoryRequest:
     skill_context: tuple[SkillContext, ...] = field(default_factory=tuple)
     score: float | None = None
     task_id: str | None = None
+    task: str | None = None
 
     def __post_init__(self) -> None:
         if not self.messages:
             raise ValueError("messages must not be empty")
         _validate_optional_text(self.task_id, "task_id")
+        _validate_optional_text(self.task, "task")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -241,12 +243,15 @@ class SearchMemoryRequest:
     rerank: bool = False
     score_threshold: float | None = None
     max_rounds: int = 3
+    task_top_k: int | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.query, "query")
         _validate_optional_text(self.memory_mode, "memory_mode")
         if self.top_k is not None and self.top_k < 1:
             raise ValueError("top_k must be positive when provided")
+        if self.task_top_k is not None and self.task_top_k < 1:
+            raise ValueError("task_top_k must be positive when provided")
         if self.score_threshold is not None and not 0 <= self.score_threshold <= 1:
             raise ValueError("score_threshold must be between 0 and 1")
         if self.max_rounds < 1:
@@ -318,6 +323,23 @@ class MemoryListResult:
     status: OperationStatus
     memories: tuple[MemoryItem, ...] = field(default_factory=tuple)
     message: str | None = None
+    task_id: str | None = None
+    task_name: str | None = None
+    """When the configured search pipeline matched a task entity, its identity."""
+    tasks: tuple["MemoryTaskGroup", ...] = field(default_factory=tuple)
+    """Task experience search: every matched task plus its one-hop experiences.
+
+    Experiences are scoped per task (shared experiences repeat across tasks).
+    """
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MemoryTaskGroup:
+    """One matched task together with its one-hop experiences."""
+
+    task_id: str
+    task_name: str
+    memories: tuple[MemoryItem, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

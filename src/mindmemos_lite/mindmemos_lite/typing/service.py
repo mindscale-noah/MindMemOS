@@ -116,6 +116,21 @@ class MemorySearchItem(BaseModel):
     """Version lineage metadata populated by vanilla search."""
 
 
+class TaskSearchEntity(BaseModel):
+    """The task entity matched by a ``task_experience_search`` query."""
+
+    entity_id: str
+    entity_name: str
+    entity_type: str = "task"
+
+
+class TaskSearchGroup(BaseModel):
+    """One matched task together with its one-hop experiences."""
+
+    task_entity: TaskSearchEntity
+    memories: list[MemorySearchItem] = Field(default_factory=list)
+
+
 class AddPipelineInput(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -141,6 +156,10 @@ class AddPipelineInput(BaseModel):
 
     metadata: dict = Field(default_factory=dict)
     """Business extension metadata."""
+
+    task: str | None = None
+    """Optional task text. When set, add runs the trajectory task+experience pipeline;
+    the first user dialogue message is used as the default task if a caller leaves it unset."""
 
     @property
     def timestamp(self) -> int:
@@ -189,6 +208,9 @@ class SearchPipelineInput(BaseModel):
     top_k: int | None = Field(default=10, ge=1)
     """Maximum number of memories to return; None returns all final candidates."""
 
+    task_top_k: int | None = Field(default=None, ge=1)
+    """Task experience search: maximum number of tasks to return. None uses the pipeline default."""
+
     search_pipeline: SearchPipelineStrategy = "default"
     """Internal search engine key used by search_pipeline before optional agentic orchestration."""
 
@@ -217,6 +239,16 @@ class SearchPipelineResult(BaseModel):
 
     memories: list[MemorySearchItem]
     """Returned memories."""
+
+    task_entity: TaskSearchEntity | None = None
+    """Top-matched task entity (first item of ``tasks``), when applicable."""
+
+    tasks: list[TaskSearchGroup] = Field(default_factory=list)
+    """Task experience search: every matched task plus its one-hop experiences.
+
+    Experiences are scoped per task and repeated across tasks when shared, so
+    each task's list is independent (no cross-task deduplication).
+    """
 
 
 class GetPipelineInput(BaseModel):

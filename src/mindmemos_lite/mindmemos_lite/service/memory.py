@@ -10,9 +10,10 @@ from ..logging import traced
 from ..mappers import parse_search_dsl
 from ..persistence import MemoryOperationRecorder
 from ..persistence.memory import MemoryPersistence
+from ..pipeline import SearchPipeline, create_pipeline
 from ..pipeline.dreaming.consolidation import MEMORY_DREAMING_TOPIC, MemoryConsolidationPipeline
 from ..pipeline.feedback.default import MEMORY_FEEDBACK_TOPIC, DefaultFeedbackPipeline
-from ..pipeline.mixed_memory import MixedAddPipeline, ModeSearchPipeline
+from ..pipeline.mixed_memory import MixedAddPipeline
 from ..pipeline.utils import (
     format_memory_event_time,
     format_source_timestamp,
@@ -65,19 +66,29 @@ class VanillaMemoryService(BaseMemoryService):
         self._persistence = persistence
         self._config = config or get_config()
         resolved_recorder = recorder or MemoryOperationRecorder.from_service(persistence.service)
-        resolved_add_pipeline = add_pipeline or VanillaAddPipeline.from_config(
-            self._config,
+        resolved_add_pipeline = add_pipeline or create_pipeline(
+            type="add",
+            name=self._config.pipelines.default_add_pipeline,
+            config=self._config,
             persistence=persistence,
         )
-        resolved_search_pipeline = search_pipeline or VanillaSearchPipeline.from_config(
-            self._config,
+        resolved_search_pipeline = search_pipeline or create_pipeline(
+            type="search",
+            name=self._config.pipelines.default_search_pipeline,
+            config=self._config,
             persistence=persistence,
         )
         self._dreaming_pipeline = dreaming_pipeline
         self._dreaming_recorder = resolved_recorder
         self._feedback_pipeline = feedback_pipeline
         self._feedback_recorder = resolved_recorder
-        self._feedback_search_pipeline = resolved_search_pipeline
+        # Feedback recall stays on generic vanilla search regardless of the
+        # configured default search pipeline (task_experience_search would not
+        # be a meaningful recall source).
+        self._feedback_search_pipeline = search_pipeline or VanillaSearchPipeline.from_config(
+            self._config,
+            persistence=persistence,
+        )
         super().__init__(
             persistence,
             add_pipeline=resolved_add_pipeline,
@@ -87,6 +98,11 @@ class VanillaMemoryService(BaseMemoryService):
             direct_add_pipeline_factory=self._build_direct_add_pipeline,
             recorder=resolved_recorder,
         )
+        # Resolve the default add pipeline's task requirement AFTER
+        # BaseMemoryService.__init__ so the base default does not reset it.
+        # Read the capability from the resolved pipeline itself, so injected
+        # test doubles (e.g. plain Add classes) also resolve correctly.
+        self._default_add_pipeline_requires_task = bool(getattr(resolved_add_pipeline, "requires_task", False))
         if task_client is not None and MEMORY_DREAMING_TOPIC not in task_client.handlers.names():
             task_client.handlers.register(MEMORY_DREAMING_TOPIC, self._handle_dreaming_task)
         if task_client is not None and MEMORY_FEEDBACK_TOPIC not in task_client.handlers.names():
@@ -249,7 +265,7 @@ class VanillaMemoryService(BaseMemoryService):
 
 
 class MixedMemoryService(VanillaMemoryService):
-    """Memory service using config-driven parallel add and mode-aware search."""
+    """Memory service using config-driven add and search pipeline selection."""
 
     def __init__(
         self,
@@ -258,7 +274,7 @@ class MixedMemoryService(VanillaMemoryService):
         config: MemoryConfig | None = None,
         task_client: TaskClient | None = None,
         add_pipeline: MixedAddPipeline | None = None,
-        search_pipeline: ModeSearchPipeline | None = None,
+        search_pipeline: SearchPipeline | None = None,
         direct_add_pipeline: VanillaAddPipeline | None = None,
         dreaming_pipeline: MemoryConsolidationPipeline | None = None,
         feedback_pipeline: DefaultFeedbackPipeline | None = None,
@@ -270,13 +286,17 @@ class MixedMemoryService(VanillaMemoryService):
             config=resolved_config,
             task_client=task_client,
             add_pipeline=add_pipeline
-            or MixedAddPipeline.from_config(
-                resolved_config,
+            or create_pipeline(
+                type="add",
+                name=resolved_config.pipelines.default_add_pipeline,
+                config=resolved_config,
                 persistence=persistence,
             ),
             search_pipeline=search_pipeline
-            or ModeSearchPipeline.from_config(
-                resolved_config,
+            or create_pipeline(
+                type="search",
+                name=resolved_config.pipelines.default_search_pipeline,
+                config=resolved_config,
                 persistence=persistence,
             ),
             direct_add_pipeline=direct_add_pipeline,

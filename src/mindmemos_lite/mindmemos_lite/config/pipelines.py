@@ -58,6 +58,23 @@ class PipelineRoutingConfig(MindMemOSConfig):
     default_search_mode: str = "vanilla"
     """Mode used when a search request omits ``memory_mode``."""
 
+    default_add_pipeline: str = "trajectory_add"
+    """Registered add-pipeline name used for every inferred add request.
+
+    Pipelines that declare ``requires_task`` (for example ``trajectory_add``)
+    require a non-empty ``task`` on each add request; configure ``vanilla_add``
+    or ``mixed_add`` here to accept task-less adds.
+    """
+
+    default_search_pipeline: str = "task_experience_search"
+    """Registered search-pipeline name used by every ``/v1/memory/search`` request.
+
+    ``task_experience_search`` treats the query as a task text and returns that
+    task plus its one-hop experiences (the default). Configure ``vanilla_search``
+    for a direct vanilla hybrid search, or ``mode_search`` to keep request-time
+    ``memory_mode`` routing.
+    """
+
     modes: dict[str, MemoryModePipelineConfig] = field(default_factory=_default_mode_pipelines)
     """All modes exposed to mixed add and mode-aware search."""
 
@@ -67,6 +84,8 @@ class PipelineRoutingConfig(MindMemOSConfig):
     @classmethod
     def validate_self(cls, value, path: str) -> None:
         require_string(join_path(path, "default_search_mode"), value.default_search_mode)
+        require_string(join_path(path, "default_add_pipeline"), value.default_add_pipeline)
+        require_string(join_path(path, "default_search_pipeline"), value.default_search_pipeline)
         if not value.modes:
             raise InvalidConfigError(join_path(path, "modes"), support="at least one memory mode binding")
 
