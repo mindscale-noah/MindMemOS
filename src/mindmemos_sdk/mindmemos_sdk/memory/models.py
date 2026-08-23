@@ -116,12 +116,36 @@ class MemorySearchHit(BaseModel):
     lineage: MemoryLineage | None = None
 
 
+class TaskEntity(BaseModel):
+    """The task entity matched by a task experience search."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    entity_id: str
+    entity_name: str
+    entity_type: str = "task"
+
+
 class SearchResult(BaseModel):
     """Typed result of ``MemoryClient.search``."""
 
     model_config = ConfigDict(extra="ignore")
 
     request_id: str | None = None
+    memories: list[MemorySearchHit] = Field(default_factory=list)
+    task: TaskEntity | None = None
+    """Top-matched task entity, populated when the configured search pipeline is
+    task experience search (query is treated as a task text)."""
+    tasks: list["SearchTaskGroup"] = Field(default_factory=list)
+    """Task experience search: every matched task plus its one-hop experiences."""
+
+
+class SearchTaskGroup(BaseModel):
+    """One matched task together with its one-hop experiences."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    task: TaskEntity
     memories: list[MemorySearchHit] = Field(default_factory=list)
 
 
@@ -202,6 +226,7 @@ def build_add_body(
     skill_context: list[BaseModel | dict[str, Any]] | None = None,
     score: float | None = None,
     task_id: str | None = None,
+    task: str | None = None,
 ) -> dict[str, Any]:
     """Build a memory add request body without empty optional fields."""
     body: dict[str, Any] = {"user_id": user_id, "messages": serialize_messages(messages), "mode": mode}
@@ -222,6 +247,8 @@ def build_add_body(
         body["score"] = score
     if task_id is not None:
         body["task_id"] = task_id
+    if task:
+        body["task"] = task
     return body
 
 
@@ -237,6 +264,7 @@ def build_search_body(
     app_id: str | None = None,
     agent_id: str | None = None,
     session_id: str | None = None,
+    task_top_k: int | None = None,
 ) -> dict[str, Any]:
     """Build a memory search request body without empty optional fields."""
     if not isinstance(rerank, bool):
@@ -259,6 +287,8 @@ def build_search_body(
         body["session_id"] = session_id
     if filters:
         body["filters"] = filters
+    if task_top_k is not None:
+        body["task_top_k"] = task_top_k
     return body
 
 

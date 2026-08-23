@@ -235,6 +235,12 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
         default=None,
         help="Minimum rerank relevance score (0-1). Only effective with --rerank.",
     )
+    search.add_argument(
+        "--task-top-k",
+        type=int,
+        default=None,
+        help="Task experience search: maximum number of tasks to return (default 3).",
+    )
     search.add_argument("--filter", dest="filter_json", help="Filter DSL as a JSON object string.")
     search.add_argument("--json", action="store_true", help="Print a machine-readable JSON result.")
     search.set_defaults(handler=_handle_memory_search)
@@ -747,6 +753,7 @@ def _handle_memory_search(args: argparse.Namespace) -> int:
                     app_id=args.app_id,
                     agent_id=args.agent_id,
                     session_id=args.session_id,
+                    task_top_k=args.task_top_k,
                 ),
             )
     except MindMemOSSDKError as exc:
@@ -755,8 +762,21 @@ def _handle_memory_search(args: argparse.Namespace) -> int:
     if args.json:
         _print_json(result.model_dump())
         return 0
+    if result.tasks:
+        for group in result.tasks:
+            print(f"Task: {group.task.entity_name} ({group.task.entity_id})")
+            if not group.memories:
+                print("  (no experiences)")
+                continue
+            for i, hit in enumerate(group.memories, start=1):
+                when = hit.last_update_at or ""
+                print(f"  {i}. [{hit.id}] {hit.memory}" + (f"  ({when})" if when else ""))
+        return 0
+    # Legacy non-task search output.
+    if result.task is not None:
+        print(f"Task: {result.task.entity_name} ({result.task.entity_id})")
     if not result.memories:
-        print("No memories found.")
+        print("  (no experiences)")
         return 0
     for i, hit in enumerate(result.memories, start=1):
         when = hit.last_update_at or ""

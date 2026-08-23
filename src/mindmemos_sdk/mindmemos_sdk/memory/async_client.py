@@ -72,6 +72,7 @@ class AsyncMemoryClient:
         skill_context: list[Any] | None = None,
         score: float | None = None,
         task_id: str | None = None,
+        task: str | None = None,
     ) -> AddResult:
         """Add content to the memory store."""
         request = self._core.add(
@@ -85,6 +86,7 @@ class AsyncMemoryClient:
             skill_context=skill_context,
             score=score,
             task_id=task_id,
+            task=task,
         )
         return await self._backend.execute(request)
 
@@ -101,6 +103,7 @@ class AsyncMemoryClient:
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        task_top_k: int | None | object = _UNSET,
     ) -> SearchResult:
         """Search memories."""
         request = self._core.search(
@@ -116,6 +119,7 @@ class AsyncMemoryClient:
             app_id=app_id,
             agent_id=agent_id,
             session_id=session_id,
+            task_top_k=None if task_top_k is _UNSET else task_top_k,
         )
         return await self._backend.execute(request)
 

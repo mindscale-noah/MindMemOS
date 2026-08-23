@@ -107,6 +107,7 @@ class InMemoryMemoryBackend(AsyncMemoryBackend):
                     skill_context=tuple(self._skill_context(item) for item in body.get("skill_context", [])),
                     score=body.get("score"),
                     task_id=body.get("task_id"),
+                    task=body.get("task"),
                 ),
             )
         if operation == "search":

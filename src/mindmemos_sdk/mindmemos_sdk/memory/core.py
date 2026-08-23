@@ -94,6 +94,7 @@ class MemoryCore:
         skill_context: list[Any] | None = None,
         score: float | None = None,
         task_id: str | None = None,
+        task: str | None = None,
     ) -> MemoryRequest[AddResult]:
         if not messages:
             raise InvalidRequestError("`messages` must be a non-empty list.")
@@ -111,6 +112,7 @@ class MemoryCore:
                 skill_context=skill_context,
                 score=score,
                 task_id=task_id,
+                task=task,
             ),
             parse=parse_add_result,
         )
@@ -128,6 +130,7 @@ class MemoryCore:
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        task_top_k: int | None = None,
     ) -> MemoryRequest[SearchResult]:
         return MemoryRequest(
             operation="search",
@@ -143,6 +146,7 @@ class MemoryCore:
                 app_id=app_id or self._defaults.app_id,
                 agent_id=agent_id or self._defaults.agent_id,
                 session_id=session_id or self._defaults.session_id,
+                task_top_k=task_top_k,
             ),
             parse=parse_search_result,
         )
@@ -244,6 +248,8 @@ def parse_search_result(envelope: Envelope) -> SearchResult:
     return SearchResult(
         request_id=envelope.request_id,
         memories=data.get("memories", []),
+        task=data.get("task"),
+        tasks=data.get("tasks", []),
     )
 
 

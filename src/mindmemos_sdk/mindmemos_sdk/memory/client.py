@@ -71,6 +71,7 @@ class MemoryClient:
         skill_context: list[Any] | None = None,
         score: float | None = None,
         task_id: str | None = None,
+        task: str | None = None,
     ) -> AddResult:
         """Add content to the memory store."""
         messages = self._apply_default_role(messages)
@@ -91,6 +92,7 @@ class MemoryClient:
             skill_context=skill_context,
             score=score,
             task_id=task_id,
+            task=task,
         )
         return self._execute(request)
 
@@ -163,6 +165,7 @@ class MemoryClient:
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        task_top_k: int | None | object = _UNSET,
     ) -> SearchResult:
         """Search memories."""
         request = self._core.search(
@@ -178,6 +181,7 @@ class MemoryClient:
             app_id=app_id,
             agent_id=agent_id,
             session_id=session_id,
+            task_top_k=None if task_top_k is _UNSET else task_top_k,
         )
         return self._execute(request)
 
