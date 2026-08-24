@@ -62,8 +62,6 @@ class SchemaAddPlanner:
         llm_client: LLMClient | None,
         embed_client: EmbedClient | None,
         db_reader: Any,
-        db_writer: Any,
-        entity_manager: Any,
         prompt_set: AddPromptSet,
         entity_recall_top_k: int,
         episode_edge_top_k: int,
@@ -75,8 +73,6 @@ class SchemaAddPlanner:
         self.llm_client = llm_client
         self.embed_client = embed_client
         self.db_reader = db_reader
-        self.db_writer = db_writer
-        self.entity_manager = entity_manager
         self.prompt_set = prompt_set
         self.entity_recall_top_k = entity_recall_top_k
         self.episode_edge_top_k = episode_edge_top_k
@@ -329,10 +325,18 @@ class SchemaAddPlanner:
     ) -> list[dict[str, Any]]:
         if entity_write.entity_type == "episodes":
             return episode_entity.get("properties", [])
+        # An alias-update entity stores its own raw name in latest_raw_entity_name;
+        # match that first so a same-named create entity earlier in the list cannot
+        # steal its properties.
+        latest_raw_name = entity_write.metadata.get("latest_raw_entity_name")
         for entity in raw_entity_list:
-            if entity.get("name") == entity_write.entity_name or (
-                entity.get("name") and entity_write.metadata.get("latest_raw_entity_name") == entity.get("name")
-            ):
+            if latest_raw_name and entity.get("name") == latest_raw_name:
+                raw_properties = entity.get("properties", [])
+                if len(raw_properties) > self.max_properties_per_entity:
+                    raw_properties = raw_properties[: self.max_properties_per_entity]
+                return raw_properties
+        for entity in raw_entity_list:
+            if entity.get("name") == entity_write.entity_name:
                 raw_properties = entity.get("properties", [])
                 if len(raw_properties) > self.max_properties_per_entity:
                     raw_properties = raw_properties[: self.max_properties_per_entity]
@@ -416,7 +420,7 @@ class SchemaAddPlanner:
         metadata = dict(target.metadata)
         metadata.update(
             {
-                "add_algorithm": "schema_add_v1",
+                "add_algorithm": "schema_add",
                 "merge_action": "update",
                 "latest_raw_entity_name": new_entity.get("name"),
                 "record_time": new_entity.get("record_time"),
@@ -455,7 +459,7 @@ class SchemaAddPlanner:
         metadata = base_metadata(request_metadata)
         metadata.update(
             {
-                "add_algorithm": "schema_add_v1",
+                "add_algorithm": "schema_add",
                 "record_time": entity.get("record_time"),
                 "raw_entity_name": entity.get("name"),
             }
@@ -517,7 +521,7 @@ class SchemaAddPlanner:
         metadata = base_metadata(request_metadata)
         metadata.update(
             {
-                "add_algorithm": "schema_add_v1",
+                "add_algorithm": "schema_add",
                 "property_time": prop.get("time"),
                 "property_operation": prop.get("operation", "set"),
                 "entity_name": entity_write.entity_name,
@@ -537,7 +541,7 @@ class SchemaAddPlanner:
             content=str(prop.get("value") or ""),
             mem_type=mem_type,
             mem_extract_type="schema",
-            mem_extract_version="schema_add_v1",
+            mem_extract_version="schema_add",
             metadata=metadata,
             validate_from=_validate_from_property_time(prop.get("time")),
             created_at=created_at,

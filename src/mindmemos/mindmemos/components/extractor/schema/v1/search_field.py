@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .....llm import LLMClient
+from .....llm import LLMClient, provider_binding_runtime_enabled
 from .....logging import get_logger
 from .....prompts import AddPromptSetV1
-from .._runtime_clients import provider_binding_runtime_enabled, resolve_llm_client
+from .._runtime_clients import resolve_llm_client
 from ._schema_utils import dedupe_non_empty, parse_json_object
 from .base import SchemaSearchFieldExtractorProtocol
 

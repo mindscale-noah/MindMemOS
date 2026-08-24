@@ -667,7 +667,7 @@ class SchemaAddPlannerV1:
         metadata = dict(target.metadata)
         metadata.update(
             {
-                "add_algorithm": "schema_add_v1",
+                "add_algorithm": "schema_add",
                 "merge_action": "update",
                 "latest_raw_entity_name": new_entity.get("name"),
                 "record_time": new_entity.get("record_time"),
@@ -1324,7 +1324,7 @@ class SchemaAddPlannerV1:
         metadata = base_metadata(request_metadata)
         metadata.update(
             {
-                "add_algorithm": "schema_add_v1",
+                "add_algorithm": "schema_add",
                 "record_time": entity.get("record_time"),
                 "raw_entity_name": entity.get("name"),
             }
@@ -1370,7 +1370,7 @@ class SchemaAddPlannerV1:
         metadata = dict(target.metadata)
         metadata.update(
             {
-                "add_algorithm": "schema_add_v1",
+                "add_algorithm": "schema_add",
                 "merge_action": "update",
                 "latest_raw_entity_name": new_entity.get("name"),
                 "record_time": new_entity.get("record_time"),
@@ -1412,7 +1412,7 @@ class SchemaAddPlannerV1:
         metadata = base_metadata(request_metadata)
         metadata.update(
             {
-                "add_algorithm": "schema_add_v1",
+                "add_algorithm": "schema_add",
                 "property_time": prop.get("time"),
                 "property_operation": prop.get("operation", "set"),
                 "entity_name": entity_write.entity_name,
@@ -1434,7 +1434,7 @@ class SchemaAddPlannerV1:
             content=str(prop.get("value") or ""),
             mem_type=mem_type,
             mem_extract_type="schema",
-            mem_extract_version="schema_add_v1",
+            mem_extract_version="schema_add",
             metadata=metadata,
             validate_from=_validate_from_property_time(prop.get("time")),
             created_at=created_at,
