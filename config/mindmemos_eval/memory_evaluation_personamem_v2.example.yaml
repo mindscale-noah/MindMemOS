@@ -1,10 +1,10 @@
 runner:
   base_url: http://127.0.0.1:8000
-  timeout_seconds: 18000
-  max_conv_concurrency: 20
-  max_qa_concurrency: 20
-  max_search_concurrency: 20
-  max_score_concurrency: 20
+  timeout_seconds: 1800
+  max_conv_concurrency: 2
+  max_qa_concurrency: 4
+  max_search_concurrency: 4
+  max_score_concurrency: 2
   add: true
   score: true
   show_progress: true
@@ -111,9 +111,7 @@ algorithm_profiles:
               max_minutes_from_first: 999999
               streaming_window_size: 50
             drain:
-              episode_generation_max_retries: 50
-              episode_retry_backoff_base: 1.0
-              episode_retry_backoff_max: 30.0
+              episode_generation_max_retries: 3
         search:
           request_top_k_max: 100
           schema_search:
