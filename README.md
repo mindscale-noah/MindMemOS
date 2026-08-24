@@ -92,7 +92,7 @@ Before startup, configure at least the following three model routers in `config/
 - `embed_model_router`: generates semantic embeddings; make sure its dimensions match the Qdrant dimension configuration.
 - `rerank_model_router`: optional; reranks memory retrieval results.
 
-The schema memory-extraction flow is versioned: `algo_config.add.schema.version` defaults to `v2` (rule-based graph fusion) and can be pinned to `v1` (develop-compatible flow) per project. See [docs/develop/schema-add-versions.md](docs/develop/schema-add-versions.md) for binding, effective timing, storage compatibility, and lifecycle.
+The schema memory-extraction flow is versioned: `algo_config.add.schema.version` defaults to `v2` (rule-based graph fusion) and can be pinned to `v1` (develop-compatible flow) per project. Storage is compatible in both directions; see the deployment guide for binding and effective timing.
 
 Configure an API key and its bound `project_id` in `config/mindmemos/api_keys.yaml`.
 

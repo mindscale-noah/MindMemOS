@@ -268,10 +268,12 @@ Schema 记忆抽取有两套可选流程，通过 `algo_config.add.schema.versio
 - `v2`（默认）：规则化图融合，每个 episode 的 LLM 调用更少。
 - `v1`：与 develop 对齐的重 LLM 流程，用于基线对比和回退。
 
-写在基础配置里是部署级默认；写在项目 API key 的覆盖配置里则只对该项目生效
-（项目覆盖优先，项目下一个 add 请求即生效，无需重启）。两个方向的存储都兼容；
-产出数据带 `schema_add_v1` / `schema_add`（`mem_extract_version`）标签，可区分来源。
-详见 [docs/develop/schema-add-versions_ZH.md](../develop/schema-add-versions_ZH.md)。
+写在基础配置里是部署级默认（修改后需重启生效）；写在项目 API key 的覆盖配置里
+则只对该项目生效（项目覆盖优先，项目下一个 add 请求即生效，无需重启）。两个
+方向的存储都兼容：collection 与 payload 结构相同，v2 可直接读写 v1 数据，反向
+亦然，混合历史安全。产出数据带 `mem_extract_version` 标签（`schema_add` /
+`schema_add_v1`），可区分来源。v1 保留用于基线对比和回退，直到 v2 在
+LoCoMo/PersonaMem 基准上验证完成。
 
 ## 9. 认证配置
 
