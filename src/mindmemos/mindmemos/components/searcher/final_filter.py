@@ -97,7 +97,10 @@ class SearchFinalFilter:
         Used by the token-budget retention path, which needs per-candidate
         relevance scores and defers truncation until after retention packing.
         Always routes through ``rerank_with_scores_fn`` so scores are available
-        even when no ``score_threshold`` is set.
+        even when no ``score_threshold`` is set.  When ``truncate`` is false
+        the rerank call scores the full candidate pool: ``top_k`` must not
+        pre-narrow the pool, it only caps the packed result afterwards
+        (applied by the caller, together with the token budget).
         """
 
         if not candidates:
@@ -117,7 +120,10 @@ class SearchFinalFilter:
                 outcome = "skipped_unavailable"
             else:
                 documents = [item.memory for item in candidates]
-                limit = len(candidates) if top_k is None else min(top_k, len(candidates))
+                # Deferred truncation (retention packing) implies full-pool scoring:
+                # top_k must not pre-narrow the rerank call, it only caps the packed
+                # result after this filter returns.
+                limit = len(candidates) if top_k is None or not truncate else min(top_k, len(candidates))
                 try:
                     scored = await self._rerank_with_scores_fn(rerank_client, query, documents, limit)
                 except Exception:

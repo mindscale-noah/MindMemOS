@@ -155,6 +155,48 @@ async def test_search_pipeline_token_budget_packs_under_budget(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
+async def test_search_pipeline_token_budget_reranks_full_pool_before_packing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_fake_preprocessors(monkeypatch)
+    engine = MultiItemEngine(["alpha beta", "gamma delta", "epsilon zeta", "eta theta", "iota kappa"])
+    rerank_top_n_calls: list[int] = []
+
+    async def fake_rerank_with_scores(client, query, docs, top_n):
+        rerank_top_n_calls.append(top_n)
+        return [(i, 1.0 - i * 0.1) for i in range(min(top_n, len(docs)))]
+
+    pipeline = SearchPipelineImpl(
+        engines={"default": engine},
+        final_filter=SearchFinalFilter(
+            rerank_client=SimpleNamespace(available=True, has_external_model=True),
+            rerank_with_scores_fn=fake_rerank_with_scores,
+        ),
+        retention_config=MemoryRetentionConfig(max_candidates=50),
+        db_reader=SimpleNamespace(),
+        db_writer=SimpleNamespace(),
+    )
+
+    result = await pipeline.search(
+        SearchPipelineInput(
+            query="alpha gamma",
+            search_pipeline="default",
+            top_k=3,
+            rerank=True,
+            token_budget=10000,
+        ),
+        make_context(),
+    )
+
+    # Retention raises engine recall to max_candidates and the rerank call
+    # scores that whole pool instead of being pre-narrowed to the request top_k.
+    assert engine.inputs[0].top_k == 50
+    assert rerank_top_n_calls == [5]
+    # top_k still caps the final packed result count.
+    assert [m.id for m in result.memories] == ["mem-0", "mem-1", "mem-2"]
+
+
+@pytest.mark.asyncio
 async def test_search_pipeline_token_budget_consolidates_near_duplicates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
