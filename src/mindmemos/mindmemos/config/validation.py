@@ -53,6 +53,7 @@ CHOICE_RULES: tuple[ChoiceRule, ...] = (
     ),
     ChoiceRule("algo_config.text_processing.sparse_fallback_mode", frozenset({"tf", "log_tf"})),
     ChoiceRule("algo_config.add.schema.chunker.split_mode", frozenset({"llm", "rule"})),
+    ChoiceRule("algo_config.add.schema.version", frozenset({"v1", "v2"})),
     ChoiceRule("kafka.acks", frozenset({"0", "1", "all"})),
 )
 
@@ -178,7 +179,13 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("algo_config.add.vanilla.safety_gate.min_update_confidence", min_value=0, max_value=1),
     RangeRule("algo_config.add.vanilla.safety_gate.min_merge_confidence", min_value=0, max_value=1),
     RangeRule("algo_config.add.schema.extraction.search_fields_max", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.add.schema.extraction.episode_augment_count", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.add.schema.merge.entity_recall_top_k", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.add.schema.merge.secondary_search_limit", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.add.schema.merge.max_merge_retries", min_value=0, support="non-negative integer"),
+    RangeRule("algo_config.add.schema.merge.secondary_search_retries", min_value=0, support="non-negative integer"),
+    RangeRule("algo_config.add.schema.higher_order.top_k", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.add.schema.higher_order.min_evidence_count", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.add.schema.episode_edge.top_k", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.add.schema.chunker.min_episode_length", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.add.schema.chunker.max_episode_length", min_value=1, support="positive integer >= 1"),
@@ -206,7 +213,22 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         support="positive number",
     ),
     RangeRule(
+        "algo_config.add.schema.merge.secondary_search_retry_backoff_base",
+        min_value=0,
+        include_min=False,
+        support="positive number",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.secondary_search_retry_backoff_max",
+        min_value=0,
+        include_min=False,
+        support="positive number",
+    ),
+    RangeRule(
         "algo_config.add.schema.extraction.max_entities_per_conversation", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entity_resolve_concurrency", min_value=1, support="positive integer >= 1"
     ),
     RangeRule(
         "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"

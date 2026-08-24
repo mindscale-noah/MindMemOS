@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import mindmemos.pipelines.add.schema.schema_add as schema_add
 import pytest
-from mindmemos.components.memory_modeling.schema import EntityManager
+from mindmemos.components.extractor.schema.v1 import _schema_higher_order
+from mindmemos.components.memory_modeling.schema import EntityManager, EntityType
 from mindmemos.config import bind_config_overrides, get_config, init_config, reset_config
 from mindmemos.infra import db
 from mindmemos.llm import ChatResponse, EmbeddingResponse
@@ -459,6 +460,24 @@ class FakeReader(MemoryDbReader):
 
     async def list_memories(self, ctx, *, filters=None, limit=50, cursor=None):
         return self._list_memories[:limit], None
+
+
+class PropertyMergeLLM(FakeLLM):
+    async def chat(self, task, messages, format_parser=None, **kwargs):
+        if task == "memory.add.property_merge":
+            content = '{"existing":[{"id":"p1","op":"delete"}],"new":[{"id":"n1","op":"update","target":"p2","value":"merged preference"}]}'
+            parsed = format_parser(content) if format_parser else None
+            return ChatResponse(finish_reason="stop", content=content, parsed=parsed)
+        return await super().chat(task, messages, format_parser=format_parser, **kwargs)
+
+
+class HigherOrderLLM(FakeLLM):
+    async def chat(self, task, messages, format_parser=None, **kwargs):
+        if task == "memory.add.higher_order_generation":
+            content = '{"updates":[{"property_name":"preference_summary","action":"update","value":"User consistently prefers vector databases. Evidence: Qdrant memories in 2026. Confidence: high.","reasoning":"Repeated preference evidence."}]}'
+            parsed = format_parser(content) if format_parser else None
+            return ChatResponse(finish_reason="stop", content=content, parsed=parsed)
+        return await super().chat(task, messages, format_parser=format_parser, **kwargs)
 
 
 class EmptyBoundaryLLM(FakeLLM):
@@ -1419,6 +1438,166 @@ async def test_schema_add_pipeline_forces_split_when_llm_returns_no_boundary_at_
 
 
 @pytest.mark.asyncio
+async def test_schema_add_pipeline_property_merge_archives_existing_and_writes_merged_value():
+    get_config().algo_config.add.schema.version = "v1"
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    existing_one = MemoryView(
+        memory_id="mem-old-1",
+        project_id="proj-1",
+        content="old plan",
+        mem_type="fact",
+        status="active",
+        property_name="plan_event",
+        entity_id="entity-user",
+        entity_type="person",
+        created_at=datetime(2026, 5, 1, tzinfo=UTC),
+        metadata={"property_time": "2026-05-01"},
+    )
+    existing_two = MemoryView(
+        memory_id="mem-old-2",
+        project_id="proj-1",
+        content="old preference",
+        mem_type="fact",
+        status="active",
+        property_name="preference",
+        entity_id="entity-user",
+        entity_type="person",
+        created_at=datetime(2026, 5, 2, tzinfo=UTC),
+        metadata={"property_time": "2026-05-02"},
+    )
+    reader = FakeReader(
+        entity_candidates=[
+            EntityView(
+                entity_id="entity-user",
+                project_id="proj-1",
+                entity_name="User",
+                entity_type="person",
+                description="Existing user",
+            )
+        ],
+        property_hits=[existing_one, existing_two],
+    )
+    pipeline = SchemaAddPipeline(
+        db_reader=reader,
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        llm_client=PropertyMergeLLM(),
+        embed_client=FakeEmbed(),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+        use_property_merge=True,
+    )
+
+    await pipeline.add_sync(
+        AddPipelineInput(
+            mode="sync",
+            timestamp=1770000000000,
+            force_generation=True,
+            messages=[{"role": "user", "content": "I like Qdrant even more now."}],
+        ),
+        make_context(),
+    )
+
+    assert writer.deleted == ["mem-old-1"]
+    assert len(writer.updated) == 1
+    update_command = writer.updated[0]
+    assert update_command.memory_id == "mem-old-2"
+    assert update_command.content == "merged preference"
+    assert update_command.metadata_patch["property_merge_action"] == "update"
+    assert update_command.metadata_patch["merged_from_memory_ids"] == ["mem-old-2"]
+    assert "merged_from_new_property" not in update_command.metadata_patch
+    assert update_command.payload_patch["property_name"] == "preference"
+    _, plan, _ = writer.calls[0]
+    preference_memories = [memory for memory in plan.memories if memory.property_name == "preference"]
+    assert preference_memories == []
+
+
+@pytest.mark.asyncio
+async def test_schema_add_pipeline_higher_order_runs_for_updated_entity(monkeypatch):
+    get_config().algo_config.add.schema.version = "v1"
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    first_order = MemoryView(
+        memory_id="mem-first",
+        project_id="proj-1",
+        content="User likes Qdrant for vector search.",
+        mem_type="fact",
+        status="active",
+        property_name="preference",
+        entity_id="entity-user",
+        entity_type="person",
+        created_at=datetime(2026, 5, 1, tzinfo=UTC),
+        metadata={"property_time": "2026-05-01"},
+    )
+    current_higher = MemoryView(
+        memory_id="mem-ho-old",
+        project_id="proj-1",
+        content="User likes databases.",
+        mem_type="fact",
+        status="active",
+        property_name="preference_summary",
+        entity_id="entity-user",
+        entity_type="person",
+        created_at=datetime(2026, 5, 2, tzinfo=UTC),
+        metadata={"property_time": "2026-05-02", "higher_order": True},
+    )
+    reader = FakeReader(
+        entity_candidates=[
+            EntityView(
+                entity_id="entity-user",
+                project_id="proj-1",
+                entity_name="User",
+                entity_type="person",
+                description="Existing user",
+            )
+        ],
+        property_hits=[first_order],
+        list_memories=[first_order, current_higher],
+    )
+    manager = EntityManager("config/presets/entity_modeling_locomo.json")
+    user_entity = manager.get("person")
+    assert isinstance(user_entity, EntityType)
+    user_entity.dynamic_property["preference_summary"] = {
+        "type": "string",
+        "order": 2,
+        "desc": "Higher order user preference summary.",
+    }
+    # Higher-order generation resolves the project entity manager via the global accessor in
+    # _schema_higher_order (not the injected manager), so patch it to return the test manager
+    # that has preference_summary registered.
+    monkeypatch.setattr(_schema_higher_order, "get_entity_manager", lambda *args, **kwargs: manager)
+    pipeline = SchemaAddPipeline(
+        db_reader=reader,
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        llm_client=HigherOrderLLM(),
+        embed_client=FakeEmbed(),
+        entity_manager=manager,
+        higher_order_enabled=True,
+    )
+
+    await pipeline.add_sync(
+        AddPipelineInput(
+            mode="sync",
+            timestamp=1770000000000,
+            force_generation=True,
+            messages=[{"role": "user", "content": "Qdrant is still my favorite vector database."}],
+        ),
+        make_context(),
+    )
+
+    assert "mem-ho-old" not in writer.deleted
+    higher_update = next(command for command in writer.updated if command.memory_id == "mem-ho-old")
+    assert higher_update.metadata_patch["higher_order"] is True
+    assert higher_update.reason == "schema_add_higher_order_update"
+    _, plan, _ = writer.calls[0]
+    higher_memories = [memory for memory in plan.memories if memory.property_name == "preference_summary"]
+    assert higher_memories == []
+
+
+@pytest.mark.asyncio
 async def test_schema_add_pipeline_marks_episode_failed_when_generation_fails():
     writer = FakeWriter()
     qdrant = FakeQdrant()
@@ -1516,6 +1695,7 @@ async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_
 
     pipeline = SchemaAddPipeline.__new__(SchemaAddPipeline)
     rt = SimpleNamespace(
+        version="v2",
         extractor=TrackingExtractor(),
         planner=TrackingPlanner(),
         search_fields_max=10,

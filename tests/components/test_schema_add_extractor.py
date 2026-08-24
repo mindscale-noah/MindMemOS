@@ -10,6 +10,12 @@ from mindmemos.components.extractor.schema._schema_utils import (
     schema_memory_type,
     strip_for_generation,
 )
+from mindmemos.components.extractor.schema.v1 import SchemaSearchFieldExtractor
+from mindmemos.components.extractor.schema.v1 import build_episode_entity as build_episode_entity_v1
+from mindmemos.components.extractor.schema.v1._schema_utils import (
+    dedupe_non_empty,
+    entity_embedding_text,
+)
 from mindmemos.typing.memory import MemoryRequestContext
 
 
@@ -128,6 +134,69 @@ def test_schema_add_utils_filter_schema_and_build_episode_entity() -> None:
     assert episode_entity["name"] == "Qdrant preference"
     assert episode_entity["properties"][0]["property_name"] == "input_messages"
     assert episode_entity["properties"][0]["value"] == "The user said they like Qdrant."
+
+
+def test_schema_add_v1_utils_build_episode_entity_and_embedding_text() -> None:
+    episode_entity = build_episode_entity_v1(
+        objectified_content="The user said they like Qdrant.",
+        episode_description="Qdrant preference\nThe user likes Qdrant.",
+        dialogue_date="2026-02-02",
+        search_fields=["Qdrant preference"],
+    )
+
+    assert episode_entity["entity_type"] == "episodes"
+    assert episode_entity["name"] == "Qdrant preference"
+    assert episode_entity["properties"][0]["property_name"] == "input_messages"
+    assert episode_entity["properties"][0]["value"] == "The user said they like Qdrant."
+    assert "Qdrant" in entity_embedding_text(episode_entity)
+    assert dedupe_non_empty([" a ", "", "a", "b"]) == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_schema_search_field_extractor_uses_properties_then_dedupes() -> None:
+    extractor = SchemaSearchFieldExtractor()
+
+    fields = await extractor.extract_search_fields(
+        entities=[
+            {
+                "entity_type": "user",
+                "description": "fallback description",
+                "properties": [
+                    {"property_name": "preference", "value": "Likes Qdrant"},
+                    {"property_name": "preference", "value": "Likes Qdrant"},
+                    {"property_name": "input_messages", "value": "ignored"},
+                ],
+            },
+            {"entity_type": "episodes", "description": "ignored episode"},
+            {"entity_type": "project", "description": "Uses Neo4j"},
+        ],
+        context_text="conversation",
+        max_fields=3,
+    )
+
+    assert fields == ["Likes Qdrant", "Uses Neo4j"]
+
+
+@pytest.mark.asyncio
+async def test_schema_search_field_extractor_can_augment_fields() -> None:
+    class FakeLLM:
+        async def chat(self, **kwargs):
+            return SimpleNamespace(parsed=["Augmented Qdrant query"])
+
+    prompt_set = SimpleNamespace(
+        episode_search_field_augment="{episode_text}\n{existing_fields}\n{augment_count}",
+    )
+    extractor = SchemaSearchFieldExtractor(llm_client=FakeLLM(), prompt_set=prompt_set)
+
+    fields = await extractor.extract_search_fields(
+        entities=[{"entity_type": "project", "description": "Uses Qdrant"}],
+        context_text="conversation",
+        max_fields=3,
+        augment=True,
+        augment_count=1,
+    )
+
+    assert fields == ["Uses Qdrant", "Augmented Qdrant query"]
 
 
 def test_parse_json_object_handles_fenced_json() -> None:
