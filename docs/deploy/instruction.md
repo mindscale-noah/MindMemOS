@@ -259,7 +259,20 @@ algo_config:
 
 `rerank` is an optional enhancement. For production, stabilize Docker, LLM, and Embedding first, then add rerank.
 
-## 8. Authentication Configuration
+## 8. Memory Algorithm Version (v1 / v2)
+
+Schema memory extraction has two selectable flows via `algo_config.add.schema.version`:
+
+- `v2` (default): rule-based graph fusion, fewer LLM calls per episode.
+- `v1`: develop-compatible LLM-heavy flow, for baseline comparison and rollback.
+
+Set it in the base config for a deployment-wide default, or in a project's API-key
+override config to pin one project (project overrides win and take effect on that
+project's next add request — no restart). Storage is compatible in both directions;
+output is labeled `schema_add_v1` / `schema_add` (`mem_extract_version`) so you can
+tell which flow produced what. Details: [docs/develop/schema-add-versions.md](../develop/schema-add-versions.md).
+
+## 9. Authentication Configuration
 
 Local setup uses API keys by default:
 
@@ -280,7 +293,7 @@ Use this header when calling APIs:
 Authorization: Bearer <api_key>
 ```
 
-## 9. Minimal Checklist
+## 10. Minimal Checklist
 
 Before starting, confirm at least the following:
 

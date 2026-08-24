@@ -1785,3 +1785,50 @@ async def test_schema_add_pipeline_segments_with_version_matched_boundary_prompt
     schema_cfg.version = "v2"
     v2_prompt = await _add_one_turn_and_capture_boundary_prompt(BoundaryPromptCaptureLLM())
     assert '"reasoning"' not in v2_prompt
+
+
+async def _add_one_turn_and_get_plan(*, writer: FakeWriter) -> tuple:
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    pipeline = SchemaAddPipeline(
+        db_reader=MemoryDbReader(clients=clients),
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        llm_client=FakeLLM(),
+        embed_client=FakeEmbed(),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    await pipeline.add_sync(
+        AddPipelineInput(
+            mode="sync",
+            timestamp=1770000000000,
+            force_generation=True,
+            messages=[{"role": "user", "content": "I like Qdrant."}],
+        ),
+        make_context(),
+    )
+
+    assert writer.calls
+    _, plan, _ = writer.calls[0]
+    return plan
+
+
+@pytest.mark.asyncio
+async def test_schema_add_writes_version_matched_labels():
+    """v1 must label its output schema_add_v1 (develop parity, keeps eval buckets
+    comparable); v2 labels its output schema_add."""
+    schema_cfg = get_config().algo_config.add.schema
+    schema_cfg.version = "v1"
+    plan = await _add_one_turn_and_get_plan(writer=FakeWriter())
+    person_entities = [entity for entity in plan.entities if entity.entity_type == "person"]
+    assert person_entities and all(
+        entity.metadata.get("add_algorithm") == "schema_add_v1" for entity in person_entities
+    )
+    assert plan.memories and all(memory.mem_extract_version == "schema_add_v1" for memory in plan.memories)
+
+    schema_cfg.version = "v2"
+    plan = await _add_one_turn_and_get_plan(writer=FakeWriter())
+    person_entities = [entity for entity in plan.entities if entity.entity_type == "person"]
+    assert person_entities and all(entity.metadata.get("add_algorithm") == "schema_add" for entity in person_entities)
+    assert plan.memories and all(memory.mem_extract_version == "schema_add" for memory in plan.memories)
