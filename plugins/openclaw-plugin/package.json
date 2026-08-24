@@ -1,6 +1,6 @@
 {
   "name": "@mindmemos/openclaw-plugin",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "OpenClaw plugin that recalls and writes MindMemOS memories through the mindmemos CLI.",
   "type": "module",
   "repository": {

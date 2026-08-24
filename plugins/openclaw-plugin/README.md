@@ -111,6 +111,7 @@ Optional plugin config:
   "enabled": true,
   "cli": "mindmemos",
   "topK": 5,
+  "tokenBudget": 2000,
   "addMode": "async",
   "userId": "alice",
   "appId": "openclaw",
@@ -120,7 +121,10 @@ Optional plugin config:
 }
 ```
 
-`userId` scopes both recall and storage to the same user. Configure it with:
+`userId` scopes both recall and storage to the same user. `tokenBudget` is
+optional: when set, recall runs with `memory search --token-budget` so the
+injected memories are capped by estimated tokens (token-budget retention) in
+addition to `topK`; omit it to keep legacy behavior. Configure the user with:
 
 ```bash
 openclaw config set plugins.entries.mindmemos-memory.config.userId alice
