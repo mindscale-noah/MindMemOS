@@ -168,6 +168,9 @@ algo_config:
         secondary_search_retries: 3
         secondary_search_retry_backoff_base: 0.2
         secondary_search_retry_backoff_max: 5.0
+        description_rewrite_threshold: 1000
+        description_max_chars: 2000
+        reference_description_max_chars: 500
       higher_order:
         enabled: true
         top_k: 10

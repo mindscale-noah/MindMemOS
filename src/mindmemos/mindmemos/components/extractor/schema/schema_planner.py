@@ -69,6 +69,9 @@ class SchemaAddPlanner:
         sparse_encoder: SparseVectorEncoder,
         max_entities_per_conversation: int = 200,
         max_properties_per_entity: int = 15,
+        description_rewrite_threshold: int = 1000,
+        description_max_chars: int = 2000,
+        reference_description_max_chars: int = 500,
     ) -> None:
         self.llm_client = llm_client
         self.embed_client = embed_client
@@ -78,12 +81,15 @@ class SchemaAddPlanner:
         self.episode_edge_top_k = episode_edge_top_k
         self.max_entities_per_conversation = max_entities_per_conversation
         self.max_properties_per_entity = max_properties_per_entity
+        self.description_rewrite_threshold = description_rewrite_threshold
+        self.description_max_chars = description_max_chars
         self._text_preprocessor = text_preprocessor
         self._sparse_encoder = sparse_encoder
         self._write_plan_builder = SchemaWritePlanBuilder(
             text_preprocessor=self._text_preprocessor,
             sparse_encoder=self._sparse_encoder,
             embed_texts=self._embed_texts,
+            entity_description_max_chars=reference_description_max_chars,
         )
 
     async def recall_reference_entities(
@@ -254,6 +260,10 @@ class SchemaAddPlanner:
         entities.append(episode_write)
         entity_by_name[episode_entity["name"]] = episode_write
 
+        # Compress rule-merged descriptions that outgrew the threshold before any
+        # embedding text, payload, or event content is derived from them.
+        await self._rewrite_oversized_descriptions(entities)
+
         await _report_progress(
             progress,
             "memory_planning",
@@ -406,6 +416,47 @@ class SchemaAddPlanner:
                 return ref
         return None
 
+    async def _rewrite_oversized_descriptions(self, entities: list[EntityWrite]) -> None:
+        """Compress rule-merged entity descriptions that crossed the rewrite threshold.
+
+        The v2 flow merges entity descriptions by plain concatenation (no extra
+        LLM call per update). Left unchecked a hot entity's description grows
+        without bound, inflating the stored payload, the embedding text, and
+        every later reference-entity prompt. Past the threshold one LLM call
+        rewrites the accumulated description into a concise single one; on
+        failure the hard-capped concatenation from ``merge_description`` stays.
+        """
+        for entity in entities:
+            description = entity.description or ""
+            if entity.entity_type == "episodes" or len(description) <= self.description_rewrite_threshold:
+                continue
+            rewritten = await self._rewrite_description(entity, description)
+            if rewritten:
+                entity.description = rewritten
+                entity.metadata = {**dict(entity.metadata or {}), "description_rewritten": True}
+
+    async def _rewrite_description(self, entity: EntityWrite, description: str) -> str | None:
+        prompt = (
+            self.prompt_set.entity_description_rewrite.replace("{entity_name}", entity.entity_name)
+            .replace("{entity_type}", entity.entity_type or "")
+            .replace("{char_limit}", str(self.description_max_chars))
+            .replace("{current_description}", description)
+        )
+        try:
+            response = await resolve_llm_client(self.llm_client).chat(
+                task="memory.add.description_rewrite",
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception:
+            logger.warning("description rewrite LLM failed; keeping capped concatenation", exc_info=True)
+            return None
+        content = response.content.strip()
+        if "<description>" in content:
+            content = content.split("<description>")[1]
+        if "</description>" in content:
+            content = content.split("</description>")[0]
+        return content.strip()[: self.description_max_chars] or None
+
     def _entity_write_from_view(
         self,
         target: EntityView,
@@ -416,7 +467,9 @@ class SchemaAddPlanner:
     ) -> EntityWrite:
         """Build an update EntityWrite with a rule-based description merge."""
         em = get_entity_manager(project_id=context.project_id)
-        description = merge_description(target.description or "", new_entity.get("description") or "")
+        description = merge_description(
+            target.description or "", new_entity.get("description") or "", max_chars=self.description_max_chars
+        )
         metadata = dict(target.metadata)
         metadata.update(
             {

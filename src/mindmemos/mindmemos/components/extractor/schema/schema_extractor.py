@@ -35,11 +35,13 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
         prompt_set: AddPromptSet,
         entity_manager: EntitySchemaProvider,
         enable_schema_selection: bool,
+        reference_description_max_chars: int = 500,
     ) -> None:
         self.llm_client = llm_client
         self.prompt_set = prompt_set
         self.entity_manager = entity_manager
         self.enable_schema_selection = enable_schema_selection
+        self.reference_description_max_chars = reference_description_max_chars
         self.normalizer = SchemaExtractionNormalizer(entity_manager=entity_manager)
 
     async def select_schema(
@@ -101,7 +103,12 @@ class SchemaAddExtractor(SchemaEpisodeExtractor):
 
         prompt = (
             prompts.entity_generation.replace("{entity_schema}", str(entity_schema))
-            .replace("{reference_entities}", format_reference_entities(reference_entities))
+            .replace(
+                "{reference_entities}",
+                format_reference_entities(
+                    reference_entities, description_max_chars=self.reference_description_max_chars
+                ),
+            )
             .replace("{dialogue_timestamp}", dialogue_timestamp)
             .replace("{chat_chunk}", conversation_text)
         )

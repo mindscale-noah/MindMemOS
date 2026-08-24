@@ -291,6 +291,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             prompt_set=prompts,
             entity_manager=project_em,
             enable_schema_selection=enable_schema_selection,
+            reference_description_max_chars=schema_cfg.merge.reference_description_max_chars,
         )
         planner = self._explicit_planner or SchemaAddPlanner(
             llm_client=llm_client,
@@ -301,6 +302,9 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             episode_edge_top_k=episode_edge_top_k,
             max_entities_per_conversation=schema_cfg.extraction.max_entities_per_conversation,
             max_properties_per_entity=schema_cfg.extraction.max_properties_per_entity,
+            description_rewrite_threshold=schema_cfg.merge.description_rewrite_threshold,
+            description_max_chars=schema_cfg.merge.description_max_chars,
+            reference_description_max_chars=schema_cfg.merge.reference_description_max_chars,
             text_preprocessor=text_preprocessor,
             sparse_encoder=sparse_encoder,
         )

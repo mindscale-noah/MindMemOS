@@ -146,7 +146,9 @@ def build_episode_entity(
     }
 
 
-def entity_write_embedding_text(entity: EntityWrite, memories: list[MemoryWrite] | None = None) -> str:
+def entity_write_embedding_text(
+    entity: EntityWrite, memories: list[MemoryWrite] | None = None, *, description_max_chars: int = 500
+) -> str:
     """Build the canonical entity indexing text from the final entity write payload."""
 
     property_text = " ".join(memory.content for memory in (memories or [])[:5])
@@ -158,7 +160,7 @@ def entity_write_embedding_text(entity: EntityWrite, memories: list[MemoryWrite]
         for part in [
             entity.entity_name,
             entity.entity_type or "",
-            entity.description or "",
+            (entity.description or "")[:description_max_chars],
             property_text,
             search_field_text,
         ]
@@ -179,13 +181,29 @@ def base_metadata(request_metadata: dict[str, Any]) -> dict[str, Any]:
     return {"request_metadata": dict(request_metadata)}
 
 
-def merge_description(old: str | None, new: str | None) -> str | None:
-    """Merge an existing description with a newly extracted description."""
+def merge_description(old: str | None, new: str | None, *, max_chars: int = 2000) -> str | None:
+    """Merge an existing description with a newly extracted description.
+
+    Concatenates by default (no LLM call). When the result would exceed
+    *max_chars*, the oldest segments are dropped first so the newest
+    information always survives — without this cap a hot entity's description
+    grows without bound and inflates the stored payload, the embedding text,
+    and every later reference-entity prompt.
+    """
     if not old:
-        return new
+        return _cap_description(new, max_chars)
     if not new or new in old:
-        return old
-    return f"{old}\n{new}"
+        return _cap_description(old, max_chars)
+    return _cap_description(f"{old}\n{new}", max_chars)
+
+
+def _cap_description(text: str | None, max_chars: int) -> str | None:
+    if text is None or len(text) <= max_chars:
+        return text
+    lines = text.split("\n")
+    while len(lines) > 1 and len("\n".join(lines)) > max_chars:
+        lines.pop(0)
+    return "\n".join(lines)[:max_chars]
 
 
 def format_candidate_episodes(candidates: list[EntityView]) -> str:
@@ -196,13 +214,24 @@ def format_candidate_episodes(candidates: list[EntityView]) -> str:
     )
 
 
-def format_reference_entities(entities: list[EntityView]) -> str:
-    """Format recalled reference entities for the entity-generation prompt."""
+def format_reference_entities(entities: list[EntityView], *, description_max_chars: int = 500) -> str:
+    """Format recalled reference entities for the entity-generation prompt.
+
+    Each entity's description is truncated to *description_max_chars* so hot
+    entities with long merged histories cannot blow up the prompt.
+    """
     if not entities:
         return "None (no existing entities in memory)."
+
+    def _format_description(description: str | None) -> str:
+        text = description or ""
+        if len(text) <= description_max_chars:
+            return text
+        return text[:description_max_chars] + "..."
+
     return "\n".join(
         f"- name: {entity.entity_name}, entity_type: {entity.entity_type or ''}, "
-        f"description: {entity.description or ''}"
+        f"description: {_format_description(entity.description)}"
         for entity in entities
     )
 

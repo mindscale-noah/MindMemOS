@@ -233,6 +233,21 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule(
         "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"
     ),
+    RangeRule(
+        "algo_config.add.schema.merge.description_rewrite_threshold",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.description_max_chars",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.reference_description_max_chars",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
     RangeRule("algo_config.search.request_top_k_max", min_value=1, support="positive integer >= 1"),
     RangeRule(
         "algo_config.search.vanilla.dedup_threshold",

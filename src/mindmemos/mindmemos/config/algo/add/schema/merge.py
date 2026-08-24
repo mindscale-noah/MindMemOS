@@ -32,3 +32,15 @@ class SchemaAddMergeConfig:
 
     secondary_search_retry_backoff_max: float = field(default=5.0)
     """Maximum seconds between secondary search retries (v1 flow)."""
+
+    description_rewrite_threshold: int = field(default=1000)
+    """Rule-merged entity description length (chars) that triggers one LLM rewrite to
+    compress it (v2 flow). Below the threshold the merge stays a plain concatenation."""
+
+    description_max_chars: int = field(default=2000)
+    """Hard cap on a stored entity description. When the merge result exceeds it the
+    oldest segments are dropped first so the newest information survives (v2 flow)."""
+
+    reference_description_max_chars: int = field(default=500)
+    """Per-entity description slice injected into the reference-entity prompt and the
+    entity embedding text (v2 flow)."""

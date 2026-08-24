@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from .EN.add.conv_split import CONV_BOUNDARY_DETECTION_PROMPT, CONV_FORCED_RESPLIT_PROMPT
 from .EN.add.conv_split_v1 import CONV_BOUNDARY_DETECTION_PROMPT_V1, CONV_FORCED_RESPLIT_PROMPT_V1
+from .EN.add.entity_description_rewrite import ENTITY_DESCRIPTION_REWRITE_PROMPT
 from .EN.add.entity_generation import ENTITY_GENERATION_PROMPT
 from .EN.add.entity_generation_v1 import ENTITY_GENERATION_PROMPT_V1
 from .EN.add.entity_merge import (
@@ -47,6 +48,7 @@ from .ZH.add.conv_split import CONV_BOUNDARY_DETECTION_PROMPT as CONV_BOUNDARY_D
 from .ZH.add.conv_split import CONV_FORCED_RESPLIT_PROMPT as CONV_FORCED_RESPLIT_PROMPT_ZH
 from .ZH.add.conv_split_v1 import CONV_BOUNDARY_DETECTION_PROMPT_V1 as CONV_BOUNDARY_DETECTION_PROMPT_V1_ZH
 from .ZH.add.conv_split_v1 import CONV_FORCED_RESPLIT_PROMPT_V1 as CONV_FORCED_RESPLIT_PROMPT_V1_ZH
+from .ZH.add.entity_description_rewrite import ENTITY_DESCRIPTION_REWRITE_PROMPT as ENTITY_DESCRIPTION_REWRITE_PROMPT_ZH
 from .ZH.add.entity_generation import ENTITY_GENERATION_PROMPT as ENTITY_GENERATION_PROMPT_ZH
 from .ZH.add.entity_generation_v1 import ENTITY_GENERATION_PROMPT_V1 as ENTITY_GENERATION_PROMPT_V1_ZH
 from .ZH.add.entity_merge import DES_UPDATE_PROMPT as DES_UPDATE_PROMPT_ZH
@@ -97,6 +99,7 @@ class AddPromptSet:
     conv_boundary_detection: str
     conv_forced_resplit: str
     entity_generation: str
+    entity_description_rewrite: str
     episode_edge: str
     episode_entity: str
     episode_objectify: str
@@ -110,6 +113,7 @@ def get_add_prompts(language: str | None = None) -> AddPromptSet:
             conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT_ZH,
             conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT_ZH,
             entity_generation=ENTITY_GENERATION_PROMPT_ZH,
+            entity_description_rewrite=ENTITY_DESCRIPTION_REWRITE_PROMPT_ZH,
             episode_edge=EPISODE_EDGE_PROMPT_ZH,
             episode_entity=EPISODE_ENTITY_PROMPT_ZH,
             episode_objectify=EPISODE_OBJECTIFY_PROMPT_ZH,
@@ -119,6 +123,7 @@ def get_add_prompts(language: str | None = None) -> AddPromptSet:
         conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT,
         conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT,
         entity_generation=ENTITY_GENERATION_PROMPT,
+        entity_description_rewrite=ENTITY_DESCRIPTION_REWRITE_PROMPT,
         episode_edge=EPISODE_EDGE_PROMPT,
         episode_entity=EPISODE_ENTITY_PROMPT,
         episode_objectify=EPISODE_OBJECTIFY_PROMPT,
@@ -260,6 +265,8 @@ __all__ = [
     "DES_UPDATE_PROMPT_ZH",
     "DUPLICATE_NAME_RESOLUTION_PROMPT",
     "DUPLICATE_NAME_RESOLUTION_PROMPT_ZH",
+    "ENTITY_DESCRIPTION_REWRITE_PROMPT",
+    "ENTITY_DESCRIPTION_REWRITE_PROMPT_ZH",
     "ENTITY_GENERATION_PROMPT",
     "ENTITY_GENERATION_PROMPT_V1",
     "ENTITY_GENERATION_PROMPT_V1_ZH",

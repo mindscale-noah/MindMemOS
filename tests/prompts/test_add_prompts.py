@@ -7,6 +7,7 @@ def test_add_prompt_selector_keeps_english_and_chinese_prompts() -> None:
 
     assert "conversation analysis expert" in en_prompts.conv_boundary_detection
     assert "professional entity and relationship extraction expert" in en_prompts.entity_generation
+    assert "memory editor" in en_prompts.entity_description_rewrite
     assert "episodic memory expert" in en_prompts.episode_entity
     assert "memory relationship expert" in en_prompts.episode_edge
     assert "episodic memory generation expert" in en_prompts.episode_objectify
