@@ -98,16 +98,8 @@ class MemoryConsolidator:
             primary = kept[0]
             return ScoredSearchCandidate(
                 item=primary.item,
-                original_rank=primary.original_rank,
                 rank=rank,
-                retrieval_score=primary.retrieval_score,
-                retrieval_score_type=primary.retrieval_score_type,
-                normalized_retrieval_score=primary.normalized_retrieval_score,
-                rerank_score=primary.rerank_score,
-                normalized_rerank_score=primary.normalized_rerank_score,
                 relevance_score=_relevance(primary),
-                final_score_source=primary.final_score_source,
-                evidence=list(primary.evidence),
             )
 
         texts = [m.memory.strip() for m in kept if m.memory and m.memory.strip()]
@@ -131,16 +123,8 @@ class MemoryConsolidator:
         )
         return ScoredSearchCandidate(
             item=item,
-            original_rank=primary.original_rank,
             rank=rank,
-            retrieval_score=primary.retrieval_score,
-            retrieval_score_type=primary.retrieval_score_type,
-            normalized_retrieval_score=primary.normalized_retrieval_score,
-            rerank_score=primary.rerank_score,
-            normalized_rerank_score=primary.normalized_rerank_score,
             relevance_score=max(_relevance(m) for m in kept),
-            final_score_source=primary.final_score_source,
-            evidence=list(primary.evidence),
         )
 
     def _is_near_dup(self, left: ScoredSearchCandidate, right: ScoredSearchCandidate) -> bool:

@@ -36,9 +36,6 @@ class MemoryRetentionConfig:
     missing_recency_score: float = field(default=0.5)
     """Recency score used when a candidate has no parsable timestamp."""
 
-    graph_provenance_limit: int = field(default=8)
-    """Maximum evidence entries kept per scored candidate."""
-
     selector_version: str = field(default="mixed-v1")
     """Retention selector implementation: ``mixed-v1`` or ``mixed-v2``."""
 

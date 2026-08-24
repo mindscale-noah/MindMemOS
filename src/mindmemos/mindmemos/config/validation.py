@@ -249,7 +249,6 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         support="positive number",
     ),
     RangeRule("algo_config.search.retention.missing_recency_score", min_value=0, max_value=1),
-    RangeRule("algo_config.search.retention.graph_provenance_limit", min_value=1, max_value=100),
     RangeRule("algo_config.search.retention.top_m_guarantee", min_value=0, max_value=100),
     RangeRule("algo_config.search.retention.mmr_lambda", min_value=0, max_value=1),
     RangeRule("algo_config.search.retention.consolidation_max_memories", min_value=1, max_value=100),

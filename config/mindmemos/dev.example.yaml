@@ -303,7 +303,6 @@ algo_config:
       cost_weight: 0.1
       recency_half_life_days: 30.0
       missing_recency_score: 0.5
-      graph_provenance_limit: 8
       selector_version: mixed-v1
       estimator_version: heuristic-v1
       top_m_guarantee: 5

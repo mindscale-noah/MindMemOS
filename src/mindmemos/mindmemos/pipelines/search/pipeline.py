@@ -108,13 +108,12 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
         scored = [
             ScoredSearchCandidate(
                 item=item,
-                original_rank=rank,
                 rank=rank,
-                rerank_score=score,
                 relevance_score=score if score is not None else 0.0,
-                final_score_source="rerank" if score is not None else "rank_fallback",
             )
-            for rank, (item, score) in enumerate(zip(filter_result.candidates, filter_result.rerank_scores))
+            for rank, (item, score) in enumerate(
+                zip(filter_result.candidates, filter_result.rerank_scores, strict=True)
+            )
         ]
         retention_input = scored
         metrics: dict[str, Any] = {"rerank_outcome": filter_result.rerank_outcome}

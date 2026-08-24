@@ -171,6 +171,16 @@ omitted, search behaves exactly as before; when set, results are packed under a
 strict token budget after final filtering, with optional consolidation of
 near-duplicate memories first.
 
+Both request limits bind at the same time, whichever is tighter: the response
+contains at most `top_k` memories whose combined estimated tokens stay within
+`token_budget`. When rerank is enabled it scores the whole retention candidate
+pool (up to `max_candidates`), so budget-aware selection is not pre-narrowed to
+`top_k`; lower `max_candidates` to make retention consider fewer (e.g. only
+`top_k`) candidates per request. When consolidation is enabled, merged
+memories are returned under a synthetic `consol:<id>+<id>` id with the source
+ids listed in `metadata.consolidated_from`; such ids cannot be used with
+get/delete APIs.
+
 | Field | Default | Description |
 |---|---|---|
 | `min_token_budget` | `1` | Minimum token budget accepted for request-gated retention. |
@@ -182,7 +192,6 @@ near-duplicate memories first.
 | `cost_weight` | `0.10` | Weight subtracted for token cost relative to the request budget. |
 | `recency_half_life_days` | `30.0` | Half-life in days for the exponential recency decay. |
 | `missing_recency_score` | `0.5` | Recency score used when a candidate has no parsable timestamp. |
-| `graph_provenance_limit` | `8` | Maximum evidence entries kept per scored candidate. |
 | `selector_version` | `mixed-v1` | Retention selector implementation: `mixed-v1` or `mixed-v2`. |
 | `estimator_version` | `heuristic-v1` | Token estimator implementation (currently heuristic only). |
 | `top_m_guarantee` | `5` | Candidates force-kept by relevance before MMR re-ranking (mixed-v2). |

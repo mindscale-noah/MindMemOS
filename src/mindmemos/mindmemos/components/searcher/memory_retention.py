@@ -63,10 +63,7 @@ class MemoryRetentionSelector:
         now = self._now()
         if now.tzinfo is None:
             now = now.replace(tzinfo=UTC)
-        bounded = merge_scored_candidates(
-            candidates[: self._config.max_candidates],
-            evidence_limit=self._config.graph_provenance_limit,
-        )
+        bounded = merge_scored_candidates(candidates[: self._config.max_candidates])
         scored: list[CandidateRetentionScore] = []
         for candidate in bounded:
             cost = estimate_tokens(candidate.memory)

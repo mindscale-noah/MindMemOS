@@ -19,10 +19,8 @@ class FakeTextPreprocessor:
 def candidate(memory_id: str, text: str, *, rank: int, relevance: float) -> ScoredSearchCandidate:
     return ScoredSearchCandidate(
         item=MemorySearchItem(id=memory_id, memory=text, last_update_at="2026-01-01 00:00:00"),
-        original_rank=rank,
         rank=rank,
         relevance_score=relevance,
-        final_score_source="retrieval",
     )
 
 

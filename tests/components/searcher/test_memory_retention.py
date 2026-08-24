@@ -28,10 +28,8 @@ def candidate(
 ) -> ScoredSearchCandidate:
     return ScoredSearchCandidate(
         item=MemorySearchItem(id=memory_id, memory=text, last_update_at=last_update_at),
-        original_rank=rank,
         rank=rank,
         relevance_score=relevance,
-        final_score_source="rerank",
     )
 
 
