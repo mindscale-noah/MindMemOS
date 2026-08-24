@@ -1730,3 +1730,58 @@ async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_
     await asyncio.sleep(0.5)
     assert {"objectify", "entity"} <= started
     assert finished == set()
+
+
+class BoundaryPromptCaptureLLM(FakeLLM):
+    """FakeLLM that records the prompt sent to the episode-boundary task."""
+
+    def __init__(self):
+        self.boundary_prompts: list[str] = []
+
+    async def chat(self, task, messages, format_parser=None, **kwargs):
+        if task == "memory.add.episode_boundary":
+            self.boundary_prompts.append(str(messages[0]["content"]))
+        return await super().chat(task, messages, format_parser, **kwargs)
+
+
+async def _add_one_turn_and_capture_boundary_prompt(llm: BoundaryPromptCaptureLLM) -> str:
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    pipeline = SchemaAddPipeline(
+        db_reader=MemoryDbReader(clients=clients),
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        llm_client=llm,
+        embed_client=FakeEmbed(),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    await pipeline.add_sync(
+        AddPipelineInput(
+            mode="sync",
+            timestamp=1770000000000,
+            force_generation=True,
+            messages=[{"role": "user", "content": "I like Qdrant."}],
+        ),
+        make_context(),
+    )
+
+    assert llm.boundary_prompts
+    return llm.boundary_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_schema_add_pipeline_segments_with_version_matched_boundary_prompt():
+    """v1 chunking must use the develop boundary prompt (with the reasoning field),
+    v2 the token-saving variant without it — the shared chunking path picks the
+    prompt set by version instead of always using the latest one."""
+    schema_cfg = get_config().algo_config.add.schema
+    schema_cfg.version = "v1"
+    schema_cfg.chunker.split_mode = "llm"
+    v1_prompt = await _add_one_turn_and_capture_boundary_prompt(BoundaryPromptCaptureLLM())
+    assert '"reasoning"' in v1_prompt
+
+    schema_cfg.version = "v2"
+    v2_prompt = await _add_one_turn_and_capture_boundary_prompt(BoundaryPromptCaptureLLM())
+    assert '"reasoning"' not in v2_prompt

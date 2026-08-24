@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .EN.add.conv_split import CONV_BOUNDARY_DETECTION_PROMPT, CONV_FORCED_RESPLIT_PROMPT
+from .EN.add.conv_split_v1 import CONV_BOUNDARY_DETECTION_PROMPT_V1, CONV_FORCED_RESPLIT_PROMPT_V1
 from .EN.add.entity_generation import ENTITY_GENERATION_PROMPT
 from .EN.add.entity_generation_v1 import ENTITY_GENERATION_PROMPT_V1
 from .EN.add.entity_merge import (
@@ -44,6 +45,8 @@ from .EN.retrieve.entity_relevance_filter import (
 )
 from .ZH.add.conv_split import CONV_BOUNDARY_DETECTION_PROMPT as CONV_BOUNDARY_DETECTION_PROMPT_ZH
 from .ZH.add.conv_split import CONV_FORCED_RESPLIT_PROMPT as CONV_FORCED_RESPLIT_PROMPT_ZH
+from .ZH.add.conv_split_v1 import CONV_BOUNDARY_DETECTION_PROMPT_V1 as CONV_BOUNDARY_DETECTION_PROMPT_V1_ZH
+from .ZH.add.conv_split_v1 import CONV_FORCED_RESPLIT_PROMPT_V1 as CONV_FORCED_RESPLIT_PROMPT_V1_ZH
 from .ZH.add.entity_generation import ENTITY_GENERATION_PROMPT as ENTITY_GENERATION_PROMPT_ZH
 from .ZH.add.entity_generation_v1 import ENTITY_GENERATION_PROMPT_V1 as ENTITY_GENERATION_PROMPT_V1_ZH
 from .ZH.add.entity_merge import DES_UPDATE_PROMPT as DES_UPDATE_PROMPT_ZH
@@ -151,8 +154,8 @@ def get_add_prompts_v1(language: str | None = None) -> AddPromptSetV1:
     normalized = (language or "EN").upper()
     if normalized == "ZH":
         return AddPromptSetV1(
-            conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT_ZH,
-            conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT_ZH,
+            conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT_V1_ZH,
+            conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT_V1_ZH,
             entity_generation=ENTITY_GENERATION_PROMPT_V1_ZH,
             episode_edge=EPISODE_EDGE_PROMPT_ZH,
             episode_inference=EPISODE_INFERENCE_PROMPT_ZH,
@@ -171,8 +174,8 @@ def get_add_prompts_v1(language: str | None = None) -> AddPromptSetV1:
             single_entity_merge=SINGLE_ENTITY_MERGE_PROMPT_ZH,
         )
     return AddPromptSetV1(
-        conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT,
-        conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT,
+        conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT_V1,
+        conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT_V1,
         entity_generation=ENTITY_GENERATION_PROMPT_V1,
         episode_edge=EPISODE_EDGE_PROMPT,
         episode_inference=EPISODE_INFERENCE_PROMPT,
@@ -246,8 +249,12 @@ __all__ = [
     "BATCH_ENTITY_RELEVANCE_PROMPT",
     "BATCH_ENTITY_RELEVANCE_PROMPT_ZH",
     "CONV_BOUNDARY_DETECTION_PROMPT",
+    "CONV_BOUNDARY_DETECTION_PROMPT_V1",
+    "CONV_BOUNDARY_DETECTION_PROMPT_V1_ZH",
     "CONV_BOUNDARY_DETECTION_PROMPT_ZH",
     "CONV_FORCED_RESPLIT_PROMPT",
+    "CONV_FORCED_RESPLIT_PROMPT_V1",
+    "CONV_FORCED_RESPLIT_PROMPT_V1_ZH",
     "CONV_FORCED_RESPLIT_PROMPT_ZH",
     "DES_UPDATE_PROMPT",
     "DES_UPDATE_PROMPT_ZH",

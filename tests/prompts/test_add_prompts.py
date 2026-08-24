@@ -35,3 +35,16 @@ def test_add_prompt_v1_selector_keeps_english_and_chinese_prompts() -> None:
     assert zh_prompts.property_merge_decision
     assert zh_prompts.search_field_generation
     assert zh_prompts.conv_boundary_detection != en_prompts.conv_boundary_detection
+
+
+def test_conv_boundary_detection_prompt_is_versioned() -> None:
+    """v1 keeps the develop boundary prompt (with the reasoning output field); v2 drops it."""
+    v1_prompts = get_add_prompts_v1("EN")
+    v2_prompts = get_add_prompts("EN")
+
+    assert '"reasoning"' in v1_prompts.conv_boundary_detection
+    assert '"reasoning"' not in v2_prompts.conv_boundary_detection
+    assert '"reasoning"' in v1_prompts.conv_forced_resplit
+    assert '"reasoning"' not in v2_prompts.conv_forced_resplit
+    assert '"reasoning"' in get_add_prompts_v1("ZH").conv_boundary_detection
+    assert '"reasoning"' not in get_add_prompts("ZH").conv_boundary_detection

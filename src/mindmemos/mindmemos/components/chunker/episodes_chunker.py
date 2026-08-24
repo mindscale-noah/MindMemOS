@@ -38,7 +38,7 @@ class EpisodesChunker:
         split_on_user_speaker: bool = True,
         boundary_prompt: str = CONV_BOUNDARY_DETECTION_PROMPT,
         resplit_prompt: str | None = None,
-        streaming_window_size: int = 50,
+        streaming_window_size: int = 15,
     ) -> None:
         if streaming_window_size < 1:
             raise ValueError(f"streaming_window_size must be >= 1, got {streaming_window_size}")

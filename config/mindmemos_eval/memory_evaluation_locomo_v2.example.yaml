@@ -116,6 +116,7 @@ algorithm_profiles:
               max_buffer_size: 1000
               split_on_user_speaker: false
               max_minutes_from_first: 999999
+              streaming_window_size: 50
             drain:
               episode_generation_max_retries: 3
         search:

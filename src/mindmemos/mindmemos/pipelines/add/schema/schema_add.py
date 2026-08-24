@@ -795,7 +795,13 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             return []
 
         sample_text = " ".join(str(e.get("content", "")) for e in entries[:20])
-        request_prompts = get_add_prompts(_prompt_language_for_records(records, sample_text))
+        # Segment with the version-matched prompt set: v1 keeps the develop
+        # boundary prompt (with the "reasoning" output field), v2 uses the
+        # token-saving variant without it.
+        if rt.version == "v1":
+            request_prompts = get_add_prompts_v1(_prompt_language_for_records(records, sample_text))
+        else:
+            request_prompts = get_add_prompts(_prompt_language_for_records(records, sample_text))
 
         detect_force = force or add_record_ops.force_generation(records)
         window_size = rt.chunker.streaming_window_size
