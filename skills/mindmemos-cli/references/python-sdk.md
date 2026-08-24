@@ -57,7 +57,7 @@ with MindMemOSClient(
         search_strategy="fast",     # or "agentic"
         rerank=True,
         score_threshold=0.5,        # filter out low-relevance rerank results
-        token_budget=2000,          # optional: strict token budget (enables retention)
+        token_budget=2000,          # optional: strict token budget (enables retention); still capped by top_k
     )
     for hit in search_result.memories:
         print(hit.id, hit.memory, hit.last_update_at)

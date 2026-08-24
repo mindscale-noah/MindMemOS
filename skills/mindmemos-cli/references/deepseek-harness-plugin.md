@@ -75,8 +75,8 @@ maxConversationMessages: 80
 - `topK` — number of memories injected per turn.
 - `tokenBudget` — optional strict token budget for recall; when set,
   `memory search --token-budget` caps the injected memories by estimated tokens
-  (token-budget retention) instead of only by `topK` count. Omit to keep legacy
-  behavior.
+  (token-budget retention) in addition to `topK` — whichever limit is tighter
+  applies. Omit to keep legacy behavior.
 - `addMode` — `sync` blocks until extraction finishes; `async` (default) enqueues
   and returns. In `async` mode only CLI-level failures are visible to the plugin.
 - `userId` — scopes both search and add to one user. If omitted, search is

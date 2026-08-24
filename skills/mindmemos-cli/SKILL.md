@@ -109,7 +109,7 @@ project facts, decisions, or past experience related to the current request.
 | `--search-strategy {fast,agentic}` | `fast` = vector recall; `agentic` = multi-step reasoning over memory |
 | `--rerank` | rerank candidates for precision |
 | `--score-threshold N` | minimum rerank relevance score (0–1); only effective with `--rerank` |
-| `--token-budget N` | strict token budget for the result set; enables token-budget retention (packing under a token limit) |
+| `--token-budget N` | strict token budget for the result set; enables token-budget retention (packing under a token limit) — the result is still capped by `--top-k`, whichever limit is tighter |
 | `--filter '{...}'` | structured filter DSL, JSON object (e.g. `{"memory_type":"semantic"}`) |
 | `--user-id`, `--app-id`, `--agent-id`, `--session-id` | scoping; omit `--user-id` for project-wide search |
 | `--json` | machine-readable output |
