@@ -166,6 +166,7 @@ with MindMemOSClient() as client:
         "用户喜欢喝什么咖啡？",
         top_k=5,
         search_strategy="fast",
+        # token_budget=2000,  # 可选：严格 token 预算（启用 token 预算保留）
     )
 
     for memory in search_result.memories:

@@ -55,7 +55,9 @@ with MindMemOSClient(user_id="alice", app_id="my-agent") as client:
         ],
     )
 
-    result = client.memory.search("What coffee does the user prefer?", top_k=5, user_id="alice")
+    result = client.memory.search(
+        "What coffee does the user prefer?", top_k=5, user_id="alice", token_budget=2000
+    )
     for memory in result.memories:
         print(memory.memory)
 ```
@@ -64,5 +66,5 @@ with MindMemOSClient(user_id="alice", app_id="my-agent") as client:
 
 ```bash
 mindmemos memory add --content "I prefer iced Americano" --user-id alice
-mindmemos memory search "coffee preference" --top-k 5 --user-id alice
+mindmemos memory search "coffee preference" --top-k 5 --user-id alice --token-budget 2000
 ```

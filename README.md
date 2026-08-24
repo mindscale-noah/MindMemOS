@@ -172,6 +172,7 @@ with MindMemOSClient() as client:
         "What kind of coffee does the user like?",
         top_k=5,
         search_strategy="fast",
+        # token_budget=2000,  # optional: strict token budget (enables retention)
     )
 
     for memory in search_result.memories:

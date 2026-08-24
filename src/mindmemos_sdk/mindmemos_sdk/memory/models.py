@@ -256,6 +256,7 @@ def build_search_body(
     search_strategy: SearchStrategy = "fast",
     rerank: bool = False,
     score_threshold: float | None = None,
+    token_budget: int | None = None,
     filters: dict[str, Any] | None = None,
     app_id: str | None = None,
     agent_id: str | None = None,
@@ -272,6 +273,8 @@ def build_search_body(
     body["rerank"] = rerank
     if score_threshold is not None:
         body["score_threshold"] = score_threshold
+    if token_budget is not None:
+        body["token_budget"] = token_budget
     if app_id:
         body["app_id"] = app_id
     if agent_id:

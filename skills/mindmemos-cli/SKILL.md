@@ -109,13 +109,14 @@ project facts, decisions, or past experience related to the current request.
 | `--search-strategy {fast,agentic}` | `fast` = vector recall; `agentic` = multi-step reasoning over memory |
 | `--rerank` | rerank candidates for precision |
 | `--score-threshold N` | minimum rerank relevance score (0–1); only effective with `--rerank` |
+| `--token-budget N` | strict token budget for the result set; enables token-budget retention (packing under a token limit) |
 | `--filter '{...}'` | structured filter DSL, JSON object (e.g. `{"memory_type":"semantic"}`) |
 | `--user-id`, `--app-id`, `--agent-id`, `--session-id` | scoping; omit `--user-id` for project-wide search |
 | `--json` | machine-readable output |
 
 ```bash
 mindmemos memory search "what are the user's dietary restrictions?" --top-k 5 --user-id alice
-mindmemos memory search "travel prefs" --rerank --search-strategy agentic --user-id alice --json
+mindmemos memory search "travel prefs" --rerank --search-strategy agentic --token-budget 2000 --user-id alice --json
 # project-wide search across all users in the API-key project
 mindmemos memory search "project notes" --filter '{"memory_type":"semantic"}'
 ```
