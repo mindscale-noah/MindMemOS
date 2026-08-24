@@ -101,7 +101,7 @@ algorithm_profiles:
         add:
           schema:
             entity_modeling_path: config/presets/entity_modeling_locomo.json
-            version: v1
+            version: v2
             extraction:
               enable_schema_selection: true
               search_fields_max: 10
@@ -110,12 +110,12 @@ algorithm_profiles:
             episode_edge:
               top_k: 10
             chunker:
-              split_mode: llm
+              split_mode: rule
               min_episode_length: 1
               max_episode_length: 50
               max_buffer_size: 1000
-              split_on_user_speaker: true
-              max_minutes_from_first: 30
+              split_on_user_speaker: false
+              max_minutes_from_first: 999999
             drain:
               episode_generation_max_retries: 3
         search:

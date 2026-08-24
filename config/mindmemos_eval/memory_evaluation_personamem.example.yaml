@@ -92,6 +92,7 @@ algorithm_profiles:
         add:
           schema:
             entity_modeling_path: config/presets/entity_modeling_persona.json
+            version: v1
             extraction:
               enable_schema_selection: true
               search_fields_max: 12
