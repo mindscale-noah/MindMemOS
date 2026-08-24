@@ -81,6 +81,7 @@ class QdrantEngine:
             else None
         )
         self._collection_locks: dict[str, asyncio.Lock] = {}
+        self._ensured_collection_specs: dict[str, tuple[Any, ...]] = {}
 
     @property
     def client(self) -> AsyncQdrantClient:
@@ -123,14 +124,27 @@ class QdrantEngine:
         with an empty ``vectors_config`` (payload + filter only).
         """
 
+        fingerprint = self._collection_spec_fingerprint(spec)
+        if self._ensured_collection_specs.get(spec.name) == fingerprint:
+            return
+
         lock = self._collection_locks.setdefault(spec.name, asyncio.Lock())
         async with lock:
-            await self._ensure_collection_locked(spec)
+            if self._ensured_collection_specs.get(spec.name) == fingerprint:
+                return
+            if await self._ensure_collection_locked(spec):
+                self._ensured_collection_specs[spec.name] = fingerprint
 
-    async def _ensure_collection_locked(self, spec: QdrantCollectionSpec) -> None:
-        """Ensure one collection while its process-local name lock is held."""
+    async def _ensure_collection_locked(self, spec: QdrantCollectionSpec) -> bool:
+        """Ensure one collection while its process-local name lock is held.
+
+        Return ``True`` only when the complete requested schema is known to be
+        present. A transient payload-index failure is intentionally left
+        uncached so a later call can repair it.
+        """
 
         exists = await self._client.collection_exists(spec.name)
+        created = False
         if not exists:
             vectors_config: dict[str, qmodels.VectorParams] = {}
             sparse_vectors_config: dict[str, qmodels.SparseVectorParams] | None = None
@@ -150,19 +164,33 @@ class QdrantEngine:
                     sparse_vectors_config=sparse_vectors_config,
                     on_disk_payload=spec.on_disk_payload,
                 )
+                created = True
             except Exception:
                 # Another service instance may win the create race after our
                 # existence check. Treat that as success only when Qdrant now
                 # confirms the requested collection exists.
                 if not await self._client.collection_exists(spec.name):
                     raise
-        elif spec.on_disk_payload is not None:
-            await self._client.update_collection(
-                collection_name=spec.name,
-                collection_params=qmodels.CollectionParamsDiff(on_disk_payload=spec.on_disk_payload),
-            )
 
+        existing_payload_indexes: set[str] = set()
+        if not created and (spec.on_disk_payload is not None or spec.payload_indexes):
+            info = await self._client.get_collection(spec.name)
+            existing_payload_indexes = set((getattr(info, "payload_schema", None) or {}).keys())
+            current_on_disk_payload = getattr(
+                getattr(getattr(info, "config", None), "params", None),
+                "on_disk_payload",
+                None,
+            )
+            if spec.on_disk_payload is not None and current_on_disk_payload != spec.on_disk_payload:
+                await self._client.update_collection(
+                    collection_name=spec.name,
+                    collection_params=qmodels.CollectionParamsDiff(on_disk_payload=spec.on_disk_payload),
+                )
+
+        complete = True
         for index in spec.payload_indexes:
+            if index.field_name in existing_payload_indexes:
+                continue
             try:
                 await self._client.create_payload_index(
                     collection_name=spec.name,
@@ -170,12 +198,29 @@ class QdrantEngine:
                     field_schema=index.field_schema,
                 )
             except Exception as exc:
+                complete = False
                 logger.debug(
                     "qdrant payload index create skipped",
                     collection=spec.name,
                     field_name=index.field_name,
                     error=str(exc),
                 )
+        return complete
+
+    @staticmethod
+    def _collection_spec_fingerprint(spec: QdrantCollectionSpec) -> tuple[Any, ...]:
+        """Return a stable process-local identity for one requested schema."""
+
+        return (
+            spec.vector_size,
+            spec.dense_vector_name,
+            spec.sparse_vector_name,
+            spec.distance,
+            spec.enable_dense,
+            spec.enable_sparse,
+            spec.on_disk_payload,
+            tuple((index.field_name, repr(index.field_schema)) for index in spec.payload_indexes),
+        )
 
     async def upsert(self, collection: str, points: list[qmodels.PointStruct]) -> None:
         """Upsert point structs into one collection (no-op on empty input)."""
