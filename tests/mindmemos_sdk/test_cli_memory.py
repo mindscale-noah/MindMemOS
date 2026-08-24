@@ -568,6 +568,8 @@ def test_memory_add_builds_dialogue_message(fake_client):
             "agent1",
             "--session-id",
             "s1",
+            "--task",
+            "总结咖啡偏好",
             "--metadata-json",
             '{"source": "cli"}',
         ]
@@ -582,6 +584,7 @@ def test_memory_add_builds_dialogue_message(fake_client):
     assert kwargs["app_id"] == "app1"
     assert kwargs["agent_id"] == "agent1"
     assert kwargs["session_id"] == "s1"
+    assert kwargs["task"] == "总结咖啡偏好"
     assert kwargs["metadata"] == {"source": "cli"}
     (message,) = kwargs["messages"]
     assert isinstance(message, DialogueMessage)

@@ -61,7 +61,7 @@ with MindMemOSClient(user_id="alice", app_id="my-agent") as client:
 ## CLI
 
 ```bash
-mindmemos memory add --content "I prefer iced Americano" --user-id alice
+mindmemos memory add --content "Installed pandas successfully" --task "Install pandas" --user-id alice
 mindmemos memory search "coffee preference" --top-k 5 --user-id alice
 ```
 

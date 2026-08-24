@@ -10,7 +10,7 @@ from ..logging import traced
 from ..mappers import parse_search_dsl
 from ..persistence import MemoryOperationRecorder
 from ..persistence.memory import MemoryPersistence
-from ..pipeline import SearchPipeline, create_pipeline
+from ..pipeline import AddPipeline, SearchPipeline, create_pipeline
 from ..pipeline.dreaming.consolidation import MEMORY_DREAMING_TOPIC, MemoryConsolidationPipeline
 from ..pipeline.feedback.default import MEMORY_FEEDBACK_TOPIC, DefaultFeedbackPipeline
 from ..pipeline.mixed_memory import MixedAddPipeline
@@ -56,9 +56,10 @@ class VanillaMemoryService(BaseMemoryService):
         *,
         config: MemoryConfig | None = None,
         task_client: TaskClient | None = None,
-        add_pipeline: VanillaAddPipeline | None = None,
+        add_pipeline: AddPipeline | None = None,
         direct_add_pipeline: VanillaAddPipeline | None = None,
-        search_pipeline: VanillaSearchPipeline | None = None,
+        search_pipeline: SearchPipeline | None = None,
+        feedback_search_pipeline: SearchPipeline | None = None,
         dreaming_pipeline: MemoryConsolidationPipeline | None = None,
         feedback_pipeline: DefaultFeedbackPipeline | None = None,
         recorder: MemoryOperationRecorder | None = None,
@@ -66,29 +67,19 @@ class VanillaMemoryService(BaseMemoryService):
         self._persistence = persistence
         self._config = config or get_config()
         resolved_recorder = recorder or MemoryOperationRecorder.from_service(persistence.service)
-        resolved_add_pipeline = add_pipeline or create_pipeline(
-            type="add",
-            name=self._config.pipelines.default_add_pipeline,
-            config=self._config,
+        resolved_add_pipeline = add_pipeline or VanillaAddPipeline.from_config(
+            self._config,
             persistence=persistence,
         )
-        resolved_search_pipeline = search_pipeline or create_pipeline(
-            type="search",
-            name=self._config.pipelines.default_search_pipeline,
-            config=self._config,
+        resolved_search_pipeline = search_pipeline or VanillaSearchPipeline.from_config(
+            self._config,
             persistence=persistence,
         )
         self._dreaming_pipeline = dreaming_pipeline
         self._dreaming_recorder = resolved_recorder
         self._feedback_pipeline = feedback_pipeline
         self._feedback_recorder = resolved_recorder
-        # Feedback recall stays on generic vanilla search regardless of the
-        # configured default search pipeline (task_experience_search would not
-        # be a meaningful recall source).
-        self._feedback_search_pipeline = search_pipeline or VanillaSearchPipeline.from_config(
-            self._config,
-            persistence=persistence,
-        )
+        self._feedback_search_pipeline = feedback_search_pipeline or resolved_search_pipeline
         super().__init__(
             persistence,
             add_pipeline=resolved_add_pipeline,
@@ -297,6 +288,12 @@ class MixedMemoryService(VanillaMemoryService):
                 type="search",
                 name=resolved_config.pipelines.default_search_pipeline,
                 config=resolved_config,
+                persistence=persistence,
+            ),
+            # Feedback recall is a generic memory query. Keep it on vanilla
+            # search even when the configured request pipeline matches tasks.
+            feedback_search_pipeline=VanillaSearchPipeline.from_config(
+                resolved_config,
                 persistence=persistence,
             ),
             direct_add_pipeline=direct_add_pipeline,

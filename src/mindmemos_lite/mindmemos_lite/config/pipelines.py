@@ -26,7 +26,13 @@ class MemoryModePipelineConfig(MindMemOSConfig):
 
 
 def _default_mode_pipelines() -> dict[str, MemoryModePipelineConfig]:
-    return {"vanilla": MemoryModePipelineConfig()}
+    return {
+        "vanilla": MemoryModePipelineConfig(),
+        "experience": MemoryModePipelineConfig(
+            add_pipeline="trajectory_add",
+            search_pipeline="task_experience_search",
+        ),
+    }
 
 
 @dataclass
@@ -55,7 +61,7 @@ class MixedAddPipelineConfig(MindMemOSConfig):
 class PipelineRoutingConfig(MindMemOSConfig):
     """Top-level mapping from stable public modes to concrete pipelines."""
 
-    default_search_mode: str = "vanilla"
+    default_search_mode: str = "experience"
     """Mode used when a search request omits ``memory_mode``."""
 
     default_add_pipeline: str = "trajectory_add"

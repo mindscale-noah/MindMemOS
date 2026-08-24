@@ -115,11 +115,15 @@ pipelines:
   # Configure vanilla_search for a generic hybrid search, or mode_search for
   # request-time memory_mode routing.
   default_search_pipeline: task_experience_search
-  default_search_mode: vanilla
+  # Public mode stamped on experience memories and used when mode_search is selected.
+  default_search_mode: experience
   modes:
     vanilla:
       add_pipeline: vanilla_add
       search_pipeline: vanilla_search
+    experience:
+      add_pipeline: trajectory_add
+      search_pipeline: task_experience_search
   mixed_add:
     modes:
       - vanilla

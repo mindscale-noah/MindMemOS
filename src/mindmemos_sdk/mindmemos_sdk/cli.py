@@ -265,6 +265,10 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
     add.add_argument("--app-id", help="Request app id.")
     add.add_argument("--agent-id", help="Request agent id.")
     add.add_argument("--session-id", help="Request session id.")
+    add.add_argument(
+        "--task",
+        help="Task completed by this trajectory. Required by the default experience pipeline.",
+    )
     add.add_argument("--metadata-json", help="Business metadata as a JSON object string.")
     add.add_argument("--skill-context-json", help="Skill context array as JSON; overrides SDK auto-detection.")
     add.add_argument("--async", dest="async_mode", action="store_true", help="Use async add mode.")
@@ -808,6 +812,7 @@ def _handle_memory_add(args: argparse.Namespace) -> int:
                 app_id=args.app_id,
                 agent_id=args.agent_id,
                 session_id=args.session_id,
+                task=args.task,
                 metadata=metadata,
                 skill_context=skill_context,
             )

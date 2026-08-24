@@ -134,6 +134,7 @@ async def test_mode_search_rejects_unconfigured_mode() -> None:
 
 def test_pipeline_routing_config_rejects_unknown_mixed_add_mode() -> None:
     config = PipelineRoutingConfig(
+        default_search_mode="vanilla",
         modes={"vanilla": MemoryModePipelineConfig()},
         mixed_add=MixedAddPipelineConfig(modes=["vanilla", "experience"]),
     )

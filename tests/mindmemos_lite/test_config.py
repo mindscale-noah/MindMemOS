@@ -129,10 +129,14 @@ def test_example_config_selects_pgvector_with_typed_options() -> None:
     assert OmegaConf.get_type(cfg.pipelines) is PipelineRoutingConfig
     assert OmegaConf.get_type(cfg.pipelines.modes.vanilla) is MemoryModePipelineConfig
     assert OmegaConf.get_type(cfg.pipelines.mixed_add) is MixedAddPipelineConfig
-    assert cfg.pipelines.default_search_mode == "vanilla"
-    assert list(cfg.pipelines.modes) == ["vanilla"]
+    assert cfg.pipelines.default_add_pipeline == "trajectory_add"
+    assert cfg.pipelines.default_search_pipeline == "task_experience_search"
+    assert cfg.pipelines.default_search_mode == "experience"
+    assert list(cfg.pipelines.modes) == ["vanilla", "experience"]
     assert cfg.pipelines.modes.vanilla.add_pipeline == "vanilla_add"
     assert cfg.pipelines.modes.vanilla.search_pipeline == "vanilla_search"
+    assert cfg.pipelines.modes.experience.add_pipeline == "trajectory_add"
+    assert cfg.pipelines.modes.experience.search_pipeline == "task_experience_search"
     assert list(cfg.pipelines.mixed_add.modes) == ["vanilla"]
     assert OmegaConf.get_type(cfg.algo_config) is VanillaAlgorithmConfig
     assert OmegaConf.get_type(cfg.algo_config.text_processing) is TextProcessingConfig
