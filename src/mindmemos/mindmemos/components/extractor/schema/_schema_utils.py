@@ -59,10 +59,10 @@ def schema_memory_type(entity_type: str | None, property_name: str | None = None
 
 
 def strip_for_generation(schema: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Strip schema entries that should not be used for generation.
+    """Return the schema entries used for entity generation.
 
-    Higher-order (order >= 2) properties are intentionally retained so they are
-    extracted in the single entity-generation call rather than a separate pass.
+    The ``episodes`` pseudo-entity is dropped because the episode entity is built
+    by the dedicated episode-entity branch rather than the generic entity prompt.
     """
     return [item for item in schema if item.get("entity_type") != "episodes"]
 

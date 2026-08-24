@@ -207,12 +207,9 @@ class SchemaAddPlanner:
         context: MemoryRequestContext,
         request_metadata: dict[str, Any],
         created_at: datetime,
-        episode_time: str = "",
-        prompt_set: AddPromptSet | None = None,
         progress: ProgressReporter | None = None,
     ) -> tuple[MemoryDbWritePlan, list[MemoryAddEventItem]]:
         """Build a complete database write plan from extracted schema entities."""
-        del prompt_set  # rule-based planning no longer needs per-call prompts
         await _report_progress(
             progress,
             "memory_planning",
@@ -513,11 +510,9 @@ class SchemaAddPlanner:
         context: MemoryRequestContext,
         created_at: datetime,
         request_metadata: dict[str, Any],
-        memory_id: str | None = None,
-        extra_metadata: dict[str, Any] | None = None,
     ) -> MemoryWrite:
         """Build a MemoryWrite DTO from one extracted property dictionary."""
-        memory_id = memory_id or str(uuid4())
+        memory_id = str(uuid4())
         property_name = str(prop.get("property_name") or "default_property")
         metadata = base_metadata(request_metadata)
         metadata.update(
@@ -528,8 +523,6 @@ class SchemaAddPlanner:
                 "entity_name": entity_write.entity_name,
             }
         )
-        if extra_metadata:
-            metadata.update(extra_metadata)
         mem_type = schema_memory_type(entity_write.entity_type, property_name)
         return MemoryWrite(
             memory_id=memory_id,

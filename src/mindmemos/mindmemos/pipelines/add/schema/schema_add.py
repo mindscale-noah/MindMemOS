@@ -1035,7 +1035,6 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
             context=episode_context,
             request_metadata=add_record_ops.metadata(records),
             created_at=added_at,
-            episode_time=dialogue_timestamp,
             progress=progress,
         )
 
