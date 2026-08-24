@@ -159,3 +159,122 @@ async def test_score_threshold_none_uses_indices_only_rerank() -> None:
 
     assert [entry.id for entry in result] == ["c", "a", "b"]
     assert reranker.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_with_outcome_aligns_scores_and_skips_truncation() -> None:
+    async def fake_rerank_with_scores(client, query, docs, top_n):
+        return [(2, 0.9), (1, 0.7), (0, 0.4)]
+
+    final_filter = SearchFinalFilter(
+        rerank_client=FakeRerankClient(),
+        rerank_with_scores_fn=fake_rerank_with_scores,
+    )
+    candidates = [item("a", "A"), item("b", "B"), item("c", "C")]
+
+    outcome = await final_filter.apply_with_outcome(
+        query="q", candidates=candidates, top_k=1, rerank=True, truncate=False,
+    )
+
+    # truncate=False defers the top_k cut so retention can pack the full pool.
+    assert [entry.id for entry in outcome.candidates] == ["c", "b", "a"]
+    assert outcome.rerank_scores == [0.9, 0.7, 0.4]
+    assert outcome.rerank_outcome == "applied"
+
+
+@pytest.mark.asyncio
+async def test_apply_with_outcome_applies_score_threshold() -> None:
+    async def fake_rerank_with_scores(client, query, docs, top_n):
+        return [(0, 0.95), (1, 0.5), (2, 0.3)]
+
+    final_filter = SearchFinalFilter(
+        rerank_client=FakeRerankClient(),
+        rerank_with_scores_fn=fake_rerank_with_scores,
+    )
+    candidates = [item("a", "high"), item("b", "medium"), item("c", "low")]
+
+    outcome = await final_filter.apply_with_outcome(
+        query="q", candidates=candidates, top_k=10, rerank=True, score_threshold=0.6,
+    )
+
+    assert [entry.id for entry in outcome.candidates] == ["a"]
+    assert outcome.rerank_scores == [0.95]
+    assert outcome.rerank_outcome == "applied"
+
+
+@pytest.mark.asyncio
+async def test_apply_with_outcome_slices_scores_when_truncating() -> None:
+    async def fake_rerank_with_scores(client, query, docs, top_n):
+        return [(2, 0.9), (1, 0.7), (0, 0.4)]
+
+    final_filter = SearchFinalFilter(
+        rerank_client=FakeRerankClient(),
+        rerank_with_scores_fn=fake_rerank_with_scores,
+    )
+    candidates = [item("a", "A"), item("b", "B"), item("c", "C")]
+
+    outcome = await final_filter.apply_with_outcome(
+        query="q", candidates=candidates, top_k=2, rerank=True,
+    )
+
+    assert [entry.id for entry in outcome.candidates] == ["c", "b"]
+    assert outcome.rerank_scores == [0.9, 0.7]
+
+
+@pytest.mark.asyncio
+async def test_apply_with_outcome_reports_disabled_without_rerank() -> None:
+    final_filter = SearchFinalFilter()
+    candidates = [item("a", "A"), item("b", "B")]
+
+    outcome = await final_filter.apply_with_outcome(
+        query="q", candidates=candidates, top_k=2, rerank=False,
+    )
+
+    assert [entry.id for entry in outcome.candidates] == ["a", "b"]
+    assert outcome.rerank_scores == [None, None]
+    assert outcome.rerank_outcome == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_apply_with_outcome_reports_skipped_unavailable() -> None:
+    reranker = FakeRerankClient(available=False)
+    final_filter = SearchFinalFilter(rerank_client=reranker)
+    candidates = [item("a", "A"), item("b", "B")]
+
+    outcome = await final_filter.apply_with_outcome(
+        query="q", candidates=candidates, top_k=2, rerank=True,
+    )
+
+    assert [entry.id for entry in outcome.candidates] == ["a", "b"]
+    assert outcome.rerank_scores == [None, None]
+    assert outcome.rerank_outcome == "skipped_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_apply_with_outcome_reports_failed_rerank() -> None:
+    async def failing_rerank_with_scores(client, query, docs, top_n):
+        raise RuntimeError("rerank down")
+
+    final_filter = SearchFinalFilter(
+        rerank_client=FakeRerankClient(),
+        rerank_with_scores_fn=failing_rerank_with_scores,
+    )
+    candidates = [item("a", "A"), item("b", "B")]
+
+    outcome = await final_filter.apply_with_outcome(
+        query="q", candidates=candidates, top_k=2, rerank=True,
+    )
+
+    assert [entry.id for entry in outcome.candidates] == ["a", "b"]
+    assert outcome.rerank_outcome == "failed"
+
+
+@pytest.mark.asyncio
+async def test_apply_with_outcome_returns_empty_for_no_candidates() -> None:
+    final_filter = SearchFinalFilter()
+
+    outcome = await final_filter.apply_with_outcome(query="q", candidates=[], top_k=5, rerank=True)
+
+    assert outcome.candidates == []
+    assert outcome.rerank_scores == []
+    assert outcome.rerank_outcome == "disabled"

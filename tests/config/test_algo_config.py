@@ -2,6 +2,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from mindmemos.config import (
     EpisodesChunkerConfig,
@@ -16,6 +17,11 @@ from mindmemos.config import (
 )
 from mindmemos.config.app import ModelEndpointConfig
 from mindmemos.llm.router import build_litellm_params
+
+skip_no_locomo_schema = pytest.mark.skipif(
+    not Path("config/locomo_schema.yaml").exists(),
+    reason="config/locomo_schema.yaml (gitignored local benchmark config) not present",
+)
 
 
 def test_dev_example_declares_all_algorithm_config_fields() -> None:
@@ -39,7 +45,11 @@ def test_vanilla_search_defaults_bound_prefetch_and_dedup_work() -> None:
 
 def test_dev_configs_keep_vanilla_settings_in_canonical_sections() -> None:
     legacy_flat_alias = "non" + "_schema"
-    for path in ("config/mindmemos/dev.yaml", "config/mindmemos/dev.example.yaml"):
+    # dev.yaml is a gitignored developer-local overlay; check it only when present.
+    paths = ["config/mindmemos/dev.example.yaml"]
+    if Path("config/mindmemos/dev.yaml").exists():
+        paths.append("config/mindmemos/dev.yaml")
+    for path in paths:
         raw_algo_config = _load_algo_config(path)
 
         assert "vanilla_add" not in raw_algo_config
@@ -130,6 +140,7 @@ def test_litellm_params_preserve_explicit_temperature() -> None:
     assert params["temperature"] == 0.7
 
 
+@skip_no_locomo_schema
 def test_locomo_schema_sets_router_failure_cooldown_policy() -> None:
     cfg = build_config(config_path="config/locomo_schema.yaml")
 

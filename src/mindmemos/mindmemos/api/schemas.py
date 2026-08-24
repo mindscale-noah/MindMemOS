@@ -175,6 +175,9 @@ class SearchRequest(ActorIdentityRequest):
     score_threshold: float | None = Field(default=None, ge=0, le=1)
     """Minimum rerank relevance score (0–1). Only effective when rerank=True."""
 
+    token_budget: int | None = Field(default=None, ge=1)
+    """Optional strict token budget; enables token-budget retention post-processing."""
+
     max_rounds: int = Field(default=3, ge=1)
     """Maximum agentic rounds. Ignored when search_strategy is fast."""
 

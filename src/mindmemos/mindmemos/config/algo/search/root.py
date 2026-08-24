@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from .agentic import AgenticConfig
 from .default_search import DefaultSearchConfig
 from .rerank import RerankConfig
+from .retention import MemoryRetentionConfig
 from .schema import SchemaSearchConfig
 from .vanilla import VanillaSearchConfig
 
@@ -35,3 +36,6 @@ class SearchConfig:
 
     rerank: RerankConfig = field(default_factory=RerankConfig)
     """Shared reranking configuration."""
+
+    retention: MemoryRetentionConfig = field(default_factory=MemoryRetentionConfig)
+    """Request-gated token-budget retention configuration."""
