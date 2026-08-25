@@ -48,7 +48,10 @@ results/
 outputs/
 docs/paper/
 docs/superpowers/
-resources/memory/
+# resources/memory/ holds local runtime artifacts, except the tracked
+# wildclawbench eval-image plugin source kept under resources/memory/wildclawbench/.
+resources/memory/*
+!resources/memory/wildclawbench/
 
 # Node / openclaw plugin build artifacts
 node_modules/
