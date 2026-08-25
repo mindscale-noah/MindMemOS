@@ -1,0 +1,110 @@
+# WildClawBench schema-mode project override.
+#
+# Mint a key with:
+#   uv run python scripts/wildclawbench/new_key.py \
+#     --benchmark wildclawbench --memory-algorithm schema \
+#     --project-override-config config/presets/project_override_wildclawbench_schema.example.yaml \
+#     [--disable-previous]
+#
+# The top level of this file IS the project_override_config block that gets
+# stored on the API key entry and deep-merged over config/mindmemos/dev.yaml
+# (api_keys.yaml is hot-reloaded; the override applies to the next add/search).
+#
+# Tuning goals vs the dev.yaml defaults:
+#   - add: task-trajectory chunking (one task = one episode, rule-cut only
+#          past 50 messages) and bounded extraction cost per task
+#   - search: fast non-agentic profile — kill per-entity agent shrink,
+#          multi-hop expansion, dual-path property recall, and rerank calls so
+#          a search is one small time-extraction LLM call + embed + BM25
+#
+# Version note: this branch has a single schema-add flow (self-labeled
+# mem_extract_version=schema_add_v1). When the algo_config.add.schema.version
+# switch (feat/accelerate_schema) merges here, pin `version: v1` under
+# add.schema — the merge/higher_order/extraction keys this override tunes are
+# v1-flow knobs and v2's rule-based flow would silently ignore them.
+
+algo_config:
+  common:
+    prompt_language: EN
+
+  add:
+    schema:
+      # Task-experience entity schema: task (provenance) + environment/method/
+      # behavioral experience classes (reusable knowledge) + episodes backup.
+      entity_modeling_path: config/presets/entity_modeling_wildclawbench.json
+      extraction:
+        enable_schema_selection: true
+        use_search_fields: true
+        search_fields_max: 8
+        episode_search_fields_augment: true
+        episode_augment_count: 2
+        # Cost bounds per task trajectory
+        max_entities_per_conversation: 60
+        max_properties_per_entity: 8
+        max_entity_resolve_concurrency: 10
+      merge:
+        enable_entity_merge_decision: true
+        entity_recall_top_k: 15
+        max_merge_retries: 8
+        use_property_merge: false
+        secondary_search_limit: 30
+        secondary_search_retries: 3
+      higher_order:
+        # Synthesizes order-2 "distilled_rule" properties across merged
+        # experience entities — the cross-task distillation mechanism.
+        enabled: true
+        top_k: 10
+        min_evidence_count: 2
+      episode_edge:
+        top_k: 10
+      chunker:
+        # One task = one episode, deterministically. A WildClawBench task is a
+        # single user instruction + tool loop added in one forced drain, so:
+        # rule mode never LLM-splits within a task (zero boundary LLM calls);
+        # streaming_window_size must be >= max_episode_length or the window
+        # loop forces cuts (non-final windows never commit their tail);
+        # tasks longer than 50 messages are rule-cut every 50.
+        split_mode: rule
+        min_episode_length: 1
+        max_episode_length: 50
+        max_buffer_size: 1000
+        split_on_user_speaker: true
+        max_minutes_from_first: 60
+        streaming_window_size: 50
+      drain:
+        episode_generation_max_retries: 3
+
+  search:
+    schema_search:
+      entity:
+        recall_size: 200
+        rrf_k: 80
+        top_k: 30
+        top_n: 10
+        use_reranker: false
+        max_rerank_candidates: 100
+        use_maxsim_rescore: false
+        search_field_overfetch_factor: 3
+      property:
+        recall_size: 45
+        rrf_k: 60
+        top_k: 20
+        top_n: 16
+        alloc_min_factor: 0.5
+        alloc_max_factor: 1.5
+        use_property_extension: false
+        extension_step: 3
+        higher_order_ratio: 0.3
+      dual_path:
+        enabled: false
+      entity_weights:
+        # Experience entities, not raw episode backups, are what a task
+        # instruction should recall.
+        force_balanced_split: false
+        episode_weight: 0.3
+        non_episode_weight: 0.7
+      edge:
+        top_k: 10
+        min_relevance_score: 0.1
+      multi_hop: 1
+      use_entity_agent_search: false

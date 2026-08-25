@@ -1,0 +1,143 @@
+[
+  {
+    "entity_type": "task",
+    "entity_description": "One entity per WildClawBench task run, named by its canonical objective. Records what the task was, whether it succeeded, and the single most important lesson. Serves as provenance and as the recall anchor for 'similar past task' queries.",
+    "entity_instruction": "Create EXACTLY ONE task entity per task run. The entity name MUST be a concise imperative objective (verb + object + key constraint, e.g. 'Find arxiv paper by title and download PDF'). Reuse the same name when the same task runs again so runs merge into one entity. Do not use the full prompt text as the name.",
+    "search_weight": 0.8,
+    "static_property": {
+      "name": "Canonical task objective in imperative form (verb + object + key constraint).",
+      "category": "Task category derived from the task content (e.g. productivity flow, code intelligence, social interaction, search retrieval, creative synthesis, safety alignment)."
+    },
+    "dynamic_property": {
+      "outcome": {
+        "type": "string",
+        "desc": "Final result of the task. Format: 'Task <succeeded/failed/partially succeeded>: <one-line summary of what was produced or what went wrong>'.",
+        "example": "Task succeeded: downloaded the MAE paper PDF and wrote a 3-section summary to summary.md",
+        "order": 1
+      },
+      "lesson": {
+        "type": "string",
+        "desc": "The single most transferable lesson from this task run. Format: 'When <situation>, <do X> because <reason>'. Only state what the transcript actually evidences.",
+        "example": "When downloading a paper by title, search the exact title in quotes first; guessing arxiv IDs wasted 3 tool calls",
+        "order": 1
+      }
+    }
+  },
+  {
+    "entity_type": "environment_experience",
+    "entity_description": "One entity per CLASS of recurring environment constraint or command pitfall: things that fail in this execution environment and why (missing tools, permission errors, version conflicts, network limits, command/parameter errors with a known fix). The entity name is the canonical statement of the constraint and doubles as the merge key across tasks.",
+    "entity_instruction": "Create ONE entity per distinct ROOT CAUSE, never per occurrence: two tasks hitting the same wall belong to the SAME entity. The entity name MUST be a stable canonical statement of the constraint (e.g. 'pip install fails with PEP 668 externally-managed-environment'). If an equivalent constraint entity already fits, reuse its exact name so occurrences merge. Only create entities for failures actually observed in the transcript, with the error text as evidence.",
+    "search_weight": 1.0,
+    "static_property": {
+      "name": "Canonical statement of the constraint or pitfall (what fails, in what environment)."
+    },
+    "dynamic_property": {
+      "symptom": {
+        "type": "string",
+        "desc": "Observed failure evidence. Format: 'In <environment/context>, running <command/action> fails with <error/behavior>'. Quote the key error text.",
+        "example": "In the eval container, running pip install pandas fails with 'error: externally-managed-environment'",
+        "order": 1
+      },
+      "workaround": {
+        "type": "string",
+        "desc": "Verified way around it. Format: 'Use <working alternative/command>; verified in <situation>'. Omit if no workaround was verified.",
+        "example": "Use pip install --break-system-packages pandas; verified in the same container",
+        "order": 1
+      },
+      "verified_in": {
+        "type": "string",
+        "desc": "Provenance of this occurrence. Format: 'Hit in task <task objective>; relevant commands: <commands>'.",
+        "example": "Hit in task 'Set up python scraping script and run it'; relevant commands: pip install pandas",
+        "order": 1
+      },
+      "distilled_rule": {
+        "type": "string",
+        "desc": "Synthesized one-line rule covering multiple occurrences. System-filled by higher-order synthesis; do not generate during extraction.",
+        "example": "",
+        "order": 2
+      }
+    }
+  },
+  {
+    "entity_type": "method_experience",
+    "entity_description": "One entity per CLASS of effective method: workflows, tool sequences, and recovery strategies that verifiably worked. The entity name is the canonical statement of the method and doubles as the merge key across tasks.",
+    "entity_instruction": "Create ONE entity per distinct reusable method, not per task: the same trick used in three tasks is ONE entity whose occurrences merge. The entity name MUST be a stable canonical statement of the method (e.g. 'Access GitHub raw content through the mirror endpoint when github.com is blocked'). Only create entities for approaches the transcript shows actually succeeding.",
+    "search_weight": 1.0,
+    "static_property": {
+      "name": "Canonical statement of the method (what to do, for what goal)."
+    },
+    "dynamic_property": {
+      "when_to_use": {
+        "type": "string",
+        "desc": "Trigger condition. Format: 'Use when <situation/goal>, especially if <constraint>'.",
+        "example": "Use when fetching a file from github.com and the connection times out",
+        "order": 1
+      },
+      "steps": {
+        "type": "string",
+        "desc": "Concrete steps or command sequence. Format: '1. <step/command> 2. <step/command> ...'. Keep commands exact.",
+        "example": "1. Replace github.com with the mirror host in the raw URL 2. curl -L the mirrored raw URL",
+        "order": 1
+      },
+      "outcome": {
+        "type": "string",
+        "desc": "Verified result and provenance. Format: 'Worked: <result>; verified in task <task objective>'.",
+        "example": "Worked: fetched the config file in one call; verified in task 'Back up dotfiles to a gist'",
+        "order": 1
+      },
+      "distilled_rule": {
+        "type": "string",
+        "desc": "Synthesized one-line rule covering multiple uses. System-filled by higher-order synthesis; do not generate during extraction.",
+        "example": "",
+        "order": 2
+      }
+    }
+  },
+  {
+    "entity_type": "behavioral_experience",
+    "entity_description": "One entity per CLASS of behavioral precedent: how the agent should act regarding safety and interaction — do not overwrite existing files, confirm before destructive actions, ask instead of assume for ambiguous personal requests, how to handle refusals. The entity name is the canonical statement of the behavior and doubles as the merge key across tasks.",
+    "entity_instruction": "Create ONE entity per distinct behavioral principle, not per task. The entity name MUST be a stable canonical statement of the behavior (e.g. 'Check for existing files before writing a deliverable'). Only create entities grounded in what the transcript shows (a mistake made, a correction received, a rule stated in the task).",
+    "search_weight": 1.0,
+    "static_property": {
+      "name": "Canonical statement of the behavioral principle."
+    },
+    "dynamic_property": {
+      "precedent_context": {
+        "type": "string",
+        "desc": "What happened. Format: 'In task <task objective>, <situation that established the precedent>'.",
+        "example": "In task 'Write meeting notes file', an existing notes.md was present and overwriting it would have destroyed prior notes",
+        "order": 1
+      },
+      "correct_behavior": {
+        "type": "string",
+        "desc": "What to do. Format: 'Always <behavior> when <condition>'.",
+        "example": "Always list the target directory and read any existing file before writing a deliverable",
+        "order": 1
+      },
+      "distilled_rule": {
+        "type": "string",
+        "desc": "Synthesized one-line rule covering multiple precedents. System-filled by higher-order synthesis; do not generate during extraction.",
+        "example": "",
+        "order": 2
+      }
+    }
+  },
+  {
+    "entity_type": "episodes",
+    "entity_description": "**MANDATORY**: ALWAYS create exactly ONE episode entity for EVERY dialogue segment. This entity records the raw dialogue content objectively with timestamps. The episode entity serves as the original dialogue backup and MUST be included in every extraction. Use a simple descriptive name summarizing the dialogue topic (e.g. 'Discussion about dance performance', 'Planning dance studio').",
+    "entity_instruction": "Episode entity names should be concise topic summaries. The description and input_messages will be automatically filled by the system.",
+    "search_weight": 0.5,
+    "static_property": {
+      "detail": "Detailed description of the dialogue snippet content and main topics discussed",
+      "input_messages": "Raw context record, leave it blank and it will be filled by system."
+    },
+    "dynamic_property": {
+      "default_property": {
+        "type": "string",
+        "desc": "Catch-all property for episode-related details that do not fit into static properties. Each value must be a complete, self-contained statement.",
+        "example": "On 2023-05-20, the dialogue covered additional context about Zhang Wei's upcoming travel plans",
+        "order": 1
+      }
+    }
+  }
+]
