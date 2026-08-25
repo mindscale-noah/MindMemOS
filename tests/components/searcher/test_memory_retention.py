@@ -210,9 +210,9 @@ def test_mixed_v2_prefers_novelty_over_near_duplicates() -> None:
         candidate("novel", "zeta eta", rank=2, relevance=0.4),
     ]
 
-    result = selector.select(query="alpha", candidates=candidates, token_budget=10)
+    # Budget 5 fits rel (2 tokens) plus exactly one of dup (3) / novel (2).
+    # Greedy priority would take dup (relevance 0.5 > 0.4); the MMR redundancy
+    # penalty must pick novel instead.
+    result = selector.select(query="alpha", candidates=candidates, token_budget=5)
 
-    ids = [c.id for c in result.candidates]
-    assert ids[0] == "rel"
-    # Once the top item is kept, MMR prefers the novel item over the near-duplicate.
-    assert "novel" in ids
+    assert [c.id for c in result.candidates] == ["rel", "novel"]

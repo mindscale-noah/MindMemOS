@@ -211,6 +211,7 @@ def serialize_feedback_recalled_memories(
         item.setdefault("event_time", None)
         item.setdefault("source_timestamp", None)
         item.setdefault("lineage", None)
+        item.setdefault("metadata", {})
         result.append(item)
     return result
 

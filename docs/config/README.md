@@ -168,16 +168,19 @@ They are read at load time (`.env` at the repository root is honoured):
 Retention is activated per request by passing `token_budget` in the search
 request (Python SDK / CLI: the `token_budget` / `--token-budget` option). When
 omitted, search behaves exactly as before; when set, results are packed under a
-strict token budget after final filtering. Every returned memory keeps its real
-memory id, usable with get/update/delete and feedback as usual.
+strict token budget after final filtering. Retention itself never merges or
+rewrites results: every returned item passes through with the id and content
+produced by the underlying engine.
 
 Both request limits bind at the same time, whichever is tighter: the response
 contains at most `top_k` memories whose combined estimated tokens stay within
 `token_budget`. When rerank is enabled it scores the whole retention candidate
 pool (up to `max_candidates`), so budget-aware selection is not pre-narrowed to
 `top_k`; lower `max_candidates` to make retention consider fewer (e.g. only
-`top_k`) candidates per request. Redundancy is handled at selection time by the
-`mixed-v2` MMR packing (`mmr_lambda`), never by merging or rewriting memories.
+`top_k`) candidates per request. Selection never merges or rewrites memories.
+Redundancy-aware packing is available by setting `selector_version` to
+`mixed-v2` (MMR, `mmr_lambda`); the default `mixed-v1` packs greedily by
+priority.
 
 | Field | Default | Description |
 |---|---|---|

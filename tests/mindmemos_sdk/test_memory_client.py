@@ -506,6 +506,7 @@ def test_feedback_normalizes_raw_recalled_memory_context():
             "event_time": None,
             "source_timestamp": None,
             "lineage": None,
+            "metadata": {},
         }
     ]
 

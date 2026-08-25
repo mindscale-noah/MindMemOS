@@ -193,3 +193,33 @@ async def test_search_pipeline_token_budget_reranks_full_pool_before_packing(
     assert rerank_top_n_calls == [5]
     # top_k still caps the final packed result count.
     assert [m.id for m in result.memories] == ["mem-0", "mem-1", "mem-2"]
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_token_budget_keeps_real_engine_ids_for_near_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Retention must never merge or rewrite results: even a pool containing
+    # near-duplicate memories must come back as the engine's own items, with
+    # ids usable by get/update/delete and feedback.
+    _patch_fake_preprocessors(monkeypatch)
+    engine = MultiItemEngine(
+        [
+            "alice likes coffee in seattle",
+            "alice likes coffee in seattle mornings",
+            "bob plays tennis every sunday",
+        ]
+    )
+    pipeline = SearchPipelineImpl(
+        engines={"default": engine},
+        final_filter=SearchFinalFilter(),
+        retention_config=MemoryRetentionConfig(max_candidates=50),
+        db_reader=SimpleNamespace(),
+        db_writer=SimpleNamespace(),
+    )
+
+    result = await pipeline.search(
+        SearchPipelineInput(query="alice coffee", search_pipeline="default", token_budget=10000), make_context()
+    )
+
+    assert sorted(m.id for m in result.memories) == ["mem-0", "mem-1", "mem-2"]
