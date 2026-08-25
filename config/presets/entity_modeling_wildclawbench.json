@@ -126,7 +126,7 @@
     "entity_type": "episodes",
     "entity_description": "**MANDATORY**: ALWAYS create exactly ONE episode entity for EVERY dialogue segment. This entity records the raw dialogue content objectively with timestamps. The episode entity serves as the original dialogue backup and MUST be included in every extraction. Use a simple descriptive name summarizing the dialogue topic (e.g. 'Discussion about dance performance', 'Planning dance studio').",
     "entity_instruction": "Episode entity names should be concise topic summaries. The description and input_messages will be automatically filled by the system.",
-    "search_weight": 0.5,
+    "search_weight": 0.0,
     "static_property": {
       "detail": "Detailed description of the dialogue snippet content and main topics discussed",
       "input_messages": "Raw context record, leave it blank and it will be filled by system."

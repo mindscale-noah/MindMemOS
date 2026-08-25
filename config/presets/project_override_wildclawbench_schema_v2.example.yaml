@@ -87,11 +87,14 @@ algo_config:
       dual_path:
         enabled: false
       entity_weights:
-        # Experience entities, not raw episode backups, are what a task
-        # instruction should recall.
+        # Unified single-path recall (one embed call). episode_weight /
+        # non_episode_weight are ONLY read on the balanced path
+        # (force_balanced_split: true) — left at base defaults, unused here.
+        # Episodes are zeroed instead via the entity model: episodes has
+        # search_weight 0.0 in entity_modeling_wildclawbench.json, so every
+        # episode scores 0 and sinks below all experience/task entities; an
+        # episode surfaces only when non-episode hits cannot fill top_k.
         force_balanced_split: false
-        episode_weight: 0.3
-        non_episode_weight: 0.7
       edge:
         top_k: 10
         min_relevance_score: 0.1
