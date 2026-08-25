@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ....llm import LLMClient
-from ....logging import get_logger
-from ....prompts import AddPromptSet
-from ._runtime_clients import provider_binding_runtime_enabled, resolve_llm_client
+from .....llm import LLMClient, provider_binding_runtime_enabled
+from .....logging import get_logger
+from .....prompts import AddPromptSetV1
+from .._runtime_clients import resolve_llm_client
 from ._schema_utils import dedupe_non_empty, parse_json_object
 from .base import SchemaSearchFieldExtractorProtocol
 
@@ -21,7 +21,7 @@ class SchemaSearchFieldExtractor(SchemaSearchFieldExtractorProtocol):
         self,
         *,
         llm_client: LLMClient | None = None,
-        prompt_set: AddPromptSet | None = None,
+        prompt_set: AddPromptSetV1 | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._prompt_set = prompt_set
@@ -35,7 +35,7 @@ class SchemaSearchFieldExtractor(SchemaSearchFieldExtractorProtocol):
         augment: bool = False,
         augment_count: int = 0,
         fallback_text: str | None = None,
-        prompt_set: AddPromptSet | None = None,
+        prompt_set: AddPromptSetV1 | None = None,
     ) -> list[str]:
         """Build deduplicated schema search fields from entity properties."""
 
@@ -63,7 +63,7 @@ class SchemaSearchFieldExtractor(SchemaSearchFieldExtractorProtocol):
         *,
         context_text: str,
         augment_count: int,
-        prompt_set: AddPromptSet | None = None,
+        prompt_set: AddPromptSetV1 | None = None,
     ) -> list[str]:
         prompts = prompt_set or self._prompt_set
         if prompts is None:

@@ -16,6 +16,11 @@ from .merge import SchemaAddMergeConfig
 class SchemaAddConfig:
     """Configuration for the schema_add pipeline and components."""
 
+    version: str = field(default="v2")
+    """Schema add pipeline version: ``v1`` restores the develop LLM-heavy flow (entity merge
+    decision, higher-order generation, property merge/delete, search-field generation); ``v2``
+    is the rule-based graph-fusion flow."""
+
     extraction: SchemaAddExtractionConfig = field(default_factory=SchemaAddExtractionConfig)
     merge: SchemaAddMergeConfig = field(default_factory=SchemaAddMergeConfig)
     higher_order: SchemaAddHigherOrderConfig = field(default_factory=SchemaAddHigherOrderConfig)

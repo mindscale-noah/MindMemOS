@@ -261,7 +261,21 @@ algo_config:
 
 强调：`rerank` 是可选增强项。生产环境建议先把 Docker、LLM、Embedding 跑稳，再接入 rerank。
 
-## 8. 认证配置
+## 8. 记忆算法版本（v1 / v2）
+
+Schema 记忆抽取有两套可选流程，通过 `algo_config.add.schema.version` 切换：
+
+- `v2`（默认）：规则化图融合，每个 episode 的 LLM 调用更少。
+- `v1`：与 develop 对齐的重 LLM 流程，用于基线对比和回退。
+
+写在基础配置里是部署级默认（修改后需重启生效）；写在项目 API key 的覆盖配置里
+则只对该项目生效（项目覆盖优先，项目下一个 add 请求即生效，无需重启）。两个
+方向的存储都兼容：collection 与 payload 结构相同，v2 可直接读写 v1 数据，反向
+亦然，混合历史安全。产出数据带 `mem_extract_version` 标签（`schema_add` /
+`schema_add_v1`），可区分来源。v1 保留用于基线对比和回退，直到 v2 在
+LoCoMo/PersonaMem 基准上验证完成。
+
+## 9. 认证配置
 
 本地默认使用 API key：
 
@@ -282,7 +296,7 @@ auth:
 Authorization: Bearer <api_key>
 ```
 
-## 9. 最小检查清单
+## 10. 最小检查清单
 
 启动前至少确认：
 

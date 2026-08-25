@@ -6,8 +6,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from ....logging import get_logger
-from ....typing import MemoryRequestContext, MemoryView
+from .....logging import get_logger
+from .....typing import MemoryRequestContext, MemoryView
 
 logger = get_logger(__name__)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ....typing import EntityWrite
+from .....typing import EntityWrite
 from .base import SchemaMergePolicyProtocol
 
 

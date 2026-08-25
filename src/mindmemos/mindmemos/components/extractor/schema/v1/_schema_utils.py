@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any
 
-from ....typing import (
+from .....typing import (
     REL_HAS_PROPERTY_MEMORY,
     REL_MENTIONS,
     REL_RELATED_TO,
@@ -19,7 +19,7 @@ from ....typing import (
     MemoryView,
     MemoryWrite,
 )
-from ...memory_modeling.schema import Edge
+from ....memory_modeling.schema import Edge, memory_timestamp
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 _EPISODIC_SCHEMA_TYPES = frozenset({"episode", "episodes", "episodic"})
@@ -59,12 +59,17 @@ def schema_memory_type(entity_type: str | None, property_name: str | None = None
 
 
 def strip_for_generation(schema: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return the schema entries used for entity generation.
-
-    The ``episodes`` pseudo-entity is dropped because the episode entity is built
-    by the dedicated episode-entity branch rather than the generic entity prompt.
-    """
-    return [item for item in schema if item.get("entity_type") != "episodes"]
+    """Strip schema entries that should not be used for generation."""
+    filtered = [item for item in schema if item.get("entity_type") != "episodes"]
+    for item in filtered:
+        dynamic = item.get("dynamic_property", {})
+        if isinstance(dynamic, dict):
+            item["dynamic_property"] = {
+                name: definition
+                for name, definition in dynamic.items()
+                if not isinstance(definition, dict) or definition.get("order", 1) < 2
+            }
+    return filtered
 
 
 def format_schema_summary(entity_schema: list[dict[str, Any]]) -> str:
@@ -123,16 +128,16 @@ def has_unique_entity_names(raw_memory: dict[str, Any]) -> bool:
 def build_episode_entity(
     *,
     objectified_content: str,
-    title: str,
-    content: str,
+    episode_description: str,
     dialogue_date: str,
     search_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the raw episode entity dictionary used by write planning."""
+    title = episode_description.splitlines()[0][:80] if episode_description else "Episode"
     return {
         "name": title or "Episode",
         "entity_type": "episodes",
-        "description": content,
+        "description": episode_description,
         "record_time": dialogue_date,
         "search_fields": search_fields or [],
         "properties": [
@@ -146,9 +151,25 @@ def build_episode_entity(
     }
 
 
-def entity_write_embedding_text(
-    entity: EntityWrite, memories: list[MemoryWrite] | None = None, *, description_max_chars: int = 500
-) -> str:
+def entity_embedding_text(entity: dict[str, Any]) -> str:
+    """Build embedding text from entity fields, properties, and search fields."""
+    props = entity.get("properties") or []
+    prop_text = " ".join(str(prop.get("value", "")) for prop in props[:5])
+    search_field_text = " ".join(str(field) for field in entity.get("search_fields", [])[:5])
+    return " ".join(
+        part
+        for part in [
+            str(entity.get("name") or ""),
+            str(entity.get("entity_type") or ""),
+            str(entity.get("description") or ""),
+            prop_text,
+            search_field_text,
+        ]
+        if part
+    )
+
+
+def entity_write_embedding_text(entity: EntityWrite, memories: list[MemoryWrite] | None = None) -> str:
     """Build the canonical entity indexing text from the final entity write payload."""
 
     property_text = " ".join(memory.content for memory in (memories or [])[:5])
@@ -160,7 +181,7 @@ def entity_write_embedding_text(
         for part in [
             entity.entity_name,
             entity.entity_type or "",
-            (entity.description or "")[:description_max_chars],
+            entity.description or "",
             property_text,
             search_field_text,
         ]
@@ -181,63 +202,151 @@ def base_metadata(request_metadata: dict[str, Any]) -> dict[str, Any]:
     return {"request_metadata": dict(request_metadata)}
 
 
-def merge_description(old: str | None, new: str | None, *, max_chars: int = 2000) -> str | None:
-    """Merge an existing description with a newly extracted description.
-
-    Concatenates by default (no LLM call). When the result would exceed
-    *max_chars*, the oldest segments are dropped first so the newest
-    information always survives — without this cap a hot entity's description
-    grows without bound and inflates the stored payload, the embedding text,
-    and every later reference-entity prompt.
-    """
+def merge_description(old: str | None, new: str | None) -> str | None:
+    """Handle merge description."""
     if not old:
-        return _cap_description(new, max_chars)
+        return new
     if not new or new in old:
-        return _cap_description(old, max_chars)
-    return _cap_description(f"{old}\n{new}", max_chars)
+        return old
+    return f"{old}\n{new}"
 
 
-def _cap_description(text: str | None, max_chars: int) -> str | None:
-    if text is None or len(text) <= max_chars:
-        return text
-    lines = text.split("\n")
-    while len(lines) > 1 and len("\n".join(lines)) > max_chars:
-        lines.pop(0)
-    return "\n".join(lines)[:max_chars]
+def dedupe_non_empty(values: list[Any]) -> list[str]:
+    """Handle dedupe non empty."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def memory_to_evidence(memory: MemoryView) -> dict[str, Any]:
+    """Convert a memory view into higher-order evidence."""
+    return {
+        "property_name": memory.property_name or "",
+        "timestamp": memory_timestamp(memory),
+        "value": memory.content,
+        "uid": memory.memory_id,
+    }
+
+
+def new_properties_for_higher_order(entity: dict[str, Any]) -> list[dict[str, Any]]:
+    """Handle new properties for higher order."""
+    return [
+        {
+            "property_name": prop.get("property_name", ""),
+            "value": prop.get("value", ""),
+            "time": prop.get("time", ""),
+        }
+        for prop in entity.get("properties", [])
+        if prop.get("operation") != "delete"
+        and prop.get("property_name")
+        and prop.get("property_name") != "input_messages"
+        and prop.get("value")
+    ]
+
+
+def format_property_delete_context(delete_context: list[dict[str, Any]]) -> str:
+    """Format property-delete context for the LLM prompt."""
+    lines: list[str] = []
+    for index, item in enumerate(delete_context, start=1):
+        lines.append(f"Property group {index}: {item.get('property_name', '')}")
+        lines.append(f"  New value: {item.get('new_value', '')}")
+        lines.append("  Similar history:")
+        for hist_index, history in enumerate(item.get("similar_history", []), start=1):
+            lines.append(
+                f"    [{hist_index}] time: {history.get('timestamp', '')}, "
+                f"value: {history.get('value', '')}, similarity: {history.get('similarity', 0):.2f}"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def format_higher_order_schema(schema: dict[str, Any]) -> str:
+    """Format higher-order property schema for the LLM prompt."""
+    lines: list[str] = []
+    for prop_name, prop_def in schema.items():
+        desc = prop_def.get("desc", "") if isinstance(prop_def, dict) else str(prop_def)
+        example = prop_def.get("example", "") if isinstance(prop_def, dict) else ""
+        lines.append(f"- {prop_name}: {desc}")
+        if example:
+            lines.append(f"  Example: {example}")
+    return "\n".join(lines) if lines else "None defined."
+
+
+def format_first_order_memories(memories: list[dict[str, Any]]) -> str:
+    """Handle format first order memories."""
+    if not memories:
+        return "No first-order memories available."
+    return "\n".join(
+        f"{index}. [{memory.get('property_name', '')}] ({memory.get('timestamp', '')}) {memory.get('value', '')}"
+        for index, memory in enumerate(memories, start=1)
+    )
+
+
+def format_current_higher_order(current: dict[str, list[dict[str, Any]]]) -> str:
+    """Format current higher-order property history for the LLM prompt."""
+    if not current:
+        return "No existing higher-order traits."
+    lines: list[str] = []
+    for prop_name, entries in current.items():
+        if not entries:
+            continue
+        if len(entries) == 1:
+            entry = entries[0]
+            lines.append(f"- {prop_name} ({entry.get('timestamp', '')}): {entry.get('value', '')}")
+        else:
+            lines.append(f"- {prop_name} ({len(entries)} versions, latest first):")
+            for entry in reversed(entries):
+                lines.append(f"    [{entry.get('timestamp', '')}] {entry.get('value', '')}")
+    return "\n".join(lines) if lines else "No existing higher-order traits."
+
+
+def format_new_properties(new_props: list[dict[str, Any]]) -> str:
+    """Format newly extracted properties for the LLM prompt."""
+    if not new_props:
+        return "No new properties from this episode."
+    return "\n".join(
+        f"- [{prop.get('property_name', '?')}] ({prop.get('time', '?')}) {prop.get('value', '')}" for prop in new_props
+    )
 
 
 def format_candidate_episodes(candidates: list[EntityView]) -> str:
-    """Format recalled episode candidates for the episode-edge prompt."""
+    """Handle format candidate episodes."""
     return "\n".join(
         f"- id: {candidate.entity_id}, name: {candidate.entity_name}, description: {candidate.description or ''}"
         for candidate in candidates
     )
 
 
-def format_reference_entities(entities: list[EntityView], *, description_max_chars: int = 500) -> str:
-    """Format recalled reference entities for the entity-generation prompt.
-
-    Each entity's description is truncated to *description_max_chars* so hot
-    entities with long merged histories cannot blow up the prompt.
-    """
-    if not entities:
-        return "None (no existing entities in memory)."
-
-    def _format_description(description: str | None) -> str:
-        text = description or ""
-        if len(text) <= description_max_chars:
-            return text
-        return text[:description_max_chars] + "..."
-
-    return "\n".join(
-        f"- name: {entity.entity_name}, entity_type: {entity.entity_type or ''}, "
-        f"description: {_format_description(entity.description)}"
-        for entity in entities
-    )
+def exact_candidate(entity: dict[str, Any], candidates: list[EntityView]) -> EntityView | None:
+    """Find an exact candidate by name and entity type."""
+    target_name = base_entity_name(str(entity.get("name") or ""))
+    target_type = entity.get("entity_type")
+    for candidate in candidates:
+        if base_entity_name(candidate.entity_name) == target_name and candidate.entity_type == target_type:
+            return candidate
+    return None
 
 
 def base_entity_name(name: str) -> str:
     return name.split("(", 1)[0].strip().lower()
+
+
+def fuzzy_match_candidate(target_name: str, name2id: dict[str, EntityView]) -> str | None:
+    """Handle fuzzy match candidate."""
+    target_lower = target_name.lower()
+    for cand_name in name2id:
+        if cand_name.lower() == target_lower:
+            return cand_name
+    for cand_name in name2id:
+        if target_lower in cand_name.lower() or cand_name.lower() in target_lower:
+            return cand_name
+    return None
 
 
 def resolve_duplicate_name(new_entity: dict[str, Any], existing: EntityView) -> dict[str, Any]:
@@ -281,16 +390,10 @@ def property_relationships(project_id: str, entity_id: str, memory: MemoryWrite)
 
 def edge_relationships(
     raw_edges: list[dict[str, Any]],
-    entity_by_name: dict[str, EntityView | EntityWrite],
+    entity_by_name: dict[str, EntityWrite],
     project_id: str,
 ) -> list[GraphRelationship]:
-    """Build entity-to-entity relationships from raw edges.
-
-    ``entity_by_name`` maps a referenced entity name to either a newly created
-    ``EntityWrite`` or a recalled reference ``EntityView``, so edges may connect
-    two new entities, a new entity and a reference entity, or two reference
-    entities.
-    """
+    """Handle edge relationships."""
     relationships: list[GraphRelationship] = []
     seen_pairs: set[tuple[str, str]] = set()
     for edge in raw_edges:
