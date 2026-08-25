@@ -156,6 +156,12 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
         choices=["fast", "agentic"],
         help="Search strategy. Default: fast.",
     )
+    search.add_argument(
+        "--max-rounds",
+        type=int,
+        default=None,
+        help="Agentic search max rounds (default 3). Only effective with --search-strategy agentic.",
+    )
     search.add_argument("--rerank", action="store_true", help="Enable reranking.")
     search.add_argument(
         "--score-threshold",
@@ -580,6 +586,7 @@ def _handle_memory_search(args: argparse.Namespace) -> int:
                     search_strategy=args.search_strategy,
                     rerank=args.rerank,
                     score_threshold=args.score_threshold,
+                    max_rounds=args.max_rounds,
                     filters=filters,
                     app_id=args.app_id,
                     agent_id=args.agent_id,

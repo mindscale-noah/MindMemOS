@@ -179,6 +179,15 @@ function loadConfig(raw: unknown): PluginConfig {
 
 async function searchMemories(config: PluginConfig, query: string, sessionId: string): Promise<MemorySearchResult> {
   const args = ["memory", "search", query, "--top-k", String(config.topK), "--json"];
+  // Agentic search by default, single round (retrieve once, no sufficiency
+  // check / query rewrite). Override via env for A/B runs:
+  //   MINDMEMOS_SEARCH_STRATEGY=fast | agentic (default agentic)
+  //   MINDMEMOS_SEARCH_MAX_ROUNDS=<n>            (default 1)
+  const strategy = process.env.MINDMEMOS_SEARCH_STRATEGY ?? "agentic";
+  args.push("--search-strategy", strategy);
+  if (strategy === "agentic") {
+    args.push("--max-rounds", process.env.MINDMEMOS_SEARCH_MAX_ROUNDS ?? "1");
+  }
   args.push("--app-id", config.appId, "--session-id", sessionId);
   if (config.userId) {
     args.push("--user-id", config.userId);

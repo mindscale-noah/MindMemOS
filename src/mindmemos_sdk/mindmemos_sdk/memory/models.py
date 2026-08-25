@@ -256,6 +256,7 @@ def build_search_body(
     search_strategy: SearchStrategy = "fast",
     rerank: bool = False,
     score_threshold: float | None = None,
+    max_rounds: int | None = None,
     filters: dict[str, Any] | None = None,
     app_id: str | None = None,
     agent_id: str | None = None,
@@ -272,6 +273,8 @@ def build_search_body(
     body["rerank"] = rerank
     if score_threshold is not None:
         body["score_threshold"] = score_threshold
+    if max_rounds is not None:
+        body["max_rounds"] = max_rounds
     if app_id:
         body["app_id"] = app_id
     if agent_id:

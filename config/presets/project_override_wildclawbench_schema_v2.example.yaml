@@ -57,9 +57,10 @@ algo_config:
         episode_generation_max_retries: 3
 
   search:
-    # Fast non-agentic profile, identical for v1/v2 storage: kill per-entity
-    # agent shrink, multi-hop expansion, dual-path property recall, and rerank
-    # calls so one search = one small time-extraction LLM call + one embed.
+    # Single-round agentic strategy (the plugin sends --search-strategy
+    # agentic --max-rounds 1); the engine internals stay lean — no per-entity
+    # agent shrink, no dual-path property recall, no rerank HTTP — so one
+    # search = one time-extraction LLM call + one embed + DB-only graph pass.
     request_top_k_max: 100
     rerank:
       enabled: false
@@ -96,3 +97,18 @@ algo_config:
         min_relevance_score: 0.1
       multi_hop: 1
       use_entity_agent_search: false
+    agentic:
+      # Single-round agentic search: retrieve once, then stop — no sufficiency
+      # LLM check and no query rewrite (the loop breaks at round >= max_rounds
+      # before both). The plugin also sends max_rounds=1 on each request, which
+      # overrides config; this block pins it for direct pipeline callers and
+      # supplies the per-round knobs the wrapper reads from config. Note: the
+      # agentic loop hardcodes num_hops=2 for the round-1 query, so round 1
+      # also does one graph-expansion pass (DB neighbors + local scoring only —
+      # no rerank HTTP since rerank.enabled is false).
+      max_rounds: 1
+      top_k_per_round: 30
+      top_n_per_round: 5
+      use_rerank: false
+      use_relevance_filter: false
+      use_property_filter: false

@@ -101,7 +101,7 @@ python3 scripts/wildclawbench/new_key.py \
   --disable-previous
 ```
 
-默认用 v2（rule-based graph fusion）；对照 v1（LLM-heavy）把命令里的 `_v2` 换成 `_v1` 即可。该 override 绑定 `config/presets/entity_modeling_wildclawbench.json` 实体模型（task 溯源实体 + environment/method/behavioral 三类经验实体），并把 schema 检索调成快速非 agentic 配置（关闭 entity agent / multi-hop / dual-path / rerank）。
+默认用 v2（rule-based graph fusion）；对照 v1（LLM-heavy）把命令里的 `_v2` 换成 `_v1` 即可。该 override 绑定 `config/presets/entity_modeling_wildclawbench.json` 实体模型（task 溯源实体 + environment/method/behavioral 三类经验实体）。检索用 agentic 单轮（插件自动传 `--search-strategy agentic --max-rounds 1`：只检索一轮，不做充分性判断和查询改写；引擎层仍关闭 entity agent 收缩 / dual-path / rerank）。要回退纯 fast 模式，在评测 `.env` 里加 `MINDMEMOS_SEARCH_STRATEGY=fast`。
 
 把输出中的 `api_key` 和 `project_id` 填到下面：
 
