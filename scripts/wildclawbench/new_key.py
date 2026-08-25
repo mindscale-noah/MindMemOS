@@ -13,8 +13,8 @@ Algorithm knobs are NOT hardcoded here. You can either:
 
 - pass ``--project-override-config`` with a YAML file containing the same
   shape as an existing entry's ``project_override_config:`` block (see
-  ``config/presets/project_override_wildclawbench_schema.example.yaml`` for a
-  starting point), or
+  ``config/presets/project_override_wildclawbench_schema_v2.example.yaml``
+  and its ``_v1`` sibling for a starting point), or
 - pass ``--from-memory-eval-profile`` to copy
   ``algorithm_profiles.<name>.project_override_config`` from
   ``config/mindmemos_eval/memory_evaluation.yaml``.

@@ -1,0 +1,98 @@
+# WildClawBench schema-mode project override — v2 (rule-based graph fusion).
+# v1 variant: project_override_wildclawbench_schema_v1.example.yaml
+#
+# Mint a key with:
+#   uv run python scripts/wildclawbench/new_key.py \
+#     --benchmark wildclawbench --memory-algorithm schema \
+#     --project-override-config config/presets/project_override_wildclawbench_schema_v2.example.yaml \
+#     [--disable-previous]
+#
+# The top level of this file IS the project_override_config block stored on
+# the API key entry, deep-merged over config/mindmemos/dev.yaml (api_keys.yaml
+# hot-reloads; the override applies to this project's next add/search).
+#
+# v2 flow: rule-based entity merge with fewer LLM calls per episode. Keys
+# marked (v1 flow) in config (LLM merge decision, higher-order generation,
+# search-field augmentation, resolve concurrency) are ignored here, so this
+# file only sets version-neutral knobs. Description-growth caps
+# (merge.description_rewrite_threshold / description_max_chars /
+# reference_description_max_chars) keep their defaults. v2 never runs
+# higher-order synthesis, so the entity model's order-2 distilled_rule
+# properties stay empty under this profile.
+
+algo_config:
+  common:
+    prompt_language: EN
+
+  add:
+    schema:
+      version: v2
+      # Task-experience entity schema: task (provenance) + environment/method/
+      # behavioral experience classes (reusable knowledge) + episodes backup.
+      entity_modeling_path: config/presets/entity_modeling_wildclawbench.json
+      extraction:
+        enable_schema_selection: true
+        search_fields_max: 8
+        # Cost bounds per task trajectory (version-neutral)
+        max_entities_per_conversation: 60
+        max_properties_per_entity: 8
+      merge:
+        entity_recall_top_k: 15
+      episode_edge:
+        top_k: 10
+      chunker:
+        # One task = one episode, deterministically (same strategy as the
+        # official v2 eval profiles): rule mode, zero boundary LLM calls, no
+        # speaker/time cuts — pure length cap. streaming_window_size must be
+        # >= max_episode_length or the window loop forces extra cuts; tasks
+        # longer than 50 messages are rule-cut every 50.
+        split_mode: rule
+        min_episode_length: 1
+        max_episode_length: 50
+        max_buffer_size: 1000
+        split_on_user_speaker: false
+        max_minutes_from_first: 999999
+        streaming_window_size: 50
+      drain:
+        episode_generation_max_retries: 3
+
+  search:
+    # Fast non-agentic profile, identical for v1/v2 storage: kill per-entity
+    # agent shrink, multi-hop expansion, dual-path property recall, and rerank
+    # calls so one search = one small time-extraction LLM call + one embed.
+    request_top_k_max: 100
+    rerank:
+      enabled: false
+    schema_search:
+      entity:
+        recall_size: 200
+        rrf_k: 80
+        top_k: 30
+        top_n: 10
+        use_reranker: false
+        max_rerank_candidates: 100
+        use_maxsim_rescore: false
+        search_field_overfetch_factor: 3
+      property:
+        recall_size: 45
+        rrf_k: 60
+        top_k: 20
+        top_n: 16
+        alloc_min_factor: 0.5
+        alloc_max_factor: 1.5
+        use_property_extension: false
+        extension_step: 3
+        higher_order_ratio: 0.0
+      dual_path:
+        enabled: false
+      entity_weights:
+        # Experience entities, not raw episode backups, are what a task
+        # instruction should recall.
+        force_balanced_split: false
+        episode_weight: 0.3
+        non_episode_weight: 0.7
+      edge:
+        top_k: 10
+        min_relevance_score: 0.1
+      multi_hop: 1
+      use_entity_agent_search: false

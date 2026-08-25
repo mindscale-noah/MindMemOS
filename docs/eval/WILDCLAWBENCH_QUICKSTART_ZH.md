@@ -97,11 +97,11 @@ cd "$MINDMEMOS_REPO"
 python3 scripts/wildclawbench/new_key.py \
   --benchmark wildclawbench \
   --memory-algorithm schema \
-  --project-override-config config/presets/project_override_wildclawbench_schema.example.yaml \
+  --project-override-config config/presets/project_override_wildclawbench_schema_v2.example.yaml \
   --disable-previous
 ```
 
-该 override 绑定 `config/presets/entity_modeling_wildclawbench.json` 实体模型（task 溯源实体 + environment/method/behavioral 三类经验实体），并把 schema 检索调成快速非 agentic 配置（关闭 entity agent / multi-hop / dual-path / rerank）。
+默认用 v2（rule-based graph fusion）；对照 v1（LLM-heavy）把命令里的 `_v2` 换成 `_v1` 即可。该 override 绑定 `config/presets/entity_modeling_wildclawbench.json` 实体模型（task 溯源实体 + environment/method/behavioral 三类经验实体），并把 schema 检索调成快速非 agentic 配置（关闭 entity agent / multi-hop / dual-path / rerank）。
 
 把输出中的 `api_key` 和 `project_id` 填到下面：
 
@@ -270,7 +270,7 @@ cd "$MINDMEMOS_REPO"
 python3 scripts/wildclawbench/new_key.py \
   --benchmark wildclawbench \
   --memory-algorithm schema \
-  --project-override-config config/presets/project_override_wildclawbench_schema.example.yaml \
+  --project-override-config config/presets/project_override_wildclawbench_schema_v2.example.yaml \
   --disable-previous
 ```
 
