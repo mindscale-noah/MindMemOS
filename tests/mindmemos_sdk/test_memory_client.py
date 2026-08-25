@@ -233,6 +233,7 @@ def test_search_returns_hits_and_sends_params():
                             "id": "m1",
                             "memory": "cat",
                             "last_update_at": "2026-06-11 00:00:00",
+                            "metadata": {"source": "import", "tags": ["animal"]},
                             "lineage": {
                                 "role": "current",
                                 "derived_from_memory_ids": ["old-m1"],
@@ -251,6 +252,9 @@ def test_search_returns_hits_and_sends_params():
     assert captured["body"]["user_id"] == "u_1"
     assert result.memories[0].id == "m1"
     assert result.memories[0].memory == "cat"
+    # Server-side metadata (e.g. business fields, future source-id lists)
+    # must reach SDK callers instead of being silently dropped.
+    assert result.memories[0].metadata == {"source": "import", "tags": ["animal"]}
     assert result.memories[0].lineage is not None
     assert result.memories[0].lineage.role == "current"
     assert result.memories[0].lineage.derived_from_memory_ids == ["old-m1"]
@@ -475,6 +479,7 @@ def test_feedback_sends_explicit_context():
         "event_time": None,
         "source_timestamp": None,
         "lineage": None,
+        "metadata": {},
     }
 
 

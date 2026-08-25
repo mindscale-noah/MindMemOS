@@ -114,6 +114,8 @@ class MemorySearchHit(BaseModel):
     event_time: str | None = None
     source_timestamp: str | None = None
     lineage: MemoryLineage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    """Business metadata attached to the memory by the server."""
 
 
 class SearchResult(BaseModel):

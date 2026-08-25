@@ -168,18 +168,16 @@ They are read at load time (`.env` at the repository root is honoured):
 Retention is activated per request by passing `token_budget` in the search
 request (Python SDK / CLI: the `token_budget` / `--token-budget` option). When
 omitted, search behaves exactly as before; when set, results are packed under a
-strict token budget after final filtering, with optional consolidation of
-near-duplicate memories first.
+strict token budget after final filtering. Every returned memory keeps its real
+memory id, usable with get/update/delete and feedback as usual.
 
 Both request limits bind at the same time, whichever is tighter: the response
 contains at most `top_k` memories whose combined estimated tokens stay within
 `token_budget`. When rerank is enabled it scores the whole retention candidate
 pool (up to `max_candidates`), so budget-aware selection is not pre-narrowed to
 `top_k`; lower `max_candidates` to make retention consider fewer (e.g. only
-`top_k`) candidates per request. When consolidation is enabled, merged
-memories are returned under a synthetic `consol:<id>+<id>` id with the source
-ids listed in `metadata.consolidated_from`; such ids cannot be used with
-get/delete APIs.
+`top_k`) candidates per request. Redundancy is handled at selection time by the
+`mixed-v2` MMR packing (`mmr_lambda`), never by merging or rewriting memories.
 
 | Field | Default | Description |
 |---|---|---|
@@ -196,12 +194,6 @@ get/delete APIs.
 | `estimator_version` | `heuristic-v1` | Token estimator implementation (currently heuristic only). |
 | `top_m_guarantee` | `5` | Candidates force-kept by relevance before MMR re-ranking (mixed-v2). |
 | `mmr_lambda` | `0.70` | Trade-off between priority and redundancy in MMR packing (mixed-v2). |
-| `consolidation_enabled` | `false` | Whether consolidation runs before retention when enabled. |
-| `consolidation_max_memories` | `40` | Maximum clusters produced per consolidation pass. |
-| `consolidation_cluster_threshold` | `0.50` | Jaccard similarity at which candidates join the same cluster. |
-| `consolidation_near_dup_threshold` | `0.85` | Jaccard similarity at which intra-cluster members count as duplicates. |
-| `consolidation_stitch_max_members` | `3` | Maximum cluster members stitched into one consolidated memory. |
-| `consolidation_max_chars` | `600` | Character cap for a stitched consolidated memory. |
 
 ## Validation
 

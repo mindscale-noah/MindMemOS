@@ -106,7 +106,6 @@ class MultiItemEngine:
 
 def _patch_fake_preprocessors(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeTextPreprocessor()
-    monkeypatch.setattr("mindmemos.pipelines.search.pipeline.get_text_preprocessor", lambda: fake)
     monkeypatch.setattr("mindmemos.components.searcher.memory_retention.get_text_preprocessor", lambda: fake)
 
 
@@ -194,37 +193,3 @@ async def test_search_pipeline_token_budget_reranks_full_pool_before_packing(
     assert rerank_top_n_calls == [5]
     # top_k still caps the final packed result count.
     assert [m.id for m in result.memories] == ["mem-0", "mem-1", "mem-2"]
-
-
-@pytest.mark.asyncio
-async def test_search_pipeline_token_budget_consolidates_near_duplicates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_fake_preprocessors(monkeypatch)
-    engine = MultiItemEngine(
-        [
-            "alice likes coffee in seattle",
-            "alice likes coffee in seattle mornings",
-            "bob plays tennis every sunday",
-        ]
-    )
-    pipeline = SearchPipelineImpl(
-        engines={"default": engine},
-        final_filter=SearchFinalFilter(),
-        retention_config=MemoryRetentionConfig(
-            selector_version="mixed-v2",
-            consolidation_enabled=True,
-            consolidation_cluster_threshold=0.5,
-        ),
-        db_reader=SimpleNamespace(),
-        db_writer=SimpleNamespace(),
-    )
-
-    result = await pipeline.search(
-        SearchPipelineInput(query="alice coffee", search_pipeline="default", token_budget=10000), make_context()
-    )
-
-    ids = [m.id for m in result.memories]
-    assert any(i.startswith("consol:") for i in ids)
-    assert not any(i in ids for i in ("mem-0", "mem-1"))
-    assert "mem-2" in ids

@@ -307,12 +307,6 @@ algo_config:
       estimator_version: heuristic-v1
       top_m_guarantee: 5
       mmr_lambda: 0.7
-      consolidation_enabled: false
-      consolidation_max_memories: 40
-      consolidation_cluster_threshold: 0.5
-      consolidation_near_dup_threshold: 0.85
-      consolidation_stitch_max_members: 3
-      consolidation_max_chars: 600
   skill_evolution: {}
 
 kafka:

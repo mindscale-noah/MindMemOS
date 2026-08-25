@@ -191,3 +191,28 @@ def test_score_bounds_candidates_to_max_candidates() -> None:
     scored = selector.score(query="q", candidates=candidates, token_budget=1000)
 
     assert len(scored) == 2
+
+
+def test_mixed_v2_prefers_novelty_over_near_duplicates() -> None:
+    selector = _selector(
+        selector_version="mixed-v2",
+        relevance_weight=1.0,
+        query_overlap_weight=0.0,
+        recency_weight=0.0,
+        cost_weight=0.0,
+        top_m_guarantee=1,
+        mmr_lambda=0.7,
+        now=lambda: datetime(2026, 1, 31, tzinfo=UTC),
+    )
+    candidates = [
+        candidate("rel", "alpha beta", rank=0, relevance=1.0),
+        candidate("dup", "alpha beta gamma", rank=1, relevance=0.5),
+        candidate("novel", "zeta eta", rank=2, relevance=0.4),
+    ]
+
+    result = selector.select(query="alpha", candidates=candidates, token_budget=10)
+
+    ids = [c.id for c in result.candidates]
+    assert ids[0] == "rel"
+    # Once the top item is kept, MMR prefers the novel item over the near-duplicate.
+    assert "novel" in ids

@@ -47,21 +47,3 @@ class MemoryRetentionConfig:
 
     mmr_lambda: float = field(default=0.70)
     """Trade-off between priority and redundancy in MMR packing (mixed-v2)."""
-
-    consolidation_enabled: bool = field(default=False)
-    """Whether consolidation runs before retention when enabled."""
-
-    consolidation_max_memories: int = field(default=40)
-    """Maximum clusters produced per consolidation pass."""
-
-    consolidation_cluster_threshold: float = field(default=0.50)
-    """Jaccard similarity at which candidates join the same cluster."""
-
-    consolidation_near_dup_threshold: float = field(default=0.85)
-    """Jaccard similarity at which intra-cluster members count as duplicates."""
-
-    consolidation_stitch_max_members: int = field(default=3)
-    """Maximum cluster members stitched into one consolidated memory."""
-
-    consolidation_max_chars: int = field(default=600)
-    """Character cap for a stitched consolidated memory."""

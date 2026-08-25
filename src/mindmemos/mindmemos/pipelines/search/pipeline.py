@@ -5,12 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from ...components.searcher import (
-    MemoryConsolidator,
     MemoryRetentionSelector,
     ScoredSearchCandidate,
     SearchFinalFilter,
 )
-from ...components.text import get_text_preprocessor
 from ...config import get_config
 from ...config.algo.search import MemoryRetentionConfig
 from ...llm import RerankClient
@@ -115,36 +113,16 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
                 zip(filter_result.candidates, filter_result.rerank_scores, strict=True)
             )
         ]
-        retention_input = scored
         metrics: dict[str, Any] = {"rerank_outcome": filter_result.rerank_outcome}
-        if retention_config.consolidation_enabled:
-            consolidator = MemoryConsolidator(
-                text_preprocessor=get_text_preprocessor(),
-                max_memories=retention_config.consolidation_max_memories,
-                cluster_threshold=retention_config.consolidation_cluster_threshold,
-                near_dup_threshold=retention_config.consolidation_near_dup_threshold,
-                stitch_max_members=retention_config.consolidation_stitch_max_members,
-                max_chars=retention_config.consolidation_max_chars,
-            )
-            consol = consolidator.consolidate(scored)
-            retention_input = consol.candidates
-            metrics.update(
-                {
-                    "consolidation_enabled": True,
-                    "consolidation_input_count": consol.input_count,
-                    "consolidation_cluster_count": consol.cluster_count,
-                    "consolidation_output_count": consol.output_count,
-                }
-            )
         selection = MemoryRetentionSelector(config=retention_config).select(
             query=inp.query,
-            candidates=retention_input,
+            candidates=scored,
             token_budget=inp.token_budget,
         )
         metrics.update(
             {
                 "token_budget": inp.token_budget,
-                "candidate_count_before_retention": len(retention_input),
+                "candidate_count_before_retention": len(scored),
                 "candidate_count_after_retention": len(selection.candidates),
                 "estimated_tokens_before": selection.estimated_tokens_before,
                 "estimated_tokens_after": selection.estimated_tokens_after,

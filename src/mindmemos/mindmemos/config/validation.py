@@ -251,11 +251,6 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("algo_config.search.retention.missing_recency_score", min_value=0, max_value=1),
     RangeRule("algo_config.search.retention.top_m_guarantee", min_value=0, max_value=100),
     RangeRule("algo_config.search.retention.mmr_lambda", min_value=0, max_value=1),
-    RangeRule("algo_config.search.retention.consolidation_max_memories", min_value=1, max_value=100),
-    RangeRule("algo_config.search.retention.consolidation_cluster_threshold", min_value=0, max_value=1),
-    RangeRule("algo_config.search.retention.consolidation_near_dup_threshold", min_value=0, max_value=1),
-    RangeRule("algo_config.search.retention.consolidation_stitch_max_members", min_value=1, max_value=20),
-    RangeRule("algo_config.search.retention.consolidation_max_chars", min_value=1, support="positive integer >= 1"),
     RangeRule(
         "algo_config.search.vanilla.dedup_threshold",
         min_value=0,
