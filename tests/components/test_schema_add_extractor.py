@@ -6,13 +6,16 @@ import pytest
 from mindmemos.components.extractor.schema._schema_utils import (
     build_episode_entity,
     build_filtered_schema,
-    dedupe_non_empty,
-    entity_embedding_text,
     parse_json_object,
     schema_memory_type,
     strip_for_generation,
 )
-from mindmemos.components.extractor.schema.search_field import SchemaSearchFieldExtractor
+from mindmemos.components.extractor.schema.v1 import SchemaSearchFieldExtractor
+from mindmemos.components.extractor.schema.v1 import build_episode_entity as build_episode_entity_v1
+from mindmemos.components.extractor.schema.v1._schema_utils import (
+    dedupe_non_empty,
+    entity_embedding_text,
+)
 from mindmemos.typing.memory import MemoryRequestContext
 
 
@@ -106,7 +109,8 @@ def test_schema_add_utils_filter_schema_and_build_episode_entity() -> None:
     )
     episode_entity = build_episode_entity(
         objectified_content="The user said they like Qdrant.",
-        episode_description="Qdrant preference\nThe user likes Qdrant.",
+        title="Qdrant preference",
+        content="The user likes Qdrant.",
         dialogue_date="2026-02-02",
         search_fields=["Qdrant preference"],
     )
@@ -118,6 +122,7 @@ def test_schema_add_utils_filter_schema_and_build_episode_entity() -> None:
             "dynamic_property": {
                 "default_property": {"desc": "Fallback"},
                 "preference": {"desc": "Preference"},
+                "preference_summary": {"desc": "High order", "order": 2},
             },
         }
     ]
@@ -126,7 +131,23 @@ def test_schema_add_utils_filter_schema_and_build_episode_entity() -> None:
         "preference": {"desc": "Preference"},
     }
     assert episode_entity["entity_type"] == "episodes"
+    assert episode_entity["name"] == "Qdrant preference"
     assert episode_entity["properties"][0]["property_name"] == "input_messages"
+    assert episode_entity["properties"][0]["value"] == "The user said they like Qdrant."
+
+
+def test_schema_add_v1_utils_build_episode_entity_and_embedding_text() -> None:
+    episode_entity = build_episode_entity_v1(
+        objectified_content="The user said they like Qdrant.",
+        episode_description="Qdrant preference\nThe user likes Qdrant.",
+        dialogue_date="2026-02-02",
+        search_fields=["Qdrant preference"],
+    )
+
+    assert episode_entity["entity_type"] == "episodes"
+    assert episode_entity["name"] == "Qdrant preference"
+    assert episode_entity["properties"][0]["property_name"] == "input_messages"
+    assert episode_entity["properties"][0]["value"] == "The user said they like Qdrant."
     assert "Qdrant" in entity_embedding_text(episode_entity)
     assert dedupe_non_empty([" a ", "", "a", "b"]) == ["a", "b"]
 

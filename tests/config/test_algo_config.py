@@ -78,15 +78,8 @@ def test_schema_add_defaults_align_with_original_generation_config() -> None:
 
     schema = cfg.add.schema
     assert schema.merge.entity_recall_top_k == 15
-    assert schema.merge.max_merge_retries == 8
-    assert schema.merge.use_property_merge is False
-    assert schema.extraction.use_search_fields is True
+    assert schema.extraction.enable_schema_selection is True
     assert schema.extraction.search_fields_max == 10
-    assert schema.extraction.episode_search_fields_augment is True
-    assert schema.extraction.episode_augment_count == 4
-    assert schema.higher_order.enabled is True
-    assert schema.higher_order.top_k == 10
-    assert schema.higher_order.min_evidence_count == 2
     assert schema.episode_edge.top_k == 10
 
 

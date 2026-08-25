@@ -1,4 +1,4 @@
-CONV_BOUNDARY_DETECTION_PROMPT = """
+CONV_BOUNDARY_DETECTION_PROMPT_V1 = """
 ### Core Task
 As a conversation analysis expert, you need to split the message list into independent, memorable topic segments. Your core principle is **"Fine-grained splitting — each independent topic as a separate segment"**.
 
@@ -69,6 +69,7 @@ Please return your analysis results strictly in the following JSON format:
 ```json
 [
     {
+        "reasoning": "Basis for identifying this as an independent topic/event",
         "start_idx": int,
         "end_idx": int,
         "title": "Summary of this topic/event"
@@ -95,11 +96,13 @@ Output:
 ```json
 [
     {
+        "reasoning": "Messages 1-4 are a complete bug-fix episode; message 5 starts a new day with an unrelated lunch topic",
         "start_idx": 0,
         "end_idx": 3,
         "title": "Login bug fix"
     },
     {
+        "reasoning": "Cross-day split, new topic about lunch plans",
         "start_idx": 4,
         "end_idx": 5,
         "title": "Lunch plans"
@@ -122,6 +125,7 @@ Output:
 ```json
 [
     {
+        "reasoning": "All messages are part of a continuous work discussion within 11 minutes, covering related project updates",
         "start_idx": 0,
         "end_idx": 4,
         "title": "Project status updates"
@@ -144,11 +148,13 @@ Output:
 ```json
 [
     {
+        "reasoning": "Complete API Q&A exchange forming one episode",
         "start_idx": 0,
         "end_idx": 2,
         "title": "API call inquiry"
     },
     {
+        "reasoning": "4.5-hour gap with completely unrelated dinner topic",
         "start_idx": 3,
         "end_idx": 4,
         "title": "Dinner plans"
@@ -161,7 +167,7 @@ Output:
 """
 
 
-CONV_FORCED_RESPLIT_PROMPT = """
+CONV_FORCED_RESPLIT_PROMPT_V1 = """
 ### Core Task
 As a conversation analysis expert, you are given a message segment that is too long and MUST be forcibly split into smaller parts.
 
@@ -211,6 +217,7 @@ Return strictly in JSON:
 ```json
 [
     {{
+        "reasoning": "Basis for identifying this as an independent topic/event",
         "start_idx": int,
         "end_idx": int,
         "title": "Summary of this topic/event"

@@ -15,6 +15,12 @@
   <a href="https://www.npmjs.com/package/@mindmemos/openclaw-plugin">
     <img src="https://img.shields.io/npm/v/%40mindmemos%2Fopenclaw-plugin?label=npm%20plugin&labelColor=gray&logo=npm&logoColor=white" alt="MindMemOS OpenClaw Plugin npm version">
   </a>
+  <a href="https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin">
+    <img src="https://img.shields.io/npm/v/%40mindmemos%2Fdeepseek-harness-plugin?label=dsh%20plugin&labelColor=gray&logo=npm&logoColor=white" alt="MindMemOS DeepSeek Harness Plugin npm version">
+  </a>
+  <a href="https://arxiv.org/abs/2608.12428">
+    <img src="https://img.shields.io/badge/arXiv-2608.12428-B31B1B?labelColor=gray&logo=arxiv&logoColor=white" alt="MindMemOS arXiv paper">
+  </a>
   <a href="#license">
     <img src="https://img.shields.io/badge/license-MIT-blue.svg?labelColor=gray" alt="MIT License">
   </a>
@@ -40,6 +46,8 @@
 
 ## 📰 News
 
+- **2026-08-18**: We released the [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin), letting DeepSeek Harness (dsh) agents automatically recall and write MindMemOS memories.
+- **2026-08-14**: We released the [MindMemOS 1.0 technical report](https://arxiv.org/abs/2608.12428), *MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents*.
 - **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.
 - **2026-06-30**: MindMemOS was officially released!
 
@@ -48,13 +56,24 @@
 - **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable assets, allowing OpenClaw, Hermes, Claude Code, OpenHands, and other agents to share or transfer the same long-term memory.
 - **Self-evolving memory system**: Continuously improve memory quality through schema learning, dreaming, and feedback by automatically learning frequent memory patterns, consolidating memories offline, and using interaction corrections to optimize add/search workflows.
 - **Memory and Skills integration**: Experience memories can be distilled into skill candidates, while skill execution results, failure traces, and user feedback flow back into the memory system to drive continuous skill evolution.
-- **Plugin integrations**: Connect MindMemOS to different agents and workflows through plugins that retrieve and inject relevant memories before interactions and automatically write conversations back afterward. The [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) is currently available, with more integrations in progress.
+- **Plugin integrations**: Connect MindMemOS to different agents and workflows through plugins that retrieve and inject relevant memories before interactions and automatically write conversations back afterward. The [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) and [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) are currently available, with more integrations in progress.
 
 <p align="center">
   <img src="./assets/mindmemos-benchmark-overview.png" alt="MindMemOS benchmark results overview">
 </p>
 
 ## 🚀 Quick Start
+
+MindMemOS offers **two deployment modes** (official cloud service, local self-hosting) and **three access methods** (HTTP API, Python SDK / CLI, agent plugin). Any combination works — server and client speak the same protocol:
+
+| Access Method | Use Case | Cloud base_url | Local base_url |
+| :--- | :--- | :--- | :--- |
+| [HTTP API](https://mindmemos.cn/api-docs) | Call directly from business apps | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+| [Python SDK / CLI](https://pypi.org/project/mindmemos-sdk/) | Integrate into business apps | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+| [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) | Agent auto-recalls / writes memory | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+| [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) | Agent auto-recalls / writes memory (dsh) | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
+
+To try it without deploying, use the official cloud service (request an API key on the [website](https://mindmemos.cn)); for on-premises or offline use, start with Local Deployment below.
 
 ### 1. Local Deployment
 
@@ -72,6 +91,8 @@ Before startup, configure at least the following three model routers in `config/
 - `chat_model_router`: supports memory extraction, Skill evolution, and other generation tasks.
 - `embed_model_router`: generates semantic embeddings; make sure its dimensions match the Qdrant dimension configuration.
 - `rerank_model_router`: optional; reranks memory retrieval results.
+
+The schema memory-extraction flow is versioned: `algo_config.add.schema.version` defaults to `v2` (rule-based graph fusion) and can be pinned to `v1` (develop-compatible flow) per project. Storage is compatible in both directions; see the deployment guide for binding and effective timing.
 
 Configure an API key and its bound `project_id` in `config/mindmemos/api_keys.yaml`.
 
@@ -104,7 +125,43 @@ Stop the local service:
 make dev-down
 ```
 
-#### 1.3 Configure the SDK
+### 2. Access Methods
+
+Cloud and local self-hosting use the same access protocol. Local keys come from `config/mindmemos/api_keys.yaml`; cloud keys are obtained from the [website](https://mindmemos.cn).
+
+#### 2.1 HTTP API
+
+HTTP is the base access method — the SDK and plugins also talk HTTP underneath. Once the service is up, first use curl to verify the endpoints work, then wire up your business logic. Define the address and key before calling (pick local or cloud):
+
+```bash
+export BASE_URL=http://127.0.0.1:8000   # Local self-host; change to https://mindmemos.cn for cloud
+export API_KEY=dev-api-key-001          # Local example key; use a website-issued key for cloud
+```
+
+Add a memory:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/memory/add" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "u_123",
+    "messages": [{"role": "user", "content": "I like iced Americanos."}]
+  }'
+```
+
+Search memories:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/memory/search" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What kind of coffee does the user like?", "top_k": 3}'
+```
+
+A `code` of `ok` with readable memory content means the access works. curl is just a smoke-test helper; the shown format is for bash. Other environments / languages and the remaining endpoints (get / list / delete / update / feedback / dreaming / skills, etc.) are all covered in the [API docs](https://mindmemos.cn/api-docs).
+
+#### 2.2 Configure the SDK
 
 Install the Python SDK:
 
@@ -147,7 +204,7 @@ with MindMemOSClient(
 
 Explicit parameters take precedence over values in `~/.mindmemos/settings.json`.
 
-#### 1.4 Add and Search Memories with the SDK
+#### 2.3 Add and Search Memories with the SDK
 
 After completing the configuration above, `MindMemOSClient()` automatically reads the service address, API key, and default `user_id`. The SDK adds the authentication header automatically, so there is no need to construct HTTP requests manually:
 
@@ -194,7 +251,7 @@ with MindMemOSClient() as client:
 
 Local and cloud services use the same SDK call pattern. To switch between them, reconfigure only the `base_url` and corresponding API key.
 
-#### 1.5 Use the CLI
+#### 2.4 Use the CLI
 
 After running `mindmemos auth`, you can also add and search memories directly with the CLI included in the SDK:
 
@@ -203,55 +260,98 @@ mindmemos memory add --content "I like iced Americanos"
 mindmemos memory search "coffee preferences" --top-k 5
 ```
 
-The CLI can also view, update, and delete memories, submit feedback, or trigger Dreaming:
+The `memory` subcommand also supports get / update / delete / feedback / dreaming, and the `skill` subcommand supports register / list / evolve / push / pull / history and more. For the full command list, parameter reference, and troubleshooting, see the [CLI Guide](docs/cli/instruction.md).
+
+#### 2.5 OpenClaw Plugin
+
+**Installing via our [`mindmemos-cli` skill](skills/mindmemos-cli/SKILL.md) is recommended**: deploy `skills/mindmemos-cli/` to your agent's skills directory and let the agent follow its instructions. The skill's [reference docs](skills/mindmemos-cli/references/openclaw-plugin.md) cover installation, permissions, and common troubleshooting.
+
+<details>
+<summary><b>Manual installation (not recommended)</b></summary>
+
+**First install the SDK and complete `auth` configuration (required)**: the plugin communicates with the local machine through the `mindmemos` CLI, so you must install the Python SDK first and make sure the `mindmemos` command is available:
 
 ```bash
-mindmemos memory get --top-k 10  # View memories
-mindmemos memory update <memory_id> --content "I now prefer lattes"  # Update a memory
-mindmemos memory delete <memory_id>  # Delete a memory
-mindmemos memory feedback --text "The preference retrieved just now was inaccurate" \
-  --messages-json '[{"role":"user","content":"The preference retrieved just now was inaccurate"}]'  # Submit explicit feedback
-mindmemos memory feedback  # Submit implicit feedback
-mindmemos memory dreaming  # Consolidate memories
+pip install mindmemos-sdk    # or: uv add mindmemos-sdk
+mindmemos --version          # confirm the command is available
 ```
 
-Use the Skill CLI to register a local Skill and manage it later through the alias set during registration:
+Then configure `base_url`, API key, and `user_id` with `mindmemos auth` (pointing at either the cloud or a local service):
 
 ```bash
-mindmemos skill register ./path/to/skill --alias my-skill
-mindmemos skill list
-mindmemos skill show my-skill
+mindmemos auth
+mindmemos config show        # confirm the configuration took effect
 ```
 
-Skill Evolution uses synchronous mode by default. You can also enqueue the evolution task asynchronously:
+> Skipping these two steps before installing the plugin causes the logs to error out (`mindmemos` command not found / auth not configured), and the plugin will not be able to read or write memories properly.
+
+Install and enable the plugin:
 
 ```bash
-mindmemos skill evolve my-skill
-mindmemos skill evolve my-skill --async
+openclaw plugins install @mindmemos/openclaw-plugin
+openclaw plugins enable mindmemos-memory
 ```
 
-After modifying a local Skill, push it as a new version. You can also retrieve cloud version information and update local files:
+(`@mindmemos/openclaw-plugin` is the npm package name; `mindmemos-memory` is the plugin id.) Manual installation easily runs into two pitfalls:
+
+- **Write permission (required)**: the plugin's `agent_end` write hook needs `allowConversationAccess`; otherwise everything looks fine, but memories are never actually stored after a turn:
+  ```bash
+  openclaw config set plugins.entries.mindmemos-memory.hooks.allowConversationAccess true
+  openclaw gateway restart
+  ```
+- **`cli` PATH**: an OpenClaw process launched from the GUI does not inherit your terminal PATH. Configure `mindmemos` as an absolute path or wrap it with `uv run mindmemos`, or the logs will report `ENOENT`.
+
+Once installed, enabled, and the gateway restarted, the plugin recalls and injects relevant memories before each user turn and writes the conversation back automatically when the turn ends.
+
+Full commands, configuration options, and troubleshooting are in the [OpenClaw plugin integration docs](skills/mindmemos-cli/references/openclaw-plugin.md).
+
+</details>
+
+#### 2.6 DeepSeek Harness Plugin
+
+**Installing via our [`mindmemos-cli` skill](skills/mindmemos-cli/SKILL.md) is recommended**: deploy `skills/mindmemos-cli/` to your agent's skills directory and let the agent follow its instructions. The skill's [reference docs](skills/mindmemos-cli/references/deepseek-harness-plugin.md) cover installation and common troubleshooting.
+
+<details>
+<summary><b>Manual installation (not recommended)</b></summary>
+
+**First install the SDK and complete `auth` configuration (required)**: the plugin communicates with the local machine through the `mindmemos` CLI, so you must install the Python SDK first and make sure the `mindmemos` command is available:
 
 ```bash
-mindmemos skill push my-skill
-mindmemos skill pull my-skill
-mindmemos skill update my-skill
-mindmemos skill update --all
+pip install mindmemos-sdk    # or: uv add mindmemos-sdk
+mindmemos --version          # confirm the command is available
 ```
 
-`pull` retrieves only cloud version metadata and does not modify local files. `update` first shows an update plan and applies it after confirmation. Use the following commands to view version history, compare versions, or roll back:
+Then configure `base_url`, API key, and `user_id` with `mindmemos auth` (pointing at either the cloud or a local service):
 
 ```bash
-mindmemos skill history my-skill
-mindmemos skill diff my-skill --to <version_id>
-mindmemos skill rollback my-skill --to <version_id>
+mindmemos auth
+mindmemos config show        # confirm the configuration took effect
 ```
 
-When a Skill no longer needs to be managed by the SDK, unregister it. Local Skill files are preserved by default:
+> Skipping these two steps before installing the plugin causes the logs to error out (`mindmemos` command not found / auth not configured), and the plugin will not be able to read or write memories properly.
+
+Install the plugin into a dsh profile (`dsh plugin` forwards to pnpm and installs the package into the profile's `node_modules`):
 
 ```bash
-mindmemos skill unregister my-skill
+dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 ```
+
+(`@mindmemos/deepseek-harness-plugin` is the npm package name; `mindmemos-memory` is the plugin id.) dsh composes plugins through layered `cordis.patch.yml` files, so register the plugin by adding an `insert` entry to the profile patch (`~/.dsh/profiles/<name>/cordis.patch.yml`):
+
+```yaml
+- insert:
+    - id: mindmemos-memory
+      name: '@mindmemos/deepseek-harness-plugin'
+      config:
+        userId: alice
+        appId: deepseek-harness
+```
+
+Restart dsh with that profile. Once registered, the plugin recalls and injects relevant memories before each user turn and writes the conversation back automatically when the turn ends.
+
+Full commands, configuration options, and troubleshooting are in the [DeepSeek Harness plugin integration docs](skills/mindmemos-cli/references/deepseek-harness-plugin.md).
+
+</details>
 
 ## 📊 Benchmark
 
@@ -330,6 +430,22 @@ Join the MindMemOS Feishu group for project updates, usage discussions, and comm
 <p align="center">
   <img src="./assets/feishu-group-small.png" alt="MindMemOS Feishu group QR code">
 </p>
+
+## 📝 Citation
+
+If you find MindMemOS useful in your research, please cite our technical report:
+
+```bibtex
+@misc{liang2026mindmemos,
+  title        = {MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents},
+  author       = {Liang, Kaichao and Cui, Yuqi and Kong, Hao and Huang, Xinyuan and Hou, Guohaotian and Kang, Qingcan and Chen, Liang and Yin, Yiyang and Ye, Ke and Guo, Jiaquan and Chen, Da and Zeng, Lingan and Peng, Yixing and Yao, Rong and Kai, Shixiong and Yuan, Mingxuan},
+  year         = {2026},
+  eprint       = {2608.12428},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.AI},
+  url          = {https://arxiv.org/abs/2608.12428},
+}
+```
 
 ## 📄 License
 

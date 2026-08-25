@@ -53,6 +53,7 @@ CHOICE_RULES: tuple[ChoiceRule, ...] = (
     ),
     ChoiceRule("algo_config.text_processing.sparse_fallback_mode", frozenset({"tf", "log_tf"})),
     ChoiceRule("algo_config.add.schema.chunker.split_mode", frozenset({"llm", "rule"})),
+    ChoiceRule("algo_config.add.schema.version", frozenset({"v1", "v2"})),
     ChoiceRule("kafka.acks", frozenset({"0", "1", "all"})),
 )
 
@@ -212,15 +213,6 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         support="positive number",
     ),
     RangeRule(
-        "algo_config.add.schema.extraction.max_entities_per_conversation", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
-        "algo_config.add.schema.extraction.max_entity_resolve_concurrency", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
-        "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
         "algo_config.add.schema.merge.secondary_search_retry_backoff_base",
         min_value=0,
         include_min=False,
@@ -231,6 +223,30 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         min_value=0,
         include_min=False,
         support="positive number",
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entities_per_conversation", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entity_resolve_concurrency", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.description_rewrite_threshold",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.description_max_chars",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.reference_description_max_chars",
+        min_value=1,
+        support="positive integer >= 1",
     ),
     RangeRule("algo_config.search.request_top_k_max", min_value=1, support="positive integer >= 1"),
     RangeRule(

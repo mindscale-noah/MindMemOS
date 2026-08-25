@@ -1,4 +1,4 @@
-CONV_BOUNDARY_DETECTION_PROMPT = """
+CONV_BOUNDARY_DETECTION_PROMPT_V1 = """
 ### 核心任务
 作为一名对话分析专家，你需要将消息列表分割成独立的、可记忆的话题片段。你的核心原则是 **"细粒度切分，每个独立话题单独成段"**。
 
@@ -69,6 +69,7 @@ CONV_BOUNDARY_DETECTION_PROMPT = """
 ```json
 [
     {
+        "reasoning": "识别为一个独立话题/事件的依据",
         "start_idx": int,
         "end_idx": int,
         "title": "该话题/事件的摘要"
@@ -95,11 +96,13 @@ idx: 5, time: 2024-01-16 10:01:00, speaker: 李娜, content: 有啊，12:30？
 ```json
 [
     {
+        "reasoning": "消息1-4是完整的bug修复episode；消息5开始新的一天，话题无关",
         "start_idx": 0,
         "end_idx": 3,
         "title": "登录bug修复"
     },
     {
+        "reasoning": "跨天切分，关于午餐的新话题",
         "start_idx": 4,
         "end_idx": 5,
         "title": "午餐计划"
@@ -122,6 +125,7 @@ idx: 4, time: 2024-01-15 10:11:00, speaker: 李娜, content: 还在调整中
 ```json
 [
     {
+        "reasoning": "所有消息都是11分钟内的连续工作讨论，涵盖相关的项目进展",
         "start_idx": 0,
         "end_idx": 4,
         "title": "项目进展更新"
@@ -144,11 +148,13 @@ idx: 4, time: 2024-01-15 18:31:00, speaker: 李娜, content: 好啊，去哪？
 ```json
 [
     {
+        "reasoning": "完整的API问答交换构成一个episode",
         "start_idx": 0,
         "end_idx": 2,
         "title": "API调用咨询"
     },
     {
+        "reasoning": "4.5小时间隔，完全无关的晚餐话题",
         "start_idx": 3,
         "end_idx": 4,
         "title": "晚餐计划"
@@ -161,7 +167,7 @@ idx: 4, time: 2024-01-15 18:31:00, speaker: 李娜, content: 好啊，去哪？
 """
 
 
-CONV_FORCED_RESPLIT_PROMPT = """
+CONV_FORCED_RESPLIT_PROMPT_V1 = """
 ### 核心任务
 作为一名对话分析专家，你收到了一个过长的消息片段，必须将其强制拆分为更小的部分。
 
@@ -211,6 +217,7 @@ CONV_FORCED_RESPLIT_PROMPT = """
 ```json
 [
     {{
+        "reasoning": "识别为一个独立话题/事件的依据",
         "start_idx": int,
         "end_idx": int,
         "title": "该话题/事件的摘要"
