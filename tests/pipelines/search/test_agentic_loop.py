@@ -93,7 +93,7 @@ async def test_agentic_loop_adds_time_relaxed_query_after_second_round() -> None
 
 
 @pytest.mark.asyncio
-async def test_agentic_loop_uses_two_hops_only_for_first_round() -> None:
+async def test_agentic_loop_uses_configured_hops_only_for_first_round() -> None:
     tool = FakeTool()
     loop = AgenticLoop(
         config=AgenticConfig(max_rounds=2, num_hops=4),
@@ -104,4 +104,5 @@ async def test_agentic_loop_uses_two_hops_only_for_first_round() -> None:
 
     await loop.run(query="what did I discuss", context=make_context())
 
-    assert [request.num_hops for request in tool.requests] == [2, 1]
+    # Round-1 query carries the configured hop count; follow-up queries never expand.
+    assert [request.num_hops for request in tool.requests] == [4, 1]

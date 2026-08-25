@@ -59,7 +59,7 @@ class AgenticLoop:
             AgenticQuery(
                 query=query,
                 time_window=initial_time_window,
-                num_hops=2,
+                num_hops=self._config.num_hops,
                 allow_time_extraction=allow_time_extraction,
             ),
         ]

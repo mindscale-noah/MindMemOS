@@ -113,13 +113,14 @@ algo_config:
       # LLM check and no query rewrite (the loop breaks at round >= max_rounds
       # before both). The plugin also sends max_rounds=1 on each request, which
       # overrides config; this block pins it for direct pipeline callers and
-      # supplies the per-round knobs the wrapper reads from config. Note: the
-      # agentic loop hardcodes num_hops=2 for the round-1 query, so round 1
-      # also does one graph-expansion pass (DB neighbors + local scoring only —
-      # no rerank HTTP since rerank.enabled is false).
+      # supplies the per-round knobs the wrapper reads from config.
+      # num_hops drives the round-1 engine call's graph expansion (follow-up
+      # queries never expand) and overrides schema_search.multi_hop; 1 = no
+      # expansion, matching the multi_hop: 1 intent below.
       max_rounds: 1
       top_k_per_round: 30
       top_n_per_round: 5
+      num_hops: 1
       use_rerank: false
       use_relevance_filter: false
       use_property_filter: false

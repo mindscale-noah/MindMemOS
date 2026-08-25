@@ -19,7 +19,9 @@ class AgenticConfig:
     """Entities kept per round after filtering."""
 
     num_hops: int = field(default=2)
-    """Multi-hop expansion hops."""
+    """Graph-expansion hops for the round-1 query's engine call (follow-up
+    queries never expand). Overrides ``schema_search.multi_hop`` because the
+    agentic path always passes an explicit per-query hop count."""
 
     use_rerank: bool = field(default=True)
     """Whether reranker is used in the agentic loop."""
