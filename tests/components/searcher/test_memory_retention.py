@@ -193,6 +193,23 @@ def test_score_bounds_candidates_to_max_candidates() -> None:
     assert len(scored) == 2
 
 
+def test_select_rejects_unbroken_blobs_that_exceed_budget() -> None:
+    # heuristic-v2 scales long spaceless words by length, so a blob can no
+    # longer slip through a strict budget at one flat token.
+    selector = _selector(relevance_weight=1.0)
+    candidates = [
+        candidate("blob", "x" * 10000, rank=0, relevance=1.0),
+        candidate("small", "alpha beta", rank=1, relevance=0.5),
+    ]
+
+    nothing_fits = selector.select(query="alpha", candidates=candidates, token_budget=1)
+    assert nothing_fits.candidates == []
+    assert nothing_fits.budget_induced_empty is True
+
+    result = selector.select(query="alpha", candidates=candidates, token_budget=3)
+    assert [c.id for c in result.candidates] == ["small"]
+
+
 def test_mixed_v2_prefers_novelty_over_near_duplicates() -> None:
     selector = _selector(
         selector_version="mixed-v2",

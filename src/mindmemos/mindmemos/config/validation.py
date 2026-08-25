@@ -44,7 +44,7 @@ CHOICE_RULES: tuple[ChoiceRule, ...] = (
     ),
     ChoiceRule("auth.mode", frozenset({"api_key", "gateway_jwt"})),
     ChoiceRule("algo_config.search.retention.selector_version", frozenset({"mixed-v1", "mixed-v2"})),
-    ChoiceRule("algo_config.search.retention.estimator_version", frozenset({"heuristic-v1"})),
+    ChoiceRule("algo_config.search.retention.estimator_version", frozenset({"heuristic-v2"})),
     ChoiceRule("database.qdrant.distance", frozenset({"Cosine", "Euclid", "Dot", "Manhattan"}), case_insensitive=True),
     ChoiceRule("database.default_consistency", frozenset({"fast", "strong"})),
     ChoiceRule("algo_config.common.prompt_language", frozenset({"EN", "ZH"}), case_insensitive=True),

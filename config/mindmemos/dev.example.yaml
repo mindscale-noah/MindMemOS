@@ -304,7 +304,7 @@ algo_config:
       recency_half_life_days: 30.0
       missing_recency_score: 0.5
       selector_version: mixed-v1
-      estimator_version: heuristic-v1
+      estimator_version: heuristic-v2
       top_m_guarantee: 5
       mmr_lambda: 0.7
   skill_evolution: {}

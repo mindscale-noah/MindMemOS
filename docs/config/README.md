@@ -180,7 +180,9 @@ pool (up to `max_candidates`), so budget-aware selection is not pre-narrowed to
 `top_k`) candidates per request. Selection never merges or rewrites memories.
 Redundancy-aware packing is available by setting `selector_version` to
 `mixed-v2` (MMR, `mmr_lambda`); the default `mixed-v1` packs greedily by
-priority.
+priority. The `heuristic-v2` token estimator counts words longer than 8
+characters at one token per 8 characters, so spaceless runs (URLs, base64,
+hashes) scale with length instead of bypassing the budget at one flat token.
 
 | Field | Default | Description |
 |---|---|---|
@@ -194,7 +196,7 @@ priority.
 | `recency_half_life_days` | `30.0` | Half-life in days for the exponential recency decay. |
 | `missing_recency_score` | `0.5` | Recency score used when a candidate has no parsable timestamp. |
 | `selector_version` | `mixed-v1` | Retention selector implementation: `mixed-v1` or `mixed-v2`. |
-| `estimator_version` | `heuristic-v1` | Token estimator implementation (currently heuristic only). |
+| `estimator_version` | `heuristic-v2` | Token estimator implementation (currently heuristic only). |
 | `top_m_guarantee` | `5` | Candidates force-kept by relevance before MMR re-ranking (mixed-v2). |
 | `mmr_lambda` | `0.70` | Trade-off between priority and redundancy in MMR packing (mixed-v2). |
 

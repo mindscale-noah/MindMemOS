@@ -39,7 +39,7 @@ class MemoryRetentionConfig:
     selector_version: str = field(default="mixed-v1")
     """Retention selector implementation: ``mixed-v1`` or ``mixed-v2``."""
 
-    estimator_version: str = field(default="heuristic-v1")
+    estimator_version: str = field(default="heuristic-v2")
     """Token estimator implementation (currently heuristic only)."""
 
     top_m_guarantee: int = field(default=5)
