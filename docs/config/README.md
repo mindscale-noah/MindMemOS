@@ -180,9 +180,12 @@ pool (up to `max_candidates`), so budget-aware selection is not pre-narrowed to
 `top_k`) candidates per request. Selection never merges or rewrites memories.
 Redundancy-aware packing is available by setting `selector_version` to
 `mixed-v2` (MMR, `mmr_lambda`); the default `mixed-v1` packs greedily by
-priority. The `heuristic-v2` token estimator counts words longer than 8
-characters at one token per 8 characters, so spaceless runs (URLs, base64,
-hashes) scale with length instead of bypassing the budget at one flat token.
+priority. Retention applies its own `heuristic-v2` token estimator, which
+counts words longer than 8 characters at one token per 8 characters so
+spaceless runs (URLs, base64, hashes) scale with length instead of
+bypassing the budget at one flat token; the add pipeline's chunking and
+compaction estimator is a separate implementation with word-count
+semantics.
 
 | Field | Default | Description |
 |---|---|---|

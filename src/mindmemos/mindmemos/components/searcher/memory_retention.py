@@ -8,7 +8,8 @@ from math import exp, isfinite, log
 from typing import Callable
 
 from ...config.algo.search import MemoryRetentionConfig
-from ..text import TextPreprocessor, estimate_tokens, get_text_preprocessor
+from ..text import TextPreprocessor, get_text_preprocessor
+from .retention_token_estimator import estimate_tokens
 from .scored_candidate import ScoredSearchCandidate, merge_scored_candidates
 
 
