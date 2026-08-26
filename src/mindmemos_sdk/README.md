@@ -12,7 +12,7 @@
   <a href="https://mindmemos.cn">
     <img src="https://img.shields.io/badge/Website-mindmemos.cn-0A66C2?logo=googlechrome&logoColor=white" alt="MindMemOS Website">
   </a>
-  <a href="https://mindmemos.cn/api-docs">
+  <a href="https://mindmemos.cn/#/api-docs">
     <img src="https://img.shields.io/badge/FastAPI-Docs-009688?logo=fastapi&logoColor=white" alt="MindMemOS FastAPI Docs">
   </a>
   <a href="https://pypi.org/project/mindmemos-sdk/">
