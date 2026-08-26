@@ -6,7 +6,7 @@
   <a href="https://mindmemos.cn">
     <img src="https://img.shields.io/badge/Website-mindmemos.cn-0A66C2?labelColor=gray&logo=googlechrome&logoColor=white" alt="MindMemOS 官网">
   </a>
-  <a href="https://mindmemos.cn/api-docs">
+  <a href="https://mindmemos.cn/#/api-docs">
     <img src="https://img.shields.io/badge/FastAPI-Docs-009688?labelColor=gray&logo=fastapi&logoColor=white" alt="MindMemOS FastAPI 手册">
   </a>
   <a href="https://pypi.org/project/mindmemos-sdk/">
@@ -31,7 +31,7 @@
   &nbsp;&nbsp;│&nbsp;&nbsp;
   <strong><a href="https://mindmemos.cn">官网</a></strong>
   &nbsp;&nbsp;│&nbsp;&nbsp;
-  <strong><a href="https://mindmemos.cn/api-docs">API 文档</a></strong>
+  <strong><a href="https://mindmemos.cn/#/api-docs">API 文档</a></strong>
   &nbsp;&nbsp;│&nbsp;&nbsp;
   <strong><a href="https://pypi.org/project/mindmemos-sdk/">PYPI SDK</a></strong>
   &nbsp;&nbsp;│&nbsp;&nbsp;
@@ -217,6 +217,7 @@ with MindMemOSClient() as client:
         "用户喜欢喝什么咖啡？",
         top_k=5,
         search_strategy="fast",
+        # token_budget=2000,  # 可选：严格 token 预算（启用 token 预算保留）
     )
 
     for memory in search_result.memories:

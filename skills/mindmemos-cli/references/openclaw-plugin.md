@@ -51,6 +51,7 @@ Optional plugin config:
   "enabled": true,
   "cli": "mindmemos",
   "topK": 5,
+  "tokenBudget": 2000,
   "addMode": "async",
   "userId": "alice",
   "appId": "openclaw",
@@ -62,6 +63,7 @@ Optional plugin config:
 
 - `cli` — command used to invoke the CLI. Defaults to `mindmemos`. If OpenClaw does not run with the CLI on its PATH, set this to an absolute path or a wrapper command (e.g. `uv run mindmemos` inside the repo).
 - `topK` — number of memories injected per turn.
+- `tokenBudget` — optional strict token budget for recall; when set, `memory search --token-budget` caps the injected memories by estimated tokens (token-budget retention) instead of only by `topK` count. Omit to keep legacy behavior.
 - `addMode` — `sync` blocks until extraction finishes; `async` (default) enqueues and returns immediately. Note: in `async` mode the plugin only sees CLI-level failures — a server-side add failure that happens after the CLI exits 0 is not logged by the plugin.
 - `userId` — scopes both search and add to one user. If omitted, search is project-wide, while add inherits the
   default user from the local `mindmemos` CLI config. If neither location supplies a user, add fails.

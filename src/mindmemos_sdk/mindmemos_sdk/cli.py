@@ -163,6 +163,12 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
         default=None,
         help="Minimum rerank relevance score (0-1). Only effective with --rerank.",
     )
+    search.add_argument(
+        "--token-budget",
+        type=int,
+        default=None,
+        help="Strict token budget; enables token-budget retention post-processing.",
+    )
     search.add_argument("--filter", dest="filter_json", help="Filter DSL as a JSON object string.")
     search.add_argument("--json", action="store_true", help="Print a machine-readable JSON result.")
     search.set_defaults(handler=_handle_memory_search)
@@ -580,6 +586,7 @@ def _handle_memory_search(args: argparse.Namespace) -> int:
                     search_strategy=args.search_strategy,
                     rerank=args.rerank,
                     score_threshold=args.score_threshold,
+                    token_budget=args.token_budget,
                     filters=filters,
                     app_id=args.app_id,
                     agent_id=args.agent_id,

@@ -107,6 +107,8 @@ algo_config:
     strip_text: true
     spacy_en_model: en_core_web_sm
     spacy_zh_model: zh_core_web_sm
+    nlp_max_retries: 50
+    nlp_retry_base_delay: 0.1
     content_hash_algorithm: md5
     explicit_language_confidence: 1.0
     lang_zh_ratio: 0.35
@@ -227,6 +229,7 @@ algo_config:
     consolidation_model:
   search:
     request_top_k_max: 100
+    include_patches: true
     default:
       top_k: 10
     vanilla:
@@ -299,6 +302,20 @@ algo_config:
       max_doc_length: 5000
       max_batch_size: 20
       max_concurrent_batches: 1
+    retention:
+      min_token_budget: 1
+      max_token_budget: 128000
+      max_candidates: 100
+      relevance_weight: 0.5
+      query_overlap_weight: 0.25
+      recency_weight: 0.15
+      cost_weight: 0.1
+      recency_half_life_days: 30.0
+      missing_recency_score: 0.5
+      selector_version: mixed-v1
+      estimator_version: heuristic-v2
+      top_m_guarantee: 5
+      mmr_lambda: 0.7
   skill_evolution: {}
 
 kafka:

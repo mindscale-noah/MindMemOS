@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...components.searcher import SearchFinalFilter
+from ...components.searcher import (
+    MemoryRetentionSelector,
+    ScoredSearchCandidate,
+    SearchFinalFilter,
+)
 from ...config import get_config
+from ...config.algo.search import MemoryRetentionConfig
 from ...llm import RerankClient
-from ...typing import MemoryRequestContext, SearchPipelineInput, SearchPipelineResult
+from ...logging import get_logger
+from ...typing import MemoryRequestContext, MemorySearchItem, SearchPipelineInput, SearchPipelineResult
 from ..base import MemoryDbPipelineMixin
 from ..registry import register
 from .agentic.wrapper import AgenticSearchWrapper
@@ -15,6 +21,8 @@ from .base import SearchEngine
 from .default import DefaultSearchEngine
 from .schema import SchemaSearchEngine
 from .vanilla import VanillaSearchEngine
+
+logger = get_logger(__name__)
 
 _DEFAULT_ENGINE_NAMES = frozenset({"default", "vanilla", "schema"})
 
@@ -30,12 +38,14 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
         agentic_wrapper: AgenticSearchWrapper | None = None,
         final_filter: SearchFinalFilter | None = None,
         rerank_client: RerankClient | None = None,
+        retention_config: MemoryRetentionConfig | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._engines = dict(engines or {})
         self._use_default_engines = engines is None
         self._agentic = agentic_wrapper
+        self._retention_config = retention_config
         if final_filter is not None:
             self._final_filter = final_filter
         else:
@@ -55,16 +65,81 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
 
         if inp.agentic:
             candidates = await self._agentic_wrapper().run(inp, context, engine)
+        elif inp.token_budget is not None:
+            # Retention packs from a wider pool than top_k; raise engine recall accordingly.
+            retention_config = self._resolve_retention_config()
+            engine_top_k = max(inp.top_k or 0, retention_config.max_candidates)
+            candidates = await engine.search_candidates(inp.model_copy(update={"top_k": engine_top_k}), context)
         else:
             candidates = await engine.search_candidates(inp, context)
-        memories = await self._final_filter.apply(
+        if inp.token_budget is None:
+            memories = await self._final_filter.apply(
+                query=inp.query,
+                candidates=candidates,
+                top_k=inp.top_k,
+                rerank=inp.rerank and _strategy_allows_rerank(strategy),
+                score_threshold=inp.score_threshold,
+            )
+            return SearchPipelineResult(status="ok", memories=memories)
+        memories = await self._search_with_retention(inp, strategy=strategy, candidates=candidates)
+        return SearchPipelineResult(status="ok", memories=memories)
+
+    async def _search_with_retention(
+        self,
+        inp: SearchPipelineInput,
+        *,
+        strategy: str,
+        candidates: list[MemorySearchItem],
+    ) -> list[MemorySearchItem]:
+        """Final-filter without truncation, then pack candidates under the token budget."""
+
+        retention_config = self._resolve_retention_config()
+        bounded = candidates[: retention_config.max_candidates]
+        filter_result = await self._final_filter.apply_with_outcome(
             query=inp.query,
-            candidates=candidates,
+            candidates=bounded,
             top_k=inp.top_k,
             rerank=inp.rerank and _strategy_allows_rerank(strategy),
             score_threshold=inp.score_threshold,
+            truncate=False,
         )
-        return SearchPipelineResult(status="ok", memories=memories)
+        scored = [
+            ScoredSearchCandidate(
+                item=item,
+                rank=rank,
+                relevance_score=score if score is not None else 0.0,
+            )
+            for rank, (item, score) in enumerate(
+                zip(filter_result.candidates, filter_result.rerank_scores, strict=True)
+            )
+        ]
+        metrics: dict[str, Any] = {"rerank_outcome": filter_result.rerank_outcome}
+        selection = MemoryRetentionSelector(config=retention_config).select(
+            query=inp.query,
+            candidates=scored,
+            token_budget=inp.token_budget,
+        )
+        metrics.update(
+            {
+                "token_budget": inp.token_budget,
+                "candidate_count_before_retention": len(scored),
+                "candidate_count_after_retention": len(selection.candidates),
+                "estimated_tokens_before": selection.estimated_tokens_before,
+                "estimated_tokens_after": selection.estimated_tokens_after,
+                "budget_utilization": selection.estimated_tokens_after / inp.token_budget,
+                "budget_induced_empty": selection.budget_induced_empty,
+                "retention_selector_version": retention_config.selector_version,
+                "token_estimator_version": retention_config.estimator_version,
+            }
+        )
+        logger.info("search_retention_metrics", **metrics)
+        selected = selection.candidates if inp.top_k is None else selection.candidates[: inp.top_k]
+        return [candidate.item for candidate in selected]
+
+    def _resolve_retention_config(self) -> MemoryRetentionConfig:
+        if self._retention_config is not None:
+            return self._retention_config
+        return get_config().algo_config.search.retention
 
     def _engine(self, name: str) -> SearchEngine | None:
         engine = self._engines.get(name)

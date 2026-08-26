@@ -7,6 +7,7 @@ type PluginConfig = {
   enabled: boolean;
   cli: string;
   topK: number;
+  tokenBudget?: number;
   addMode: "sync" | "async";
   userId?: string;
   appId: string;
@@ -66,6 +67,10 @@ const CONFIG_SCHEMA = {
       type: "string",
     },
     topK: {
+      type: "integer",
+      minimum: 1,
+    },
+    tokenBudget: {
       type: "integer",
       minimum: 1,
     },
@@ -165,6 +170,7 @@ function loadConfig(raw: unknown): PluginConfig {
     enabled: obj.enabled !== false,
     cli: typeof obj.cli === "string" && obj.cli.trim() ? obj.cli.trim() : DEFAULT_CONFIG.cli,
     topK: positiveInteger(obj.topK, DEFAULT_CONFIG.topK),
+    tokenBudget: optionalPositiveInteger(obj.tokenBudget),
     addMode,
     appId: typeof obj.appId === "string" && obj.appId.trim() ? obj.appId.trim() : DEFAULT_CONFIG.appId,
     sessionId: typeof obj.sessionId === "string" && obj.sessionId.trim() ? obj.sessionId.trim() : undefined,
@@ -179,6 +185,9 @@ function loadConfig(raw: unknown): PluginConfig {
 
 async function searchMemories(config: PluginConfig, query: string, sessionId: string): Promise<MemorySearchResult> {
   const args = ["memory", "search", query, "--top-k", String(config.topK), "--json"];
+  if (config.tokenBudget) {
+    args.push("--token-budget", String(config.tokenBudget));
+  }
   args.push("--app-id", config.appId, "--session-id", sessionId);
   if (config.userId) {
     args.push("--user-id", config.userId);
@@ -638,7 +647,11 @@ function getPath(value: unknown, path: string[]): unknown {
 }
 
 function positiveInteger(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+  return optionalPositiveInteger(value) ?? fallback;
+}
+
+function optionalPositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
