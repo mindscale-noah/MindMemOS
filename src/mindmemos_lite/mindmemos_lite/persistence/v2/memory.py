@@ -79,7 +79,7 @@ def memory_table_definitions(
                     column("metadata", FieldType.JSON, nullable=False, default={}),
                 ),
                 indexes=(
-                    IndexSpec(name="entity_v2_name_idx", fields=("entity_name",)),
+                    IndexSpec(name="entity_v2_name_idx", fields=("entity_name",), kind=IndexKind.HASH),
                     IndexSpec(name="entity_v2_status_idx", fields=("status",)),
                 ),
                 vectors=(semantic, bm25),

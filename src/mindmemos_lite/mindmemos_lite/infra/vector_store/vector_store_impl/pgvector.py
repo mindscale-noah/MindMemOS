@@ -507,6 +507,19 @@ class PgVectorBackend(ScopedVectorStore):
                     )
                 )
                 continue
+            if index.kind == IndexKind.HASH:
+                if index.unique:
+                    raise ValueError("hash indexes do not support UNIQUE constraints")
+                if len(index.fields) != 1:
+                    raise ValueError("postgres hash indexes support exactly one column")
+                statements.append(
+                    sql.SQL("CREATE INDEX IF NOT EXISTS {name} ON {table} USING hash ({fields})").format(
+                        name=sql.Identifier(index.name),
+                        table=self._qualified_table(spec),
+                        fields=sql.SQL(", ").join(index_fields),
+                    )
+                )
+                continue
             if index.unique and spec.scope_scoped:
                 index_fields.insert(0, sql.SQL("_scope_key"))
             unique = sql.SQL("UNIQUE ") if index.unique else sql.SQL("")

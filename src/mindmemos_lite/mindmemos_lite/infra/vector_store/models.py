@@ -427,7 +427,7 @@ class FieldType(StrEnum):
 class IndexKind(StrEnum):
     BTREE = "btree"
     FULL_TEXT = "full_text"
-
+    HASH = "hash"
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FieldSpec:
