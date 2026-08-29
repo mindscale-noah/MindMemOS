@@ -1,6 +1,6 @@
 {
   "name": "@mindmemos/deepseek-harness-plugin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness (dsh) plugin that recalls and writes MindMemOS memories through the mindmemos CLI.",
   "type": "module",
   "repository": {

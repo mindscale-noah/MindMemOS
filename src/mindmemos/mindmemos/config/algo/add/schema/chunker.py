@@ -28,10 +28,12 @@ class EpisodesChunkerConfig:
     """Rule mode cuts when a message is farther than this from episode start."""
 
     streaming_window_size: int = 15
-    """Streaming mode window size: max messages per LLM boundary detection call."""
+    """Streaming mode window size: max messages per LLM boundary detection call.
+
+    Develop-compatible default; the v2 flow typically opts into a larger window
+    (e.g. 50) via explicit config.
+    """
 
     def __post_init__(self) -> None:
         if self.streaming_window_size < 1:
-            raise ValueError(
-                f"streaming_window_size must be >= 1, got {self.streaming_window_size}"
-            )
+            raise ValueError(f"streaming_window_size must be >= 1, got {self.streaming_window_size}")

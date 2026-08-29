@@ -71,6 +71,8 @@ export interface Config {
   cli: string;
   /** Number of memories injected per turn. */
   topK: number;
+  /** Optional strict token budget for recall; enables token-budget retention when set. */
+  tokenBudget?: number;
   /** `sync` blocks until extraction finishes; `async` enqueues and returns. */
   addMode: "sync" | "async";
   /** Scopes search and add to one user; omit for project-wide search. */
@@ -89,6 +91,7 @@ export interface Config {
 export const Config: z<Config> = z.object({
   cli: z.string().default("mindmemos"),
   topK: z.natural().min(1).default(5),
+  tokenBudget: z.natural().min(1),
   addMode: z.union([z.const("sync"), z.const("async")]).default("async"),
   userId: z.string(),
   appId: z.string().default("deepseek-harness"),
@@ -181,6 +184,9 @@ export function apply(ctx: Context, config: Config): void {
 
 async function searchMemories(config: Config, query: string, sessionId: string): Promise<MemorySearchResult> {
   const args = ["memory", "search", query, "--top-k", String(config.topK), "--json"];
+  if (config.tokenBudget) {
+    args.push("--token-budget", String(config.tokenBudget));
+  }
   args.push("--app-id", config.appId, "--session-id", sessionId);
   if (config.userId) {
     args.push("--user-id", config.userId);

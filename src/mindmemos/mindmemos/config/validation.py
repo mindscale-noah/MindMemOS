@@ -43,6 +43,8 @@ CHOICE_RULES: tuple[ChoiceRule, ...] = (
         "telemetry.log_level", frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}), case_insensitive=True
     ),
     ChoiceRule("auth.mode", frozenset({"api_key", "gateway_jwt"})),
+    ChoiceRule("algo_config.search.retention.selector_version", frozenset({"mixed-v1", "mixed-v2"})),
+    ChoiceRule("algo_config.search.retention.estimator_version", frozenset({"heuristic-v2"})),
     ChoiceRule("database.qdrant.distance", frozenset({"Cosine", "Euclid", "Dot", "Manhattan"}), case_insensitive=True),
     ChoiceRule("database.default_consistency", frozenset({"fast", "strong"})),
     ChoiceRule("algo_config.common.prompt_language", frozenset({"EN", "ZH"}), case_insensitive=True),
@@ -53,6 +55,7 @@ CHOICE_RULES: tuple[ChoiceRule, ...] = (
     ),
     ChoiceRule("algo_config.text_processing.sparse_fallback_mode", frozenset({"tf", "log_tf"})),
     ChoiceRule("algo_config.add.schema.chunker.split_mode", frozenset({"llm", "rule"})),
+    ChoiceRule("algo_config.add.schema.version", frozenset({"v1", "v2"})),
     ChoiceRule("kafka.acks", frozenset({"0", "1", "all"})),
 )
 
@@ -212,15 +215,6 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         support="positive number",
     ),
     RangeRule(
-        "algo_config.add.schema.extraction.max_entities_per_conversation", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
-        "algo_config.add.schema.extraction.max_entity_resolve_concurrency", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
-        "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
         "algo_config.add.schema.merge.secondary_search_retry_backoff_base",
         min_value=0,
         include_min=False,
@@ -232,7 +226,47 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         include_min=False,
         support="positive number",
     ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entities_per_conversation", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entity_resolve_concurrency", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.description_rewrite_threshold",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.description_max_chars",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.reference_description_max_chars",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
     RangeRule("algo_config.search.request_top_k_max", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.search.retention.min_token_budget", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.search.retention.max_token_budget", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.search.retention.max_candidates", min_value=1, max_value=100),
+    RangeRule("algo_config.search.retention.relevance_weight", min_value=0, support="non-negative number"),
+    RangeRule("algo_config.search.retention.query_overlap_weight", min_value=0, support="non-negative number"),
+    RangeRule("algo_config.search.retention.recency_weight", min_value=0, support="non-negative number"),
+    RangeRule("algo_config.search.retention.cost_weight", min_value=0, support="non-negative number"),
+    RangeRule(
+        "algo_config.search.retention.recency_half_life_days",
+        min_value=0,
+        include_min=False,
+        support="positive number",
+    ),
+    RangeRule("algo_config.search.retention.missing_recency_score", min_value=0, max_value=1),
+    RangeRule("algo_config.search.retention.top_m_guarantee", min_value=0, max_value=100),
+    RangeRule("algo_config.search.retention.mmr_lambda", min_value=0, max_value=1),
     RangeRule(
         "algo_config.search.vanilla.dedup_threshold",
         min_value=0,
@@ -548,6 +582,13 @@ def _validate_schema_add(schema_add: Any) -> None:
 
 
 def _validate_search(search: Any) -> None:
+    retention = search.retention
+    if retention.min_token_budget > retention.max_token_budget:
+        raise InvalidConfigError(
+            "algo_config.search.retention.min_token_budget",
+            support="<= algo_config.search.retention.max_token_budget",
+        )
+
     vanilla = search.vanilla
     if vanilla.hybrid_prefetch_min > vanilla.hybrid_prefetch_max:
         raise InvalidConfigError(

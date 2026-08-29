@@ -6,7 +6,7 @@
   <a href="https://mindmemos.cn">
     <img src="https://img.shields.io/badge/Website-mindmemos.cn-0A66C2?labelColor=gray&logo=googlechrome&logoColor=white" alt="MindMemOS Website">
   </a>
-  <a href="https://mindmemos.cn/api-docs">
+  <a href="https://mindmemos.cn/#/api-docs">
     <img src="https://img.shields.io/badge/FastAPI-Docs-009688?labelColor=gray&logo=fastapi&logoColor=white" alt="MindMemOS FastAPI Docs">
   </a>
   <a href="https://pypi.org/project/mindmemos-sdk/">
@@ -31,7 +31,7 @@
   &nbsp;&nbsp;│&nbsp;&nbsp;
   <strong><a href="https://mindmemos.cn">Website</a></strong>
   &nbsp;&nbsp;│&nbsp;&nbsp;
-  <strong><a href="https://mindmemos.cn/api-docs">API Docs</a></strong>
+  <strong><a href="https://mindmemos.cn/#/api-docs">API Docs</a></strong>
   &nbsp;&nbsp;│&nbsp;&nbsp;
   <strong><a href="https://pypi.org/project/mindmemos-sdk/">PYPI SDK</a></strong>
   &nbsp;&nbsp;│&nbsp;&nbsp;
@@ -91,6 +91,8 @@ Before startup, configure at least the following three model routers in `config/
 - `chat_model_router`: supports memory extraction, Skill evolution, and other generation tasks.
 - `embed_model_router`: generates semantic embeddings; make sure its dimensions match the Qdrant dimension configuration.
 - `rerank_model_router`: optional; reranks memory retrieval results.
+
+The schema memory-extraction flow is versioned: `algo_config.add.schema.version` defaults to `v2` (rule-based graph fusion) and can be pinned to `v1` (develop-compatible flow) per project. Storage is compatible in both directions; see the deployment guide for binding and effective timing.
 
 Configure an API key and its bound `project_id` in `config/mindmemos/api_keys.yaml`.
 
@@ -227,6 +229,7 @@ with MindMemOSClient() as client:
         "What kind of coffee does the user like?",
         top_k=5,
         search_strategy="fast",
+        # token_budget=2000,  # optional: strict token budget (enables retention)
     )
 
     for memory in search_result.memories:

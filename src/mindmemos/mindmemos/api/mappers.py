@@ -92,6 +92,7 @@ def to_search_pipeline_input(
     """Build pure search pipeline input from a public search request."""
 
     _validate_request_top_k(req.top_k)
+    _validate_request_token_budget(req.token_budget)
     data = req.model_dump(by_alias=True, exclude=set(_ACTOR_FIELDS) | {"search_strategy"})
     if req.user_id:
         request_filters = data.get("filters")
@@ -111,6 +112,18 @@ def _validate_request_top_k(top_k: int | None) -> None:
         raise BadRequestError(
             f"top_k must be <= {top_k_max}; value={top_k}",
             code="search.top_k_too_large",
+        )
+
+
+def _validate_request_token_budget(token_budget: int | None) -> None:
+    if token_budget is None:
+        return
+    retention = get_config().algo_config.search.retention
+    if token_budget < retention.min_token_budget or token_budget > retention.max_token_budget:
+        raise BadRequestError(
+            f"token_budget must be between {retention.min_token_budget} and "
+            f"{retention.max_token_budget}; value={token_budget}",
+            code="search.token_budget_out_of_range",
         )
 
 

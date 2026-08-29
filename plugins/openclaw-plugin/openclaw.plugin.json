@@ -2,7 +2,7 @@
   "id": "mindmemos-memory",
   "name": "MindMemOS Memory",
   "description": "Searches MindMemOS memories before each prompt and stores completed OpenClaw conversations through the mindmemos CLI.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "kind": "memory",
   "configSchema": {
     "type": "object",
@@ -15,6 +15,10 @@
         "type": "string"
       },
       "topK": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "tokenBudget": {
         "type": "integer",
         "minimum": 1
       },

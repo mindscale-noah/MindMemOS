@@ -225,6 +225,9 @@ class SearchPipelineInput(BaseModel):
     score_threshold: float | None = None
     """Minimum rerank relevance score (0–1). Only effective when rerank=True."""
 
+    token_budget: int | None = Field(default=None, ge=1)
+    """Optional strict token budget; enables token-budget retention post-processing."""
+
     agentic: bool = False
     """Whether to wrap the selected search pipeline in multi-round orchestration."""
 

@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Protocol
 
-from ....llm import LLMClient
-from ....logging import get_logger
-from ....prompts import AddPromptSet
-from ....typing import EntityWrite, MemoryRequestContext, MemoryView, MemoryWrite
-from ...memory_modeling.schema import TemporalEntity, get_entity_manager, memory_timestamp
-from ._runtime_clients import resolve_llm_client
+from .....llm import LLMClient
+from .....logging import get_logger
+from .....prompts import AddPromptSetV1
+from .....typing import EntityWrite, MemoryRequestContext, MemoryView, MemoryWrite
+from ....memory_modeling.schema import TemporalEntity, get_entity_manager, memory_timestamp
+from .._runtime_clients import resolve_llm_client
 from ._schema_update_ops import SchemaMemoryUpdate
 from ._schema_utils import (
     dedupe_non_empty,
@@ -48,7 +48,7 @@ class SchemaHigherOrderGenerator:
 
     llm_client: LLMClient | None
     db_reader: Any
-    prompt_set: AddPromptSet
+    prompt_set: AddPromptSetV1
     embed_texts: EmbedTexts
     list_entity_memories: ListEntityMemories
     memory_factory: MemoryFactory
@@ -65,7 +65,7 @@ class SchemaHigherOrderGenerator:
         created_at: datetime,
         episode_time: str = "",
         request_metadata: dict[str, Any],
-        prompt_set: AddPromptSet | None = None,
+        prompt_set: AddPromptSetV1 | None = None,
     ) -> tuple[list[MemoryWrite], list[str], list[SchemaMemoryUpdate]]:
         """Generate higher-order memories and archive ids for an updated entity."""
 

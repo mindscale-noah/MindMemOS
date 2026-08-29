@@ -107,6 +107,8 @@ algo_config:
     strip_text: true
     spacy_en_model: en_core_web_sm
     spacy_zh_model: zh_core_web_sm
+    nlp_max_retries: 50
+    nlp_retry_base_delay: 0.1
     content_hash_algorithm: md5
     explicit_language_confidence: 1.0
     lang_zh_ratio: 0.35
@@ -149,12 +151,16 @@ algo_config:
   add:
     schema:
       entity_modeling_path: config/presets/schema_general.json
+      version: v2
       extraction:
         enable_schema_selection: true
         use_search_fields: true
         search_fields_max: 10
         episode_search_fields_augment: true
         episode_augment_count: 4
+        max_entities_per_conversation: 200
+        max_entity_resolve_concurrency: 10
+        max_properties_per_entity: 15
       merge:
         enable_entity_merge_decision: true
         entity_recall_top_k: 15
@@ -162,6 +168,11 @@ algo_config:
         use_property_merge: false
         secondary_search_limit: 30
         secondary_search_retries: 3
+        secondary_search_retry_backoff_base: 0.2
+        secondary_search_retry_backoff_max: 5.0
+        description_rewrite_threshold: 1000
+        description_max_chars: 2000
+        reference_description_max_chars: 500
       higher_order:
         enabled: true
         top_k: 10
@@ -169,13 +180,13 @@ algo_config:
       episode_edge:
         top_k: 10
       chunker:
-        split_mode: llm
+        split_mode: rule
         min_episode_length: 1
-        max_episode_length: 15
+        max_episode_length: 50
         max_buffer_size: 1000
-        split_on_user_speaker: true
-        max_minutes_from_first: 30
-        streaming_window_size: 15
+        split_on_user_speaker: false
+        max_minutes_from_first: 999999
+        streaming_window_size: 50
       drain:
         episode_generation_max_retries: 3
     vanilla:
@@ -218,6 +229,7 @@ algo_config:
     consolidation_model:
   search:
     request_top_k_max: 100
+    include_patches: true
     default:
       top_k: 10
     vanilla:
@@ -290,6 +302,20 @@ algo_config:
       max_doc_length: 5000
       max_batch_size: 20
       max_concurrent_batches: 1
+    retention:
+      min_token_budget: 1
+      max_token_budget: 128000
+      max_candidates: 100
+      relevance_weight: 0.5
+      query_overlap_weight: 0.25
+      recency_weight: 0.15
+      cost_weight: 0.1
+      recency_half_life_days: 30.0
+      missing_recency_score: 0.5
+      selector_version: mixed-v1
+      estimator_version: heuristic-v2
+      top_m_guarantee: 5
+      mmr_lambda: 0.7
   skill_evolution: {}
 
 kafka:

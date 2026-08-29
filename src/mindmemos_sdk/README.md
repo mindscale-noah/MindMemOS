@@ -12,7 +12,7 @@
   <a href="https://mindmemos.cn">
     <img src="https://img.shields.io/badge/Website-mindmemos.cn-0A66C2?logo=googlechrome&logoColor=white" alt="MindMemOS Website">
   </a>
-  <a href="https://mindmemos.cn/api-docs">
+  <a href="https://mindmemos.cn/#/api-docs">
     <img src="https://img.shields.io/badge/FastAPI-Docs-009688?logo=fastapi&logoColor=white" alt="MindMemOS FastAPI Docs">
   </a>
   <a href="https://pypi.org/project/mindmemos-sdk/">
@@ -55,7 +55,9 @@ with MindMemOSClient(user_id="alice", app_id="my-agent") as client:
         ],
     )
 
-    result = client.memory.search("What coffee does the user prefer?", top_k=5, user_id="alice")
+    result = client.memory.search(
+        "What coffee does the user prefer?", top_k=5, user_id="alice", token_budget=2000
+    )
     for memory in result.memories:
         print(memory.memory)
 ```
@@ -64,5 +66,5 @@ with MindMemOSClient(user_id="alice", app_id="my-agent") as client:
 
 ```bash
 mindmemos memory add --content "I prefer iced Americano" --user-id alice
-mindmemos memory search "coffee preference" --top-k 5 --user-id alice
+mindmemos memory search "coffee preference" --top-k 5 --user-id alice --token-budget 2000
 ```

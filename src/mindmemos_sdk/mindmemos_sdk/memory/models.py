@@ -114,6 +114,8 @@ class MemorySearchHit(BaseModel):
     event_time: str | None = None
     source_timestamp: str | None = None
     lineage: MemoryLineage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    """Business metadata attached to the memory by the server."""
 
 
 class SearchResult(BaseModel):
@@ -209,6 +211,7 @@ def serialize_feedback_recalled_memories(
         item.setdefault("event_time", None)
         item.setdefault("source_timestamp", None)
         item.setdefault("lineage", None)
+        item.setdefault("metadata", {})
         result.append(item)
     return result
 
@@ -256,6 +259,7 @@ def build_search_body(
     search_strategy: SearchStrategy = "fast",
     rerank: bool = False,
     score_threshold: float | None = None,
+    token_budget: int | None = None,
     filters: dict[str, Any] | None = None,
     app_id: str | None = None,
     agent_id: str | None = None,
@@ -272,6 +276,8 @@ def build_search_body(
     body["rerank"] = rerank
     if score_threshold is not None:
         body["score_threshold"] = score_threshold
+    if token_budget is not None:
+        body["token_budget"] = token_budget
     if app_id:
         body["app_id"] = app_id
     if agent_id:

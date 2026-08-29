@@ -57,6 +57,7 @@ with MindMemOSClient(
         search_strategy="fast",     # or "agentic"
         rerank=True,
         score_threshold=0.5,        # filter out low-relevance rerank results
+        token_budget=2000,          # optional: strict token budget (enables retention); still capped by top_k
     )
     for hit in search_result.memories:
         print(hit.id, hit.memory, hit.last_update_at)
@@ -87,7 +88,7 @@ SDK results and API errors; callers cannot provide them.
 Useful memory kwargs:
 
 - `add(..., mode="sync"|"async", metadata={...}, skill_context=[...], score=0.8, task_id="...")`
-- `search(..., search_strategy="fast"|"agentic", rerank=True, score_threshold=0.5, filters={...})`
+- `search(..., search_strategy="fast"|"agentic", rerank=True, score_threshold=0.5, token_budget=2000, filters={...})`
 - `feedback(feedback="...", mode="sync"|"async", messages=[...], recalled_memories=[...])`;
   explicit feedback text requires `messages`, while omitting `feedback` runs implicit feedback from recent adds.
 - `dreaming(mode="async"|"sync")`

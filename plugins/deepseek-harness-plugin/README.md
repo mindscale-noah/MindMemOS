@@ -87,6 +87,7 @@ the row.
 | --- | --- | --- |
 | `cli` | `mindmemos` | Executable used to invoke the CLI — a name on dsh's `PATH` or an absolute path. It is not a shell command, so a wrapper like `uv run mindmemos` will not work; point it at the real executable instead. |
 | `topK` | `5` | Number of memories injected per turn. |
+| `tokenBudget` | *(none)* | Optional strict token budget for recall; when set, `memory search --token-budget` caps the injected memories by estimated tokens (token-budget retention) in addition to `topK` — whichever limit is tighter applies. |
 | `addMode` | `async` | `sync` blocks until extraction finishes; `async` enqueues and returns. In `async` mode only CLI-level failures are visible to the plugin. |
 | `userId` | *(none)* | Scopes both search and add to one user. Omit for project-wide search; add then inherits the CLI's default user. |
 | `appId` | `deepseek-harness` | Application scope attached to every search and add. |
