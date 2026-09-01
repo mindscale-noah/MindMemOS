@@ -64,6 +64,7 @@ class MemoryPoint:
     memory_id: str
     payload: dict[str, Any]
     semantic_vector: list[float] | None = None
+    semantic_dimension: int | None = None
     bm25_vector: SparseVectorData | None = None
 
 
@@ -74,6 +75,7 @@ class EntityPoint:
     entity_id: str
     payload: dict[str, Any]
     vector: list[float] | None = None
+    semantic_dimension: int | None = None
     bm25_vector: SparseVectorData | None = None
 
 

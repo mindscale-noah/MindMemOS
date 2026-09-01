@@ -514,6 +514,17 @@ class MemoryDbReader:
             with_vectors=False,
         )
 
+    @traced("memory_db.count_memory_records")
+    async def count_memory_records(
+        self,
+        ctx: MemoryRequestContext,
+        *,
+        filters: qmodels.Filter | None = None,
+    ) -> int:
+        """Count raw memory records with an internal Qdrant filter."""
+
+        return await self._clients.qdrant.count_memories(ctx.project_id, filter_=filters)
+
     @traced("memory_db.list_add_records")
     async def list_add_records(
         self,

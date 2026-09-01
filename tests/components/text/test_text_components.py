@@ -197,6 +197,10 @@ async def test_vectorize_many_falls_back_to_single_embeddings_after_batch_failur
         def __init__(self) -> None:
             self.calls: list[tuple[str, str | list[str]]] = []
 
+        @property
+        def expected_dimension(self) -> int:
+            return 2560
+
         async def embed(self, task: str, text: str | list[str], **kwargs):
             self.calls.append((task, text))
             if isinstance(text, list):
@@ -225,6 +229,37 @@ async def test_vectorize_many_falls_back_to_single_embeddings_after_batch_failur
     ]
     assert pending == [False, True, False]
     assert [vector.semantic_vector for vector in vectors] == [[0.0], None, [2.0]]
+    assert [vector.semantic_dimension for vector in vectors] == [2560, 2560, 2560]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_fast_failure_preserves_configured_embedding_dimension() -> None:
+    class FailingEmbedClient:
+        @property
+        def expected_dimension(self) -> int:
+            return 1536
+
+        async def embed(self, task: str, text: str | list[str], **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    cfg = make_config(sparse_hash_dim=128)
+    preprocessor = TextPreprocessor(cfg)
+    vectorizer = MemoryVectorizer(
+        sparse_encoder=SparseVectorEncoder(cfg),
+        embed_client=FailingEmbedClient(),
+        text_preprocessor=preprocessor,
+    )
+
+    vector, pending = await vectorizer.vectorize(
+        "mem-pending",
+        preprocessor.preprocess_text("pending memory"),
+        "pending memory",
+        consistency="fast",
+    )
+
+    assert pending is True
+    assert vector.semantic_vector is None
+    assert vector.semantic_dimension == 1536
 
 
 @pytest.mark.asyncio
@@ -409,6 +444,10 @@ async def test_vectorize_entities_batches_all_entities_and_search_fields() -> No
 @pytest.mark.asyncio
 async def test_vectorize_entities_marks_pending_when_batch_response_is_short() -> None:
     class ShortEmbedClient:
+        @property
+        def expected_dimension(self) -> int:
+            return 768
+
         async def embed(self, task: str, text: str | list[str], **kwargs):
             return EmbeddingResponse(embeddings=[[1.0]])
 
@@ -435,3 +474,4 @@ async def test_vectorize_entities_marks_pending_when_batch_response_is_short() -
 
     assert pending is True
     assert [vector.semantic_vector for vector in vectors] == [[1.0], None, None]
+    assert [vector.semantic_dimension for vector in vectors] == [768, 768, 768]
