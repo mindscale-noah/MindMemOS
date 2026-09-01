@@ -306,15 +306,24 @@ class MemoryDbWriter:
                 return to_mutation_result(req.memory_id, changed=False)
 
         now = datetime.now(UTC)
-        patch: dict[str, Any] = {**req.payload_patch, "update_at": now}
+        patch: dict[str, Any] = dict(req.payload_patch)
+        if req.touch_update_at:
+            patch["update_at"] = now
         metadata_patch = dict(req.metadata_patch)
         sparse: SparseVectorData | None = _sparse_from_command(req)
         dense: list[float] | None = _dense_from_command(req)
 
-        if req.content is not None:
+        vector_content = req.content
+        if req.refresh_vectors:
+            vector_content = str(record.payload.get("content") or "")
+            if not vector_content:
+                raise MemoryUpdateError("memory vector refresh requires stored content")
+
+        if vector_content is not None:
             preprocessor, encoder = self._ensure_text_components()
-            preprocessed = preprocessor.preprocess_text(req.content, segment_id="update", include_entities=False)
-            patch["content"] = preprocessed.normalized_text
+            preprocessed = preprocessor.preprocess_text(vector_content, segment_id="update", include_entities=False)
+            if req.content is not None:
+                patch["content"] = preprocessed.normalized_text
             metadata_patch.update(
                 {
                     "content_hash": preprocessed.content_hash,

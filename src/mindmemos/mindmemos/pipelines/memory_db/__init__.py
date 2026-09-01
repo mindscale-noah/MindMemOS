@@ -7,6 +7,13 @@ from .catalog import MemoryCatalog
 from .operation_records import MemoryOperationRecorder, suppress_recording_errors, utcnow
 from .reader import MemoryDbReader
 from .schema_add_buffer_store import SchemaAddBufferStore
+from .vector_repair import (
+    VectorRepairPolicy,
+    VectorRepairRequest,
+    VectorRepairResult,
+    VectorRepairService,
+    VectorRepairStatus,
+)
 from .writer import MemoryDbWriter
 
 __all__ = [
@@ -18,6 +25,11 @@ __all__ = [
     "MemoryDbReader",
     "MemoryDbWriteResult",
     "MemoryDbWriter",
+    "VectorRepairPolicy",
+    "VectorRepairRequest",
+    "VectorRepairResult",
+    "VectorRepairService",
+    "VectorRepairStatus",
     "SchemaAddBufferStore",
     "MemoryOperationRecorder",
     "buffer_key",

@@ -14,9 +14,16 @@ from pydantic import BaseModel
 
 from ..errors import MemoryNotFoundError, PermissionDeniedError, ResourceNotFoundError
 from ..infra.db import QdrantRecord, build_filter, match_text
-from ..pipelines.memory_db import MemoryDbReader
+from ..pipelines.memory_db import (
+    MemoryDbReader,
+    VectorRepairRequest,
+    VectorRepairResult,
+    VectorRepairService,
+    VectorRepairStatus,
+)
 from ..provider_bindings import get_provider_binding_service
 from .deps import ensure_scopes, get_internal_request_context
+from .mappers import to_memory_request_context
 from .schemas import ApiResponse, AuthContext
 
 router = APIRouter(prefix="/internal/v1", tags=["internal-memory"])
@@ -33,6 +40,8 @@ InternalMemoryListResponse = ApiResponse[InternalMemoryListData]
 InternalMemoryDetailResponse = ApiResponse[dict[str, Any]]
 ProviderBindingResponse = ApiResponse[dict[str, Any]]
 ProviderBindingListResponse = ApiResponse[dict[str, Any]]
+VectorRepairResponse = ApiResponse[VectorRepairResult]
+VectorRepairStatusResponse = ApiResponse[VectorRepairStatus]
 
 
 class ProviderBindingCreateRequest(BaseModel):
@@ -46,6 +55,12 @@ class ProviderBindingPatchRequest(BaseModel):
     """Patch a dynamic provider binding."""
 
     routers: dict[str, Any]
+
+
+def get_vector_repair_service() -> VectorRepairService:
+    """Build a repair service from the process database/client registry."""
+
+    return VectorRepairService()
 
 
 @router.get("/projects/{project_id}/memories", response_model=InternalMemoryListResponse)
@@ -81,6 +96,31 @@ async def get_project_memory(
     if record is None:
         raise ResourceNotFoundError(str(MemoryNotFoundError(memory_id)), code="memory.not_found")
     return InternalMemoryDetailResponse(request_id=ctx.request_id, data=_record_to_item(record))
+
+
+@router.post("/projects/{project_id}/vector-repairs", response_model=VectorRepairResponse)
+async def repair_project_vectors(
+    payload: VectorRepairRequest,
+    project_id: str = Path(min_length=1),
+    ctx: AuthContext = Depends(get_internal_request_context),
+) -> VectorRepairResponse:
+    """Repair one bounded project batch without exposing it publicly."""
+
+    _ensure_internal_memory_write(ctx, project_id)
+    result = await get_vector_repair_service().repair(to_memory_request_context(ctx), payload)
+    return VectorRepairResponse(request_id=ctx.request_id, data=result)
+
+
+@router.get("/projects/{project_id}/vector-repairs/status", response_model=VectorRepairStatusResponse)
+async def get_project_vector_repair_status(
+    project_id: str = Path(min_length=1),
+    ctx: AuthContext = Depends(get_internal_request_context),
+) -> VectorRepairStatusResponse:
+    """Return aggregate vector-repair lifecycle counts for one project."""
+
+    _ensure_internal_read(ctx, project_id)
+    result = await get_vector_repair_service().status(to_memory_request_context(ctx))
+    return VectorRepairStatusResponse(request_id=ctx.request_id, data=result)
 
 
 @router.post("/projects/{project_id}/provider-bindings", response_model=ProviderBindingResponse)
@@ -144,6 +184,11 @@ def _ensure_internal_provider_read(ctx: AuthContext, project_id: str) -> None:
 
 def _ensure_internal_write(ctx: AuthContext, project_id: str) -> None:
     ensure_scopes(ctx, ("provider:write",))
+    _ensure_project_scope(ctx, project_id)
+
+
+def _ensure_internal_memory_write(ctx: AuthContext, project_id: str) -> None:
+    ensure_scopes(ctx, ("memory:write",))
     _ensure_project_scope(ctx, project_id)
 
 

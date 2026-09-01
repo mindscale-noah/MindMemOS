@@ -39,7 +39,9 @@ class MemoryRepository(CollectionRepository):
             )
             by_collection.setdefault(collection, []).append(point)
         for collection, collection_points in by_collection.items():
-            vector_size = await self._engine.dense_vector_size(collection, self.semantic_vector_name)
+            vector_size = self._cfg.vector_size
+            if self._cfg.project_collection_namespace_enabled:
+                vector_size = await self._engine.dense_vector_size(collection, self.semantic_vector_name)
             await self._engine.upsert(
                 collection,
                 [self._point(point, vector_size=vector_size) for point in collection_points],

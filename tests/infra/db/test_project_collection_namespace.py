@@ -28,7 +28,7 @@ def _memory_point(project_id: str, memory_id: str, vector: list[float]) -> Memor
 
 
 @pytest.mark.asyncio
-async def test_project_collection_namespace_is_disabled_by_default() -> None:
+async def test_project_collection_namespace_is_disabled_by_default(monkeypatch) -> None:
     client = AsyncQdrantClient(":memory:")
     cfg = QdrantConfig(
         url="http://unused",
@@ -42,11 +42,27 @@ async def test_project_collection_namespace_is_disabled_by_default() -> None:
     try:
         await store.ensure_schema()
         memory_id = "00000000-0000-0000-0000-000000000011"
+
+        async def unexpected_dimension_probe(*args, **kwargs):
+            raise AssertionError("static collection writes must use the configured vector size")
+
+        monkeypatch.setattr(store.engine, "dense_vector_size", unexpected_dimension_probe)
         await store.upsert_memory(_memory_point("static-project", memory_id, [1.0, 0.0]))
         hits = await store.search_memory_dense("static-project", [1.0, 0.0], limit=5)
         assert [hit.point_id for hit in hits] == [memory_id]
         assert await store.get_memory("another-project", memory_id) is None
+
+        original_retrieve = store.engine.retrieve
+        retrieve_calls = 0
+
+        async def counted_retrieve(*args, **kwargs):
+            nonlocal retrieve_calls
+            retrieve_calls += 1
+            return await original_retrieve(*args, **kwargs)
+
+        monkeypatch.setattr(store.engine, "retrieve", counted_retrieve)
         await store.patch_memory("static-project", memory_id, {"status": "archived"})
+        assert retrieve_calls == 1
         assert (await store.get_memory("static-project", memory_id)).payload["status"] == "archived"
         await store.delete_memory("static-project", memory_id)
         assert await store.get_memory("static-project", memory_id) is None

@@ -122,6 +122,8 @@ class CollectionRepository:
     async def _collections_holding_record(self, project_id: str, point_id: str) -> list[str]:
         """Return all project-owned physical collections containing ``point_id``."""
 
+        if not self._cfg.project_collection_namespace_enabled or not self._is_vector_repository:
+            return [self.collection]
         collections: list[str] = []
         for collection in await self._collections_holding_project(project_id):
             records = await self._engine.retrieve(collection, [point_id], with_vectors=False)
