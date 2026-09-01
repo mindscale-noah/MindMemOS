@@ -65,3 +65,11 @@ def test_embedding_dimension_error_message_guides_operator() -> None:
     assert isinstance(err, ApiError)
     assert err.status_code == 409
     assert err.code == "embedding.dimension_mismatch"
+
+
+def test_embed_client_exposes_request_scoped_expected_dimension(monkeypatch) -> None:
+    monkeypatch.setattr("mindmemos.llm.embedding._resolved_expected_dim", lambda: 2560)
+
+    client = EmbedClient(FixedDimEmbedRouter(dim=2560))
+
+    assert client.expected_dimension == 2560

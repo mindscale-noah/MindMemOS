@@ -109,6 +109,12 @@ class EmbedClient:
         self._router = router
         self._default_model = default_model
 
+    @property
+    def expected_dimension(self) -> int | None:
+        """Return the request-scoped configured embedding dimension, if known."""
+
+        return _resolved_expected_dim()
+
     @traced("llm.embed", record_args=False, record_result=False)
     async def embed(
         self,

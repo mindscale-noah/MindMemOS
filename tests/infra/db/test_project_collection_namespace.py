@@ -75,12 +75,8 @@ async def test_project_collection_namespace_shares_same_dimension_and_separates_
     try:
         await store.ensure_schema()
         await store.upsert_memory(_memory_point("proj-a", "00000000-0000-0000-0000-000000000001", [1.0, 0.0]))
-        await store.upsert_memory(
-            _memory_point("proj-b", "00000000-0000-0000-0000-000000000002", [0.0, 1.0])
-        )
-        await store.upsert_memory(
-            _memory_point("proj-c", "00000000-0000-0000-0000-000000000003", [1.0, 0.0, 0.0])
-        )
+        await store.upsert_memory(_memory_point("proj-b", "00000000-0000-0000-0000-000000000002", [0.0, 1.0]))
+        await store.upsert_memory(_memory_point("proj-c", "00000000-0000-0000-0000-000000000003", [1.0, 0.0, 0.0]))
 
         collections = {item.name for item in (await client.get_collections()).collections}
         assert "tenant_memos" not in collections
@@ -110,13 +106,128 @@ async def test_project_collection_namespace_shares_same_dimension_and_separates_
         assert [hit.point_id for hit in b_hits] == ["00000000-0000-0000-0000-000000000002"]
 
         # Knowing another project's logical ID must never bypass project ownership.
-        assert await store.get_memory(
-            "proj-b", "00000000-0000-0000-0000-000000000001"
-        ) is None
+        assert await store.get_memory("proj-b", "00000000-0000-0000-0000-000000000001") is None
         await store.delete_memory("proj-b", "00000000-0000-0000-0000-000000000001")
-        assert await store.get_memory(
-            "proj-a", "00000000-0000-0000-0000-000000000001"
-        ) is not None
+        assert await store.get_memory("proj-a", "00000000-0000-0000-0000-000000000001") is not None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_project_reads_and_mutations_span_all_dimension_collections() -> None:
+    client = AsyncQdrantClient(":memory:")
+    cfg = QdrantConfig(
+        url="http://unused",
+        memory_collection="tenant_memos",
+        entity_collection="tenant_entities",
+        source_collection="tenant_sources",
+        vector_size=2,
+        project_collection_namespace_enabled=True,
+    )
+    store = QdrantStore(cfg, client=client)
+    lower_id = "00000000-0000-0000-0000-000000000021"
+    configured_id = "00000000-0000-0000-0000-000000000022"
+
+    try:
+        await store.ensure_schema()
+        await store.upsert_memory(_memory_point("proj-a", lower_id, [1.0, 0.0]))
+        await store.upsert_memory(_memory_point("proj-a", configured_id, [1.0, 0.0, 0.0]))
+
+        assert await store.count_memories("proj-a") == 2
+        records, next_cursor = await store.scroll_memories("proj-a", limit=10)
+        assert {record.point_id for record in records} == {lower_id, configured_id}
+        assert next_cursor is None
+        first_page, next_cursor = await store.scroll_memories("proj-a", limit=1)
+        second_page, final_cursor = await store.scroll_memories("proj-a", limit=1, cursor=next_cursor)
+        assert {record.point_id for record in [*first_page, *second_page]} == {lower_id, configured_id}
+        assert next_cursor is not None
+        assert final_cursor is None
+        assert (await store.get_memory("proj-a", configured_id)).point_id == configured_id
+
+        await store.patch_memory("proj-a", configured_id, {"status": "archived"})
+        assert (await store.get_memory("proj-a", configured_id)).payload["status"] == "archived"
+
+        await store.delete_memory("proj-a", configured_id)
+        assert await store.get_memory("proj-a", configured_id) is None
+        assert await store.get_memory("proj-a", lower_id) is not None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_memory_uses_embedding_configuration_dimension_hint() -> None:
+    client = AsyncQdrantClient(":memory:")
+    cfg = QdrantConfig(
+        url="http://unused",
+        memory_collection="tenant_memos",
+        entity_collection="tenant_entities",
+        source_collection="tenant_sources",
+        vector_size=2,
+        project_collection_namespace_enabled=True,
+    )
+    store = QdrantStore(cfg, client=client)
+    memory_id = "00000000-0000-0000-0000-000000000031"
+
+    try:
+        await store.ensure_schema()
+        await store.upsert_memory(
+            MemoryPoint(
+                memory_id=memory_id,
+                semantic_vector=None,
+                semantic_dimension=3,
+                bm25_vector=SparseVectorData(indices=[1], values=[1.0]),
+                payload={
+                    "memory_id": memory_id,
+                    "project_id": "proj-a",
+                    "content": "pending memory",
+                    "status": "active",
+                },
+            )
+        )
+
+        collections = {item.name for item in (await client.get_collections()).collections}
+        assert "tenant_memos__d_3" in collections
+        assert "tenant_memos__d_2" not in collections
+        record = await store.get_memory("proj-a", memory_id, with_vectors=True)
+        assert len(record.vectors[store.semantic_vector_name]) == 3
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_reembedding_moves_pending_memory_to_matching_dimension_collection() -> None:
+    client = AsyncQdrantClient(":memory:")
+    cfg = QdrantConfig(
+        url="http://unused",
+        memory_collection="tenant_memos",
+        entity_collection="tenant_entities",
+        source_collection="tenant_sources",
+        vector_size=2,
+        project_collection_namespace_enabled=True,
+    )
+    store = QdrantStore(cfg, client=client)
+    memory_id = "00000000-0000-0000-0000-000000000041"
+
+    try:
+        await store.ensure_schema()
+        await store.upsert_memory(_memory_point("proj-a", memory_id, [0.0, 0.0]))
+        record = await store.get_memory("proj-a", memory_id)
+
+        await store.patch_memory(
+            "proj-a",
+            memory_id,
+            {"metadata": {"vector_pending": False}},
+            dense_vector=[1.0, 0.0, 0.0],
+            sparse_vector=SparseVectorData(indices=[1], values=[1.0]),
+            record=record,
+        )
+
+        assert await store.count_memories("proj-a") == 1
+        assert await store.engine.retrieve("tenant_memos__d_2", [memory_id]) == []
+        moved = await store.engine.retrieve("tenant_memos__d_3", [memory_id], with_vectors=True)
+        assert len(moved) == 1
+        assert moved[0].vectors[store.semantic_vector_name] == [1.0, 0.0, 0.0]
+        assert moved[0].payload["metadata"]["vector_pending"] is False
     finally:
         await client.close()
 
@@ -191,17 +302,13 @@ async def test_project_collection_namespace_scopes_payload_only_records() -> Non
         search_records, _ = await store.scroll_search_records("proj-a")
         search_records_other, _ = await store.scroll_search_records("proj-b")
 
-        assert [record.payload["request_id"] for record in add_records] == [
-            "00000000-0000-0000-0000-000000000101"
-        ]
+        assert [record.payload["request_id"] for record in add_records] == ["00000000-0000-0000-0000-000000000101"]
         assert add_records_other == []
         assert [record.payload["schema_buffer_record_id"] for record in schema_records] == [
             "00000000-0000-0000-0000-000000000201"
         ]
         assert schema_records_other == []
-        assert [record.payload["request_id"] for record in search_records] == [
-            "00000000-0000-0000-0000-000000000301"
-        ]
+        assert [record.payload["request_id"] for record in search_records] == ["00000000-0000-0000-0000-000000000301"]
         assert search_records_other == []
 
         base_add_records, _ = await store.engine.scroll(
@@ -219,9 +326,7 @@ async def test_project_collection_namespace_scopes_payload_only_records() -> Non
             scroll_filter=None,
             limit=10,
         )
-        assert [record.payload["request_id"] for record in base_add_records] == [
-            "00000000-0000-0000-0000-000000000101"
-        ]
+        assert [record.payload["request_id"] for record in base_add_records] == ["00000000-0000-0000-0000-000000000101"]
         assert [record.payload["schema_buffer_record_id"] for record in base_schema_records] == [
             "00000000-0000-0000-0000-000000000201"
         ]

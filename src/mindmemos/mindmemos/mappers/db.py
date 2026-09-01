@@ -293,6 +293,7 @@ def to_memory_point(
         memory_id=write.memory_id,
         payload=to_memory_payload(write, ctx=ctx),
         semantic_vector=vector.semantic_vector if vector else None,
+        semantic_dimension=vector.semantic_dimension if vector else None,
         bm25_vector=to_sparse_vector_data(vector),
     )
 
@@ -314,6 +315,7 @@ def to_entity_point(
         entity_id=write.entity_id,
         payload=to_entity_payload(write, ctx=ctx),
         vector=vector.semantic_vector if vector else None,
+        semantic_dimension=vector.semantic_dimension if vector else None,
         bm25_vector=sparse,
     )
 
@@ -410,6 +412,7 @@ def _to_search_field_entity_points(
                     entity_id=sf_point_id,
                     payload=payload,
                     vector=sf_vec.semantic_vector,
+                    semantic_dimension=sf_vec.semantic_dimension,
                     bm25_vector=sparse,
                 )
             )
