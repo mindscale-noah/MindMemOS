@@ -55,6 +55,15 @@ def _episode_input_messages_exclusion_filter() -> SearchFilter:
     )
 
 
+def _episode_entity_exclusion_filter() -> SearchFilter:
+    """Exclude every episode-owned property from the property store search.
+
+    Used when episode weight is 0: episodes excluded from the entity path
+    must not resurface here via their remaining properties (e.g. `detail`).
+    """
+    return SearchFilter(must_not=[FieldCondition(field="entity_type", op="match", value="episodes")])
+
+
 def _higher_order_exclusion_filter(entity_manager: EntityManager | None) -> SearchFilter | None:
     """Build a filter that excludes higher-order properties from property store search."""
     if not entity_manager:
@@ -531,12 +540,19 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
         non_ep_weight = self.config.entity_weights.non_episode_weight
         should_use_reranker = self.config.entity.use_reranker if use_reranker is None else use_reranker
 
-        ep_top_k = max(1, int(top_k * ep_weight))
-        non_ep_top_k = max(1, int(top_k * non_ep_weight))
-        ep_top_n = max(1, int(top_n * ep_weight))
-        non_ep_top_n = max(1, int(top_n * non_ep_weight))
+        # A zero weight means "never surface this side": skip its recall calls
+        # and its merge slot entirely. The old max(1, ...) clamp always
+        # reserved one slot (and paid for both recall pairs) even at weight 0,
+        # and that one episode could still jump back up in the final rerank.
+        run_episodes = ep_weight > 0
+        run_non_episodes = non_ep_weight > 0
+        if not run_episodes and not run_non_episodes:
+            return []
 
-        ep_filter = combine_search_filters(build_entity_type_filter(["episodes"]), entity_search_filter)
+        ep_top_k = max(1, int(top_k * ep_weight)) if run_episodes else 0
+        non_ep_top_k = max(1, int(top_k * non_ep_weight)) if run_non_episodes else 0
+        ep_top_n = max(1, int(top_n * ep_weight)) if run_episodes else 0
+        non_ep_top_n = max(1, int(top_n * non_ep_weight)) if run_non_episodes else 0
 
         # Non-episode path filter: exclude "episodes"
         if entity_types:
@@ -546,30 +562,36 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
             non_ep_filter = SearchFilter(must_not=[FieldCondition(field="entity_type", op="match", value="episodes")])
         non_ep_filter = combine_search_filters(non_ep_filter, entity_search_filter)
 
-        ep_vec_task = self._entity_recall.recall_dense(
-            ctx,
-            query=query,
-            filters=ep_filter,
-            limit=recall_size,
-        )
-        ep_bm25_task = self._entity_sparse_recall_safe(ctx, query, filters=ep_filter, limit=recall_size)
-        non_ep_vec_task = self._entity_recall.recall_dense(
-            ctx,
-            query=query,
-            filters=non_ep_filter,
-            limit=recall_size,
-        )
-        non_ep_bm25_task = self._entity_sparse_recall_safe(ctx, query, filters=non_ep_filter, limit=recall_size)
+        recall_tasks: dict[str, Any] = {}
+        if run_episodes:
+            ep_filter = combine_search_filters(build_entity_type_filter(["episodes"]), entity_search_filter)
+            recall_tasks["ep_vec"] = self._entity_recall.recall_dense(
+                ctx,
+                query=query,
+                filters=ep_filter,
+                limit=recall_size,
+            )
+            recall_tasks["ep_bm25"] = self._entity_sparse_recall_safe(ctx, query, filters=ep_filter, limit=recall_size)
+        if run_non_episodes:
+            recall_tasks["non_ep_vec"] = self._entity_recall.recall_dense(
+                ctx,
+                query=query,
+                filters=non_ep_filter,
+                limit=recall_size,
+            )
+            recall_tasks["non_ep_bm25"] = self._entity_sparse_recall_safe(ctx, query, filters=non_ep_filter, limit=recall_size)
+        recalled = dict(zip(recall_tasks.keys(), await asyncio.gather(*recall_tasks.values())))
 
-        ep_vec, ep_bm25, non_ep_vec, non_ep_bm25 = await asyncio.gather(
-            ep_vec_task,
-            ep_bm25_task,
-            non_ep_vec_task,
-            non_ep_bm25_task,
+        ep_rrf = (
+            combine_entity_results_rrf(recalled["ep_vec"], recalled["ep_bm25"], rrf_k=rrf_k, top_k=ep_top_k)
+            if run_episodes
+            else []
         )
-
-        ep_rrf = combine_entity_results_rrf(ep_vec, ep_bm25, rrf_k=rrf_k, top_k=ep_top_k)
-        non_ep_rrf = combine_entity_results_rrf(non_ep_vec, non_ep_bm25, rrf_k=rrf_k, top_k=non_ep_top_k)
+        non_ep_rrf = (
+            combine_entity_results_rrf(recalled["non_ep_vec"], recalled["non_ep_bm25"], rrf_k=rrf_k, top_k=non_ep_top_k)
+            if run_non_episodes
+            else []
+        )
 
         if self.config.entity.use_maxsim_rescore:
             if ep_rrf:
@@ -586,8 +608,12 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
             ep_rrf = ep_rrf[:ep_top_n]
             non_ep_rrf = non_ep_rrf[:non_ep_top_n]
 
-        ep_entities = await self._hydrate_entities(ctx, ep_rrf, memory_filters=search_filter)
-        non_ep_entities = await self._hydrate_entities(ctx, non_ep_rrf, memory_filters=search_filter)
+        ep_entities = (
+            await self._hydrate_entities(ctx, ep_rrf, memory_filters=search_filter) if run_episodes else []
+        )
+        non_ep_entities = (
+            await self._hydrate_entities(ctx, non_ep_rrf, memory_filters=search_filter) if run_non_episodes else []
+        )
 
         # Apply entity type weights to non-episode path
         if _weights:
@@ -631,6 +657,10 @@ class SchemaSearchExpander(SearchStrategy, EntityHydrator):
             _higher_order_exclusion_filter(get_entity_manager(project_id=ctx.project_id)),
             search_filter,
         )
+        if self.config.entity_weights.force_balanced_split and self.config.entity_weights.episode_weight == 0:
+            property_search_filter = combine_search_filters(
+                property_search_filter, _episode_entity_exclusion_filter()
+            )
 
         vector_results: list[dict[str, Any]] = []
         bm25_results: list[dict[str, Any]] = []

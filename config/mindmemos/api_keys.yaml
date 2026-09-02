@@ -15,3 +15,319 @@ api_keys:
   scopes:
   - memory:read
   - memory:write
+- key_id: key_wildclawbench_schema_20260826_031128_e67bcf5e
+  api_key: dev-api-key-wildclawbench-schema-20260826-031128-e67bcf5e
+  project_id: proj_wildclawbench_schema_20260826_031128_e67bcf5e
+  memory_algorithm: schema
+  enabled: false
+  scopes:
+  - memory:read
+  - memory:write
+  project_override_config:
+    algo_config:
+      common:
+        prompt_language: EN
+      add:
+        schema:
+          version: v2
+          entity_modeling_path: config/presets/entity_modeling_wildclawbench.json
+          extraction:
+            enable_schema_selection: true
+            search_fields_max: 8
+            max_entities_per_conversation: 60
+            max_properties_per_entity: 8
+          merge:
+            entity_recall_top_k: 15
+          episode_edge:
+            top_k: 10
+          chunker:
+            split_mode: rule
+            min_episode_length: 1
+            max_episode_length: 50
+            max_buffer_size: 1000
+            split_on_user_speaker: false
+            max_minutes_from_first: 999999
+            streaming_window_size: 50
+          drain:
+            episode_generation_max_retries: 3
+      search:
+        request_top_k_max: 100
+        rerank:
+          enabled: true
+          request_timeout: 600
+        schema_search:
+          entity:
+            recall_size: 200
+            rrf_k: 80
+            top_k: 30
+            top_n: 10
+            use_reranker: false
+            max_rerank_candidates: 100
+            use_maxsim_rescore: false
+            search_field_overfetch_factor: 3
+          property:
+            recall_size: 45
+            rrf_k: 60
+            top_k: 20
+            top_n: 16
+            alloc_min_factor: 0.5
+            alloc_max_factor: 1.5
+            use_property_extension: false
+            extension_step: 3
+            higher_order_ratio: 0.0
+          dual_path:
+            enabled: false
+          entity_weights:
+            force_balanced_split: true
+            episode_weight: 0.0
+            non_episode_weight: 1.0
+          edge:
+            top_k: 10
+            min_relevance_score: 0.1
+          multi_hop: 1
+          use_entity_agent_search: false
+        agentic:
+          max_rounds: 1
+          top_k_per_round: 30
+          top_n_per_round: 5
+          num_hops: 1
+          use_rerank: true
+          use_relevance_filter: false
+          use_property_filter: false
+- key_id: key_wildclawbench_schema_20260902_035517_5666ef45
+  api_key: dev-api-key-wildclawbench-schema-20260902-035517-5666ef45
+  project_id: proj_wildclawbench_schema_20260902_035517_5666ef45
+  memory_algorithm: schema
+  enabled: false
+  scopes:
+  - memory:read
+  - memory:write
+  project_override_config:
+    algo_config:
+      common:
+        prompt_language: EN
+      add:
+        schema:
+          version: v2
+          entity_modeling_path: config/presets/entity_modeling_wildclawbench.json
+          extraction:
+            enable_schema_selection: true
+            search_fields_max: 8
+            max_entities_per_conversation: 60
+            max_properties_per_entity: 8
+          merge:
+            entity_recall_top_k: 15
+          episode_edge:
+            top_k: 10
+          chunker:
+            split_mode: rule
+            min_episode_length: 1
+            max_episode_length: 50
+            max_buffer_size: 1000
+            split_on_user_speaker: false
+            max_minutes_from_first: 999999
+            streaming_window_size: 50
+          drain:
+            episode_generation_max_retries: 3
+      search:
+        request_top_k_max: 100
+        rerank:
+          enabled: true
+          request_timeout: 600
+        schema_search:
+          entity:
+            recall_size: 200
+            rrf_k: 80
+            top_k: 30
+            top_n: 10
+            use_reranker: false
+            max_rerank_candidates: 100
+            use_maxsim_rescore: false
+            search_field_overfetch_factor: 3
+          property:
+            recall_size: 45
+            rrf_k: 60
+            top_k: 20
+            top_n: 16
+            alloc_min_factor: 0.5
+            alloc_max_factor: 1.5
+            use_property_extension: false
+            extension_step: 3
+            higher_order_ratio: 0.0
+          dual_path:
+            enabled: false
+          entity_weights:
+            force_balanced_split: true
+            episode_weight: 0.0
+            non_episode_weight: 1.0
+          edge:
+            top_k: 10
+            min_relevance_score: 0.1
+          multi_hop: 1
+          use_entity_agent_search: false
+        agentic:
+          max_rounds: 1
+          top_k_per_round: 30
+          top_n_per_round: 5
+          num_hops: 1
+          use_rerank: true
+          use_relevance_filter: false
+          use_property_filter: false
+- key_id: key_wildclawbench_schema_20260902_060650_975aced4
+  api_key: dev-api-key-wildclawbench-schema-20260902-060650-975aced4
+  project_id: proj_wildclawbench_schema_20260902_060650_975aced4
+  memory_algorithm: schema
+  enabled: false
+  scopes:
+  - memory:read
+  - memory:write
+  project_override_config:
+    algo_config:
+      common:
+        prompt_language: EN
+      add:
+        schema:
+          version: v2
+          entity_modeling_path: config/presets/entity_modeling_wildclawbench.json
+          extraction:
+            enable_schema_selection: true
+            search_fields_max: 8
+            max_entities_per_conversation: 60
+            max_properties_per_entity: 8
+          merge:
+            entity_recall_top_k: 15
+          episode_edge:
+            top_k: 10
+          chunker:
+            split_mode: rule
+            min_episode_length: 1
+            max_episode_length: 50
+            max_buffer_size: 1000
+            split_on_user_speaker: false
+            max_minutes_from_first: 999999
+            streaming_window_size: 50
+          drain:
+            episode_generation_max_retries: 3
+      search:
+        request_top_k_max: 100
+        rerank:
+          enabled: true
+          request_timeout: 600
+        schema_search:
+          entity:
+            recall_size: 200
+            rrf_k: 80
+            top_k: 30
+            top_n: 10
+            use_reranker: false
+            max_rerank_candidates: 100
+            use_maxsim_rescore: false
+            search_field_overfetch_factor: 3
+          property:
+            recall_size: 45
+            rrf_k: 60
+            top_k: 20
+            top_n: 16
+            alloc_min_factor: 0.5
+            alloc_max_factor: 1.5
+            use_property_extension: false
+            extension_step: 3
+            higher_order_ratio: 0.0
+          dual_path:
+            enabled: false
+          entity_weights:
+            force_balanced_split: true
+            episode_weight: 0.0
+            non_episode_weight: 1.0
+          edge:
+            top_k: 10
+            min_relevance_score: 0.1
+          multi_hop: 1
+          use_entity_agent_search: false
+        agentic:
+          max_rounds: 1
+          top_k_per_round: 30
+          top_n_per_round: 5
+          num_hops: 1
+          use_rerank: true
+          use_relevance_filter: false
+          use_property_filter: false
+- key_id: key_wildclawbench_schema_20260902_063457_d0ef8f60
+  api_key: dev-api-key-wildclawbench-schema-20260902-063457-d0ef8f60
+  project_id: proj_wildclawbench_schema_20260902_063457_d0ef8f60
+  memory_algorithm: schema
+  enabled: true
+  scopes:
+  - memory:read
+  - memory:write
+  project_override_config:
+    algo_config:
+      common:
+        prompt_language: EN
+      add:
+        schema:
+          version: v2
+          entity_modeling_path: config/presets/entity_modeling_wildclawbench.json
+          extraction:
+            enable_schema_selection: true
+            search_fields_max: 8
+            max_entities_per_conversation: 60
+            max_properties_per_entity: 8
+          merge:
+            entity_recall_top_k: 15
+          episode_edge:
+            top_k: 10
+          chunker:
+            split_mode: rule
+            min_episode_length: 1
+            max_episode_length: 50
+            max_buffer_size: 1000
+            split_on_user_speaker: false
+            max_minutes_from_first: 999999
+            streaming_window_size: 50
+          drain:
+            episode_generation_max_retries: 3
+      search:
+        request_top_k_max: 100
+        rerank:
+          enabled: true
+          request_timeout: 600
+        schema_search:
+          entity:
+            recall_size: 200
+            rrf_k: 80
+            top_k: 30
+            top_n: 10
+            use_reranker: false
+            max_rerank_candidates: 100
+            use_maxsim_rescore: false
+            search_field_overfetch_factor: 3
+          property:
+            recall_size: 45
+            rrf_k: 60
+            top_k: 20
+            top_n: 16
+            alloc_min_factor: 0.5
+            alloc_max_factor: 1.5
+            use_property_extension: false
+            extension_step: 3
+            higher_order_ratio: 0.0
+          dual_path:
+            enabled: false
+          entity_weights:
+            force_balanced_split: true
+            episode_weight: 0.0
+            non_episode_weight: 1.0
+          edge:
+            top_k: 10
+            min_relevance_score: 0.1
+          multi_hop: 1
+          use_entity_agent_search: false
+        agentic:
+          max_rounds: 1
+          top_k_per_round: 30
+          top_n_per_round: 5
+          num_hops: 1
+          use_rerank: true
+          use_relevance_filter: false
+          use_property_filter: false

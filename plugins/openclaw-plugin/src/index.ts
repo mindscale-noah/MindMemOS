@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { buildJsonPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { spawnFileJson, spawnFileOk } from "./mindmemos-cli.js";
+import { spawnFileJson } from "./mindmemos-cli.js";
 
 type PluginConfig = {
   enabled: boolean;
@@ -28,6 +29,18 @@ type MemorySearchResult = {
   memories?: MemoryHit[];
 };
 
+type MemoryAddItem = {
+  memory_id?: string | null;
+  operation?: string;
+  content?: string;
+};
+
+type MemoryAddResult = {
+  code?: string;
+  request_id?: string | null;
+  memories?: MemoryAddItem[];
+};
+
 type MemoryMessage = {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
@@ -45,10 +58,26 @@ type SkillContext = {
 const MEMORY_CONTEXT_OPEN = "<relevant-memories>";
 const MEMORY_CONTEXT_CLOSE = "</relevant-memories>";
 
+// Every search / add round-trip is dumped here as JSON so each task's memory
+// writes and recalls survive in the runner's task_output (the runner collects
+// the whole /tmp/openclaw/ tree after the container stops).
+const MEMORY_LOG_DIR = "/tmp/openclaw/mindmemos-logs";
+
+function dumpMemoryLog(kind: "search" | "add", payload: Record<string, unknown>): void {
+  try {
+    mkdirSync(MEMORY_LOG_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    writeFileSync(`${MEMORY_LOG_DIR}/${stamp}-${kind}.json`, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+  } catch (error) {
+    // Logging must never break the hook it lives in.
+    console.warn(`[mindmemos] failed to dump ${kind} log: ${errorMessage(error)}`);
+  }
+}
+
 const DEFAULT_CONFIG: PluginConfig = {
   enabled: true,
   cli: "mindmemos",
-  topK: 5,
+  topK: 50,
   addMode: "async",
   appId: "openclaw",
   minQueryLength: 2,
@@ -178,12 +207,27 @@ function loadConfig(raw: unknown): PluginConfig {
 }
 
 async function searchMemories(config: PluginConfig, query: string, sessionId: string): Promise<MemorySearchResult> {
-  const args = ["memory", "search", query, "--top-k", String(config.topK), "--json"];
-  // Agentic search by default, single round (retrieve once, no sufficiency
-  // check / query rewrite). Override via env for A/B runs:
+  const args = ["memory", "search", query, "--json"];
+  // Request-side search parameters. Override via env for A/B runs:
+  //   MINDMEMOS_SEARCH_TOP_K=<n>            (default: config topK = 50)
+  //   MINDMEMOS_SEARCH_RERANK=0|1           (default 1)
+  //   MINDMEMOS_SEARCH_SCORE_THRESHOLD=<f>  (default 0.01, rerank scores only)
+  // Threshold calibration (2026-09-02): the query here is the FULL task
+  // prompt (hundreds of tokens), and measured qwen3-reranker scores for
+  // (long prompt, long entity text) pairs cluster 0.005-0.05 — the previous
+  // 0.15 default filtered EVERYTHING (12 tasks ran with zero recall
+  // injection before this was caught). 0.01 keeps a noise floor without
+  // gutting recall; short focused queries still score up to ~0.99.
   //   MINDMEMOS_SEARCH_STRATEGY=fast | agentic (default agentic)
-  //   MINDMEMOS_SEARCH_MAX_ROUNDS=<n>            (default 1)
+  //   MINDMEMOS_SEARCH_MAX_ROUNDS=<n>          (default 1)
+  const topK = process.env.MINDMEMOS_SEARCH_TOP_K ?? String(config.topK);
+  const rerank = process.env.MINDMEMOS_SEARCH_RERANK !== "0";
+  const scoreThreshold = process.env.MINDMEMOS_SEARCH_SCORE_THRESHOLD ?? "0.01";
   const strategy = process.env.MINDMEMOS_SEARCH_STRATEGY ?? "agentic";
+  args.push("--top-k", topK);
+  if (rerank) {
+    args.push("--rerank", "--score-threshold", scoreThreshold);
+  }
   args.push("--search-strategy", strategy);
   if (strategy === "agentic") {
     args.push("--max-rounds", process.env.MINDMEMOS_SEARCH_MAX_ROUNDS ?? "1");
@@ -192,7 +236,15 @@ async function searchMemories(config: PluginConfig, query: string, sessionId: st
   if (config.userId) {
     args.push("--user-id", config.userId);
   }
-  return spawnFileJson<MemorySearchResult>(config.cli, args);
+  const result = await spawnFileJson<MemorySearchResult>(config.cli, args);
+  dumpMemoryLog("search", {
+    session_id: sessionId,
+    query,
+    params: { top_k: Number(topK), rerank, score_threshold: Number(scoreThreshold), strategy, max_rounds: strategy === "agentic" ? Number(process.env.MINDMEMOS_SEARCH_MAX_ROUNDS ?? "1") : null },
+    hit_count: result.memories?.length ?? 0,
+    result,
+  });
+  return result;
 }
 
 async function addConversation(config: PluginConfig, messages: MemoryMessage[], sessionId: string): Promise<void> {
@@ -209,7 +261,14 @@ async function addConversation(config: PluginConfig, messages: MemoryMessage[], 
     args.push("--skill-context-json", JSON.stringify(skillContext));
   }
   args.push("--metadata-json", JSON.stringify({ source: "openclaw-plugin" }));
-  await spawnFileOk(config.cli, args, `${JSON.stringify(messages)}\n`);
+  const result = await spawnFileJson<MemoryAddResult>(config.cli, args, `${JSON.stringify(messages)}\n`);
+  dumpMemoryLog("add", {
+    session_id: sessionId,
+    mode: config.addMode,
+    message_count: messages.length,
+    roles: messages.map((message) => message.role),
+    result,
+  });
 }
 
 function detectSkillContext(messages: MemoryMessage[]): SkillContext[] {

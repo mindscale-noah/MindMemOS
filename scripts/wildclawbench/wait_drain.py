@@ -56,7 +56,7 @@ def main() -> None:
     parser.add_argument("--qdrant-url", default="http://localhost:6333")
     parser.add_argument("--collection", default="add_record_v1")
     parser.add_argument("--poll-interval", type=float, default=2.0, help="seconds between checks")
-    parser.add_argument("--timeout", type=float, default=180.0, help="max seconds to wait before giving up")
+    parser.add_argument("--timeout", type=float, default=900.0, help="max seconds to wait before giving up")
     args = parser.parse_args()
 
     deadline = time.monotonic() + args.timeout

@@ -20,7 +20,7 @@ WILDCLAWBENCH_DIR="${WILDCLAWBENCH_DIR:?set WILDCLAWBENCH_DIR to your WildClawBe
 MINDMEMOS_PROJECT_ID="${MINDMEMOS_PROJECT_ID:?set MINDMEMOS_PROJECT_ID to the wildclawbench project_id from config/mindmemos/api_keys.yaml}"
 export DOCKER_IMAGE="${DOCKER_IMAGE:-wildclawbench-mindmemos:v1.3-brave-yibu}"
 QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
-DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-180}"
+DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-900}"
 
 category="all"
 extra_args=()
@@ -76,11 +76,17 @@ for category_dir in $categories; do
       task_name="$(basename "$task_file" .md)"
       out_base="$WILDCLAWBENCH_DIR/output/openclaw/$(basename "$category_dir")/${task_name}"
       skip=0
-      for run_dir in "$out_base"/gpt-4.1-mini_*; do
+      # Only look at run dirs of THIS sweep's model: an old gpt-4.1-mini runner
+      # once ran in parallel and left scored dirs that wrongly skipped these
+      # tasks in the gpt-5.5 sweep.
+      for run_dir in "$out_base"/gpt-5.5_*/; do
         [[ -d "$run_dir" ]] || continue
-        stamp="${run_dir##*/gpt-4.1-mini_}"
-        stamp="${stamp#_}"
-        stamp="${stamp%_*}"
+        name="$(basename "$run_dir")"
+        if [[ "$name" =~ _([0-9]{8}_[0-9]{4})_ ]]; then
+          stamp="${BASH_REMATCH[1]}"
+        else
+          continue
+        fi
         if [[ -f "$run_dir/score.json" && "$stamp" > "$RESUME_AFTER" ]]; then
           skip=1
           break

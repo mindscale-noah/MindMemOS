@@ -42,10 +42,15 @@ def schema_search_apply_weights_to_ranked(
     ranked_entities: list[Any],
     weights: dict[str, float],
 ) -> list[Any]:
-    """Convert ranks to scores, apply weights, and return reranked entities."""
+    """Convert ranks to scores, apply weights, and return reranked entities.
+
+    A weight of 0 drops the entity entirely: sinking it to the tail is not
+    enough, because the request-level final rerank re-scores the whole
+    candidate pool by text and would pull zero-weight entities back up.
+    """
     if not weights or not ranked_entities:
         return ranked_entities
 
     entities_with_scores = [(entity, 1.0 / (i + 1)) for i, entity in enumerate(ranked_entities)]
     weighted_results = schema_search_apply_entity_weights(entities_with_scores, weights)
-    return [entity for entity, _ in weighted_results]
+    return [entity for entity, score in weighted_results if score > 0]
