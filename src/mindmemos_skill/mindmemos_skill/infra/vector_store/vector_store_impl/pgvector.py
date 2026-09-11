@@ -26,8 +26,8 @@ from uuid import UUID
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
-from psycopg_pool import AsyncConnectionPool
 
+from ...pg_pool import serialize_schema_bootstrap, validating_connection_pool
 from ..models import (
     BackendCapabilities,
     FieldSpec,
@@ -125,7 +125,7 @@ class PgVectorBackend(ScopedVectorStore):
         self._options = options
         self._tables = {spec.name: spec for spec in tables.specs}
         self._validate_registry()
-        self._pool = pool or AsyncConnectionPool(
+        self._pool = pool or validating_connection_pool(
             conninfo=options.dsn,
             min_size=options.min_pool_size,
             max_size=options.max_pool_size,
@@ -154,6 +154,7 @@ class PgVectorBackend(ScopedVectorStore):
         await self._ensure_open()
         async with self._pool.connection() as connection:
             async with connection.transaction():
+                await serialize_schema_bootstrap(connection, "mindmemos:vector-schema")
                 if self._options.create_extension:
                     await connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
                 await self._validate_extension(connection)

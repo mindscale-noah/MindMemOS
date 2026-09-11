@@ -6,14 +6,14 @@ import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from ..agents import Agent
 from ..config import CompiledSkillApplicationConfig, CompiledSkillModelConfig, SkillExecutionConfig
 from ..errors import SkillConfigurationError
-from ..llm import LLMCallSink, LLMClient, get_router
+from ..llm import EmbedClient, LLMCallSink, LLMClient, get_router
 from ..service import SkillAlgorithms
-from ..service.protocols import SkillAnalyzer, SkillEvolver, SkillOptimizer
+from ..service.protocols import SkillAnalyzer, SkillEvolver, SkillManageAlgorithm, SkillOptimizer
 from .enums import SkillApplicationCapability
 
 
@@ -21,7 +21,9 @@ from .enums import SkillApplicationCapability
 class AlgorithmBuildContext:
     """Resolved dependencies passed to a registered algorithm component."""
 
-    models: Mapping[str, LLMClient]
+    models: Mapping[str, Any]
+    chat_models: Mapping[str, LLMClient]
+    embedding_models: Mapping[str, EmbedClient]
     agents: Mapping[str, Agent[Any]]
     execution: SkillExecutionConfig
     config_hash: str
@@ -97,9 +99,7 @@ def compose_runtime(
         if agent.model_ref is not None and agent.component.requirements.requires_model_ref
     }
     required_model_refs.update(
-        model_ref
-        for algorithm in config.runtime.algorithms.values()
-        for model_ref in algorithm.model_roles.values()
+        model_ref for algorithm in config.runtime.algorithms.values() for model_ref in algorithm.model_roles.values()
     )
     model_clients = {
         name: _build_model_client(name, config.runtime.models[name], call_sink=llm_call_sink)
@@ -122,7 +122,7 @@ def _build_model_client(
     model: CompiledSkillModelConfig,
     *,
     call_sink: LLMCallSink | None,
-) -> LLMClient:
+) -> LLMClient | EmbedClient:
     endpoint = dict(model.options)
     reserved = {"model", "api_key", "api_base", "temperature"} & endpoint.keys()
     if reserved:
@@ -138,19 +138,21 @@ def _build_model_client(
         }
     )
     router, max_retries = get_router({"endpoints": [endpoint]}, model.model)
+    if model.kind == "embedding":
+        return EmbedClient(router, default_model=model.model, call_sink=call_sink)
     return LLMClient(router, default_model=model.model, max_attempts=max_retries + 1, call_sink=call_sink)
 
 
 def _build_agents(
     config: CompiledSkillApplicationConfig,
-    model_clients: Mapping[str, LLMClient],
+    model_clients: Mapping[str, LLMClient | EmbedClient],
 ) -> dict[str, Agent[Any]]:
     agents: dict[str, Agent[Any]] = {}
     for name, compiled in config.runtime.agents.items():
         kwargs: dict[str, Any] = {"config": compiled.config}
         if compiled.component.requirements.requires_model_ref:
             assert compiled.model_ref is not None
-            kwargs["llm"] = model_clients[compiled.model_ref]
+            kwargs["llm"] = cast(LLMClient, model_clients[compiled.model_ref])
         try:
             instance = compiled.component.factory(**kwargs)
         except Exception as exc:
@@ -180,15 +182,26 @@ def _build_agent_model_profile(model: CompiledSkillModelConfig) -> dict[str, Any
 
 def _build_algorithms(
     config: CompiledSkillApplicationConfig,
-    model_clients: Mapping[str, LLMClient],
+    model_clients: Mapping[str, LLMClient | EmbedClient],
     agents: Mapping[str, Agent[Any]],
 ) -> dict[str, Any]:
     algorithms: dict[str, Any] = {}
     for name, compiled in config.runtime.algorithms.items():
+        chat_models: dict[str, LLMClient] = {}
+        embedding_models: dict[str, EmbedClient] = {}
+        legacy_models: dict[str, Any] = {}
+        for role, model_ref in compiled.model_roles.items():
+            client = model_clients[model_ref]
+            model = config.runtime.models[model_ref]
+            legacy_models[role] = client
+            if model.kind == "embedding":
+                embedding_models[role] = cast(EmbedClient, client)
+            else:
+                chat_models[role] = cast(LLMClient, client)
         context = AlgorithmBuildContext(
-            models=MappingProxyType(
-                {role: model_clients[model_ref] for role, model_ref in compiled.model_roles.items()}
-            ),
+            models=MappingProxyType(legacy_models),
+            chat_models=MappingProxyType(chat_models),
+            embedding_models=MappingProxyType(embedding_models),
             agents=MappingProxyType(dict(agents)),
             execution=config.runtime.execution,
             config_hash=config.config_hash,
@@ -208,6 +221,7 @@ def _build_skill_algorithms(
     analyzers: dict[str, SkillAnalyzer] = {}
     optimizers: dict[str, SkillOptimizer] = {}
     evolvers: dict[str, SkillEvolver] = {}
+    skill_managers: dict[str, SkillManageAlgorithm] = {}
     owners: dict[str, str] = {}
     for name, instance in instances.items():
         capabilities = config.runtime.algorithms[name].component.capabilities
@@ -223,6 +237,10 @@ def _build_skill_algorithms(
             if not isinstance(instance, SkillEvolver):
                 raise SkillConfigurationError(f"algorithm {name!r} declares evolve but does not implement it")
             evolvers[name] = instance
+        if "skill_manage" in capabilities:
+            if not isinstance(instance, SkillManageAlgorithm):
+                raise SkillConfigurationError(f"algorithm {name!r} declares skill_manage but does not implement it")
+            skill_managers[name] = instance
 
     for capability, configured in (
         (SkillApplicationCapability.ANALYZE.value, analyzers),
@@ -232,13 +250,14 @@ def _build_skill_algorithms(
         if len(configured) == 1:
             owners[capability] = next(iter(configured))
 
-    if not analyzers and not optimizers and not evolvers:
+    if not analyzers and not optimizers and not evolvers and not skill_managers:
         return None, owners
     return (
         SkillAlgorithms(
             analyzers=analyzers,
             optimizers=optimizers,
             evolvers=evolvers,
+            skill_managers=skill_managers,
             agents=agents,
         ),
         owners,

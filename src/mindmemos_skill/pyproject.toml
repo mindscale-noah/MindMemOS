@@ -22,6 +22,7 @@ llm = [
     "litellm>=1.85.0",
 ]
 pgvector = [
+    "numpy>=1.26",
     "psycopg[binary,pool]>=3.2",
 ]
 claude-sdk = [

@@ -14,8 +14,8 @@ from typing import Any, AsyncIterator
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
-from psycopg_pool import AsyncConnectionPool
 
+from ...pg_pool import serialize_schema_bootstrap, validating_connection_pool
 from ..database import DatabaseUnitOfWork, ScopedDatabase
 from ..models import (
     DatabaseCapabilities,
@@ -70,7 +70,8 @@ class PostgresBackend(ScopedDatabase):
         self._options = options
         self._registry = tables
         self._tables = {spec.name: spec for spec in tables.specs}
-        self._pool = AsyncConnectionPool(
+        self._pool = validating_connection_pool(
+            default_search_path="public",
             conninfo=options.dsn,
             min_size=options.min_size,
             max_size=options.pool_size,
@@ -98,6 +99,7 @@ class PostgresBackend(ScopedDatabase):
             raise ValueError("ensure_schema registry differs from the configured postgres registry")
         await self._open()
         async with self._pool.connection() as connection, connection.transaction():
+            await serialize_schema_bootstrap(connection, "mindmemos:database-schema")
             await connection.execute(
                 sql.SQL(
                     "CREATE TABLE IF NOT EXISTS {} (table_name TEXT PRIMARY KEY, schema_fingerprint TEXT NOT NULL)"
@@ -248,6 +250,21 @@ class PostgresBackend(ScopedDatabase):
         await self._open()
         async with self._pool.connection() as connection, connection.transaction():
             await self._upsert(connection, table, records)
+
+    async def insert_record_if_absent(self, table: str, record: Record) -> bool:
+        await self._open()
+        spec = self._table(table)
+        columns = ["_scope_key", "_scope", "_record_id", *[field.name for field in spec.fields]]
+        conflict = ["_scope_key", "_record_id"] if spec.scope_scoped else ["_record_id"]
+        statement = sql.SQL("INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO NOTHING").format(
+            sql.Identifier(spec.name),
+            sql.SQL(", ").join(map(sql.Identifier, columns)),
+            sql.SQL(", ").join(sql.Placeholder() for _ in columns),
+            sql.SQL(", ").join(map(sql.Identifier, conflict)),
+        )
+        async with self._pool.connection() as connection, connection.transaction():
+            cursor = await connection.execute(statement, _prepare_record(spec, record))
+            return cursor.rowcount == 1
 
     async def get_records(self, table: str, scope: DatabaseScope, record_ids: Sequence[str]) -> list[Record]:
         await self._open()
@@ -402,6 +419,19 @@ class _PostgresUnitOfWork(DatabaseUnitOfWork):
     async def upsert_records(self, table, records):
         await self._backend._upsert(self._connection, table, records)
 
+    async def insert_record_if_absent(self, table, record):
+        spec = self._backend._table(table)
+        columns = ["_scope_key", "_scope", "_record_id", *[field.name for field in spec.fields]]
+        conflict = ["_scope_key", "_record_id"] if spec.scope_scoped else ["_record_id"]
+        statement = sql.SQL("INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO NOTHING").format(
+            sql.Identifier(spec.name),
+            sql.SQL(", ").join(map(sql.Identifier, columns)),
+            sql.SQL(", ").join(sql.Placeholder() for _ in columns),
+            sql.SQL(", ").join(map(sql.Identifier, conflict)),
+        )
+        cursor = await self._connection.execute(statement, _prepare_record(spec, record))
+        return cursor.rowcount == 1
+
     async def get_records(self, table, scope, record_ids):
         return await self._backend._get(self._connection, table, scope, record_ids)
 
@@ -479,8 +509,14 @@ def _adapt(field: FieldSpec, value: Any):
         return Jsonb(value)
     if field.field_type in {FieldType.TEXT_ARRAY, FieldType.UUID_ARRAY}:
         return list(value)
-    if field.field_type == FieldType.DATETIME and isinstance(value, str):
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if field.field_type == FieldType.DATETIME:
+        # A naive instant would be interpreted in the session time zone on
+        # the way in and come back as a different instant; the sqlite backend
+        # refuses it, so this one does too.
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
+        if not isinstance(parsed, datetime) or parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError(f"{field.name} requires a timezone-aware datetime")
+        return parsed
     if hasattr(value, "value"):
         return value.value
     return value

@@ -4,15 +4,40 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr, model_validator
 
 from ..infra.database import DatabaseRequirements
+from ..infra.vector_store import BackendRequirements
 from ..persistence.enums import SkillInjectionMode
 from ..registry import ComponentSpec
 
 SkillConfigSource: TypeAlias = str | Path | Mapping[str, Any] | BaseModel
+
+_SECRET_FIELD_NAMES = {
+    "api_key",
+    "authorization",
+    "client_secret",
+    "password",
+    "secret",
+    "token",
+}
+_DSN_FIELD_NAMES = {"connection_uri", "database_url", "dsn", "uri", "url"}
+
+
+def _redact(value: Any, *, field_name: str | None = None) -> Any:
+    """Redact secrets and whole DSN values for snapshots and reprs."""
+
+    if isinstance(value, SecretStr):
+        return "<redacted>"
+    if field_name is not None and field_name.lower() in _SECRET_FIELD_NAMES | _DSN_FIELD_NAMES:
+        return "<redacted>"
+    if isinstance(value, Mapping):
+        return {str(key): _redact(item, field_name=str(key)) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(item) for item in value]
+    return value
 
 
 class _StrictConfig(BaseModel):
@@ -27,11 +52,19 @@ class SkillDatabaseConfig(_StrictConfig):
     options: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class SkillVectorStoreConfig(_StrictConfig):
+    """User-selectable vector backend provider and connection options."""
+
+    provider: str = Field(default="pgvector", min_length=1)
+    options: dict[str, JsonValue] = Field(default_factory=dict)
+
+
 class SkillLocalConfig(_StrictConfig):
     """Local state and large-artifact locations owned by the Skill package."""
 
     root_dir: Path = Path("~/.mindmemos/skill")
     database: SkillDatabaseConfig = Field(default_factory=SkillDatabaseConfig)
+    vector_store: SkillVectorStoreConfig = Field(default_factory=SkillVectorStoreConfig)
     artifacts_dir: Path | None = None
 
 
@@ -39,10 +72,18 @@ class SkillModelConfig(_StrictConfig):
     """One named LiteLLM model endpoint referenced by agents or algorithms."""
 
     model: str = Field(min_length=1)
+    kind: Literal["chat", "embedding"] = "chat"
+    dimension: int | None = Field(default=None, gt=0)
     api_base: str | None = Field(default=None, min_length=1)
     api_key: SecretStr | None = None
     temperature: float | None = Field(default=None, ge=0)
     options: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _embedding_requires_dimension(self) -> SkillModelConfig:
+        if self.kind == "embedding" and self.dimension is None:
+            raise ValueError("embedding models must declare a positive integer dimension")
+        return self
 
 
 class SkillAgentConfig(_StrictConfig):
@@ -89,6 +130,10 @@ class SkillApplicationConfig(_StrictConfig):
 class _CompiledConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
+    def __repr__(self) -> str:
+        safe = _redact(self.model_dump(mode="python"))
+        return f"{type(self).__name__}({safe!r})"
+
 
 class CompiledSkillDatabaseConfig(_CompiledConfig):
     provider: str
@@ -96,9 +141,16 @@ class CompiledSkillDatabaseConfig(_CompiledConfig):
     required: DatabaseRequirements
 
 
+class CompiledSkillVectorStoreConfig(_CompiledConfig):
+    provider: str
+    options: dict[str, JsonValue]
+    required: BackendRequirements
+
+
 class CompiledSkillLocalConfig(_CompiledConfig):
     root_dir: Path
     database: CompiledSkillDatabaseConfig
+    vector_store: CompiledSkillVectorStoreConfig
     artifacts_dir: Path
 
 
@@ -107,6 +159,8 @@ class CompiledSkillModelConfig(_CompiledConfig):
 
     provider: str
     model: str
+    kind: Literal["chat", "embedding"]
+    dimension: int | None
     api_base: str | None
     api_key: SecretStr | None
     temperature: float | None
@@ -153,6 +207,7 @@ __all__ = [
     "CompiledSkillLocalConfig",
     "CompiledSkillModelConfig",
     "CompiledSkillRuntimeConfig",
+    "CompiledSkillVectorStoreConfig",
     "SkillAgentConfig",
     "SkillAlgorithmConfig",
     "SkillApplicationConfig",
@@ -162,4 +217,5 @@ __all__ = [
     "SkillLocalConfig",
     "SkillModelConfig",
     "SkillRuntimeConfig",
+    "SkillVectorStoreConfig",
 ]

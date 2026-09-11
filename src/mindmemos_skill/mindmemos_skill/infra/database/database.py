@@ -21,6 +21,16 @@ class DatabaseUnitOfWork(ABC):
     async def upsert_records(self, table: str, records: Sequence[Record]) -> None: ...
 
     @abstractmethod
+    async def insert_record_if_absent(self, table: str, record: Record) -> bool:
+        """Atomically insert one record if its scoped identity does not exist.
+
+        Returns ``True`` when the insert succeeded and ``False`` when an
+        equivalent record (same scope + ``record_id``) already exists. Any other
+        error raises without overwriting the existing record.
+        """
+        ...
+
+    @abstractmethod
     async def get_records(
         self,
         table: str,

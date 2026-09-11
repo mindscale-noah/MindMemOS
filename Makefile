@@ -155,3 +155,13 @@ db-clean:
 
 dev-down:
 	$(COMPOSE) down
+
+.PHONY: test-skill-manage-pg
+test-skill-manage-pg:
+	test -n "$${MINDMEMOS_SKILL_TEST_PG_DSN:-}"
+	mkdir -p outputs/skill_manage_tests
+	$(UV) run --locked --all-packages --extra pgvector pytest \
+		tests/integration/mindmemos_skill -m integration_pgvector \
+		--strict-markers --strict-config -q -ra \
+		--junitxml=outputs/skill_manage_tests/pgvector.xml
+	$(UV) run --locked python -c 'import xml.etree.ElementTree as ET; suites = list(ET.parse("outputs/skill_manage_tests/pgvector.xml").iter("testsuite")); assert sum(int(s.get("tests", 0)) for s in suites) > 0; assert not any(int(s.get("skipped", 0)) for s in suites), "PG integration tests must not skip"'

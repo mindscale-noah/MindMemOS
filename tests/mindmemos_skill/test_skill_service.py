@@ -11,6 +11,7 @@ from mindmemos_skill.service import (
     SkillCandidate,
     SkillCapabilityUnavailableError,
     SkillFinding,
+    SkillManageAlgorithm,
     Trace2SkillInput,
     Trace2SkillOutput,
 )
@@ -129,6 +130,38 @@ async def test_missing_capability_raises_clear_error() -> None:
 def test_algorithm_api_requires_at_least_one_capability() -> None:
     with pytest.raises(ValueError, match="at least one"):
         SkillAlgorithms()
+
+
+class FakeSkillManager(SkillManageAlgorithm):
+    async def plan_build(self, request):
+        raise NotImplementedError
+
+    async def plan_upsert(self, request):
+        raise NotImplementedError
+
+    async def plan_remove(self, request):
+        raise NotImplementedError
+
+    async def embed(self, request):
+        raise NotImplementedError
+
+    async def retrieve(self, request):
+        raise NotImplementedError
+
+
+def test_skill_manage_dispatch_exposes_capability_and_resolves_names() -> None:
+    algorithms = SkillAlgorithms(skill_manager=FakeSkillManager())
+
+    assert "skill_manage" in algorithms.capabilities
+    assert algorithms.algorithm_names("skill_manage") == ("default",)
+    assert algorithms.resolve_name("skill_manage") == "default"
+
+    multi = SkillAlgorithms(
+        skill_managers={"alpha": FakeSkillManager(), "beta": FakeSkillManager()},
+    )
+    assert multi.resolve_name("skill_manage", "alpha") == "alpha"
+    with pytest.raises(SkillCapabilityUnavailableError, match="algorithm name"):
+        multi.resolve_name("skill_manage")
 
 
 def test_removed_runtime_facade_is_not_public() -> None:

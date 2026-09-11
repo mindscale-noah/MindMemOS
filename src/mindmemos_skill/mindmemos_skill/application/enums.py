@@ -18,6 +18,7 @@ class SkillApplicationCapability(StrEnum):
     PUSH = "push"
     REGISTER = "register"
     SHOW = "show"
+    SKILL_MANAGE = "skill_manage"
     SYNC = "sync"
     UNREGISTER = "unregister"
 

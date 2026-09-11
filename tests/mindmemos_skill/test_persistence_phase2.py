@@ -91,6 +91,7 @@ async def test_persistence_bootstrap_registers_the_public_v1_catalog(tmp_path) -
 
     assert migrations == [
         ("mindmemos-skill", 1, "initial_schema"),
+        ("mindmemos-skill", 2, "skill_manage_graph_tables"),
     ]
     assert {
         "algorithm_logs",
@@ -99,10 +100,11 @@ async def test_persistence_bootstrap_registers_the_public_v1_catalog(tmp_path) -
         "skill_sync_state",
         "skill_versions",
         "trajectories",
+        "skill_manage_graphs",
     } <= tables
     status = get_skill_database_status(path)
-    assert status.current_version == CURRENT_SCHEMA_VERSION == 1
-    assert status.target_version == 1
+    assert status.current_version == CURRENT_SCHEMA_VERSION == 2
+    assert status.target_version == 2
     assert status.pending_versions == ()
     assert status.database_is_newer is False
 
@@ -116,7 +118,7 @@ async def test_skill_database_backup_is_a_consistent_sqlite_copy(tmp_path) -> No
 
     backup_path = backup_skill_database(path)
 
-    assert backup_path.name.startswith("state.db.backup-v1-to-v1-")
+    assert backup_path.name.startswith("state.db.backup-v2-to-v2-")
     with sqlite3.connect(backup_path) as connection:
         assert connection.execute("SELECT version_id FROM skill_versions").fetchall() == [("version-1",)]
 

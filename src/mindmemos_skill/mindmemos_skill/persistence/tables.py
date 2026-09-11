@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..infra.database import FieldSpec, FieldType, IndexSpec, TableRegistry, TableSpec
 from .migrations import SKILL_SCHEMA_MIGRATIONS
+from .skill_manage_tables import build_skill_manage_tables
 
 SKILL_TABLE = "skill_versions"
 TRAJECTORY_TABLE = "trajectories"
@@ -15,7 +16,7 @@ SKILL_FAMILY_STATE_TABLE = SKILL_SYNC_STATE_TABLE
 
 
 def build_persistence_tables() -> TableRegistry:
-    specs = (
+    _CORE_SPECS = (
         TableSpec(
             name=SKILL_TABLE,
             primary_key="version_id",
@@ -191,6 +192,7 @@ def build_persistence_tables() -> TableRegistry:
             scope_scoped=False,
         ),
     )
+    specs = (*_CORE_SPECS, *build_skill_manage_tables())
     registry = TableRegistry(
         specs,
         migrations=SKILL_SCHEMA_MIGRATIONS,

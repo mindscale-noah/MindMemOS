@@ -12,6 +12,7 @@ from pydantic import BaseModel, SecretStr, ValidationError
 
 from ..errors import SkillConfigurationError
 from ..infra.database import DatabaseRegistry, DatabaseRequirements, register_builtin_databases
+from ..infra.vector_store import BackendRegistry, BackendRequirements, register_builtin_vector_stores
 from ..llm.router import resolve_model_provider
 from ..registry import ComponentSpec, ComponentType, get_component
 from .models import (
@@ -22,6 +23,7 @@ from .models import (
     CompiledSkillLocalConfig,
     CompiledSkillModelConfig,
     CompiledSkillRuntimeConfig,
+    CompiledSkillVectorStoreConfig,
     SkillApplicationConfig,
     SkillConfigSource,
     SkillModelConfig,
@@ -36,6 +38,11 @@ _REPOSITORY_REQUIREMENTS = DatabaseRequirements(
     transactions=True,
     compare_and_swap=True,
 )
+_VECTOR_STORE_REQUIREMENTS = BackendRequirements(
+    dense_vector=True,
+    metadata_filtering=True,
+    batch_record_io=True,
+)
 _SECRET_NAMES = {
     "api_key",
     "authorization",
@@ -43,6 +50,13 @@ _SECRET_NAMES = {
     "password",
     "secret",
     "token",
+}
+_DSN_FIELD_NAMES = {
+    "connection_uri",
+    "database_url",
+    "dsn",
+    "uri",
+    "url",
 }
 
 
@@ -53,12 +67,17 @@ class SkillConfigCompiler:
         self,
         *,
         database_registry: DatabaseRegistry | None = None,
+        vector_store_registry: BackendRegistry | None = None,
         component_resolver: ComponentResolver = get_component,
     ) -> None:
         if database_registry is None:
             database_registry = DatabaseRegistry()
             register_builtin_databases(database_registry)
+        if vector_store_registry is None:
+            vector_store_registry = BackendRegistry()
+            register_builtin_vector_stores(vector_store_registry)
         self._database_registry = database_registry
+        self._vector_store_registry = vector_store_registry
         self._component_resolver = component_resolver
 
     def compile(self, source: SkillConfigSource) -> CompiledSkillApplicationConfig:
@@ -68,9 +87,10 @@ class SkillConfigCompiler:
         root_dir = _resolve_path(config.local.root_dir)
         artifacts_dir = _resolve_path(config.local.artifacts_dir or root_dir / "artifacts", base=root_dir)
         database = self._compile_database(config, root_dir=root_dir)
+        vector_store = self._compile_vector_store(config)
         models = self._compile_models(config.runtime.models)
         agents = self._compile_agents(config.runtime.agents, models=models)
-        algorithms = self._compile_algorithms(config.runtime.algorithms, models=models)
+        algorithms = self._compile_algorithms(config, models=models)
         runtime = CompiledSkillRuntimeConfig(
             models=models,
             agents=agents,
@@ -80,6 +100,7 @@ class SkillConfigCompiler:
         local = CompiledSkillLocalConfig(
             root_dir=root_dir,
             database=database,
+            vector_store=vector_store,
             artifacts_dir=artifacts_dir,
         )
         snapshot = _build_safe_snapshot(local=local, runtime=runtime)
@@ -137,6 +158,23 @@ class SkillConfigCompiler:
             required=_REPOSITORY_REQUIREMENTS,
         )
 
+    def _compile_vector_store(
+        self,
+        config: SkillApplicationConfig,
+    ) -> CompiledSkillVectorStoreConfig:
+        vector_store = config.local.vector_store
+        provider = vector_store.provider.strip().lower()
+        if provider not in self._vector_store_registry.providers:
+            available = ", ".join(self._vector_store_registry.providers) or "<none>"
+            raise SkillConfigurationError(
+                f"unknown vector store provider {vector_store.provider!r}; available providers: {available}"
+            )
+        return CompiledSkillVectorStoreConfig(
+            provider=provider,
+            options=dict(vector_store.options),
+            required=_VECTOR_STORE_REQUIREMENTS,
+        )
+
     @staticmethod
     def _compile_models(models: Mapping[str, SkillModelConfig]) -> dict[str, CompiledSkillModelConfig]:
         compiled: dict[str, CompiledSkillModelConfig] = {}
@@ -155,6 +193,8 @@ class SkillConfigCompiler:
             compiled[normalized_name] = CompiledSkillModelConfig(
                 provider=provider,
                 model=model_id,
+                kind=model.kind,
+                dimension=model.dimension,
                 api_base=model.api_base,
                 api_key=model.api_key,
                 temperature=model.temperature,
@@ -182,6 +222,11 @@ class SkillConfigCompiler:
                 if model is None:
                     raise SkillConfigurationError(
                         f"agent {normalized_name!r} references unknown model {agent.model_ref!r}"
+                    )
+                if model.kind != "chat":
+                    raise SkillConfigurationError(
+                        f"agent {normalized_name!r} model_ref must reference a chat model; "
+                        f"model {agent.model_ref!r} has kind {model.kind!r}"
                     )
             payload = dict(agent.config)
             if "model" in payload:
@@ -219,36 +264,49 @@ class SkillConfigCompiler:
 
     def _compile_algorithms(
         self,
-        algorithms: Mapping[str, Any],
+        config: SkillApplicationConfig,
         *,
         models: Mapping[str, CompiledSkillModelConfig],
     ) -> dict[str, CompiledSkillAlgorithmConfig]:
         compiled: dict[str, CompiledSkillAlgorithmConfig] = {}
-        for name, algorithm in algorithms.items():
+        for name, algorithm in config.runtime.algorithms.items():
             normalized_name = _validate_reference_name(name, kind="algorithm")
             component = self._resolve_component(ComponentType.ALGO, algorithm.type)
             if component.config_model is None:
                 raise SkillConfigurationError(f"algorithm component {algorithm.type!r} does not declare config_model")
-            if not component.capabilities.intersection({"analyze", "optimize", "evolve"}):
+            if not component.capabilities.intersection({"analyze", "optimize", "evolve", "skill_manage"}):
                 raise SkillConfigurationError(
-                    f"algorithm component {algorithm.type!r} must declare analyze, optimize, or evolve capability"
+                    f"algorithm component {algorithm.type!r} must declare a known algorithm capability"
                 )
-            missing_roles = component.requirements.required_model_roles - algorithm.model_roles.keys()
+            validated = _validate_component_config(
+                component,
+                algorithm.config,
+                label=f"algorithm {normalized_name!r}",
+            )
+            # Existing components declare required roles without a model-kind
+            # contract. Only enforce kinds that a component explicitly declares.
+            required_kinds = dict(component.requirements.required_model_kinds)
+            if component.requirements.dependency_validator is not None:
+                required_kinds.update(component.requirements.dependency_validator(validated))
+            required_roles = component.requirements.required_model_roles | required_kinds.keys()
+            missing_roles = required_roles - algorithm.model_roles.keys()
             if missing_roles:
                 raise SkillConfigurationError(
                     f"algorithm {normalized_name!r} is missing model roles: {', '.join(sorted(missing_roles))}"
                 )
             for role, model_ref in algorithm.model_roles.items():
                 _validate_reference_name(role, kind=f"model role for algorithm {normalized_name!r}")
-                if model_ref not in models:
+                model = models.get(model_ref)
+                if model is None:
                     raise SkillConfigurationError(
                         f"algorithm {normalized_name!r} role {role!r} references unknown model {model_ref!r}"
                     )
-            validated = _validate_component_config(
-                component,
-                algorithm.config,
-                label=f"algorithm {normalized_name!r}",
-            )
+                expected_kind = required_kinds.get(role)
+                if expected_kind is not None and model.kind != expected_kind:
+                    raise SkillConfigurationError(
+                        f"algorithm {normalized_name!r} role {role!r} requires a {expected_kind!r} model; "
+                        f"model {model_ref!r} has kind {model.kind!r}"
+                    )
             compiled[normalized_name] = CompiledSkillAlgorithmConfig(
                 name=normalized_name,
                 type=component.name,
@@ -256,7 +314,42 @@ class SkillConfigCompiler:
                 component=component,
                 config=validated,
             )
+        self._validate_skill_manage_backends(config, compiled, models=models)
         return compiled
+
+    def _validate_skill_manage_backends(
+        self,
+        config: SkillApplicationConfig,
+        compiled: Mapping[str, CompiledSkillAlgorithmConfig],
+        *,
+        models: Mapping[str, CompiledSkillModelConfig],
+    ) -> None:
+        skill_manage_instances = [
+            algorithm for algorithm in compiled.values() if "skill_manage" in algorithm.component.capabilities
+        ]
+        if not skill_manage_instances:
+            return
+        database_provider = config.local.database.provider.strip().lower()
+        if database_provider != "postgres":
+            raise SkillConfigurationError(
+                "skill_manage requires the structured database provider to be postgres; "
+                f"got {config.local.database.provider!r}"
+            )
+        vector_provider = config.local.vector_store.provider.strip().lower()
+        if vector_provider != "pgvector":
+            raise SkillConfigurationError(
+                "skill_manage requires the vector store provider to be pgvector; "
+                f"got {config.local.vector_store.provider!r}"
+            )
+        embedding_dimensions = {
+            algorithm.model_roles["embedding"]
+            for algorithm in skill_manage_instances
+            if "embedding" in algorithm.model_roles
+        }
+        if len(embedding_dimensions) != 1:
+            raise SkillConfigurationError(
+                "all skill_manage instances must resolve the same embedding model and dimension"
+            )
 
     def _resolve_component(self, component_type: ComponentType, name: str) -> ComponentSpec:
         try:
@@ -298,6 +391,8 @@ def _build_safe_snapshot(
         name: {
             "provider": model.provider,
             "model": model.model,
+            "kind": model.kind,
+            "dimension": model.dimension,
             "api_base": model.api_base,
             "api_key_configured": model.api_key is not None,
             "temperature": model.temperature,
@@ -335,6 +430,15 @@ def _build_safe_snapshot(
                     "compare_and_swap": local.database.required.compare_and_swap,
                 },
             },
+            "vector_store": {
+                "provider": local.vector_store.provider,
+                "options": _redact_secrets(local.vector_store.options),
+                "required": {
+                    "dense_vector": local.vector_store.required.dense_vector,
+                    "metadata_filtering": local.vector_store.required.metadata_filtering,
+                    "batch_record_io": local.vector_store.required.batch_record_io,
+                },
+            },
             "artifacts_dir": str(local.artifacts_dir),
         },
         "runtime": {
@@ -350,6 +454,8 @@ def _redact_secrets(value: Any, *, field_name: str | None = None) -> Any:
     if isinstance(value, SecretStr):
         return "<redacted>"
     if field_name is not None and field_name.lower() in _SECRET_NAMES:
+        return "<redacted>"
+    if field_name is not None and field_name.lower() in _DSN_FIELD_NAMES:
         return "<redacted>"
     if isinstance(value, Mapping):
         return {
