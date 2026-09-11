@@ -90,26 +90,6 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
             inject_environment_as_benchmark=True,
         ),
         _evolve(
-            "trajectory_memory",
-            environment_extras={"alfworld": ("alfworld",)},
-            inject_environment_as_benchmark=True,
-        ),
-        _evolve(
-            "task_virtual_skill",
-            environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
-            inject_environment_as_benchmark=True,
-        ),
-        _evolve(
-            "tree_skill_grpo",
-            environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
-            inject_environment_as_benchmark=True,
-        ),
-        _evolve(
-            "experience_memory_embedding",
-            environment_extras={"alfworld": ("alfworld",)},
-            inject_environment_as_benchmark=True,
-        ),
-        _evolve(
             "initial_skill_evaluation",
             environment_extras={"alfworld": ("alfworld",)},
             inject_environment_as_benchmark=True,
@@ -125,6 +105,10 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         ),
         _trace2skill(
             "trajectory_evidence_patch",
+            environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
+        ),
+        _trace2skill(
+            "offline_evolution",
             environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
         ),
     )

@@ -33,6 +33,19 @@ _INSTALL_RE = re.compile(
 )
 _SPREADSHEETBENCH_THREAD_POOL_WORKERS = 32
 _configured_event_loops: weakref.WeakSet[asyncio.AbstractEventLoop] = weakref.WeakSet()
+_SENSITIVE_ENV_NAMES = frozenset({"OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ENDPOINT"})
+_SENSITIVE_ENV_SUFFIXES = ("_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIAL")
+
+
+def _subprocess_environment() -> dict[str, str]:
+    """Return a benchmark shell environment without inherited credentials."""
+
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name.upper() not in _SENSITIVE_ENV_NAMES
+        and not any(name.upper().endswith(suffix) for suffix in _SENSITIVE_ENV_SUFFIXES)
+    }
 
 
 def _configure_default_executor() -> None:
@@ -166,13 +179,12 @@ class SpreadsheetBenchEnv(BaseEnv[SpreadsheetBenchEnvConfig]):
         task = prepared.agent_request.task
         position = str(task.metadata.get("answer_position") or "")
         answer_sheet = task.metadata.get("answer_sheet")
-        if position and answer_sheet and "!" not in position:
-            position = f"{answer_sheet}!{position}"
         try:
             correct, detail = compare_workbooks(
                 state["golden_workbook"],
                 state["workspace"] / "output.xlsx",
                 position,
+                answer_sheet=str(answer_sheet) if answer_sheet else None,
             )
         except Exception as exc:
             correct, detail = False, f"score error: {type(exc).__name__}: {exc}"
@@ -304,7 +316,7 @@ class SpreadsheetTools:
     def shell(self, commands: list[str], timeout_ms: int | None = None) -> str:
         timeout = timeout_ms / 1000 if timeout_ms else self.timeout_seconds
         environment = {
-            **os.environ,
+            **_subprocess_environment(),
             "PIP_NO_INDEX": "1",
             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
             "UV_OFFLINE": "1",

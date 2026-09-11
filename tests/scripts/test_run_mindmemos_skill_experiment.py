@@ -35,22 +35,22 @@ def runner_command(invocation: SCRIPT.ExperimentInvocation) -> tuple[str, list[s
 
 def test_build_invocation_selects_method_environment_and_boolean_flags(tmp_path: Path) -> None:
     invocation = SCRIPT.build_invocation(
-        CONFIG_ROOT / "skill_grpo_with_replay_buffer" / "livemath" / "gpt54mini_epoch4.yaml",
+        CONFIG_ROOT / "skill_grpo_with_experience_validation" / "livemath" / "default.yaml",
         env_file_override=empty_env_file(tmp_path),
         timestamp="20260102-030405",
         base_environment={},
     )
 
-    assert invocation.method == "skill_grpo_with_replay_buffer"
+    assert invocation.method == "skill_grpo_with_experience_validation"
     assert invocation.environment == "livemath"
-    assert invocation.run_id == "livemath_skill_grpo_with_replay_buffer_20260102-030405"
+    assert invocation.run_id == "livemath_skill_grpo_with_experience_validation_20260102-030405"
     assert invocation.output_dir == Path(
-        "outputs/livemath/skill_grpo_with_replay_buffer/livemath_skill_grpo_with_replay_buffer_20260102-030405"
+        "outputs/livemath/skill_grpo_with_experience_validation/livemath_skill_grpo_with_experience_validation_20260102-030405"
     )
     assert invocation.command[:7] == ["uv", "run", "--package", "mindmemos-skill", "--extra", "llm", "python"]
     runner, arguments = runner_command(invocation)
     assert runner.endswith("scripts/mindmemos_skill/runners/evolve.py")
-    assert arguments[:2] == ["--algorithm", "skill_grpo_with_replay_buffer"]
+    assert arguments[:2] == ["--algorithm", "skill_grpo_with_experience_validation"]
     assert invocation.command[invocation.command.index("--benchmark") + 1] == "livemath"
     assert "--no-fail-fast" in invocation.command
     assert "--shuffle-choices" in invocation.command
@@ -62,7 +62,7 @@ def test_replay_buffer_does_not_restrict_environment_or_dataset(tmp_path: Path) 
         tmp_path / "experiment.yaml",
         {
             "version": 1,
-            "method": "skill_grpo_with_replay_buffer",
+            "method": "skill_grpo_with_experience_validation",
             "environment": "custom-environment",
             "parameters": {
                 "dataset": {
@@ -103,16 +103,8 @@ def test_replay_buffer_does_not_restrict_environment_or_dataset(tmp_path: Path) 
 @pytest.mark.parametrize(
     "config_path",
     [
-        CONFIG_ROOT / "skill_grpo_with_replay_buffer" / "alfworld" / "gpt54mini_epoch4.yaml",
-        CONFIG_ROOT / "skill_grpo_without_replay_buffer" / "alfworld" / "default.yaml",
         CONFIG_ROOT / "skill_grpo_with_experience_validation" / "alfworld" / "default.yaml",
-        CONFIG_ROOT / "task_virtual_skill" / "spreadsheetbench" / "default.yaml",
-        CONFIG_ROOT / "tree_skill_grpo" / "alfworld" / "default.yaml",
-        CONFIG_ROOT / "trajectory_memory" / "alfworld" / "default.yaml",
-        CONFIG_ROOT / "experience_memory_embedding" / "alfworld" / "default.yaml",
-        CONFIG_ROOT / "initial_skill_evaluation" / "alfworld" / "default.yaml",
-        CONFIG_ROOT / "skill_evaluation" / "alfworld" / "default.yaml",
-        CONFIG_ROOT / "trajectory_evidence_patch" / "alfworld" / "default.yaml",
+        CONFIG_ROOT / "offline_evolution" / "livemath" / "initial_skill.yaml",
     ],
 )
 def test_registered_component_experiments_accept_custom_dataset_and_env(config_path: Path, tmp_path: Path) -> None:
@@ -151,7 +143,7 @@ def test_launcher_passes_external_component_modules_to_runner(tmp_path: Path) ->
         tmp_path / "experiment.yaml",
         {
             "version": 1,
-            "method": "skill_grpo_with_replay_buffer",
+            "method": "skill_grpo_with_experience_validation",
             "environment": "custom-benchmark",
             "launcher": {
                 "component_modules": ["acme_skill_components", "team_benchmark.components"],
@@ -196,23 +188,6 @@ def test_experiment_adapters_stay_outside_the_algorithm_support_package() -> Non
     assert all(spec.implementation_path.parent == script_experiments for spec in SCRIPT.EXPERIMENTS.values())
 
 
-def test_skill_evaluation_can_switch_to_true_no_skill_mode(tmp_path: Path) -> None:
-    invocation = SCRIPT.build_invocation(
-        CONFIG_ROOT / "skill_evaluation" / "alfworld" / "default.yaml",
-        env_file_override=empty_env_file(tmp_path),
-        overrides=["dataset.skill=null", "dataset.no_skill=true", "evaluation.test_limit=2"],
-        timestamp="20260102-030405",
-        base_environment={},
-    )
-
-    runner, arguments = runner_command(invocation)
-    assert runner.endswith("scripts/mindmemos_skill/runners/evolve.py")
-    assert arguments[:2] == ["--algorithm", "skill_evaluation"]
-    assert "--no-skill" in invocation.command
-    assert "--skill" not in invocation.command
-    assert invocation.command[invocation.command.index("--test-limit") + 1] == "2"
-
-
 def test_officeqa_custom_search_uses_env_file_without_putting_secrets_in_command(tmp_path: Path) -> None:
     env_file = tmp_path / ".skill.env"
     env_file.write_text(
@@ -222,7 +197,7 @@ def test_officeqa_custom_search_uses_env_file_without_putting_secrets_in_command
         encoding="utf-8",
     )
     invocation = SCRIPT.build_invocation(
-        CONFIG_ROOT / "skill_evaluation" / "officeqa" / "default.yaml",
+        CONFIG_ROOT / "skill_grpo_with_experience_validation" / "officeqa" / "default.yaml",
         env_file_override=env_file,
         overrides=["environment_options.env_options.search_mode=custom_search"],
         timestamp="20260102-030405",
@@ -240,8 +215,7 @@ def test_officeqa_custom_search_uses_env_file_without_putting_secrets_in_command
 @pytest.mark.parametrize(
     "config_path",
     [
-        CONFIG_ROOT / "skill_evaluation" / "officeqa" / "default.yaml",
-        CONFIG_ROOT / "skill_grpo_without_replay_buffer" / "officeqa" / "default.yaml",
+        CONFIG_ROOT / "skill_grpo_with_experience_validation" / "officeqa" / "default.yaml",
     ],
 )
 def test_officeqa_configs_forward_custom_search_env_options(config_path: Path, tmp_path: Path) -> None:
@@ -256,25 +230,6 @@ def test_officeqa_configs_forward_custom_search_env_options(config_path: Path, t
     serialized_options = invocation.command[invocation.command.index("--env-options") + 1]
     options = json.loads(serialized_options)
     assert options["search_mode"] == "custom_search"
-    assert options["search_api_protocol_env"] == "OFFICEQA_SERPAPI_PROTOCOL"
-    assert options["search_api_base_url_env"] == "OFFICEQA_SERPAPI_BASE_URL"
-    assert options["search_api_key_env"] == "OFFICEQA_SERPAPI_API_KEY"
-
-
-@pytest.mark.parametrize("environment", ["alfworld", "livemath", "spreadsheetbench"])
-def test_tree_skill_grpo_configs_use_the_evolve_runner(environment: str, tmp_path: Path) -> None:
-    invocation = SCRIPT.build_invocation(
-        CONFIG_ROOT / "tree_skill_grpo" / environment / "default.yaml",
-        env_file_override=empty_env_file(tmp_path),
-        timestamp="20260102-030405",
-        base_environment={},
-    )
-
-    runner, arguments = runner_command(invocation)
-    assert runner.endswith("scripts/mindmemos_skill/runners/evolve.py")
-    assert arguments[:2] == ["--algorithm", "tree_skill_grpo"]
-    assert invocation.command[invocation.command.index("--batch-size") + 1] == "40"
-    assert invocation.command[invocation.command.index("--max-task-attempts") + 1] == "4"
 
 
 def test_spreadsheetbench_experience_validation_config_uses_expected_controls(tmp_path: Path) -> None:
@@ -310,11 +265,7 @@ def test_spreadsheetbench_experience_validation_can_disable_tool_observation_lim
 
 @pytest.mark.parametrize(
     "config_path",
-    [
-        CONFIG_ROOT / "skill_grpo_without_replay_buffer" / "alfworld" / "bounded_history.yaml",
-        CONFIG_ROOT / "skill_grpo_with_experience_validation" / "alfworld" / "bounded_history.yaml",
-        CONFIG_ROOT / "skill_evaluation" / "alfworld" / "bounded_history.yaml",
-    ],
+    [CONFIG_ROOT / "skill_grpo_with_experience_validation" / "alfworld" / "default.yaml"],
 )
 def test_bounded_history_alfworld_configs_select_the_registered_env(config_path: Path, tmp_path: Path) -> None:
     invocation = SCRIPT.build_invocation(
@@ -326,13 +277,12 @@ def test_bounded_history_alfworld_configs_select_the_registered_env(config_path:
 
     assert invocation.environment == "alfworld"
     assert invocation.command[invocation.command.index("--env-ref") + 1] == "alfworld_bounded_history"
-    if config_path.parent.parent.name == "skill_grpo_without_replay_buffer":
-        assert invocation.command[invocation.command.index("--env-seed") + 1] == "42"
+    assert invocation.command[invocation.command.index("--env-seed") + 1] == "42"
 
 
 def test_trace2skill_routes_to_family_runner_and_keeps_test_config(tmp_path: Path) -> None:
     invocation = SCRIPT.build_invocation(
-        CONFIG_ROOT / "trajectory_evidence_patch" / "alfworld" / "default.yaml",
+        CONFIG_ROOT / "offline_evolution" / "livemath" / "initial_skill.yaml",
         env_file_override=empty_env_file(tmp_path),
         timestamp="20260102-030405",
         base_environment={},
@@ -340,8 +290,46 @@ def test_trace2skill_routes_to_family_runner_and_keeps_test_config(tmp_path: Pat
 
     runner, arguments = runner_command(invocation)
     assert runner.endswith("scripts/mindmemos_skill/runners/trace2skill.py")
-    assert arguments[:2] == ["--algorithm", "trajectory_evidence_patch"]
+    assert arguments[:2] == ["--algorithm", "offline_evolution"]
+    assert invocation.resolved_config["resolved"]["extras"] == ["llm", "offline-evolution"]
     assert invocation.command[invocation.command.index("--test-rollouts") + 1] == "1"
+
+
+@pytest.mark.parametrize("environment,skill_name", [("livemath", "livemath"), ("spreadsheetbench", "xlsx")])
+def test_offline_evolution_configs_keep_dependencies_and_initial_skill(environment, skill_name, tmp_path):
+    invocation = SCRIPT.build_invocation(
+        CONFIG_ROOT / "offline_evolution" / environment / "initial_skill.yaml",
+        env_file_override=empty_env_file(tmp_path),
+        overrides=[
+            "offline_evolution.train_limit=2",
+            "offline_evolution.min_trajectories=1",
+            "evaluation.test_limit=1",
+        ],
+        timestamp="20260102-030405",
+        base_environment={},
+    )
+    runner, arguments = runner_command(invocation)
+    assert runner.endswith("scripts/mindmemos_skill/runners/trace2skill.py")
+    assert arguments[:2] == ["--algorithm", "offline_evolution"]
+    expected_extras = ["llm", "offline-evolution"]
+    if environment == "spreadsheetbench":
+        expected_extras.insert(1, "spreadsheetbench")
+    assert invocation.resolved_config["resolved"]["extras"] == expected_extras
+    skill_path = invocation.command[invocation.command.index("--initial-skill") + 1]
+    assert skill_path == f"resources/mindmemos_skill/skills/{environment}/{skill_name}/SKILL.md"
+    assert (SCRIPT.REPO_ROOT / skill_path).is_file()
+    assert invocation.command[invocation.command.index("--train-limit") + 1] == "2"
+    assert invocation.command[invocation.command.index("--test-limit") + 1] == "1"
+
+
+def test_offline_evolution_does_not_offer_resource_evolution(tmp_path):
+    with pytest.raises(ValueError, match="does not accept: --skill-md-only"):
+        SCRIPT.build_invocation(
+            CONFIG_ROOT / "offline_evolution" / "livemath" / "initial_skill.yaml",
+            env_file_override=empty_env_file(tmp_path),
+            overrides=["offline_evolution.skill_md_only=false"],
+            base_environment={},
+        )
 
 
 @pytest.mark.parametrize(
@@ -368,9 +356,9 @@ def test_all_shipped_experiment_configs_build(config_path: Path, tmp_path: Path)
 @pytest.mark.parametrize(
     ("config_path", "expected"),
     [
-        (CONFIG_ROOT / "skill_evaluation" / "alfworld" / "default.yaml", "50"),
-        (CONFIG_ROOT / "skill_evaluation" / "livemath" / "default.yaml", "1"),
-        (CONFIG_ROOT / "skill_evaluation" / "spreadsheetbench" / "default.yaml", "30"),
+        (CONFIG_ROOT / "skill_grpo_with_experience_validation" / "alfworld" / "default.yaml", "50"),
+        (CONFIG_ROOT / "skill_grpo_with_experience_validation" / "livemath" / "default.yaml", "1"),
+        (CONFIG_ROOT / "skill_grpo_with_experience_validation" / "spreadsheetbench" / "default.yaml", "30"),
     ],
 )
 def test_configs_use_one_public_turn_limit(config_path: Path, expected: str, tmp_path: Path) -> None:
@@ -387,7 +375,7 @@ def test_configs_use_one_public_turn_limit(config_path: Path, expected: str, tmp
 
 def test_explicit_run_id_and_output_dir_still_override_defaults(tmp_path: Path) -> None:
     invocation = SCRIPT.build_invocation(
-        CONFIG_ROOT / "skill_evaluation" / "alfworld" / "default.yaml",
+        CONFIG_ROOT / "skill_grpo_with_experience_validation" / "alfworld" / "default.yaml",
         env_file_override=empty_env_file(tmp_path),
         overrides=["runtime.run_id=custom-run", "runtime.output_dir=custom/{run_id}"],
         timestamp="20260102-030405",
@@ -403,7 +391,7 @@ def test_overrides_and_environment_expansion_are_applied(tmp_path: Path) -> None
         tmp_path / "experiment.yaml",
         {
             "version": 1,
-            "method": "initial_skill_evaluation",
+            "method": "skill_grpo_with_experience_validation",
             "environment": "alfworld",
             "parameters": {
                 "dataset": {
@@ -432,7 +420,7 @@ def test_rejects_unknown_runner_parameter(tmp_path: Path) -> None:
         tmp_path / "experiment.yaml",
         {
             "version": 1,
-            "method": "initial_skill_evaluation",
+            "method": "skill_grpo_with_experience_validation",
             "environment": "alfworld",
             "parameters": {
                 "dataset": {
@@ -454,7 +442,7 @@ def test_rejects_duplicate_leaf_parameters(tmp_path: Path) -> None:
         tmp_path / "experiment.yaml",
         {
             "version": 1,
-            "method": "initial_skill_evaluation",
+            "method": "skill_grpo_with_experience_validation",
             "environment": "alfworld",
             "parameters": {
                 "dataset": {

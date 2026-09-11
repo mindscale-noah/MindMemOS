@@ -1,18 +1,32 @@
 #!/usr/bin/env python3
-"""Run Tree Skill GRPO on one registered benchmark."""
+"""Script-side offline-evolution trace2skill run followed by test evaluation.
+
+Collects trajectories from a bounded set of train tasks with the same react
+Agent/Env path as evolve, runs the vendored offline pipeline through the
+:class:`OfflineEvolution` algorithm, then evaluates the resulting Skill on the
+test split.
+"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mindmemos_skill.algos.evolve.tree_skill_grpo import TreeSkillGrpoAlgorithm
+from mindmemos_skill.algos.trace2skill import (
+    OfflineEvolution,
+    OfflineEvolutionConfig,
+    ScheduledTrajectoryCollector,
+    TaskCollectionConfig,
+)
 from mindmemos_skill.llm import DatabaseLLMCallSink
 from mindmemos_skill.persistence import bootstrap_skill_database
-from mindmemos_skill.typing import EvolveInput
+from mindmemos_skill.typing import Skill, SkillCandidate, Trace2SkillInput, compute_skill_content_hash
 
 from .component_selection import json_object, resolve_env_ref
 from .skill_evaluation import (
@@ -23,17 +37,19 @@ from .skill_evaluation import (
     build_skill,
     environment_options,
     evaluate_test_tasks,
+    limited_test_tasks,
     write_json,
 )
 
 
-class ChatModelWithDefaults:
-    def __init__(self, client: Any, **defaults: Any) -> None:
-        self._client = client
-        self._defaults = defaults
-
-    async def chat(self, task: str, messages: list[dict[str, Any]], **kwargs: Any) -> Any:
-        return await self._client.chat(task, messages, **{**self._defaults, **kwargs})
+@dataclass(frozen=True, slots=True)
+class _AlgorithmContext:
+    models: dict[str, Any]
+    agents: dict[str, Any]
+    config_hash: str
+    # The host audit sink: the wrapper flushes vendored LLM calls through it
+    # under llm_run_context so the optimizer's calls land in LLM_CALL_TABLE.
+    llm_call_sink: Any = None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -41,7 +57,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--benchmark", required=True, help="artifact label and built-in component default")
     parser.add_argument("--dataset-ref", help="registered Dataset name")
     parser.add_argument("--dataset-options", type=json_object, default={}, help="JSON options for the Dataset factory")
-    parser.add_argument("--env-ref", help="registered Env override; ALFWorld defaults to alfworld_bounded_history")
+    parser.add_argument("--env-ref", help="registered Env name; ALFWorld defaults to alfworld_bounded_history")
     parser.add_argument("--env-options", type=json_object, default={}, help="JSON options for the Env factory")
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--split-dir", type=Path)
@@ -57,13 +73,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-retries", type=int, default=3)
     parser.add_argument("--max-completion-tokens", type=int, default=16384)
 
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--batch-size", type=int, default=40)
-    parser.add_argument("--max-task-attempts", type=int, default=4)
-    parser.add_argument("--max-concurrency", type=int, default=32)
-    parser.add_argument("--train-limit", type=int)
-    parser.add_argument("--test-limit", type=int)
+    # Offline pipeline specific knobs.
+    parser.add_argument("--backend", choices=("react",), default="react")
+    parser.add_argument("--scope-name", default="evolution")
+    # min/max bound the *collected* trajectory ids handed to the pipeline.
+    # They are intentionally looser than --train-limit (which bounds tasks):
+    # a rollout can fail without producing a trajectory, so collecting
+    # train-limit * collection-rollouts tasks is not a guarantee of that many
+    # usable ids. Keep the min below that worst case and let the wrapper's own
+    # min/max check decide the real boundary.
+    parser.add_argument("--min-trajectories", type=int, default=1)
+    parser.add_argument("--max-trajectories", type=int, default=8)
+
+    parser.add_argument("--train-limit", type=int, default=8)
+    parser.add_argument("--collection-rollouts", type=int, default=1)
+
     parser.add_argument("--test-rollouts", type=int, default=1)
+    parser.add_argument("--test-limit", type=int)
     parser.add_argument("--max-concurrent-rollouts", type=int, default=16)
     parser.add_argument("--rollout-timeout", type=float)
     parser.add_argument("--rollout-retries", type=int, default=1)
@@ -79,10 +105,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def limited(items: list[Any], limit: int | None) -> list[Any]:
-    if limit is not None and limit < 1:
-        raise ValueError("task limits must be at least 1")
-    return items if limit is None else items[:limit]
+def _limited_train_tasks(tasks: list[Any], limit: int) -> list[Any]:
+    if limit < 1:
+        raise ValueError("train-limit must be at least 1")
+    return tasks[:limit]
+
+
+def _config_hash(args: argparse.Namespace) -> str:
+    payload = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _candidate_skill(base: Skill, candidate: SkillCandidate | None, *, run_id: str) -> Skill:
+    if candidate is None:
+        return base
+    blob = dict(candidate.blob)
+    return base.model_copy(
+        update={
+            "version_id": f"{run_id}:candidate",
+            "parent_version_ids": [base.version_id],
+            "content_hash": compute_skill_content_hash(blob),
+            "blob": blob,
+            "resources": candidate.resources,
+            "commit_message": candidate.commit_message,
+            "metadata": {**base.metadata, **candidate.metadata},
+        },
+        deep=True,
+    )
 
 
 async def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -90,7 +139,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("OPENAI_API_KEY is required")
     if not args.api_base:
         raise ValueError("--api-base, OPENAI_ENDPOINT, or OPENAI_BASE_URL is required")
-
     dataset = build_dataset(
         args.benchmark,
         data_root=args.data_root,
@@ -100,8 +148,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         dataset_ref=args.dataset_ref,
         dataset_options=args.dataset_options,
     )
-    train_tasks = limited(dataset.train_tasks(), args.train_limit)
-    test_tasks = limited(dataset.test_tasks(), args.test_limit)
+    train_tasks = _limited_train_tasks(dataset.train_tasks(), args.train_limit)
+    test_tasks = limited_test_tasks(dataset, args.test_limit)
     base_skill = build_skill(args.initial_skill, run_id=args.run_id, benchmark=args.benchmark)
     env_options = environment_options(
         args.benchmark,
@@ -130,17 +178,12 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         model_retries=args.model_retries,
         call_sink=sink,
     )
-    optimizer_client = ChatModelWithDefaults(
-        build_client(
-            model=args.optimizer_model,
-            api_base=args.api_base,
-            request_timeout=args.request_timeout,
-            model_retries=args.model_retries,
-            call_sink=sink,
-        ),
-        reasoning_effort=args.reasoning_effort,
-        max_completion_tokens=args.max_completion_tokens,
-        temperature=0.0,
+    optimizer_client = build_client(
+        model=args.optimizer_model,
+        api_base=args.api_base,
+        request_timeout=args.request_timeout,
+        model_retries=args.model_retries,
+        call_sink=sink,
     )
     agent = build_agent(
         agent_type="react",
@@ -150,26 +193,52 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         reasoning_effort=args.reasoning_effort,
         max_completion_tokens=args.max_completion_tokens,
     )
-    algorithm = TreeSkillGrpoAlgorithm(
+    collection_config = TaskCollectionConfig(
+        agent_ref="react",
         env_ref=env_ref,
-        chat_model=optimizer_client,
-        agent=agent,
+        samples_per_task=args.collection_rollouts,
+        max_concurrent_rollouts=args.max_concurrent_rollouts,
+        timeout_seconds=args.rollout_timeout,
+        retry={"max_attempts": args.rollout_retries},
+        fail_fast=False,
+        workspace_root=args.output_dir / "collection_workspace",
+        seed=args.seed,
         env_options=env_options,
-        workspace_root=args.output_dir / "workspace",
-        checkpoint_dir=args.output_dir / "epochs",
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        max_task_attempts=args.max_task_attempts,
-        max_concurrency=args.max_concurrency,
+    )
+    config = OfflineEvolutionConfig(
+        backend=args.backend,
+        scope_name=args.scope_name,
+        min_trajectories=args.min_trajectories,
+        max_trajectories=args.max_trajectories,
+        run_root=args.output_dir / "offline_evolution",
+        optimizer_model=args.optimizer_model,
+        collection=collection_config,
+    )
+    write_json(args.output_dir / "run_config.json", config.model_dump(mode="json"))
+    collector = ScheduledTrajectoryCollector(agents={"react": agent}, config=collection_config)
+    algorithm = OfflineEvolution(
+        config=config,
+        context=_AlgorithmContext(
+            models={"chat": optimizer_client},
+            agents={"react": agent},
+            config_hash=_config_hash(args),
+            llm_call_sink=sink,
+        ),
+        collector=collector,
     )
     try:
-        result = await algorithm.evolve(
-            EvolveInput(run_id=args.run_id, base_skill=base_skill, train_tasks=train_tasks, test_tasks=test_tasks)
+        result = await algorithm.optimize(
+            Trace2SkillInput(
+                run_id=args.run_id,
+                base_skill=base_skill,
+                tasks=train_tasks,
+            )
         )
+        final_skill = _candidate_skill(base_skill, result.candidate, run_id=args.run_id)
         test_summary = await evaluate_test_tasks(
             run_id=args.run_id,
             tasks=test_tasks,
-            skill=result.final_skill,
+            skill=final_skill,
             agent=agent,
             output_dir=args.output_dir / "test",
             config=TestEvaluationConfig(
@@ -186,13 +255,13 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     finally:
         await database.close()
 
-    (args.output_dir / "result.json").write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    (args.output_dir / "final_skill.md").write_text(result.final_skill.content, encoding="utf-8")
+    write_json(args.output_dir / "result.json", result.model_dump(mode="json"))
+    (args.output_dir / "final_skill.md").write_text(final_skill.content, encoding="utf-8")
     summary = {
-        "run_id": result.run_id,
+        "run_id": args.run_id,
         "changed": result.changed,
-        "trajectory_count": len(result.trajectories),
-        "final_skill_hash": result.final_skill.content_hash,
+        "final_skill_hash": final_skill.content_hash,
+        "offline_evolution": result.report.model_dump(mode="json"),
         "test": test_summary,
     }
     write_json(args.output_dir / "summary.json", summary)
@@ -200,7 +269,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> None:
-    asyncio.run(run(parse_args(argv)))
+    print(json.dumps(asyncio.run(run(parse_args(argv))), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

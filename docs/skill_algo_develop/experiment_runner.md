@@ -208,6 +208,23 @@ UV_CACHE_DIR=/tmp/mindmemos-skill-uv-cache scripts/run_mindmemos_skill_experimen
 
 所有正式 evolve 配置必须把最终 Skill 跑一次 test；`trajectory_evidence_patch` 的 trace2skill runner 也会在候选生成后立即测试候选，未产生候选时测试原 Skill。`summary.json.test` 是统一测试摘要，不能只凭 `final_skill.md` 判断实验完成。
 
+## Offline Evolution
+
+`offline_evolution` 使用 trace2skill 家族入口，提供 LiveMath 和 SpreadsheetBench 配置：
+
+```bash
+UV_CACHE_DIR=/tmp/mindmemos-skill-uv-cache scripts/run_mindmemos_skill_experiment.sh \
+  --config config/mindmemos_skill/offline_evolution/livemath/initial_skill.yaml --dry-run
+```
+
+确认配置后去掉 `--dry-run`。该方法先采集训练轨迹，执行一次离线演化，再评测最终 Skill。
+当前仅允许修改现有 `SKILL.md`，辅助资源保持原样；没有关闭此限制的实验参数，
+`OfflineEvolutionConfig(skill_md_only=False)` 会报错。`impl/` 内置离线 pipeline，chat 调用使用
+从宿主配置派生的同步 client 并记录到宿主审计。Embedding 仍由 pipeline 读取 `EMBEDDING_API_KEY`
+及 `EMBEDDING_BASE_URL`（放在 `.skill.env`），尚未使用宿主 embedding client 或审计；模型可用
+`VECTORIZER_EMBEDDING_API_MODEL` 覆盖。通过 Application 配置时须声明 `chat` 和 `embedding` 角色。
+`vendor_config_hash` 包含非敏感 pipeline 配置和有效环境覆盖，凭证不参与哈希。
+
 ## 环境变量、凭证与输出
 
 `OPENAI_API_KEY`、`OPENAI_BASE_URL`/`OPENAI_ENDPOINT` 等密钥和端点放在 `.skill.env` 或进程环境中，不写入实验 YAML。launcher 先复制当前进程环境，再加载 `launcher.env_file`，因此 `.skill.env` 中同名变量会覆盖终端里 export 的值。诊断时不要输出 key 明文，只确认来源、长度和短 hash。实验成功后，展开且不含密钥的配置会保存到输出目录的 `experiment_config.yaml`。
