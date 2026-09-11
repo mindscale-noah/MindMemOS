@@ -22,14 +22,34 @@ def test_skill_core_and_optional_dependency_metadata_are_separate() -> None:
     sdk_project = tomllib.loads(SDK_PYPROJECT.read_text(encoding="utf-8"))["project"]
 
     assert skill_project["dependencies"] == ["pydantic>=2.0"]
-    assert skill_project["optional-dependencies"] == {
+
+    # The core package must stay lightweight: heavy or optional deps are
+    # allowed only as named extras, and each extra must exist.
+    extras = skill_project["optional-dependencies"]
+    expected_extras = {
         "llm": ["litellm>=1.85.0"],
         "pgvector": ["psycopg[binary,pool]>=3.2"],
         "claude-sdk": ["claude-agent-sdk>=0.1.0"],
         "alfworld": ["alfworld>=0.4.0", "pyyaml>=6.0"],
         "dataset-download": ["alfworld>=0.4.0", "huggingface-hub>=0.34.0"],
         "spreadsheetbench": ["openpyxl>=3.1.5"],
+        "offline-evolution": [
+            "scipy>=1.11",
+            "scikit-learn>=1.4",
+            "numpy>=1.26",
+            "jieba>=0.42.1",
+            "tqdm>=4.67.3",
+            "openai>=1.0",
+            "pyyaml>=6.0",
+        ],
     }
+    # Every declared extra must be pinned to its explicit list; extras are
+    # how the lightweight core keeps optional dependencies out of the base
+    # install, so adding a new extra must be a deliberate edit here.
+    assert extras == expected_extras
+    # No extra may collide with the trusted core dependency list.
+    for extra_name, requirements in extras.items():
+        assert not set(requirements) & {"pydantic>=2.0"}, extra_name
     assert "mindmemos-skill>=0.1.0" in sdk_project["dependencies"]
 
 

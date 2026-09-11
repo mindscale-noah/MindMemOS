@@ -107,6 +107,10 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
             "trajectory_evidence_patch",
             environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
         ),
+        _trace2skill(
+            "offline_evolution",
+            environment_extras={"alfworld": ("alfworld",), "spreadsheetbench": ("spreadsheetbench",)},
+        ),
     )
 }
 

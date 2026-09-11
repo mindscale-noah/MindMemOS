@@ -1,0 +1,79 @@
+# Non-secret defaults for the pipeline. Credentials live in .env.
+#
+# Benchmark configs (--config configs/<name>.yaml) are deep-merged on top of
+# this file: keys they set win, keys they omit inherit from here. An exported
+# environment variable outranks both; its name is the dotted path upper-cased
+# with dots as underscores (PARALLELISM_EXTRACT overrides parallelism.extract).
+
+pipeline:
+  # unsupervised never copies scores/ into the run workspace even when the
+  # source has them, so the same extraction can feed both arms of an A/B.
+  supervision_mode: unsupervised
+  # true restricts evolve to editing existing skills' SKILL.md only (no
+  # creation/removal, supporting files frozen; deterministic post-check
+  # restores everything else). CLI --skill-md-only can turn it ON but not
+  # off. No longer implied by the backend choice.
+  skill_md_only: true
+
+agent:
+  # llm_api is the shell-free ReAct mode; CLI backends are full harnesses
+  # with a native shell.
+  backend: react
+  timeout_sec: 600
+  # Per-stage wall-clock overrides; a stage absent here uses timeout_sec.
+  # Timeout retries resume the session, so these bound one slice, not the
+  # whole task -- evolve slices routinely need >600s of real work.
+  timeout_overrides:
+    evolve: 1800
+  invokes_max_attempts: 3
+
+# Max concurrent LLM calls per stage. Flat by design: each value is that
+# stage's total in-flight bound; nothing multiplies with anything else.
+# pattern is deterministic compute but still bounded (remote embedding calls).
+parallelism:
+  extract: 32
+  pattern: 32
+  evolve: 32
+
+extract:
+  trajectory_char_cap: 50000
+
+pattern:
+  # Cosine distance for grouping trajectories into task families.
+  family_distance_threshold: 0.3
+  # Cosine distance for behavior clustering (joined keywords) within a family.
+  keyword_cluster_threshold: 0.3
+
+evolve:
+  # Total char budget for inlined family evidence in the evolve prompt.
+  # Overflow degrades WHOLE families to Read pointers (patterns.json).
+  families_char_budget: 120000
+
+# Shared deterministic text vectorizer: tfidf, embedding (local
+# SentenceTransformer), or embedding_api (remote).
+vectorizer:
+  method: embedding_api
+  embedding_model: embeddings/all-MiniLM-L6-v2/
+  embedding_api_model: qwen3-embedding-4b
+  embedding_batch_size: 32
+  embedding_device: cpu
+
+# Generation and tool-loop settings for the evolution agent. Its endpoint,
+# credentials, and model are in .env.
+llm:
+  model: gpt-5.4-mini
+  protocol: openai
+  temperature: 0
+  # Only protocol openai accepts reasoning_effort; anthropic raises.
+  reasoning_effort: medium
+  context_window_tokens: 200000
+  max_output_tokens: 65536
+  output_token_parameter: max_tokens
+  max_tool_turns: 32
+  transport_max_retries: 2
+  tool_result_max_chars: 30000
+  auto_compact:
+    trigger_ratio: 0.80
+    target_ratio: 0.55
+    keep_recent_messages: 4
+    compacted_tool_result_chars: 2000

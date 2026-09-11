@@ -9,6 +9,7 @@ from .collection import (
     TrajectoryCollector,
 )
 from .contracts import AnnotationMode, EvidenceSelection, TraceEvidence
+from .offline_evolution import OfflineEvolution, OfflineEvolutionConfig, OfflineEvolutionReport
 from .trajectory_evidence_patch import (
     TrajectoryEvidencePatch,
     TrajectoryEvidencePatchConfig,
@@ -21,6 +22,9 @@ __all__ = [
     "AnnotationMode",
     "CollectionRetryConfig",
     "EvidenceSelection",
+    "OfflineEvolution",
+    "OfflineEvolutionConfig",
+    "OfflineEvolutionReport",
     "ScheduledTrajectoryCollector",
     "TaskCollectionConfig",
     "Trace2SkillAlgorithm",
