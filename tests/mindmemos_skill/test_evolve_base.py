@@ -13,10 +13,6 @@ from mindmemos_skill.algos.evolve.skill_grpo_without_replay_buffer import (
     SkillGrpoWithoutReplayBufferEvolveInput,
     SkillGrpoWithoutReplayBufferEvolveResult,
 )
-from mindmemos_skill.algos.evolve.trajectory_memory import (
-    TrajectoryMemoryEvolveInput,
-    TrajectoryMemoryEvolveResult,
-)
 from mindmemos_skill.registry import ComponentType, get_component
 
 
@@ -47,13 +43,11 @@ def test_all_evolve_contracts_extend_shared_input_and_output() -> None:
         SkillGrpoEvolveInput,
         SkillGrpoWithoutReplayBufferEvolveInput,
         SkillGrpoWithExperienceValidationEvolveInput,
-        TrajectoryMemoryEvolveInput,
     )
     output_types = (
         SkillGrpoEvolveResult,
         SkillGrpoWithoutReplayBufferEvolveResult,
         SkillGrpoWithExperienceValidationEvolveResult,
-        TrajectoryMemoryEvolveResult,
     )
 
     assert all(issubclass(input_type, EvolveInput) for input_type in input_types)
@@ -65,7 +59,6 @@ def test_builtin_evolve_algorithms_are_application_configurable() -> None:
         "skill_grpo_with_replay_buffer",
         "skill_grpo_without_replay_buffer",
         "skill_grpo_with_experience_validation",
-        "tree_skill_grpo",
     ):
         component = get_component(type=ComponentType.ALGO, name=name)
         assert component.config_model is not None

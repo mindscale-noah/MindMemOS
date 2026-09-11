@@ -5,7 +5,7 @@
 | 路径 | 参考实现 | 入口/输出 | 当前接入状态 |
 | --- | --- | --- | --- |
 | `trace2skill` | `trajectory_evidence_patch` | `optimize(Trace2SkillInput) -> Trace2SkillOutput` | 由 `SkillApplication.run_trace2skill()` 编排 |
-| `evolve` | `skill_grpo_*`、`trajectory_memory` | `evolve(EvolveInput) -> EvolveOutput` | 由 `SkillApplication.run_evolve()` 编排 |
+| `evolve` | `skill_grpo_*` | `evolve(EvolveInput) -> EvolveOutput` | 由 `SkillApplication.run_evolve()` 编排 |
 
 两类都是产品侧 Skill 算法，关键区别是轨迹在算法中的角色。`trace2skill` 主要消费已经存在的离线轨迹，完成一次有界的“轨迹证据到 Skill 候选”转换；为了方便构造数据和做对比，它也允许传入 `Task` 临时采一批轨迹，但这批轨迹只用于模拟离线输入。`evolve` 则把主动采样放在算法循环内部：基于当前 Skill 采样、更新 Skill，再基于新 Skill 进入下一轮，并可主动运行验证集或测试集决定是否接受候选、继续迭代或结束。统一实验入口额外规定：无论算法内部是否消费 test，最终候选都必须在对应 dataset/env 的 test split 上生成统一评测 artifact。
 
