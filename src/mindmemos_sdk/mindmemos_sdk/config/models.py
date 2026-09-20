@@ -35,6 +35,7 @@ class StorageConfig(BaseModel):
 
     skill_cache_dir: str = Field(default_factory=lambda: str(get_mindmemos_home() / "skills/cache"))
     """Cache directory under the selected SDK home unless explicitly configured."""
+
     skill_backup_dir: str = Field(default_factory=lambda: str(get_mindmemos_home() / "skills/backups"))
     """Backup directory under the selected SDK home unless explicitly configured."""
 

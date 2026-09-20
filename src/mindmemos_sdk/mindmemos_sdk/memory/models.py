@@ -99,6 +99,7 @@ class MemoryLineage(BaseModel):
     role: Literal["current", "archived"] = "current"
     derived_from_memory_ids: list[str] = Field(default_factory=list)
     """Ancestor memory IDs, newest first."""
+
     derived_to_memory_ids: list[str] = Field(default_factory=list)
 
 

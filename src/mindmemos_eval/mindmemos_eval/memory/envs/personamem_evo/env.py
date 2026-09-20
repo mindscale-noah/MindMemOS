@@ -40,6 +40,7 @@ DEFAULT_ANSWER_SYSTEM_PROMPT = (
 @dataclass
 class CompletionResult:
     """Result of an LLM completion call with token usage."""
+
     content: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -47,6 +48,7 @@ class CompletionResult:
 @dataclass
 class PersonaMemEvoAnswer:
     """One MCQ answer produced by the model."""
+
     response: str
     predicted_answer: str
     is_correct: bool
@@ -59,6 +61,7 @@ class PersonaMemEvoAnswer:
 @dataclass
 class PersonaMemEvoBuildSummary:
     """Per-persona build phase summary."""
+
     persona_id: str
     user_id: str
     session_id: str
@@ -79,6 +82,7 @@ class PersonaMemEvoBuildSummary:
 @dataclass
 class PersonaMemEvoItem:
     """One PersonaMem-Evo benchmark item (one question for one persona)."""
+
     row: dict[str, str]
     index: int
     persona_id: str
@@ -97,6 +101,7 @@ class PersonaMemEvoItem:
 @dataclass
 class PersonaMemEvoQAResult:
     """Result for one QA step."""
+
     index: int
     persona_id: str
     user_id: str
@@ -112,6 +117,7 @@ class PersonaMemEvoQAResult:
 @dataclass
 class PersonaMemEvoRunResult:
     """Result for a full PersonaMem-Evo dataset run."""
+
     items: list[PersonaMemEvoItem] = field(default_factory=list)
     results: list[PersonaMemEvoQAResult] = field(default_factory=list)
     metrics: dict[str, float] = field(default_factory=dict)
