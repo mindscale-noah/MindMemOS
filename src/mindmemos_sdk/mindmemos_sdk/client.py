@@ -1,6 +1,6 @@
 """Root SDK client facade.
 
-Assembles the SDK from local config: it reads ``~/.mindmemos/settings.json`` via
+Assembles the SDK from local config: it reads ``settings.json`` in the selected SDK home via
 :class:`ConfigManager`, builds a shared :class:`HttpTransport`, and exposes resource
 clients (currently ``memory``). Explicit constructor arguments override config so
 callers can run without a config file.

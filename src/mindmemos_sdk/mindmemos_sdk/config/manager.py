@@ -18,11 +18,10 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from ..errors import ConfigNotFoundError, ConfigValidationError
-from .models import SDKConfig
+from .models import SDKConfig, StorageConfig
+from .paths import get_mindmemos_home
 
-DEFAULT_CONFIG_DIR = Path.home() / ".mindmemos"
 CONFIG_FILE_NAME = "settings.json"
-CONFIG_DIR_ENV = "MINDMEMOS_CONFIG_DIR"
 
 
 def _utc_now_iso() -> str:
@@ -30,13 +29,17 @@ def _utc_now_iso() -> str:
 
 
 class ConfigManager:
-    """Owns the lifecycle of ``~/.mindmemos/settings.json``."""
+    """Owns settings and default storage under the selected SDK home."""
 
     def __init__(self, config_dir: str | os.PathLike[str] | None = None) -> None:
-        """Handle init."""
+        """Select a stable home for this manager.
+
+        Args:
+            config_dir: Explicit home overriding environment settings. If omitted,
+                use MINDMEMOS_HOME, MINDMEMOS_CONFIG_DIR, then ~/.mindmemos.
+        """
         if config_dir is None:
-            env_dir = os.environ.get(CONFIG_DIR_ENV)
-            config_dir = Path(env_dir) if env_dir else DEFAULT_CONFIG_DIR
+            config_dir = get_mindmemos_home()
         self.config_dir = Path(config_dir).expanduser()
         self.config_path = self.config_dir / CONFIG_FILE_NAME
 
@@ -50,7 +53,12 @@ class ConfigManager:
             raise ConfigNotFoundError(f"No SDK config at {self.config_path}. Run `mindmemos auth` to create it.")
         try:
             raw = json.loads(self.config_path.read_text(encoding="utf-8"))
-            return SDKConfig.model_validate(raw)
+            config = SDKConfig.model_validate(raw)
+            if "skill_cache_dir" not in config.storage.model_fields_set:
+                config.storage.skill_cache_dir = str(self.config_dir / "skills/cache")
+            if "skill_backup_dir" not in config.storage.model_fields_set:
+                config.storage.skill_backup_dir = str(self.config_dir / "skills/backups")
+            return config
         except (json.JSONDecodeError, ValidationError) as exc:
             raise ConfigValidationError(f"Invalid SDK config at {self.config_path}: {exc}") from exc
 
@@ -58,7 +66,12 @@ class ConfigManager:
         """Load existing configuration or return defaults without writing."""
         if self.exists():
             return self.load()
-        return SDKConfig()
+        return SDKConfig(
+            storage=StorageConfig(
+                skill_cache_dir=str(self.config_dir / "skills/cache"),
+                skill_backup_dir=str(self.config_dir / "skills/backups"),
+            )
+        )
 
     def save(self, config: SDKConfig) -> None:
         """Atomically write configuration and refresh metadata timestamps."""

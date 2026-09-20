@@ -3,15 +3,75 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from mindmemos_sdk.config import ConfigManager, mask_secret
+from mindmemos_sdk.config.constants import CONFIG_DIR_ENV, MINDMEMOS_HOME_ENV
+from mindmemos_sdk.config.models import StorageConfig
 from mindmemos_sdk.errors import ConfigNotFoundError, ConfigValidationError
 
 
 @pytest.fixture
 def manager(tmp_path):
     return ConfigManager(config_dir=tmp_path)
+
+
+@pytest.mark.parametrize("home", [None, "", "~/project-a/.mindmemos"])
+def test_home_fallback_and_expansion(monkeypatch, tmp_path, home):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv(CONFIG_DIR_ENV, raising=False)
+    monkeypatch.delenv(MINDMEMOS_HOME_ENV, raising=False)
+    if home is not None:
+        monkeypatch.setenv(MINDMEMOS_HOME_ENV, home)
+    expected = Path(home).expanduser() if home else Path.home() / ".mindmemos"
+    manager = ConfigManager()
+    assert manager.config_path == expected / "settings.json"
+    assert StorageConfig().skill_cache_dir == str(expected / "skills/cache")
+    assert manager.load_or_default().storage.skill_backup_dir == str(expected / "skills/backups")
+
+
+def test_home_precedence(monkeypatch, tmp_path):
+    legacy = tmp_path / "legacy"
+    home = tmp_path / "home"
+    explicit = tmp_path / "explicit"
+    monkeypatch.delenv(MINDMEMOS_HOME_ENV, raising=False)
+    monkeypatch.setenv(CONFIG_DIR_ENV, str(legacy))
+    assert ConfigManager().config_dir == legacy
+    monkeypatch.setenv(MINDMEMOS_HOME_ENV, str(home))
+    assert ConfigManager().config_dir == home
+    manager = ConfigManager(config_dir=explicit)
+    assert manager.config_dir == explicit
+    assert manager.load_or_default().storage.skill_cache_dir == str(explicit / "skills/cache")
+
+
+def test_project_homes_remain_isolated(monkeypatch, tmp_path):
+    monkeypatch.setenv(MINDMEMOS_HOME_ENV, str(tmp_path / "a"))
+    first = ConfigManager()
+    monkeypatch.setenv(MINDMEMOS_HOME_ENV, str(tmp_path / "b"))
+    second = ConfigManager()
+
+    # Each manager keeps its home even after the process environment changes.
+    first.update_auth(base_url="https://a", api_key="key-a", user_id="user-a")
+    second.update_auth(base_url="https://b", api_key="key-b", user_id="user-b")
+    for manager, suffix in [(first, "a"), (second, "b")]:
+        config = manager.load()
+        assert config.auth.api_key == f"key-{suffix}"
+        assert config.defaults.user_id == f"user-{suffix}"
+        assert config.storage.skill_cache_dir == str(tmp_path / suffix / "skills/cache")
+        assert config.storage.skill_backup_dir == str(tmp_path / suffix / "skills/backups")
+    first.reset()
+    assert second.load().auth.api_key == "key-b"
+
+
+def test_partial_storage_uses_manager_home_and_preserves_explicit_paths(manager):
+    manager.config_path.write_text(json.dumps({"storage": {"skill_cache_dir": "/custom/cache"}}))
+    config = manager.load()
+    assert config.storage.skill_cache_dir == "/custom/cache"
+    assert config.storage.skill_backup_dir == str(manager.config_dir / "skills/backups")
+    config.storage.skill_backup_dir = "/custom/backups"
+    manager.save(config)
+    assert manager.load().storage.skill_backup_dir == "/custom/backups"
 
 
 def test_load_missing_raises(manager):

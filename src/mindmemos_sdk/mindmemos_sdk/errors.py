@@ -24,7 +24,7 @@ class ConfigNotFoundError(ConfigError):
     """Raised when the SDK config file does not exist yet.
 
     Typically resolved by running ``mindmemos auth`` to create
-    ``~/.mindmemos/settings.json``.
+    ``settings.json`` in the selected SDK home (default: ``~/.mindmemos``).
     """
 
 

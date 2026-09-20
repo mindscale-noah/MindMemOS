@@ -39,6 +39,28 @@ The package also installs the `mindmemos` command.
 mindmemos auth
 ```
 
+默认将本地状态保存在 `~/.mindmemos`。在启动 CLI 或创建 SDK 客户端前设置
+`MINDMEMOS_HOME`，即可为不同项目使用独立的配置、凭据、Skill 注册信息、历史记录、
+待上传记录，以及默认缓存和备份目录：
+
+```bash
+# Run in project A's terminal.
+export MINDMEMOS_HOME="/path/to/project-a/.mindmemos"
+mindmemos auth
+
+# Run in project B's terminal.
+export MINDMEMOS_HOME="/path/to/project-b/.mindmemos"
+mindmemos auth
+```
+
+目录选择优先级：显式 `ConfigManager(config_dir=...)` > 非空 `MINDMEMOS_HOME` >
+非空 `MINDMEMOS_CONFIG_DIR`（兼容旧配置）> `~/.mindmemos`。支持 `~` 展开。
+默认缓存和备份位于所选目录的 `skills/cache` 和 `skills/backups` 下。
+已有 `settings.json` 中显式设置的存储路径保持有效；复制旧配置时，如需完全隔离，
+请删除 `storage` 中的旧路径以使用新默认值，或将其改为项目独立路径。
+切换环境变量后请重新创建客户端；已有配置管理器保持创建时选定的目录。
+该变量隔离本地 SDK 状态，远端数据的项目归属仍由服务端和 API 凭据决定。
+
 You can also pass `base_url`, `api_key`, and `user_id` directly when creating a client. The default `user_id`
 is used by operations that require a user, such as `memory.add`. Search is different: `memory.search` only uses
 the `user_id` passed to that call. Omit it for a project-wide search, or pass it explicitly for a user-scoped search.

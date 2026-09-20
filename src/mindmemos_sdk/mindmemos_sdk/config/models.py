@@ -1,6 +1,6 @@
 """Local SDK configuration schema.
 
-These models mirror the on-disk ``~/.mindmemos/settings.json`` format described in
+These models mirror the on-disk ``settings.json`` format described in
 ``docs/sdk/design.md``. The first version uses a single profile. ``skills`` is kept
 as a permissive list so the skill-management feature can populate it later without a
 schema migration here.
@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from .paths import get_mindmemos_home
 
 CONFIG_SCHEMA_VERSION = 1
 DEFAULT_BASE_URL = "https://api.mindmemos.example.com"
@@ -31,8 +33,10 @@ class DefaultsConfig(BaseModel):
 class StorageConfig(BaseModel):
     """Local storage locations for skill cache and backups."""
 
-    skill_cache_dir: str = "~/.mindmemos/skills/cache"
-    skill_backup_dir: str = "~/.mindmemos/skills/backups"
+    skill_cache_dir: str = Field(default_factory=lambda: str(get_mindmemos_home() / "skills/cache"))
+    """Cache directory under the selected SDK home unless explicitly configured."""
+    skill_backup_dir: str = Field(default_factory=lambda: str(get_mindmemos_home() / "skills/backups"))
+    """Backup directory under the selected SDK home unless explicitly configured."""
 
 
 class NetworkConfig(BaseModel):
@@ -50,7 +54,7 @@ class ConfigMetadata(BaseModel):
 
 
 class SDKConfig(BaseModel):
-    """Top-level SDK settings persisted to ``~/.mindmemos/settings.json``."""
+    """Top-level SDK settings persisted to ``settings.json`` in the selected home."""
 
     version: int = CONFIG_SCHEMA_VERSION
     base_url: str = DEFAULT_BASE_URL
