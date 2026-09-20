@@ -44,6 +44,8 @@ scripts/locomo/locomo_eval.env
 
 # Eval / run outputs
 data/
+!src/mindmemos_skill/mindmemos_skill/envs/data/
+!src/mindmemos_skill/mindmemos_skill/envs/data/*.py
 results/
 outputs/
 docs/paper/
@@ -57,3 +59,10 @@ plugins/openclaw-plugin/dist/
 /results/
 /tmp/
 /data/
+
+.tmp/
+
+.local_doc/
+
+# MindMemOS UI frontend dependencies
+src/mindmemos_ui/frontend/node_modules/

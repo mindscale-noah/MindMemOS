@@ -1,0 +1,30 @@
+# Environment options; upstream Qwen actor settings after ModelSettings overrides.
+interaction_mode: bash_only
+tool_agent: text_action
+skill_loading_mode: system_prompt
+max_turns: 100
+stagnation_limit: null
+agent:
+  model: Qwen3.5-35B-A3B
+  max_completion_tokens: null
+  temperature: 0.7
+  top_p: 0.95
+  presence_penalty: 1.5
+  seed: 41
+  stop: ["Observation:"]
+  timeout_s: 1800
+  max_retries: 3
+  retry_policy: all
+  retry_wait: schedule
+  retry_waits_s: [5, 10, 30]
+  sdk_max_retries: 2
+  response_validation: content
+  strip_thinking: true
+  extra_body:
+    top_k: 20
+    min_p: 0.0
+    repetition_penalty: 1.0
+    chat_template_kwargs:
+      enable_thinking: true
+execution:
+  timeout_s: 120
