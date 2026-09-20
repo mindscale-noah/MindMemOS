@@ -59,16 +59,68 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 
 ---
 
-## Dataset Download
+## Memory Dataset Download
 
-The benchmark datasets referenced in the example config are **not** included in this repository.
-Download them from the respective benchmark authors (LoCoMo, LongMemEval, PersonaMem) and place
-them at the paths shown in ``config/mindmemos_eval/memory_evaluation_locomo.example.yaml``.
+Run the following commands from the repository root with Python 3.12+. Dataset payloads are not
+included in this repository. The shared downloader retrieves official releases at the revisions
+recorded in [`config/datasets/sources.json`](../../config/datasets/sources.json).
 
-Copy the example config and adjust LLM keys before running:
+```bash
+python -m pip install huggingface_hub
+python scripts/download_datasets.py list --benchmark memory
+python scripts/download_datasets.py download --benchmark memory --dataset locomo
+python scripts/download_datasets.py download --benchmark memory --dataset longmemeval
+python scripts/download_datasets.py download --benchmark memory --dataset personamem
+python scripts/download_datasets.py download --benchmark memory --dataset memoryagentbench
+```
+
+Downloads default to `data/mindmemos_memory/<dataset>/` and preserve the official file formats:
+
+| Dataset | Official source | Files relative to its download directory |
+| --- | --- | --- |
+| LoCoMo | [snap-research/locomo](https://github.com/snap-research/locomo) | `locomo10.json` |
+| LongMemEval | [longmemeval-cleaned](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned) | `longmemeval_s_cleaned.json`, `longmemeval_m_cleaned.json`, `longmemeval_oracle.json` |
+| PersonaMem v1 | [PersonaMem-v1](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v1) | `questions_{32k,128k,1M}.csv` and matching `shared_contexts_{32k,128k,1M}.jsonl` |
+| MemoryAgentBench | [ai-hyz/MemoryAgentBench](https://huggingface.co/datasets/ai-hyz/MemoryAgentBench) | `data/*.parquet` for all four official partitions, plus `entity2id.json` |
+
+Copy the evaluation config, then update the paths and LLM keys in your local copy:
+
 ```bash
 cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
 ```
+
+```yaml
+benchmarks:
+  locomo:
+    dataset: data/mindmemos_memory/locomo/locomo10.json
+  longmemeval:
+    dataset: data/mindmemos_memory/longmemeval/longmemeval_s_cleaned.json
+  personamem:
+    dataset: data/mindmemos_memory/personamem/questions_32k.csv
+    context_dataset: data/mindmemos_memory/personamem/shared_contexts_32k.jsonl
+```
+
+For PersonaMem, use a question file and context file with the same context size; update the same
+fields when using `memory_evaluation_personamem.yaml`. LongMemEval downloads the official cleaned
+release, not the local smoke fixture previously referenced by the example config.
+MemoryAgentBench remains in official Parquet format: the current evaluator's local `dataset` input
+accepts JSON/JSONL, so convert the required partition before setting that path. The downloader does
+not perform this conversion or select a FactConsolidation subset.
+
+Use `--data-root` to change the parent directory, `--verify-only` to check an existing download,
+and `--offline` to materialize Hugging Face datasets from an existing cache:
+
+```bash
+python scripts/download_datasets.py download --benchmark memory --dataset locomo --data-root /path/to/memory
+python scripts/download_datasets.py download --benchmark memory --dataset locomo --verify-only
+python scripts/download_datasets.py download --benchmark memory --dataset personamem --offline
+```
+
+The custom-root example writes to `/path/to/memory/locomo/`; use the same `--data-root` when verifying
+that download. LoCoMo's initial direct-URL download requires network access. Existing directories are
+verified rather than overwritten. Each download records its source and local hashes in
+`download_receipt.json`. Experiment split manifests are maintained with the code for GitHub; the
+script does not download or generate them.
 
 ---
 

@@ -57,6 +57,66 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 
 ---
 
+## Memory 数据集下载
+
+使用 Python 3.12+，从仓库根目录执行以下命令。数据本体不随仓库分发；统一下载脚本从官方来源
+获取数据，版本固定在 [`config/datasets/sources.json`](../../config/datasets/sources.json)。
+
+```bash
+python -m pip install huggingface_hub
+python scripts/download_datasets.py list --benchmark memory
+python scripts/download_datasets.py download --benchmark memory --dataset locomo
+python scripts/download_datasets.py download --benchmark memory --dataset longmemeval
+python scripts/download_datasets.py download --benchmark memory --dataset personamem
+python scripts/download_datasets.py download --benchmark memory --dataset memoryagentbench
+```
+
+默认下载到 `data/mindmemos_memory/<dataset>/`，保留官方文件格式：
+
+| 数据集 | 官方来源 | 相对于该数据集下载目录的文件 |
+| --- | --- | --- |
+| LoCoMo | [snap-research/locomo](https://github.com/snap-research/locomo) | `locomo10.json` |
+| LongMemEval | [longmemeval-cleaned](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned) | `longmemeval_s_cleaned.json`、`longmemeval_m_cleaned.json`、`longmemeval_oracle.json` |
+| PersonaMem v1 | [PersonaMem-v1](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v1) | `questions_{32k,128k,1M}.csv` 与对应的 `shared_contexts_{32k,128k,1M}.jsonl` |
+| MemoryAgentBench | [ai-hyz/MemoryAgentBench](https://huggingface.co/datasets/ai-hyz/MemoryAgentBench) | 官方四个数据分区的 `data/*.parquet`，以及 `entity2id.json` |
+
+复制评测配置，然后在本地副本中更新数据路径和 LLM API key：
+
+```bash
+cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+```
+
+```yaml
+benchmarks:
+  locomo:
+    dataset: data/mindmemos_memory/locomo/locomo10.json
+  longmemeval:
+    dataset: data/mindmemos_memory/longmemeval/longmemeval_s_cleaned.json
+  personamem:
+    dataset: data/mindmemos_memory/personamem/questions_32k.csv
+    context_dataset: data/mindmemos_memory/personamem/shared_contexts_32k.jsonl
+```
+
+PersonaMem 的问题文件和上下文文件需使用相同的上下文长度；使用 `memory_evaluation_personamem.yaml`
+时也需更新这两个字段。LongMemEval 下载的是官方 cleaned 版本，不是示例配置原先引用的本地 smoke 样本。
+MemoryAgentBench 保留官方 Parquet 格式，当前评测器的本地 `dataset` 入口接受 JSON/JSONL，
+需要先转换所需分区再配置该路径。下载脚本不执行格式转换，也不筛选 FactConsolidation 子集。
+
+使用 `--data-root` 指定父目录、`--verify-only` 校验已有下载，或使用 `--offline` 从已有
+Hugging Face 缓存准备数据：
+
+```bash
+python scripts/download_datasets.py download --benchmark memory --dataset locomo --data-root /path/to/memory
+python scripts/download_datasets.py download --benchmark memory --dataset locomo --verify-only
+python scripts/download_datasets.py download --benchmark memory --dataset personamem --offline
+```
+
+自定义目录示例会写入 `/path/to/memory/locomo/`，校验该目录时也需传入相同的 `--data-root`。
+LoCoMo 首次通过直接链接下载需要联网。已有目录只校验，不覆盖；每个下载目录中的
+`download_receipt.json` 记录来源与本地文件哈希。实验 split 随代码提交到 GitHub，脚本不下载或生成 split。
+
+---
+
 ## 各数据集复现
 
 除非特别说明，下面的命令都从仓库根目录执行。LoCoMo、LongMemEval、PersonaMem 和 MemoryAgentBench 的数据集不随仓库分发，需要先从对应 benchmark 的官方渠道获取。
@@ -65,10 +125,10 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 
 ### LoCoMo
 
-1. 将 LoCoMo 数据集放到示例配置默认读取的位置：
+1. 按上节下载 LoCoMo，并将复制后的配置中 `benchmarks.locomo.dataset` 设置为：
 
    ```text
-   datasets/locomo/locomo10.json
+   data/mindmemos_memory/locomo/locomo10.json
    ```
 
 2. 复制配置并填入 eval 进程使用的 LLM API key：
@@ -96,7 +156,7 @@ LongMemEval 与 LoCoMo 共用 `memory_evaluation_locomo.example.yaml`。将数�
 ```yaml
 benchmarks:
   longmemeval:
-    dataset: resources/memory/dataset/longmemeval_smoke.json
+    dataset: data/mindmemos_memory/longmemeval/longmemeval_s_cleaned.json
 ```
 
 运行评测：
@@ -114,11 +174,11 @@ uv run python -m mindmemos_eval.cli memory \
 
 ### PersonaMem
 
-1. 准备问题和上下文数据：
+1. 按上节下载 PersonaMem，并在复制后的配置中分别设置 `dataset` 和 `context_dataset`：
 
    ```text
-   resources/memory/dataset/questions_32k.csv
-   resources/memory/dataset/shared_contexts_32k.jsonl
+   data/mindmemos_memory/personamem/questions_32k.csv
+   data/mindmemos_memory/personamem/shared_contexts_32k.jsonl
    ```
 
 2. 复制配置并填入 eval 进程使用的 LLM API key：
