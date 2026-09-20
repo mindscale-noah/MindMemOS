@@ -7,34 +7,43 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from ....config import MessageChunkerConfig, TrajectoryAddConfig
+from ....config import TrajectoryAddConfig
 from ....logging import get_logger
 from ....typing import (
     AddPipelineInput,
+    DialogueMessage,
     Entity,
     EntityVectorWrite,
     EntityWrite,
+    FileMessage,
     MemoryAddEventItem,
     MemoryDbUpdateCommand,
     MemoryDbWritePlan,
     MemoryRequestContext,
     MemoryWrite,
-    NormalizedMessage,
     PreprocessedText,
     SourceRef,
+    TextMessage,
+    UrlMessage,
     VectorWrite,
 )
-from ...chunker import MessageChunker, SourceAwareSegment
+from ...chunker import SourceAwareSegment
+from ...chunker.message_chunker import MessageChunker, _estimate_tokens
 from ...id import generate_entity_id, generate_trajectory_source_id
 from ...memory_modeling.vanilla import build_extracted_from_edge, build_task_experience_edge
-from ...text import TextPreprocessor, MemoryVectorizer
+from ...text import MemoryVectorizer, TextPreprocessor
 from ..vanilla._entity import build_entity_write
 from ..vanilla._update_commands import build_update_command
 from .dedup import ExperienceDeduplicator
 from .extractor import TrajectoryExperienceExtractor
-from .schema import ExtractedExperienceCandidate, ExperienceResolution
+from .schema import ExperienceResolution, ExtractedExperienceCandidate
 
 logger = get_logger(__name__)
+
+# Head/tail boundary search and the token heuristic stay owned by the chunker so
+# there is a single source of truth; only chunk *planning* is dropped here.
+_prefix_end_for_budget = MessageChunker._prefix_end_for_budget
+_suffix_start_for_budget = MessageChunker._suffix_start_for_budget
 
 # Garbled/zero-width bytes that slip into trajectory files and would otherwise
 # fragment identical tasks into separate entity names (U+FFFD replacement char,
@@ -45,18 +54,69 @@ def _clean_task_text(text: str) -> str:
     return _GARBLED_TEXT_RE.sub("", text or "").strip()
 
 
-def _normalized_to_turn(message: NormalizedMessage) -> dict[str, Any]:
-    """Convert a chunker-normalized message into the turn dict the prompt expects.
+# Roles the extractor prompt understands. Unknown labels become named speakers
+# rather than being forced into the user/assistant protocol.
+_STANDARD_ROLES = frozenset({"user", "assistant", "system", "tool"})
 
-    ``message_index`` keeps the original trajectory position so extracted
-    ``source_message_indices`` stay stable across chunks and imports.
+
+def _normalize_role(role: str) -> str:
+    normalized = (role or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return normalized if normalized in _STANDARD_ROLES else "speaker"
+
+
+def _normalize_message(
+    message: DialogueMessage | TextMessage | UrlMessage | FileMessage,
+) -> tuple[str, str, int | None] | None:
+    """Reduce one add input to the ``(role, text, timestamp)`` the prompt expects.
+
+    The caller keeps every surviving message at its original request position, so
+    extracted ``source_message_indices`` keep pointing at the real source message.
+    System messages carry no trajectory evidence, and file/URL attachments are
+    not evidence for this pipeline, so both are dropped.
     """
-    return {
-        "message_index": message.message_index,
-        "role": str(message.role),
-        "text": message.text,
-        "timestamp": message.timestamp,
-    }
+    if isinstance(message, TextMessage):
+        role, text, timestamp = "user", message.text, None
+    elif isinstance(message, DialogueMessage):
+        role, text, timestamp = _normalize_role(message.role), message.content, message.timestamp
+    else:
+        return None
+    if role == "system" or not text.strip():
+        return None
+    return role, text, timestamp
+
+
+def _truncate_tool_message(text: str, role: str, cfg: TrajectoryAddConfig) -> str:
+    """Keep the head and tail of an oversized tool result and drop the middle.
+
+    Every message reaches the extractor in a single call, so one huge tool
+    output is the main thing that can dominate the prompt. Only ``tool`` role is
+    truncated; other roles are returned untouched. The gap is marked explicitly
+    so the extractor can tell evidence is missing rather than continuous.
+    """
+
+    if role != "tool":
+        return text
+    head_budget = cfg.tool_message_head_tokens
+    tail_budget = cfg.tool_message_tail_tokens
+    if head_budget <= 0 and tail_budget <= 0:
+        return text
+    if _estimate_tokens(text) <= head_budget + tail_budget:
+        return text
+
+    head_end = _prefix_end_for_budget(text, head_budget)
+    tail_start = _suffix_start_for_budget(text, tail_budget)
+    if tail_start <= head_end:
+        # Head and tail overlap, which can only happen when the text clears the
+        # budget by at most one token (the estimator is not additive across the
+        # split). Keeping the message whole is then cheaper than a marker that
+        # would claim a gap of nothing.
+        return text
+    omitted = text[head_end:tail_start]
+    return (
+        f"{text[:head_end]}\n"
+        f"...[{len(omitted)} chars / ~{_estimate_tokens(omitted)} tokens truncated]...\n"
+        f"{text[tail_start:]}"
+    )
 
 
 def _dominant_lang(preprocessed: list[PreprocessedText]) -> str:
@@ -123,15 +183,11 @@ class TrajectoryExperienceBuilder:
         extractor: TrajectoryExperienceExtractor,
         deduplicator: ExperienceDeduplicator,
         vectorizer: MemoryVectorizer,
-        chunker_config: MessageChunkerConfig | None = None,
-        llm_client=None,
     ) -> None:
         self._text_preprocessor = text_preprocessor
         self._extractor = extractor
         self._deduplicator = deduplicator
         self._vectorizer = vectorizer
-        self._chunker_config = chunker_config
-        self._llm_client = llm_client
 
     async def _preprocess(self, text: str) -> PreprocessedText:
         return await asyncio.to_thread(self._text_preprocessor.preprocess_text, text, include_entities=False)
@@ -174,44 +230,48 @@ class TrajectoryExperienceBuilder:
         task_entity_id = generate_entity_id(context.project_id, task_entity)
         entities_by_id[task_entity_id] = build_entity_write(task_entity, task_entity_id, context, now)
 
-        # 2. Reuse vanilla's MessageChunker so long trajectories stay within LLM
-        #    budget. Extractable messages keep their original message_index for
-        #    stable per-message source refs and cross-chunk provenance.
-        chunking_result = await MessageChunker(self._chunker_config, llm_client=self._llm_client).split(
-            inp.messages
-        )
+        # 2. Normalize the whole trajectory in one pass without chunk planning.
+        #    A trajectory is not multi-turn dialogue (tool results are neither a
+        #    user question nor an assistant answer), so splitting it into turns
+        #    produces no meaningful unit. Every message therefore reaches the
+        #    extractor in a single call; only oversized tool results are trimmed.
+        #    Messages keep their original message_index for stable source refs.
+        turns: list[dict[str, Any]] = []
         turn_by_index: dict[int, dict[str, Any]] = {}
         preprocessed_by_index: dict[int, PreprocessedText] = {}
         source_by_index: dict[int, SourceRef] = {}
-        for prepared in chunking_result.chunks:
-            for message in prepared.extractable_messages:
-                index = message.message_index
-                if index in turn_by_index:
-                    continue
-                turn = _normalized_to_turn(message)
-                turn_by_index[index] = turn
-                pp = await self._preprocess(turn["text"])
-                preprocessed_by_index[index] = pp
-                source_by_index[index] = SourceRef(
-                    source_type="message",
-                    source_id=generate_trajectory_source_id(context.project_id, index, pp.content_hash),
-                    is_parsed=True,
-                    metadata={"message_index": index},
-                )
+        for index, message in enumerate(inp.messages):
+            normalized = _normalize_message(message)
+            if normalized is None:
+                continue
+            role, text, timestamp = normalized
+            turn = {
+                "message_index": index,
+                "role": role,
+                "text": _truncate_tool_message(text, role, cfg),
+                "timestamp": timestamp,
+            }
+            turns.append(turn)
+            turn_by_index[index] = turn
+            pp = await self._preprocess(turn["text"])
+            preprocessed_by_index[index] = pp
+            source_by_index[index] = SourceRef(
+                source_type="message",
+                source_id=generate_trajectory_source_id(context.project_id, index, pp.content_hash),
+                is_parsed=True,
+                metadata={"message_index": index},
+            )
         lang = _dominant_lang(list(preprocessed_by_index.values()))
 
-        # 3. Extract experiences per chunk (task text stays fixed for the whole trace).
+        # 3. Extract experiences once (task text stays fixed for the whole trace).
         candidates: list[ExtractedExperienceCandidate] = []
-        for prepared in chunking_result.chunks:
-            chunk_turns = [_normalized_to_turn(message) for message in prepared.extractable_messages]
-            if not chunk_turns:
-                continue
-            chunk_candidates = await self._extractor.extract(task_text, chunk_turns, lang, context)
-            for index, candidate in enumerate(chunk_candidates):
-                candidates.append(candidate.model_copy(update={"ref_id": f"c{prepared.chunk.chunk_index}_e{index}"}))
+        if turns:
+            extracted = await self._extractor.extract(task_text, turns, lang, context)
+            for index, candidate in enumerate(extracted):
+                candidates.append(candidate.model_copy(update={"ref_id": f"e{index}"}))
 
         # 4. Resolve each candidate; reuse experiences already created by this
-        #    import so repeated lessons across chunks do not duplicate nodes.
+        #    import so repeated lessons within one trajectory do not duplicate nodes.
         batch_target_by_hash: dict[str, str] = {}
         import_experiences: list[tuple[str, str]] = []
         for candidate in candidates:

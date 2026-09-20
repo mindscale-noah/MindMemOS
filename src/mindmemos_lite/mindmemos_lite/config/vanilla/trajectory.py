@@ -33,3 +33,16 @@ class TrajectoryAddConfig:
     per-call via the search ``score_threshold``. Short Chinese task names share
     "帮我…" prefixes that inflate similarity; 0.45 keeps genuine paraphrases
     while dropping clearly unrelated queries. Set lower for fuzzier matches."""
+
+    tool_message_head_tokens: int = field(default=4000)
+    """Head budget kept verbatim from an oversized ``tool`` message.
+
+    Counted with the shared whitespace/CJK token heuristic, which under-counts
+    real provider tokens (roughly 2x on tool output), so treat this as a
+    heuristic budget rather than an exact one. The trajectory pipeline sends
+    every message to the extractor in one call (no chunk planning), so one huge
+    tool output is the main thing that can dominate the prompt. Its head and
+    tail survive verbatim; the middle is replaced by a truncation marker."""
+
+    tool_message_tail_tokens: int = field(default=4000)
+    """Tail budget kept verbatim from an oversized ``tool`` message (heuristic tokens)."""

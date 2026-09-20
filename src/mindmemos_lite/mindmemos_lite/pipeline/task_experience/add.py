@@ -10,7 +10,7 @@ from ...components.extractor.task_experience import (
     TrajectoryExperienceExtractor,
 )
 from ...components.text import MemoryVectorizer, SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
-from ...config import MemoryConfig, MessageChunkerConfig, TrajectoryAddConfig, TextProcessingConfig, get_config
+from ...config import MemoryConfig, TextProcessingConfig, TrajectoryAddConfig, get_config
 from ...llm import get_embed_client, get_llm_client
 from ...logging import get_logger, traced
 from ...typing import (
@@ -64,7 +64,6 @@ class TrajectoryAddPipeline(MemoryPersistencePipelineMixin):
         text_preprocessor: TextPreprocessor | None = None,
         sparse_encoder: SparseVectorEncoder | None = None,
         trajectory_config: TrajectoryAddConfig | None = None,
-        chunker_config: MessageChunkerConfig | None = None,
         extractor: TrajectoryExperienceExtractor | None = None,
         deduplicator: ExperienceDeduplicator | None = None,
         consistency: Consistency | None = None,
@@ -77,7 +76,6 @@ class TrajectoryAddPipeline(MemoryPersistencePipelineMixin):
         self._text_preprocessor = text_preprocessor or get_text_preprocessor(cfg)
         self._sparse_encoder = sparse_encoder or SparseVectorEncoder(cfg)
         self._explicit_trajectory_config = trajectory_config
-        self._explicit_chunker_config = chunker_config
         self._explicit_consistency = consistency
 
         resolved_llm = _try_get_llm() if llm_client is _CLIENT_UNSET else llm_client
@@ -99,8 +97,6 @@ class TrajectoryAddPipeline(MemoryPersistencePipelineMixin):
                 llm_client=resolved_llm,
             ),
             vectorizer=vectorizer,
-            chunker_config=self._get_chunker_config(),
-            llm_client=resolved_llm,
         )
 
     @classmethod
@@ -110,7 +106,6 @@ class TrajectoryAddPipeline(MemoryPersistencePipelineMixin):
         return cls(
             text_config=config.algo_config.text_processing,
             trajectory_config=getattr(config.algo_config, "trajectory", None),
-            chunker_config=config.algo_config.add.chunker,
             consistency=config.database.default_consistency,
             **kwargs,
         )
@@ -125,11 +120,6 @@ class TrajectoryAddPipeline(MemoryPersistencePipelineMixin):
         if self._explicit_trajectory_config is not None:
             return self._explicit_trajectory_config
         return getattr(get_config().algo_config, "trajectory", TrajectoryAddConfig())
-
-    def _get_chunker_config(self) -> MessageChunkerConfig | None:
-        if self._explicit_chunker_config is not None:
-            return self._explicit_chunker_config
-        return get_config().algo_config.add.chunker
 
     @traced("add.trajectory_add.sync")
     async def add_sync(

@@ -181,7 +181,7 @@ algo_config:
     nlp_retry_base_delay: 0.1
 
   add:
-    enable_entities: false
+    enable_entities: true
     embedding_batch_size: 32
     chunker:
       chunk_soft_token_budget: 26000
@@ -219,6 +219,8 @@ algo_config:
     min_content_chars: 1
     enable_task_entity_embedding: true
     task_search_score_threshold: 0.45
+    tool_message_head_tokens: 4000
+    tool_message_tail_tokens: 4000
 
   search:
     recall_size: 20
