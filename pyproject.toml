@@ -9,6 +9,7 @@ dependencies = [
     "mindmemos",
     "mindmemos-eval",
     "mindmemos-sdk",
+    "mindmemos-ui",
 ]
 
 [dependency-groups]
@@ -31,12 +32,16 @@ python-preference = "system"
 mindmemos = { workspace = true }
 mindmemos-eval = { workspace = true }
 mindmemos-sdk = { workspace = true }
+mindmemos-ui = { workspace = true }
+mindmemos-skill = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "src/mindmemos",
     "src/mindmemos_eval",
     "src/mindmemos_sdk",
+    "src/mindmemos_ui",
+    "src/mindmemos_skill",
 ]
 
 [tool.ruff]

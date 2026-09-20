@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 
 PRESERVE_ENV_VARS := \
+	MINDMEMOS_HOME \
 	MINDMEMOS_CONFIG_NAME \
 	MINDMEMOS_CONFIG_PATH \
 	MINDMEMOS_API_HOST \
@@ -91,8 +92,13 @@ PROFILE_OUT ?= tmp/profile.svg
 PROFILE_SECONDS ?= 60
 PROFILE_RATE ?= 100
 PROFILE_PID ?= $(PID)
+SKILL_PYTHON ?= .venv/bin/python
+SKILL_CONFIG ?= config/mindmemos_skill/default.yaml
+SKILL_LOCAL_ARGS ?=
+SKILL_HOST ?= 127.0.0.1
+SKILL_PORT ?= 8000
 
-.PHONY: dev dev-setup hooks-install format lint dev-core api profile-api db db-observability db-clean dev-down
+.PHONY: dev dev-setup hooks-install format lint dev-core api profile-api db db-observability db-clean dev-down skill-local skill-fastapi
 
 dev-setup:
 	$(UV) sync
@@ -117,6 +123,12 @@ dev: db-observability
 
 api:
 	$(UV) run uvicorn mindmemos.api.app:app --host $(API_HOST) --port $(API_PORT) $(API_RELOAD_FLAGS)
+
+skill-local:
+	PYTHONPATH="$(CURDIR)/src/mindmemos_skill:$(PYTHONPATH)" "$(SKILL_PYTHON)" -m mindmemos_skill.api.entries.local $(SKILL_LOCAL_ARGS)
+
+skill-fastapi:
+	PYTHONPATH="$(CURDIR)/src/mindmemos_skill:$(PYTHONPATH)" "$(SKILL_PYTHON)" -m mindmemos_skill.api.entries.fastapi --config "$(SKILL_CONFIG)" --host "$(SKILL_HOST)" --port "$(SKILL_PORT)"
 
 profile-api:
 	@pid="$(PROFILE_PID)"; \
@@ -154,3 +166,12 @@ db-clean:
 
 dev-down:
 	$(COMPOSE) down
+
+UI_PORT ?= 8765
+UI_ARGS ?=
+.PHONY: ui ui-build
+ui:
+	PYTHONPATH="$(CURDIR)/src/mindmemos_ui:$(CURDIR)/src/mindmemos_sdk:$(CURDIR)/src/mindmemos_skill:$(PYTHONPATH)" "$(SKILL_PYTHON)" -m mindmemos_ui.cli --port "$(UI_PORT)" $(UI_ARGS)
+
+ui-build:
+	cd src/mindmemos_ui/frontend && npm ci && npm run build

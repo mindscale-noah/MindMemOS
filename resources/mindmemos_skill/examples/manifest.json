@@ -1,0 +1,24 @@
+[
+  {
+    "name": "示例 · 代码审查",
+    "alias": "demo-code-review",
+    "versions": [
+      "versions/v1/demo-code-review",
+      "demo-code-review"
+    ]
+  },
+  {
+    "name": "示例 · 实验结果核对",
+    "alias": "demo-experiment-audit",
+    "versions": [
+      "demo-experiment-audit"
+    ]
+  },
+  {
+    "name": "示例 · 会议纪要整理",
+    "alias": "demo-meeting-notes",
+    "versions": [
+      "demo-meeting-notes"
+    ]
+  }
+]
