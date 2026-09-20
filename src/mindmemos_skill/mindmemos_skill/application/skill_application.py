@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from functools import wraps
-from typing import Any, Concatenate, ParamSpec, Self, TypeVar
+from typing import Any, Concatenate, ParamSpec, Protocol, Self, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -130,6 +130,47 @@ _Parameters = ParamSpec("_Parameters")
 _ReturnT = TypeVar("_ReturnT")
 
 
+@runtime_checkable
+class _SkillManageServiceLike(Protocol):
+    """Lifecycle surface ``SkillApplication`` uses without importing the service.
+
+    Kept local so importing the application never pulls in the service module
+    before the package finishes loading.
+    """
+
+    async def start(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+    def is_ready(self) -> bool: ...
+
+    async def build_skill_index(self, request: Any) -> Any: ...
+
+    async def upsert_skill_index(self, request: Any) -> Any: ...
+
+    async def remove_skill_from_index(self, request: Any) -> Any: ...
+
+    async def retrieve_skills(self, request: Any) -> Any: ...
+
+    async def get_skill_manage_operation(
+        self,
+        operation_id: str,
+        *,
+        project_id: str,
+        graph_id: str,
+    ) -> Any: ...
+
+    async def repair_skill_index(
+        self,
+        *,
+        project_id: str,
+        graph_id: str,
+        stale_candidate_age_seconds: float | None = None,
+    ) -> Any: ...
+
+    async def maintain_skill_index(self, *, project_id: str, graph_id: str) -> Any: ...
+
+
 def requires_ready(
     method: Callable[Concatenate[SkillApplication, _Parameters], Awaitable[_ReturnT]],
 ) -> Callable[Concatenate[SkillApplication, _Parameters], Awaitable[_ReturnT]]:
@@ -160,6 +201,7 @@ class SkillApplication:
         remote: SkillRemotePort | None,
         clock: Callable[[], datetime],
         id_generator: Callable[[], str],
+        skill_manage_service: _SkillManageServiceLike | None = None,
     ) -> None:
         self._config = config
         self._database = database
@@ -168,6 +210,7 @@ class SkillApplication:
         self._remote = remote
         self._clock = clock
         self._id_generator = id_generator
+        self._skill_manage_service = skill_manage_service
         self._algorithm_orchestrator = (
             SkillAlgorithmOrchestrator(
                 algorithms=runtime.skill_algorithms,
@@ -197,6 +240,7 @@ class SkillApplication:
         remote: SkillRemotePort | None = None,
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[], str] | None = None,
+        skill_manage_service: _SkillManageServiceLike | None = None,
     ) -> Self:
         """Compile configuration and create a ready-to-use application."""
 
@@ -217,6 +261,8 @@ class SkillApplication:
         )
         resolved_clock = clock or (lambda: datetime.now(UTC))
         resolved_id_generator = id_generator or (lambda: str(uuid.uuid4()))
+        runtime = None
+        manager = None
         try:
             runtime = compose_runtime(compiled, llm_call_sink=DatabaseLLMCallSink(database))
             manager = LocalSkillManager(
@@ -228,6 +274,28 @@ class SkillApplication:
         except BaseException:
             await database.close()
             raise
+
+        if (
+            skill_manage_service is None
+            and runtime is not None
+            and runtime.skill_algorithms is not None
+            and "skill_manage" in runtime.skill_algorithms.capabilities
+        ):
+            from .skill_manage.production import build_skill_manage_service
+
+            try:
+                skill_manage_service = await build_skill_manage_service(
+                    compiled=compiled,
+                    skill_algorithms=runtime.skill_algorithms,
+                    database=database,
+                    repository=manager.repository,
+                    clock=resolved_clock,
+                    id_generator=resolved_id_generator,
+                )
+            except BaseException:
+                await database.close()
+                raise
+
         application = cls(
             config=compiled,
             database=database,
@@ -236,6 +304,7 @@ class SkillApplication:
             remote=remote,
             clock=resolved_clock,
             id_generator=resolved_id_generator,
+            skill_manage_service=skill_manage_service,
         )
         try:
             await application.start()
@@ -258,6 +327,12 @@ class SkillApplication:
             capabilities.add(SkillApplicationCapability.EXECUTE.value)
         if self._runtime.skill_algorithms is not None:
             capabilities.update(self._runtime.skill_algorithms.capabilities)
+        # The algorithm set advertises skill_manage whenever an instance is
+        # configured; the application only exposes it while the storage-backed
+        # service is actually usable (started and not closed).
+        capabilities.discard(SkillApplicationCapability.SKILL_MANAGE.value)
+        if self._skill_manage_service is not None and self._skill_manage_service.is_ready():
+            capabilities.add(SkillApplicationCapability.SKILL_MANAGE.value)
         if self._remote is not None:
             capabilities.add(SkillApplicationCapability.PULL.value)
             capabilities.add(SkillApplicationCapability.PUSH.value)
@@ -282,6 +357,8 @@ class SkillApplication:
                 return
             self._owner_loop = loop
             await self._runtime.start()
+            if self._skill_manage_service is not None:
+                await self._skill_manage_service.start()
             self._started = True
 
     async def close(self) -> None:
@@ -291,10 +368,16 @@ class SkillApplication:
             self._ensure_owner_loop()
             self._closed = True
             error: BaseException | None = None
+            if self._skill_manage_service is not None:
+                try:
+                    await self._skill_manage_service.close()
+                except BaseException as exc:
+                    error = exc
             try:
                 await self._runtime.close()
             except BaseException as exc:
-                error = exc
+                if error is None:
+                    error = exc
             try:
                 await self._database.close()
             except BaseException as exc:
@@ -588,6 +671,75 @@ class SkillApplication:
             result.model_dump(mode="json"),
         )
         return result
+
+    @requires_ready
+    async def build_skill_index(self, request: Any) -> Any:
+        service = self._skill_manage_service
+        if service is None or not service.is_ready():
+            raise SkillCapabilityUnavailableError("skill_manage is not configured")
+        return await service.build_skill_index(request)
+
+    @requires_ready
+    async def upsert_skill_index(self, request: Any) -> Any:
+        service = self._skill_manage_service
+        if service is None or not service.is_ready():
+            raise SkillCapabilityUnavailableError("skill_manage is not configured")
+        return await service.upsert_skill_index(request)
+
+    @requires_ready
+    async def remove_skill_from_index(self, request: Any) -> Any:
+        service = self._skill_manage_service
+        if service is None or not service.is_ready():
+            raise SkillCapabilityUnavailableError("skill_manage is not configured")
+        return await service.remove_skill_from_index(request)
+
+    @requires_ready
+    async def retrieve_skills(self, request: Any) -> Any:
+        service = self._skill_manage_service
+        if service is None or not service.is_ready():
+            raise SkillCapabilityUnavailableError("skill_manage is not configured")
+        return await service.retrieve_skills(request)
+
+    @requires_ready
+    async def get_skill_manage_operation(
+        self,
+        operation_id: str,
+        *,
+        project_id: str,
+        graph_id: str,
+    ) -> Any:
+        service = self._skill_manage_service
+        if service is None or not service.is_ready():
+            raise SkillCapabilityUnavailableError("skill_manage is not configured")
+        return await service.get_skill_manage_operation(
+            operation_id,
+            project_id=project_id,
+            graph_id=graph_id,
+        )
+
+    @requires_ready
+    async def repair_skill_index(
+        self,
+        *,
+        project_id: str,
+        graph_id: str,
+        stale_candidate_age_seconds: float | None = None,
+    ) -> Any:
+        service = self._skill_manage_service
+        if service is None or not service.is_ready():
+            raise SkillCapabilityUnavailableError("skill_manage is not configured")
+        return await service.repair_skill_index(
+            project_id=project_id,
+            graph_id=graph_id,
+            stale_candidate_age_seconds=stale_candidate_age_seconds,
+        )
+
+    @requires_ready
+    async def maintain_skill_index(self, *, project_id: str, graph_id: str) -> Any:
+        service = self._skill_manage_service
+        if service is None or not service.is_ready():
+            raise SkillCapabilityUnavailableError("skill_manage is not configured")
+        return await service.maintain_skill_index(project_id=project_id, graph_id=graph_id)
 
     @requires_ready
     async def optimize(self, request: Trace2SkillInput) -> Skill:

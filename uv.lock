@@ -1656,6 +1656,7 @@ offline-evolution = [
     { name = "tqdm" },
 ]
 pgvector = [
+    { name = "numpy" },
     { name = "psycopg", extra = ["binary", "pool"] },
 ]
 spreadsheetbench = [
@@ -1671,6 +1672,7 @@ requires-dist = [
     { name = "jieba", marker = "extra == 'offline-evolution'", specifier = ">=0.42.1" },
     { name = "litellm", marker = "extra == 'llm'", specifier = ">=1.85.0" },
     { name = "numpy", marker = "extra == 'offline-evolution'", specifier = ">=1.26" },
+    { name = "numpy", marker = "extra == 'pgvector'", specifier = ">=1.26" },
     { name = "openai", marker = "extra == 'offline-evolution'", specifier = ">=1.0" },
     { name = "openpyxl", marker = "extra == 'spreadsheetbench'", specifier = ">=3.1.5" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'pgvector'", specifier = ">=3.2" },

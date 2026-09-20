@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from ...errors import SkillCapabilityUnavailableError
 from .models import BackendConfig
 from .registry import BackendRegistry, TableRegistry
@@ -9,14 +12,16 @@ from .vector_store import ScopedVectorStore
 
 
 def register_builtin_vector_stores(registry: BackendRegistry) -> None:
-    """Register every backend shipped by ``mindmemos-skill``.
+    """Register built-in providers without importing their optional drivers."""
 
-    Keeping imports inside the composition function prevents concrete database
-    drivers from leaking into the backend-neutral contract modules.
-    """
+    registry.register("pgvector", _create_pgvector_backend)
+
+
+def _create_pgvector_backend(options: Mapping[str, Any], tables: TableRegistry) -> ScopedVectorStore:
+    """Load PostgreSQL dependencies only when a vector store is constructed."""
 
     try:
-        from .vector_store_impl import register_pgvector_backend
+        from .vector_store_impl import create_pgvector_backend
     except ModuleNotFoundError as exc:
         missing_root = (exc.name or "").split(".", 1)[0]
         if missing_root not in {"psycopg", "psycopg_pool"}:
@@ -26,7 +31,7 @@ def register_builtin_vector_stores(registry: BackendRegistry) -> None:
             "Install it with `pip install 'mindmemos-skill[pgvector]'`."
         ) from exc
 
-    register_pgvector_backend(registry)
+    return create_pgvector_backend(options, tables)
 
 
 def create_vector_store(

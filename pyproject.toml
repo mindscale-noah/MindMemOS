@@ -42,6 +42,11 @@ members = [
     "src/mindmemos_skill",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration_pgvector: requires a dedicated PostgreSQL/pgvector instance via MINDMEMOS_SKILL_TEST_PG_DSN",
+]
+
 [tool.ruff]
 line-length = 120
 

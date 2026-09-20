@@ -9,7 +9,7 @@ from ..typing.operations import (
     Trace2SkillInput,
     Trace2SkillOutput,
 )
-from .protocols import SkillAnalyzer, SkillEvolver, SkillOptimizer
+from .protocols import SkillAnalyzer, SkillEvolver, SkillManageAlgorithm, SkillOptimizer
 from .skill import SkillAlgorithms
 
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "SkillCandidate",
     "SkillFinding",
     "SkillEvolver",
+    "SkillManageAlgorithm",
     "SkillOptimizer",
     "Trace2SkillInput",
     "Trace2SkillOutput",

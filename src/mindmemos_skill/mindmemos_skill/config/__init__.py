@@ -9,6 +9,7 @@ from .models import (
     CompiledSkillLocalConfig,
     CompiledSkillModelConfig,
     CompiledSkillRuntimeConfig,
+    CompiledSkillVectorStoreConfig,
     SkillAgentConfig,
     SkillAlgorithmConfig,
     SkillApplicationConfig,
@@ -18,6 +19,7 @@ from .models import (
     SkillLocalConfig,
     SkillModelConfig,
     SkillRuntimeConfig,
+    SkillVectorStoreConfig,
 )
 
 __all__ = [
@@ -28,6 +30,7 @@ __all__ = [
     "CompiledSkillLocalConfig",
     "CompiledSkillModelConfig",
     "CompiledSkillRuntimeConfig",
+    "CompiledSkillVectorStoreConfig",
     "SkillAgentConfig",
     "SkillAlgorithmConfig",
     "SkillApplicationConfig",
@@ -38,4 +41,5 @@ __all__ = [
     "SkillLocalConfig",
     "SkillModelConfig",
     "SkillRuntimeConfig",
+    "SkillVectorStoreConfig",
 ]

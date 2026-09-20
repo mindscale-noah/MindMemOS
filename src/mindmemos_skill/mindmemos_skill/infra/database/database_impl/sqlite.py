@@ -147,6 +147,23 @@ class SqliteBackend(ScopedDatabase):
     async def upsert_records(self, table: str, records: Sequence[Record]) -> None:
         await self._upsert_records(table, records, transactional=False)
 
+    async def insert_record_if_absent(self, table: str, record: Record) -> bool:
+        await self._ensure_open()
+        spec = self._table(table)
+        row = self._prepare_record(spec, record)
+        columns = ["_scope_key", "_scope", "_record_id", *[field.name for field in spec.fields]]
+        conflict = ["_scope_key", "_record_id"] if spec.scope_scoped else ["_record_id"]
+        statement = (
+            f"INSERT INTO {_quote(spec.name)} ({', '.join(_quote(item) for item in columns)}) "
+            f"VALUES ({', '.join('?' for _ in columns)}) "
+            f"ON CONFLICT ({', '.join(_quote(item) for item in conflict)}) DO NOTHING"
+        )
+
+        def execute(connection: sqlite3.Connection) -> bool:
+            return connection.execute(statement, row).rowcount == 1
+
+        return await self._run_write(execute)
+
     async def _upsert_records(
         self,
         table: str,
@@ -875,6 +892,21 @@ class _SqliteUnitOfWork(DatabaseUnitOfWork):
 
     async def upsert_records(self, table: str, records: Sequence[Record]) -> None:
         await self._backend._upsert_records(table, records, transactional=True)
+
+    async def insert_record_if_absent(self, table: str, record: Record) -> bool:
+        spec = self._backend._table(table)
+        row = self._backend._prepare_record(spec, record)
+        columns = ["_scope_key", "_scope", "_record_id", *[field.name for field in spec.fields]]
+        conflict = ["_scope_key", "_record_id"] if spec.scope_scoped else ["_record_id"]
+        statement = (
+            f"INSERT INTO {_quote(spec.name)} ({', '.join(_quote(item) for item in columns)}) "
+            f"VALUES ({', '.join('?' for _ in columns)}) "
+            f"ON CONFLICT ({', '.join(_quote(item) for item in conflict)}) DO NOTHING"
+        )
+        return await self._backend._execute_write(
+            lambda connection: connection.execute(statement, row).rowcount == 1,
+            transactional=True,
+        )
 
     async def get_records(
         self,

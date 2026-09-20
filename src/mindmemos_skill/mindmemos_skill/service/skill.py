@@ -16,7 +16,7 @@ from ..typing.operations import (
     Trace2SkillInput,
     Trace2SkillOutput,
 )
-from .protocols import SkillAnalyzer, SkillEvolver, SkillOptimizer
+from .protocols import SkillAnalyzer, SkillEvolver, SkillManageAlgorithm, SkillOptimizer
 
 
 class SkillAlgorithms:
@@ -33,15 +33,18 @@ class SkillAlgorithms:
         analyzer: SkillAnalyzer | None = None,
         optimizer: SkillOptimizer | None = None,
         evolver: SkillEvolver | None = None,
+        skill_manager: SkillManageAlgorithm | None = None,
         analyzers: Mapping[str, SkillAnalyzer] | None = None,
         optimizers: Mapping[str, SkillOptimizer] | None = None,
         evolvers: Mapping[str, SkillEvolver] | None = None,
+        skill_managers: Mapping[str, SkillManageAlgorithm] | None = None,
         agents: Mapping[str, Agent[Any]] | None = None,
     ) -> None:
         self._analyzers = self._with_default(analyzers, analyzer)
         self._optimizers = self._with_default(optimizers, optimizer)
         self._evolvers = self._with_default(evolvers, evolver)
-        if not self._analyzers and not self._optimizers and not self._evolvers:
+        self._skill_managers = self._with_default(skill_managers, skill_manager)
+        if not self._analyzers and not self._optimizers and not self._evolvers and not self._skill_managers:
             raise SkillConfigurationError("at least one Skill capability must be configured")
         self._agents = MappingProxyType(dict(agents or {}))
 
@@ -71,6 +74,8 @@ class SkillAlgorithms:
             capabilities.add("optimize")
         if self._evolvers:
             capabilities.add("evolve")
+        if self._skill_managers:
+            capabilities.add("skill_manage")
         return frozenset(capabilities)
 
     def algorithm_names(self, capability: str) -> tuple[str, ...]:
@@ -92,12 +97,15 @@ class SkillAlgorithms:
         if len(algorithms) == 1:
             return next(iter(algorithms))
         if not algorithms:
-            operation = {"analyze": "analysis", "optimize": "optimization", "evolve": "evolution"}[capability]
+            operation = {
+                "analyze": "analysis",
+                "optimize": "optimization",
+                "evolve": "evolution",
+                "skill_manage": "Skill graph management",
+            }[capability]
             raise SkillCapabilityUnavailableError(f"Skill {operation} is not configured")
         available = ", ".join(sorted(algorithms)) or "<none>"
-        raise SkillCapabilityUnavailableError(
-            f"Skill {capability} requires an algorithm name; available: {available}"
-        )
+        raise SkillCapabilityUnavailableError(f"Skill {capability} requires an algorithm name; available: {available}")
 
     def _algorithms_for(self, capability: str) -> Mapping[str, Any]:
         try:
@@ -105,9 +113,21 @@ class SkillAlgorithms:
                 "analyze": self._analyzers,
                 "optimize": self._optimizers,
                 "evolve": self._evolvers,
+                "skill_manage": self._skill_managers,
             }[capability]
         except KeyError as exc:
             raise ValueError(f"unknown Skill algorithm capability: {capability}") from exc
+
+    def get_skill_manager(self, algorithm_name: str | None = None) -> SkillManageAlgorithm:
+        """Resolve one configured ``skill_manage`` implementation by name.
+
+        Mirrors ``resolve_name`` behavior: an explicit name is honored, an
+        unknown name raises, and an omitted name works only when exactly one
+        implementation is configured.
+        """
+
+        name = self.resolve_name("skill_manage", algorithm_name)
+        return self._skill_managers[name]
 
     async def analyze(
         self,

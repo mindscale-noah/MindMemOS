@@ -1,0 +1,26 @@
+{
+  "skill": {
+    "name": "CSV Parser Skill",
+    "entry_scene_id": "scene_parse"
+  },
+  "scenes": [
+    {
+      "scene_id": "scene_parse",
+      "scene_name": "Parse CSV",
+      "scene_goal": "Parse raw CSV text into records",
+      "scene_type": "subtask",
+      "contained_logic_steps": ["step_read_input", "step_build_records"],
+      "next_scene_rules": []
+    }
+  ],
+  "logic_steps": [
+    {
+      "logic_step_id": "step_read_input",
+      "logic_step_description": "Read the raw CSV text input"
+    },
+    {
+      "logic_step_id": "step_build_records",
+      "logic_step_description": "Split rows and build structured records"
+    }
+  ]
+}

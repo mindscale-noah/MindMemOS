@@ -28,7 +28,7 @@ def test_skill_core_and_optional_dependency_metadata_are_separate() -> None:
     extras = skill_project["optional-dependencies"]
     expected_extras = {
         "llm": ["litellm>=1.85.0"],
-        "pgvector": ["psycopg[binary,pool]>=3.2"],
+        "pgvector": ["numpy>=1.26", "psycopg[binary,pool]>=3.2"],
         "claude-sdk": ["claude-agent-sdk>=0.1.0"],
         "alfworld": ["alfworld>=0.4.0", "pyyaml>=6.0"],
         "dataset-download": ["alfworld>=0.4.0", "huggingface-hub>=0.34.0"],
@@ -58,7 +58,7 @@ def test_skill_core_imports_without_optional_dependencies() -> None:
 import importlib.abc
 import sys
 
-blocked = {"claude_agent_sdk", "litellm", "openpyxl", "psycopg", "psycopg_pool"}
+blocked = {"claude_agent_sdk", "litellm", "numpy", "openpyxl", "psycopg", "psycopg_pool"}
 
 class BlockOptionalDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
@@ -73,9 +73,13 @@ sys.meta_path.insert(0, BlockOptionalDependencies())
 
 import mindmemos_skill
 from mindmemos_skill.infra.database import DatabaseConfig, create_database
-from mindmemos_skill.infra.vector_store import BackendRegistry, register_builtin_vector_stores
+from mindmemos_skill.config import SkillConfigCompiler
+from mindmemos_skill.infra.vector_store import (
+    BackendConfig, BackendRegistry, TableRegistry, register_builtin_vector_stores,
+)
 from mindmemos_skill.errors import SkillCapabilityUnavailableError
 from mindmemos_skill.persistence import SkillRecord
+from mindmemos_skill.registry import ComponentType, get_component
 
 assert mindmemos_skill.SkillAlgorithms
 assert DatabaseConfig
@@ -83,8 +87,22 @@ assert create_database
 assert SkillRecord
 assert blocked.isdisjoint(sys.modules)
 
+compiled = SkillConfigCompiler().compile({})
+assert compiled.local.database.provider == "sqlite"
+assert blocked.isdisjoint(sys.modules)
+
+assert get_component(type=ComponentType.AGENT, name="react").name == "react"
+assert get_component(type=ComponentType.ALGO, name="offline_evolution").name == "offline_evolution"
+assert get_component(type=ComponentType.ALGO, name="skill_manage").name == "skill_manage"
+assert blocked.isdisjoint(sys.modules)
+
+registry = BackendRegistry()
+register_builtin_vector_stores(registry)
+assert registry.providers == ("pgvector",)
+assert blocked.isdisjoint(sys.modules)
+
 try:
-    register_builtin_vector_stores(BackendRegistry())
+    registry.create(BackendConfig(provider="pgvector"), TableRegistry())
 except SkillCapabilityUnavailableError as error:
     assert "mindmemos-skill[pgvector]" in str(error)
 else:

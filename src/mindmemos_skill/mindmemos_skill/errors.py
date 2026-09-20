@@ -113,6 +113,123 @@ class SkillConflictError(SkillManagementError, ValueError):
     """Raised when a local management invariant or CAS precondition fails."""
 
 
+class SkillManageProfileMismatchError(SkillConflictError):
+    """Raised when an embedding profile differs from the one a graph or deployment uses."""
+
+    error_code = "SKILL_MANAGE_EMBEDDING_PROFILE_MISMATCH"
+
+    def __init__(self, *, expected: dict[str, object], actual: dict[str, object]) -> None:
+        super().__init__(f"{self.error_code}: expected embedding profile {expected}, got {actual}")
+        self.expected = expected
+        self.actual = actual
+
+
+class SkillManageWriterConflictError(SkillConflictError):
+    """Raised when the graph writer lease is held by, or was taken over by, another writer."""
+
+    error_code = "SKILL_MANAGE_WRITER_CONFLICT"
+    retryable = True
+
+    def __init__(self, *, graph_id: str, owner_operation_id: str | None = None) -> None:
+        super().__init__(f"{self.error_code}: writer lease for graph {graph_id!r} is not held by this writer")
+        self.graph_id = graph_id
+        self.owner_operation_id = owner_operation_id
+
+
+class SkillManageConsistencyError(SkillManagementError, RuntimeError):
+    """Raised when durable skill_manage state violates a frozen invariant."""
+
+    error_code = "SKILL_MANAGE_CONSISTENCY_VIOLATION"
+    retryable = False
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"{self.error_code}: {reason}")
+        self.reason = reason
+
+
+class SkillManageValidationError(SkillManagementError, ValueError):
+    """Raised when a staged generation fails pre-publish validation."""
+
+    error_code = "SKILL_MANAGE_VALIDATION_FAILED"
+    retryable = False
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"{self.error_code}: {reason}")
+        self.reason = reason
+
+
+class SkillManageRevisionConflictError(SkillManagementError, RuntimeError):
+    """Raised when an explicit ``expected_revision`` no longer matches the head.
+
+    The optimistic-lock contract is that the caller asserts the head revision
+    its plan was computed against; a mismatch means another writer advanced the
+    graph, so the write must be a conflict rather than a silent rebase.
+    """
+
+    error_code = "SKILL_MANAGE_REVISION_CONFLICT"
+    retryable = False
+
+    def __init__(self, *, expected_revision: int | None, actual_revision: int | None) -> None:
+        super().__init__(
+            f"{self.error_code}: expected head revision {expected_revision}, actual revision {actual_revision}"
+        )
+        self.expected_revision = expected_revision
+        self.actual_revision = actual_revision
+
+
+class SkillManageOperationPendingError(SkillManagementError, TimeoutError):
+    """Raised when a same-key operation is still in flight after the configured wait."""
+
+    error_code = "SKILL_MANAGE_OPERATION_PENDING"
+    retryable = True
+
+    def __init__(self, operation_id: str, status: str) -> None:
+        super().__init__(f"{self.error_code}: operation {operation_id} is still {status}")
+        self.operation_id = operation_id
+        self.status = status
+
+
+class SkillManageOperationCancelledError(SkillManagementError, RuntimeError):
+    """Raised when a same-key retry hits an operation that was cancelled before publish."""
+
+    error_code = "SKILL_MANAGE_OPERATION_CANCELLED"
+    retryable = False
+
+    def __init__(self, operation_id: str) -> None:
+        super().__init__(f"{self.error_code}: operation {operation_id} was cancelled; retry with a new key")
+        self.operation_id = operation_id
+
+
+class SkillManageOperationPendingRepairError(SkillManagementError, RuntimeError):
+    """Raised when an operation's outcome cannot be determined without explicit repair."""
+
+    error_code = "SKILL_MANAGE_OPERATION_PENDING_REPAIR"
+    retryable = False
+
+    def __init__(self, operation_id: str, reason: str | None = None) -> None:
+        super().__init__(f"{self.error_code}: operation {operation_id} requires repair ({reason or 'unknown'})")
+        self.operation_id = operation_id
+        self.reason = reason
+
+
+class SkillManageGcPartialFailureError(SkillManagementError, RuntimeError):
+    """Raised when a retired-generation GC pass deleted some generations but not all.
+
+    Each generation is deleted independently, so the pass carries on past a
+    failure; ``removed`` names what is physically gone and ``deferred`` pairs
+    each generation left in place with the failing exception's type name, so
+    a maintenance report never claims nothing was removed when something was.
+    """
+
+    error_code = "SKILL_MANAGE_GC_DEFERRED"
+    retryable = True
+
+    def __init__(self, *, removed: list[str], deferred: list[tuple[str, str]]) -> None:
+        super().__init__(f"{self.error_code}: {len(deferred)} retired generation(s) could not be deleted")
+        self.removed = list(removed)
+        self.deferred = list(deferred)
+
+
 class SkillSnapshotError(SkillManagementError, ValueError):
     """Raised when an external Skill snapshot is unsafe or malformed."""
 
@@ -177,6 +294,15 @@ __all__ = [
     "SkillManagementError",
     "SkillNotFoundError",
     "SkillConflictError",
+    "SkillManageProfileMismatchError",
+    "SkillManageWriterConflictError",
+    "SkillManageConsistencyError",
+    "SkillManageValidationError",
+    "SkillManageRevisionConflictError",
+    "SkillManageOperationCancelledError",
+    "SkillManageOperationPendingError",
+    "SkillManageOperationPendingRepairError",
+    "SkillManageGcPartialFailureError",
     "SkillSnapshotError",
     "SkillExportError",
     "SkillRemoteRequestError",

@@ -24,11 +24,7 @@ class TableRegistry:
             raise RuntimeError("table registry is frozen")
         if spec.name in self._specs:
             raise ValueError(f"table {spec.name!r} is already registered")
-        index_owners = {
-            index.name: table.name
-            for table in self._specs.values()
-            for index in table.indexes
-        }
+        index_owners = {index.name: table.name for table in self._specs.values() for index in table.indexes}
         for index in spec.indexes:
             owner = index_owners.get(index.name)
             if owner is not None:

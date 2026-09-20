@@ -84,13 +84,111 @@ async with database.transaction() as unit_of_work:
     await unit_of_work.upsert_records("skill_sync_state", (sync_state_record,))
 ```
 
-The initial public schema is `mindmemos-skill` version 1. SQLite records ordered,
-forward-only migrations and automatically creates a consistent backup before an
-upgrade. Use `get_skill_database_status(...)` to inspect pending versions or
+The current public schema is `mindmemos-skill` version 2, adding Skill Manage
+graph tables to the initial version 1 catalog. SQLite records ordered,
+forward-only migrations. The `bootstrap_skill_database(...)` helper creates a
+consistent backup before an upgrade; `SkillApplication.from_config(...)` uses
+the generic bootstrap and requires an operator-provided backup.
+Use `get_skill_database_status(...)` to inspect pending versions or
 `backup_skill_database(...)` to create a manual backup. Migration failures roll
 back both DDL and the version ledger. Use the transaction-bound `unit_of_work`
 inside the context; do not call the outer `database` object until the context
 exits.
+
+## Skill Manage graph index
+
+The `skill_manage` capability builds and updates a graph over registered,
+immutable Skill versions, then retrieves Skills with embedding seeds and graph
+ranking. Install `mindmemos-skill[llm,pgvector]` and configure both structured
+storage and vector storage on PostgreSQL with the pgvector extension. Plain
+SQLite applications remain supported without enabling this capability.
+
+For example, configure an application from environment-provided credentials:
+
+```python
+import os
+
+from mindmemos_skill import SkillApplication
+from mindmemos_skill.application.skill_manage import (
+    SkillManageBuildRequest,
+    SkillManageRetrieveRequest,
+)
+from mindmemos_skill.typing import SkillVersionRef
+
+application = await SkillApplication.from_config({
+    "local": {
+        "root_dir": "~/.mindmemos/skill",
+        "database": {
+            "provider": "postgres",
+            "options": {"dsn": os.environ["SKILL_DATABASE_DSN"]},
+        },
+        "vector_store": {
+            "provider": "pgvector",
+            "options": {"dsn": os.environ["SKILL_DATABASE_DSN"]},
+        },
+    },
+    "runtime": {
+        "models": {
+            "embed": {
+                "kind": "embedding",
+                "model": "openai/text-embedding-3-small",
+                "dimension": 1536,
+                "api_key": os.environ["OPENAI_API_KEY"],
+            },
+        },
+        "algorithms": {
+            "graphs": {
+                "type": "skill_manage",
+                "model_roles": {"embedding": "embed"},
+            },
+        },
+    },
+})
+try:
+    # Use IDs of a version already registered in this application's repository.
+    result = await application.build_skill_index(SkillManageBuildRequest(
+        project_id="my-project",
+        graph_id="my-graph",
+        version_refs=(SkillVersionRef(skill_id=skill_id, version_id=version_id),),
+        idempotency_key="initial-build-1",
+    ))
+    hits = await application.retrieve_skills(SkillManageRetrieveRequest(
+        project_id="my-project", graph_id="my-graph", query="parse a CSV file",
+    ))
+finally:
+    await application.close()
+```
+
+`upsert_skill_index` replaces/adds one version; `remove_skill_from_index` removes
+a family or version from the index without deleting the canonical Skill.
+Persisted writes accept `expected_revision` for optimistic concurrency and an
+`idempotency_key` for replay. A classified transient storage failure before
+publication permits the same request/key to open a new attempt; committed
+requests replay their result. Unknown failures remain non-retryable. Keep the
+request unchanged when retrying; request hashes currently follow the DTO shape,
+so changing that shape across releases needs an explicit compatibility review.
+
+Inspect operations with `get_skill_manage_operation(operation_id, project_id=...,
+graph_id=...)`. Use `repair_skill_index(project_id=..., graph_id=...)` to reconcile
+interrupted writes and `maintain_skill_index(project_id=..., graph_id=...)` to
+collect retired generations according to configured retention. The default
+version loader assumes a single-tenant local repository; project IDs scope the
+index and do not provide repository authorization.
+
+Opening the current persistence catalog applies schema v2 even without a graph
+algorithm configured. Back up existing databases before upgrading; PostgreSQL
+backups are the operator's responsibility. Older code rejects a v2 migration
+ledger, so rolling back requires restoring a compatible backup, not deleting
+ledger entries. No database is migrated merely by installing this package.
+
+Run graph integration tests only against a disposable database; they reset test
+tables. A dedicated local service is provided:
+
+```bash
+docker compose -f dockers/docker-compose.skill-manage-test.yml up -d --wait
+MINDMEMOS_SKILL_TEST_PG_DSN=postgresql://mindmemos:mindmemos@127.0.0.1:54329/skill_manage_test \
+  make test-skill-manage-pg
+```
 
 ## Skill application
 

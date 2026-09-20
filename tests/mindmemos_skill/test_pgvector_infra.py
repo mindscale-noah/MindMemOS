@@ -129,7 +129,13 @@ async def test_python_ensure_schema_enables_extension_and_creates_schema() -> No
 
     await backend.ensure_schema(tables)
 
-    assert pool.connection_value.statements[0] == "CREATE EXTENSION IF NOT EXISTS vector"
+    # Bootstraps serialize on a transaction-scoped advisory lock, taken under
+    # READ COMMITTED, before touching the catalog.
+    assert pool.connection_value.statements[:3] == [
+        "SET TRANSACTION ISOLATION LEVEL READ COMMITTED",
+        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+        "CREATE EXTENSION IF NOT EXISTS vector",
+    ]
     assert 'CREATE SCHEMA IF NOT EXISTS "mindmemos"' in pool.connection_value.statements
     assert any(
         'CREATE TABLE IF NOT EXISTS "mindmemos"."__mindmemos_schema"' in statement

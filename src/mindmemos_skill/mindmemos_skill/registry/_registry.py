@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
@@ -12,8 +13,6 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from ..agents.base import Agent
     from ..agents.config import AgentConfig
     from ..envs.base import BaseEnv
@@ -33,6 +32,8 @@ class ComponentRequirements:
 
     requires_model_ref: bool = False
     required_model_roles: frozenset[str] = frozenset()
+    required_model_kinds: Mapping[str, str] = field(default_factory=dict)
+    dependency_validator: Callable[[BaseModel], Mapping[str, str]] | None = None
     supported_skill_injection_modes: frozenset[str] = frozenset()
 
 
@@ -61,6 +62,7 @@ _BUILTIN_MODULES = (
     "..algos.evolve.skill_grpo_with_experience_validation",
     "..algos.evolve.skill_grpo_without_replay_buffer",
     "..algos.evolve.skill_grpo_with_replay_buffer",
+    "..algos.skill_manage",
     "..algos.trace2skill.trajectory_evidence_patch",
     "..algos.trace2skill.offline_evolution",
 )
