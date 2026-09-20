@@ -344,6 +344,26 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 
 ## 📊 Benchmark
 
+### 数据集下载
+
+skill 和 memory 共用下载入口（Python 3.12+；Hugging Face 来源需安装 `huggingface_hub`）：
+
+```bash
+python scripts/download_datasets.py list --benchmark memory
+python scripts/download_datasets.py list --benchmark skill
+python scripts/download_datasets.py download --benchmark memory --dataset locomo
+python scripts/download_datasets.py download --benchmark skill --dataset spreadsheetbench
+```
+
+memory 包括 `locomo`、`personamem`（v1）、`memoryagentbench`（官方四个数据分区）和
+`longmemeval`（官方 cleaned 版本）。官方来源与固定 revision 集中在
+[`config/datasets/sources.json`](config/datasets/sources.json)。
+默认下载到 `data/mindmemos_memory/<dataset>/` 或 `data/mindmemos_skill/<dataset>/`；
+可用 `--data-root` 指定父目录，在 `download` 后加 `--verify-only` 校验已有文件。
+评测配置需指向下载后的文件。下载保留官方格式，MemoryAgentBench 为 Parquet，使用当前评测器的
+本地 JSON/JSONL 入口前仍需转换格式。实验 split 随仓库管理，下载脚本不下载或生成 split。
+
+
 ### 💬 对话记忆：LoCoMo
 
 - **评测基准**：[LoCoMo](https://arxiv.org/abs/2402.17753)，面向长对话记忆的主流基准，覆盖单跳（single-hop）、多跳（multi-hop）、时序（temporal）和开放域（open-domain）问答。

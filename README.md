@@ -356,6 +356,27 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 
 ## 📊 Benchmark
 
+### Dataset downloads
+
+Use the shared downloader for both benchmark groups (Python 3.12+; install `huggingface_hub` for Hugging Face sources):
+
+```bash
+python scripts/download_datasets.py list --benchmark memory
+python scripts/download_datasets.py list --benchmark skill
+python scripts/download_datasets.py download --benchmark memory --dataset locomo
+python scripts/download_datasets.py download --benchmark skill --dataset spreadsheetbench
+```
+
+Memory datasets: `locomo`, `personamem` (v1), `memoryagentbench` (all four official partitions),
+and `longmemeval` (official cleaned release). Sources and pinned revisions are in
+[`config/datasets/sources.json`](config/datasets/sources.json).
+Downloads go to `data/mindmemos_memory/<dataset>/` or `data/mindmemos_skill/<dataset>/`;
+use `--data-root` to change the parent directory and `--verify-only` on `download` to verify existing files.
+Set evaluation config paths to these downloaded files. Official formats are preserved; MemoryAgentBench
+remains Parquet and requires conversion for the current evaluator's local JSON/JSONL input.
+Experiment split manifests are maintained in the repository and are not downloaded or generated.
+
+
 ### 💬 Conversational Memory: LoCoMo
 
 - **Benchmark**: [LoCoMo](https://arxiv.org/abs/2402.17753), a mainstream benchmark for long-conversation memory covering single-hop, multi-hop, temporal, and open-domain question answering.
