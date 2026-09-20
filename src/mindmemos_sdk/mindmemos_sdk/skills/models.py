@@ -314,3 +314,19 @@ class SkillUpdateResult(BaseModel):
 
 SkillUpdatePlan = SkillCheckoutPlan
 RollbackPlan = SkillCheckoutPlan
+
+
+class SkillExportPlan(BaseModel):
+    """Immutable inputs checked immediately before export."""
+
+    directory: str
+    """Canonical destination Skill directory."""
+
+    content_hash: str
+    """Fingerprint of the requested canonical bundle."""
+
+    previous_hash: str | None
+    """Raw file fingerprint at preview time, or None when absent."""
+
+    content: str
+    """Canonical source bundle retained by the caller until confirmation."""
