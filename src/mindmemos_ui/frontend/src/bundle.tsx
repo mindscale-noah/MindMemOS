@@ -175,7 +175,13 @@ export function BundleBrowser({
             content.files[selected] === "" ? (
               <Empty>空文件</Empty>
             ) : (
-              <FilePreview path={selected} text={content.files[selected]} />
+              <FilePreview
+                key={selected}
+                path={selected}
+                text={content.files[selected]}
+                paths={paths}
+                onOpenFile={setChosen}
+              />
             )
           ) : (
             <Empty>二进制文件，暂不支持文本预览</Empty>
