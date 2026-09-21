@@ -9,7 +9,7 @@ from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillConfig
 from mindmemos_skill.algos.train.treeskill.tree import parse_tree, render_selection
 from mindmemos_skill.envs import Environment, Reward, RolloutResult, Task
 from mindmemos_skill.envs.data import RewardData
-from mindmemos_skill.skill import Skill, SkillBundle, SkillResources
+from mindmemos_skill.skill import Skill, SkillBundle, SkillResources, SkillSet
 from pydantic import BaseModel
 
 
@@ -141,8 +141,13 @@ def test_snapshot_and_environment_preserve_references_and_route_only_once(tmp_pa
 
     env = LocalEnvironment(EnvironmentOptions())
     task = Task(id="one", instruction="Verify")
-    result = env.rollout(task, tmp_path, reward_data=RewardData(), skills=[restored])
-    assert env.rollout(task, tmp_path, reward_data=RewardData(), skills=[restored]) == result
+    result = env.rollout(
+        task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": restored}, max_concurrency=1)
+    )
+    assert (
+        env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": restored}, max_concurrency=1))
+        == result
+    )
     assert len(router.calls) == 1 and "Formatting" not in result.output
     assert restored.bundle == skill.bundle
 
@@ -175,7 +180,9 @@ def test_assemble_returns_complete_skill_and_environment_uses_that_object(tmp_pa
     from unittest.mock import patch
 
     with patch.object(skill, "assemble", return_value=prepared) as assemble:
-        IdentityEnvironment(EnvironmentOptions()).rollout(task, tmp_path, reward_data=RewardData(), skills=[skill])
+        IdentityEnvironment(EnvironmentOptions()).rollout(
+            task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)
+        )
         assemble.assert_called_once_with(task)
 
 

@@ -79,7 +79,7 @@ class TreeSkill(Skill):
         snapshot = super().snapshot()
         snapshot.implementation = "treeskill"
         snapshot.config_schema_version = 1
-        snapshot.config = self.config.model_dump(mode="json")
+        snapshot.config = self.config.model_dump(mode="json", exclude={"router": {"api_key"}})
         return snapshot
 
     def with_bundle(self, bundle: SkillBundle) -> Self:
@@ -103,8 +103,18 @@ class TreeSkill(Skill):
         source = Skill.from_snapshot(snapshot)
         if snapshot.implementation != "treeskill" or snapshot.config_schema_version != 1:
             raise ValueError("Unsupported TreeSkill snapshot implementation or schema version")
+        recorded_config = dict(snapshot.config)
+        recorded_router = dict(recorded_config["router"])
+        if recorded_router.get("api_key") == "**********":
+            recorded_router.pop("api_key")
+        recorded_config["router"] = recorded_router
+        config = TreeSkillConfig.model_validate(recorded_config)
+        if router is not None:
+            if router.config.model_dump(exclude={"api_key"}) != config.router.model_dump(exclude={"api_key"}):
+                raise ValueError("Injected router must match the recorded non-secret settings")
+            config.router = router.config.model_copy(deep=True)
         return cls(
-            TreeSkillConfig.model_validate(snapshot.config),
+            config,
             bundle=source.bundle,
             resources=source.resources,
             router=router,
@@ -121,6 +131,44 @@ class TreeSkill(Skill):
     def _route(self, task: Task) -> RoutingResult:
         """Route once internally, preserving evidence and propagating provider errors."""
         source = self.bundle
+        if self.config.reference_routing:
+            import asyncio
+
+            from .routing import TreeSkillRouter
+            from .typing import ChatResponse
+
+            router_agent = self.router if self.router is not None else OpenAIChatAgent(self.config.router)
+
+            class RouterModel:
+                async def chat(self, task, messages, **kwargs):
+                    """Chat.
+
+                    Args:
+                        task: Stage audit label or public task supplied by the caller.
+                        messages: Explicit messages for this operation.
+                    """
+                    response = await asyncio.to_thread(router_agent.run, messages=messages)
+                    if not isinstance(response.output, str):
+                        raise TypeError("Router must return text")
+                    self.response = response
+                    return ChatResponse(content=response.output)
+
+            model = RouterModel()
+            model.response = None
+            routed = asyncio.run(
+                TreeSkillRouter(chat_model=model).route(
+                    skill=self,
+                    task=task,
+                    tree_metadata=self.config.tree_metadata or None,
+                )
+            )
+            return RoutingResult(
+                bundle=SkillBundle(files={"SKILL.md": routed.skill_content}),
+                selected_subtree_ids=list(routed.content_node_ids),
+                ancestor_ids=list(routed.ancestor_node_ids),
+                fallback_reason=routed.fallback_reason if routed.fallback_used else None,
+                response=model.response,
+            )
         tree = parse_tree(source.files["SKILL.md"])
         if not tree.roots:
             return RoutingResult(bundle=source, fallback_reason="no_heading_tree")

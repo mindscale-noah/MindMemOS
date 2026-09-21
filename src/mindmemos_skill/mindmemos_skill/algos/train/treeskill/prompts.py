@@ -1,67 +1,151 @@
-"""Tree-only routing prompt from TreeSkill revision bc3b0a9d55870d8ad77c38839c4fa5baf111e638."""
+"""Versioned prompts and renderers used by TreeSkill."""
 
-ROUTING_SYSTEM_PROMPT = """You are a tree-only skill retrieval router.
+from __future__ import annotations
 
-Select every and only existing Markdown skill-tree subtree needed for a
-complete execution pathway for the current spreadsheet task. Operational
-completeness takes priority over context reduction. Do not select irrelevant
-or parent-child redundant nodes. Use only the provided task and skill tree. Do
-not invent node ids.
+import json
+import re
+from importlib.resources import files
+from typing import Any
 
-Markdown tree model:
-- Markdown headings define the skill tree.
-- Each heading creates one node.
-- Each node provides its numeric level, plain heading title without Markdown
-  # markers, complete local_content directly under that heading, and children.
-  local_content excludes child sections.
-- Selecting a node means selecting that node's whole subtree for downstream
-  policy prompting.
-- Ancestor nodes are added later only as path/context for selected subtrees.
-- Sibling subtrees are not automatically included.
+from .env_specific.spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
+from .fusion_tree import tree_prompt_payload
+from .typing import LocatedEvidence, MarkdownSkillTree, TraceEvidence, TrajectoryAnalysisRecord
 
-Selection rules:
-- The selected subtrees must collectively provide both the direct task guidance
-  and the supporting workflow needed to execute it correctly.
-- Include separate subtree roots when inspection, loading, editing, saving,
-  recalculation, or verification guidance is needed from another branch.
-- For an existing-workbook task, include available guidance for loading,
-  modifying, and saving an existing workbook.
-- For lookup, copying, filling, aggregation, or source-to-target mapping,
-  include available inspection or data-analysis guidance.
-- Decide whether the intended workbook output should contain formulas or
-  computed literal values. Do not select formula guidance merely because the
-  task uses Excel or requires a calculated value.
-- If the intended output contains formulas, select available executable
-  guidance for formula construction, workbook editing and saving,
-  recalculation, and verification. Formula construction does not replace
-  recalculation, and a checklist or verification subtree does not provide an
-  executable recalculation method.
-- If the task should write computed literal values instead, select available
-  guidance for inspecting the inputs, computing the values, writing and saving
-  them, and verifying the result. Do not add formula or recalculation guidance
-  unless formulas are actually required or must be preserved.
-- A checklist or verification subtree cannot be the only selected task
-  capability.
-- Select financial-model guidance only for an explicitly financial task or
-  when the workbook's existing conventions require it.
-- Select the most specific useful subtree roots that satisfy the complete
-  workflow.
-- Select a broad parent only when the task needs that whole subtree.
-- Do not select both a parent and its child for the same reason; choose the
-  parent only when the whole parent subtree is needed.
-- Do not select nodes for weak topical similarity.
-- If no node is useful, return an empty selected_subtree_ids list.
 
-Output constraints:
-- Return only JSON.
-- Do not return explanatory text outside the JSON object.
-- Do not return skill content.
+def _load_prompt_template(name: str, *, strip_trailing: bool = False) -> str:
+    text = files(f"{__package__}.prompt_templates").joinpath(name).read_text(encoding="utf-8")
+    return text.rstrip() if strip_trailing else text
 
-Return exactly this JSON shape:
 
+ANALYSIS_SYSTEM_PROMPT = """You analyze one completed agent trajectory for reusable skill evidence.
+
+Use the task, transcript, execution outcome, and evaluator feedback provided by the user. Extract only lessons supported by the trajectory. Separate distinct lessons into separate items. A successful trajectory may contain failed intermediate attempts; preserve only reusable behavior that contributed to recovery or success. A failed trajectory may still contain useful partial behavior, but do not present an unverified action as reliable guidance.
+
+Do not include task-specific values, filenames, exact answers, private paths, ground-truth content, evaluator-only instructions, or unsupported conclusions. Return an empty items list when the trajectory contains no reusable evidence.
+
+Return JSON only:
 {
-  "selected_subtree_ids": ["<quoted node id>", "<quoted node id>"],
-  "rationale": "<short reason>"
-}
-"""
-"""Reference subtree-selection contract for spreadsheet-oriented TreeSkill routing."""
+  "instance_id": "<trajectory id>",
+  "task_id": "<task id>",
+  "record_source": "error|success|unlabeled",
+  "items": [
+    {
+      "item_id": "i1",
+      "kind": "failure_cause|failure_memory|success_memory|unlabeled_memory",
+      "title": "<short title>",
+      "description": "<evidence-grounded explanation>",
+      "content": "<concise reusable lesson>"
+    }
+  ]
+}"""
+
+LOCALIZATION_SYSTEM_PROMPT = _load_prompt_template("locating_system_prompt.txt")
+NODE_FUSION_SYSTEM_PROMPT = _load_prompt_template("node_fusion_system_prompt.txt")
+
+
+def analysis_user_prompt(evidence: TraceEvidence, *, source: str) -> str:
+    """Analysis user prompt.
+
+    Args:
+        evidence: Ordered trajectory-derived evidence available to this stage.
+        source: Outcome label determined from the recorded score.
+    """
+    payload = {
+        "instance_id": evidence.trajectory_id,
+        "task_id": evidence.task_id,
+        "record_source": source,
+        "score": evidence.score,
+        "evaluator_feedback": evidence.annotation_detail,
+        "annotation_metadata": evidence.annotation_metadata,
+        "trajectory": evidence.transcript,
+    }
+    return "Analyze this trajectory.\n\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def localization_user_prompt(tree: MarkdownSkillTree, record: TrajectoryAnalysisRecord) -> str:
+    """Localization user prompt.
+
+    Args:
+        tree: Parsed Markdown tree with stable heading identities.
+        record: Validated analysis record to render for localization.
+    """
+    payload = {
+        "analysis_record": _reference_analysis_record(record),
+        "skill_tree": tree_prompt_payload(tree),
+    }
+    return (
+        "Locate trajectory-derived evidence into the Markdown skill tree.\n"
+        "Use the recursive skill tree to choose existing fusion target nodes.\n\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+
+
+def _reference_analysis_record(record: TrajectoryAnalysisRecord) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for index, item in enumerate(record.items, start=1):
+        number = item.number
+        if number is None:
+            match = re.search(r"(\d+)$", item.item_id)
+            number = int(match.group(1)) if match else index
+        rendered: dict[str, Any] = {
+            "type": item.kind,
+            "number": number,
+            "title": item.title,
+            "description": item.description,
+            "content": item.content,
+        }
+        if item.kind == "failure_cause":
+            rendered["relation_to_skill"] = item.relation_to_skill
+        elif item.kind == "failure_memory":
+            rendered["skill_reflection"] = item.skill_reflection
+        items.append(rendered)
+    return {
+        "record_source": record.record_source,
+        "instance_id": record.instance_id,
+        "source_file": record.source_file,
+        "items": items,
+    }
+
+
+def fusion_user_prompt(
+    tree: MarkdownSkillTree,
+    target_node_id: str,
+    evidence: list[LocatedEvidence],
+) -> str:
+    """Fusion user prompt.
+
+    Args:
+        tree: Parsed Markdown tree with stable heading identities.
+        target_node_id: Existing stable node ID that owns this fusion request.
+        evidence: Ordered trajectory-derived evidence available to this stage.
+    """
+    payload = {
+        "target_node_id": target_node_id,
+        "skill_tree": tree_prompt_payload(tree),
+        "located_evidence": [
+            {
+                "instance_id": item.instance_id,
+                "evidence_id": item.evidence_id,
+                "record_source": item.record_source,
+                "reusable_lesson": item.reusable_lesson,
+                "target_node_id": item.target_node_id,
+            }
+            for item in evidence
+        ],
+    }
+    return (
+        "Fuse the located evidence for this target Markdown node.\n"
+        "Use the complete recursive skill tree to avoid redundant or misplaced edits.\n\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+
+
+__all__ = [
+    "ANALYSIS_SYSTEM_PROMPT",
+    "LOCALIZATION_SYSTEM_PROMPT",
+    "NODE_FUSION_SYSTEM_PROMPT",
+    "ROUTING_SYSTEM_PROMPT",
+    "analysis_user_prompt",
+    "localization_user_prompt",
+    "fusion_user_prompt",
+]

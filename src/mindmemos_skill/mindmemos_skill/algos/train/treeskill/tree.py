@@ -90,6 +90,11 @@ def render_selection(tree: SkillTree, selected_ids: list[str]) -> tuple[str, lis
     chosen, ancestors = [], []
 
     def render(node):
+        """Render.
+
+        Args:
+            node: Parsed heading node or proposed subtree.
+        """
         if node.id in selected:
             chosen.append(node.id)
             return [node.body]

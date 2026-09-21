@@ -1,0 +1,56 @@
+# Generic TreeSkill; ChengzhePiao/TreeSkill-colleague-share bc3b0a9d55870d8ad77c38839c4fa5baf111e638 ordered 200/200 split.
+data: spreadsheetbench
+data_options:
+  data_path: data/mindmemos_skill/treeskill/spreadsheetbench/dataset.json
+  data_root: data/mindmemos_skill/treeskill/spreadsheetbench
+split_file: resources/mindmemos_skill/treeskill/spreadsheetbench/splits.json
+initial_skill: resources/skill_evolve/spreadsheetbench_init_skill/xlsx
+train_limit: 200
+algorithm:
+  optimizer:
+    model: qwen3.5-9b
+    timeout_s: 1800
+    max_retries: 3
+    max_completion_tokens: 16384
+    parse_max_attempts: 3
+    temperature: 1.0
+    response_validation: content
+  router:
+    model: qwen3.5-9b
+    timeout_s: 1800
+    max_retries: 3
+    max_completion_tokens: 512
+    parse_max_attempts: 3
+    temperature: 0.0
+    response_validation: content
+  analysis_adapter: generic
+  samples_per_task: 1
+  rollout_concurrency: 8
+  min_trajectories: 8
+  max_trajectories: 200
+  transcript_max_chars: 20000
+  annotation_mode: required
+  require_skill_match: true
+  success_score_threshold: 1.0
+  analysis_concurrency: 8
+  localization_concurrency: 8
+  analysis_temperature: 1.0
+  localization_temperature: 0.0
+  fusion_temperature: 0.0
+  analysis_max_tokens: 4096
+  localization_max_tokens: 2048
+  fusion_max_tokens: 4096
+environment: spreadsheetbench
+environment_options:
+  agent:
+    model: qwen3.5-9b
+    timeout_s: 1800
+    max_retries: 3
+    max_completion_tokens: 16384
+    parse_max_attempts: 3
+    temperature: 1.0
+    response_validation: content
+  max_turns: 30
+  interaction_mode: workspace_tools
+  skill_loading_mode: tool
+test_limit: 200
