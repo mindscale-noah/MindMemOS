@@ -31,13 +31,16 @@ def main() -> None:
     )
     from mindmemos_skill.agents.typing import AgentResult
     from mindmemos_skill.envs.builtin_envs.common import export_skills
-    from mindmemos_skill.envs.builtin_envs.spreadsheetbench import SpreadsheetBenchConfig, SpreadsheetBenchTask
-    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.bash_only import run_bash_only
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench import (
+        SpreadsheetBenchConfig,
+        SpreadsheetBenchEnvironment,
+        SpreadsheetBenchTask,
+    )
     from mindmemos_skill.envs.builtin_envs.spreadsheetbench.prompts.bash_only import NO_SKILL, WITH_SKILL
     from mindmemos_skill.envs.builtin_envs.spreadsheetbench.prompts.workspace_tools import SYSTEM_PROMPT
     from mindmemos_skill.envs.builtin_envs.spreadsheetbench.tools import TOOLS, run_tool
-    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.typing import WorkbookInput
-    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.workspace_tools import run_workspace_tools
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.typing import SpreadsheetContext, WorkbookInput
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.workspace_tools import available_tools
     from mindmemos_skill.infra.execution import ExecutionConfig
     from mindmemos_skill.skill import Skill, SkillBundle, SkillResources
 
@@ -153,7 +156,17 @@ def main() -> None:
             adapter = OpenAIChatAgent(
                 config, model=model, parse_response=parse_native_tools, observation=native_observation
             )
-            run_workspace_tools(task, text, [case], root, settings, adapter)
+            env = SpreadsheetBenchEnvironment(settings)
+            env.agent = adapter
+            env._interact(
+                SpreadsheetContext(
+                    task=task,
+                    directory=case,
+                    skill_directory=case / "skills/xlsx",
+                    skill_text=text,
+                    tools=available_tools(settings, text),
+                )
+            )
             source_events = iter(events)
             requests = []
 
@@ -229,7 +242,13 @@ def main() -> None:
                 "run_bash_action",
                 lambda action, directory, config: execute(action["arguments"]["command"]),
             ):
-                result = run_bash_only(task, raw_skill if with_skill else "", case, root, settings, adapter)
+                env = SpreadsheetBenchEnvironment(settings)
+                env.agent = adapter
+                result = env._interact(
+                    SpreadsheetContext(
+                        task=task, directory=case, skill_directory=case, skill_text=raw_skill if with_skill else ""
+                    )
+                )
             (case / "output.xlsx").unlink(missing_ok=True)
             client = ReferenceClient(events)
             if with_skill:

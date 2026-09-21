@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from ....agents.buitin_agents.openai_chat.config import OpenAIChatConfig
 from ....infra.execution import ExecutionConfig
@@ -31,6 +31,9 @@ class SpreadsheetBenchConfig(BaseModel):
     agent: OpenAIChatConfig
     """Recorded model and transport settings."""
 
+    tools: list[dict[str, JsonValue]] | None = None
+    """Optional tool schemas for a subclass; None selects the built-in mode defaults."""
+
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     """Local Python launcher, shell, and command timeout."""
 
@@ -48,9 +51,6 @@ class SpreadsheetBenchConfig(BaseModel):
 
     skill_loading_mode: Literal["tool", "system_prompt"] = "tool"
     """Load xlsx guidance through a tool, or inject it into the system prompt."""
-
-    evaluator_version: str = "spreadsheetbench-cached-values-v2"
-    """Cell scoring and exact post-execution report protocol."""
 
     @model_validator(mode="after")
     def validate_interaction_mode(self) -> Self:

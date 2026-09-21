@@ -115,7 +115,22 @@ stagnation_limit: null
 
 ## SpreadsheetBench react 对齐
 
-`spreadsheetbench` 对齐 Skill-Forest T5/T7 实验中的 workspace react，模型通过工具修改 workbook；不是 `spreadsheetbench_python` 的 multi 代码生成模式。`tool_agent` 可选 `openai_tool`（默认）或 `text_action`，二者统一使用 `OpenAIChatAgent`，通过解析、格式错误提示和 observation 回调切换协议，环境持有工具执行与评分。`interaction_mode="bash_only"` 使用独立的 `run_bash_only` 函数，保留单 workbook、前 5 行预览、仅 bash action、输出缺失时提醒一次及可选的重复动作停止行为（默认关闭）；必须显式设置 `tool_agent="text_action"` 和 `skill_loading_mode="system_prompt"`。默认 `interaction_mode="workspace_tools"` 使用独立的 `run_workspace_tools` 函数，支持两种 tool agent 和两种 Skill 加载方式。
+`spreadsheetbench` 对齐 Skill-Forest T5/T7 实验中的 workspace react，模型通过工具修改 workbook。`tool_agent` 可选 `openai_tool`（默认）或 `text_action`，二者复用 `OpenAIChatAgent` 的解析和 observation 回调。`interaction_mode="bash_only"` 保留单 workbook、前 5 行预览、仅 bash action、输出缺失时提醒一次及可选的重复动作停止行为（默认关闭），必须设置 `tool_agent="text_action"` 和 `skill_loading_mode="system_prompt"`。`workspace_tools` 支持两种 tool agent 和两种 Skill 加载方式。两种模式共用环境内部 `_interact()` 循环，模式模块只提供消息渲染与单轮工具处理。
+
+### 算法通过继承定制交互
+
+继承 `SpreadsheetBenchEnvironment`，按需覆盖三个同步方法：
+
+- `_system_prompt(context) -> str`：初始 system message。
+- `_user_prompt(context) -> str`：公开任务说明。
+- `_get_observation(response, context) -> SpreadsheetObservation`：工具解析、执行和返回消息。
+
+`SpreadsheetContext` 包含公开 Task、本 case 工作区、已组装 Skill 的内容和目录、工具声明，不含 RewardData。消息历史和循环计数由每次调用持有，不存入共享环境实例。`SpreadsheetObservation` 返回 assistant 历史消息、后续反馈消息列表、结束信号、工具加载状态，以及可选的重复动作签名。原生工具协议必须保留 assistant 中的 tool_calls 和反馈中的 tool_call_id。
+
+构造时传入 `agent`，默认环境将其作为底层传输并包装工具解析；需要自行解析原始文本的子类可在构造函数中设置自己的 `self.agent`，TreeSkill 子类即采用这种方式。环境配置中的 `tools` 可传自定义工具声明；`None` 选择模式默认工具，空列表不发送工具声明。执行逻辑由对应 observation 方法负责。
+
+子类继承工作区校验、case 遍历、交互循环、usage 汇总和统一评分，不覆盖 `_run()` 或复制完整 rollout。提示词快照保存在 `workspace/<case-number>/system.md` 和 `task.md`。评分报告仅在执行结束后追加。
+
 
 ```python
 env = Environment.build("spreadsheetbench", {
@@ -231,7 +246,7 @@ Hugging Face 和 GitHub 来源锁定 revision；ALFWorld 锁定发布版本。
 运行环境时按上表中的官方路径配置 data loader；需要格式转换的数据集应另行准备转换步骤。
 数据本体仍由 `data/` 忽略规则排除；下载脚本、来源配置和已有 split 资源随代码管理。
 
-SpreadsheetBench 统一评分版本为 `spreadsheetbench-cached-values-v2`；旧结果目录的请求配置不同，应使用新 `work_dir`。`bash_only` 的 `finished` 和 `stop_reason` 单独记录交互终止状态，`fail_reason` 统一表示评分失败原因。差分脚本仅对 Skill-Forest 的标准范围比较通过标记，对 TreeSkill 的非空范围比较分数与首个差异；不再要求旧版逐格反馈文本一致。
+SpreadsheetBench 两种交互模式使用同一个公共评分器。`bash_only` 的 `finished` 和 `stop_reason` 单独记录交互终止状态，`fail_reason` 统一表示评分失败原因。差分脚本仅对 Skill-Forest 的标准范围比较通过标记，对 TreeSkill 的非空范围比较分数与首个差异；不再要求旧版逐格反馈文本一致。
 
 
 ## 原始仓库 actor 协议核对（2026-09-20）
@@ -282,7 +297,7 @@ SDK 请求测试另外验证三个 YAML 的实际请求体、thinking 去除、t
 
 ### 不能宣称完整实验完全一致的边界
 
-1. 按用户决定，两种模式共享 cached-value reward 和 TreeSkill 范围解析，均不进行公式重算。
+1. 默认两种模式共享 cached-value reward 和 TreeSkill 范围解析，均不主动进行公式重算。算法子类可以像 TreeSkill 一样提供重算辅助程序和指令。
    TreeSkill 的其他 evaluator/recalc 变体、原始成功状态与评分关联、Skill-Forest 旧解析不是复刻目标。
 2. TreeSkill 完整实验包含 tree routing、retrieval、fusion 和具体 Skill 选择。本 env 只接收已经组装的 SkillBundle，
    bash 分支对应 CLI/preloaded 执行协议，不实现 `cli_skill_tree_only_routed` 的算法行为或额外资源文件。

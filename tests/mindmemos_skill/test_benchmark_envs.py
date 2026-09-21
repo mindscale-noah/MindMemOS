@@ -482,7 +482,7 @@ def test_agent_tool_call_sdk_boundary(monkeypatch):
 
 @pytest.mark.parametrize("protocol", ["openai_tool", "text_action"])
 def test_spreadsheet_skill_tool_and_protocol_switch(spreadsheet, tmp_path, monkeypatch, protocol):
-    from mindmemos_skill.skill import Skill, SkillBundle, SkillResources
+    from mindmemos_skill.skill import Skill, SkillBundle, SkillResources, SkillSet
 
     sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
     actions = [
@@ -519,12 +519,15 @@ def test_spreadsheet_skill_tool_and_protocol_switch(spreadsheet, tmp_path, monke
         sample.task,
         tmp_path / "result",
         reward_data=sample.reward_data,
-        skills=[
-            Skill(
-                bundle=SkillBundle(files={"SKILL.md": "Use Python literal values."}),
-                resources=SkillResources(files={"references/guide.md": b"Original reference\r\n"}),
-            )
-        ],
+        skill_set=SkillSet(
+            {
+                "0": Skill(
+                    bundle=SkillBundle(files={"SKILL.md": "Use Python literal values."}),
+                    resources=SkillResources(files={"references/guide.md": b"Original reference\r\n"}),
+                )
+            },
+            max_concurrency=1,
+        ),
     )
     assert result.reward.success and result.reward.skill_loaded
     assert "Use Python literal values." not in json.dumps(agent.requests[0])
@@ -708,3 +711,83 @@ def test_bash_only_scores_output_at_turn_limit(spreadsheet, tmp_path, monkeypatc
     assert result.reward.finished is False
     assert result.reward.fail_reason == ""
     assert result.reward.stop_reason == "Max turns exceeded"
+
+
+def test_subclass_hooks_share_scoring_and_isolate_concurrent_rollouts(spreadsheet, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.typing import SpreadsheetObservation
+
+    barrier = Barrier(2)
+    schema = {"type": "function", "function": {"name": "custom", "parameters": {"type": "object"}}}
+
+    class Model(OpenAIChatAgent):
+        def run_messages(self, *, messages, tools=None):
+            assert tools == [schema]
+            assert messages[0]["content"] == "Custom policy"
+            return AgentResult(
+                output=messages[1]["content"],
+                trajectory=[{"role": "assistant", "content": messages[1]["content"]}],
+                usage={"total_tokens": 3},
+            )
+
+    class CustomEnvironment(SpreadsheetBenchEnvironment):
+        def _system_prompt(self, context):
+            return "Custom policy"
+
+        def _user_prompt(self, context):
+            assert "reward_data" not in type(context).model_fields
+            return context.task.id
+
+        def _get_observation(self, response, context):
+            barrier.wait(timeout=5)
+            assert response.output.text == context.task.id
+            workbook(context.directory / "output.xlsx", {"A1": 2})
+            return SpreadsheetObservation(
+                assistant={"role": "assistant", "content": context.task.id},
+                output=context.task.id,
+                complete=True,
+            )
+
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    config = SpreadsheetBenchConfig(agent=OpenAIChatConfig(model="offline"), tools=[schema])
+    env = CustomEnvironment(config, agent=Model(config.agent))
+
+    def run(identifier):
+        return env.rollout(
+            sample.task.model_copy(update={"id": identifier}),
+            tmp_path / identifier,
+            reward_data=sample.reward_data,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(run, ["first", "second"]))
+    assert [result.output for result in results] == ["first", "second"]
+    assert all(result.reward.success for result in results)
+    assert all(result.trajectory[-1]["content"] == result.reward.detail for result in results)
+    assert results[0].reward == results[1].reward
+    assert all(result.usage.calls == [{"total_tokens": 3}] for result in results)
+    assert all(result.usage.reported for result in results)
+    assert CustomEnvironment._run is SpreadsheetBenchEnvironment._run
+    assert CustomEnvironment._interact is SpreadsheetBenchEnvironment._interact
+    # The base class still renders its own prompts and cannot inherit custom hooks.
+    base_agent = ScriptedAgent(["Done"])
+    base = SpreadsheetBenchEnvironment(SpreadsheetBenchConfig(agent=base_agent.config), agent=base_agent)
+    base.rollout(sample.task, tmp_path / "base", reward_data=sample.reward_data)
+    assert base_agent.requests[0][0]["content"] != "Custom policy"
+
+
+def test_spreadsheet_resume_checks_tool_schemas(spreadsheet, tmp_path):
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    agent = ScriptedAgent(["Done"])
+    config = SpreadsheetBenchConfig(agent=agent.config)
+    env = SpreadsheetBenchEnvironment(config, agent=agent)
+    root = tmp_path / "run"
+    original = env.rollout(sample.task, root, reward_data=sample.reward_data)
+    assert env.rollout(sample.task, root, reward_data=sample.reward_data) == original
+    assert len(agent.requests) == 1
+    changed = SpreadsheetBenchEnvironment(config.model_copy(update={"tools": []}), agent=agent)
+    with pytest.raises(ValueError, match="inputs changed"):
+        changed.rollout(sample.task, root, reward_data=sample.reward_data)
+    assert len(agent.requests) == 1

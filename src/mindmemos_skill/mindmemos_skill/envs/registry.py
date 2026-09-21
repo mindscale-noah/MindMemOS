@@ -3,6 +3,7 @@
 from importlib import import_module
 
 BUILTIN_MODULES = (
+    "mindmemos_skill.envs.builtin_envs.agentskillos",
     "mindmemos_skill.envs.builtin_envs.livemath",
     "mindmemos_skill.envs.builtin_envs.searchqa",
     "mindmemos_skill.envs.builtin_envs.officeqa",

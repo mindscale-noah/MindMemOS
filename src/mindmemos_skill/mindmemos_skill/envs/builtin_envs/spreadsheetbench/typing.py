@@ -77,3 +77,47 @@ class SpreadsheetInteractionResult(BaseModel):
 
     diagnostics: dict[str, JsonValue]
     """Mode-specific completion and skill-loading information."""
+
+
+class SpreadsheetContext(BaseModel):
+    """Public, rollout-local inputs for prompt and tool hooks."""
+
+    task: SpreadsheetBenchTask
+    """Public instruction and workbook identities; excludes scoring inputs."""
+
+    directory: Path
+    """Current case workspace containing input.xlsx and output.xlsx."""
+
+    skill_directory: Path
+    """Exported guidance and auxiliary files for this case."""
+
+    skill_text: str
+    """Already assembled Skill instructions, empty for a baseline."""
+
+    tools: list[dict] = Field(default_factory=list)
+    """Tool schemas exposed to the agent for this case."""
+
+
+class SpreadsheetObservation(BaseModel):
+    """Decoded assistant turn and public feedback consumed by the shared loop."""
+
+    assistant: dict[str, JsonValue]
+    """Assistant history message, including native tool-call IDs when present."""
+
+    messages: list[dict[str, JsonValue]] = Field(default_factory=list)
+    """Ordered tool observations or format correction messages."""
+
+    output: str = ""
+    """Human-readable response for the rollout result."""
+
+    complete: bool = False
+    """Whether the assistant requested completion; the loop checks output files."""
+
+    skill_loaded: bool = False
+    """Whether this turn successfully loaded guidance through a tool."""
+
+    signature: str = ""
+    """Comparable action/result signature for optional stagnation detection."""
+
+    repeated_kind: str = "action/result pair"
+    """Description used when identical interactions reach the configured limit."""
