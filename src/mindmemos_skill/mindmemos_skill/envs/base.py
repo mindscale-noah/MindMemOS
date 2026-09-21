@@ -7,7 +7,7 @@ from time import perf_counter
 from typing import ClassVar
 
 from ..registry.base import ConfigT, Registrable
-from ..skill import Skill
+from ..skill import Skill, SkillSet
 from .data.typing import RewardData
 from .typing import RolloutRequest, RolloutResult, Task
 
@@ -27,7 +27,7 @@ class Environment(Registrable[ConfigT], ABC):
         work_dir: str | Path,
         *,
         reward_data: RewardData,
-        skills: list[Skill] | None = None,
+        skill_set: SkillSet | None = None,
         resume: bool = True,
     ) -> RolloutResult:
         """Execute a task or load its matching completed result.
@@ -37,7 +37,8 @@ class Environment(Registrable[ConfigT], ABC):
             work_dir: Root directory for one independent rollout, containing
                 private audit/ records and an agent-facing workspace/ directory.
                 Concurrent calls must use different roots.
-            skills: Ordered skill objects, or None for a baseline run.
+            skill_set: Candidate collection with task-time selection and bounded
+                parallel assembly, or None for a baseline run.
             reward_data: Private scoring inputs, persisted only in audit/.
             resume: Reuse a completed result when True. False reruns matching
                 inputs without clearing agent-created workspace files. Environments
@@ -55,7 +56,10 @@ class Environment(Registrable[ConfigT], ABC):
         """
         if resume and not self.supports_resume:
             raise NotImplementedError(f"{type(self).__name__} does not support resume; pass resume=False")
-        skills = [] if skills is None else list(skills)
+        skill_set = SkillSet({}, max_concurrency=1) if skill_set is None else skill_set
+        if not isinstance(skill_set, SkillSet):
+            raise TypeError("skill_set must be a SkillSet")
+        skills = skill_set.skills
         request = RolloutRequest(
             task={
                 "type": f"{type(task).__module__}.{type(task).__qualname__}",
@@ -65,7 +69,8 @@ class Environment(Registrable[ConfigT], ABC):
                 "type": f"{type(reward_data).__module__}.{type(reward_data).__qualname__}",
                 "data": reward_data.model_dump(mode="json"),
             },
-            skills=[skill.snapshot() for skill in skills],
+            skills=[skill.snapshot() for skill in skills.values()],
+            skill_set=skill_set.identity(),
             environment=f"{type(self).__module__}.{type(self).__qualname__}",
             config=self.config.model_dump(mode="json"),
         )
@@ -81,7 +86,12 @@ class Environment(Registrable[ConfigT], ABC):
         previous = None
         if request_path.exists():
             previous = RolloutRequest.model_validate_json(request_path.read_text(encoding="utf-8"))
-            source_request = previous.model_copy(update={"assembled_bundles": None, "assembled_hashes": None})
+            source_request = previous.model_copy(
+                update={"assembled_bundles": None, "assembled_hashes": None, "selected_skill_ids": None}
+            )
+            # Legacy requests had an ordered static list and no selection policy.
+            if previous.skill_set is None and type(skill_set) is SkillSet:
+                source_request.skill_set = request.skill_set
             if source_request != request:
                 raise ValueError("Rollout inputs changed; use a new work_dir")
         elif result_path.exists():
@@ -102,17 +112,24 @@ class Environment(Registrable[ConfigT], ABC):
         started_at = datetime.now(timezone.utc)
         start = perf_counter()
         if resume and previous is not None and previous.assembled_bundles is not None:
-            prepared_skills = [skill.with_bundle(bundle) for skill, bundle in zip(skills, previous.assembled_bundles)]
+            selected_ids = previous.selected_skill_ids
+            if selected_ids is None:
+                selected_ids = list(skills)
+            prepared_skills = [
+                skills[key].with_bundle(bundle)
+                for key, bundle in zip(selected_ids, previous.assembled_bundles, strict=True)
+            ]
         else:
             # Clear prior assembly before a forced rerun that may fail to assemble.
             temporary_request.write_text(request.model_dump_json(indent=2), encoding="utf-8")
             temporary_request.replace(request_path)
-            prepared_skills = [skill.assemble(task) for skill in skills]
-            if any(not isinstance(skill, Skill) for skill in prepared_skills):
-                raise TypeError("Skill.assemble(task) must return a complete Skill")
+            selected_ids = list(skill_set.select(task))
+            prepared_skills = skill_set.assemble(task, selected_ids=selected_ids)
         bundles = [skill.bundle for skill in prepared_skills]
         request.assembled_bundles = bundles
         request.assembled_hashes = [bundle.content_hash for bundle in bundles]
+        request.selected_skill_ids = selected_ids
+        request = RolloutRequest.model_validate_json(request.model_dump_json())
         temporary_request.write_text(request.model_dump_json(indent=2), encoding="utf-8")
         temporary_request.replace(request_path)
         result = self._run(task=task, reward_data=reward_data, skills=prepared_skills, workspace=workspace)

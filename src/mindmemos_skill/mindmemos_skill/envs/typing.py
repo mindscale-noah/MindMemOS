@@ -13,7 +13,7 @@ from pydantic import (
     model_validator,
 )
 
-from ..skill.typing import SkillBundle, SkillSnapshot
+from ..skill.typing import SkillBundle, SkillSetIdentity, SkillSnapshot
 
 
 class Task(BaseModel):
@@ -39,7 +39,13 @@ class RolloutRequest(BaseModel):
     """Private scoring input class and fields, including reference versions or hashes."""
 
     skills: list[SkillSnapshot]
-    """Ordered source Skill snapshots; empty for a baseline run."""
+    """Ordered candidate Skill snapshots; empty for a baseline run."""
+
+    skill_set: SkillSetIdentity | None = None
+    """Candidate identities and selection settings; None for legacy static records."""
+
+    selected_skill_ids: list[str] | None = None
+    """Ordered assembled member IDs; None before assembly or in legacy records."""
 
     assembled_bundles: list[SkillBundle] | None = None
     """Actual task-time bundles, or None until assembly has completed."""
@@ -56,13 +62,27 @@ class RolloutRequest(BaseModel):
     @model_validator(mode="after")
     def validate_assembly(self) -> Self:
         """Reject incomplete or corrupt task-time content records."""
+        if self.skill_set is not None and len(self.skill_set.skill_ids) != len(self.skills):
+            raise ValueError("Collection IDs must match the source Skill count")
+        expected_count = len(self.skills)
+        if self.selected_skill_ids is not None:
+            ids = self.selected_skill_ids
+            if (
+                self.skill_set is None
+                or len(set(ids)) != len(ids)
+                or any(key not in self.skill_set.skill_ids for key in ids)
+            ):
+                raise ValueError("Selected IDs must be unique members of the SkillSet")
+            expected_count = len(ids)
         if self.assembled_bundles is None:
-            if self.assembled_hashes is not None:
-                raise ValueError("Assembly hashes require assembled bundles")
-        elif len(self.assembled_bundles) != len(self.skills) or self.assembled_hashes != [
+            if self.assembled_hashes is not None or self.selected_skill_ids is not None:
+                raise ValueError("Assembly hashes and selection require assembled bundles")
+        elif self.skill_set is not None and self.selected_skill_ids is None:
+            raise ValueError("Assembled SkillSet requires selected IDs")
+        elif len(self.assembled_bundles) != expected_count or self.assembled_hashes != [
             bundle.content_hash for bundle in self.assembled_bundles
         ]:
-            raise ValueError("Assembled bundles and hashes must match the source Skill count")
+            raise ValueError("Assembled bundles and hashes must match the selected Skill count")
         return self
 
 

@@ -71,3 +71,12 @@ class OpenAIChatConfig(AgentConnectionConfig):
 
     invalid_tool_arguments: Literal["error", "empty"] = "error"
     """Return a parsing error or execute malformed JSON tool arguments as an empty object."""
+
+    response_format: dict[str, JsonValue] | None = None
+    """Optional OpenAI JSON object or JSON Schema response constraint."""
+
+    parse_max_attempts: int = Field(default=3, ge=1)
+    """Total calls allowed when an output parser rejects responses."""
+
+    parse_retry_mode: Literal["direct", "feedback"] = "direct"
+    """Retry the unchanged request or append the rejected reply and feedback."""

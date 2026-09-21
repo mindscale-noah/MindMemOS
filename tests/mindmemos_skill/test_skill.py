@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from mindmemos_skill.envs import Environment, Reward, RolloutResult, Task
 from mindmemos_skill.envs.data import RewardData
-from mindmemos_skill.skill import Skill, SkillBundle, SkillResources
+from mindmemos_skill.skill import Skill, SkillBundle, SkillResources, SkillSet
 from pydantic import BaseModel, ValidationError
 
 
@@ -140,7 +140,7 @@ def test_assembly_is_saved_once_reused_on_retry_and_checked_on_resume(tmp_path):
     env = BundleEnvironment(EnvironmentOptions())
     env.fail = True
     with pytest.raises(RuntimeError, match="Execution failed"):
-        env.rollout(task, tmp_path, reward_data=RewardData(), skills=[skill])
+        env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
     assert skill.calls == 1
     request_path = tmp_path / "audit/request.json"
     request = json.loads(request_path.read_text())
@@ -148,15 +148,18 @@ def test_assembly_is_saved_once_reused_on_retry_and_checked_on_resume(tmp_path):
     assert request["assembled_hashes"][0] != skill.bundle.content_hash
     skill.fail = True
     env.fail = False
-    result = env.rollout(task, tmp_path, reward_data=RewardData(), skills=[skill])
+    result = env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
     assert result.output == "Use: public task"
     assert skill.calls == 1
-    assert env.rollout(task, tmp_path, reward_data=RewardData(), skills=[skill]) == result
+    assert (
+        env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
+        == result
+    )
     assert env.calls == 2
     request["assembled_bundles"][0]["files"]["SKILL.md"] = "corrupt"
     request_path.write_text(json.dumps(request))
     with pytest.raises(ValidationError, match="hashes"):
-        env.rollout(task, tmp_path, reward_data=RewardData(), skills=[skill])
+        env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
     assert skill.calls == 1
 
 
@@ -164,14 +167,16 @@ def test_forced_rerun_invalidates_previous_assembly_before_failure(tmp_path):
     task = Task(id="one", instruction="task")
     skill = TaskSkill(bundle=SkillBundle(files={"SKILL.md": "Use: "}))
     env = BundleEnvironment(EnvironmentOptions())
-    env.rollout(task, tmp_path, reward_data=RewardData(), skills=[skill])
+    env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
     skill.fail = True
     with pytest.raises(RuntimeError, match="Assembly failed"):
-        env.rollout(task, tmp_path, reward_data=RewardData(), skills=[skill], resume=False)
+        env.rollout(
+            task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1), resume=False
+        )
     assert not (tmp_path / "audit/result.json").exists()
     assert json.loads((tmp_path / "audit/request.json").read_text())["assembled_bundles"] is None
     skill.fail = False
-    env.rollout(task, tmp_path, reward_data=RewardData(), skills=[skill])
+    env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
     assert skill.calls == 3
 
 
@@ -203,12 +208,17 @@ def test_environment_receives_complete_skill_and_unchanged_references(tmp_path, 
 
     env = ReferenceEnvironment(EnvironmentOptions())
     work_dir = tmp_path / "rollout"
-    env.rollout(task, work_dir, reward_data=RewardData(), skills=[skill])
+    env.rollout(task, work_dir, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
     assert skill.snapshot() == snapshot
     assert (root / "SKILL.md").read_text() == "Read references/guide.md. Task: "
     (root / "references/guide.md").write_text("Changed reference")
     with pytest.raises(ValueError, match="inputs changed"):
-        env.rollout(task, work_dir, reward_data=RewardData(), skills=[implementation.from_path(root)])
+        env.rollout(
+            task,
+            work_dir,
+            reward_data=RewardData(),
+            skill_set=SkillSet({"0": implementation.from_path(root)}, max_concurrency=1),
+        )
 
 
 @pytest.mark.parametrize("path", [".", "../secret", "/secret", "SKILL.md", "SKILL.md/other", "a\\b", "a/../b"])

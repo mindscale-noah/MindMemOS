@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from mindmemos_skill.envs import Environment, Reward, RolloutResult, Task, Usage
 from mindmemos_skill.envs.data import RewardData
-from mindmemos_skill.skill import Skill, SkillBundle
+from mindmemos_skill.skill import Skill, SkillBundle, SkillSet
 from pydantic import BaseModel, ValidationError
 
 
@@ -70,13 +70,21 @@ def test_unsupported_resume_has_no_side_effects(tmp_path, completed):
     skill = make_skill("Check the answer")
     work_dir = tmp_path / "rollout"
     if completed:
-        env.rollout(task, work_dir, reward_data=RewardData(), skills=[skill], resume=False)
+        env.rollout(
+            task, work_dir, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1), resume=False
+        )
     before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     with patch.object(skill, "assemble", side_effect=AssertionError("Unexpected assembly")):
         with pytest.raises(NotImplementedError, match="does not support resume; pass resume=False"):
-            env.rollout(task, work_dir, reward_data=RewardData(), skills=[skill], resume=True)
+            env.rollout(
+                task,
+                work_dir,
+                reward_data=RewardData(),
+                skill_set=SkillSet({"0": skill}, max_concurrency=1),
+                resume=True,
+            )
         with pytest.raises(NotImplementedError, match="does not support resume"):
-            env.rollout(task, work_dir, reward_data=RewardData(), skills=[skill])
+            env.rollout(task, work_dir, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
     assert env.calls == int(completed)
     assert work_dir.exists() == completed
     assert {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
@@ -104,7 +112,7 @@ def test_resume_from_new_instance_without_execution(tmp_path):
         Task(id="task-001", instruction="Solve this"),
         tmp_path,
         reward_data=RewardData(),
-        skills=[make_skill("Check the answer")],
+        skill_set=SkillSet({"0": make_skill("Check the answer")}, max_concurrency=1),
     )
     assert env.calls == 1
     assert (tmp_path / "workspace/answer.txt").read_text() == "Solve this"
@@ -119,7 +127,7 @@ def test_resume_from_new_instance_without_execution(tmp_path):
             Task(id="task-001", instruction="Solve this"),
             tmp_path,
             reward_data=RewardData(),
-            skills=[make_skill("Check the answer")],
+            skill_set=SkillSet({"0": make_skill("Check the answer")}, max_concurrency=1),
         )
         == result
     )
@@ -134,7 +142,7 @@ def test_reject_changed_inputs(tmp_path, change):
         Task(id="task-001", instruction="task"),
         tmp_path,
         reward_data=RewardData(),
-        skills=[make_skill("skill")],
+        skill_set=SkillSet({"0": make_skill("skill")}, max_concurrency=1),
     )
     if change == "config":
         env.config = Options(model="another-model")
@@ -143,7 +151,7 @@ def test_reject_changed_inputs(tmp_path, change):
             Task(id="task-001", instruction="different" if change == "task" else "task"),
             tmp_path,
             reward_data=RewardData(),
-            skills=[make_skill("different" if change == "skills" else "skill")],
+            skill_set=SkillSet({"0": make_skill("different" if change == "skills" else "skill")}, max_concurrency=1),
         )
     assert env.calls == 1
 
@@ -235,11 +243,14 @@ def test_task_subclass_fields_and_original_objects_are_preserved(tmp_path):
 
     original_task = task
     env = ObjectEnvironment(Options())
-    result = env.rollout(task, tmp_path, reward_data=RewardData(), skills=[skill])
+    result = env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
     assert result.trajectory[0]["task"]["input_file"] == "first.csv"
     with pytest.raises(ValueError, match="inputs changed"):
         env.rollout(
-            task.model_copy(update={"input_file": "second.csv"}), tmp_path, reward_data=RewardData(), skills=[skill]
+            task.model_copy(update={"input_file": "second.csv"}),
+            tmp_path,
+            reward_data=RewardData(),
+            skill_set=SkillSet({"0": skill}, max_concurrency=1),
         )
 
 

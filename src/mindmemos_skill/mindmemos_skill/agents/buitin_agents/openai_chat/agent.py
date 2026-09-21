@@ -2,9 +2,12 @@
 
 import random
 from collections.abc import Callable
+from copy import deepcopy
+from functools import partial
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
+from ....common.json import parse_model
 from ....logging import get_logger
 from ...base import Agent
 from ...constants import AGENT_API_KEY_ENV
@@ -28,6 +31,9 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
         format_error: Callable[[ValueError], str] = str,
         observation: Callable[[ToolCall, str], dict[str, JsonValue]] | None = None,
         native_tools: bool = True,
+        output_parser: Callable[[str], str | BaseModel] | None = None,
+        output_model: type[BaseModel] | None = None,
+        parse_feedback: Callable[[Exception], str] | None = None,
     ) -> None:
         """Configure a shared model call with optional protocol callbacks.
 
@@ -38,6 +44,10 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             format_error: Convert parser ValueError into retry feedback.
             observation: Encode environment results for the next turn.
             native_tools: Whether to send tool schemas to the provider.
+            output_parser: Validate or decode final text; parser exceptions trigger bounded retries.
+            output_model: Extract, repair and validate JSON with this model; mutually
+                exclusive with output_parser and tool parse_response.
+            parse_feedback: Optional correction message renderer for feedback retries.
         """
         super().__init__(config)
         if model is not None and model.config != config:
@@ -46,6 +56,14 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
         self.parse_response = parse_response
         self.format_error = format_error
         self.encode_observation = observation
+        if output_model is not None:
+            if output_parser is not None or parse_response is not None:
+                raise ValueError("output_model cannot be combined with output_parser or tool parse_response")
+            output_parser = partial(parse_model, model_type=output_model)
+        if output_parser is not None and parse_response is not None:
+            raise ValueError("output_parser and tool parse_response are mutually exclusive")
+        self.output_parser = output_parser
+        self.parse_feedback = parse_feedback or _parse_feedback
         self.native_tools = native_tools
 
     def run(
@@ -55,6 +73,7 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
         user: str | None = None,
         messages: list[dict[str, JsonValue]] | None = None,
         tools: list[dict[str, JsonValue]] | None = None,
+        response_format: dict[str, JsonValue] | None = None,
     ) -> AgentResult:
         """Call the model once and optionally decode the response.
 
@@ -63,6 +82,7 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             user: Public task text without private scoring inputs.
             messages: Conversation history, mutually exclusive with system/user.
             tools: Environment tool schemas; omitted from textual protocol requests.
+            response_format: Per-call structured output constraint; overrides configuration.
 
         Returns:
             Text or a decoded ToolTurn with the original trace and usage.
@@ -79,7 +99,43 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
         elif system is not None or user is not None:
             raise ValueError("messages cannot be combined with system or user")
         transport = self.model if self.model is not None else self
-        result = transport.run_messages(messages=messages, tools=tools if self.native_tools else None)
+        conversation = deepcopy(messages)
+        attempts = []
+        for attempt in range(self.config.parse_max_attempts if self.output_parser else 1):
+            options = {"messages": conversation, "tools": tools if self.native_tools else None}
+            if response_format is not None:
+                options["response_format"] = response_format
+            result = transport.run_messages(**options)
+            attempts.append(result)
+            if self.output_parser is None:
+                break
+            try:
+                if not isinstance(result.output, str):
+                    raise TypeError("Output parser requires text")
+                parsed = self.output_parser(result.output)
+                if not isinstance(parsed, (str, BaseModel)):
+                    raise TypeError("Output parser must return str or a Pydantic model")
+            except Exception as exc:
+                if attempt + 1 == self.config.parse_max_attempts:
+                    raise
+                if self.config.parse_retry_mode == "feedback":
+                    conversation.extend(
+                        [
+                            {"role": "assistant", "content": result.output},
+                            {"role": "user", "content": self.parse_feedback(exc)},
+                        ]
+                    )
+                continue
+            usage = dict(result.usage)
+            for key in ("input_tokens", "output_tokens", "total_tokens"):
+                usage[key] = sum(int(item.usage.get(key, 0)) for item in attempts)
+            usage["parse_attempts"] = len(attempts)
+            usage["attempt_usage"] = [item.usage for item in attempts]
+            return AgentResult(
+                output=parsed,
+                trajectory=[event for item in attempts for event in item.trajectory],
+                usage=usage,
+            )
         if self.parse_response is None:
             return result
         try:
@@ -106,13 +162,18 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
         return self.encode_observation(call, content)
 
     def run_messages(
-        self, *, messages: list[dict[str, JsonValue]], tools: list[dict[str, JsonValue]] | None = None
+        self,
+        *,
+        messages: list[dict[str, JsonValue]],
+        tools: list[dict[str, JsonValue]] | None = None,
+        response_format: dict[str, JsonValue] | None = None,
     ) -> AgentResult:
         """Execute one conversation turn, optionally requesting declared tools.
 
         Args:
             messages: Public conversation history in OpenAI chat format.
             tools: Explicit tool schemas; None disables tool calls.
+            response_format: Override the configured JSON output constraint.
 
         Returns:
             Text output and full trace, including tool calls in the last event.
@@ -128,6 +189,9 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             raise ValueError(f"Provide api_key or set {AGENT_API_KEY_ENV}")
         api_key = self.config.api_key.get_secret_value()
         options = {}
+        effective_format = response_format if response_format is not None else self.config.response_format
+        if effective_format is not None:
+            options["response_format"] = effective_format
         if self.config.max_completion_tokens is not None:
             options["max_completion_tokens"] = self.config.max_completion_tokens
         if self.config.reasoning_effort is not None:
@@ -233,3 +297,12 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             ],
             usage=usage,
         )
+
+
+def _parse_feedback(error: Exception) -> str:
+    """Render the reference format-correction message."""
+    return (
+        f"Your previous reply could not be applied:\n{error}\n\n"
+        "Fix exactly that problem and resend the COMPLETE corrected output in the same "
+        "format as before. Do not apologize or add commentary."
+    )

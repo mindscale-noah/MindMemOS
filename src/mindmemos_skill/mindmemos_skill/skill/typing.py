@@ -9,6 +9,37 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 
+class SkillSetIdentity(BaseModel):
+    """Record collection selection settings and ordered candidate identities."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject unrecognized persisted collection settings."""
+
+    implementation: str = Field(min_length=1)
+    """Fully qualified collection class implementing task-time selection."""
+
+    skill_ids: list[str]
+    """Ordered candidate IDs corresponding to the source Skill snapshots."""
+
+    max_concurrency: int = Field(gt=0, strict=True)
+    """Maximum simultaneous member assemblies within one collection call."""
+
+    config: dict[str, JsonValue] = Field(default_factory=dict)
+    """Non-secret selection settings supplied by the concrete collection."""
+
+    @field_validator("skill_ids")
+    @classmethod
+    def validate_ids(cls, values: list[str]) -> list[str]:
+        """Validate unique, nonempty candidate IDs.
+
+        Args:
+            values: Candidate identities in injection order.
+        """
+        if any(not value.strip() for value in values) or len(set(values)) != len(values):
+            raise ValueError("Skill IDs must be unique nonempty strings")
+        return values
+
+
 class SkillBundle(BaseModel):
     """Own the mutable text files managed by a Skill."""
 

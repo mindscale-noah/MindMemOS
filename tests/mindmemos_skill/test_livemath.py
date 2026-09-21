@@ -10,7 +10,7 @@ from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.builtin_envs.livemath import LiveMathConfig, LiveMathEnvironment
 from mindmemos_skill.envs.builtin_envs.livemath.reward import evaluate
 from mindmemos_skill.envs.data import Data
-from mindmemos_skill.skill import Skill, SkillBundle
+from mindmemos_skill.skill import Skill, SkillBundle, SkillSet
 
 
 @pytest.fixture
@@ -121,7 +121,9 @@ def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
     env = LiveMathEnvironment(config, agent=agent)
     skill = Skill(bundle=SkillBundle(files={"SKILL.md": "Check quantifiers"}))
     root = tmp_path / "rollout"
-    result = env.rollout(sample.task, root, reward_data=sample.reward_data, skills=[skill])
+    result = env.rollout(
+        sample.task, root, reward_data=sample.reward_data, skill_set=SkillSet({"0": skill}, max_concurrency=1)
+    )
     assert result.reward.success and result.usage.total_tokens == 120
     assert result.usage.input_tokens == 100 and result.usage.output_tokens == 20
     assert len(result.trajectory) == 3
@@ -132,7 +134,12 @@ def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
     assert set(path.name for path in (root / "workspace").iterdir()) == {"task.md", "system.md", "response.txt"}
     audit = json.loads((root / "audit/request.json").read_text())
     assert audit["reward_data"]["data"]["correct_choice"]["label"] == sample.reward_data.correct_choice.label
-    assert env.rollout(sample.task, root, reward_data=sample.reward_data, skills=[skill]) == result
+    assert (
+        env.rollout(
+            sample.task, root, reward_data=sample.reward_data, skill_set=SkillSet({"0": skill}, max_concurrency=1)
+        )
+        == result
+    )
     assert agent.calls == 1
 
     class TaskSkill(Skill):
@@ -140,7 +147,12 @@ def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
             return self.with_bundle(SkillBundle(files={"SKILL.md": self.bundle.files["SKILL.md"] + task.instruction}))
 
     dynamic = TaskSkill(bundle=skill.bundle)
-    env.rollout(sample.task, tmp_path / "dynamic", reward_data=sample.reward_data, skills=[dynamic])
+    env.rollout(
+        sample.task,
+        tmp_path / "dynamic",
+        reward_data=sample.reward_data,
+        skill_set=SkillSet({"0": dynamic}, max_concurrency=1),
+    )
     assert agent.calls == 2
 
 

@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.builtin_envs.livemath.config import LiveMathRunConfig
 from mindmemos_skill.envs.data import Data
-from mindmemos_skill.skill import Skill
+from mindmemos_skill.skill import Skill, SkillSet
 
 
 def main() -> None:
@@ -38,6 +38,7 @@ def main() -> None:
     skills = []
     if args.skill_file is not None:
         skills.append(Skill.from_path(args.skill_file))
+    skill_set = SkillSet({str(index): skill for index, skill in enumerate(skills)}, max_concurrency=1)
     env = Environment.build("livemath", config.environment.model_dump())
     print(
         json.dumps(
@@ -54,8 +55,18 @@ def main() -> None:
         ),
         flush=True,
     )
-    result = env.rollout(sample.task, args.work_dir, reward_data=sample.reward_data, skills=skills)
-    resumed = env.rollout(sample.task, args.work_dir, reward_data=sample.reward_data, skills=skills)
+    result = env.rollout(
+        sample.task,
+        args.work_dir,
+        reward_data=sample.reward_data,
+        skill_set=skill_set,
+    )
+    resumed = env.rollout(
+        sample.task,
+        args.work_dir,
+        reward_data=sample.reward_data,
+        skill_set=skill_set,
+    )
     if resumed != result:
         raise RuntimeError("Resume did not return the original result")
     audit_dir = args.work_dir / "audit"

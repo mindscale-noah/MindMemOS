@@ -1,9 +1,8 @@
 """Callbacks for native tool calls and textual Action/Observation turns."""
 
-import json
-
 from pydantic import JsonValue
 
+from ....common.json import extract_json_object
 from ...typing import AgentResult, ToolCall, ToolTurn
 from .config import OpenAIChatConfig
 
@@ -40,42 +39,13 @@ def parse_action(response: str) -> dict | None:
     if "ACTION: TASK_COMPLETE" in response or "Action:" not in response:
         return None
     raw = response.split("Action:", 1)[1]
-    start = raw.find("{")
-    if start < 0:
+    try:
+        payload = extract_json_object(raw, allow_incomplete=True)
+    except ValueError as exc:
+        raise ValueError("Malformed Action payload") from exc
+    if not isinstance(payload.get("name"), str) or not isinstance(payload.get("arguments", {}), dict):
         raise ValueError("Malformed Action payload")
-    text, depth, quote, escaped = "", 0, None, False
-    for character in raw[start:]:
-        text += character
-        if quote:
-            if escaped:
-                escaped = False
-            elif character == "\\":
-                escaped = True
-            elif character == quote:
-                quote = None
-        elif character in {"'", '"'}:
-            quote = character
-        elif character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth == 0:
-                break
-    if quote:
-        raise ValueError("Malformed Action payload")
-    text += "}" * depth
-    for candidate in (text, text.replace("'", '"')):
-        try:
-            payload = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if (
-            isinstance(payload, dict)
-            and isinstance(payload.get("name"), str)
-            and isinstance(payload.get("arguments", {}), dict)
-        ):
-            return {"name": payload["name"], "arguments": payload.get("arguments", {})}
-    raise ValueError("Malformed Action payload")
+    return {"name": payload["name"], "arguments": payload.get("arguments", {})}
 
 
 def text_format_error(error: ValueError) -> str:
@@ -125,9 +95,7 @@ def parse_native_tools(result: AgentResult, config: OpenAIChatConfig) -> ToolTur
         function = raw["function"]
         error = ""
         try:
-            arguments = json.loads(function["arguments"] or "{}")
-            if not isinstance(arguments, dict):
-                raise ValueError("Tool arguments must be a JSON object")
+            arguments = extract_json_object(function["arguments"] or "{}", repair=False)
         except (ValueError, TypeError) as exc:
             arguments = {}
             if config.invalid_tool_arguments == "error":
