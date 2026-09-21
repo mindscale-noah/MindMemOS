@@ -1,0 +1,73 @@
+{
+  "protocol": "online-controlled",
+  "domain": "customer_support",
+  "evaluation": {
+    "test_tasks_per_seed": 50,
+    "runs_per_task": 1,
+    "primary_metric": "task_completion_pass_at_1",
+    "bootstrap_repetitions": 10000,
+    "bootstrap_strata": "task_id"
+  },
+  "seeds": {
+    "42": {
+      "paired_samples": 50,
+      "pairing_complete": true,
+      "baseline": {
+        "pass_at_1": 0.56,
+        "ux_score_mean": 4.27,
+        "state_requirements_pass_rate": 0.82,
+        "task_requirements_pass_rate": 0.62,
+        "turns_mean": 3.26,
+        "tool_errors_mean": 0.0
+      },
+      "evolution": {
+        "pass_at_1": 0.68,
+        "ux_score_mean": 4.4544,
+        "state_requirements_pass_rate": 0.84,
+        "task_requirements_pass_rate": 0.74,
+        "turns_mean": 3.72,
+        "tool_errors_mean": 0.0
+      },
+      "pass_at_1_delta": 0.12,
+      "pass_at_1_delta_ci95": [0.0, 0.24]
+    },
+    "43": {
+      "paired_samples": 50,
+      "pairing_complete": true,
+      "baseline": {
+        "pass_at_1": 0.64,
+        "ux_score_mean": 4.2048,
+        "state_requirements_pass_rate": 0.86,
+        "task_requirements_pass_rate": 0.72,
+        "turns_mean": 3.22,
+        "tool_errors_mean": 0.02
+      },
+      "evolution": {
+        "pass_at_1": 0.66,
+        "ux_score_mean": 4.3078,
+        "state_requirements_pass_rate": 0.88,
+        "task_requirements_pass_rate": 0.7,
+        "turns_mean": 2.98,
+        "tool_errors_mean": 0.06
+      },
+      "pass_at_1_delta": 0.02,
+      "pass_at_1_delta_ci95": [-0.1, 0.14]
+    }
+  },
+  "macro_average_across_completed_seeds": {
+    "seed_count": 2,
+    "baseline_pass_at_1": 0.6,
+    "evolution_pass_at_1": 0.67,
+    "pass_at_1_delta": 0.07,
+    "baseline_ux_score_mean": 4.2374,
+    "evolution_ux_score_mean": 4.3811,
+    "ux_score_delta": 0.1437,
+    "baseline_state_requirements_pass_rate": 0.84,
+    "evolution_state_requirements_pass_rate": 0.86,
+    "state_requirements_delta": 0.02,
+    "baseline_task_requirements_pass_rate": 0.67,
+    "evolution_task_requirements_pass_rate": 0.72,
+    "task_requirements_delta": 0.05
+  },
+  "conclusion": "Evolution has a positive pass@1 point estimate in both completed seeds and a +0.07 macro-average delta, but neither per-seed 95% confidence interval has a lower bound above zero; the current evidence is therefore positive but statistically inconclusive."
+}
