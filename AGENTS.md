@@ -1,5 +1,10 @@
 # 项目开发约定
 
+## 项目 Skill
+
+- 编写、修改、重构或审查 Python 代码时，使用仓库内的 [python-coding](.agents/skills/python-coding/SKILL.md)；涉及注册机制时，按该 Skill 的引用读取补充规范。
+- 项目 Skill 位于根目录 `.agents/skills/`，随仓库提交，供 Codex 在本项目及其子目录中发现；无需安装到个人目录，也可通过 `$python-coding` 显式调用。
+
 ## 已部署云服务的数据库兼容与迁移
 
 - `src/mindmemos/` 对应已经商用部署的云服务，涉及该服务的修改必须以已有生产数据和在线调用为基础，不能按全新数据库处理。
