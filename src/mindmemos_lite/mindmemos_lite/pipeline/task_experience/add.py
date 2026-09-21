@@ -95,6 +95,7 @@ class TrajectoryAddPipeline(MemoryPersistencePipelineMixin):
                 persistence=self.persistence,
                 embed_client=resolved_embed,
                 llm_client=resolved_llm,
+                top_k=self._get_trajectory_config().experience_recall_top_k,
             ),
             vectorizer=vectorizer,
         )

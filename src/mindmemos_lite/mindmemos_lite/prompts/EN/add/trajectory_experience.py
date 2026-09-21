@@ -20,7 +20,9 @@ EXPERIENCE_EXTRACTION_SYSTEM_PROMPT = """You are the experience extractor for Mi
 - source_message_indices must reference real message_index values present in the turns; never fabricate evidence.
 
 [Quantity]
-- Fewer is better; every experience must be genuinely reusable. If nothing qualifies, output {"experiences": []}.
+- Fewer is better; every experience must be genuinely reusable.
+- Emit each distinct experience exactly once. If the same lesson recurs in the trace under different wording, output a single entry, not one per phrasing.
+- If nothing qualifies, output {"experiences": []}.
 
 [Output]
 {"experiences": [{"content": "...", "confidence": 0.9, "importance": 0.8, "source_message_indices": [0, 3], "reason": "..."}]}"""

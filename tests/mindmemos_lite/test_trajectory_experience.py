@@ -16,7 +16,6 @@ from mindmemos_lite.typing import (
     DialogueMessage,
     FileMessage,
     MemoryRequestContext,
-    PreprocessedText,
 )
 
 
@@ -62,27 +61,35 @@ class _RecordingExtractor:
         ]
 
 
-class _ReuseFirstDedup:
-    """Simulates the LLM judge: once one experience exists in this import, reuse it."""
+class _StubDedup:
+    """Stand-in batched judge: records the batch and creates one node per candidate.
 
-    def __init__(self) -> None:
-        self.creates = 0
+    ``reuse_first`` mimics the LLM deciding that a later candidate is the same
+    experience as an earlier one, collapsing the batch onto a single node.
+    """
 
-    async def resolve(
-        self,
-        ctx: MemoryRequestContext,
-        candidate_text: str,
-        preprocessed: PreprocessedText,
-        *,
-        lang: str,
-        import_experiences: list[tuple[str, str]] | None = None,
-    ) -> ExperienceResolution:
-        for memory_id, content in import_experiences or ():
-            if content and "pip" in content and "pip" in candidate_text:
-                return ExperienceResolution(action="reuse", target_memory_id=memory_id, preprocessed=preprocessed)
-        self.creates += 1
-        memory_id = f"exp-{self.creates}"
-        return ExperienceResolution(action="create", target_memory_id=memory_id, preprocessed=preprocessed)
+    def __init__(self, *, reuse_first: bool = False) -> None:
+        self.calls = 0
+        self.batches: list[list[str]] = []
+        self._reuse_first = reuse_first
+
+    async def resolve_many(self, ctx, candidates, *, lang):
+        self.calls += 1
+        self.batches.append([text for _, text, _ in candidates])
+        resolutions: dict[int, ExperienceResolution] = {}
+        first_target: str | None = None
+        for candidate_id, _text, preprocessed in candidates:
+            if self._reuse_first and first_target is not None:
+                resolutions[candidate_id] = ExperienceResolution(
+                    action="reuse", target_memory_id=first_target, preprocessed=preprocessed
+                )
+                continue
+            target = f"exp-{candidate_id}"
+            first_target = first_target or target
+            resolutions[candidate_id] = ExperienceResolution(
+                action="create", target_memory_id=target, preprocessed=preprocessed
+            )
+        return resolutions
 
 
 def _turns(count: int) -> list[DialogueMessage]:
@@ -119,7 +126,8 @@ def _builder(extractor, dedup) -> TrajectoryExperienceBuilder:
 async def test_trajectory_builder_extracts_whole_trace_in_one_call_and_dedups() -> None:
     messages = _turns(16)
     extractor = _RecordingExtractor()
-    builder = _builder(extractor, _ReuseFirstDedup())
+    dedup = _StubDedup(reuse_first=True)
+    builder = _builder(extractor, dedup)
 
     inp = AddPipelineInput(messages=messages, task="安装 pandas", mode="sync")
     plan, events, _update_commands = await builder.build(inp, _context(), config=TrajectoryAddConfig())
@@ -129,9 +137,13 @@ async def test_trajectory_builder_extracts_whole_trace_in_one_call_and_dedups() 
     assert extractor.calls == 1
     assert [turn["message_index"] for turn in extractor.turns] == list(range(len(messages)))
 
-    # exactly one task entity, and only ONE experience created despite two candidates
+    # Both candidates are judged in ONE batched call rather than one call each.
+    assert dedup.calls == 1
+    assert len(dedup.batches[0]) == 2
+
+    # exactly one task entity, and only ONE experience node despite two candidates
     assert len(plan.entities) == 1
-    assert len(plan.memories) == 1, f"expected dedup to keep a single node, got {len(plan.memories)}"
+    assert len(plan.memories) == 1, f"expected the batch to collapse onto one node, got {len(plan.memories)}"
 
     task_entity_id = plan.entities[0].entity_id
     task_edges = [r for r in plan.relationships if r.rel_type == "TASK_EXPERIENCE"]
@@ -139,6 +151,45 @@ async def test_trajectory_builder_extracts_whole_trace_in_one_call_and_dedups() 
     assert {r.source.node_id for r in task_edges} == {task_entity_id}
     assert {r.target.node_id for r in task_edges} == {memory.memory_id for memory in plan.memories}
 
+    assert len({event.memory_id for event in events}) == 1
+
+
+class _ByteIdenticalExtractor:
+    """Emits the same experience text twice, so only the hash guard can fold it."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def extract(self, task_text, turns, lang, context):
+        self.calls += 1
+        return [
+            ExtractedExperienceCandidate(
+                ref_id=f"e{offset}",
+                content="同一条经验: 离线环境需要改用本地包源。",
+                confidence=0.9,
+                source_message_indices=[0],
+            )
+            for offset in range(2)
+        ]
+
+
+@pytest.mark.asyncio
+async def test_trajectory_builder_folds_byte_identical_candidates_before_judging() -> None:
+    extractor = _ByteIdenticalExtractor()
+    dedup = _StubDedup()
+    builder = _builder(extractor, dedup)
+
+    inp = AddPipelineInput(messages=_turns(4), task="安装 pandas", mode="sync")
+    plan, events, _update_commands = await builder.build(inp, _context(), config=TrajectoryAddConfig())
+
+    # The duplicate is dropped before the judge, which therefore sees one candidate.
+    assert dedup.calls == 1
+    assert len(dedup.batches[0]) == 1
+
+    assert len(plan.memories) == 1
+    # Both candidates still produce their own task edge onto the shared node.
+    task_edges = [r for r in plan.relationships if r.rel_type == "TASK_EXPERIENCE"]
+    assert len(task_edges) == 2
     assert len({event.memory_id for event in events}) == 1
 
 
@@ -152,7 +203,7 @@ async def test_trajectory_builder_keeps_head_and_tail_of_oversized_tool_message(
         DialogueMessage(role="assistant", content="安装完成"),
     ]
     extractor = _RecordingExtractor()
-    builder = _builder(extractor, _ReuseFirstDedup())
+    builder = _builder(extractor, _StubDedup())
 
     cfg = TrajectoryAddConfig(tool_message_head_tokens=200, tool_message_tail_tokens=200)
     inp = AddPipelineInput(messages=messages, task="安装 pandas", mode="sync")
@@ -183,7 +234,7 @@ async def test_trajectory_builder_keeps_original_positions_when_messages_are_dro
         DialogueMessage(role="tool", content="工具输出"),
     ]
     extractor = _RecordingExtractor()
-    builder = _builder(extractor, _ReuseFirstDedup())
+    builder = _builder(extractor, _StubDedup())
 
     inp = AddPipelineInput(messages=messages, task="安装 pandas", mode="sync")
     await builder.build(inp, _context(), config=TrajectoryAddConfig())
@@ -217,3 +268,15 @@ def test_truncate_tool_message_boundaries() -> None:
     assert trimmed.startswith("日志行")
     assert trimmed.endswith("END")
     assert "truncated" in trimmed
+
+
+def test_pipeline_wires_experience_recall_top_k_into_dedup() -> None:
+    """The dedup recall width must follow the trajectory config, not the default."""
+    from mindmemos_lite.config import build_config
+    from mindmemos_lite.pipeline import create_pipeline
+
+    cfg = build_config(config_path="config/mindmemos_lite/dev.example.yaml")
+    cfg.algo_config.trajectory.experience_recall_top_k = 2
+    pipeline = create_pipeline(type="add", name="trajectory_add", config=cfg, persistence=object())
+
+    assert pipeline._builder._deduplicator._top_k == 2

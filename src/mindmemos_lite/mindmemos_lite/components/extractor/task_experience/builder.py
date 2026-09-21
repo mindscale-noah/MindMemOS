@@ -270,55 +270,64 @@ class TrajectoryExperienceBuilder:
             for index, candidate in enumerate(extracted):
                 candidates.append(candidate.model_copy(update={"ref_id": f"e{index}"}))
 
-        # 4. Resolve each candidate; reuse experiences already created by this
-        #    import so repeated lessons within one trajectory do not duplicate nodes.
+        # 4. Resolve every candidate against existing experiences in one batched
+        #    judgement (one recall pass + one LLM call) instead of one call per
+        #    candidate. A candidate the model skips is stored as new.
+        #
+        #    Byte-identical repeats inside one extraction are folded before the
+        #    judge runs: writes are batched at the end, so a repeat cannot recall
+        #    the node it would otherwise create - it links to the first target.
         batch_target_by_hash: dict[str, str] = {}
-        import_experiences: list[tuple[str, str]] = []
-        for candidate in candidates:
-            content = candidate.content.strip()
-            if len(content) < cfg.min_content_chars:
+        resolvable: list[tuple[int, ExtractedExperienceCandidate, PreprocessedText]] = []
+        repeats: list[tuple[ExtractedExperienceCandidate, PreprocessedText]] = []
+        seen_hashes: set[str] = set()
+        for index, candidate in enumerate(candidates):
+            if len(candidate.content.strip()) < cfg.min_content_chars:
                 continue
-            pp = await self._preprocess(content)
-
-            # Guard against byte-identical duplicates within this very import:
-            # writes are batched at the end, so a repeated candidate cannot recall
-            # the node it would otherwise create - link it to the first target.
-            batch_duplicate_target = batch_target_by_hash.get(pp.content_hash)
-            if batch_duplicate_target is not None:
-                relationships.append(
-                    build_task_experience_edge(task_entity_id, batch_duplicate_target, task_text, context)
-                )
-                edge_count = 1
-                for message_index in candidate.source_message_indices:
-                    source_ref = source_by_index.get(message_index)
-                    if source_ref is None:
-                        continue
-                    segment = _source_segment(turn_by_index[message_index], source_ref)
-                    relationships.append(
-                        build_extracted_from_edge(batch_duplicate_target, source_ref, context, segment)
-                    )
-                    edge_count += 1
-                events.append(
-                    MemoryAddEventItem(
-                        operation="add",
-                        content=content,
-                        memory_id=batch_duplicate_target,
-                        mem_type="experience",
-                        confidence=candidate.confidence,
-                        graph_edge_count=edge_count,
-                    )
-                )
+            pp = await self._preprocess(candidate.content.strip())
+            if pp.content_hash in seen_hashes:
+                repeats.append((candidate, pp))
                 continue
+            seen_hashes.add(pp.content_hash)
+            resolvable.append((index, candidate, pp))
 
-            resolution: ExperienceResolution = await self._deduplicator.resolve(
-                context,
-                content,
-                pp,
-                lang=lang,
-                import_experiences=import_experiences,
+        resolutions = await self._deduplicator.resolve_many(
+            context,
+            [(index, candidate.content.strip(), pp) for index, candidate, pp in resolvable],
+            lang=lang,
+        )
+
+        def _link(
+            target_id: str,
+            candidate: ExtractedExperienceCandidate,
+            operation: str,
+            content: str,
+        ) -> None:
+            """Attach the task edge, one EXTRACTED_FROM edge per cited message, and an event."""
+            relationships.append(build_task_experience_edge(task_entity_id, target_id, task_text, context))
+            edge_count = 1
+            for message_index in candidate.source_message_indices:
+                source_ref = source_by_index.get(message_index)
+                if source_ref is None:
+                    continue
+                segment = _source_segment(turn_by_index[message_index], source_ref)
+                relationships.append(build_extracted_from_edge(target_id, source_ref, context, segment))
+                edge_count += 1
+            events.append(
+                MemoryAddEventItem(
+                    operation=operation,
+                    content=content,
+                    memory_id=target_id,
+                    mem_type="experience",
+                    confidence=candidate.confidence,
+                    graph_edge_count=edge_count,
+                )
             )
+
+        for index, candidate, pp in resolvable:
+            content = candidate.content.strip()
+            resolution: ExperienceResolution = resolutions[index]
             target_id = resolution.target_memory_id
-            edge_count = 0
             batch_target_by_hash[pp.content_hash] = target_id
 
             if resolution.action == "create":
@@ -353,28 +362,12 @@ class TrajectoryExperienceBuilder:
             else:  # reuse
                 event_content = content
 
-            import_experiences.append((target_id, event_content))
+            _link(target_id, candidate, "update" if resolution.action == "merge" else "add", event_content)
 
-            relationships.append(build_task_experience_edge(task_entity_id, target_id, task_text, context))
-            edge_count += 1
-            for message_index in candidate.source_message_indices:
-                source_ref = source_by_index.get(message_index)
-                if source_ref is None:
-                    continue
-                segment = _source_segment(turn_by_index[message_index], source_ref)
-                relationships.append(build_extracted_from_edge(target_id, source_ref, context, segment))
-                edge_count += 1
-
-            events.append(
-                MemoryAddEventItem(
-                    operation="update" if resolution.action == "merge" else "add",
-                    content=event_content,
-                    memory_id=target_id,
-                    mem_type="experience",
-                    confidence=candidate.confidence,
-                    graph_edge_count=edge_count,
-                )
-            )
+        # Repeats carry no new evidence: link them to the node their first
+        # occurrence resolved to rather than creating a second one.
+        for candidate, pp in repeats:
+            _link(batch_target_by_hash[pp.content_hash], candidate, "add", candidate.content.strip())
 
         # 5. Vectorize new experiences (and optionally the task entity).
         if pending_memory_vectors:

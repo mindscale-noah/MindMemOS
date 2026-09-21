@@ -20,7 +20,9 @@ EXPERIENCE_EXTRACTION_SYSTEM_PROMPT = """你是 MindMemOS 的经验抽取器。�
 - source_message_indices 必须引用 turns 中真实存在的 message_index,不得伪造依据。
 
 [数量]
-- 宁少勿多;每条经验必须真正可复用。没有合格经验时输出 {"experiences": []}。
+- 宁少勿多;每条经验必须真正可复用。
+- 同一条经验只输出一次:若轨迹中同一教训以不同措辞重复出现,只输出一条,不要每种说法各一条。
+- 没有合格经验时输出 {"experiences": []}。
 
 [输出]
 {"experiences": [{"content": "...", "confidence": 0.9, "importance": 0.8, "source_message_indices": [0, 3], "reason": "..."}]}"""
@@ -46,7 +48,9 @@ EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_ZH = """你是 MindMemOS 的经验抽取器�
 - source_message_indices 必须引用 turns 中真实存在的 message_index,不得伪造依据。
 
 [数量]
-- 宁少勿多;每条经验必须真正可复用。没有合格经验时输出 {"experiences": []}。
+- 宁少勿多;每条经验必须真正可复用。
+- 同一条经验只输出一次:若轨迹中同一教训以不同措辞重复出现,只输出一条,不要每种说法各一条。
+- 没有合格经验时输出 {"experiences": []}。
 
 [输出]
 {"experiences": [{"content": "...", "confidence": 0.9, "importance": 0.8, "source_message_indices": [0, 3], "reason": "..."}]}"""
