@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import type { Version } from "./api";
+import { versionLabel, type Version } from "./api";
 export function useLoad<T>(load: () => Promise<T>, key: string) {
   const [value, setValue] = useState<T>();
   const [error, setError] = useState("");
@@ -49,7 +49,7 @@ export function VersionOptions({ versions }: { versions: Version[] }) {
     <>
       {versions.map((v) => (
         <option key={v.version_id} value={v.version_id}>
-          {v.version_label || "未命名版本"}
+          {versionLabel(v)}
         </option>
       ))}
     </>
@@ -69,7 +69,13 @@ export function Dialog({
     dialog.current?.showModal();
   }, []);
   return (
-    <dialog ref={dialog} onCancel={close}>
+    <dialog
+      ref={dialog}
+      onCancel={(event) => {
+        event.preventDefault();
+        close();
+      }}
+    >
       <div className="row">
         <h2>{title}</h2>
         <button onClick={close} aria-label="关闭">

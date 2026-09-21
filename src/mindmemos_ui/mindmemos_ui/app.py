@@ -1,12 +1,14 @@
 """Same-origin workbench backed by the MindMemOSSkill service contract."""
 
+import asyncio
 import hashlib
 import secrets
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import anyio
 from fastapi import FastAPI, HTTPException, Request
@@ -18,16 +20,22 @@ from mindmemos_sdk.errors import ApiError, MindMemOSSDKError
 from mindmemos_sdk.skills.cloud import SkillCloudClient
 from mindmemos_sdk.transport import HttpTransport
 from mindmemos_skill.api.factory import create_service
+from mindmemos_skill.api.service import SkillService
+from mindmemos_skill.envs.typing import Task
 from mindmemos_skill.errors import SkillConflictError, SkillNotFoundError
 from mindmemos_skill.pipelines import typing as requests
-from mindmemos_skill.pipelines.content import snapshot_from_version
-from mindmemos_skill.skill import Skill
+from mindmemos_skill.pipelines.content import compare_versions, snapshot_from_version
+from mindmemos_skill.skill import Skill, SkillBundle, SkillResources, SkillSnapshot
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from mindmemos_skill import MindMemOSSkill
 
-from .config import SettingsUpdate
+from .assembly import load_runtime_skill
+from .connection_settings import connection_settings_router
+from .config import SettingsUpdate, apply_sdk_settings
+from .service_settings import service_settings_router
 from .typing import (
+    AssembleRequest,
     CommitRequest,
     ConfirmRequest,
     DiffRequest,
@@ -61,12 +69,13 @@ def directory_hash(directory: Path) -> str:
     return digest.hexdigest()
 
 
-def create_app(
+async def create_app(
     config_manager: ConfigManager | None = None,
     graph_service=None,
     *,
     service: MindMemOSSkill | None = None,
     project_id: str | None = None,
+    skill_loader: Callable[[SkillSnapshot], Skill] = load_runtime_skill,
 ) -> FastAPI:
     """Build the workbench around one local service and project scope.
 
@@ -75,6 +84,7 @@ def create_app(
         graph_service: Optional borrowed query service for the same repository and project.
         service: Optional borrowed MindMemOSSkill implementation; never closed by this app.
         project_id: Required scope when a service is supplied.
+        skill_loader: Explicit runtime restoration for installed Skill implementations.
 
     Returns:
         Local FastAPI application owning its service when none is supplied.
@@ -84,10 +94,10 @@ def create_app(
         raise ValueError("project_id is required with an injected service")
     owned = service is None
     if owned:
-        local = create_service(home=manager.config_dir)
+        local = await create_service(home=manager.config_dir)
         repository = local
         scope = local.local_project_id
-        graph_service = local.graph_queries(scope)
+        graph_service = await local.graph_queries(scope)
     else:
         repository = service
         scope = project_id
@@ -98,9 +108,11 @@ def create_app(
             yield
         finally:
             if owned:
-                repository.close()
+                await repository.close()
 
     app = FastAPI(title="MindMemOS UI", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app.include_router(service_settings_router(manager.config_dir))
+    app.include_router(connection_settings_router(manager.config_dir))
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"])
     token = secrets.token_urlsafe(32)
     plans = OrderedDict()
@@ -118,7 +130,7 @@ def create_app(
                 request.headers.get("x-workbench-token", ""), token
             ):
                 return JSONResponse({"detail": "Invalid workbench session"}, status_code=403)
-            if request.method in {"GET", "HEAD"}:
+            if request.method in {"GET", "HEAD"} or request.url.path == "/api/configurations/choose-directory":
                 response = await call_next(request)
             else:
                 async with lock:
@@ -165,8 +177,8 @@ def create_app(
             raise HTTPException(503, "Graph storage is not connected")
         return graph_service
 
-    def detail(ref: VersionRef):
-        return repository.show_skill(
+    async def detail(ref: VersionRef):
+        return await repository.show_skill(
             requests.ShowRequest(project_id=scope, skill_ref=ref.skill_id, version_id=ref.version_id)
         )
 
@@ -209,16 +221,7 @@ def create_app(
     @app.put("/api/config")
     def save_settings(body: SettingsUpdate):
         c = manager.load_or_default()
-        c.base_url = body.base_url
-        if body.clear_api_key:
-            c.auth.api_key = None
-        elif body.api_key:
-            c.auth.api_key = body.api_key
-        c.defaults.user_id = body.user_id
-        c.storage.skill_cache_dir = body.skill_cache_dir
-        c.storage.skill_backup_dir = body.skill_backup_dir
-        c.network.timeout_seconds = body.timeout_seconds
-        c.network.max_retries = body.max_retries
+        apply_sdk_settings(c, body)
         manager.save(c)
         plans.clear()
         return settings()
@@ -236,47 +239,59 @@ def create_app(
         return {"ok": True}
 
     @app.get("/api/skills")
-    def skills():
+    async def skills():
         rows = []
         while True:
-            page = repository.list_skills(requests.ListRequest(project_id=scope, limit=100, offset=len(rows)))
+            page = await repository.list_skills(requests.ListRequest(project_id=scope, limit=100, offset=len(rows)))
             rows.extend(page)
             if len(page) < 100:
-                return [
-                    {
-                        **row.model_dump(),
-                        "current_version_label": repository.show_skill(
-                            requests.ShowRequest(
-                                project_id=scope, skill_ref=row.skill_id, version_id=row.current_version_id
+                result = []
+                for row in rows:
+                    current = (
+                        await repository.show_skill(requests.ShowRequest(project_id=scope, skill_ref=row.skill_id))
+                    ).version
+                    history = await versions(row.skill_id)
+                    latest = max(history, key=lambda version: version.created_at, default=current)
+                    result.append(
+                        {
+                            **row.model_dump(),
+                            "current_version_id": current.version_id,
+                            "current_version_label": current.version_label,
+                            "implementation": current.implementation,
+                            "latest_version_id": latest.version_id,
+                            "latest_version_label": latest.version_label,
+                            "latest_implementation": latest.implementation,
+                            "cloud_sync_status": await repository.skill_cloud_status(
+                                requests.SkillRequest(project_id=scope, skill_ref=row.skill_id)
                             )
-                        ).version.version_label,
-                    }
-                    for row in rows
-                ]
+                            if isinstance(repository, SkillService)
+                            else "unknown",
+                        }
+                    )
+                return result
 
     @app.get("/api/skills/{skill_id}")
-    def show(skill_id: str):
-        return repository.show_skill(requests.ShowRequest(project_id=scope, skill_ref=skill_id))
+    async def show(skill_id: str):
+        return await repository.show_skill(requests.ShowRequest(project_id=scope, skill_ref=skill_id))
 
     @app.get("/api/versions")
-    def versions(skill_id: str, source: str = "local"):
+    async def versions(skill_id: str, source: str = "local"):
         VersionRef(source=source, skill_id=skill_id, version_id="current")
         rows = []
         while True:
-            page = repository.skill_history(
+            page = await repository.skill_history(
                 requests.HistoryRequest(project_id=scope, skill_ref=skill_id, limit=100, offset=len(rows))
             )
             rows.extend(page)
             if len(page) < 100:
                 return rows
 
-    @app.get("/api/content")
-    def content(source: str, skill_id: str, version_id: str):
-        stored = detail(VersionRef(source=source, skill_id=skill_id, version_id=version_id))
-        skill = Skill.from_snapshot(snapshot_from_version(stored.version))
+    def displayed_content(version):
+        """Read stored files without loading runtime behavior or synthesizing content."""
         files = {}
         binary_files = []
-        for path, raw in skill.resources.files.items():
+        resources = SkillResources.deserialize(version.resources).files
+        for path, raw in resources.items():
             if b"\0" in raw:
                 binary_files.append(path)
                 continue
@@ -284,14 +299,63 @@ def create_app(
                 files[path] = raw.decode("utf-8")
             except UnicodeDecodeError:
                 binary_files.append(path)
-        files.update(skill.bundle.files)
-        return {"files": files, "resources": list(skill.resources.files), "binary_files": binary_files}
+        if version.bundle and version.bundle.strip() != "[]":
+            files.update(SkillBundle.deserialize(version.bundle).files)
+        return {"files": files, "resources": list(resources), "binary_files": binary_files}
+
+    @app.get("/api/content")
+    async def content(source: str, skill_id: str, version_id: str):
+        stored = await detail(VersionRef(source=source, skill_id=skill_id, version_id=version_id))
+        return displayed_content(stored.version)
+
+    @app.get("/api/implementation")
+    async def implementation(source: str, skill_id: str, version_id: str):
+        stored = await detail(VersionRef(source=source, skill_id=skill_id, version_id=version_id))
+        return {
+            "implementation": stored.version.implementation,
+            "dynamic": stored.version.implementation != "static",
+        }
+
+    @app.post("/api/assemble")
+    async def assemble(body: AssembleRequest):
+        if len({ref.skill_id for ref in body.versions}) != 1:
+            raise HTTPException(400, "Compare versions of the same Skill")
+        versions = [(await detail(ref)).version for ref in body.versions]
+        task = Task(id=str(uuid4()), instruction=body.instruction)
+        runtime = {}
+        try:
+            # Validate every source before any implementation can make external calls.
+            for version in versions:
+                if version.version_id not in runtime:
+                    runtime[version.version_id] = skill_loader(snapshot_from_version(version))
+        except NotImplementedError:
+            raise HTTPException(501, "This Skill implementation does not support runtime assembly") from None
+        except ValueError:
+            raise HTTPException(400, "Skill source or runtime configuration is invalid") from None
+        assembled = {}
+        try:
+            for version in versions:
+                if version.version_id not in assembled:
+                    snapshot = (
+                        await asyncio.to_thread(runtime[version.version_id].assemble, task.model_copy(deep=True))
+                    ).snapshot()
+                    assembled[version.version_id] = version.model_copy(update=snapshot.model_dump())
+        except Exception:
+            # Provider exceptions may contain endpoints, credentials or task content.
+            raise HTTPException(
+                502, "Skill assembly failed; check the server model configuration and connection"
+            ) from None
+        outputs = [assembled[version.version_id] for version in versions]
+        result = {"contents": [displayed_content(version) for version in outputs], "task": task.model_dump()}
+        if len(outputs) == 2:
+            result["comparison"] = compare_versions(*outputs).model_dump()
+        return result
 
     @app.post("/api/diff")
-    def diff(body: DiffRequest):
+    async def diff(body: DiffRequest):
         if body.before.skill_id != body.after.skill_id:
             raise HTTPException(400, "Compare versions of the same Skill")
-        result = repository.diff_skill(
+        result = await repository.diff_skill(
             requests.DiffRequest(
                 project_id=scope,
                 skill_ref=body.after.skill_id,
@@ -316,11 +380,11 @@ def create_app(
         }
 
     @app.post("/api/register/confirm")
-    def register_confirm(body: ConfirmRequest):
+    async def register_confirm(body: ConfirmRequest):
         request, snapshot = consume(body.plan_id, "register")
         if Skill.from_path(request.path).snapshot() != snapshot:
             raise HTTPException(409, "Source changed; preview again")
-        return repository.register_skill(
+        return await repository.register_skill(
             requests.RegisterRequest(
                 project_id=scope,
                 name=request.name,
@@ -333,8 +397,8 @@ def create_app(
         )
 
     @app.post("/api/commit")
-    def commit(body: CommitRequest):
-        return repository.commit_skill(
+    async def commit(body: CommitRequest):
+        return await repository.commit_skill(
             requests.CommitRequest(
                 project_id=scope,
                 skill_ref=body.skill_id,
@@ -347,14 +411,14 @@ def create_app(
         )
 
     @app.delete("/api/skills/{skill_id}")
-    def remove(skill_id: str):
-        repository.delete_skill(requests.SkillRequest(project_id=scope, skill_ref=skill_id))
+    async def remove(skill_id: str):
+        await repository.delete_skill(requests.SkillRequest(project_id=scope, skill_ref=skill_id))
         return {"ok": True}
 
     @app.post("/api/switch/preview")
-    def switch_preview(body: SwitchRequest):
-        current = repository.show_skill(requests.ShowRequest(project_id=scope, skill_ref=body.skill_id))
-        result = repository.diff_skill(
+    async def switch_preview(body: SwitchRequest):
+        current = await repository.show_skill(requests.ShowRequest(project_id=scope, skill_ref=body.skill_id))
+        result = await repository.diff_skill(
             requests.DiffRequest(project_id=scope, skill_ref=body.skill_id, to_version_id=body.version_id)
         )
         return {
@@ -363,12 +427,12 @@ def create_app(
         }
 
     @app.post("/api/switch/confirm")
-    def switch_confirm(body: ConfirmRequest):
+    async def switch_confirm(body: ConfirmRequest):
         request, expected = consume(body.plan_id, "switch")
-        current = repository.show_skill(requests.ShowRequest(project_id=scope, skill_ref=request.skill_id))
+        current = await repository.show_skill(requests.ShowRequest(project_id=scope, skill_ref=request.skill_id))
         if current.skill.current_version_id != expected:
             raise HTTPException(409, "Current version changed; preview again")
-        return repository.switch_skill(
+        return await repository.switch_skill(
             requests.SwitchRequest(project_id=scope, skill_ref=request.skill_id, version_id=request.version_id)
         )
 
@@ -383,9 +447,9 @@ def create_app(
         return target
 
     @app.post("/api/export/preview")
-    def export_preview(body: ExportRequest):
+    async def export_preview(body: ExportRequest):
         target = export_directory(body.directory)
-        stored = detail(body.version)
+        stored = await detail(body.version)
         skill = Skill.from_snapshot(snapshot_from_version(stored.version))
         fingerprint = directory_hash(target)
         files = ["SKILL.md", *skill.resources.files]
@@ -405,24 +469,24 @@ def create_app(
         }
 
     @app.post("/api/export/confirm")
-    def export_confirm(body: ConfirmRequest):
+    async def export_confirm(body: ConfirmRequest):
         request, expected = consume(body.plan_id, "export")
         target = export_directory(request.directory)
         if directory_hash(target) != expected:
             raise HTTPException(409, "Destination changed; preview again")
-        return {"path": repository.export_skill(request)}
+        return {"path": await repository.export_skill(request)}
 
     @app.get("/api/graphs")
-    def graphs():
-        return graph().list_graphs()
+    async def graphs():
+        return await graph().list_graphs()
 
     @app.get("/api/graphs/{graph_id}/snapshots")
-    def graph_snapshots(graph_id: str):
-        return graph().snapshots(graph_id)
+    async def graph_snapshots(graph_id: str):
+        return await graph().snapshots(graph_id)
 
     @app.get("/api/graphs/{graph_id}/snapshots/{snapshot_id}")
-    def graph_snapshot(graph_id: str, snapshot_id: UUID):
-        return graph().snapshot(graph_id, snapshot_id)
+    async def graph_snapshot(graph_id: str, snapshot_id: UUID):
+        return await graph().snapshot(graph_id, snapshot_id)
 
     static = Path(__file__).parent / "static"
     app.mount("/assets", StaticFiles(directory=static / "assets", check_dir=False), name="assets")

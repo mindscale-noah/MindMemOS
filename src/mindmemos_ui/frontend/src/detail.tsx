@@ -1,5 +1,14 @@
+import { DynamicSkill } from "./dynamic-skill";
 import { useState, useEffect, type ReactNode } from "react";
-import { api, query, ref, type Version, type Selection, type Ref } from "./api";
+import {
+  api,
+  query,
+  ref,
+  versionLabel,
+  type Version,
+  type Selection,
+  type Ref,
+} from "./api";
 import { useLoad, Message, Empty, Dialog, VersionOptions } from "./components";
 import { Export, SwitchVersion, Commit } from "./operations";
 import {
@@ -97,19 +106,40 @@ export function Compare({
       </div>
       <Message text={error} error />
       {busy && <Empty>正在对比…</Empty>}
-      {result && (
-        <BundleBrowser
-          key={before + after}
-          content={result.after}
-          comparison={result}
-          beforeLabel={
-            versions.find((v) => v.version_id === before)?.version_label ||
-            before
-          }
-          afterLabel={
-            versions.find((v) => v.version_id === after)?.version_label || after
-          }
-        />
+      {before && after && (
+        <DynamicSkill
+          key={source + id + before + after}
+          versions={[
+            { source, skill_id: id, version_id: before },
+            { source, skill_id: id, version_id: after },
+          ]}
+          labels={[
+            versionLabel(
+              versions.find((v) => v.version_id === before),
+              before,
+            ),
+            versionLabel(
+              versions.find((v) => v.version_id === after),
+              after,
+            ),
+          ]}
+        >
+          {result && (
+            <BundleBrowser
+              key={before + after}
+              content={result.after}
+              comparison={result}
+              beforeLabel={versionLabel(
+                versions.find((v) => v.version_id === before),
+                before,
+              )}
+              afterLabel={versionLabel(
+                versions.find((v) => v.version_id === after),
+                after,
+              )}
+            />
+          )}
+        </DynamicSkill>
       )}
     </>
   );
@@ -120,28 +150,35 @@ export function Content({ version }: { version: Ref }) {
     JSON.stringify(version),
   );
   return (
-    <>
+    <DynamicSkill
+      key={JSON.stringify(version)}
+      versions={[version]}
+      labels={["当前查看版本"]}
+    >
       <Message text={data.error} error />
       {data.loading ? (
         <Empty>加载中…</Empty>
       ) : (
-        data.value && (
-          <BundleBrowser key={JSON.stringify(version)} content={data.value} />
-        )
+        data.value && <BundleBrowser content={data.value} />
       )}
-    </>
+    </DynamicSkill>
   );
 }
 export function Detail({
   selection,
   back,
+  tab,
+  change,
 }: {
   selection: Selection;
   back: () => void;
+  tab: string;
+  change: (tab: string, version?: string, replace?: boolean) => void;
 }) {
-  const [tab, setTab] = useState(selection.version ? "content" : "versions");
+  const setTab = (next: string) => change(next, version);
   const [switching, setSwitchVersion] = useState<Version>();
-  const [version, setVersion] = useState(selection.version || "");
+  const version = selection.version || "";
+  const setVersion = (next: string) => change(tab, next);
   const [exporting, setExporting] = useState<Version>();
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState("");
@@ -167,16 +204,16 @@ export function Detail({
   );
   useEffect(() => {
     if (!version && data.value?.length)
-      setVersion(data.value[data.value.length - 1].version_id);
-  }, [data.value]);
+      change(tab, data.value[data.value.length - 1].version_id, true);
+  }, [data.value, version, tab]);
   function renderActions(versionId: string) {
     const target = data.value?.find((v) => v.version_id === versionId);
     if (!target) return null;
-    const label = target.version_label || target.version_id;
+    const label = versionLabel(target, target.version_id);
     const isCurrent = current.value?.skill.current_version_id === versionId;
     return (
       <div className="actions version-actions">
-        {selection.local && (
+        {selection.source === "local" && (
           <button disabled={isCurrent} onClick={() => setSwitchVersion(target)}>
             {isCurrent ? `${label} · 当前版本` : `将 ${label} 设为当前版本`}
           </button>
@@ -213,13 +250,13 @@ export function Detail({
           {selection.source !== "graph" && (
             <button onClick={() => setRemoving(true)}>删除 Skill</button>
           )}
-          {selection.local && (
+          {selection.source === "local" && (
             <button onClick={() => setCommitting(true)}>提交新版本</button>
           )}
         </div>
       </div>
       <p className="muted">
-        当前版本：{current.value?.version.version_label || "—"}
+        当前版本：{versionLabel(current.value?.version, "—")}
       </p>
       <Message text={current.error} error />
       <div className="tabs">
@@ -263,11 +300,10 @@ export function Detail({
                         <button
                           className="link"
                           onClick={() => {
-                            setVersion(v.version_id);
-                            setTab("content");
+                            change("content", v.version_id);
                           }}
                         >
-                          {v.version_label || "未命名版本"}
+                          {versionLabel(v)}
                         </button>
                         <details className="muted">
                           <summary>审计信息</summary>
@@ -330,11 +366,11 @@ export function Detail({
           }}
         />
       )}
-      {switching && selection.local && (
+      {switching && selection.source === "local" && (
         <SwitchVersion
-          skillId={selection.local.skill_id}
+          skillId={selection.id}
           versionId={switching.version_id}
-          versionLabel={switching.version_label || switching.version_id}
+          versionLabel={versionLabel(switching, switching.version_id)}
           close={() => {
             setSwitchVersion(undefined);
             setRevision(revision + 1);
@@ -344,7 +380,7 @@ export function Detail({
       {exporting && (
         <Export
           version={ref(selection, exporting.version_id)}
-          versionLabel={exporting.version_label || exporting.version_id}
+          versionLabel={versionLabel(exporting, exporting.version_id)}
           close={() => setExporting(undefined)}
         />
       )}{" "}

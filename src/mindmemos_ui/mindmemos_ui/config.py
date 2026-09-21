@@ -43,3 +43,22 @@ class SettingsUpdate(BaseModel):
         if url.scheme not in {"http", "https"} or not url.hostname or url.username or url.password:
             raise ValueError("Expected an HTTP URL without credentials")
         return value.rstrip("/")
+
+
+def apply_sdk_settings(config, body: SettingsUpdate) -> None:
+    """Apply editable connection fields while preserving SDK registry and metadata.
+
+    Args:
+        config: Existing SDK configuration to update in place.
+        body: Validated editable fields; an omitted key preserves stored credentials.
+    """
+    config.base_url = body.base_url
+    if body.clear_api_key:
+        config.auth.api_key = None
+    elif body.api_key:
+        config.auth.api_key = body.api_key
+    config.defaults.user_id = body.user_id
+    config.storage.skill_cache_dir = body.skill_cache_dir
+    config.storage.skill_backup_dir = body.skill_backup_dir
+    config.network.timeout_seconds = body.timeout_seconds
+    config.network.max_retries = body.max_retries

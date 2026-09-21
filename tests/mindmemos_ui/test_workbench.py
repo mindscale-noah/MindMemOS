@@ -1,21 +1,23 @@
 """Behavioral checks for credentials, previews, and graph isolation."""
 
+from datetime import datetime
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
 from mindmemos_sdk.config import ConfigManager
 from mindmemos_ui.app import create_app
 
 
-@pytest.fixture
-def client(tmp_path):
+@pytest_asyncio.fixture
+async def client(tmp_path):
     manager = ConfigManager(tmp_path / "sdk")
     config = manager.load_or_default()
     config.auth.api_key = "private-secret-value"
     config.skills = [{"skill_name": "original", "path": str(tmp_path / "original"), "skill_id": "local-1"}]
     manager.save(config)
-    with TestClient(create_app(manager)) as client:
+    with TestClient(await create_app(manager)) as client:
         client.headers["x-workbench-token"] = client.get("/api/session").json()["token"]
         yield client, manager
 
@@ -215,17 +217,18 @@ def test_export_detects_destination_changes_and_protects_home(client, tmp_path):
     assert http.post("/api/export/preview", json={**body, "directory": str(link)}).status_code == 400
 
 
-def test_reopening_home_preserves_identity_and_skills(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_reopening_home_preserves_identity_and_skills(tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("MINDMEMOS_HOME", str(home))
     source = tmp_path / "source"
     source.mkdir()
     (source / "SKILL.md").write_text("persistent")
-    with TestClient(create_app()) as http:
+    with TestClient(await create_app()) as http:
         session = http.get("/api/session").json()
         http.headers["x-workbench-token"] = session["token"]
         original = register(http, source)
-    with TestClient(create_app()) as http:
+    with TestClient(await create_app()) as http:
         assert http.get("/api/session").json()["project_id"] == session["project_id"]
         assert http.get("/api/skills").json()[0]["skill_id"] == original["skill"]["skill_id"]
     assert not (home / "service.yaml").exists()
@@ -253,20 +256,21 @@ def test_cli_without_database_or_project_flags(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.argv", ["mindmemos-ui"])
     calls = []
 
-    def run(app, *, host, port):
-        with TestClient(app) as client:
+    async def serve(server):
+        with TestClient(server.config.app) as client:
             assert client.get("/api/session").json()["graphs_connected"] is True
             assert client.get("/api/graphs").json() == []
             assert client.get("/api/skills").json() == []
-        calls.append((host, port))
+        calls.append((server.config.host, server.config.port))
 
-    monkeypatch.setattr("mindmemos_ui.cli.uvicorn.run", run)
+    monkeypatch.setattr("mindmemos_ui.cli.uvicorn.Server.serve", serve)
     main()
     assert calls == [("127.0.0.1", 8765)]
     assert (tmp_path / "default-home/data/central.db").is_file()
 
 
-def test_graph_navigation_and_borrowed_service_lifetime(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_graph_navigation_and_borrowed_service_lifetime(tmp_path, monkeypatch):
     from mindmemos_skill.api import create_service
     from mindmemos_skill.persistence.constants import (
         SKILL_GRAPH_NODES_TABLE,
@@ -280,14 +284,14 @@ def test_graph_navigation_and_borrowed_service_lifetime(tmp_path, monkeypatch):
     )
 
     manager = ConfigManager(tmp_path / "home")
-    service = create_service(home=manager.config_dir)
+    service = await create_service(home=manager.config_dir)
     calls = []
     original_close = service.close
     monkeypatch.setattr(service, "close", lambda: calls.append("closed"))
     try:
-        graph = service.graph_queries()
+        graph = await service.graph_queries()
         with TestClient(
-            create_app(manager, service=service, project_id=service.local_project_id, graph_service=graph)
+            await create_app(manager, service=service, project_id=service.local_project_id, graph_service=graph)
         ) as http:
             http.headers["x-workbench-token"] = http.get("/api/session").json()["token"]
             source = tmp_path / "source"
@@ -325,11 +329,11 @@ def test_graph_navigation_and_borrowed_service_lifetime(tmp_path, monkeypatch):
             assert http.delete(f"/api/skills/{nodes[0]['skill_id']}").status_code == 409
         assert calls == []
         other = tmp_path / "other"
-        with TestClient(create_app(ConfigManager(other))) as http:
+        with TestClient(await create_app(ConfigManager(other))) as http:
             assert http.get("/api/skills").json() == []
             assert http.get("/api/content", params=reference).status_code == 404
     finally:
-        original_close()
+        await original_close()
 
 
 def test_bundle_content_and_per_file_diff(client, tmp_path):
@@ -388,6 +392,9 @@ def test_ui_publishes_semantic_labels_and_reserves_algorithm_suffixes(client, tm
     assert result["version"]["version_label"] == "v1.2.0"
     rows = http.get("/api/skills").json()
     assert rows[0]["current_version_label"] == "v1.2.0"
+    assert rows[0]["latest_version_label"] == "v1.2.0"
+    assert datetime.fromisoformat(rows[0]["created_at"]) == datetime.fromisoformat(result["skill"]["created_at"])
+    assert rows[0]["cloud_sync_status"] == "disabled"
     commit = {
         "skill_id": result["skill"]["skill_id"],
         "path": str(root),
@@ -397,6 +404,168 @@ def test_ui_publishes_semantic_labels_and_reserves_algorithm_suffixes(client, tm
     next_version = http.post("/api/commit", json=commit)
     assert next_version.status_code == 200, next_version.text
     assert next_version.json()["version"]["version_label"] == "v1.3.0"
+    plan = http.post(
+        "/api/switch/preview",
+        json={
+            "skill_id": result["skill"]["skill_id"],
+            "version_id": result["version"]["version_id"],
+        },
+    ).json()
+    assert http.post("/api/switch/confirm", json={"plan_id": plan["plan_id"]}).status_code == 200
+    row = http.get("/api/skills").json()[0]
+    assert row["current_version_label"] == "v1.2.0"
+    assert row["latest_version_label"] == "v1.3.0"
+    assert datetime.fromisoformat(row["created_at"]) == datetime.fromisoformat(result["skill"]["created_at"])
     assert http.post("/api/register/preview", json={**body, "version_label": "v1.02.0"}).status_code == 422
     assert http.post("/api/register/preview", json={**body, "version_label": "v1.2.0-grpo"}).status_code == 422
     assert http.post("/api/commit", json={**commit, "algorithm": "grpo"}).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_task_assembly_runs_real_skill_contract_and_compares_versions(tmp_path, monkeypatch):
+    """Exercise real TreeSkill assembly with only the provider response replaced."""
+    import json
+
+    from mindmemos_skill.agents.buitin_agents.openai_chat import OpenAIChatAgent
+    from mindmemos_skill.agents.buitin_agents.openai_chat.config import OpenAIChatConfig
+    from mindmemos_skill.agents.constants import AGENT_API_KEY_ENV
+    from mindmemos_skill.agents.typing import AgentResult
+    from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillConfig
+    from mindmemos_skill.api import create_service
+    from mindmemos_skill.pipelines.typing import CommitRequest, RegisterRequest
+    from mindmemos_skill.skill import Skill, SkillBundle, SkillResources
+
+    monkeypatch.setenv(AGENT_API_KEY_ENV, "runtime-credential")
+    calls = []
+
+    def route(self, *, system, user):
+        assert self.config.api_key.get_secret_value() == "runtime-credential"
+        calls.append(json.loads(user.split("\n\n", 1)[1])["task"])
+        return AgentResult(output='{"selected_subtree_ids": ["002"]}')
+
+    monkeypatch.setattr(OpenAIChatAgent, "run", route)
+    manager = ConfigManager(tmp_path / "home")
+    service = await create_service(home=manager.config_dir)
+    bundle = SkillBundle(files={"SKILL.md": "# Root\nContext\n## Sales\nSum\n## Clean\nRemove duplicates\n"})
+    source = Skill(bundle=bundle, resources=SkillResources(files={"reference.txt": b"preserved"}))
+    first = await service.register_skill(RegisterRequest(source=source.snapshot(), name="Example"))
+    dynamic = TreeSkill(
+        TreeSkillConfig(router=OpenAIChatConfig(model="test-model", api_key="not-real")),
+        bundle=bundle,
+        resources=source.resources,
+    )
+    second = await service.commit_skill(CommitRequest(skill_ref=first.skill.skill_id, source=dynamic.snapshot()))
+    changed = dynamic.with_bundle(
+        SkillBundle(files={"SKILL.md": bundle.files["SKILL.md"].replace("Sum", "Sum monthly")})
+    )
+    third = await service.commit_skill(CommitRequest(skill_ref=first.skill.skill_id, source=changed.snapshot()))
+    refs = [
+        {"source": "local", "skill_id": first.skill.skill_id, "version_id": item.version.version_id}
+        for item in (first, second, third)
+    ]
+    try:
+        with TestClient(await create_app(manager, service=service, project_id=service.local_project_id)) as http:
+            http.headers["x-workbench-token"] = http.get("/api/session").json()["token"]
+            for index, ref in enumerate(refs):
+                info = http.get("/api/implementation", params=ref).json()
+                assert info["dynamic"] == (index > 0)
+                assert "tree" not in info and "config" not in info
+                assert http.get("/api/content", params=ref).status_code == 200
+            assert calls == []
+            assert http.get("/api/skills").json()[0]["implementation"] == "treeskill"
+            body = {"versions": refs[1:], "instruction": "Summarize monthly sales"}
+            result = http.post("/api/assemble", json=body)
+            assert result.status_code == 200, result.text
+            response = result.json()
+            assert len(calls) == 2 and calls[0] == calls[1] == response["task"]
+            assert "Clean" not in response["contents"][0]["files"]["SKILL.md"]
+            assert response["contents"][0]["files"]["reference.txt"] == "preserved"
+            assert "+Sum monthly" in response["comparison"]["files"][0]["diff"]
+            calls.clear()
+            same = http.post("/api/assemble", json={**body, "versions": [refs[1], refs[1]]}).json()
+            assert len(calls) == 1 and same["comparison"]["files"] == []
+            calls.clear()
+            mixed = http.post("/api/assemble", json={**body, "versions": refs[:2]}).json()
+            assert len(calls) == 1
+            assert mixed["contents"][0]["files"]["SKILL.md"] == bundle.files["SKILL.md"]
+            assert len(http.get("/api/versions", params={"skill_id": first.skill.skill_id}).json()) == 3
+            assert http.get("/api/content", params=refs[1]).json()["files"]["SKILL.md"] == bundle.files["SKILL.md"]
+            assert http.post("/api/assemble", json={**body, "instruction": "   "}).status_code == 422
+            assert http.post("/api/assemble", json=body, headers={"x-workbench-token": "bad"}).status_code == 403
+            invalid = {**refs[1], "skill_id": "missing"}
+            assert http.post("/api/assemble", json={**body, "versions": [invalid]}).status_code == 404
+            assert http.post("/api/treeskill/preview", json={}).status_code == 404
+
+            def fail(*args, **kwargs):
+                raise RuntimeError("secret-provider-key")
+
+            monkeypatch.setattr(OpenAIChatAgent, "run", fail)
+            failure = http.post("/api/assemble", json=body)
+            assert failure.status_code == 502 and "secret-provider-key" not in failure.text
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_implementation_is_dynamic_but_never_silently_static(tmp_path):
+    from mindmemos_skill.api import create_service
+    from mindmemos_skill.pipelines.typing import RegisterRequest
+    from mindmemos_skill.skill import Skill, SkillBundle
+
+    manager = ConfigManager(tmp_path / "home")
+    service = await create_service(home=manager.config_dir)
+    source = Skill(bundle=SkillBundle(files={"SKILL.md": ""})).snapshot()
+    source.implementation = "custom-dynamic"
+    record = await service.register_skill(RegisterRequest(source=source, name="Custom"))
+    ref = {"source": "local", "skill_id": record.skill.skill_id, "version_id": record.version.version_id}
+    try:
+        with TestClient(await create_app(manager, service=service, project_id=service.local_project_id)) as http:
+            http.headers["x-workbench-token"] = http.get("/api/session").json()["token"]
+            assert http.get("/api/implementation", params=ref).json()["dynamic"] is True
+            assert http.get("/api/content", params=ref).json()["files"] == {"SKILL.md": ""}
+            assert http.post("/api/assemble", json={"versions": [ref], "instruction": "Test"}).status_code == 501
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_custom_runtime_loader_and_absent_bundle(tmp_path, monkeypatch):
+    """Generic adapters can restore new implementations; empty source stays empty."""
+    from mindmemos_skill.api import create_service
+    from mindmemos_skill.pipelines.typing import RegisterRequest
+    from mindmemos_skill.skill import Skill, SkillBundle
+
+    class CustomSkill(Skill):
+        def assemble(self, task):
+            return self.with_bundle(SkillBundle(files={"SKILL.md": task.instruction}))
+
+    manager = ConfigManager(tmp_path / "home")
+    service = await create_service(home=manager.config_dir)
+    snapshot = Skill(bundle=SkillBundle(files={"SKILL.md": "source"})).snapshot()
+    snapshot.implementation = "custom"
+    record = await service.register_skill(RegisterRequest(source=snapshot, name="Custom"))
+    ref = {"source": "local", "skill_id": record.skill.skill_id, "version_id": record.version.version_id}
+    try:
+        with TestClient(
+            await create_app(
+                manager,
+                service=service,
+                project_id=service.local_project_id,
+                skill_loader=CustomSkill.from_snapshot,
+            )
+        ) as http:
+            http.headers["x-workbench-token"] = http.get("/api/session").json()["token"]
+            result = http.post("/api/assemble", json={"versions": [ref], "instruction": "Actual task"})
+            assert result.status_code == 200
+            assert result.json()["contents"][0]["files"]["SKILL.md"] == "Actual task"
+            for missing in ("", "[]", None):
+                absent = record.model_copy(update={"version": record.version.model_copy(update={"bundle": missing})})
+
+                async def show_absent(request):
+                    return absent
+
+                monkeypatch.setattr(service, "show_skill", show_absent)
+                assert http.get("/api/content", params=ref).json()["files"] == {}
+                assert http.get("/api/implementation", params=ref).json()["dynamic"] is True
+    finally:
+        await service.close()

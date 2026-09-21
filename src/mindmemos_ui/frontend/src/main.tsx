@@ -1,32 +1,21 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { session, type Selection } from "./api";
 import { useLoad, Message, Empty } from "./components";
-import { Settings } from "./settings";
+import { ServiceSettings } from "./service-settings";
 import { Skills } from "./skills";
 import { Detail } from "./detail";
 import { Graphs } from "./graphs";
+import { useNavigation, type Page } from "./navigation";
 import "./style.css";
 function App() {
-  const [page, setPage] = useState("skills");
-  const [selection, setSelection] = useState<Selection>();
-  const [dirty, setDirty] = useState(false);
+  const { route, navigate, back, setDirty } = useNavigation();
+  const { page, selection } = route;
   const start = useLoad(session, "session");
-  useEffect(() => {
-    const warn = (e: BeforeUnloadEvent) => {
-      if (dirty) {
-        e.preventDefault();
-        e.returnValue = "";
-      }
-    };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
-  function navigate(next: string) {
-    if (dirty && !window.confirm("配置尚未保存，放弃修改？")) return;
-    setDirty(false);
-    setSelection(undefined);
-    setPage(next);
+  const [visited, setVisited] = useState(() => new Set([page]));
+  if (!visited.has(page)) setVisited(new Set([...visited, page]));
+  function open(selection: Selection) {
+    navigate({ page, selection });
   }
   return (
     <div className="app">
@@ -38,12 +27,12 @@ function App() {
           {[
             ["skills", "Skills"],
             ["graphs", "管理图谱"],
-            ["settings", "SDK 配置"],
+            ["settings", "配置"],
           ].map(([key, label]) => (
             <button
               key={key}
               className={page === key ? "active" : ""}
-              onClick={() => navigate(key)}
+              onClick={() => navigate({ page: key as Page })}
             >
               {label}
             </button>
@@ -71,23 +60,50 @@ function App() {
           {start.loading ? (
             <Empty>加载中…</Empty>
           ) : (
-            start.value &&
-            (selection ? (
-              <Detail
-                key={selection.source + selection.id + selection.version}
-                selection={selection}
-                back={() => setSelection(undefined)}
-              />
-            ) : page === "settings" ? (
-              <Settings dirty={setDirty} />
-            ) : page === "graphs" ? (
-              <Graphs
-                connected={start.value.graphs_connected}
-                open={setSelection}
-              />
-            ) : (
-              <Skills open={setSelection} />
-            ))
+            start.value && (
+              <>
+                {visited.has("skills") && (
+                  <div hidden={!!selection || page !== "skills"}>
+                    <Skills
+                      open={open}
+                      active={!selection && page === "skills"}
+                    />
+                  </div>
+                )}
+                {visited.has("graphs") && (
+                  <div hidden={!!selection || page !== "graphs"}>
+                    <Graphs
+                      connected={start.value.graphs_connected}
+                      open={open}
+                    />
+                  </div>
+                )}
+                {selection ? (
+                  <Detail
+                    key={selection.source + selection.id}
+                    selection={selection}
+                    tab={
+                      route.tab || (selection.version ? "content" : "versions")
+                    }
+                    change={(tab, version, replace) =>
+                      navigate(
+                        {
+                          page,
+                          selection: { ...selection, version },
+                          tab,
+                        },
+                        replace,
+                      )
+                    }
+                    back={back}
+                  />
+                ) : page === "service-settings" ? (
+                  <ServiceSettings dirty={setDirty} />
+                ) : page === "settings" ? (
+                  <ServiceSettings dirty={setDirty} />
+                ) : null}
+              </>
+            )
           )}
         </main>
       </div>
