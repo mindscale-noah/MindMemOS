@@ -1,10 +1,11 @@
 """Transport-independent facade delegating business operations to pipelines."""
 
+from contextlib import AsyncExitStack
 from typing import Any, TypeVar
 
 from ..infra.database import Database
 from ..persistence import SkillRecord, SkillVersionRecord
-from ..pipelines import EvolutionPipeline, TrainingPipeline
+from ..pipelines import EvolutionPipeline, Pipeline, TrainingPipeline
 from ..pipelines.graphs import GraphQueryPipeline
 from ..pipelines.repository import RepositoryPipeline
 from ..pipelines.typing import (
@@ -29,6 +30,18 @@ from ..registry import Registrable
 from .base import MindMemOSSkill
 
 RequestT = TypeVar("RequestT", bound=ProjectRequest)
+PipelineT = TypeVar("PipelineT", bound=Pipeline)
+
+
+def _select_pipeline(pipelines: dict[str, PipelineT], name: str | None) -> PipelineT:
+    """Resolve an explicit request name or the sole available pipeline."""
+    if name is not None:
+        if name not in pipelines:
+            raise ValueError(f"Unknown or unavailable pipeline {name!r}; available: {list(pipelines)}")
+        return pipelines[name]
+    if len(pipelines) != 1:
+        raise ValueError(f"pipeline is required; available: {list(pipelines)}")
+    return next(iter(pipelines.values()))
 
 
 class SkillService(MindMemOSSkill):
@@ -37,8 +50,8 @@ class SkillService(MindMemOSSkill):
     Args:
         backends: Already constructed dependencies, ordered by construction.
         repository: Selected repository operations, or None when unconfigured.
-        training: Selected training pipeline, or None when unconfigured.
-        evolution: Selected evolution pipeline, or None when unconfigured.
+        training_pipelines: Named training instances available to requests.
+        evolution_pipelines: Named evolution instances available to requests.
         local_project_id: Scope bound only by explicit local assembly.
     """
 
@@ -47,14 +60,14 @@ class SkillService(MindMemOSSkill):
         *,
         backends: dict[str, Registrable[Any]],
         repository: RepositoryPipeline | None = None,
-        training: TrainingPipeline | None = None,
-        evolution: EvolutionPipeline | None = None,
+        training_pipelines: dict[str, TrainingPipeline] | None = None,
+        evolution_pipelines: dict[str, EvolutionPipeline] | None = None,
         local_project_id: str | None = None,
     ) -> None:
         self._backends = backends.copy()
         self._repository = repository
-        self._training = training
-        self._evolution = evolution
+        self._training_pipelines = dict(training_pipelines or {})
+        self._evolution_pipelines = dict(evolution_pipelines or {})
         self.local_project_id = local_project_id
 
     @property
@@ -62,11 +75,14 @@ class SkillService(MindMemOSSkill):
         """Return assembled backend instances for diagnostics and lifecycle inspection."""
         return self._backends.copy()
 
-    def close(self) -> None:
-        """Close owned database pools in reverse construction order."""
-        for backend in reversed(list(self._backends.values())):
-            if isinstance(backend, Database):
-                backend.close()
+    async def close(self) -> None:
+        """Close pipelines before their borrowed database in reverse construction order."""
+        async with AsyncExitStack() as cleanup:
+            for backend in self._backends.values():
+                if isinstance(backend, Pipeline):
+                    cleanup.push_async_callback(backend.close)
+                elif isinstance(backend, Database):
+                    cleanup.callback(backend.close)
 
     @property
     def repository(self) -> RepositoryPipeline:
@@ -75,9 +91,9 @@ class SkillService(MindMemOSSkill):
             raise NotImplementedError("Repository pipeline is not configured")
         return self._repository
 
-    def initialize_storage(self) -> None:
+    async def initialize_storage(self) -> None:
         """Delegate explicit missing-table initialization to the repository pipeline."""
-        self.repository.initialize_storage()
+        await self.repository.initialize_storage()
 
     def _project_id(self, requested: str | None) -> str:
         """Require explicit scope unless this service was assembled for local use."""
@@ -93,42 +109,50 @@ class SkillService(MindMemOSSkill):
         """Bind request scope without mutating the caller's model."""
         return request.model_copy(update={"project_id": self._project_id(request.project_id)})
 
-    def graph_queries(self, project_id: str | None = None) -> GraphQueryPipeline:
+    async def graph_queries(self, project_id: str | None = None) -> GraphQueryPipeline:
         """Create a project-scoped graph query pipeline over shared persistence.
 
         Args:
             project_id: Explicit project, or the bound local scope when omitted.
         """
-        return self.repository.graph_queries(self._project_id(project_id))
+        return await self.repository.graph_queries(self._project_id(project_id))
 
-    def register_skill(self, request: RegisterRequest) -> SkillDetail:
+    async def register_skill(self, request: RegisterRequest) -> SkillDetail:
         """Register a complete source under a new central identity.
 
         Args:
             request: Project, source content, display metadata, and provenance.
         """
         request = self._scoped(RegisterRequest.model_validate(request))
-        return self.repository.register_skill(request)
+        return await self.repository.register_skill(request)
 
-    def list_skills(self, request: ListRequest) -> list[SkillRecord]:
+    async def list_skills(self, request: ListRequest) -> list[SkillRecord]:
         """List central records in one project.
 
         Args:
             request: Project and pagination settings.
         """
         request = self._scoped(ListRequest.model_validate(request))
-        return self.repository.list_skills(request)
+        return await self.repository.list_skills(request)
 
-    def show_skill(self, request: ShowRequest) -> SkillDetail:
+    async def show_skill(self, request: ShowRequest) -> SkillDetail:
         """Read central metadata and an owned version.
 
         Args:
             request: Project, Skill reference, and optional version.
         """
         request = self._scoped(ShowRequest.model_validate(request))
-        return self.repository.show_skill(request)
+        return await self.repository.show_skill(request)
 
-    def export_skill(self, request: ExportRequest) -> str:
+    async def skill_cloud_status(self, request: SkillRequest) -> str:
+        """Read recorded cloud synchronization status for a local Skill.
+
+        Args:
+            request: Project and Skill reference.
+        """
+        return await self.repository.skill_cloud_status(self._scoped(SkillRequest.model_validate(request)))
+
+    async def export_skill(self, request: ExportRequest) -> str:
         """Export a complete stored snapshot without tracking the directory.
 
         Args:
@@ -138,63 +162,63 @@ class SkillService(MindMemOSSkill):
             Absolute path of the exported application directory.
         """
         request = self._scoped(ExportRequest.model_validate(request))
-        return self.repository.export_skill(request)
+        return await self.repository.export_skill(request)
 
-    def commit_skill(self, request: CommitRequest) -> SkillDetail:
+    async def commit_skill(self, request: CommitRequest) -> SkillDetail:
         """Save a new version and select it only if the captured parent is still current.
 
         Args:
             request: Target Skill, source, optional expected parent, and commit message.
         """
         request = self._scoped(CommitRequest.model_validate(request))
-        return self.repository.commit_skill(request)
+        return await self.repository.commit_skill(request)
 
-    def skill_history(self, request: HistoryRequest) -> list[SkillVersionRecord]:
+    async def skill_history(self, request: HistoryRequest) -> list[SkillVersionRecord]:
         """Read a page of versions without changing the current selection.
 
         Args:
             request: Project, Skill reference, and pagination.
         """
         request = self._scoped(HistoryRequest.model_validate(request))
-        return self.repository.skill_history(request)
+        return await self.repository.skill_history(request)
 
-    def diff_skill(self, request: DiffRequest) -> DiffResult:
+    async def diff_skill(self, request: DiffRequest) -> DiffResult:
         """Compare complete snapshots from the same Skill.
 
         Args:
             request: Skill and version pair; the starting version defaults to current.
         """
         request = self._scoped(DiffRequest.model_validate(request))
-        return self.repository.diff_skill(request)
+        return await self.repository.diff_skill(request)
 
-    def switch_skill(self, request: SwitchRequest) -> SkillRecord:
+    async def switch_skill(self, request: SwitchRequest) -> SkillRecord:
         """Change the current pointer without editing any application directory.
 
         Args:
             request: Skill and existing owned version to select.
         """
         request = self._scoped(SwitchRequest.model_validate(request))
-        return self.repository.switch_skill(request)
+        return await self.repository.switch_skill(request)
 
-    def set_skill_meta(self, request: SetMetaRequest) -> SkillRecord:
+    async def set_skill_meta(self, request: SetMetaRequest) -> SkillRecord:
         """Update name or alias without creating a version.
 
         Args:
             request: Skill reference and explicit metadata changes.
         """
         request = self._scoped(SetMetaRequest.model_validate(request))
-        return self.repository.set_skill_meta(request)
+        return await self.repository.set_skill_meta(request)
 
-    def delete_skill(self, request: SkillRequest) -> None:
+    async def delete_skill(self, request: SkillRequest) -> None:
         """Delete central data only when no retained evidence references it.
 
         Args:
             request: Project and Skill identity, alias, or unique prefix.
         """
         request = self._scoped(SkillRequest.model_validate(request))
-        return self.repository.delete_skill(request)
+        return await self.repository.delete_skill(request)
 
-    def auto_evolve_skill(self, request: SkillPipelineRequest | None = None) -> SkillPipelineResult:
+    async def auto_evolve_skill(self, request: SkillPipelineRequest | None = None) -> SkillPipelineResult:
         """Delegate evolution to the selected pipeline.
 
         Args:
@@ -202,17 +226,18 @@ class SkillService(MindMemOSSkill):
 
         Raises:
             NotImplementedError: No evolution pipeline is configured.
-            ValueError: A configured operation received no request.
+            ValueError: Request is missing, or pipeline selection is missing or unavailable.
         """
-        if self._evolution is None:
+        if not self._evolution_pipelines:
             raise NotImplementedError("Automatic Skill evolution is not implemented")
         if request is None:
             raise ValueError("An evolution request is required")
         request = SkillPipelineRequest.model_validate(request)
         scoped = request.model_copy(update={"project_id": self._project_id(request.project_id)})
-        return self._evolution.evolve(scoped)
+        pipeline = _select_pipeline(self._evolution_pipelines, request.pipeline)
+        return await pipeline.evolve(scoped)
 
-    def auto_train_skill(self, request: TrainingRequest | None = None) -> SkillPipelineResult:
+    async def auto_train_skill(self, request: TrainingRequest | None = None) -> SkillPipelineResult:
         """Delegate tasks, splits, and an exact input version to the training pipeline.
 
         Args:
@@ -220,12 +245,13 @@ class SkillService(MindMemOSSkill):
 
         Raises:
             NotImplementedError: No training pipeline is configured.
-            ValueError: A configured operation received no request.
+            ValueError: Request is missing, or pipeline selection is missing or unavailable.
         """
-        if self._training is None:
+        if not self._training_pipelines:
             raise NotImplementedError("Automatic Skill training is not implemented")
         if request is None:
             raise ValueError("A training request is required")
         request = TrainingRequest.model_validate(request)
         scoped = request.model_copy(update={"project_id": self._project_id(request.project_id)})
-        return self._training.train(scoped)
+        pipeline = _select_pipeline(self._training_pipelines, request.pipeline)
+        return await pipeline.train(scoped)

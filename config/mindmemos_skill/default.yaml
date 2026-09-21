@@ -1,84 +1,70 @@
-# MindMemOS Skill Service 完整配置参考。
-# 适用于当前 create_service("config/mindmemos_skill/full.yaml") 接口。
-# 此文件完整列出 ServiceConfig、BackendConfig 及内置仓库后端的配置字段。
-# 默认组装 SQLite 仓库；创建 service 不会调用模型或启动训练。
-#
-# 使用约定：
-# 1. 显式 YAML 模式需要调用 service.initialize_storage() 后再操作仓库。
-# 2. 每个业务请求必须提供 project_id；project_id 不是此 YAML 的顶层字段。
-# 3. 显式 YAML 不能与 create_service 的 home/database_path/project_id 参数混用。
-# 4. 相对数据库路径基于进程工作目录，不是此 YAML 所在目录。
-# 5. YAML 通过 safe_load 读取，不支持 ${ENV_VAR} 插值或自动加载 .env。
-# 6. 日志、HTTP host/port、数据集与训练请求不属于 ServiceConfig。
+# MindMemOS Skill Service 配置。
+# 使用 create_service("config/mindmemos_skill/default.yaml") 组装服务。
+# 显式配置不会初始化数据库；使用前调用 service.initialize_storage()。
+# HTTP 启动入口会执行初始化。业务请求需提供 project_id。
+# 相对数据库路径基于进程工作目录；YAML 不展开环境变量。
 
-# 选中下方 backends 中的实例名；不是 class_name，也不是模块路径。
-repository_pipeline: repository_ops
-
-# 仅当没有显式或可推断的 repository pipeline 时使用。
-# 简化方式：删除 repository_ops 后端，将 repository_pipeline 设为 null，
-# 并将 persistence_backend 设为 repository，工厂会自动包装仓库流水线。
-# 不能同时选择 repository_pipeline 和 persistence_backend。
-persistence_backend: null
-
-# 当前内置训练/演化流水线只有抽象契约，没有可直接使用的注册实现。
-# null 在只有一个对应实现时会自动推断；没有实现时该操作抛出 NotImplementedError。
-# 扩展实现需先导入完成注册，再在 backends 中声明，并在这里填写实例名。
-# 仅添加 agent/environment/algorithm 后端不会自动连接成训练或演化流水线。
-training_pipeline: null
-evolution_pipeline: null
-
-backends:
-  # BackendConfig 的四个字段：module、class_name、config、dependencies。
-  # module 可取 infra/algos/agents/logging/persistence/envs/pipelines；
-  # 是否可用取决于该类别是否已有注册实现，不能将任意类名放入 class_name。
-  # 所有声明的后端都会被构造；依赖必须指向已有实例，且不能形成环。
+# 全局唯一的 SkillPersistence，所有 pipeline 使用同一个实例。
+# 数据库直接在这里定义，不支持多存储、资源名引用或额外的存储选择项。
+persistence:
+  config:
+    # 是否登记远端绑定及操作表；不会自动连接云端或启动同步。
+    include_remote: true
   database:
-    module: infra
     class_name: sqlite
     config:
-      # 显式路径，便于独立使用此参考配置。生产使用时改成目标持久化路径。
-      # 相对路径：sqlite+pysqlite:///./data/mindmemos_skill/central.db
-      # 绝对路径示例：sqlite+pysqlite:////absolute/path/central.db
-      # 删除 url 字段时，工厂从 MINDMEMOS_HOME/workspace.json 解析数据库路径；
-      # 没有 workspace.json 时会创建本地元信息，默认数据库为 data/central.db。
-      # 不要写 url: null；“删除字段”和 null 的含义不同。
       url: sqlite+pysqlite:///./data/mindmemos_skill/central.db
-      # 等待 SQLite 写锁的秒数，必须大于 0。
       timeout: 5.0
-    dependencies: {}
+      # 删除 url 时，使用 MINDMEMOS_HOME/workspace.json 中的数据库路径。
+      # 不要填 null；绝对路径例：sqlite+pysqlite:////absolute/path/central.db
 
-  repository:
-    module: persistence
-    class_name: skill
-    config:
-      # true 注册远端绑定/操作表及对应数据服务。
-      # 这不会自动连接云端、配置鉴权或执行远端同步。
-      # 核心 Skill、版本、轨迹和图结构表不受此开关影响。
-      include_remote: true
-    dependencies:
-      # 左边是构造函数参数名；右边是 backends 实例名。
-      database: database
+# 明确定义仓库入口，不会根据 persistence 自动补装。
+repository_pipeline:
+  class_name: repository
+  config: {}
 
-  repository_ops:
-    module: pipelines
-    class_name: repository
-    # 当前仓库流水线没有额外配置字段，必须保持空映射。
-    config: {}
-    dependencies:
-      persistence: repository
+# 名称直接对应请求中的 pipeline 字段，值就是该流程的完整定义。
+# 一个流程时请求可省略 pipeline；多个时必须指定，无默认流程。
+# {} 或省略字段表示未启用；当前没有内置可运行的训练/演进 pipeline。
+training_pipelines: {}
+evolution_pipelines: {}
 
-# PostgreSQL 替换方案：用以下块替换上面的 database，其他后端无需变化。
-# 不要保留两个同名 database 键，也不要同时填入 SQLite 专属 timeout 字段。
-# 目标服务需安装 PostgreSQL/psycopg 依赖并具备 pgvector 支持。
-# 密码不要提交到版本库；可在 Python 中读取环境变量后填入 ServiceConfig。
-# 此处不支持直接写 ${DATABASE_URL}。
+# 自定义流程格式示意；注册名和内部字段须与具体实现的 config_type 一致。
+# 每个流程就地定义 algorithm/environment/agent 等组件，允许重复配置。
+# 组件的归属与层级由具体流程决定，不存在全局 backends/resources/dependencies。
 #
-#  database:
-#    module: infra
-#    class_name: postgres
-#    config:
-#      url: postgresql+psycopg://USER:PASSWORD@127.0.0.1:5432/mindmemos
-#      pool_size: 5       # 每个 service 进程保留的连接数，必须大于 0。
-#      max_overflow: 10   # 超出连接池的临时连接上限，必须大于等于 0。
-#      pool_timeout: 30.0 # 等待空闲连接的秒数，必须大于 0。
-#    dependencies: {}
+# training_pipelines:
+#   train_a:
+#     class_name: custom_train_a
+#     config:
+#       algorithm:
+#         class_name: algorithm_a
+#         config: {max_iterations: 10}
+#       environment:
+#         class_name: environment_a
+#         config:
+#           agent:
+#             class_name: agent_a
+#             config: {model: model_a}
+#   train_b:
+#     class_name: custom_train_b
+#     config:
+#       algorithm:
+#         class_name: algorithm_a
+#         config: {max_iterations: 20}
+#       environment:
+#         class_name: environment_a
+#         config:
+#           agent:
+#             class_name: agent_a
+#             config: {model: model_a}
+#
+# PostgreSQL：仅替换 persistence.database，其他业务配置保持不变。
+# database:
+#   class_name: postgres
+#   config:
+#     url: postgresql+psycopg://USER:PASSWORD@127.0.0.1:5432/mindmemos
+#     pool_size: 5
+#     max_overflow: 10
+#     pool_timeout: 30.0
+# 凭据不要提交到版本库，可在 Python 中读取环境变量并填入配置。

@@ -20,7 +20,7 @@ class EvolutionPipeline(Pipeline[ConfigT], ABC):
     """
 
     @abstractmethod
-    def evolve(self, request: SkillPipelineRequest) -> SkillPipelineResult:
+    async def evolve(self, request: SkillPipelineRequest) -> SkillPipelineResult:
         """Evolve one Skill and commit a child of its captured current version.
 
         Implementations must preserve project scope and source data, avoid

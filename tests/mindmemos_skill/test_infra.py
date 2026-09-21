@@ -298,26 +298,23 @@ def test_postgres_compilation_and_codec_without_server():
         database.close()
 
 
-def test_service_shutdown_closes_database(tmp_path):
+@pytest.mark.asyncio
+async def test_service_shutdown_closes_database(tmp_path):
     from fastapi.testclient import TestClient
     from mindmemos_skill.api.entries.fastapi import create_app
 
     from mindmemos_skill import ServiceConfig, create_service
 
-    service = create_service(
+    service = await create_service(
         ServiceConfig.model_validate(
             {
-                "backends": {
-                    "db": {
-                        "module": "infra",
-                        "class_name": "sqlite",
-                        "config": {"url": f"sqlite:///{tmp_path / 'service.db'}"},
-                    }
+                "persistence": {
+                    "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'service.db'}"}}
                 }
             }
         )
     )
-    database = service.backends["db"]
+    database = service.backends["database"]
     database.tables.register(registry().get("items"))
     database.create_tables()
     with TestClient(create_app(service)) as client:

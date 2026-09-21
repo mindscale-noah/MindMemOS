@@ -20,7 +20,7 @@ class SkillEvolver(Algorithm[ConfigT], ABC):
     """
 
     @abstractmethod
-    def evolve(self, *, skill: Skill, trajectories: Sequence[SkillTrajectory]) -> Skill:
+    async def evolve(self, *, skill: Skill, trajectories: Sequence[SkillTrajectory]) -> Skill:
         """Optimize a supplied skill using existing trajectories.
 
         Args:

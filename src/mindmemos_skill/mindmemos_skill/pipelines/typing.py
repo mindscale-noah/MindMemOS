@@ -24,6 +24,9 @@ class SkillPipelineRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     """Reject undeclared inputs rather than silently ignoring selection options."""
 
+    pipeline: Nonempty | None = None
+    """Configured instance name; omission requires exactly one available pipeline."""
+
     project_id: Nonempty
     """Caller-selected repository scope; not proof of authorization."""
 
@@ -73,6 +76,9 @@ class TrainingRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     """Reject undeclared inputs, including obsolete Skill references."""
+
+    pipeline: Nonempty | None = None
+    """Configured instance name; omission requires exactly one available pipeline."""
 
     project_id: Nonempty | None = None
     """Repository scope; omission is allowed only through a locally bound service."""

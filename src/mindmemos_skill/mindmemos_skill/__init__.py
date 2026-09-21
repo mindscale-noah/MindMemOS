@@ -1,5 +1,5 @@
 """Skill package for MindMemOS."""
 
-from .api import BackendConfig, MindMemOSSkill, ServiceConfig, create_service
+from .api import ImplementationConfig, MindMemOSSkill, PersistenceConfig, ServiceConfig, create_service
 
-__all__ = ["MindMemOSSkill", "BackendConfig", "ServiceConfig", "create_service"]
+__all__ = ["MindMemOSSkill", "ImplementationConfig", "PersistenceConfig", "ServiceConfig", "create_service"]

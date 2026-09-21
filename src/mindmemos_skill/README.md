@@ -41,12 +41,15 @@ membership. Use the exported manifest to freeze a selection.
 
 ## Minimal environment contract
 
-`Environment.rollout(task, work_dir, *, reward_data, skills=None, resume=True)` executes one
+`Environment.rollout(task, work_dir, *, reward_data, skill_set=None, resume=True)` executes one
 sample and returns a `RolloutResult` with `output`, ordered `trajectory` records,
 and a structured `reward`. The task is a `Task` object with required stable `id` and `instruction` fields; subclasses may add fields.
-Skills are supplied as `list[Skill]`; omitting them runs a baseline.
-Both `rollout` and `_run` accept `list[Skill]`. The base class calls
-`Skill.assemble(task)` once and passes the returned complete Skill directly to `_run`.
+Supply `skill_set=SkillSet({"skill-id": skill}, max_concurrency=4)`; omitting it runs a baseline.
+`SkillSet` selects all members by default. Dynamic collections override `select(task)`
+and record non-secret selection settings through `config_snapshot()`. The collection calls
+each selected member's `assemble(task)` concurrently, bounded by `max_concurrency` per call,
+and preserves selection order. `_run` receives the resulting `list[Skill]` without reassembly.
+The removed `skills=` rollout argument is not accepted.
 Assembly owns creation of the task-local copy and replacement of its bundle.
 Concrete classes, auxiliary resources, and export methods remain available.
 Environments never check whether a Skill is static or dynamic or assemble it again.
@@ -70,7 +73,9 @@ verified absence of consumption.
 The base class fills UTC `started_at`, `finished_at`, and monotonic
 `duration_s` around assembly and `_run`, including preparation, agent execution, and scoring.
 Cache reads and result persistence are excluded. Resume preserves the original
-timing and usage. Subclass fields on Reward and Usage survive serialization.
+timing and usage. Saved selection and assembly are reused without selecting or assembling again;
+changed candidates or collection settings require a new work directory. Legacy ordered-list
+records remain readable with a static SkillSet when their source inputs match. Subclass fields on Reward and Usage survive serialization.
 To restore their concrete Python types and validators, declare a RolloutResult
 subclass with those field types and set the environment's `result_type` to it.
 Otherwise, base Reward and Usage objects retain the extension data.
@@ -193,11 +198,18 @@ reconfiguration, log rotation, and multiprocess shared-file management are not s
 
 ## Service assembly
 
+Service assembly, pipeline business operations (including repository and graph reads),
+and service/pipeline cleanup are asynchronous. Use `await` inside an async function.
+Use `async with await create_service(...) as service:` to close owned resources
+automatically, or call `await service.close()` explicitly. Only process entry points
+should own an event loop with `asyncio.run(...)`. Constructors and configuration
+validation remain synchronous.
+
 Install this package, then run from the repository root:
 
 ```python
 from mindmemos_skill import create_service
-service = create_service("config/mindmemos_skill/default.yaml")
+service = await create_service("config/mindmemos_skill/default.yaml")
 ```
 
 Alternatively, pass a configuration object directly:
@@ -205,97 +217,18 @@ Alternatively, pass a configuration object directly:
 ```python
 from mindmemos_skill import ServiceConfig, create_service
 
-service = create_service(ServiceConfig(backends={}))
+service = await create_service(ServiceConfig())
 ```
 
-Both inputs produce the same `SkillService` implementing `MindMemOSSkill`.
-Configuration describes backends and dependencies, without a `mode` field.
-The service exposes business methods and does not own an HTTP application.
-The factory revalidates and copies configuration objects and does not start a server.
-An empty `backends: {}` still creates an assembly-only service; the default configuration now includes a SQLite repository. For configured backends, each instance name
-is constructed once and exposed through `service.backends[name]`.
+Both inputs produce the same `SkillService` implementing `MindMemOSSkill`. An explicit empty config creates no storage or pipelines; omitting the config argument uses the local workspace repository.
 
-The following example demonstrates registration and dependency injection only;
-it does not implement a database or persistence operations. Save the YAML as
-`config/mindmemos_skill/assembly.yaml` before running the Python example.
-```python
-from pydantic import BaseModel, ConfigDict
-from mindmemos_skill import create_service
-from mindmemos_skill.infra import Infrastructure
-from mindmemos_skill.persistence import Persistence
+Configuration contains one `persistence` with an inline `database`, an optional `repository_pipeline`, and named `training_pipelines` / `evolution_pipelines` mappings containing complete definitions. See the [default configuration](../../config/mindmemos_skill/default.yaml) and [assembly contract](../../docs/mindmemos_skill/central_repository_api.md).
 
-class ConnectionConfig(BaseModel):
-    """Configure an in-memory connection example."""
-    model_config = ConfigDict(extra="forbid")
-    namespace: str = "default"
-    """Namespace used by this example connection."""
+Each pipeline owns its nested algorithm, environment and agent settings. Repeated configuration creates independent components; there are no global resource references. The factory constructs one `SkillPersistence` and passes it to every pipeline through the fixed `persistence` keyword. Pipeline constructors accept `config` and `persistence`; their `config_type` models validate nested settings, and the implementation constructs local components through their existing registries.
 
-class StoreConfig(BaseModel):
-    """Configure an in-memory store example."""
-    model_config = ConfigDict(extra="forbid")
+Import extensions explicitly before assembly. The factory validates pipeline capabilities, options and constructor signatures before constructing the database. It does not infer or synthesize repository pipelines. Pipelines validate their own internal implementation choices and must never pass persistence into trainers or evolvers.
 
-@Infrastructure.register("MemoryConnection")
-class MemoryConnection(Infrastructure[ConnectionConfig]):
-    """Hold configuration for the connection example."""
-    config_type = ConnectionConfig
-    """Configuration model for this implementation."""
-
-@Persistence.register("MemoryStore")
-class MemoryStore(Persistence[StoreConfig]):
-    """Demonstrate injection of an existing connection instance."""
-    config_type = StoreConfig
-    """Configuration model for this implementation."""
-
-    def __init__(self, config: StoreConfig, *, connection: MemoryConnection):
-        """Store an injected connection.
-
-        Args:
-            config: Validated store configuration.
-            connection: Shared connection selected by the YAML dependency.
-        """
-        super().__init__(config)
-        self.connection = connection
-
-service = create_service("config/mindmemos_skill/assembly.yaml")
-assert service.backends["store"].connection is service.backends["db"]
-```
-
-```yaml
-backends:
-  store:
-    module: persistence
-    class_name: MemoryStore
-    config: {}
-    dependencies:
-      connection: db
-  db:
-    module: infra
-    class_name: MemoryConnection
-    config:
-      namespace: demo
-```
-
-`class_name` matches the case-sensitive registration name, which may equal the
-Python class name. `config` is validated by the implementation's `config_type`;
-use `extra="forbid"` to reject unexpected options. Dependency keys name constructor
-keyword arguments, and their values reference backend instance names.
-
-Available families are `infra.Infrastructure`, `algos.Algorithm`, `agents.Agent`,
-`logging.Logger`, `persistence.Persistence`, and `envs.Environment`.
-They share `registry.Registrable` while keeping separate registries. `common`
-contains utilities and is not a service backend.
-
-Import extension modules explicitly before calling the factory; YAML does not
-import arbitrary Python modules. Only backends use registration; the service is
-independent of transport. Package imports do not construct resources.
-All registered names, configurations, references, cycles, and constructor signatures
-are checked before construction. Dependency order is independent of YAML ordering;
-multiple references share the same instance.
-
-Generic resource cleanup and constructor-failure rollback are not yet implemented.
-Backend constructors should avoid starting long-lived resources and must clean up
-their own failed construction. Business execution and resource lifecycle remain
-future work.
+`service.backends` is diagnostic only. Its keys are `database`, `persistence`, `repository_pipeline`, `training_pipelines.<name>` and `evolution_pipelines.<name>`, not YAML references. Service shutdown closes pipelines in reverse construction order before closing the database. Pipelines release their owned components and clean up partial constructor failures, without closing global persistence.
 
 Run `.venv/bin/python -m pytest tests/mindmemos_skill -q` from the repository root.
 
@@ -315,7 +248,7 @@ The HTTP adapter accepts an existing service and calls its methods without rebui
 from mindmemos_skill import ServiceConfig, create_service
 from mindmemos_skill.api.entries.fastapi import create_app
 
-service = create_service(ServiceConfig())
+service = await create_service(ServiceConfig())
 app = create_app(service)
 assert app.state.service is service
 ```

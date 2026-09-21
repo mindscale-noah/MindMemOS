@@ -26,6 +26,14 @@ class RemoteDataService:
     def __init__(self, database: Database):
         self.database = database
 
+    def has_version(self, local_version_id: str) -> bool:
+        """Check for a confirmed cloud mapping on any recorded deployment.
+
+        Args:
+            local_version_id: Exact local version identity, already checked by the caller.
+        """
+        return bool(self.database.count(REMOTE_VERSION_BINDINGS_TABLE, filters={"local_version_id": local_version_id}))
+
     def bind_skill(self, record: RemoteSkillBindingRecord) -> None:
         """Associate an existing local family with a confirmed cloud lineage.
 

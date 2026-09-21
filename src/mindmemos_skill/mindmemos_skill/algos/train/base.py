@@ -22,7 +22,7 @@ class SkillTrainer(Algorithm[ConfigT], ABC):
     """
 
     @abstractmethod
-    def train(
+    async def train(
         self,
         *,
         skill: Skill,

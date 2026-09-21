@@ -1,4 +1,4 @@
-"""YAML-driven service assembly without external resources."""
+"""Service assembly with one store and independently configured pipelines."""
 
 import subprocess
 import sys
@@ -6,86 +6,52 @@ from pathlib import Path
 
 import pytest
 import yaml
-from mindmemos_skill.agents import Agent
-from mindmemos_skill.algos import Algorithm
 from mindmemos_skill.api.entries.fastapi import create_app
-from mindmemos_skill.envs import Environment, Reward, RolloutResult, Task
-from mindmemos_skill.envs.data import RewardData
-from mindmemos_skill.infra import Infrastructure
-from mindmemos_skill.logging import Logger
-from mindmemos_skill.persistence import Persistence
-from mindmemos_skill.skill import Skill
+from mindmemos_skill.infra.database import SQLiteDatabase
+from mindmemos_skill.pipelines import Pipeline, TrainingPipeline
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mindmemos_skill import MindMemOSSkill, ServiceConfig, create_service
 
 
-class Options(BaseModel):
-    """Backend configuration used to observe assembly."""
+class AgentOptions(BaseModel):
+    """Typed options owned by the example pipeline's nested agent."""
 
     model_config = ConfigDict(extra="forbid")
-    """Reject unexpected implementation options."""
 
     count: int = Field(default=1, gt=0)
-    """Positive number preserved on constructed test backends."""
+
+
+class Options(BaseModel):
+    """Each pipeline carries all of its agent settings locally."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent: AgentOptions = Field(default_factory=AgentOptions)
 
 
 @pytest.fixture
-def registered_backends():
-    """Register test implementations in isolated module registries."""
+def registered_pipeline(monkeypatch):
+    """Observe independent construction and reverse resource cleanup."""
     events = []
-    families = {
-        "infra": Infrastructure,
-        "algos": Algorithm,
-        "agents": Agent,
-        "logging": Logger,
-        "persistence": Persistence,
-        "envs": Environment,
-    }
-    original_registries = {family: family._registry for family in families.values()}
-    for family in families.values():
-        family._registry = {}
+    monkeypatch.setattr(Pipeline, "_registry", {})
 
-    @Infrastructure.register("Connection")
-    class Connection(Infrastructure[Options]):
+    @Pipeline.register("training")
+    class Training(TrainingPipeline[Options]):
         config_type = Options
 
-        def __init__(self, config):
-            super().__init__(config)
-            events.append("connection")
+        def __init__(self, config, *, persistence):
+            super().__init__(config, persistence=persistence)
+            self.agent = config.agent.model_copy(deep=True)
+            events.append(("created", self))
 
-    @Persistence.register("Store")
-    class Store(Persistence[Options]):
-        config_type = Options
+        async def train(self, request):
+            raise NotImplementedError
 
-        def __init__(self, config, *, connection):
-            super().__init__(config)
-            self.connection = connection
-            events.append("store")
+        async def close(self):
+            events.append(("closed", self))
 
-    for family in families.values():
-        if family is Environment:
-            continue
-
-        @family.register("Simple")
-        class Simple(family):
-            config_type = Options
-
-    @Environment.register("Simple")
-    class SimpleEnvironment(Environment[Options]):
-        config_type = Options
-
-        def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
-            """Supply a concrete contract for service assembly tests."""
-            return RolloutResult(
-                output=task.instruction,
-                trajectory=[],
-                reward=Reward(score=0.0, success=False, detail="Answer did not pass"),
-            )
-
-    yield events
-    for family, registry in original_registries.items():
-        family._registry = registry
+    return events
 
 
 def write_config(tmp_path, value):
@@ -95,106 +61,195 @@ def write_config(tmp_path, value):
     return path
 
 
-def assembly_config():
-    """Place dependents first to verify dependency-driven ordering."""
+def assembly_config(tmp_path):
+    """Repeat local configuration instead of referencing a shared resource."""
     return {
-        "backends": {
-            "store": {"module": "persistence", "class_name": "Store", "dependencies": {"connection": "db"}},
-            "second_store": {"module": "persistence", "class_name": "Store", "dependencies": {"connection": "db"}},
-            "db": {"module": "infra", "class_name": "Connection", "config": {"count": 7}},
+        "persistence": {"database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'db'}"}}},
+        "training_pipelines": {
+            name: {"class_name": "training", "config": {"agent": {"count": 7}}} for name in ("first", "second")
         },
     }
 
 
 @pytest.mark.parametrize("source", ["yaml", "config"])
-def test_assembly_reuses_dependencies(tmp_path, registered_backends, source):
-    """Construct once per configured name and inject the same dependency object."""
-    config = assembly_config()
+@pytest.mark.asyncio
+async def test_assembly_shares_only_global_persistence(tmp_path, registered_pipeline, source):
+    """Create independent pipeline components and exactly one database/store."""
+    config = assembly_config(tmp_path)
     value = ServiceConfig.model_validate(config) if source == "config" else write_config(tmp_path, config)
-    service = create_service(value)
+    service = await create_service(value)
     assert isinstance(service, MindMemOSSkill)
-    assert registered_backends == ["connection", "store", "store"]
-    assert service.backends["store"].connection is service.backends["db"]
-    assert service.backends["second_store"].connection is service.backends["db"]
-    assert service.backends["db"].config.count == 7
-    app = create_app(service)
-    assert app.state.service is service
-    assert app.state.service.backends["db"] is service.backends["db"]
-    assert registered_backends == ["connection", "store", "store"]
+    first, second = (event[1] for event in registered_pipeline)
+    assert first.persistence is second.persistence is service.backends["persistence"]
+    assert first.persistence.database is service.backends["database"]
+    assert first.agent is not second.agent
+    first.agent.count = 9
+    assert second.agent.count == 7
+    assert create_app(service).state.service is service
     view = service.backends
     view.clear()
-    assert len(service.backends) == 3
-    with pytest.raises(NotImplementedError):
-        service.auto_train_skill()
+    assert len(service.backends) == 4
+    await service.close()
+    assert registered_pipeline[-2:] == [("closed", second), ("closed", first)]
 
 
-@pytest.mark.parametrize("module", ["infra", "algos", "agents", "logging", "persistence", "envs"])
-def test_all_backend_families(tmp_path, registered_backends, module):
-    """Resolve every supported family through the shared registry mechanism."""
-    config = {"backends": {"backend": {"module": module, "class_name": "Simple"}}}
-    assert create_service(write_config(tmp_path, config)).backends["backend"].config.count == 1
+@pytest.mark.parametrize("failure", ["class", "options", "reference", "module", "dependencies", "legacy"])
+@pytest.mark.asyncio
+async def test_invalid_assembly_does_not_construct_backends(tmp_path, registered_pipeline, monkeypatch, failure):
+    """Validate all pipeline definitions before opening the global database."""
+    opened = []
+    original = SQLiteDatabase.__init__
 
+    def observe(self, config):
+        opened.append(True)
+        original(self, config)
 
-@pytest.mark.parametrize("failure", ["class", "options", "missing", "cycle", "keyword", "required", "mode"])
-def test_invalid_assembly_does_not_construct_backends(tmp_path, registered_backends, failure):
-    """Reject invalid input before any backend constructor is called."""
-    config = assembly_config()
+    monkeypatch.setattr(SQLiteDatabase, "__init__", observe)
+    config = assembly_config(tmp_path)
+    spec = config["training_pipelines"]["second"]
     if failure == "class":
-        config["backends"]["store"]["class_name"] = "Missing"
+        spec["class_name"] = "missing"
     elif failure == "options":
-        config["backends"]["store"]["config"] = {"count": 0}
-    elif failure == "missing":
-        config["backends"]["store"]["dependencies"]["connection"] = "missing"
-    elif failure == "cycle":
-        config["backends"]["db"]["dependencies"] = {"store": "store"}
-    elif failure == "keyword":
-        config["backends"]["store"]["dependencies"] = {"wrong": "db"}
-    elif failure == "required":
-        config["backends"]["store"]["dependencies"] = {}
+        spec["config"]["agent"]["count"] = 0
+    elif failure == "reference":
+        spec["config"]["agent"] = "shared_agent"
+    elif failure == "module":
+        spec["module"] = "pipelines"
+    elif failure == "dependencies":
+        spec["dependencies"] = {"persistence": "store"}
     else:
-        config["mode"] = "missing"
+        config["backends"] = {}
     with pytest.raises((ValueError, TypeError)):
-        create_service(write_config(tmp_path, config))
-    assert registered_backends == []
+        await create_service(write_config(tmp_path, config))
+    assert not opened
+    assert registered_pipeline == []
 
 
 @pytest.mark.parametrize(
-    "content", ["", "[]", "null", "mode: local\nunknown: true", "backends: [", "!!python/object:object {}"]
+    "field", ["persistence_backend", "backends", "resources", "training_pipeline", "evolution_pipeline"]
 )
-def test_invalid_yaml(tmp_path, content):
+def test_removed_global_selectors_are_rejected(field):
+    """Never silently accept the old graph or default selection format."""
+    with pytest.raises(ValidationError):
+        ServiceConfig.model_validate({field: {}})
+
+
+@pytest.mark.parametrize("storage", [[{}, {}], {"first": {}, "second": {}}])
+def test_multiple_persistence_definitions_are_rejected(storage):
+    with pytest.raises(ValidationError):
+        ServiceConfig.model_validate({"persistence": storage})
+
+
+@pytest.mark.parametrize(
+    "content", ["", "[]", "null", "mode: local\nunknown: true", "persistence: [", "!!python/object:object {}"]
+)
+@pytest.mark.asyncio
+async def test_invalid_yaml(tmp_path, content):
     """Reject malformed, unsafe, non-mapping, and unknown-field input."""
     path = tmp_path / "invalid.yaml"
     path.write_text(content)
     with pytest.raises((ValidationError, yaml.YAMLError)):
-        create_service(path)
+        await create_service(path)
 
 
-def test_missing_file(tmp_path):
-    """Preserve a useful filesystem error for absent configuration."""
+@pytest.mark.asyncio
+async def test_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
-        create_service(tmp_path / "missing.yaml")
+        await create_service(tmp_path / "missing.yaml")
 
 
-def test_mutated_config_revalidated_before_construction(registered_backends):
-    config = ServiceConfig.model_validate(assembly_config())
-    config.backends["store"].dependencies["connection"] = "missing"
-    with pytest.raises(ValueError, match="missing backend"):
-        create_service(config)
-    assert registered_backends == []
+@pytest.mark.asyncio
+async def test_mutated_config_revalidated_before_construction(tmp_path, registered_pipeline):
+    config = ServiceConfig.model_validate(assembly_config(tmp_path))
+    config.training_pipelines["first"].config["agent"]["count"] = 0
+    with pytest.raises(ValidationError):
+        await create_service(config)
+    assert registered_pipeline == []
 
 
-def test_builtin_loading_in_fresh_process(tmp_path):
-    """Importing the package alone makes service assembly available."""
-    path = write_config(tmp_path, {"backends": {}})
+@pytest.mark.asyncio
+async def test_builtin_loading_in_fresh_process(tmp_path):
+    """An explicit empty config creates no resources or implicit repository."""
+    path = write_config(tmp_path, {})
     source = Path(__file__).resolve().parents[2] / "src/mindmemos_skill"
     subprocess.run(
         [
             sys.executable,
             "-c",
-            "from mindmemos_skill import create_service; import sys; assert create_service(sys.argv[1]).backends == {}",
+            "from mindmemos_skill import create_service; import sys, asyncio; assert asyncio.run(create_service(sys.argv[1])).backends == {}",
             str(path),
         ],
         cwd=source,
         check=True,
     )
-    assert create_service(path).backends == {}
+    assert (await create_service(path)).backends == {}
+
+
+@pytest.mark.asyncio
+async def test_persistence_does_not_implicitly_enable_repository(tmp_path):
+    service = await create_service(
+        ServiceConfig.model_validate(
+            {"persistence": {"database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'db'}"}}}}
+        )
+    )
+    try:
+        with pytest.raises(NotImplementedError):
+            await service.initialize_storage()
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reaches_database_when_pipeline_close_fails(tmp_path, registered_pipeline, monkeypatch):
+    """A component cleanup error must not leak the shared database or other pipelines."""
+    service = await create_service(ServiceConfig.model_validate(assembly_config(tmp_path)))
+    first, second = (event[1] for event in registered_pipeline)
+    closed = []
+    database = service.backends["database"]
+    original = database.close
+
+    def close_database():
+        closed.append("database")
+        original()
+
+    async def fail_close():
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(database, "close", close_database)
+    monkeypatch.setattr(second, "close", fail_close)
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await service.close()
+    assert ("closed", first) in registered_pipeline
+    assert closed == ["database"]
+
+
+@pytest.mark.asyncio
+async def test_factory_closes_completed_pipelines_on_later_failure(tmp_path, registered_pipeline, monkeypatch):
+    """Roll back successful pipeline construction before closing the shared database."""
+    database_closed = []
+    original = SQLiteDatabase.close
+
+    def close_database(self):
+        database_closed.append(True)
+        original(self)
+
+    monkeypatch.setattr(SQLiteDatabase, "close", close_database)
+
+    @Pipeline.register("failing")
+    class Failing(TrainingPipeline[Options]):
+        config_type = Options
+
+        def __init__(self, config, *, persistence):
+            raise RuntimeError("construction failed")
+
+        async def train(self, request):
+            raise NotImplementedError
+
+    config = assembly_config(tmp_path)
+    config["training_pipelines"]["second"] = {"class_name": "failing"}
+    with pytest.raises(RuntimeError, match="construction failed"):
+        await create_service(ServiceConfig.model_validate(config))
+    assert len(registered_pipeline) == 2
+    assert registered_pipeline[0][0] == "created"
+    assert registered_pipeline[1] == ("closed", registered_pipeline[0][1])
+    assert database_closed == [True]

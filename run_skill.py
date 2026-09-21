@@ -1,4 +1,12 @@
+import asyncio
+
 from mindmemos_skill import create_service
 
-service = create_service("config/mindmemos_skill/default.yaml")
-print(service)
+
+async def main():
+    async with await create_service("config/mindmemos_skill/default.yaml") as service:
+        print(service)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

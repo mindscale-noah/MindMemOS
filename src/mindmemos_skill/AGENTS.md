@@ -30,13 +30,13 @@
 
 - `api/base.py` 定义全局抽象基类，中心仓接口覆盖注册、列表、详情、提交、导出、历史、差异、切换、元信息及删除；请求与返回类型放在 `pipelines/typing.py`。
 - 抽象基类只定义契约，不实现业务逻辑，不创建后端资源。
-- `api/factory.py` 的 `create_service(config)` 接受 `ServiceConfig` 或 YAML 路径，统一构建 `api/service.py` 中的 `SkillService`。工厂负责依赖排序、构建和 pipeline 能力校验，Service 只接收已组装实例。`repository_pipeline`、`training_pipeline`、`evolution_pipeline` 选择操作后端；旧 `persistence_backend` 只用于工厂构建默认仓库 pipeline。
+- `api/factory.py` 的 `create_service(config)` 接受 `ServiceConfig` 或 YAML 路径。全局只有一个 `persistence`，数据库直接定义于其 `database` 字段；`repository_pipeline` 为完整定义，`training_pipelines`、`evolution_pipelines` 为名称到完整定义的字典。工厂预检后构造唯一存储，以 `persistence` 关键字注入各 pipeline。每个 pipeline 用自身嵌套配置独立构造算法、环境和 Agent，允许重复配置，不使用全局后端表、资源名引用、依赖图或隐式仓库选择。请求通过 `pipeline` 选择流程，只有一个时可省略。
 - 服务不参与接入模式注册，也不持有 HTTP 应用。`api/entries/fastapi.py` 的 `create_app(service)` 只包装已有 `MindMemOSSkill` 实例，所有路由共享其后端，不重复构造服务。
 - 未实现的入口使用 `NotImplementedError`，不得返回伪造的成功结果。
 - 导入包不得启动服务、连接数据库或加载模型。Python 调用方通过 `initialize_storage()` 显式建表；HTTP 启动入口在启动前初始化。该操作会幂等迁移既有版本标签，但不承担其他旧表结构迁移。
 - 启动统一通过根目录 Makefile 的 `skill-local` 和 `skill-fastapi` 目标；具体入口分别放在 `api/entries/local.py` 和 `api/entries/fastapi.py`。`run_skill.py` 仅供个人调试，不作为正式服务启动入口。
 - 服务配置放在 `config/mindmemos_skill/`，默认配置为 `default.yaml`；不要继续使用旧的 `config/skill/` 路径。`skill-local` 当前仅组装、展示并关闭服务，不会执行训练。
-- 明确资源所有权：调用方负责关闭服务；当前 `SkillService.close()` 按逆构造顺序关闭数据库后端，不代表所有后端都已具备统一生命周期协议。
+- 明确资源所有权：调用方关闭服务；`SkillService.close()` 先逆构造顺序调用 pipeline 的 `close()`，最后关闭数据库。Pipeline 负责自己的组件及构造失败时的部分资源清理，不关闭全局存储。
 
 ## 统一注册
 
@@ -46,8 +46,8 @@
 - 内置实现通过显式模块清单加载，由对应包入口触发；用户扩展必须显式导入。不扫描目录或使用元类自动注册。
 - 业务模块可以维护内置实现加载清单，但不得另写注册、查找或构建逻辑。
 - `Registrable.register(name)` 统一注册，`resolve(name)` 查找类，`build(name, options, **dependencies)` 校验配置并构造实例。配置模型由实现类的 `config_type` 声明。
-- YAML 的 `class_name` 必须与装饰器注册名称完全一致；`dependencies` 将构造函数关键字参数映射到后端实例名称。同名引用复用同一实例。
-- 注册机制用于业务后端。工厂在构造前校验全部配置与依赖，按依赖顺序实例化。自动训练和演化接口仍待实现，直接调用抛出 `NotImplementedError`，HTTP 返回 501；中心仓接口已接入持久化。
+- YAML 的 `class_name` 必须与装饰器注册名称一致；pipeline 的 `config` 由具体实现的 `config_type` 校验，并就地定义其全部组件。无 `module` 或字符串 `dependencies` 装配字段；字段归属决定注册类别。
+- 注册机制用于业务后端。工厂在构造前校验存储及 pipeline 的类型、配置与构造参数；内部组件校验由具体 pipeline 的嵌套模型负责。未配置训练/演进时调用抛出 `NotImplementedError`，HTTP 返回 501；中心仓接口已接入持久化。
 - `Data` 复用统一注册机制，但不是服务配置中的顶层后端类别。普通函数能力（例如进程执行）不为形式统一而额外包装为注册后端。
 
 ## 环境与数据边界
@@ -67,9 +67,14 @@
 - Skill 文件导出的具体操作归属 `skill/`。完整导出统一调用 `Skill.export()`，`SkillSnapshot` 仅负责序列化数据与校验；中心仓先通过 `Skill.from_snapshot()` 恢复数据对象，由 `skill/io.py` 处理目录替换与恢复；RepositoryPipeline 负责版本选择及仓库保护，不实现文件导出流程，不为导出快照实例化动态 Skill 依赖。算法所需的默认执行依赖延迟到实际组装时创建。
 
 - `Skill` 是数据对象，不继承 `Registrable`，不要求空配置，也不作为 YAML 后端。可优化 `bundle` 和辅助 `resources` 分开保存。`assemble(task)` 返回完整的任务专属 Skill 副本，保留具体类、依赖、辅助资源和导出能力，不原地修改源 Skill。
-- rollout 公共流程统一处理组装；具体环境直接使用已组装的 Skill，不按静态或动态类型分支，也不重复组装。
+- rollout 公开入口统一接收 `skill_set: SkillSet | None`，不接受旧的 `skills=`。SkillSet 默认全选，动态集合通过 `select(task)` 选择成员，并用 `config_snapshot()` 记录非敏感选择配置；集合按 `max_concurrency` 并行调用成员的 `assemble(task)` 并保持选择顺序。具体环境 `_run` 直接使用已组装的 Skill 列表，不按静态或动态类型分支，也不重复组装。恢复复用已保存的选择和组装内容，输入或选择配置变化要求新目录；旧静态列表记录仅以静态 SkillSet 恢复。
 - `snapshot()` / `from_snapshot()` 负责内容快照与数据恢复，保留已有实现元数据而不加载运行时代码。`content_hash` 覆盖源 bundle，`local_snapshot_hash` 同时覆盖 bundle 和 resources；源内容与某次任务组装结果不得混用。
-- 算法专属实现由调用方显式构造；需要动态行为时使用该算法自己的恢复入口。例如 `algos/train/treeskill/` 当前提供任务时路由的 `TreeSkill`，不能仅因目录名就宣称已实现完整训练算法。
+- 算法专属实现由调用方显式构造；需要动态行为时使用该算法自己的恢复入口。`algos/train/treeskill/` 提供任务时路由的 `TreeSkill` 与单轮主动采样的 `TreeSkillTrainer`；独立实验入口位于 `scripts/treeskill/`，尚未接入训练 pipeline。
+- SpreadsheetBench 算法适配通过继承公共环境并覆盖 `_system_prompt`、`_user_prompt`、`_get_observation` 实现；不复制 `_run()`、交互循环、工作区与任务评分。环境重算运行时和评分实现归入 `envs/builtin_envs/spreadsheetbench/`。
+- 所有算法的主流程保持通用；环境特殊提示词、分析或执行流程放在算法自身的 `env_specific/` 中，主入口文件名与环境注册名对应（例如 `spreadsheetbench.py`）。较长的同环境辅助实现可以按 `spreadsheetbench_*.py` 拆分，配置和数据类型仍分别归入该目录的 `config.py`、`typing.py`。
+- TreeSkill 的 SpreadsheetBench reference 训练失败分析允许访问对应训练样本的标准答案，以复现原始 PASS 门控分析流程；这是仅限该训练分析 Agent 的例外。任务执行 Agent、通用分析以及 val/test 不得借此访问训练分析之外的私有答案。进入 Skill 的经验继续执行原始私有答案内容过滤。
+- TreeSkill 单条执行异常由环境抛出，训练/实验层记录并跳过；不得将异常伪装成零分或纳入训练证据，不因一条数据失败终止其他独立数据。分析、定位和融合的单项失败也须保留记录。配置、数据契约与产物写入错误仍应明确失败。
+- TreeSkill 的 `config.json` 仅保存算法配置，不保存文件 SHA、提示词哈希、源码哈希或数据/Skill 快照。总实验目录还须记录分数分母、分阶段及总耗时、训练指标、模型调用和每次 patch 的提案、结果、修改前后全文与 diff；test 只在训练完成后执行一次用于汇报，不参与选优。
 - `SkillTrainer.train()` 接收已准备好的 Skill、Environment、训练集和验证集，返回选中的 Skill；不得修改输入 Skill，也不得直接或通过依赖读写数据库。调用方管理环境生命周期并保存返回结果。
 
 ## 持久化与基础设施
@@ -81,7 +86,7 @@
 - `version_id` 只用于内部关联和审计；`version_label` 是同项目、同 Skill 内唯一且创建后不变的展示别名。用户标签格式为 `v主.次.修订`；算法发布由 pipeline 传固定 `algorithm` 标识，持久层分配递增修订号与算法尾缀，禁止算法自行拼接标签或用展示顺序代替父子谱系。
 - Skill 版本身份、源内容和多父谱系与 rollout 物理执行记录分开。轨迹以 `trajectory_id` 标识，以 `(rollout_id, attempt_no)` 区分重试；新增记录不覆盖历史。
 - 本地身份、哈希与远端身份、哈希分别保存，remote 映射带部署及项目范围；已有映射表和操作队列不等于已实现网络同步、worker 或自动重试。
-- 图管理的表结构与记录类型不代表算法执行、发布或权限隔离已完成。涉及具体表语义先查 `persistence/README.md` 与当前实现。
+- `algos/manage/skill_manage/` 提供基于现有图表的组织与推荐；算法专属 SkillSet 不解释 Skill 版本。外围调度通过 `SkillGraphStore` 提供同项目版本绑定，发布服务核验完整快照并原子提交图和向量，保留历史。Scene 来自调用方显式记录，不由 LLM 生成。新增模型连边和查询改写使用显式配置及可注入客户端；模型失败明确抛出。图管理范围见 `docs/mindmemos_skill/skill_manage.md`，不得将 Python 算法入口描述为已接通 UI 或商用云服务。
 
 ## 代码与验证
 
@@ -105,3 +110,5 @@
 - Service 不创建 Skill 数据服务或公开原始 database；所有业务操作委托给 pipeline。UI 图查询通过 `service.graph_queries()` 获取项目范围内的查询 pipeline。
 - `SkillPersistence.skills` 是统一的 Skill 身份、版本及快照访问入口；`resolve(project_id, reference)` 解析 ID、别名和唯一前缀，`version_by_id(project_id, version_id)` 按精确版本加载并校验项目。事务及版本冲突检测留在 persistence。
 - TrainingRequest 传入 tasks、split 和必填 base_version_id，不接受 skill_ref。train 必填，val/test 可缺省；test 只评估已选定候选，不进入 trainer。具体训练和演进 pipeline 未实现时仍返回明确的未实现错误。
+
+- Pipeline 的业务接口、仓库与图查询接口、`close()` 均为异步；Service 与 `create_service()` 沿调用链使用 `await`。`SkillTrainer.train()` 和 `SkillEvolver.evolve()` 同样异步。仅进程入口创建事件循环，不在 pipeline 或训练主流程内使用 `asyncio.run()`；现有同步数据库事务与环境采样通过工作线程执行。

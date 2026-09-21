@@ -6,28 +6,32 @@
 ## 初始化与调用
 
 默认配置 `config/mindmemos_skill/default.yaml` 使用本地 SQLite，且不启用 remote 表。
-服务构造不连接数据库。Python 调用方显式初始化并最终关闭服务：
+显式配置组装不连接数据库；省略配置参数时，本地工厂会初始化存储。工厂、pipeline 业务方法（包括仓库和图查询）及关闭接口均为异步，构造函数与配置校验仍同步。HTTP 请求格式不变。Python 调用示例：
 
 ```python
+import asyncio
+
 from mindmemos_skill import create_service
 from mindmemos_skill.pipelines.typing import RegisterRequest, CommitRequest, ExportRequest
 
-service = create_service("config/mindmemos_skill/default.yaml")
-try:
-    service.initialize_storage()
-    first = service.register_skill(RegisterRequest(
-        project_id="demo", name="Data analysis", alias="analysis",
-        source="./my-skill", message="Initial registration",
-    ))
-    second = service.commit_skill(CommitRequest(
-        project_id="demo", skill_ref=first.skill.skill_id,
-        source="./edited-skill", message="Improve instructions",
-    ))
-    destination = service.export_skill(ExportRequest(
-        project_id="demo", skill_ref="analysis", directory="./application/analysis",
-    ))
-finally:
-    service.close()
+async def main():
+    async with await create_service("config/mindmemos_skill/default.yaml") as service:
+        await service.initialize_storage()
+        first = await service.register_skill(RegisterRequest(
+            project_id="demo", name="Data analysis", alias="analysis",
+            source="./my-skill", message="Initial registration",
+        ))
+        second = await service.commit_skill(CommitRequest(
+            project_id="demo", skill_ref=first.skill.skill_id,
+            source="./edited-skill", message="Improve instructions",
+        ))
+        destination = await service.export_skill(ExportRequest(
+            project_id="demo", skill_ref="analysis", directory="./application/analysis",
+        ))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 方法接收 `pipelines/typing.py` 中的请求对象，也接受同结构字典并校验。
@@ -36,9 +40,9 @@ finally:
 显式提交完整 snapshot 可以同时更改实现与固定配置。导出只写 bundle 与 resources，
 不把实现配置或仓库元信息偷偷写入应用目录；完整实现配置仍保存在仓内版本中。
 
-`initialize_storage()` 只创建缺失表，不迁移已有表。已有版本库的索引迁移与项目回填要求见
+`await service.initialize_storage()` 创建缺失表并执行已有版本标签迁移，不重建已有数据库；本次异步接口调整不改变表、快照或版本语义。已有版本库的索引迁移与项目回填要求见
 [持久化说明](../../src/mindmemos_skill/mindmemos_skill/persistence/README.md)。
-有多个 SkillPersistence 后端时，用 ServiceConfig 的 `persistence_backend` 指定实例名称。
+每个服务只有一个全局 SkillPersistence，数据库配置直接放在 `persistence.database` 下。
 
 ## 方法与 HTTP 路由
 
@@ -96,14 +100,54 @@ TreeSkill 的默认 router 延迟到实际路由时创建，读取、恢复和�
 ## 调用与组装边界
 
 调用链统一为 `SkillService → RepositoryPipeline → SkillPersistence.skills`。
-Service 只处理请求校验、项目绑定、pipeline 委托和资源关闭；配置解析、依赖排序及实例构建在 `api/factory.py`。
+Service 只处理请求校验、项目绑定、pipeline 委托和资源关闭；配置解析、单一存储及 pipeline 实例构建在 `api/factory.py`。
 原有仓库注册、提交、导出等业务实现位于 `pipelines/repository.py`；ID/别名/前缀解析以及版本事务位于 `persistence/db_services/skills/service.py`。
 Skill 数据入口统一为 `persistence.skills`，不再单独构造 CentralSkillStore。
 
-默认配置显式选择 `repository_pipeline: repository_ops`，该 pipeline 注入 `repository` 持久化实例。
-自定义训练、演进后端通过 `training_pipeline`、`evolution_pipeline` 选择；存在多个同类实现时必须明确指定。
-仅配置一个 SkillPersistence 的旧配置仍由工厂装配默认 RepositoryPipeline；`persistence_backend` 保留为这种配置的显式选择项。
-它不能和已选定的 repository pipeline 同时指定，避免实际数据源歧义。
+默认配置直接定义存储与业务入口：
+
+```yaml
+persistence:
+  config:
+    include_remote: true
+  database:
+    class_name: sqlite
+    config:
+      url: sqlite+pysqlite:///./data/mindmemos_skill/central.db
+repository_pipeline:
+  class_name: repository
+  config: {}
+training_pipelines: {}
+evolution_pipelines: {}
+```
+
+`training_pipelines` 与 `evolution_pipelines` 使用名称到完整定义的字典，例如：
+
+```yaml
+training_pipelines:
+  train_a:
+    class_name: custom_train_a
+    config:
+      algorithm:
+        class_name: algorithm_a
+        config: {}
+  train_b:
+    class_name: custom_train_b
+    config:
+      algorithm:
+        class_name: algorithm_a
+        config: {}
+```
+
+上述注册名与内部字段仅作示意，须匹配具体 pipeline 的 `config_type`。每个流程独立定义并构造自己的组件，允许重复；嵌套结构由实现决定，Agent 可以属于 Environment，也可以直接属于 Pipeline。配置没有全局资源表和名称引用。
+
+服务工厂只构造一个 SkillPersistence，以 `persistence` 参数传给所有 pipeline。每个 pipeline 构造函数接收 `config` 和 `persistence`，前者包含其完整配置。没有配置全局存储时注入 None；需要存储的自定义流程应明确拒绝，仓库流程在工厂预检时拒绝。所有流程配置由对应模型在构造前校验，内部组件实现名称及参数也应由该模型验证。
+
+训练和演进请求通过 `pipeline` 字段选中配置中的名称，HTTP 与 Python 一致。只有一个定义时可省略，多个时必须指定；空字典或省略字段禁用对应操作，不设默认流程，也不提供并发调度。训练与演进可使用相同的请求名称，按操作分别解析。
+
+旧 `backends`、`persistence_backend`、字符串形式的 `repository_pipeline`、训练/演进名称列表和单数默认选择字段不再接受。迁移配置时把原数据库参数原样放进 `persistence.database`，存储选项放进 `persistence.config`，各 pipeline 参数直接放进对应定义；保留数据库 URL 和工作目录即可沿用已有数据。RepositoryPipeline 必须显式定义，不会自动补装。
+
+关闭服务会先逆序关闭 pipeline，再关闭数据库。具体 pipeline 覆盖 `close()` 释放其内部资源，并自行处理构造失败时的部分资源；不能关闭借用的全局存储。
 
 训练请求使用 `TrainingRequest(project_id=..., base_version_id=..., tasks=..., split=...)`，不接受 `skill_ref`。
 精确版本查询通过 `persistence.skills.version_by_id(project_id, version_id)` 校验项目归属。
@@ -114,3 +158,9 @@ UI 图查询使用 `service.graph_queries(project_id)`，不再通过 Service �
 已有数据库直接重新打开即可；原有初始化仍只创建缺失表。回退代码无需回退数据库。
 Python 内部导入从 `api.typing`/`api.content` 改为 `pipelines.typing`/`pipelines.content`，
 直接构造 Service 的调用方应改用 `create_service`；HTTP 仓库路径和请求字段保持不变。
+
+## 自定义异步流程
+
+`TrainingPipeline.train()`、`EvolutionPipeline.evolve()`、`SkillTrainer.train()` 与 `SkillEvolver.evolve()` 使用 `async def` 实现，调用方直接 `await`。`RepositoryPipeline` 的存储操作及 `GraphQueryPipeline` 的查询操作同样异步；现有同步数据库事务通过工作线程执行。`Pipeline.close()` 应等待其拥有的异步资源关闭，不关闭借用的全局存储。服务按构造的逆序等待所有 pipeline 清理，即使某项清理失败，也继续关闭其他 pipeline 和数据库。
+
+不要在这些业务方法中用 `asyncio.run(...)` 桥接；同步命令行入口统一创建一次事件循环。UI 的 `create_app(...)` 需要 `await` 完成服务组装；仅包装已有服务的 Skill HTTP `create_app(service)` 仍为同步函数。

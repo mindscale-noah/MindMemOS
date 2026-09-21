@@ -2,34 +2,32 @@
 
 import os
 import tempfile
-from graphlib import TopologicalSorter
+from contextlib import AsyncExitStack
 from inspect import signature
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import yaml
-from filelock import FileLock
+from dotenv import load_dotenv
+from filelock import AsyncFileLock
 from mindmemos_sdk.config.paths import get_mindmemos_home
 from sqlalchemy.engine import URL
 
-from ..agents import Agent
-from ..algos import Algorithm
-from ..envs import Environment
 from ..infra import Infrastructure
 from ..infra.database import Database
-from ..logging import Logger
-from ..persistence import Persistence
 from ..persistence.store import SkillPersistence
 from ..pipelines import EvolutionPipeline, Pipeline, TrainingPipeline
-from ..pipelines.config import RepositoryPipelineConfig
 from ..pipelines.repository import RepositoryPipeline
 from ..registry import Registrable
-from .config import BackendConfig, LocalServiceConfig, ServiceConfig
+from .config import ImplementationConfig, LocalServiceConfig, PersistenceConfig, ServiceConfig
 from .service import SkillService
 
+SERVICE_CONFIG_FILENAME = "service.yaml"
+"""Optional service definition inside the selected local home."""
 
-def create_service(
+
+async def create_service(
     config: ServiceConfig | str | Path | None = None,
     *,
     home: str | Path | None = None,
@@ -39,7 +37,7 @@ def create_service(
     """Assemble one service, using local defaults only when config is omitted.
 
     Args:
-        config: Explicit configuration or YAML path; storage initialization stays caller-owned.
+        config: Explicit configuration or YAML path; otherwise load home/service.yaml or local defaults.
         home: Local root; omitted local roots use the shared HOME resolver.
         database_path: Optional local SQLite override, not persisted.
         project_id: Optional local scope override, never a cloud authentication claim.
@@ -57,59 +55,45 @@ def create_service(
     if config is None:
         local_root, settings = resolve_local_settings(home)
         scope = LocalServiceConfig(project_id=settings.project_id if project_id is None else project_id).project_id
-        path = (
-            Path(database_path).expanduser().resolve()
-            if database_path is not None
-            else (local_root / Path(settings.database_path).expanduser()).resolve()
+        source = local_root / SERVICE_CONFIG_FILENAME
+        load_dotenv(source.with_suffix(".env"), override=False, interpolate=False)
+        resolved = (
+            load_service_config(source.read_text(encoding="utf-8")) if source.exists() else default_service_config()
         )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        resolved = ServiceConfig(
-            repository_pipeline="repository_ops",
-            backends={
-                "repository_ops": BackendConfig(
-                    module="pipelines",
-                    class_name="repository",
-                    dependencies={"persistence": "repository"},
-                ),
-                "database": BackendConfig(
-                    module="infra",
-                    class_name="sqlite",
-                    config={
-                        "url": URL.create("sqlite+pysqlite", database=str(path)).render_as_string(hide_password=False)
-                    },
-                ),
-                "repository": BackendConfig(
-                    module="persistence",
-                    class_name="skill",
-                    config={"include_remote": False},
-                    dependencies={"database": "database"},
-                ),
-            },
-        )
+        if database_path is not None:
+            if resolved.persistence is None or resolved.persistence.database.class_name != "sqlite":
+                raise ValueError("database_path requires SQLite persistence")
+            path = Path(database_path).expanduser().resolve()
+            resolved.persistence.database.config["url"] = URL.create(
+                "sqlite+pysqlite", database=str(path)
+            ).render_as_string(hide_password=False)
+            path.parent.mkdir(parents=True, exist_ok=True)
     else:
         if any(value is not None for value in (home, database_path, project_id)):
             raise ValueError("Explicit config cannot be combined with home, database_path or project_id")
         if isinstance(config, ServiceConfig):
             resolved = ServiceConfig.model_validate(config.model_dump())
         else:
-            with Path(config).open(encoding="utf-8") as stream:
-                resolved = ServiceConfig.model_validate(yaml.safe_load(stream))
-        for backend in resolved.backends.values():
-            if backend.module == "infra" and backend.class_name == "sqlite" and "url" not in backend.config:
-                root, settings = resolve_local_settings()
-                path = (root / Path(settings.database_path).expanduser()).resolve()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                backend.config["url"] = URL.create("sqlite+pysqlite", database=str(path)).render_as_string(
-                    hide_password=False
-                )
+            source = Path(config).expanduser()
+            load_dotenv(source.with_suffix(".env"), override=False, interpolate=False)
+            resolved = load_service_config(source.read_text(encoding="utf-8"))
+    if resolved.persistence is not None:
+        database = resolved.persistence.database
+        if database.class_name == "sqlite" and "url" not in database.config:
+            root, settings = resolve_local_settings(local_root)
+            path = (root / Path(settings.database_path).expanduser()).resolve()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            database.config["url"] = URL.create("sqlite+pysqlite", database=str(path)).render_as_string(
+                hide_password=False
+            )
 
-    service = _assemble_service(resolved, local_project_id=scope)
+    service = await _assemble_service(resolved, local_project_id=scope)
     if local_root is not None:
         try:
-            with FileLock(str(local_root / ".workspace.lock")):
-                service.initialize_storage()
+            async with AsyncFileLock(str(local_root / ".workspace.lock")):
+                await service.initialize_storage()
         except BaseException:
-            service.close()
+            await service.close()
             raise
     return service
 
@@ -140,73 +124,109 @@ def resolve_local_settings(home: str | Path | None = None) -> tuple[Path, LocalS
     return root, LocalServiceConfig.model_validate_json(manifest.read_text())
 
 
-_MODULES: dict[str, type[Registrable[Any]]] = {
-    "infra": Infrastructure,
-    "algos": Algorithm,
-    "agents": Agent,
-    "envs": Environment,
-    "logging": Logger,
-    "persistence": Persistence,
-    "pipelines": Pipeline,
-}
-"""Backend families sharing the existing registration mechanism."""
-
-
-def _assemble_service(config: ServiceConfig, *, local_project_id: str | None) -> SkillService:
-    """Validate the complete graph before constructing and selecting pipelines."""
-    implementations = {}
-    for name, spec in config.backends.items():
-        implementation = _MODULES[spec.module].resolve(spec.class_name)
-        implementation.config_type.model_validate(spec.config)
-        try:
-            signature(implementation).bind(None, **dict.fromkeys(spec.dependencies))
-        except TypeError as exc:
-            raise TypeError(f"Invalid dependencies for backend {name!r}: {exc}") from exc
-        implementations[name] = implementation
-
-    def select(name, family):
-        if name is not None:
-            if name not in implementations or not issubclass(implementations[name], family):
-                raise ValueError(f"Backend {name!r} must select a {family.__name__}")
-            return name
-        candidates = [key for key, value in implementations.items() if issubclass(value, family)]
-        if len(candidates) > 1:
-            raise ValueError(f"Select a {family.__name__} explicitly when multiple backends are configured")
-        return candidates[0] if candidates else None
-
-    repository_name = select(config.repository_pipeline, RepositoryPipeline)
-    training_name = select(config.training_pipeline, TrainingPipeline)
-    evolution_name = select(config.evolution_pipeline, EvolutionPipeline)
-    persistence_name = None
-    if repository_name is None:
-        persistence_name = select(config.persistence_backend, SkillPersistence)
-    elif config.persistence_backend is not None:
-        raise ValueError("Use repository_pipeline or persistence_backend, not both")
-    for name, implementation in implementations.items():
-        if issubclass(implementation, RepositoryPipeline):
-            dependency = config.backends[name].dependencies.get("persistence")
-            if dependency is None or not issubclass(implementations[dependency], SkillPersistence):
-                raise ValueError("Repository pipeline requires a SkillPersistence dependency")
-
-    backends = {}
-    graph = {name: set(spec.dependencies.values()) for name, spec in config.backends.items()}
+def _validate_pipeline(spec: ImplementationConfig, family: type[Pipeline]) -> None:
+    """Validate a pipeline's family, typed options and fixed persistence injection."""
+    implementation = Pipeline.resolve(spec.class_name)
+    if not issubclass(implementation, family):
+        raise ValueError(f"Pipeline {spec.class_name!r} must implement {family.__name__}")
+    implementation.config_type.model_validate(spec.config)
     try:
-        for name in TopologicalSorter(graph).static_order():
-            spec = config.backends[name]
-            dependencies = {key: backends[target] for key, target in spec.dependencies.items()}
-            backends[name] = _MODULES[spec.module].build(spec.class_name, spec.config, **dependencies)
-        repository = backends[repository_name] if repository_name is not None else None
-        if persistence_name is not None:
-            repository = RepositoryPipeline(RepositoryPipelineConfig(), persistence=backends[persistence_name])
+        signature(implementation).bind(None, persistence=None)
+    except TypeError as exc:
+        raise TypeError(f"Pipeline {spec.class_name!r} must accept config and persistence: {exc}") from exc
+
+
+def default_service_config() -> ServiceConfig:
+    """Return local defaults whose omitted SQLite URL resolves through workspace metadata."""
+    return ServiceConfig(
+        persistence=PersistenceConfig(
+            config={"include_remote": False},
+            database=ImplementationConfig(class_name="sqlite"),
+        ),
+        repository_pipeline=ImplementationConfig(class_name="repository"),
+    )
+
+
+def load_service_config(content: str) -> ServiceConfig:
+    """Parse and preflight YAML without constructing resources.
+
+    Args:
+        content: Complete service YAML document.
+
+    Returns:
+        Validated service definition.
+    """
+    config = ServiceConfig.model_validate(yaml.safe_load(content))
+    validate_service_config(config)
+    return config
+
+
+def validate_service_config(config: ServiceConfig) -> None:
+    """Check registered types and nested options without connecting or constructing backends.
+
+    Args:
+        config: Service definition to preflight.
+    """
+    if config.persistence is not None:
+        database_spec = config.persistence.database
+        database_type = Infrastructure.resolve(database_spec.class_name)
+        if not issubclass(database_type, Database):
+            raise ValueError("persistence.database must select a Database implementation")
+        database_type.config_type.model_validate(database_spec.config)
+        signature(database_type).bind(None)
+    if config.repository_pipeline is not None:
+        if config.persistence is None:
+            raise ValueError("repository_pipeline requires global persistence")
+        _validate_pipeline(config.repository_pipeline, RepositoryPipeline)
+    for spec in config.training_pipelines.values():
+        _validate_pipeline(spec, TrainingPipeline)
+    for spec in config.evolution_pipelines.values():
+        _validate_pipeline(spec, EvolutionPipeline)
+
+
+async def _assemble_service(config: ServiceConfig, *, local_project_id: str | None) -> SkillService:
+    """Validate definitions, build one store, and inject it into independent pipelines."""
+    validate_service_config(config)
+    backends: dict[str, Registrable[Any]] = {}
+    try:
+        persistence = None
+        if config.persistence is not None:
+            database_spec = config.persistence.database
+            database = Infrastructure.build(database_spec.class_name, database_spec.config)
+            backends["database"] = database
+            persistence = SkillPersistence(config.persistence.config, database=database)
+            backends["persistence"] = persistence
+
+        def build_pipeline(path: str, spec: ImplementationConfig) -> Pipeline:
+            """Construct a pipeline whose typed config owns all non-storage dependencies."""
+            pipeline = Pipeline.build(spec.class_name, spec.config, persistence=persistence)
+            backends[path] = pipeline
+            return pipeline
+
+        repository = (
+            build_pipeline("repository_pipeline", config.repository_pipeline)
+            if config.repository_pipeline is not None
+            else None
+        )
+        training = {
+            name: build_pipeline(f"training_pipelines.{name}", spec) for name, spec in config.training_pipelines.items()
+        }
+        evolution = {
+            name: build_pipeline(f"evolution_pipelines.{name}", spec)
+            for name, spec in config.evolution_pipelines.items()
+        }
         return SkillService(
             backends=backends,
             repository=repository,
-            training=backends[training_name] if training_name is not None else None,
-            evolution=backends[evolution_name] if evolution_name is not None else None,
+            training_pipelines=training,
+            evolution_pipelines=evolution,
             local_project_id=local_project_id,
         )
     except BaseException:
-        for backend in reversed(list(backends.values())):
-            if isinstance(backend, Database):
-                backend.close()
+        async with AsyncExitStack() as cleanup:
+            for backend in backends.values():
+                if isinstance(backend, Pipeline):
+                    cleanup.push_async_callback(backend.close)
+                elif isinstance(backend, Database):
+                    cleanup.callback(backend.close)
         raise

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
 from mindmemos_skill.api.entries.fastapi import create_app
 from mindmemos_skill.api.service import SkillService
@@ -12,12 +13,12 @@ from mindmemos_skill.api.service import SkillService
 from mindmemos_skill import MindMemOSSkill, create_service
 
 
-@pytest.fixture
-def service(tmp_path):
+@pytest_asyncio.fixture
+async def service(tmp_path):
     """Build a transport-independent service through the public YAML factory."""
     path = tmp_path / "http.yaml"
-    path.write_text("backends: {}\n")
-    return create_service(path)
+    path.write_text("{}\n")
+    return await create_service(path)
 
 
 def test_factory_and_http_discovery(service):
@@ -35,7 +36,8 @@ def test_factory_and_http_discovery(service):
 
 
 @pytest.mark.parametrize("path", ["auto-evolve", "auto-train"])
-def test_pending_operations_return_501(service, path):
+@pytest.mark.asyncio
+async def test_pending_operations_return_501(service, path):
     """Keep placeholder methods visibly unimplemented over HTTP."""
     with TestClient(create_app(service)) as client:
         response = client.post(f"/skills/{path}")
@@ -43,7 +45,7 @@ def test_pending_operations_return_501(service, path):
         assert "not implemented" in response.json()["detail"]
         assert client.get(f"/skills/{path}").status_code == 405
     with pytest.raises(NotImplementedError):
-        service.auto_train_skill()
+        await service.auto_train_skill()
 
 
 def test_http_calls_service_implementation():
@@ -51,10 +53,10 @@ def test_http_calls_service_implementation():
     calls = []
 
     class RecordingService(SkillService):
-        def register_skill(self) -> None:
+        async def register_skill(self) -> None:
             calls.append(self.backends)
 
-        def delete_skill(self) -> None:
+        async def delete_skill(self) -> None:
             raise RuntimeError("Unexpected backend failure")
 
     service = RecordingService(backends={})
@@ -71,10 +73,10 @@ def test_local_import_does_not_load_http_dependencies():
         [
             sys.executable,
             "-c",
-            "import sys; from mindmemos_skill import ServiceConfig, create_service; "
+            "import sys, asyncio; from mindmemos_skill import ServiceConfig, create_service; "
             "from mindmemos_skill.api.entries.fastapi import create_app; "
             "from mindmemos_skill.api.entries.local import main; "
-            "service = create_service(ServiceConfig()); "
+            "service = asyncio.run(create_service(ServiceConfig())); "
             "assert service.backends == {}; "
             "assert 'fastapi' not in sys.modules; assert 'uvicorn' not in sys.modules",
         ],

@@ -62,7 +62,7 @@ src/mindmemos_skill/
 ```python
 from mindmemos_skill.envs import Task
 from mindmemos_skill.envs.data import RewardData
-from mindmemos_skill.skill import Skill, SkillBundle
+from mindmemos_skill.skill import Skill, SkillBundle, SkillSet
 
 skill = Skill(
     bundle=SkillBundle(files={"SKILL.md": "Check quantifiers and equality cases."}),
@@ -71,11 +71,19 @@ result = env.rollout(
     task=Task(id="task-001", instruction="Complete the task and check the answer."),
     work_dir="output/sample-001",
     reward_data=RewardData(),
-    skills=[skill],
+    skill_set=SkillSet({"skill": skill}, max_concurrency=4),
     resume=True,
 )
 print(result.output, result.reward.score, result.reward.success)
 ```
+
+`SkillSet` 默认选择全部成员；动态集合覆写 `select(task)` 返回有序成员 ID，
+并通过 `config_snapshot()` 记录不含密钥的选择配置。集合只调用成员的 `assemble(task)`，
+不区分静态或动态 Skill。`max_concurrency` 限制单次集合组装的并发数，输出保持选择顺序。
+公开入口已移除 `skills=`，统一使用 `skill_set=`。
+
+恢复继续复用已保存的选择和组装结果，不重复推荐或组装；候选、顺序或集合配置变化要求新目录。
+源输入一致的旧列表记录可用静态 SkillSet 恢复；`resume=False` 清除旧完成标记并重新选择、组装、执行。
 
 具体环境继承 `Environment[YourConfig]` 并实现
 `_run(*, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult`。
@@ -85,7 +93,7 @@ agent 可通过具体环境的构造函数注入，沿用现有 YAML dependencie
 `Task` 包含必填的稳定 `id` 和 `instruction`；子类可添加公开的任务专属字段。
 私有答案、测试用例和参考文件通过 `RewardData` 子类传入，只用于评分，不交给 agent。
 不需要额外评分输入的环境可以显式传入 `RewardData()`。
-`rollout` 和 `_run` 的 `skills` 均接收 `list[Skill]`。公共流程统一调用 `assemble(task)` 并接收完整 Skill，直接交给 `_run`。
+`rollout` 接收 `SkillSet`，集合选择成员并并行组装；`_run` 接收组装后的 `list[Skill]`。
 Skill 自己生成任务副本，只替换 bundle，保留具体类、references 等辅助文件及导出方法。
 具体环境不判断静态或动态类型，也不重复组装。
 不传 skills 表示无 skill 基线。基类不包含真实模型后端或特定任务评分器。
@@ -179,7 +187,7 @@ result = env.rollout(
     task=sample.task,
     reward_data=sample.reward_data,
     work_dir="output/rollout-001",
-    skills=[],
+    skill_set=None,
 )
 ```
 
@@ -229,9 +237,11 @@ logger.info("Skill training started")
 
 最小配置见仓库中的 `config/mindmemos_skill/default.yaml`。在仓库根目录安装本包后：
 
+服务组装、所有 pipeline 业务操作（含仓库及图查询）、pipeline 与服务关闭均为异步接口。以下示例中的 `await` 应放在异步函数内；可用 `async with await create_service(...) as service:` 自动关闭资源，或显式 `await service.close()`。仅进程入口使用 `asyncio.run(...)`；构造函数和配置校验仍为同步。
+
 ```python
 from mindmemos_skill import create_service
-service = create_service("config/mindmemos_skill/default.yaml")
+service = await create_service("config/mindmemos_skill/default.yaml")
 ```
 
 也可以直接传入配置类，无需生成 YAML：
@@ -239,88 +249,18 @@ service = create_service("config/mindmemos_skill/default.yaml")
 ```python
 from mindmemos_skill import ServiceConfig, create_service
 
-service = create_service(ServiceConfig(backends={}))
+service = await create_service(ServiceConfig())
 ```
 
-两种输入均返回实现 `MindMemOSSkill` 的同一种 `SkillService`。
-配置只描述后端及依赖，不包含 `mode`。服务本身提供业务方法，不持有 HTTP 应用。
-工厂仅组装对象，不监听端口；配置对象会重新校验并复制，避免调用方修改影响服务配置。
-空的 `backends: {}` 可创建无后端服务。配置中的每个后端会被构造一次，通过
-`service.backends[实例名称]` 访问；同一实例名称被多处引用时，注入相同对象。
+两种输入均返回实现 `MindMemOSSkill` 的 `SkillService`。显式空配置创建无存储、无 pipeline 的服务；省略 `create_service()` 的配置参数则使用本地工作区默认仓库。
 
-下例演示两个自定义类的注册与连接关系，不实现真实数据库或读写操作。
-将 YAML 保存到 `config/mindmemos_skill/assembly.yaml`，再执行 Python 示例。
-```python
-from pydantic import BaseModel, ConfigDict
-from mindmemos_skill import create_service
-from mindmemos_skill.infra import Infrastructure
-from mindmemos_skill.persistence import Persistence
+配置只包含一个 `persistence`（数据库直接定义在 `persistence.database`）、一个可选 `repository_pipeline`，以及 `training_pipelines`、`evolution_pipelines` 两个名称到完整定义的字典。参见 [默认配置](../../config/mindmemos_skill/default.yaml) 与 [接口及组装说明](../../docs/mindmemos_skill/central_repository_api.md)。
 
-class ConnectionConfig(BaseModel):
-    """Configure an in-memory connection example."""
-    model_config = ConfigDict(extra="forbid")
-    namespace: str = "default"
-    """Namespace used by this example connection."""
+每个 pipeline 的 `config` 就地包含自己的 algorithm、environment、agent 等定义；允许重复配置，不使用全局资源名引用。工厂构造一个 `SkillPersistence`，以固定关键字 `persistence` 注入每个 pipeline。具体 pipeline 的构造函数接收 `config` 和 `persistence`，其 `config_type` 使用明确的嵌套模型校验组件设置，再通过各组件已有注册机制构造自己的实例。
 
-class StoreConfig(BaseModel):
-    """Configure an in-memory store example."""
-    model_config = ConfigDict(extra="forbid")
+`class_name` 与注册名称一致；扩展模块需先显式导入。工厂校验 pipeline 类型、配置及构造参数后再创建数据库；不会扫描候选或补装仓库。Pipeline 必须自行校验其内部实现选择，禁止把存储传给 trainer/evolver。
 
-@Infrastructure.register("MemoryConnection")
-class MemoryConnection(Infrastructure[ConnectionConfig]):
-    """Hold configuration for the connection example."""
-    config_type = ConnectionConfig
-    """Configuration model for this implementation."""
-
-@Persistence.register("MemoryStore")
-class MemoryStore(Persistence[StoreConfig]):
-    """Demonstrate injection of an existing connection instance."""
-    config_type = StoreConfig
-    """Configuration model for this implementation."""
-
-    def __init__(self, config: StoreConfig, *, connection: MemoryConnection):
-        """Store an injected connection.
-
-        Args:
-            config: Validated store configuration.
-            connection: Shared connection selected by the YAML dependency.
-        """
-        super().__init__(config)
-        self.connection = connection
-
-service = create_service("config/mindmemos_skill/assembly.yaml")
-assert service.backends["store"].connection is service.backends["db"]
-```
-
-```yaml
-backends:
-  store:
-    module: persistence
-    class_name: MemoryStore
-    config: {}
-    dependencies:
-      connection: db
-  db:
-    module: infra
-    class_name: MemoryConnection
-    config:
-      namespace: demo
-```
-
-`class_name` 是装饰器中的注册名称，区分大小写，可以与 Python 类名相同；不通过字符串反射查找类。
-`config` 由实现类的 `config_type` 校验，建议配置类设置 `extra="forbid"`。
-`dependencies` 的键是构造函数关键字参数名，值是 `backends` 中的实例名称。
-配置顺序不影响构造顺序；缺失引用、循环依赖、未知名称、非法配置或不匹配的构造参数会在实例构造前报错。
-
-支持的模块与基类：`infra.Infrastructure`、`algos.Algorithm`、`agents.Agent`、
-`logging.Logger`、`persistence.Persistence`、`envs.Environment`。
-它们复用 `registry.Registrable`，各自注册表独立；同一个模块可配置多个实例。
-`common` 是工具模块，不作为服务后端构造。
-
-扩展模块必须先显式导入，使装饰器执行，再调用工厂。YAML 不加载任意 Python 模块。
-只有业务后端参与注册，服务不按接入方式注册。导入包不会创建实例或连接外部服务。
-当前未提供通用资源关闭或构造失败回滚协议；后端构造函数应避免启动长期资源，
-并自行处理构造失败时的资源释放。业务接口的执行与资源生命周期留待后续实现。
+`service.backends` 仅用于诊断，固定键为 `database`、`persistence`、`repository_pipeline`、`training_pipelines.<名称>` 和 `evolution_pipelines.<名称>`，不是 YAML 引用表。关闭服务先逆序调用各 pipeline 的 `close()`，最后关闭数据库。Pipeline 负责释放自己的组件及构造失败时的部分资源，不关闭全局 persistence。
 
 验证：在仓库根目录执行 `.venv/bin/python -m pytest tests/mindmemos_skill -q`。
 
@@ -341,7 +281,7 @@ HTTP 包装函数位于 `api/entries/fastapi.py`，接收已构建的服务，�
 from mindmemos_skill import ServiceConfig, create_service
 from mindmemos_skill.api.entries.fastapi import create_app
 
-service = create_service(ServiceConfig())
+service = await create_service(ServiceConfig())
 app = create_app(service)
 assert app.state.service is service
 ```
@@ -423,7 +363,8 @@ candidate = skill.with_bundle(SkillBundle(files={"SKILL.md": "Revised instructio
 
 rollout 的 `audit/request.json` 保存源快照、实际组装后的 bundle 及各自哈希。
 普通重试复用已保存的组装结果，已完成的恢复不触发组装或执行；`resume=False`
-重新组装并执行。旧请求格式不能直接恢复为新协议，请使用新的 work_dir。
+重新选择、组装并执行。具有完整 task、reward_data 和源快照的旧静态列表记录可恢复；
+缺少这些字段的更早请求格式仍须使用新的 work_dir。
 源 Skill 版本不会被任务组装结果覆盖。辅助文件单独计入本地快照哈希，
 `content_hash` 始终仅对应 bundle；辅助文件变化也会使旧 rollout 输入不匹配。
 
@@ -437,6 +378,7 @@ TreeSkill 由调用方显式构造，导入与构造均不会发起模型请求�
 ```python
 from mindmemos_skill.agents import OpenAIChatConfig
 from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillConfig
+from mindmemos_skill.skill import SkillSet
 
 skill = TreeSkill.from_path(
     "skills/xlsx",
@@ -445,7 +387,7 @@ skill = TreeSkill.from_path(
     ),
 )
 # Passing this Skill to env.rollout triggers one assembly for that task.
-result = env.rollout(task, work_dir, reward_data=reward_data, skills=[skill])
+result = env.rollout(task, work_dir, reward_data=reward_data, skill_set=SkillSet({"skill": skill}, max_concurrency=4))
 ```
 
 流程为：解析源 `SKILL.md` 标题树 → 用公开 task 与完整树请求模型选择子树 →
@@ -502,3 +444,7 @@ Claude 从 config 或统一环境变量获得凭据或端点时，会禁用 user
 自定义网关必须支持对应原生协议：Codex 使用 Responses，Claude 使用 Anthropic Messages，
 DeepSeek 使用 Chat Completions。对于提供 `/v1/messages` 的网关，Claude 填写网关根 URL；
 Codex 和 DeepSeek 通常填写包含 `/v1` 的 base URL。
+
+## Skill Manage 动态集合
+
+`SkillManageSkillSet` 使用调用方提供的 Skill 和管理算法选择成员，再继承集合的并行组装。版本绑定由外围调度交给 `SkillGraphStore`，集合不解析版本。规则连边、显式 Scene、LLM 连边、查询改写、Embedding 和图快照持久化的使用方式见 [Skill Manage 说明](../../docs/mindmemos_skill/skill_manage.md)。

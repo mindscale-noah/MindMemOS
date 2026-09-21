@@ -26,7 +26,7 @@ class TrainingPipeline(Pipeline[ConfigT], ABC):
     """
 
     @abstractmethod
-    def train(self, request: TrainingRequest) -> SkillPipelineResult:
+    async def train(self, request: TrainingRequest) -> SkillPipelineResult:
         """Train one Skill and commit a child of its captured current version.
 
         Implementations must preserve project scope and source data, avoid

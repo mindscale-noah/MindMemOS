@@ -2,8 +2,6 @@
 
 import pytest
 from mindmemos_skill.algos import Algorithm, SkillEvolver, SkillManager, SkillTrainer, SkillTrajectory
-from mindmemos_skill.api.config import ServiceConfig
-from mindmemos_skill.api.factory import create_service
 from mindmemos_skill.envs import Reward, Task
 from mindmemos_skill.skill import Skill, SkillBundle
 from pydantic import BaseModel, ValidationError
@@ -30,7 +28,7 @@ class Trainer(SkillTrainer[Options]):
 
     config_type = Options
 
-    def train(self, *, skill, env, train_samples, validation_samples, work_dir):
+    async def train(self, *, skill, env, train_samples, validation_samples, work_dir):
         return skill
 
 
@@ -39,7 +37,7 @@ class Evolver(SkillEvolver[Options]):
 
     config_type = Options
 
-    def evolve(self, *, skill, trajectories):
+    async def evolve(self, *, skill, trajectories):
         return skill
 
 
@@ -53,13 +51,11 @@ def test_algorithm_contracts_are_abstract(base):
 
 
 @pytest.mark.parametrize("implementation", [Manager, Trainer, Evolver])
-def test_service_resolves_specialized_algorithms(monkeypatch, implementation):
+def test_registry_resolves_specialized_algorithms(monkeypatch, implementation):
     """Build all three categories through the existing Algorithm registry."""
     monkeypatch.setattr(Algorithm, "_registry", {})
     Algorithm.register("test_algo")(implementation)
-    config = ServiceConfig.model_validate({"backends": {"algo": {"module": "algos", "class_name": "test_algo"}}})
-    service = create_service(config)
-    assert isinstance(service.backends["algo"], implementation)
+    assert isinstance(Algorithm.build("test_algo", {}), implementation)
 
 
 def test_trajectory_accepts_unscored_history_and_preserves_subtypes():

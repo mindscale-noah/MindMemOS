@@ -2,8 +2,7 @@
 
 import pytest
 from mindmemos_skill.algos import Algorithm, SkillEvolver
-from mindmemos_skill.api.config import ServiceConfig
-from mindmemos_skill.persistence import Persistence
+from mindmemos_skill.api.config import ImplementationConfig, ServiceConfig
 from mindmemos_skill.pipelines import (
     EvolutionPipeline,
     Pipeline,
@@ -31,27 +30,26 @@ class Evolver(SkillEvolver[Options]):
 
     config_type = Options
 
-    def evolve(self, *, skill, trajectories):
+    async def evolve(self, *, skill, trajectories):
         raise NotImplementedError
 
 
-class Store(Persistence[Options]):
-    """Resource-free persistence dependency."""
+class EvolutionOptions(Options):
+    """Own the algorithm definition within each evolution pipeline."""
 
-    config_type = Options
+    algorithm: ImplementationConfig
 
 
-class Evolution(EvolutionPipeline[Options]):
-    """Composition-only implementation with no executable business flow."""
+class Evolution(EvolutionPipeline[EvolutionOptions]):
+    """Build an independent algorithm and borrow only the global persistence."""
 
-    config_type = Options
+    config_type = EvolutionOptions
 
-    def __init__(self, config, *, algorithm, repository):
-        super().__init__(config)
-        self.algorithm = algorithm
-        self.repository = repository
+    def __init__(self, config, *, persistence):
+        super().__init__(config, persistence=persistence)
+        self.algorithm = Algorithm.build(config.algorithm.class_name, config.algorithm.config)
 
-    def evolve(self, request):
+    async def evolve(self, request):
         raise NotImplementedError
 
 
@@ -60,7 +58,7 @@ class Training(TrainingPipeline[Options]):
 
     config_type = Options
 
-    def train(self, request):
+    async def train(self, request):
         raise NotImplementedError
 
 
@@ -73,75 +71,68 @@ def test_pipeline_capabilities_require_implementation(base):
         Pipeline.register("incomplete")(base)
 
 
-def test_pipeline_composition_reuses_dependencies_and_allows_algorithm_selection(monkeypatch):
-    """Compose one flow with different algorithms through the existing factory."""
+@pytest.mark.asyncio
+async def test_pipeline_composition_owns_algorithms_and_shares_only_persistence(monkeypatch, tmp_path):
+    """Keep duplicated algorithm definitions independent within each pipeline."""
     monkeypatch.setattr(Pipeline, "_registry", {})
     monkeypatch.setattr(Algorithm, "_registry", {})
-    monkeypatch.setattr(Persistence, "_registry", {})
     Pipeline.register("evolution")(Evolution)
     Pipeline.register("training")(Training)
     Algorithm.register("evolution")(Evolver)
-    Persistence.register("store")(Store)
     config = ServiceConfig.model_validate(
         {
-            "evolution_pipeline": "first",
-            "backends": {
-                "first": {
-                    "module": "pipelines",
+            "persistence": {"database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'db'}"}}},
+            "evolution_pipelines": {
+                name: {
                     "class_name": "evolution",
-                    "dependencies": {"algorithm": "algo_a", "repository": "store"},
-                },
-                "second": {
-                    "module": "pipelines",
-                    "class_name": "evolution",
-                    "config": {"limit": 20},
-                    "dependencies": {"algorithm": "algo_b", "repository": "store"},
-                },
-                "training": {"module": "pipelines", "class_name": "training"},
-                "store": {"module": "persistence", "class_name": "store"},
-                "algo_a": {"module": "algos", "class_name": "evolution"},
-                "algo_b": {"module": "algos", "class_name": "evolution", "config": {"limit": 3}},
+                    "config": {
+                        "limit": limit,
+                        "algorithm": {"class_name": "evolution", "config": {"limit": 3}},
+                    },
+                }
+                for name, limit in (("first", 10), ("second", 20))
             },
+            "training_pipelines": {"training": {"class_name": "training"}},
         }
     )
-    service = create_service(config)
-    first, second = service.backends["first"], service.backends["second"]
+    service = await create_service(config)
+    first = service.backends["evolution_pipelines.first"]
+    second = service.backends["evolution_pipelines.second"]
     assert first is not second
-    assert first.repository is second.repository is service.backends["store"]
-    assert first.algorithm is service.backends["algo_a"]
-    assert second.algorithm is service.backends["algo_b"]
+    assert first.persistence is second.persistence is service.backends["persistence"]
     assert first.algorithm is not second.algorithm
     assert second.config.limit == 20
-    assert second.algorithm.config.limit == 3
-    assert isinstance(service.backends["training"], TrainingPipeline)
+    assert first.algorithm.config.limit == second.algorithm.config.limit == 3
+    assert isinstance(service.backends["training_pipelines.training"], TrainingPipeline)
     assert Pipeline.resolve("evolution") is Evolution
     assert Algorithm.resolve("evolution") is Evolver
     with pytest.raises(ValueError, match="request is required"):
-        service.auto_evolve_skill()
-    service.close()
+        await service.auto_evolve_skill()
+    await service.close()
 
 
-def test_pipeline_configuration_is_validated_before_construction(monkeypatch):
+@pytest.mark.asyncio
+async def test_pipeline_configuration_is_validated_before_construction(monkeypatch):
     """Do not construct any backends when a pipeline's options are invalid."""
     monkeypatch.setattr(Pipeline, "_registry", {})
     calls = []
 
     @Pipeline.register("training")
     class ObservedTraining(Training):
-        def __init__(self, config):
+        def __init__(self, config, *, persistence):
             calls.append(config)
-            super().__init__(config)
+            super().__init__(config, persistence=persistence)
 
     config = ServiceConfig.model_validate(
         {
-            "backends": {
-                "valid": {"module": "pipelines", "class_name": "training"},
-                "invalid": {"module": "pipelines", "class_name": "training", "config": {"limit": 0}},
+            "training_pipelines": {
+                "valid": {"class_name": "training"},
+                "invalid": {"class_name": "training", "config": {"limit": 0}},
             }
         }
     )
     with pytest.raises(ValidationError):
-        create_service(config)
+        await create_service(config)
     assert calls == []
 
 

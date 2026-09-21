@@ -341,21 +341,17 @@ def test_invalid_core_values_are_rejected():
         RemoteVersionBindingRecord(**(remote_version().model_dump() | {"origin": "local"}))
 
 
-def test_service_factory_assembles_borrowed_data_services(tmp_path):
+@pytest.mark.asyncio
+async def test_service_factory_assembles_borrowed_data_services(tmp_path):
     from mindmemos_skill import ServiceConfig, create_service
 
     path = tmp_path / "factory.db"
-    service = create_service(
+    service = await create_service(
         ServiceConfig.model_validate(
             {
-                "backends": {
-                    "database": {"module": "infra", "class_name": "sqlite", "config": {"url": f"sqlite:///{path}"}},
-                    "persistence": {
-                        "module": "persistence",
-                        "class_name": "skill",
-                        "config": {"include_remote": False},
-                        "dependencies": {"database": "database"},
-                    },
+                "persistence": {
+                    "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{path}"}},
+                    "config": {"include_remote": False},
                 },
             }
         )
@@ -368,7 +364,7 @@ def test_service_factory_assembles_borrowed_data_services(tmp_path):
         persistence.skills.add(version())
         assert persistence.skills.get("local-v1") is not None
     finally:
-        service.close()
+        await service.close()
 
 
 def test_json_arrays_and_nested_metadata_use_infra_validation(store):

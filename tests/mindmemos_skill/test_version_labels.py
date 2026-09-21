@@ -1,10 +1,9 @@
 """Version namespaces, database uniqueness, concurrency, and legacy migration."""
 
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
-from threading import Barrier
+import asyncio
 
 import pytest
+import pytest_asyncio
 from mindmemos_skill.errors import SkillConflictError
 from mindmemos_skill.persistence.constants import SKILL_VERSION_LABEL_INDEX, SKILL_VERSIONS_TABLE
 from mindmemos_skill.persistence.db_services.skills.migrations import migrate_version_labels
@@ -22,41 +21,41 @@ def snapshot(text="content"):
     return Skill(bundle=SkillBundle(files={"SKILL.md": text})).snapshot()
 
 
-@pytest.fixture
-def service(tmp_path):
-    with closing(create_service(home=tmp_path / "home")) as service:
+@pytest_asyncio.fixture
+async def service(tmp_path):
+    async with await create_service(home=tmp_path / "home") as service:
         yield service
 
 
-def register(service, **options):
-    return service.register_skill(RegisterRequest(name="Example", source=snapshot(), **options))
+async def register(service, **options):
+    return await service.register_skill(RegisterRequest(name="Example", source=snapshot(), **options))
 
 
-def commit(service, first, **options):
-    return service.commit_skill(CommitRequest(skill_ref=first.skill.skill_id, source=snapshot("new"), **options))
+async def commit(service, first, **options):
+    return await service.commit_skill(CommitRequest(skill_ref=first.skill.skill_id, source=snapshot("new"), **options))
 
 
-def test_user_and_algorithm_numbering_and_history(service):
-    first = register(service, version_label="v1.2.0")
-    algorithm = commit(service, first, algorithm="treeskill")
+@pytest.mark.asyncio
+async def test_user_and_algorithm_numbering_and_history(service):
+    first = await register(service, version_label="v1.2.0")
+    algorithm = await commit(service, first, algorithm="treeskill")
     assert algorithm.version.version_label == "v1.2.1-treeskill"
-    service.switch_skill(SwitchRequest(skill_ref=first.skill.skill_id, version_id=first.version.version_id))
-    human = commit(service, first)
+    await service.switch_skill(SwitchRequest(skill_ref=first.skill.skill_id, version_id=first.version.version_id))
+    human = await commit(service, first)
     assert human.version.version_label == "v1.2.1"
-    again = commit(service, first, algorithm="treeskill")
+    again = await commit(service, first, algorithm="treeskill")
     assert again.version.version_label == "v1.2.2-treeskill"
-    service.switch_skill(SwitchRequest(skill_ref=first.skill.skill_id, version_id=first.version.version_id))
-    assert commit(service, first, algorithm="treeskill").version.version_label == "v1.2.3-treeskill"
-    assert commit(service, first, version_bump="minor").version.version_label == "v1.3.0"
-    assert commit(service, first, version_bump="major").version.version_label == "v2.0.0"
+    await service.switch_skill(SwitchRequest(skill_ref=first.skill.skill_id, version_id=first.version.version_id))
+    assert (await commit(service, first, algorithm="treeskill")).version.version_label == "v1.2.3-treeskill"
+    assert (await commit(service, first, version_bump="minor")).version.version_label == "v1.3.0"
+    assert (await commit(service, first, version_bump="major")).version.version_label == "v2.0.0"
     with pytest.raises(SkillConflictError, match="already in use"):
-        commit(service, first, version_label="v1.2.0")
-    assert register(service, version_label="v1.2.0").version.version_label == "v1.2.0"
-    assert register(service, algorithm="grpo").version.version_label == "v1.0.0-grpo"
+        await commit(service, first, version_label="v1.2.0")
+    assert (await register(service, version_label="v1.2.0")).version.version_label == "v1.2.0"
+    assert (await register(service, algorithm="grpo")).version.version_label == "v1.0.0-grpo"
     assert (
-        service.show_skill(ShowRequest(skill_ref=first.skill.skill_id, version_id=first.version.version_id)).version
-        == first.version
-    )
+        await service.show_skill(ShowRequest(skill_ref=first.skill.skill_id, version_id=first.version.version_id))
+    ).version == first.version
 
 
 @pytest.mark.parametrize(
@@ -82,45 +81,49 @@ def test_conflicting_modes_are_rejected(options):
         VersionNaming(**options)
 
 
-def test_concurrent_commit_does_not_duplicate_or_leave_orphans(service, tmp_path):
-    first = register(service)
-    barrier = Barrier(2)
+@pytest.mark.asyncio
+async def test_concurrent_commit_does_not_duplicate_or_leave_orphans(service, tmp_path):
+    first = await register(service)
+    barrier = asyncio.Barrier(2)
 
-    def publish(algorithm):
-        with closing(create_service(home=tmp_path / "home")) as writer:
-            barrier.wait(timeout=10)
+    async def publish(algorithm):
+        async with await create_service(home=tmp_path / "home") as writer:
+            await asyncio.wait_for(barrier.wait(), timeout=10)
             try:
-                return writer.commit_skill(
-                    CommitRequest(
-                        skill_ref=first.skill.skill_id,
-                        source=snapshot(),
-                        base_version_id=first.version.version_id,
-                        algorithm=algorithm,
+                return (
+                    await writer.commit_skill(
+                        CommitRequest(
+                            skill_ref=first.skill.skill_id,
+                            source=snapshot(),
+                            base_version_id=first.version.version_id,
+                            algorithm=algorithm,
+                        )
                     )
                 ).version.version_label
             except SkillConflictError:
                 return "conflict"
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(publish, [None, "treeskill"]))
+    results = await asyncio.gather(publish(None), publish("treeskill"))
     assert results.count("conflict") == 1
-    versions = service.skill_history(HistoryRequest(skill_ref=first.skill.skill_id))
+    versions = await service.skill_history(HistoryRequest(skill_ref=first.skill.skill_id))
     assert len(versions) == 2
     assert len({version.version_label for version in versions}) == 2
 
 
-def test_database_uniqueness(service):
-    first = register(service)
+@pytest.mark.asyncio
+async def test_database_uniqueness(service):
+    first = await register(service)
     database = service.repository.persistence.database
     duplicate = first.version.model_copy(update={"version_id": "another-id"})
     with pytest.raises(IntegrityError):
         database.insert(SKILL_VERSIONS_TABLE, [duplicate.model_dump()])
 
 
-def test_migration_preserves_data_rolls_back_and_repeats(service):
-    first = register(service)
+@pytest.mark.asyncio
+async def test_migration_preserves_data_rolls_back_and_repeats(service):
+    first = await register(service)
     for _ in range(3):
-        commit(service, first)
+        await commit(service, first)
     database = service.repository.persistence.database
     table = database.tables.get(SKILL_VERSIONS_TABLE).table
     with database.engine.begin() as connection:
@@ -135,7 +138,7 @@ def test_migration_preserves_data_rolls_back_and_repeats(service):
                 .values(version_label=label, local_metadata={"user_note": "keep"})
             )
     before = database.select(SKILL_VERSIONS_TABLE, limit=100)
-    pointer = service.show_skill(ShowRequest(skill_ref=first.skill.skill_id)).skill.current_version_id
+    pointer = (await service.show_skill(ShowRequest(skill_ref=first.skill.skill_id))).skill.current_version_id
     writes = []
 
     def interrupt(connection, cursor, statement, parameters, context, executemany):
@@ -167,16 +170,17 @@ def test_migration_preserves_data_rolls_back_and_repeats(service):
             assert new["local_metadata"]["version_label_migration_v1"]["previous_label"] == old["version_label"]
     migrate_version_labels(database)
     assert database.select(SKILL_VERSIONS_TABLE, limit=100) == after
-    assert service.show_skill(ShowRequest(skill_ref=first.skill.skill_id)).skill.current_version_id == pointer
+    assert (await service.show_skill(ShowRequest(skill_ref=first.skill.skill_id))).skill.current_version_id == pointer
 
 
-def test_startup_migrates_late_legacy_writes_and_keeps_existing_aliases(service, tmp_path):
-    first = register(service, version_label="v1.2.0")
+@pytest.mark.asyncio
+async def test_startup_migrates_late_legacy_writes_and_keeps_existing_aliases(service, tmp_path):
+    first = await register(service, version_label="v1.2.0")
     database = service.repository.persistence.database
     legacy = first.version.model_copy(update={"version_id": "late-legacy", "version_label": None})
     database.insert(SKILL_VERSIONS_TABLE, [legacy.model_dump()])
-    with closing(create_service(home=tmp_path / "home")) as reopened:
-        rows = reopened.skill_history(HistoryRequest(skill_ref=first.skill.skill_id))
+    async with await create_service(home=tmp_path / "home") as reopened:
+        rows = await reopened.skill_history(HistoryRequest(skill_ref=first.skill.skill_id))
         labels = {row.version_id: row.version_label for row in rows}
         assert labels[first.version.version_id] == "v1.2.0"
         assert labels["late-legacy"] == "v1.0.0"

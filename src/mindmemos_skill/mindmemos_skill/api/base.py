@@ -27,8 +27,22 @@ from ..registry import Registrable
 class MindMemOSSkill(ABC):
     """Define the public operations exposed by an assembled Skill service."""
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Release owned resources; implementations without resources need no cleanup."""
+
+    async def __aenter__(self) -> "MindMemOSSkill":
+        """Return the service for scoped asynchronous resource ownership."""
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        """Release owned resources when leaving the asynchronous context.
+
+        Args:
+            exc_type: Exception type raised inside the context, if any.
+            exc: Exception raised inside the context, if any.
+            traceback: Traceback associated with that exception.
+        """
+        await self.close()
 
     @property
     @abstractmethod
@@ -37,12 +51,12 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def initialize_storage(self) -> None:
+    async def initialize_storage(self) -> None:
         """Explicitly create missing persistence tables; never migrate existing schemas."""
         raise NotImplementedError
 
     @abstractmethod
-    def register_skill(self, request: RegisterRequest) -> SkillDetail:
+    async def register_skill(self, request: RegisterRequest) -> SkillDetail:
         """Register a new central Skill and initial version.
 
         Args:
@@ -51,7 +65,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list_skills(self, request: ListRequest) -> list[SkillRecord]:
+    async def list_skills(self, request: ListRequest) -> list[SkillRecord]:
         """List central Skills within a project.
 
         Args:
@@ -60,7 +74,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def show_skill(self, request: ShowRequest) -> SkillDetail:
+    async def show_skill(self, request: ShowRequest) -> SkillDetail:
         """Inspect central metadata and an owned version.
 
         Args:
@@ -69,7 +83,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def export_skill(self, request: ExportRequest) -> str:
+    async def export_skill(self, request: ExportRequest) -> str:
         """Export a complete snapshot into an application directory.
 
         Args:
@@ -78,7 +92,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def commit_skill(self, request: CommitRequest) -> SkillDetail:
+    async def commit_skill(self, request: CommitRequest) -> SkillDetail:
         """Save and select a child version with conflict detection.
 
         Args:
@@ -87,7 +101,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def skill_history(self, request: HistoryRequest) -> list[SkillVersionRecord]:
+    async def skill_history(self, request: HistoryRequest) -> list[SkillVersionRecord]:
         """Read immutable version history.
 
         Args:
@@ -96,7 +110,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def diff_skill(self, request: DiffRequest) -> DiffResult:
+    async def diff_skill(self, request: DiffRequest) -> DiffResult:
         """Compare two versions of the same Skill.
 
         Args:
@@ -105,7 +119,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def switch_skill(self, request: SwitchRequest) -> SkillRecord:
+    async def switch_skill(self, request: SwitchRequest) -> SkillRecord:
         """Select an existing version without modifying external files.
 
         Args:
@@ -114,7 +128,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def set_skill_meta(self, request: SetMetaRequest) -> SkillRecord:
+    async def set_skill_meta(self, request: SetMetaRequest) -> SkillRecord:
         """Change display metadata without editing content.
 
         Args:
@@ -123,7 +137,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def delete_skill(self, request: SkillRequest) -> None:
+    async def delete_skill(self, request: SkillRequest) -> None:
         """Delete an unreferenced Skill and its version history.
 
         Args:
@@ -132,7 +146,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def auto_evolve_skill(self, request: SkillPipelineRequest | None = None) -> SkillPipelineResult:
+    async def auto_evolve_skill(self, request: SkillPipelineRequest | None = None) -> SkillPipelineResult:
         """Invoke the configured evolution pipeline.
 
         Args:
@@ -141,7 +155,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def auto_train_skill(self, request: TrainingRequest | None = None) -> SkillPipelineResult:
+    async def auto_train_skill(self, request: TrainingRequest | None = None) -> SkillPipelineResult:
         """Invoke the configured training pipeline.
 
         Args:

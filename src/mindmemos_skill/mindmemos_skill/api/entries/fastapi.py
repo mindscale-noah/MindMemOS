@@ -1,6 +1,7 @@
 """Start the Skill HTTP service using Uvicorn."""
 
 import argparse
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,7 +31,7 @@ def create_app(service: MindMemOSSkill) -> "FastAPI":
         try:
             yield
         finally:
-            service.close()
+            await service.close()
 
     app = FastAPI(title="MindMemOS Skill", lifespan=lifespan)
     app.state.service = service
@@ -93,21 +94,30 @@ def create_app(service: MindMemOSSkill) -> "FastAPI":
     return app
 
 
-def main() -> None:
+async def _main() -> None:
     """Build a service, wrap it in HTTP routes, and start the ASGI server."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True, help="Service YAML file")
+    parser.add_argument("--config", type=Path, help="Explicit service YAML file")
+    parser.add_argument("--home", type=Path, help="Local service home; omission uses the default home")
+    parser.add_argument("--project-id", help="Optional local scope; empty uses the persisted generated scope")
     parser.add_argument("--host", default="127.0.0.1", help="Listening address")
     parser.add_argument("--port", type=int, default=8000, help="Listening port")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
-    service = create_service(args.config)
-    service.initialize_storage()
+    if args.config and (args.home or args.project_id):
+        parser.error("--config cannot be combined with --home or --project-id")
+    service = await create_service(args.config, home=args.home, project_id=args.project_id or None)
+    await service.initialize_storage()
 
     import uvicorn
 
-    uvicorn.run(create_app(service), host=args.host, port=args.port)
+    await uvicorn.Server(uvicorn.Config(create_app(service), host=args.host, port=args.port)).serve()
+
+
+def main() -> None:
+    """Own the process event loop for the asynchronous entry point."""
+    asyncio.run(_main())
 
 
 if __name__ == "__main__":
