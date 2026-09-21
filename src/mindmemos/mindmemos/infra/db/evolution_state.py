@@ -189,3 +189,38 @@ class EvolutionStateStore:
                 version=state.version,
                 error=str(exc),
             )
+
+    async def record_run(
+        self,
+        project_id: str,
+        *,
+        idempotency_key: str,
+        evolved: bool,
+        version: int,
+        signal_count: int,
+        selected_event_count: int,
+        consumed_event_count: int,
+        changes: list[ParameterChange],
+    ) -> EvolutionState | None:
+        """Persist the outcome of one idempotent self-evolve request."""
+
+        current = await self.get_current(project_id)
+        if current is None:
+            return None
+        updated = current.model_copy(
+            update={
+                "last_idempotency_key": idempotency_key,
+                "last_run_evolved": evolved,
+                "last_run_version": version,
+                "last_run_signal_count": signal_count,
+                "last_run_selected_event_count": selected_event_count,
+                "last_run_consumed_event_count": consumed_event_count,
+                "last_run_changes": changes,
+            }
+        )
+        await self._repo_impl().upsert(
+            _point_id(project_id, current.version),
+            updated.model_dump(mode="json"),
+        )
+        await self._mirror_current(updated)
+        return updated

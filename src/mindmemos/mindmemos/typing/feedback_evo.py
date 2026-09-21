@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,9 +13,7 @@ class ParameterChange(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(
-        description="Dotted parameter path, e.g. 'search_config.weights.fact'."
-    )
+    path: str = Field(description="Dotted parameter path, e.g. 'add_config.entity_types' or 'search_config.top_k'.")
     before: Any = Field(default=None, description="Value before the change.")
     after: Any = Field(description="Value after the change.")
     reason: str | None = Field(default=None, description="Why this parameter changed.")
@@ -47,6 +45,16 @@ class EvolutionState(BaseModel):
     changes: list[ParameterChange] = Field(default_factory=list)
     rollback_version: int | None = Field(default=None)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    # Persist the latest request outcome so retries with the same idempotency
+    # key cannot create a duplicate evolution version.
+    last_idempotency_key: str | None = None
+    last_run_evolved: bool | None = None
+    last_run_version: int | None = None
+    last_run_signal_count: int | None = None
+    last_run_selected_event_count: int | None = None
+    last_run_consumed_event_count: int | None = None
+    last_run_changes: list[ParameterChange] = Field(default_factory=list)
 
     @property
     def state_id(self) -> str:
@@ -91,4 +99,15 @@ class FeedbackEvoEvent(BaseModel):
     actions: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Planned feedback actions (kept for audit; evolution ignores them).",
+    )
+    consumption_status: Literal["pending", "processing", "consumed"] = Field(
+        default="pending",
+        description="One-time evolution consumption state: pending, processing, or consumed.",
+    )
+    consumption_id: str | None = None
+    consumed_at: datetime | None = None
+    consumed_version: int | None = None
+    consumption_outcome: Literal["evolved", "no_change"] | None = Field(
+        default=None,
+        description="Evolution outcome when consumed: evolved or no_change.",
     )

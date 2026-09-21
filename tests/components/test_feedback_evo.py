@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-
-import pytest
-
 from types import SimpleNamespace
 
+import pytest
+from mindmemos.components.extractor.feedback_evo.memory import _normalize_feedback_evo_extraction
 from mindmemos.components.feedback_evo import FeedbackEvoCollector
+from mindmemos.components.feedback_evo.collector import _extract_recalled_memories
 from mindmemos.components.feedback_evo.evolution import (
     EvolutionExecutor,
     EvolutionPlanner,
@@ -21,8 +21,6 @@ from mindmemos.components.feedback_evo.evolution import (
     ensure_evolution_state,
     is_evolvable_path,
 )
-from mindmemos.components.feedback_evo.collector import _extract_recalled_memories
-from mindmemos.components.extractor.feedback_evo.memory import _normalize_feedback_evo_extraction
 from mindmemos.typing import (
     EvolutionResult,
     EvolutionState,
@@ -39,10 +37,7 @@ def _event(event_id: str, paths: list[str], confidence: float = 1.0) -> Feedback
         project_id="proj_1",
         api_key_uuid="key",
         submitted_at=datetime.now(UTC),
-        signals=[
-            {"evolvable_path": path, "round_index": i, "confidence": confidence}
-            for i, path in enumerate(paths)
-        ],
+        signals=[{"evolvable_path": path, "round_index": i, "confidence": confidence} for i, path in enumerate(paths)],
     )
 
 
@@ -75,10 +70,7 @@ class _FakeEventStore:
 
 
 def _messages(count: int) -> list[dict]:
-    return [
-        {"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"}
-        for i in range(count)
-    ]
+    return [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"} for i in range(count)]
 
 
 @pytest.mark.asyncio
@@ -98,9 +90,7 @@ async def test_collector_extracts_recalled_memories_from_round():
     messages[1] = {
         "role": "assistant",
         "content": "recall",
-        "tool_calls": [
-            {"name": "retrieve_learnings", "result": {"learnings": ["memory-A", "memory-B"]}}
-        ],
+        "tool_calls": [{"name": "retrieve_learnings", "result": {"learnings": ["memory-A", "memory-B"]}}],
     }
     event = await collector.collect(_ctx(), task_messages=messages, task_id="t1")
 
@@ -111,9 +101,7 @@ async def test_collector_extracts_recalled_memories_from_round():
 
 @pytest.mark.asyncio
 async def test_collector_related_memories_fallback_to_task_recall():
-    llm = _FakeLLM(
-        [{"round_index": 0, "evolvable_path": "search_config.top_k", "confidence": 0.9, "reason": "r"}]
-    )
+    llm = _FakeLLM([{"round_index": 0, "evolvable_path": "search_config.top_k", "confidence": 0.9, "reason": "r"}])
     store = _FakeEventStore()
     collector = FeedbackEvoCollector(llm_client=llm, event_store=store)  # type: ignore[arg-type]
 
@@ -122,9 +110,7 @@ async def test_collector_related_memories_fallback_to_task_recall():
     messages[21] = {
         "role": "assistant",
         "content": "recall",
-        "tool_calls": [
-            {"name": "retrieve_learnings", "result": {"learnings": ["memory-X"]}}
-        ],
+        "tool_calls": [{"name": "retrieve_learnings", "result": {"learnings": ["memory-X"]}}],
     }
     event = await collector.collect(_ctx(), task_messages=messages, task_id="t1")
 
@@ -145,9 +131,7 @@ def test_extract_recalled_memories_from_tool_results():
         {
             "role": "assistant",
             "content": "recall again",
-            "tool_calls": [
-                {"name": "retrieve_learnings", "result": {"learnings": ["m2", "m3"]}}
-            ],
+            "tool_calls": [{"name": "retrieve_learnings", "result": {"learnings": ["m2", "m3"]}}],
         },
     ]
 
@@ -156,18 +140,23 @@ def test_extract_recalled_memories_from_tool_results():
 
 
 def test_build_initial_evolution_state_seeds_only_evolvable_fields():
-    from mindmemos.config import init_config
+    from mindmemos.config import get_config, init_config
 
     init_config(config_name="product", config_path="config/mindmemos/dev.example.yaml")
     state = build_initial_evolution_state("proj_1")
+    cfg = get_config()
 
     assert state.version == 1
     assert state.is_current is True
     assert set(state.add_config) == {"extraction_prompt", "entity_tagging_prompt", "entity_types"}
     assert state.add_config["extraction_prompt"].startswith("You are a memory extractor.")
-    assert state.add_config["entity_types"] == []
-    # No ghost fields: unused vanilla config must never enter evolution state.
+    # entity_types 现在是 {name: weight}，词表和权重从静态配置一起 seed。
+    assert state.add_config["entity_types"] == dict(cfg.algo_config.add.feedback_evo.entity_types)
+    # search 侧不再有独立的 weights 演化项。
     assert state.search_config == {}
+    # No ghost fields: unused vanilla config must never enter evolution state.
+    assert "recall_size" not in state.search_config
+    assert "hybrid_prefetch_max" not in state.search_config
 
 
 def test_evolvable_config_view_trims_ghost_paths():
@@ -177,7 +166,6 @@ def test_evolvable_config_view_trims_ghost_paths():
         add_config={"extraction_prompt": "v1", "enable_entities": True},
         search_config={
             "top_k": 10,
-            "weights": {"fact": 0.8},
             "recall_size": 20,
             "hybrid_prefetch_max": 300,
         },
@@ -187,7 +175,7 @@ def test_evolvable_config_view_trims_ghost_paths():
 
     assert view is not None
     assert set(view["add_config"]) == {"extraction_prompt"}
-    assert set(view["search_config"]) == {"top_k", "weights"}
+    assert set(view["search_config"]) == {"top_k"}
     assert "recall_size" not in view["search_config"]
     assert "hybrid_prefetch_max" not in view["search_config"]
     assert _evolvable_config_view(None) is None
@@ -197,8 +185,7 @@ def test_is_evolvable_path_whitelist():
     assert is_evolvable_path("add_config.extraction_prompt")
     assert is_evolvable_path("add_config.entity_types")
     assert is_evolvable_path("search_config.top_k")
-    assert is_evolvable_path("search_config.weights")
-    assert is_evolvable_path("search_config.weights.fact")
+    assert not is_evolvable_path("search_config.weights")
     # Ghost paths from the full vanilla config must be rejected.
     assert not is_evolvable_path("search_config.recall_size")
     assert not is_evolvable_path("search_config.use_reranker")
@@ -291,24 +278,23 @@ def test_apply_changes_updates_add_and_search_config():
     current = EvolutionState(
         project_id="p",
         version=3,
-        add_config={"extraction_prompt": "v1"},
-        search_config={"weights": {"fact": 0.8}},
+        add_config={"extraction_prompt": "v1", "entity_types": {"return": 1.0}},
+        search_config={"top_k": 10},
     )
     changes = [
-        ParameterChange(path="search_config.weights.fact", before=0.8, after=0.6),
+        ParameterChange(path="add_config.entity_types", before={"return": 1.0}, after={"return": 1.0, "exchange": 1.1}),
         ParameterChange(path="add_config.extraction_prompt", before="v1", after="v2"),
     ]
 
     add_config, search_config = _apply_changes(current, changes)
 
     assert add_config["extraction_prompt"] == "v2"
-    assert search_config["weights"]["fact"] == 0.6
+    assert add_config["entity_types"] == {"return": 1.0, "exchange": 1.1}
+    assert search_config == {"top_k": 10}
 
 
 def test_valid_signals_filters_ghost_paths():
-    signals = _valid_signals(
-        [_event("e1", ["search_config.top_k", "search_config.recall_size", "not_a_path"])]
-    )
+    signals = _valid_signals([_event("e1", ["search_config.top_k", "search_config.recall_size", "not_a_path"])])
 
     assert [signal["evolvable_path"] for signal in signals] == ["search_config.top_k"]
 
@@ -329,7 +315,11 @@ async def test_evolution_executor_applies_planned_changes():
     class _FakePlanner:
         async def plan(self, signals, current, *, max_changes=None):
             del signals, current, max_changes
-            return [ParameterChange(path="search_config.weights.fact", before=0.8, after=0.6)]
+            return [
+                ParameterChange(
+                    path="add_config.entity_types", before={"return": 1.0}, after={"return": 1.0, "exchange": 1.1}
+                )
+            ]
 
     class _FakeStateStore:
         def __init__(self) -> None:
@@ -357,11 +347,11 @@ async def test_evolution_executor_applies_planned_changes():
         min_signals_to_evolve=1,
     )
 
-    result = await executor.run("proj_1", [_event("e1", ["search_config.weights.fact"])])
+    result = await executor.run("proj_1", [_event("e1", ["add_config.entity_types"])])
 
     assert result.version == 1
-    assert result.changes[0].path == "search_config.weights.fact"
-    assert store.applied[0]["search_config"]["weights"]["fact"] == 0.6
+    assert result.changes[0].path == "add_config.entity_types"
+    assert store.applied[0]["add_config"]["entity_types"] == {"return": 1.0, "exchange": 1.1}
 
 
 @pytest.mark.asyncio
@@ -399,7 +389,7 @@ async def test_evolution_executor_skips_when_signal_confidence_below_threshold()
         require_signal_confidence=0.7,
     )
 
-    result = await executor.run("proj_1", [_event("e1", ["search_config.weights.fact"], confidence=0.4)])
+    result = await executor.run("proj_1", [_event("e1", ["add_config.entity_types"], confidence=0.4)])
 
     assert result.changes == []
     assert result.version == 0
@@ -499,15 +489,12 @@ def test_filter_changes_by_threshold_numeric_ratio():
         search_config={
             "top_k": 10,
             "score_threshold": 0.5,
-            "weights": {"fact": 0.8},
         },
     )
 
     changes = [
         ParameterChange(path="search_config.top_k", before=10, after=14),
         ParameterChange(path="search_config.top_k", before=10, after=16),
-        ParameterChange(path="search_config.weights.fact", before=0.8, after=0.5),
-        ParameterChange(path="search_config.weights.fact", before=0.8, after=0.3),
         ParameterChange(path="search_config.score_threshold", before=0.5, after=1.0),
     ]
 
@@ -520,7 +507,6 @@ def test_filter_changes_by_threshold_numeric_ratio():
 
     assert [change.path for change in kept] == [
         "search_config.top_k",
-        "search_config.weights.fact",
     ]
 
 
@@ -528,13 +514,29 @@ def test_filter_changes_by_threshold_entity_types_and_prompts():
     current = EvolutionState(
         project_id="p",
         version=1,
-        add_config={"entity_types": ["defect_return", "exchange"], "extraction_prompt": "v1"},
+        add_config={"entity_types": {"defect_return": 1.0, "exchange": 1.0}, "extraction_prompt": "v1"},
         search_config={},
     )
 
     changes = [
-        ParameterChange(path="add_config.entity_types", before=["defect_return", "exchange"], after=["defect_return", "exchange", "clawback"]),
-        ParameterChange(path="add_config.entity_types", before=["defect_return", "exchange"], after=["defect_return", "exchange", "clawback", "promo", "refund"]),
+        # 加一个词 + 词权重不变 -> 保留
+        ParameterChange(
+            path="add_config.entity_types",
+            before={"defect_return": 1.0, "exchange": 1.0},
+            after={"defect_return": 1.0, "exchange": 1.0, "clawback": 1.0},
+        ),
+        # 一次加三个词 -> 超 delta 拒绝
+        ParameterChange(
+            path="add_config.entity_types",
+            before={"defect_return": 1.0, "exchange": 1.0},
+            after={"defect_return": 1.0, "exchange": 1.0, "clawback": 1.0, "promo": 1.0, "refund": 1.0},
+        ),
+        # 保留词的权重变化超 50% -> 拒绝
+        ParameterChange(
+            path="add_config.entity_types",
+            before={"defect_return": 1.0, "exchange": 1.0},
+            after={"defect_return": 1.0, "exchange": 0.4},
+        ),
         ParameterChange(path="add_config.extraction_prompt", before="v1", after="v2"),
     ]
 

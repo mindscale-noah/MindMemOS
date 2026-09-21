@@ -48,3 +48,8 @@ class FeedbackEventRepository(CollectionRepository):
             cursor=cursor,
             order_by=order_by,
         )
+
+    async def update_payload(self, event_id: str, payload: dict[str, Any]) -> None:
+        """Update consumption/audit fields on one event point."""
+
+        await self._engine.set_payload(self.collection, event_id, payload)

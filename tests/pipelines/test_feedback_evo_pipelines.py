@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from mindmemos.pipelines.search.feedback_evo.pipeline import _apply_input_overrides
 from mindmemos.pipelines.search.vanilla.engine import _apply_tag_weights
 from mindmemos.typing import MemoryDbSearchHit, MemoryView, SearchPipelineInput

@@ -10,9 +10,11 @@ from typing import Any
 class FeedbackEvoSearchConfig:
     """Configuration for the feedback_evo search engine.
 
-    ``tag_weights`` / ``top_k`` / ``rerank`` / ``search_strategy`` are read
-    live from the evolution state; the remaining fields mirror the flat-memory
-    hybrid recall defaults used by the feedback_evo engine.
+    ``top_k`` / ``rerank`` / ``search_strategy`` are read live from the
+    evolution state; ``tag_weights`` is injected at runtime from
+    ``add_config.entity_types`` (the name -> weight mapping). The remaining
+    fields mirror the flat-memory hybrid recall defaults used by the
+    feedback_evo engine.
     """
 
     recall_size: int = field(default=20)
@@ -28,7 +30,9 @@ class FeedbackEvoSearchConfig:
     """Maximum prefetch limit for hybrid recall."""
 
     tag_weights: dict[str, float] = field(default_factory=dict)
-    """Score multipliers keyed by memory ``entity_type`` (fallback ``mem_type``)."""
+    """Runtime-injected score multipliers keyed by memory ``entity_type``
+    (fallback ``mem_type``). Not a static seed: the search pipeline copies
+    ``add_config.entity_types`` here so vocabulary and weights stay bound."""
 
     extra: dict[str, Any] = field(default_factory=dict)
     """Unstructured evolvable search parameters (forward compatibility)."""

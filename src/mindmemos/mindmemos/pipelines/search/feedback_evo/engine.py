@@ -31,8 +31,8 @@ from ....typing import (
     SparseVector,
 )
 from ...base import MemoryDbPipelineMixin
-from ..base import SearchEngineOptions
 from ...utils import format_datetime, format_memory_event_time, format_source_timestamp
+from ..base import SearchEngineOptions
 
 logger = get_logger(__name__)
 
@@ -95,11 +95,7 @@ class FeedbackEvoSearchEngine(MemoryDbPipelineMixin):
         )
         filters = _request_filter(inp, context)
         request_top_k = options.result_top_n if options and options.result_top_n is not None else inp.top_k
-        recall_size = (
-            options.recall_top_k
-            if options and options.recall_top_k is not None
-            else scfg.recall_size
-        )
+        recall_size = options.recall_top_k if options and options.recall_top_k is not None else scfg.recall_size
         if request_top_k is not None:
             recall_size = max(recall_size, request_top_k)
 
@@ -142,10 +138,7 @@ class FeedbackEvoSearchEngine(MemoryDbPipelineMixin):
             ranked = _apply_tag_weights(ranked, scfg.tag_weights)
         lineage_candidates = await self._lineage_candidates(ranked, context)
 
-        candidates = [
-            _to_memory_search_item(hit)
-            for hit in ranked
-        ]
+        candidates = [_to_memory_search_item(hit) for hit in ranked]
         by_id = {item.id: item for item in candidates}
         for cand in lineage_candidates:
             if cand.memory_id in by_id:
@@ -246,9 +239,7 @@ def _apply_tag_weights(
         memory = hit.memory
         tag = getattr(memory, "entity_type", None) or getattr(memory, "mem_type", None)
         multiplier = weights.get(tag, 1.0) if tag is not None else 1.0
-        weighted.append(
-            hit.model_copy(update={"score": (hit.score or 0.0) * multiplier})
-        )
+        weighted.append(hit.model_copy(update={"score": (hit.score or 0.0) * multiplier}))
     return _rank_by_score(weighted)
 
 

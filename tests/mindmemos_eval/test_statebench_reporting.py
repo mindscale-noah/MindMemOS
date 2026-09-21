@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from scripts.statebench.run_feedback_evo_loop import _write_round_report
+from mindmemos_eval.memory.envs.statebench.runner import _write_round
 
 
 def test_write_round_report_persists_each_round(tmp_path):
     report_dir = tmp_path / "reports"
 
-    _write_round_report(report_dir, {"round_index": 1, "signals": 2})
-    _write_round_report(report_dir, {"round_index": 2, "signals": 0})
+    _write_round(report_dir, {"round_index": 1, "signals": 2})
+    _write_round(report_dir, {"round_index": 2, "signals": 0})
 
     assert (report_dir / "round_01.json").exists()
     assert (report_dir / "round_02.json").exists()

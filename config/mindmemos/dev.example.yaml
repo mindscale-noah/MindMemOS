@@ -208,6 +208,24 @@ algo_config:
         min_content_chars: 1
         min_update_confidence: 0.7
         min_merge_confidence: 0.8
+    feedback_evo:
+      enable_entities: true
+      entity_types:
+        price_adjustment: 1.2
+        return: 1.1
+        refund: 1.1
+        exchange: 1.1
+        shipping_damage: 1.0
+        lost_shipment: 1.0
+        warranty: 1.0
+        cancellation: 1.0
+        restocking_fee: 1.0
+        signature_denial: 1.0
+        subscription: 0.9
+        goodwill_compensation: 0.9
+        loyalty_bonus: 0.9
+        membership_discount: 0.9
+        bulk_discount: 0.9
   dreaming:
     lookback_days: 7
     max_scopes_per_run:
@@ -412,6 +430,3 @@ feedback_evo:
   max_entity_type_delta: 2
   state_store: db_and_file
   file_history_dir: config/evolved
-  defaults:
-    add: {}
-    search: {}

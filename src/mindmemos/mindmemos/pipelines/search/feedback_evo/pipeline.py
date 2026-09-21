@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from ....components.feedback_evo import ensure_evolution_state
 from ....components.searcher import SearchFinalFilter
-from ....llm import RerankClient
 from ....config import bind_config_overrides
 from ....infra.db import EvolutionStateStore
+from ....llm import RerankClient
 from ....typing import MemoryRequestContext, SearchPipelineInput, SearchPipelineResult
 from ...base import MemoryDbPipelineMixin
 from ...registry import register
@@ -74,16 +74,14 @@ class FeedbackEvoSearchPipeline(MemoryDbPipelineMixin):
         modified = _apply_input_overrides(inp, cfg)
 
         engine_overrides = dict(cfg.get("engine") or {})
-        weights = cfg.get("weights")
-        if weights:
-            engine_overrides["tag_weights"] = weights
+        tag_weights = state.add_config.get("entity_types")
+        if tag_weights:
+            engine_overrides["tag_weights"] = tag_weights
 
         if not engine_overrides:
             candidates = await self._candidates(modified, context)
         else:
-            project_config = {
-                "algo_config": {"search": {"feedback_evo": engine_overrides}}
-            }
+            project_config = {"algo_config": {"search": {"feedback_evo": engine_overrides}}}
             with bind_config_overrides(project_config=project_config):
                 candidates = await self._candidates(modified, context)
 

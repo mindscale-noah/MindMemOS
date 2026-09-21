@@ -57,7 +57,7 @@ def load_builtin_pipelines() -> None:
         ".delete.default",
         ".dreaming.default",
         ".feedback.default",
-        ".feedback_evo.pipeline",
+        ".feedback.feedback_evo",
         ".get.default",
         ".search.default",
         ".search.feedback_evo",

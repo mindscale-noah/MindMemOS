@@ -1,4 +1,4 @@
-"""Feedback-driven self-evolution pipeline (``feedback_evo`` mode)."""
+"""Feedback-driven self-evolution feedback pipeline."""
 
 from .pipeline import FeedbackEvoPipeline
 

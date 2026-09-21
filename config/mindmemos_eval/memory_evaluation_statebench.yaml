@@ -1,0 +1,54 @@
+# STATE-Bench formal online-controlled experiment configuration.
+# Change this file for future runs; the launcher only needs --seed.
+version: 1
+
+experiment:
+  protocol: online-controlled
+  domain: customer_support
+  group_id_template: statebench-customer_support-online-evo-20260909-s{seed}
+  seeds: [42, 43, 44]
+  output_dir: outputs/statebench/customer_support
+  state_bench_dir: data/STATE-Bench
+  api_base: http://127.0.0.1:8000
+  agent_model_name: gpt-5.4
+  # Both branches run; this controls which one starts first for a fresh seed.
+  branch_order: evolution-first
+
+training:
+  rounds: 10
+  tasks_per_round: 10
+  train_workers: 1
+  no_score: true
+
+evaluation:
+  test_task_count: 50
+  eval_workers: 4
+  # The schedule uses these checkpoints; branch-specific lists below control
+  # which branch actually runs evaluation at each checkpoint.
+  schedule_checkpoints: [0, 2, 4, 6, 8, 10]
+  baseline_checkpoints: [10]
+  evolution_checkpoints: [0, 2, 4, 6, 8, 10]
+  checkpoint_runs: 1
+  final_runs: 1
+
+# Recovery policy for a completed seed with a later bulk failure.  The repair
+# runner starts from the first incomplete round, writes to a sibling output
+# tree, and accepts at most two scattered runtime failures in a repaired
+# training round; missing trajectories or incomplete feedback still fail the
+# repair rather than being silently counted as a result.
+repair:
+  from_round: 9
+  # Replace the failed tail in the source seed directory by default.  Pass
+  # --separate-output when an immutable side-by-side repair is preferred.
+  output_mode: in-place
+  output_dir_template: outputs/statebench/customer_support/seed{seed}-repair-round{from_round:02d}
+  max_scattered_failures: 2
+
+isolation:
+  api_keys_file: config/mindmemos/api_keys.yaml
+  baseline:
+    project_id_template: proj-statebench-customer-support-online-evo-20260909-s{seed}-baseline
+    key_id_template: key_statebench_cs_online_evo_20260909_s{seed}_baseline
+  evolution:
+    project_id_template: proj-statebench-customer-support-online-evo-20260909-s{seed}-evolution
+    key_id_template: key_statebench_cs_online_evo_20260909_s{seed}_evolution

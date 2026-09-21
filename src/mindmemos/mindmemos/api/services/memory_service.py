@@ -3,17 +3,17 @@
 from typing import Literal
 from uuid import uuid4
 
+from ...components.feedback_evo import FeedbackEvoCollector
 from ...config import get_config
 from ...errors import BadRequestError
 from ...infra.db import EvolutionStateStore
 from ...logging import get_logger, traced
 from ...pipelines import create_pipeline
 from ...pipelines.add import AddPipeline
-from ...components.feedback_evo import FeedbackEvoCollector
 from ...pipelines.delete import DefaultDeletePipeline, DeletePipeline
 from ...pipelines.dreaming import DreamingPipeline
 from ...pipelines.feedback import FeedbackPipeline
-from ...pipelines.feedback_evo import FeedbackEvoPipeline
+from ...pipelines.feedback.feedback_evo import FeedbackEvoPipeline
 from ...pipelines.get import DefaultGetPipeline, GetPipeline
 from ...pipelines.memory_db import MemoryOperationRecorder, suppress_recording_errors, utcnow
 from ...pipelines.search import SearchPipeline
@@ -52,8 +52,8 @@ from ..schemas import (
     DeleteRequest,
     DreamingRequest,
     EvolutionRollbackRequest,
-    FeedbackRequest,
     FeedbackEvoCollectRequest,
+    FeedbackRequest,
     GetRequest,
     SearchRequest,
     SelfEvolveRequest,
@@ -309,7 +309,6 @@ class MemoryService:
         if pipeline is None:
             raise NotImplementedError("get pipeline implementation is not wired yet")
         return await pipeline.get(to_get_pipeline_input(request), to_memory_request_context(auth))
-
 
     @traced("memory_service.delete")
     async def delete(self, auth: AuthContext, request: DeleteRequest) -> DeletePipelineResult:

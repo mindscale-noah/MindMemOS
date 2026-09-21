@@ -404,6 +404,12 @@ class FeedbackEvoPipelineInput(BaseModel):
     force: bool = False
     """Bypass the min_signals_to_evolve gate (used for tests/manual runs)."""
 
+    event_selection: Literal["all", "unconsumed"] = "all"
+    """Whether to use all historical events or only pending events."""
+
+    idempotency_key: str | None = None
+    """Stable caller key used to make retries of one evolution round safe."""
+
 
 class FeedbackEvoPipelineResult(BaseModel):
     """Result of one feedback-driven evolution run."""
@@ -425,6 +431,15 @@ class FeedbackEvoPipelineResult(BaseModel):
 
     signal_count: int = 0
     """Number of accumulated feedback signals considered."""
+
+    selected_event_count: int = 0
+    """Number of events selected for this run."""
+
+    consumed_event_count: int = 0
+    """Number of selected events marked consumed after success."""
+
+    idempotent_replay: bool = False
+    """Whether this response came from a completed request with the same key."""
 
     message: str = ""
     """Human-readable outcome summary."""

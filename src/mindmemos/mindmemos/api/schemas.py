@@ -269,6 +269,15 @@ class SelfEvolveRequest(ActorIdentityRequest):
         description="Bypass the signal threshold gate (tests/manual runs).",
     )
 
+    event_selection: Literal["all", "unconsumed"] = Field(
+        default="all",
+        description="Select all historical events or only events not consumed by evolution.",
+    )
+    idempotency_key: NonEmptyStr | None = Field(
+        default=None,
+        description="Stable key used to make retries of one evolution round idempotent.",
+    )
+
 
 class FeedbackEvoCollectRequest(ActorIdentityRequest):
     """HTTP body for ``POST /v1/memory/feedback-evo/collect``.
@@ -366,6 +375,15 @@ class FeedbackEvoEvolveData(BaseModel):
 
     changes: list[ParameterChange] = Field(default_factory=list)
     """Applied parameter changes."""
+
+    selected_event_count: int = 0
+    """Number of events selected for this evolution run."""
+
+    consumed_event_count: int = 0
+    """Number of events marked consumed after this run."""
+
+    idempotent_replay: bool = False
+    """Whether the response was replayed from a prior idempotent request."""
 
 
 class ApiResponse(BaseModel, Generic[T]):

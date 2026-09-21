@@ -11,8 +11,9 @@ class FeedbackEvoAddConfig:
     """Configuration for the feedback_evo add pipeline.
 
     Evolvable surface: ``extraction_prompt`` / ``entity_tagging_prompt`` /
-    ``entity_types`` are read live from the evolution state by the
-    feedback_evo pipeline; ``enable_entities`` toggles entity extraction.
+    ``entity_types`` (now a name -> weight mapping) are read live from the
+    evolution state by the feedback_evo pipeline; ``enable_entities`` toggles
+    entity extraction.
     """
 
     enable_entities: bool = field(default=False)
@@ -24,8 +25,12 @@ class FeedbackEvoAddConfig:
     entity_tagging_prompt: str | None = field(default=None)
     """Optional entity-tag selection instruction appended to extraction."""
 
-    entity_types: list[str] = field(default_factory=list)
-    """Entity-type tag vocabulary; empty disables tagging."""
+    entity_types: dict[str, float] = field(default_factory=dict)
+    """Entity-type tag vocabulary with per-type search weight.
+
+    Keys are the tag vocabulary (each memory picks one ``entity_type``); values
+    are the ranking multipliers used as ``tag_weights``. Empty disables tagging.
+    """
 
     extra: dict[str, Any] = field(default_factory=dict)
     """Unstructured evolvable add parameters (forward compatibility)."""

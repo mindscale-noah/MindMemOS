@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TypeVar
 
 import yaml
 from dotenv import load_dotenv
@@ -454,15 +454,6 @@ class FeedbackEvoConfig:
     file_history_dir: str = "config/evolved"
     """Directory where evolution version history is mirrored as JSON files."""
 
-    defaults: dict[str, Any] = field(
-        default_factory=lambda: {"add": {}, "search": {}}
-    )
-    """Extra initial values layered on top of the vanilla config copy at seed time.
-
-    Empty by default: seeding copies the current vanilla add/search configs, so
-    evolution starts from a baseline identical to vanilla behavior.
-    """
-
 
 @dataclass
 class AuthConfig:
@@ -545,7 +536,9 @@ class KafkaConfig:
     enabled: bool = field(default=False)
     """Whether Kafka infrastructure is enabled."""
 
-    bootstrap_servers: str = field(default_factory=lambda: _env_str("MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
+    bootstrap_servers: str = field(
+        default_factory=lambda: _env_str("MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    )
     """Kafka broker addresses, comma-separated."""
 
     client_id: str = field(default="memos")

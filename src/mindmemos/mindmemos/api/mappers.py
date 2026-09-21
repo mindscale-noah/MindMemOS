@@ -120,9 +120,7 @@ def to_update_pipeline_input(req: UpdateRequest) -> UpdatePipelineInput:
 def to_feedback_pipeline_input(req: FeedbackRequest) -> FeedbackPipelineInput:
     """Build feedback pipeline input from a public feedback request."""
 
-    return FeedbackPipelineInput.model_validate(
-        req.model_dump(by_alias=True, exclude=set(_ACTOR_FIELDS))
-    )
+    return FeedbackPipelineInput.model_validate(req.model_dump(by_alias=True, exclude=set(_ACTOR_FIELDS)))
 
 
 def to_feedback_evo_pipeline_input(
@@ -136,6 +134,8 @@ def to_feedback_evo_pipeline_input(
         user_id=req.user_id,
         min_signals_to_evolve=req.min_signals_to_evolve,
         force=req.force,
+        event_selection=req.event_selection,
+        idempotency_key=req.idempotency_key,
     )
 
 
@@ -172,6 +172,9 @@ def to_feedback_evo_evolve_api_response(
             version=result.version,
             signal_count=result.signal_count,
             changes=result.changes,
+            selected_event_count=result.selected_event_count,
+            consumed_event_count=result.consumed_event_count,
+            idempotent_replay=result.idempotent_replay,
         ),
     )
 

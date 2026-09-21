@@ -6,31 +6,31 @@ from typing import Literal
 
 from omegaconf import OmegaConf
 
-from ...components.feedback_evo import ensure_evolution_state
-from ...components.extractor.feedback_evo import FeedbackEvoMemoryExtractor
-from ...components.extractor.vanilla import (
+from ....components.extractor.feedback_evo import FeedbackEvoMemoryExtractor
+from ....components.extractor.vanilla import (
     AddCoreBuilder,
     AddSafetyGate,
     CandidateDeduplicator,
     RelatedMemoryRecall,
 )
-from ...components.kafka import memory_add_dispatch_key
-from ...components.text import MemoryVectorizer, SparseVectorEncoder, get_text_preprocessor
-from ...config import VanillaAddConfig, get_config
-from ...errors import ConfigNotInitializedError
-from ...infra.db import EvolutionStateStore
-from ...llm import get_embed_client, get_llm_client
-from ...logging import get_logger
-from ...typing import (
+from ....components.feedback_evo import ensure_evolution_state
+from ....components.kafka import memory_add_dispatch_key
+from ....components.text import MemoryVectorizer, SparseVectorEncoder, get_text_preprocessor
+from ....config import VanillaAddConfig, get_config
+from ....errors import ConfigNotInitializedError
+from ....infra.db import EvolutionStateStore
+from ....llm import get_embed_client, get_llm_client
+from ....logging import get_logger
+from ....typing import (
     AddPipelineAsyncResult,
     AddPipelineInput,
     AddPipelineSyncResult,
     MemoryDbMutationPlan,
     MemoryRequestContext,
 )
-from ..base import MemoryDbPipelineMixin
-from ..memory_db import suppress_recording_errors
-from ..registry import register
+from ...base import MemoryDbPipelineMixin
+from ...memory_db import suppress_recording_errors
+from ...registry import register
 
 Consistency = Literal["fast", "strong"]
 MEMORY_ADD_TOPIC = "memory.add"
@@ -79,9 +79,7 @@ class FeedbackEvoAddPipeline(MemoryDbPipelineMixin):
             entity_types=add_cfg.get("entity_types") or fe_cfg.entity_types,
         )
         builder = _builder_for(self.db_reader, extractor)
-        config = _structural_add_config(
-            enable_entities=bool(fe_cfg.enable_entities or extractor.entity_types)
-        )
+        config = _structural_add_config(enable_entities=bool(fe_cfg.enable_entities or extractor.entity_types))
         plan, events, update_commands = await builder.build(
             inp,
             context,
@@ -118,7 +116,7 @@ class FeedbackEvoAddPipeline(MemoryDbPipelineMixin):
         ``feedback_evo`` contexts are processed by this pipeline.
         """
 
-        from ...infra.kafka import get_producer
+        from ....infra.kafka import get_producer
 
         cfg = get_config()
         if not cfg.kafka.enabled:

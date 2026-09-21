@@ -30,17 +30,20 @@ deserve changes; a single weak signal usually does not. Rules:
 Evolvable paths:
 add_config.extraction_prompt, add_config.entity_tagging_prompt,
 add_config.entity_types
-search_config.top_k, search_config.rerank, search_config.score_threshold,
-search_config.weights (and weights.<sub>)
+search_config.top_k, search_config.rerank, search_config.score_threshold
+
+add_config.entity_types is a mapping {entity_type: weight}. Changing it adjusts
+the tag vocabulary and each type's ranking weight together, so vocabulary and
+weights can never drift apart.
 
 Return strict JSON only:
 {
   "changes": [
     {
-      "path": "search_config.weights.fact",
-      "before": 0.8,
-      "after": 0.6,
-      "reason": "old fact versions keep outranking current ones"
+      "path": "add_config.entity_types",
+      "before": {"return": 1.0, "exchange": 1.0},
+      "after": {"return": 1.0, "exchange": 1.1, "refund": 1.0},
+      "reason": "exchange should rank slightly above a plain return"
     }
   ]
 }

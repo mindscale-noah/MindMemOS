@@ -25,10 +25,11 @@ from ...typing import (
 logger = get_logger(__name__)
 
 # The only evolvable parameter paths (must match the planning prompt list).
-# Sub-paths under ``weights`` are allowed (e.g. ``weights.fact``); everything
-# else the planner proposes is dropped so ghost parameters never enter state.
+# Tag weights are no longer a separate search evolvable: they live inside
+# ``add_config.entity_types`` as a name -> weight mapping, so they evolve
+# together with the vocabulary and can never drift apart.
 EVOLVABLE_ADD_PATHS = ("extraction_prompt", "entity_tagging_prompt", "entity_types")
-EVOLVABLE_SEARCH_PATHS = ("top_k", "rerank", "score_threshold", "weights")
+EVOLVABLE_SEARCH_PATHS = ("top_k", "rerank", "score_threshold")
 
 # Change-threshold bounds for non-prompt evolvable items.
 PROMPT_PATHS = {"extraction_prompt", "entity_tagging_prompt"}
@@ -42,7 +43,7 @@ def is_evolvable_path(path: str) -> bool:
         return path.removeprefix("add_config.") in EVOLVABLE_ADD_PATHS
     if path.startswith("search_config."):
         rest = path.removeprefix("search_config.")
-        return rest in EVOLVABLE_SEARCH_PATHS or rest.startswith("weights.")
+        return rest in EVOLVABLE_SEARCH_PATHS
     return False
 
 
@@ -59,11 +60,12 @@ def build_initial_evolution_state(project_id: str) -> EvolutionState:
     add_config = {
         "extraction_prompt": fe_cfg.extraction_prompt or FEEDBACK_EVO_EXTRACTION_SYSTEM_PROMPT,
         "entity_tagging_prompt": fe_cfg.entity_tagging_prompt or FEEDBACK_EVO_ENTITY_TAGGING_PROMPT,
-        "entity_types": list(fe_cfg.entity_types),
+        "entity_types": dict(fe_cfg.entity_types),
     }
-    # Search evolvable items (top_k / rerank / score_threshold / weights) are
-    # request- and evolution-driven with no static baseline; start empty so
-    # requests keep their defaults until evolution sets a value.
+    # Search evolvable items (top_k / rerank / score_threshold) are request-
+    # and evolution-driven with no static baseline; start empty so requests
+    # keep their defaults until evolution sets a value. Tag weights live inside
+    # ``add_config.entity_types`` (name -> weight), so no separate weights seed.
     search_config: dict[str, Any] = {}
     return EvolutionState(
         project_id=project_id,
@@ -239,11 +241,7 @@ class EvolutionExecutor:
             )
 
         add_config, search_config = _apply_changes(current, changes)
-        signal_ids = [
-            f"{event.event_id}#{index}"
-            for event in events
-            for index in range(len(event.signals))
-        ]
+        signal_ids = [f"{event.event_id}#{index}" for event in events for index in range(len(event.signals))]
         trigger = EvolutionTrigger(
             signal_ids=signal_ids,
         )
@@ -302,8 +300,8 @@ def _evolvable_config_view(current: EvolutionState | None) -> dict[str, Any] | N
 
     The planner must never see unused vanilla fields (recall_size,
     hybrid_prefetch_*, fusion weights, ...), otherwise it invents changes for
-    paths that are not consumed. ``weights`` is included whole so sub-paths
-    like ``weights.fact`` are visible.
+    paths that are not consumed. Tag weights are already part of
+    ``add_config.entity_types``.
     """
 
     if current is None:
@@ -372,15 +370,20 @@ def _change_within_threshold(
     if rest in PROMPT_PATHS:
         return isinstance(after, str) and bool(after.strip())
     if rest == "entity_types":
-        return _entity_types_delta_within(target.get("entity_types"), after, max_entity_type_delta)
+        return _entity_types_within(
+            target.get("entity_types"),
+            after,
+            max_entity_type_delta,
+            max_numeric_change_ratio,
+        )
     if rest == "top_k":
         return _numeric_within(target.get("top_k"), after, max_numeric_change_ratio, integer=True, lo=1, hi=MAX_TOP_K)
     if rest == "score_threshold":
-        return _numeric_within(target.get("score_threshold"), after, max_numeric_change_ratio, integer=False, lo=0.0, hi=1.0)
+        return _numeric_within(
+            target.get("score_threshold"), after, max_numeric_change_ratio, integer=False, lo=0.0, hi=1.0
+        )
     if rest == "rerank":
         return isinstance(after, bool)
-    if rest == "weights" or rest.startswith("weights."):
-        return _numeric_within(_get_path(target, rest), after, max_numeric_change_ratio, integer=False, lo=0.0, hi=1.0)
     return False
 
 
@@ -412,15 +415,46 @@ def _numeric_within(
     return abs(new - old) <= limit
 
 
-def _entity_types_delta_within(old: Any, new: Any, max_delta: int) -> bool:
-    """Return True when the entity-type vocabulary change is small enough."""
+def _entity_types_within(
+    old: Any,
+    new: Any,
+    max_delta: int,
+    ratio: float,
+) -> bool:
+    """Return True when the entity-type vocabulary + weight change is bounded.
 
-    if not isinstance(new, list) or not all(isinstance(item, str) for item in new):
+    ``new`` is a ``{name: weight}`` dict: keys are the tag vocabulary, values
+    are ranking multipliers. The key-set delta is bounded by ``max_delta``, and
+    each retained value may move by at most ``ratio`` (floor 0.05), within
+    [0, 1]. Vocabulary and weights are validated together so they can never
+    drift apart.
+    """
+
+    if not isinstance(new, dict):
         return False
-    old_set = set(old) if isinstance(old, list) else set()
-    new_set = set(new)
-    delta = len(new_set - old_set) + len(old_set - new_set)
-    return delta <= max_delta
+    for name, weight in new.items():
+        if not isinstance(name, str) or not name.strip():
+            return False
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+            return False
+        # Existing feedback_evo defaults intentionally use weights above 1
+        # (for example price_adjustment=1.2); keep the planner in a bounded
+        # but compatible range.
+        if not (0.0 <= float(weight) <= 2.0):
+            return False
+    old_dict = old if isinstance(old, dict) else {}
+    new_keys = set(new)
+    old_keys = set(old_dict)
+    delta = len(new_keys - old_keys) + len(old_keys - new_keys)
+    if delta > max_delta:
+        return False
+    floor = 0.05
+    for key in new_keys & old_keys:
+        old_v = float(old_dict[key])
+        new_v = float(new[key])
+        if abs(new_v - old_v) > max(abs(old_v) * ratio, floor):
+            return False
+    return True
 
 
 def _parse_plan(content: str) -> list[ParameterChange]:

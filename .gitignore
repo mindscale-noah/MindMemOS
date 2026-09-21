@@ -16,6 +16,7 @@ config/mindmemos/*.yaml
 !config/mindmemos/api_keys.yaml
 config/mindmemos_eval/*.yaml
 !config/mindmemos_eval/*.example.yaml
+!config/mindmemos_eval/memory_evaluation_statebench.yaml
 
 # Virtual environments
 .venv

@@ -11,8 +11,8 @@ import json
 import uuid
 from typing import Any
 
-from ....logging import get_logger
 from ....llm import LLMClient
+from ....logging import get_logger
 from ....prompts.EN.feedback_evo import (
     FEEDBACK_EVO_ENTITY_TAGGING_PROMPT,
     FEEDBACK_EVO_EXTRACTION_SYSTEM_PROMPT,
@@ -36,18 +36,18 @@ class FeedbackEvoMemoryExtractor:
         llm_client: LLMClient | None = None,
         extraction_prompt: str | None = None,
         entity_tagging_prompt: str | None = None,
-        entity_types: list[str] | None = None,
+        entity_types: dict[str, float] | None = None,
         enable_entities: bool = False,
     ) -> None:
         self._llm_client = llm_client
         self._extraction_prompt = extraction_prompt
         self._entity_tagging_prompt = entity_tagging_prompt
-        self._entity_types = list(entity_types or [])
+        self._entity_types = dict(entity_types or {})
         self._enable_entities = enable_entities or bool(self._entity_types)
 
     @property
-    def entity_types(self) -> list[str]:
-        """The tag vocabulary this extractor was configured with."""
+    def entity_types(self) -> dict[str, float]:
+        """The tag vocabulary -> weight mapping this extractor was configured with."""
 
         return self._entity_types
 
@@ -78,9 +78,7 @@ class FeedbackEvoMemoryExtractor:
                 ),
                 format_parser=_parse_extraction_json,
             )
-            return MemoryExtractionResult.model_validate(
-                _normalize_feedback_evo_extraction(response.parsed)
-            )
+            return MemoryExtractionResult.model_validate(_normalize_feedback_evo_extraction(response.parsed))
         except Exception as exc:
             logger.warning(
                 "feedback_evo_extraction_failed",
@@ -161,7 +159,7 @@ def _prompt_messages(
     *,
     extraction_prompt: str | None,
     entity_tagging_prompt: str | None,
-    entity_types: list[str],
+    entity_types: dict[str, float],
 ) -> list[dict[str, Any]]:
     """Build the extraction prompt for one chunked envelope."""
 
@@ -183,13 +181,9 @@ def _prompt_messages(
 
     context_section: dict[str, Any] = {}
     if envelope.history.in_request_history:
-        context_section["history"] = [
-            _turn_payload(turn) for turn in envelope.history.in_request_history
-        ]
+        context_section["history"] = [_turn_payload(turn) for turn in envelope.history.in_request_history]
     if envelope.history.external_history:
-        context_section["external_history"] = [
-            _turn_payload(turn) for turn in envelope.history.external_history
-        ]
+        context_section["external_history"] = [_turn_payload(turn) for turn in envelope.history.external_history]
     if envelope.recalled_memories:
         context_section["related_memories"] = envelope.recalled_memories
 
@@ -199,9 +193,10 @@ def _prompt_messages(
         "detection only — do not create new memories from context."
     )
     if entity_types:
+        vocabulary = list(entity_types.keys())
         instruction += (
             "\n[Entity tagging] For every memory, assign the single most "
-            f"specific entity_type from the vocabulary {entity_types!r}. "
+            f"specific entity_type from the vocabulary {vocabulary!r}. "
             "Optionally assign a property_name for finer classification. "
             "Output entity_type and property_name fields on each memory object."
         )

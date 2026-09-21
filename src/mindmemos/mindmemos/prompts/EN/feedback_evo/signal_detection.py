@@ -14,11 +14,10 @@ optimized, would prevent the same issue in future tasks.
 Evolvable items (valid values for "evolvable_path"):
 - add_config.extraction_prompt: what/how memories are extracted and stored
 - add_config.entity_tagging_prompt: how entity/property tags are assigned
-- add_config.entity_types: the entity-type vocabulary used for tagging
+- add_config.entity_types: the entity-type vocabulary and per-type ranking weight (name -> weight)
 - search_config.top_k: number of memories returned
 - search_config.rerank: whether/how candidates are re-ranked
 - search_config.score_threshold: minimum score for returned memories
-- search_config.weights: weighting of memory types/entities in ranking
 
 Return JSON only:
 {
