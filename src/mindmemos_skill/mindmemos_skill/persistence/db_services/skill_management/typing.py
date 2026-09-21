@@ -1,4 +1,4 @@
-"""Validated graph records; lifecycle transitions belong to the future data service."""
+"""Validated graph records shared by query and atomic publication services."""
 
 from typing import Annotated, Literal
 from uuid import UUID
