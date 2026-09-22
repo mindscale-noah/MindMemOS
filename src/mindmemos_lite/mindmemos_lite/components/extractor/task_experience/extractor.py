@@ -15,11 +15,13 @@ from .schema import (
 logger = get_logger(__name__)
 
 
-def _experience_prompt_messages(task_text: str, turns: list[dict[str, Any]], lang: str) -> list[dict[str, Any]]:
+def _experience_prompt_messages(
+    task_text: str, turns: list[dict[str, Any]], lang: str, *, extract_type: str = "experience"
+) -> list[dict[str, Any]]:
     from ....prompts import get_trajectory_experience_prompt
 
     return [
-        {"role": "system", "content": get_trajectory_experience_prompt(lang)},
+        {"role": "system", "content": get_trajectory_experience_prompt(lang, extract_type=extract_type)},
         {"role": "user", "content": json.dumps({"task": task_text, "turns": turns}, ensure_ascii=False)},
     ]
 
@@ -72,14 +74,17 @@ class TrajectoryExperienceExtractor:
         turns: list[dict[str, Any]],
         lang: str,
         context: MemoryRequestContext,
+        *,
+        extract_type: str = "experience",
     ) -> list[ExtractedExperienceCandidate]:
+        messages = _experience_prompt_messages(task_text, turns, lang, extract_type=extract_type)
         if self._llm_client is None:
             logger.debug("trajectory_experience_llm_unavailable", request_id=context.request_id)
             return []
         try:
             response = await self._llm_client.chat(
                 task="memory.add.trajectory_experience",
-                messages=_experience_prompt_messages(task_text, turns, lang),
+                messages=messages,
                 format_parser=parse_experience_json,
             )
             return _payload_experiences(response.parsed if response is not None else None)
@@ -90,4 +95,3 @@ class TrajectoryExperienceExtractor:
                 exc_info=True,
             )
             return []
-

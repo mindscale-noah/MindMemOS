@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from mindmemos_lite import prompts
+from mindmemos_lite.components.extractor.task_experience.extractor import TrajectoryExperienceExtractor
 from mindmemos_lite.components.extractor.task_experience import (
     ExperienceResolution,
     ExtractedExperienceCandidate,
@@ -17,6 +19,53 @@ from mindmemos_lite.typing import (
     FileMessage,
     MemoryRequestContext,
 )
+
+
+@pytest.mark.parametrize("lang", ["en", "zh"])
+def test_extraction_prompt_defaults_and_empty_plan(lang) -> None:
+    expected = (
+        prompts.EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_ZH if lang == "zh" else prompts.EXPERIENCE_EXTRACTION_SYSTEM_PROMPT
+    )
+    assert prompts.get_trajectory_experience_prompt(lang) == expected
+    assert prompts.get_trajectory_experience_prompt(lang, extract_type="experience") == expected
+    with pytest.raises(ValueError, match="plan extraction prompt is empty"):
+        prompts.get_trajectory_experience_prompt(lang, extract_type="plan")
+
+
+@pytest.mark.asyncio
+async def test_plan_prompt_is_request_local_and_keeps_output_contract(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(prompts, "PLAN_EXTRACTION_SYSTEM_PROMPT", "Extract plans as experiences JSON.")
+    monkeypatch.setattr(prompts, "PLAN_EXTRACTION_SYSTEM_PROMPT_ZH", "Chinese plan prompt.")
+    calls = []
+
+    class Client:
+        async def chat(self, **kwargs):
+            calls.append(kwargs["messages"])
+            return SimpleNamespace(
+                parsed={"experiences": [{"content": "Reusable plan", "source_message_indices": [0]}]}
+            )
+
+    extractor = TrajectoryExperienceExtractor(llm_client=Client())
+    turns = [{"message_index": 0, "role": "user", "text": "Task input"}]
+    for lang, extract_type in [("en", "plan"), ("zh", "plan"), ("en", "experience")]:
+        candidates = await extractor.extract("Task", turns, lang, _context(), extract_type=extract_type)
+        assert candidates[0].content == "Reusable plan"
+        assert candidates[0].source_message_indices == [0]
+    assert [call[0]["content"] for call in calls] == [
+        "Extract plans as experiences JSON.",
+        "Chinese plan prompt.",
+        prompts.EXPERIENCE_EXTRACTION_SYSTEM_PROMPT,
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extract_type", ["unknown", "", None, {}])
+async def test_invalid_extract_type_is_not_swallowed(extract_type) -> None:
+    extractor = TrajectoryExperienceExtractor(llm_client=None)
+    with pytest.raises(ValueError, match="metadata.extract_type"):
+        await extractor.extract("Task", [], "en", _context(), extract_type=extract_type)
 
 
 class _NoEntities:
@@ -43,10 +92,12 @@ class _RecordingExtractor:
     def __init__(self) -> None:
         self.calls = 0
         self.turns: list[dict] = []
+        self.extract_types = []
 
-    async def extract(self, task_text, turns, lang, context):
+    async def extract(self, task_text, turns, lang, context, *, extract_type="experience"):
         self.calls += 1
         self.turns = list(turns)
+        self.extract_types.append(extract_type)
         indices = [int(turn["message_index"]) for turn in turns]
         return [
             ExtractedExperienceCandidate(
@@ -123,18 +174,20 @@ def _builder(extractor, dedup) -> TrajectoryExperienceBuilder:
 
 
 @pytest.mark.asyncio
-async def test_trajectory_builder_extracts_whole_trace_in_one_call_and_dedups() -> None:
+@pytest.mark.parametrize("metadata", [{}, {"extract_type": "experience"}, {"extract_type": "plan"}])
+async def test_trajectory_builder_extracts_whole_trace_in_one_call_and_dedups(metadata) -> None:
     messages = _turns(16)
     extractor = _RecordingExtractor()
     dedup = _StubDedup(reuse_first=True)
     builder = _builder(extractor, dedup)
 
-    inp = AddPipelineInput(messages=messages, task="安装 pandas", mode="sync")
+    inp = AddPipelineInput(messages=messages, task="安装 pandas", mode="sync", metadata=metadata)
     plan, events, _update_commands = await builder.build(inp, _context(), config=TrajectoryAddConfig())
 
     # The whole trajectory reaches the extractor exactly once: no chunk planning,
     # and every message keeps its original position for source refs.
     assert extractor.calls == 1
+    assert extractor.extract_types == [metadata.get("extract_type", "experience")]
     assert [turn["message_index"] for turn in extractor.turns] == list(range(len(messages)))
 
     # Both candidates are judged in ONE batched call rather than one call each.
@@ -160,7 +213,7 @@ class _ByteIdenticalExtractor:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def extract(self, task_text, turns, lang, context):
+    async def extract(self, task_text, turns, lang, context, *, extract_type="experience"):
         self.calls += 1
         return [
             ExtractedExperienceCandidate(

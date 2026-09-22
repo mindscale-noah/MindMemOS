@@ -266,7 +266,13 @@ class TrajectoryExperienceBuilder:
         # 3. Extract experiences once (task text stays fixed for the whole trace).
         candidates: list[ExtractedExperienceCandidate] = []
         if turns:
-            extracted = await self._extractor.extract(task_text, turns, lang, context)
+            extracted = await self._extractor.extract(
+                task_text,
+                turns,
+                lang,
+                context,
+                extract_type=inp.metadata.get("extract_type", "experience"),
+            )
             for index, candidate in enumerate(extracted):
                 candidates.append(candidate.model_copy(update={"ref_id": f"e{index}"}))
 
