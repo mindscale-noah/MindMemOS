@@ -1,0 +1,22 @@
+name: mindmemos-lite
+
+services:
+  pgvector:
+    image: pgvector/pgvector:0.8.6-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PGVECTOR_DATABASE:?Set PGVECTOR_DATABASE in .env}
+      POSTGRES_USER: ${PGVECTOR_USER:?Set PGVECTOR_USER in .env}
+      POSTGRES_PASSWORD: ${PGVECTOR_PASSWORD:?Set PGVECTOR_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${PGVECTOR_PORT:-5432}:5432"
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  pgvector_data:

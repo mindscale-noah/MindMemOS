@@ -1,5 +1,7 @@
 # MindMemOS 部署配置说明
 
+部署 `src/mindmemos_lite` 时，请阅读 [MindMemOS Lite 部署与 Agent 接入说明](lite_deployment_ZH.md)，其中包含 PostgreSQL + pgvector 配置、LLM 与 Embedding 配置、add/search 调用示例和轨迹记忆接入流程。
+
 <p align="center">
   <a href="instruction.md">English</a> | <a href="instruction_ZH.md">简体中文</a>
 </p>
