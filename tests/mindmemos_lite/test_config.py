@@ -116,7 +116,7 @@ def test_example_config_selects_pgvector_with_typed_options() -> None:
         "algo_config",
     ]
     assert cfg.observability.enabled is True
-    assert cfg.observability.exporter == "sqlite"
+    assert cfg.observability.exporter == "postgres"
     assert cfg.observability.sqlite_path == ".mindmemos/observability/traces.db"
     assert cfg.chat_model_router.endpoints[0].model == "openai/gpt-4.1-mini"
     assert cfg.embed_model_router.endpoints[0].dimensions == 2560

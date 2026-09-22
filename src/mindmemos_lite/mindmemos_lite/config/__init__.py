@@ -20,7 +20,7 @@ from .context import (
 from .database import DatabaseBackendConfig, DatabaseBackendRequirementsConfig, DatabaseConfig, PgVectorConfig
 from .memory import MemoryConfig
 from .model import ModelEndpointConfig, ModelRouterConfig
-from .observability import ObservabilityConfig
+from .observability import ObservabilityConfig, PostgresObservabilityConfig
 from .pipelines import MemoryModePipelineConfig, MixedAddPipelineConfig, PipelineRoutingConfig
 from .validation import validate_config, validate_tree
 from .vanilla import (
@@ -47,6 +47,7 @@ __all__ = [
     "ModelEndpointConfig",
     "ModelRouterConfig",
     "ObservabilityConfig",
+    "PostgresObservabilityConfig",
     "MixedAddPipelineConfig",
     "PipelineRoutingConfig",
     "PgVectorConfig",

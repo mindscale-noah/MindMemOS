@@ -1,8 +1,17 @@
 observability:
   enabled: true
   service_name: mindmemos-lite
-  exporter: sqlite
+  exporter: postgres
   sqlite_path: ${oc.env:MINDMEMOS_TRACE_DB,.mindmemos/observability/traces.db}
+  postgres:
+    # Defaults to the memory database; set MINDMEMOS_TRACE_POSTGRES_DSN for a separate server/database.
+    dsn: ${oc.env:MINDMEMOS_TRACE_POSTGRES_DSN,${database.pgvector.dsn}}
+    schema: ${oc.env:MINDMEMOS_TRACE_POSTGRES_SCHEMA,observability}
+    max_pool_size: 2
+    pool_timeout_seconds: 5
+    connect_timeout_seconds: 5
+    statement_timeout_seconds: 5
+    create_schema: true
   otlp_endpoint: null
   trace_sampling_ratio: 1.0
   max_queue_size: 2048
