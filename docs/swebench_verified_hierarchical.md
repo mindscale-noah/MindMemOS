@@ -45,7 +45,7 @@
 
 先复制 `config/eval/swebench_verified.example.yaml` 并修改路径、模型和项目名。相对路径以运行时当前目录为基准。输出目录必须是全新目录；split 后配置被冻结，修改参数应使用新实验目录。
 
-在已配置好 eval 包依赖的环境中，从仓库根目录运行。`scripts/swebench/run_four_phases.sh` 接受一个阶段、同一份冻结配置和本地凭据文件；`prepare` 只在全新输出目录执行一次。用官方题目镜像时，`prepare` 还会生成镜像映射和评分数据。使用自备镜像时，先填好镜像映射文件，再改用 `python -m mindmemos_eval.swebench split --config ...` 冻结划分。
+在已配置好 eval 包依赖的环境中，从仓库根目录运行。`scripts/swebench/run_four_phases.sh` 接受一个阶段、同一份冻结配置和本地凭据文件；`prepare` 只在全新输出目录执行一次，它冻结划分而不覆盖自备镜像映射。先根据生成的 split 准备覆盖 100 题的本地镜像映射，再运行 `train`。用官方题目镜像时，配置的 `image_map_path` 必须位于新输出目录内，并显式启用 `docker.pull_missing` 和 `docker.restore_base_commit`；此时以 `prepare-official` 代替 `prepare`，自动生成镜像映射和评分数据。两种准备方式只选其一。
 
 ```bash
 cp config/eval/swebench_verified.example.yaml config/eval/swebench_verified.yaml
@@ -60,6 +60,8 @@ bash scripts/swebench/run_four_phases.sh extract  config/eval/swebench_verified.
 bash scripts/swebench/run_four_phases.sh baseline config/eval/swebench_verified.yaml /path/to/credentials.env
 bash scripts/swebench/run_four_phases.sh test     config/eval/swebench_verified.yaml /path/to/credentials.env
 ```
+
+如果使用官方题目镜像并按上段要求设置了输出路径和 Docker 选项，把第一条 `prepare` 替换为 `prepare-official`。已有 `recovery06` 等输出目录已冻结，不再执行任何准备命令。
 
 `train` 采集 50 题轨迹并导出 `train-trajectories.json`；`extract` 从这些轨迹向两个独立项目写入记忆；`baseline` 对固定的 50 道测试题执行无记忆 rollout；`test` 对同一批题执行每次模型调用前检索记忆的 rollout。后两步各自产生 `predictions.jsonl` 和 `summary.json`，仍需官方 harness 判分才能报告 resolved 准确率。`train` 不自动触发 `extract`；提取本身也可能调用记忆服务配置的模型。运行前应确认对应模型、服务端提取模型及费用。
 

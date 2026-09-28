@@ -5,6 +5,7 @@
 #
 # Examples (replace the env path with a local file that contains your keys):
 #   bash scripts/swebench/run_four_phases.sh prepare  config/eval/swebench_verified.yaml /path/to/credentials.env
+#   bash scripts/swebench/run_four_phases.sh prepare-official config/eval/swebench_verified.yaml /path/to/credentials.env
 #   bash scripts/swebench/run_four_phases.sh train    config/eval/swebench_verified.yaml /path/to/credentials.env
 #   bash scripts/swebench/run_four_phases.sh extract  config/eval/swebench_verified.yaml /path/to/credentials.env
 #   bash scripts/swebench/run_four_phases.sh baseline config/eval/swebench_verified.yaml /path/to/credentials.env
@@ -17,7 +18,7 @@
 set -euo pipefail
 
 if [[ $# -ne 3 ]]; then
-  echo "Usage: bash scripts/swebench/run_four_phases.sh {prepare|train|extract|baseline|test} CONFIG_YAML CREDENTIALS_ENV" >&2
+  echo "Usage: bash scripts/swebench/run_four_phases.sh {prepare|prepare-official|train|extract|baseline|test} CONFIG_YAML CREDENTIALS_ENV" >&2
   exit 2
 fi
 
@@ -49,10 +50,29 @@ export PYTHONPATH="$repo_root/src/mindmemos_eval:$repo_root/src/mindmemos_sdk${P
 
 case "$phase" in
   prepare)
-    # Local only: freeze a fresh 50/50 split, config, official image names,
-    # grading dataset, and source hashes. Do this once per new output directory.
-    # This route expects SWE-bench official images. For a custom local image map,
-    # run `python -m mindmemos_eval.swebench split --config "$config"` instead.
+    # Freeze a fresh 50/50 split and config. Supply a local image map covering
+    # the selected task IDs before train. This never overwrites an image map.
+    "$python_bin" -u -m mindmemos_eval.swebench split --config "$config"
+    ;;
+  prepare-official)
+    # Use this instead of prepare only with official SWE-bench images. The
+    # config must put image_map_path inside its new output_dir and explicitly
+    # enable docker.pull_missing plus docker.restore_base_commit. It writes
+    # the image map and grading dataset; never run it on an existing output.
+    "$python_bin" - "$config" <<'PY'
+import sys
+from pathlib import Path
+
+from mindmemos_eval.swebench.config import load_config
+
+config = load_config(Path(sys.argv[1]))
+if config.output_dir.exists():
+    raise SystemExit(f"Output directory already exists: {config.output_dir}")
+if not config.image_map_path.is_relative_to(config.output_dir):
+    raise SystemExit("Official image map must be inside the new output directory")
+if not config.docker.pull_missing or not config.docker.restore_base_commit:
+    raise SystemExit("Official images require pull_missing and restore_base_commit")
+PY
     "$python_bin" -u scripts/swebench/run_experiment.py \
       --config "$config" --env-file "$env_file" --mode prepare
     ;;
@@ -97,7 +117,7 @@ case "$phase" in
       --config "$config" --env-file "$env_file"
     ;;
   *)
-    echo "Unknown phase: $phase (use prepare, train, extract, baseline, or test)" >&2
+    echo "Unknown phase: $phase (use prepare, prepare-official, train, extract, baseline, or test)" >&2
     exit 2
     ;;
 esac
