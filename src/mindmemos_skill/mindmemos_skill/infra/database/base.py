@@ -1,15 +1,17 @@
 """Backend-independent operations on registered, validated tables."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from contextlib import contextmanager
 from copy import copy
 from itertools import groupby
+from typing import Any
 
 from sqlalchemy import UniqueConstraint, func, select
 
 from ..base import Infrastructure
 from .tables import TableRegistry
-from .typing import SearchHit
+from .typing import Scope, SearchHit
 from .validation import column_for, filter_clause, validate_batch
 from .vector import Vector
 
@@ -76,6 +78,25 @@ class Database(Infrastructure, ABC):
                 yield transaction
             finally:
                 transaction._closed = True
+
+    @contextmanager
+    def scoped(self, scope: Scope | Mapping[str, Any]):
+        """Yield a field-bound handle and invalidate it on context exit.
+
+        Args:
+            scope: Immutable scope or arbitrary column-value mapping.
+
+        Yields:
+            Database operations restricted to the supplied scope.
+        """
+        from .scoped import ScopedDatabase
+
+        validated = Scope(fields=scope) if isinstance(scope, Mapping) else Scope.model_validate(scope)
+        handle = ScopedDatabase(self, validated)
+        try:
+            yield handle
+        finally:
+            handle._active = False
 
     def create_tables(self):
         """Explicitly create registered tables in foreign-key dependency order.

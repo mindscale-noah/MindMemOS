@@ -1,7 +1,7 @@
 """OpenAI-compatible chat calls with optional tool protocol callbacks."""
 
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from functools import partial
 
@@ -9,6 +9,8 @@ from pydantic import BaseModel, JsonValue
 
 from ....common.json import parse_model
 from ....logging import get_logger
+from ....logging.otel import debug_fields
+from ....persistence.observability import get_log_context
 from ...base import Agent
 from ...constants import AGENT_API_KEY_ENV
 from ...typing import AgentResult, ToolCall, ToolTurn
@@ -67,6 +69,87 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
         self.native_tools = native_tools
 
     def run(
+        self,
+        *,
+        system: str | None = None,
+        user: str | None = None,
+        messages: list[dict[str, JsonValue]] | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
+        response_format: dict[str, JsonValue] | None = None,
+    ) -> AgentResult:
+        """Invoke this Agent with run-scoped tracing during algorithm training.
+
+        Args:
+            system: Public system instruction when messages is omitted.
+            user: Public task instruction when messages is omitted.
+            messages: Explicit conversation history.
+            tools: Optional tool schemas supplied to the model.
+            response_format: Optional per-call output constraint.
+
+        Returns:
+            The original Agent result with its trajectory and usage.
+        """
+
+        def call():
+            """Invoke the existing Agent behavior exactly once."""
+            return self._run_untraced(
+                system=system, user=user, messages=messages, tools=tools, response_format=response_format
+            )
+
+        session = get_log_context()
+        if session is None:
+            return call()
+        input_payload = {
+            "system": system,
+            "user": user,
+            "messages": messages,
+            "tools": tools,
+            "response_format": response_format,
+        }
+        with session.span(
+            "algorithm.agent.call",
+            {"algorithm.capture_level": session.level, "gen_ai.request.model": self.config.model},
+        ) as span:
+            try:
+                result = call()
+            except BaseException as exc:
+                get_logger(__name__).error(
+                    "agent.call",
+                    extra={
+                        "event_body": {
+                            "model": self.config.model,
+                            "status": "failed",
+                            "error_type": type(exc).__name__,
+                        }
+                    },
+                )
+                if session.level == "debug":
+                    get_logger(__name__).debug(
+                        "agent.io",
+                        extra={"event_body": debug_fields({"input": input_payload, "error_type": type(exc).__name__})},
+                    )
+                raise
+            usage = result.usage
+            span.set_attribute("algorithm.usage_reported", bool(usage))
+            if isinstance(usage, Mapping):
+                for key in ("input_tokens", "output_tokens", "total_tokens"):
+                    value = usage.get(key)
+                    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                        span.set_attribute(f"gen_ai.usage.{key}", value)
+            get_logger(__name__).info(
+                "agent.call",
+                extra={"event_body": {"model": self.config.model, "status": "completed", "usage": usage}},
+            )
+            if session.level == "debug":
+                get_logger(__name__).debug(
+                    "agent.io",
+                    extra={
+                        "event_body": debug_fields({"input": input_payload, "output": result.model_dump(mode="json")})
+                    },
+                )
+            return result
+
+    def _run_untraced(
         self,
         *,
         system: str | None = None,

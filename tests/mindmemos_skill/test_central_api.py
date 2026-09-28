@@ -7,6 +7,7 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from mindmemos_skill.api.entries.fastapi import create_app
 from mindmemos_skill.errors import SkillConflictError, SkillInUseError, SkillNotFoundError
+from mindmemos_skill.infra.database import Scope
 from mindmemos_skill.persistence import TrajectoryRecord
 from mindmemos_skill.persistence.constants import (
     REMOTE_SKILL_BINDINGS_TABLE,
@@ -33,10 +34,12 @@ async def service(tmp_path):
             "repository_pipeline": {"class_name": "repository"},
         }
     )
-    result = await create_service(config)
-    await result.initialize_storage()
+    result = await create_service(
+        config, project_authorizer=lambda principal, project_id: Scope(fields={"project_id": project_id})
+    )
     try:
-        yield result
+        with result.request_principal("test-user"):
+            yield result
     finally:
         await result.close()
 
@@ -52,30 +55,34 @@ async def test_cloud_status_tracks_exact_local_version_and_scope(service):
     item = await service.register_skill(RegisterRequest(project_id="p", source=snapshot(), name="Cloud status"))
     request = SkillRequest(project_id="p", skill_ref=item.skill.skill_id)
     assert await service.skill_cloud_status(request) == "not_synced"
-    remote = service.repository.persistence.remote
-    remote.bind_skill(
-        RemoteSkillBindingRecord(
-            remote_id="test",
-            project_id="cloud-project",
-            cloud_skill_id="cloud-skill",
-            skill_id=item.skill.skill_id,
+    with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as store:
+        remote = store.remote
+        remote.bind_skill(
+            RemoteSkillBindingRecord(
+                remote_id="test",
+                project_id="p",
+                cloud_project_id="cloud-project",
+                cloud_skill_id="cloud-skill",
+                skill_id=item.skill.skill_id,
+            )
         )
-    )
     assert await service.skill_cloud_status(request) == "not_synced"
-    remote.bind_version(
-        RemoteVersionBindingRecord(
-            remote_id="test",
-            project_id="cloud-project",
-            cloud_skill_id="cloud-skill",
-            version_id="cloud-version",
-            local_version_id=item.version.version_id,
-            skill_name=item.skill.name,
-            content_hash="cloud-hash",
-            content="cloud snapshot",
-            status="published",
-            origin="edge",
+    with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as store:
+        store.remote.bind_version(
+            RemoteVersionBindingRecord(
+                remote_id="test",
+                project_id="p",
+                cloud_project_id="cloud-project",
+                cloud_skill_id="cloud-skill",
+                version_id="cloud-version",
+                local_version_id=item.version.version_id,
+                skill_name=item.skill.name,
+                content_hash="cloud-hash",
+                content="cloud snapshot",
+                status="published",
+                origin="edge",
+            )
         )
-    )
     assert await service.skill_cloud_status(request) == "synced"
     await service.commit_skill(CommitRequest(project_id="p", skill_ref=item.skill.skill_id, source=snapshot("second")))
     assert await service.skill_cloud_status(request) == "history_only"
@@ -166,7 +173,7 @@ async def test_stale_commit_rolls_back_new_version(service, monkeypatch):
     second = await service.commit_skill(ref(first, source=snapshot("second")))
     with pytest.raises(SkillConflictError):
         await service.commit_skill(ref(first, source=snapshot("third"), base_version_id=first.version.version_id))
-    store = SkillDataService(service.backends["persistence"].database)
+    store = SkillDataService(service.backends["database"])
     with pytest.raises(SkillConflictError):
         store.commit(first.skill, snapshot("stale"), message="must roll back")
     assert len(await service.skill_history(ref(first))) == 2
@@ -193,8 +200,9 @@ async def test_text_binary_diff_and_delete_reference_protection(service):
     assert {change.path for change in diff.files} == {"SKILL.md", "asset", "added.txt"}
     assert next(change for change in diff.files if change.path == "asset").binary
     assert "-before" in next(change for change in diff.files if change.path == "SKILL.md").diff
-    database = service.backends["persistence"].database
+    database = service.backends["database"]
     trace = TrajectoryRecord(
+        project_id="p",
         trajectory_id="t",
         trajectory_hash="hash",
         task_id="task",
@@ -210,7 +218,7 @@ async def test_text_binary_diff_and_delete_reference_protection(service):
 
 
 def test_http_operations_validate_and_delegate(service, tmp_path):
-    with TestClient(create_app(service)) as client:
+    with TestClient(create_app(service, principal_from_request=lambda request: "test-user")) as client:
         response = client.post(
             "/skills/register",
             json={"project_id": "p", "name": "HTTP", "alias": "http", "source": snapshot().model_dump(mode="json")},
@@ -299,15 +307,21 @@ async def test_delete_checks_remote_and_parent_references_atomically(service):
     from mindmemos_skill.persistence.db_services.remote import RemoteSkillBindingRecord
 
     first = await register(service)
-    store = service.backends["persistence"]
-    store.remote.bind_skill(
-        RemoteSkillBindingRecord(
-            remote_id="remote", project_id="cloud-project", cloud_skill_id="cloud-skill", skill_id=first.skill.skill_id
+    persistence = service.backends["persistence"]
+    with persistence.session(Scope(fields={"project_id": "p"})) as store:
+        store.remote.bind_skill(
+            RemoteSkillBindingRecord(
+                remote_id="remote",
+                project_id="p",
+                cloud_project_id="cloud-project",
+                cloud_skill_id="cloud-skill",
+                skill_id=first.skill.skill_id,
+            )
         )
-    )
     with pytest.raises(SkillInUseError):
         await service.delete_skill(ref(first))
-    store.database.delete(REMOTE_SKILL_BINDINGS_TABLE, filters={"skill_id": first.skill.skill_id})
+    with persistence.session(Scope(fields={"project_id": "p"})) as store:
+        store.database.delete(REMOTE_SKILL_BINDINGS_TABLE, filters={"skill_id": first.skill.skill_id})
     unrelated = await register(service, alias="dependent")
     dependent = unrelated.version.model_copy(
         update={
@@ -316,7 +330,8 @@ async def test_delete_checks_remote_and_parent_references_atomically(service):
             "parent_version_ids": [first.version.version_id],
         }
     )
-    store.skills.add(dependent)
+    with persistence.session(Scope(fields={"project_id": "p"})) as store:
+        store.skills.add(dependent)
     with pytest.raises(SkillInUseError):
         await service.delete_skill(ref(first))
     assert (await service.show_skill(ref(first))).version == first.version
@@ -329,7 +344,7 @@ async def test_delete_graph_foreign_key_rolls_back_identity(service):
     from mindmemos_skill.persistence import SkillGraphNodeRecord, SkillGraphRecord, SkillGraphVersionRecord
 
     first = await register(service)
-    database = service.backends["persistence"].database
+    database = service.backends["database"]
     graph = SkillGraphRecord(project_id="p", graph_id="g", name="Graph")
     graph_version = SkillGraphVersionRecord(project_id="p", graph_id="g", graph_version_id=uuid4())
     node = SkillGraphNodeRecord(

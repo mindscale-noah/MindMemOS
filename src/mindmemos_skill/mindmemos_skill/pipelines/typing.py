@@ -86,6 +86,9 @@ class TrainingRequest(BaseModel):
     base_version_id: Nonempty = Field(...)
     """Required input version, checked as the current parent before training and commit."""
 
+    work_dir: Nonempty
+    """Stable run directory passed to the trainer; matching runs resume automatically."""
+
     tasks: list[DataSample] = Field(min_length=1)
     """Materialized public tasks paired with private scoring inputs; task IDs must be unique.
 

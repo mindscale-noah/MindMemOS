@@ -60,7 +60,8 @@ async def test_create_edit_reopen_and_explicit_path(editor, tmp_path, monkeypatc
     async with await create_service(home / "service.yaml") as service:
         await service.initialize_storage()
         assert service.local_project_id is None
-        assert (await service.list_skills(ListRequest(project_id=identity)))[0].skill_id == item.skill.skill_id
+        with pytest.raises(PermissionError, match="Project authorization is required"):
+            await service.list_skills(ListRequest(project_id=identity))
 
 
 def test_validation_conflicts_and_no_side_effects(editor):
@@ -190,6 +191,7 @@ async def test_companion_environment_loads_only_during_service_creation(editor, 
         async with await create_service(home=home):
             assert os.environ[env_name] == "${literal}"
         monkeypatch.setenv(env_name, "existing")
+        monkeypatch.setenv("MINDMEMOS_HOME", str(home))
         async with await create_service(home / "service.yaml"):
             assert os.environ[env_name] == "existing"
     finally:

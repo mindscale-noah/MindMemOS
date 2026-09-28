@@ -15,3 +15,7 @@ class SkillConflictError(MindMemosSkillError):
 
 class SkillInUseError(SkillConflictError):
     """Stored evidence or another object still references this Skill."""
+
+
+class UnsupportedPipelineError(MindMemosSkillError):
+    """The selected pipeline cannot run in this deployment."""

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 from mindmemos_skill.api.entries.fastapi import create_app
-from mindmemos_skill.infra.database import SQLiteDatabase
+from mindmemos_skill.infra.database import Scope, SQLiteDatabase
 from mindmemos_skill.pipelines import Pipeline, TrainingPipeline
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -81,7 +81,10 @@ async def test_assembly_shares_only_global_persistence(tmp_path, registered_pipe
     assert isinstance(service, MindMemOSSkill)
     first, second = (event[1] for event in registered_pipeline)
     assert first.persistence is second.persistence is service.backends["persistence"]
-    assert first.persistence.database is service.backends["database"]
+    with pytest.raises(RuntimeError, match="session is required"):
+        first.persistence.database
+    with first.persistence.session(Scope(fields={"project_id": "project"})) as scoped:
+        assert scoped.database.scope.require("project_id") == "project"
     assert first.agent is not second.agent
     first.agent.count = 9
     assert second.agent.count == 7
@@ -193,8 +196,11 @@ async def test_persistence_does_not_implicitly_enable_repository(tmp_path):
         )
     )
     try:
+        await service.initialize_storage()
+        with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
+            assert scoped.skills.list_skills("project", limit=10, offset=0) == []
         with pytest.raises(NotImplementedError):
-            await service.initialize_storage()
+            service.repository
     finally:
         await service.close()
 
@@ -253,3 +259,81 @@ async def test_factory_closes_completed_pipelines_on_later_failure(tmp_path, reg
     assert registered_pipeline[0][0] == "created"
     assert registered_pipeline[1] == ("closed", registered_pipeline[0][1])
     assert database_closed == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["yaml", "config"])
+async def test_explicit_service_is_ready_and_reopening_preserves_data(tmp_path, source):
+    """Initialize explicit configurations and migrate retained versions automatically."""
+    from mindmemos_skill.persistence.constants import SKILL_VERSIONS_TABLE
+    from mindmemos_skill.pipelines.typing import RegisterRequest, ShowRequest
+    from mindmemos_skill.skill import Skill, SkillBundle
+
+    settings = {
+        "local_project_id": "project",
+        "persistence": {"database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'ready.db'}"}}},
+        "repository_pipeline": {"class_name": "repository"},
+    }
+    value = write_config(tmp_path, settings) if source == "yaml" else ServiceConfig.model_validate(settings)
+    async with await create_service(value) as service:
+        item = await service.register_skill(
+            RegisterRequest(
+                project_id="project",
+                name="Existing",
+                source=Skill(bundle=SkillBundle(files={"SKILL.md": "Preserve"})).snapshot(),
+            )
+        )
+        # Simulate a version written before display labels were populated.
+        service.backends["database"].update(
+            SKILL_VERSIONS_TABLE, {"version_label": None}, filters={"version_id": item.version.version_id}
+        )
+    async with await create_service(value) as service:
+        restored = await service.show_skill(ShowRequest(project_id="project", skill_ref=item.skill.skill_id))
+        assert restored.version.version_label == "v1.0.0"
+        assert restored.version.version_id == item.version.version_id
+        assert restored.version.bundle == item.version.bundle
+        await service.initialize_storage()
+        assert await service.show_skill(ShowRequest(project_id="project", skill_ref=item.skill.skill_id)) == restored
+
+
+@pytest.mark.asyncio
+async def test_initialization_failure_closes_constructed_resources(tmp_path, registered_pipeline, monkeypatch):
+    """Do not return a partially ready service or leak its already assembled resources."""
+    from mindmemos_skill.persistence.store import SkillPersistence
+
+    closed = []
+    original = SQLiteDatabase.close
+
+    def close(database):
+        closed.append(database)
+        original(database)
+
+    def fail(store):
+        raise RuntimeError("initialization failed")
+
+    monkeypatch.setattr(SQLiteDatabase, "close", close)
+    monkeypatch.setattr(SkillPersistence, "initialize_storage", fail)
+    with pytest.raises(RuntimeError, match="initialization failed"):
+        await create_service(ServiceConfig.model_validate(assembly_config(tmp_path)))
+    first, second = (event[1] for event in registered_pipeline[:2])
+    assert registered_pipeline[2:] == [("closed", second), ("closed", first)]
+    assert len(closed) == 1
+
+
+@pytest.mark.asyncio
+async def test_observability_only_is_initialized_without_repository(tmp_path):
+    """Initialize optional audit storage even without business persistence."""
+    from mindmemos_skill.persistence.observability.constants import OBSERVABILITY_RUNS_TABLE
+    from sqlalchemy import inspect
+
+    config = ServiceConfig.model_validate(
+        {
+            "observability": {
+                "backend": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'audit.db'}"}}
+            }
+        }
+    )
+    async with await create_service(config) as service:
+        assert OBSERVABILITY_RUNS_TABLE in inspect(service.backends["observability_database"].engine).get_table_names()
+        with pytest.raises(NotImplementedError):
+            service.repository

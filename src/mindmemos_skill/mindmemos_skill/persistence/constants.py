@@ -2,6 +2,12 @@
 
 from typing import Final
 
+REQUIRED_SCOPE_FIELDS: Final[frozenset[str]] = frozenset({"project_id"})
+"""Isolation columns that every Skill persistence session must bind."""
+
+OPTIONAL_SCOPE_FIELDS: Final[frozenset[str]] = frozenset({"agent_id", "user_id"})
+"""Additional isolation columns a caller may bind for supported tables."""
+
 SKILLS_TABLE: Final[str] = "skills_v1"
 """Central identities, display metadata, and the selected version pointer."""
 

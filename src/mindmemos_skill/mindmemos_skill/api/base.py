@@ -52,7 +52,7 @@ class MindMemOSSkill(ABC):
 
     @abstractmethod
     async def initialize_storage(self) -> None:
-        """Explicitly create missing persistence tables; never migrate existing schemas."""
+        """Idempotently initialize configured stores; also called by create_service."""
         raise NotImplementedError
 
     @abstractmethod

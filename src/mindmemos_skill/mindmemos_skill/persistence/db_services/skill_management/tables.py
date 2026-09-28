@@ -19,6 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
 from ....infra.database import TableSpec, Vector
+from ....infra.database.typing import UTCDateTime
 from ...constants import (
     SKILL_GRAPH_EDGES_TABLE,
     SKILL_GRAPH_NODES_TABLE,
@@ -27,7 +28,6 @@ from ...constants import (
     SKILL_GRAPHS_TABLE,
     SKILL_VERSIONS_TABLE,
 )
-from ...typing import UTCDateTime
 from .typing import (
     SkillGraphEdgeRecord,
     SkillGraphNodeRecord,

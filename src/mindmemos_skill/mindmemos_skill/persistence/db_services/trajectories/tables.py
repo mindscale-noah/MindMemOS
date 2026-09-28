@@ -3,8 +3,8 @@
 from sqlalchemy import JSON, CheckConstraint, Column, Float, Index, Integer, MetaData, Table, Text, UniqueConstraint
 
 from ....infra.database import TableSpec
+from ....infra.database.typing import UTCDateTime
 from ...constants import TRAJECTORIES_TABLE
-from ...typing import UTCDateTime
 from .typing import TrajectoryRecord
 
 
@@ -20,6 +20,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
     table = Table(
         TRAJECTORIES_TABLE,
         metadata,
+        Column("project_id", Text, nullable=False, comment="Project owning this physical rollout attempt."),
         Column("trajectory_id", Text, primary_key=True, comment="Local identity of one physical rollout attempt."),
         Column("trajectory_hash", Text, nullable=False, comment="Hash of the local trajectory representation."),
         Column("task_id", Text, nullable=False, comment="Task identity within its dataset."),
@@ -59,7 +60,8 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         Column("error_info", Text, nullable=True, comment="Optional execution failure details."),
         Column("metadata", JSON, nullable=False, comment="Additional local execution annotations."),
         Column("created_at", UTCDateTime(), nullable=False, comment="Time this local record was stored."),
-        UniqueConstraint("rollout_id", "attempt_no"),
+        UniqueConstraint("project_id", "rollout_id", "attempt_no"),
+        UniqueConstraint("project_id", "trajectory_id"),
         CheckConstraint("attempt_no >= 0 AND n_turn >= 0"),
         Index("trajectories_task_idx", "task_id"),
     )

@@ -113,7 +113,7 @@ async def test_concurrent_commit_does_not_duplicate_or_leave_orphans(service, tm
 @pytest.mark.asyncio
 async def test_database_uniqueness(service):
     first = await register(service)
-    database = service.repository.persistence.database
+    database = service.backends["database"]
     duplicate = first.version.model_copy(update={"version_id": "another-id"})
     with pytest.raises(IntegrityError):
         database.insert(SKILL_VERSIONS_TABLE, [duplicate.model_dump()])
@@ -124,7 +124,7 @@ async def test_migration_preserves_data_rolls_back_and_repeats(service):
     first = await register(service)
     for _ in range(3):
         await commit(service, first)
-    database = service.repository.persistence.database
+    database = service.backends["database"]
     table = database.tables.get(SKILL_VERSIONS_TABLE).table
     with database.engine.begin() as connection:
         index = next(index for index in table.indexes if index.name == SKILL_VERSION_LABEL_INDEX)
@@ -176,7 +176,7 @@ async def test_migration_preserves_data_rolls_back_and_repeats(service):
 @pytest.mark.asyncio
 async def test_startup_migrates_late_legacy_writes_and_keeps_existing_aliases(service, tmp_path):
     first = await register(service, version_label="v1.2.0")
-    database = service.repository.persistence.database
+    database = service.backends["database"]
     legacy = first.version.model_copy(update={"version_id": "late-legacy", "version_label": None})
     database.insert(SKILL_VERSIONS_TABLE, [legacy.model_dump()])
     async with await create_service(home=tmp_path / "home") as reopened:

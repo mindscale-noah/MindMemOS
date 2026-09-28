@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
-from .base import Skill
+from .skill import Skill
 from .typing import SkillSetIdentity
 
 if TYPE_CHECKING:

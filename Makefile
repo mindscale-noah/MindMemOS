@@ -94,11 +94,11 @@ PROFILE_RATE ?= 100
 PROFILE_PID ?= $(PID)
 SKILL_PYTHON ?= .venv/bin/python
 SKILL_CONFIG ?= config/mindmemos_skill/default.yaml
-SKILL_LOCAL_ARGS ?=
+SKILL_API_CONFIG ?= config/mindmemos_skill/fastapi.yaml
 SKILL_HOST ?= 127.0.0.1
 SKILL_PORT ?= 8000
 
-.PHONY: dev dev-setup hooks-install format lint dev-core api profile-api db db-observability db-clean dev-down skill-local skill-fastapi
+.PHONY: dev dev-setup hooks-install format lint dev-core api profile-api db db-observability db-clean dev-down dev-skill
 
 dev-setup:
 	$(UV) sync
@@ -124,11 +124,8 @@ dev: db-observability
 api:
 	$(UV) run uvicorn mindmemos.api.app:app --host $(API_HOST) --port $(API_PORT) $(API_RELOAD_FLAGS)
 
-skill-local:
-	PYTHONPATH="$(CURDIR)/src/mindmemos_skill:$(PYTHONPATH)" "$(SKILL_PYTHON)" -m mindmemos_skill.api.entries.local $(SKILL_LOCAL_ARGS)
-
-skill-fastapi:
-	PYTHONPATH="$(CURDIR)/src/mindmemos_skill:$(PYTHONPATH)" "$(SKILL_PYTHON)" -m mindmemos_skill.api.entries.fastapi --config "$(SKILL_CONFIG)" --host "$(SKILL_HOST)" --port "$(SKILL_PORT)"
+dev-skill:
+	PYTHONPATH="$(CURDIR)/src/mindmemos_skill:$(PYTHONPATH)" "$(SKILL_PYTHON)" -m mindmemos_skill.api.entries.fastapi --config "$(SKILL_CONFIG)" --api-config "$(SKILL_API_CONFIG)" --host "$(SKILL_HOST)" --port "$(SKILL_PORT)"
 
 profile-api:
 	@pid="$(PROFILE_PID)"; \

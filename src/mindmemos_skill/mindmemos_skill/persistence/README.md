@@ -70,7 +70,7 @@ backends:
       database: database
 ```
 
-装配后调用 `service.initialize_storage()` 创建缺失表并迁移版本标签。低层 `ensure_collection` 仅建表，不替代服务升级入口。中心仓 API 已实现，自动 evolve/train 仍为占位。
+`create_service()` 返回前自动创建缺失表并迁移版本标签；`service.initialize_storage()` 保留为幂等入口。低层 `ensure_collection` 仅建表，不替代服务升级入口。中心仓 API 和通用训练 pipeline 已实现，自动 evolve 仍为占位。
 
 ## 核心数据语义
 

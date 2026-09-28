@@ -15,7 +15,7 @@ def create_persistence(database: Database, *, include_remote: bool = True) -> Sk
     Returns:
         Services sharing the same database and transaction boundary.
     """
-    return Persistence.build("skill", {"include_remote": include_remote}, database=database)
+    return Persistence.build("skill", {"include_remote": include_remote}, database=database, require_session=False)
 
 
 def ensure_collection(persistence: SkillPersistence) -> None:

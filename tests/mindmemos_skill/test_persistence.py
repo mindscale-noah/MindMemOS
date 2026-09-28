@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from mindmemos_skill.infra.database import SQLiteConfig, SQLiteDatabase
+from mindmemos_skill.infra.database import Scope, SQLiteConfig, SQLiteDatabase
 from mindmemos_skill.persistence import (
     SkillRecord,
     SkillVersionRecord,
@@ -123,6 +123,7 @@ def test_previous_skill_column_migration_preserves_rows(tmp_path):
 
 def trajectory(trajectory_id="t1", rollout_id="r1"):
     return TrajectoryRecord(
+        project_id="local-project",
         trajectory_id=trajectory_id,
         trajectory_hash="trace-hash",
         task_id="task-1",
@@ -138,7 +139,8 @@ def trajectory(trajectory_id="t1", rollout_id="r1"):
 def binding(project_id="project-a", cloud_skill_id="cloud-skill"):
     return RemoteSkillBindingRecord(
         remote_id="production",
-        project_id=project_id,
+        project_id="local-project",
+        cloud_project_id=project_id,
         cloud_skill_id=cloud_skill_id,
         skill_id="local-skill",
     )
@@ -147,7 +149,8 @@ def binding(project_id="project-a", cloud_skill_id="cloud-skill"):
 def remote_version(project_id="project-a", **changes):
     values = dict(
         remote_id="production",
-        project_id=project_id,
+        project_id="local-project",
+        cloud_project_id=project_id,
         version_id="cloud-v1",
         cloud_skill_id="cloud-skill",
         local_version_id="local-v1",
@@ -166,7 +169,8 @@ def remote_version(project_id="project-a", **changes):
 def operation(operation_id="op-1", **changes):
     values = dict(
         remote_id="production",
-        project_id="project-a",
+        project_id="local-project",
+        cloud_project_id="project-a",
         operation_id=operation_id,
         idempotency_key="request-1",
         operation_type="register_skill",
@@ -220,16 +224,19 @@ def test_multiple_remotes_and_projects_do_not_alias_local_identity(store):
         REMOTE_VERSION_BINDINGS_TABLE,
         {
             "remote_id": "production",
-            "project_id": "project-a",
+            "project_id": "local-project",
+            "cloud_project_id": "project-a",
             "version_id": "cloud-v1",
         },
     )
     assert row["content_hash"] == "cloud-hash"
     assert row["parent_version_id"] == "cloud-parent"
     assert store.skills.get("local-v1").content_hash == "local-content-hash"
-    store.database.update(REMOTE_VERSION_BINDINGS_TABLE, {"status": "superseded"}, filters={"project_id": "project-a"})
+    store.database.update(
+        REMOTE_VERSION_BINDINGS_TABLE, {"status": "superseded"}, filters={"cloud_project_id": "project-a"}
+    )
     assert (
-        store.database.select(REMOTE_VERSION_BINDINGS_TABLE, filters={"project_id": "project-b"})[0]["status"]
+        store.database.select(REMOTE_VERSION_BINDINGS_TABLE, filters={"cloud_project_id": "project-b"})[0]["status"]
         == "published"
     )
 
@@ -255,7 +262,8 @@ def test_binding_rejects_wrong_local_family_and_missing_trajectory(store):
         store.remote.bind_trajectory(
             RemoteTrajectoryBindingRecord(
                 remote_id="production",
-                project_id="project-a",
+                project_id="local-project",
+                cloud_project_id="project-a",
                 trajectory_id="missing",
                 add_record_id="add-1",
             )
@@ -268,7 +276,8 @@ def test_add_record_mapping_and_foreign_key_protection(store):
     store.remote.bind_trajectory(
         RemoteTrajectoryBindingRecord(
             remote_id="production",
-            project_id="project-a",
+            project_id="local-project",
+            cloud_project_id="project-a",
             trajectory_id="t1",
             add_record_id="add-1",
         )
@@ -290,7 +299,8 @@ def test_outbox_deduplication_and_uncertain_result(store):
         {"status": "uncertain", "attempt_count": 1},
         filters={
             "remote_id": "production",
-            "project_id": "project-a",
+            "project_id": "local-project",
+            "cloud_project_id": "project-a",
             "operation_id": "op-1",
             "status": "pending",
         },
@@ -358,11 +368,24 @@ async def test_service_factory_assembles_borrowed_data_services(tmp_path):
     )
     try:
         persistence = service.backends["persistence"]
-        assert persistence.database is service.backends["database"]
-        assert not path.exists()
-        ensure_collection(persistence)
-        persistence.skills.add(version())
-        assert persistence.skills.get("local-v1") is not None
+        with pytest.raises(RuntimeError, match="session is required"):
+            persistence.skills.add(version())
+        with pytest.raises(ValueError, match="project_id"):
+            with persistence.session(Scope(fields={"agent_id": "agent"})):
+                pass
+        with persistence.session(Scope(fields={"project_id": "local-project", "agent_id": "agent"})) as scoped:
+            with pytest.raises(ValueError, match="agent_id"):
+                scoped.skills.list_skills("local-project", limit=10, offset=0)
+        with persistence.session(Scope(fields={"project_id": "local-project", "user_id": "user"})) as scoped:
+            with pytest.raises(ValueError, match="user_id"):
+                scoped.skills.list_skills("local-project", limit=10, offset=0)
+        with pytest.raises(ValueError, match="unexpected"):
+            with persistence.session(Scope(fields={"project_id": "local-project", "dataset_id": "dataset"})):
+                pass
+        assert path.exists()
+        with persistence.session(Scope(fields={"project_id": "local-project"})) as scoped:
+            scoped.skills.add(version())
+            assert scoped.skills.get("local-v1") is not None
     finally:
         await service.close()
 

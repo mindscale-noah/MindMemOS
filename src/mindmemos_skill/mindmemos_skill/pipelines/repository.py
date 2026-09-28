@@ -1,11 +1,12 @@
 """Repository business operations over one injected persistence backend."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from ..errors import SkillConflictError
+from ..infra.database import Scope
 from ..persistence import SkillRecord, SkillVersionRecord
-from ..persistence.db_services.skills.migrations import migrate_version_labels
 from ..persistence.db_services.skills.typing import VersionNaming
 from ..persistence.store import SkillPersistence
 from ..skill import Skill, SkillSnapshot
@@ -49,16 +50,16 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
 
     async def initialize_storage(self) -> None:
         """Create missing tables and migrate historical version display labels."""
-        await asyncio.to_thread(self.persistence.database.create_tables)
-        await asyncio.to_thread(migrate_version_labels, self.persistence.database)
+        await asyncio.to_thread(self.persistence.initialize_storage)
 
-    async def graph_queries(self, project_id: str) -> GraphQueryPipeline:
+    async def graph_queries(self, project_id: str, authorize: Callable[[], Awaitable[Scope]]) -> GraphQueryPipeline:
         """Bind graph reads to an explicitly resolved project.
 
         Args:
-            project_id: Required project scope.
+            project_id: Required project identity.
+            authorize: Service callback that rechecks access before each query.
         """
-        return GraphQueryPipeline(self.persistence, self._scope(project_id))
+        return GraphQueryPipeline(self.persistence, self._scope(project_id), authorize)
 
     @staticmethod
     def _scope(project_id: str | None) -> str:
@@ -130,8 +131,8 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         request = ExportRequest.model_validate(request)
         store = self.persistence.skills
         target = Path(request.directory).expanduser().resolve()
-        database_path = store.database.engine.url.database
-        if store.database.engine.dialect.name == "sqlite" and database_path and database_path != ":memory:":
+        database_path = self.persistence.local_database_path()
+        if database_path is not None:
             if Path(database_path).resolve().is_relative_to(target):
                 raise ValueError("Export destination must not contain the repository database")
         record = await asyncio.to_thread(store.resolve, self._scope(request.project_id), request.skill_ref)

@@ -4,6 +4,8 @@ import pytest
 from mindmemos_skill.api.config import ServiceConfig
 from mindmemos_skill.api.entries.fastapi import create_app
 from mindmemos_skill.errors import SkillNotFoundError
+from mindmemos_skill.infra.database import Scope
+from mindmemos_skill.persistence.db_services.skills import SkillDataService
 from mindmemos_skill.pipelines import Pipeline, SkillPipelineResult, TrainingPipeline, TrainingRequest
 from mindmemos_skill.pipelines.typing import ListRequest, RegisterRequest, ShowRequest
 from mindmemos_skill.skill import Skill, SkillBundle
@@ -20,6 +22,7 @@ def sample_request():
     """Build a training request requiring local project binding."""
     return TrainingRequest(
         base_version_id="v1",
+        work_dir="output/training-test",
         tasks=[{"task": {"id": "t1", "instruction": "Solve it"}, "reward_data": {}}],
         split={"train": ["t1"]},
     )
@@ -53,6 +56,7 @@ async def test_service_delegates_to_selected_training_pipeline(monkeypatch):
 
     config = ServiceConfig.model_validate(
         {
+            "local_project_id": "project",
             "training_pipelines": {
                 "first": {"class_name": "recording_train"},
                 "second": {"class_name": "recording_train"},
@@ -66,14 +70,7 @@ async def test_service_delegates_to_selected_training_pipeline(monkeypatch):
     assert calls[0][1] is not request
     assert calls[0][1].base_version_id == "v1"
     assert result.version_id == "v2"
-    # The same selected pipeline serves HTTP, with a structured request body.
-    from fastapi.testclient import TestClient
-
-    with TestClient(create_app(service)) as client:
-        response = client.post("/skills/auto-train", json=request.model_dump())
-    assert response.status_code == 200
-    assert response.json()["version_id"] == "v2"
-    assert len(calls) == 2
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("field", ["training_pipelines", "evolution_pipelines"])
@@ -114,11 +111,12 @@ async def test_repository_uses_shared_store_and_scoped_version_lookup(tmp_path, 
         assert service.repository.persistence is service.backends["persistence"]
         source = Skill(bundle=SkillBundle(files={"SKILL.md": "Persisted content"})).snapshot()
         item = await service.register_skill(RegisterRequest(name="Example", alias="example", source=source))
-        store = service.backends["persistence"].skills
-        assert store.resolve(service.local_project_id, "example").skill_id == item.skill.skill_id
-        assert store.version_by_id(service.local_project_id, item.version.version_id) == item.version
-        with pytest.raises(SkillNotFoundError):
-            store.version_by_id("another-project", item.version.version_id)
+        with service.backends["persistence"].session(Scope(fields={"project_id": service.local_project_id})) as scoped:
+            store = scoped.skills
+            assert store.resolve(service.local_project_id, "example").skill_id == item.skill.skill_id
+            assert store.version_by_id(service.local_project_id, item.version.version_id) == item.version
+            with pytest.raises(SkillNotFoundError):
+                store.version_by_id("another-project", item.version.version_id)
         request = ListRequest()
         calls = []
         original = service.repository.list_skills
@@ -179,7 +177,7 @@ async def test_factory_closes_constructed_database_after_dependency_failure(tmp_
 @pytest.mark.parametrize("operation", ["training", "evolution"])
 @pytest.mark.asyncio
 async def test_multiple_pipeline_request_selection(monkeypatch, operation):
-    """Route both APIs consistently and reject invalid choices without execution."""
+    """Select configured pipelines and expose only evolution through HTTP."""
     from fastapi.testclient import TestClient
     from mindmemos_skill.pipelines import EvolutionPipeline, SkillPipelineRequest
 
@@ -212,6 +210,7 @@ async def test_multiple_pipeline_request_selection(monkeypatch, operation):
 
     config = ServiceConfig.model_validate(
         {
+            "local_project_id": "project",
             "training_pipelines": {name: {"class_name": "training"} for name in ("train_a", "train_b")},
             "evolution_pipelines": {name: {"class_name": "evolution"} for name in ("evolve_a", "evolve_b")},
         }
@@ -221,12 +220,10 @@ async def test_multiple_pipeline_request_selection(monkeypatch, operation):
         invoke = service.auto_train_skill
         request = sample_request().model_copy(update={"project_id": "project"})
         names, wrong = list(config.training_pipelines), "evolve_a"
-        route = "/skills/auto-train"
     else:
         invoke = service.auto_evolve_skill
         request = SkillPipelineRequest(project_id="project", skill_ref="skill")
         names, wrong = list(config.evolution_pipelines), "train_a"
-        route = "/skills/auto-evolve"
 
     for name in names:
         selected = request.model_copy(update={"pipeline": name})
@@ -235,17 +232,27 @@ async def test_multiple_pipeline_request_selection(monkeypatch, operation):
         assert calls[-1][1] is not selected
     assert request.pipeline is None
     count = len(calls)
-    with TestClient(create_app(service)) as client:
+    from mindmemos_skill.api.entries.config import FastAPIConfig
+
+    if operation == "evolution":
+        policy = FastAPIConfig(evolution_pipelines=set(names))
+        with TestClient(create_app(service, api_config=policy)) as client:
+            for name in (None, "missing", "unused", wrong):
+                invalid = request.model_copy(update={"pipeline": name})
+                with pytest.raises(ValueError):
+                    await invoke(invalid)
+                assert client.post("/skills/auto-evolve", json=invalid.model_dump()).status_code == 422
+            assert len(calls) == count
+            for name in names:
+                response = client.post("/skills/auto-evolve", json=request.model_dump() | {"pipeline": name})
+                assert response.status_code == 200
+                assert calls[-1][0] is service.backends[f"{operation}_pipelines.{name}"]
+    else:
         for name in (None, "missing", "unused", wrong):
             invalid = request.model_copy(update={"pipeline": name})
             with pytest.raises(ValueError):
                 await invoke(invalid)
-            assert client.post(route, json=invalid.model_dump()).status_code == 422
         assert len(calls) == count
-        for name in names:
-            response = client.post(route, json=request.model_dump() | {"pipeline": name})
-            assert response.status_code == 200
-            assert calls[-1][0] is service.backends[f"{operation}_pipelines.{name}"]
 
     # A single definition is inferred; an empty mapping disables the operation.
     for available in ({names[0]: {"class_name": operation}}, {}):
@@ -276,16 +283,15 @@ async def test_repository_write_leaves_event_loop_available(tmp_path, monkeypatc
     entered = Event()
     release = Event()
     async with await create_service(home=tmp_path / "home") as service:
-        store = service.repository.persistence.skills
-        original = store.register
+        original = SkillDataService.register
 
-        def slow_register(**kwargs):
+        def slow_register(self, **kwargs):
             entered.set()
             if not release.wait(timeout=2):
                 raise TimeoutError("The event loop was blocked by storage")
-            return original(**kwargs)
+            return original(self, **kwargs)
 
-        monkeypatch.setattr(store, "register", slow_register)
+        monkeypatch.setattr(SkillDataService, "register", slow_register)
 
         async def model_work():
             assert await asyncio.to_thread(entered.wait, 1)

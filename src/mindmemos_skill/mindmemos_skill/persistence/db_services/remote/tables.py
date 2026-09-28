@@ -14,6 +14,7 @@ from sqlalchemy import (
 )
 
 from ....infra.database import TableSpec
+from ....infra.database.typing import UTCDateTime
 from ...constants import (
     REMOTE_OPERATIONS_TABLE,
     REMOTE_SKILL_BINDINGS_TABLE,
@@ -22,7 +23,6 @@ from ...constants import (
     SKILL_VERSIONS_TABLE,
     TRAJECTORIES_TABLE,
 )
-from ...typing import UTCDateTime
 from .typing import (
     RemoteOperationRecord,
     RemoteSkillBindingRecord,
@@ -44,6 +44,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
     table = Table(
         REMOTE_SKILL_BINDINGS_TABLE,
         metadata,
+        Column("project_id", Text, primary_key=True, comment="Local project owning this remote record."),
         Column(
             "remote_id",
             Text,
@@ -51,7 +52,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             comment="Stable configured remote deployment alias; contains no credentials.",
         ),
         Column(
-            "project_id",
+            "cloud_project_id",
             Text,
             primary_key=True,
             comment="Cloud project resolved under the authenticated remote identity.",
@@ -78,7 +79,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         ),
         Column("created_at", UTCDateTime(), nullable=False, comment="Time this association was established."),
         Column("updated_at", UTCDateTime(), nullable=False, comment="Last change to this association."),
-        UniqueConstraint("remote_id", "project_id", "skill_id"),
+        UniqueConstraint("project_id", "remote_id", "cloud_project_id", "skill_id"),
     )
     specs.append(
         TableSpec(
@@ -90,6 +91,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
     table = Table(
         REMOTE_VERSION_BINDINGS_TABLE,
         metadata,
+        Column("project_id", Text, primary_key=True, comment="Local project owning this remote record."),
         Column(
             "remote_id",
             Text,
@@ -97,7 +99,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             comment="Stable configured remote deployment alias; contains no credentials.",
         ),
         Column(
-            "project_id",
+            "cloud_project_id",
             Text,
             primary_key=True,
             comment="Cloud project resolved under the authenticated remote identity.",
@@ -131,16 +133,22 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         Column("created_at", UTCDateTime(), nullable=False, comment="Time this association was established."),
         Column("received_at", UTCDateTime(), nullable=False, comment="Time this cloud snapshot was stored locally."),
         ForeignKeyConstraint(
-            ["remote_id", "project_id", "cloud_skill_id"],
+            ["project_id", "remote_id", "cloud_project_id", "cloud_skill_id"],
             [
-                f"{REMOTE_SKILL_BINDINGS_TABLE}.remote_id",
                 f"{REMOTE_SKILL_BINDINGS_TABLE}.project_id",
+                f"{REMOTE_SKILL_BINDINGS_TABLE}.remote_id",
+                f"{REMOTE_SKILL_BINDINGS_TABLE}.cloud_project_id",
                 f"{REMOTE_SKILL_BINDINGS_TABLE}.cloud_skill_id",
             ],
         ),
-        ForeignKeyConstraint(["local_version_id"], [f"{SKILL_VERSIONS_TABLE}.version_id"]),
-        UniqueConstraint("remote_id", "project_id", "local_version_id"),
-        Index("remote_versions_family_idx", "remote_id", "project_id", "cloud_skill_id", "created_at"),
+        ForeignKeyConstraint(
+            ["project_id", "local_version_id"],
+            [f"{SKILL_VERSIONS_TABLE}.project_id", f"{SKILL_VERSIONS_TABLE}.version_id"],
+        ),
+        UniqueConstraint("project_id", "remote_id", "cloud_project_id", "local_version_id"),
+        Index(
+            "remote_versions_family_idx", "project_id", "remote_id", "cloud_project_id", "cloud_skill_id", "created_at"
+        ),
     )
     specs.append(
         TableSpec(
@@ -152,6 +160,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
     table = Table(
         REMOTE_TRAJECTORY_BINDINGS_TABLE,
         metadata,
+        Column("project_id", Text, primary_key=True, comment="Local project owning this remote record."),
         Column(
             "remote_id",
             Text,
@@ -159,7 +168,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             comment="Stable configured remote deployment alias; contains no credentials.",
         ),
         Column(
-            "project_id",
+            "cloud_project_id",
             Text,
             primary_key=True,
             comment="Cloud project resolved under the authenticated remote identity.",
@@ -180,8 +189,11 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             comment="Cloud request identity, when returned; not an assumed idempotency guarantee.",
         ),
         Column("synced_at", UTCDateTime(), nullable=False, comment="Time the cloud add record identity was confirmed."),
-        ForeignKeyConstraint(["trajectory_id"], [f"{TRAJECTORIES_TABLE}.trajectory_id"]),
-        UniqueConstraint("remote_id", "project_id", "add_record_id"),
+        ForeignKeyConstraint(
+            ["project_id", "trajectory_id"],
+            [f"{TRAJECTORIES_TABLE}.project_id", f"{TRAJECTORIES_TABLE}.trajectory_id"],
+        ),
+        UniqueConstraint("project_id", "remote_id", "cloud_project_id", "add_record_id"),
     )
     specs.append(
         TableSpec(name=REMOTE_TRAJECTORY_BINDINGS_TABLE, table=table, insert_model=RemoteTrajectoryBindingRecord)
@@ -189,6 +201,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
     table = Table(
         REMOTE_OPERATIONS_TABLE,
         metadata,
+        Column("project_id", Text, primary_key=True, comment="Local project owning this remote record."),
         Column(
             "remote_id",
             Text,
@@ -196,7 +209,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             comment="Stable configured remote deployment alias; contains no credentials.",
         ),
         Column(
-            "project_id",
+            "cloud_project_id",
             Text,
             primary_key=True,
             comment="Cloud project resolved under the authenticated remote identity.",
@@ -249,11 +262,17 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         ),
         Column("created_at", UTCDateTime(), nullable=False, comment="Time this association was established."),
         Column("updated_at", UTCDateTime(), nullable=False, comment="Last change to this association."),
-        ForeignKeyConstraint(["local_version_id"], [f"{SKILL_VERSIONS_TABLE}.version_id"]),
-        ForeignKeyConstraint(["trajectory_id"], [f"{TRAJECTORIES_TABLE}.trajectory_id"]),
-        UniqueConstraint("remote_id", "project_id", "idempotency_key"),
+        ForeignKeyConstraint(
+            ["project_id", "local_version_id"],
+            [f"{SKILL_VERSIONS_TABLE}.project_id", f"{SKILL_VERSIONS_TABLE}.version_id"],
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "trajectory_id"],
+            [f"{TRAJECTORIES_TABLE}.project_id", f"{TRAJECTORIES_TABLE}.trajectory_id"],
+        ),
+        UniqueConstraint("project_id", "remote_id", "cloud_project_id", "idempotency_key"),
         CheckConstraint("attempt_count >= 0"),
-        Index("remote_operations_retry_idx", "remote_id", "project_id", "status", "next_retry_at"),
+        Index("remote_operations_retry_idx", "project_id", "remote_id", "cloud_project_id", "status", "next_retry_at"),
     )
     specs.append(
         TableSpec(

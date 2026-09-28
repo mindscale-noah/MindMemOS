@@ -41,7 +41,9 @@ class RemoteDataService:
             record: Explicit local-to-cloud family association.
         """
         with self.database.transaction() as database:
-            if not database.count(SKILL_VERSIONS_TABLE, filters={"skill_id": record.skill_id}):
+            if not database.count(
+                SKILL_VERSIONS_TABLE, filters={"project_id": record.project_id, "skill_id": record.skill_id}
+            ):
                 raise ValueError("Local Skill family does not exist")
             database.insert(REMOTE_SKILL_BINDINGS_TABLE, [record.model_dump(mode="python")])
 
@@ -59,12 +61,18 @@ class RemoteDataService:
             family = database.get(
                 REMOTE_SKILL_BINDINGS_TABLE,
                 {
-                    "remote_id": record.remote_id,
                     "project_id": record.project_id,
+                    "remote_id": record.remote_id,
+                    "cloud_project_id": record.cloud_project_id,
                     "cloud_skill_id": record.cloud_skill_id,
                 },
             )
-            if local is None or family is None or local["skill_id"] != family["skill_id"]:
+            if (
+                local is None
+                or family is None
+                or local["project_id"] != record.project_id
+                or local["skill_id"] != family["skill_id"]
+            ):
                 raise ValueError("Version must belong to the bound local Skill family")
             database.insert(REMOTE_VERSION_BINDINGS_TABLE, [record.model_dump(mode="python")])
 
@@ -94,13 +102,14 @@ class RemoteDataService:
             database.upsert(
                 REMOTE_OPERATIONS_TABLE,
                 [record.model_dump(mode="python")],
-                conflict_fields=["remote_id", "project_id", "idempotency_key"],
+                conflict_fields=["project_id", "remote_id", "cloud_project_id", "idempotency_key"],
             )
             rows = database.select(
                 REMOTE_OPERATIONS_TABLE,
                 filters={
-                    "remote_id": record.remote_id,
                     "project_id": record.project_id,
+                    "remote_id": record.remote_id,
+                    "cloud_project_id": record.cloud_project_id,
                     "idempotency_key": record.idempotency_key,
                 },
                 limit=1,

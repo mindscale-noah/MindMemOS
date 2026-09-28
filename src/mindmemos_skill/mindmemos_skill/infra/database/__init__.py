@@ -4,7 +4,7 @@ from .base import Database
 from .builtin_backends import PostgresDatabase, SQLiteDatabase
 from .config import PostgresConfig, SQLiteConfig
 from .tables import TableRegistry
-from .typing import Filter, SearchHit, TableSpec
+from .typing import Filter, Scope, SearchHit, TableSpec
 from .vector import Vector
 
 __all__ = [
@@ -16,6 +16,7 @@ __all__ = [
     "TableRegistry",
     "TableSpec",
     "Filter",
+    "Scope",
     "SearchHit",
     "Vector",
 ]

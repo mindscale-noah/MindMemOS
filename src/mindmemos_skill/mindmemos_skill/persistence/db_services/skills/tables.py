@@ -14,8 +14,8 @@ from sqlalchemy import (
 )
 
 from ....infra.database import TableSpec
+from ....infra.database.typing import UTCDateTime
 from ...constants import SKILL_VERSION_LABEL_INDEX, SKILL_VERSIONS_TABLE, SKILLS_TABLE
-from ...typing import UTCDateTime
 from .typing import SkillRecord, SkillVersionRecord
 
 

@@ -181,6 +181,7 @@ def training_input():
     return {
         "project_id": "project",
         "base_version_id": "v1",
+        "work_dir": "output/training-test",
         "tasks": [
             {"task": {"id": identifier, "instruction": "Solve it"}, "reward_data": {}} for identifier in ("a", "b", "c")
         ],
@@ -261,6 +262,7 @@ def test_training_preserves_public_task_and_private_scoring_subtypes():
     request = TrainingRequest(
         project_id="project",
         base_version_id="v1",
+        work_dir="output/training-test",
         tasks=[sample],
         split=TrainingSplit(train=["a"]),
     )

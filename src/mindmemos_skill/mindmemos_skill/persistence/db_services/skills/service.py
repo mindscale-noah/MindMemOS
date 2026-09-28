@@ -1,6 +1,6 @@
 """Transactional central identities, owned snapshots, and reference checks."""
 
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy.exc import IntegrityError
 
@@ -260,20 +260,118 @@ class SkillDataService:
             with self.database.transaction() as tx:
                 # Acquire the owner write lock before reading labels, including on SQLite.
                 self._advance(tx, skill, skill.current_version_id)
-                store = SkillDataService(tx)
-                current = store.version(skill)
-                labels = [row["version_label"] for row in store._rows(SKILL_VERSIONS_TABLE, self._key(skill))]
-                label = naming.version_label or next_label(
-                    current.version_label, labels, bump=naming.version_bump, algorithm=naming.algorithm
-                )
-                if label in labels:
-                    raise SkillConflictError(f"Version label is already in use: {label}")
-                version = version.model_copy(update={"version_label": label})
-                tx.insert(SKILL_VERSIONS_TABLE, [version.model_dump()])
-                self._advance(tx, skill, version_id)
+                self._insert_child(tx, skill, version, naming)
                 return SkillRecord.model_validate(tx.get(SKILLS_TABLE, self._key(skill)))
         except IntegrityError as exc:
             raise SkillConflictError("Version identity or label conflicts with an existing version") from exc
+
+    def training_publication(self, project_id: str, run_id: str, input_hash: str) -> SkillVersionRecord | None:
+        """Find an already published run without changing the current version.
+
+        Args:
+            project_id: Repository owning the run.
+            run_id: Stable identity derived from the caller's run directory.
+            input_hash: Exact non-secret request and pipeline identity.
+
+        Returns:
+            Published version, or None before publication.
+
+        Raises:
+            SkillConflictError: The run was previously published with different inputs.
+        """
+        identifier = "v_" + uuid5(NAMESPACE_URL, f"training:{project_id}:{run_id}").hex
+        version = self.get(identifier)
+        if version is None:
+            return None
+        if version.project_id != project_id or version.local_metadata.get("training") != {
+            "run_id": run_id,
+            "input_hash": input_hash,
+        }:
+            raise SkillConflictError("Training run was published with different inputs")
+        return version
+
+    def commit_training(
+        self,
+        skill: SkillRecord,
+        snapshot: SkillSnapshot,
+        *,
+        run_id: str,
+        input_hash: str,
+        algorithm: str,
+        report: dict | None = None,
+    ) -> SkillVersionRecord:
+        """Publish a training result exactly once using existing version columns.
+
+        Args:
+            skill: Owner with the original expected current parent.
+            snapshot: Complete selected Skill, including dynamic implementation data.
+            run_id: Stable run identity shared by retries.
+            input_hash: Validated request and configuration fingerprint.
+            algorithm: Registered trainer name used for automatic version naming.
+            report: Compact JSON report attached to the published version metadata.
+
+        Returns:
+            Newly committed or previously published immutable version.
+
+        Raises:
+            SkillConflictError: The parent changed or the run identity was reused.
+        """
+        existing = self.training_publication(skill.project_id, run_id, input_hash)
+        if existing is not None:
+            if not self._matches_training_result(existing, skill, snapshot):
+                raise SkillConflictError("Training publication parent or result changed")
+            return existing
+        identifier = "v_" + uuid5(NAMESPACE_URL, f"training:{skill.project_id}:{run_id}").hex
+        version = self._new_version(skill, snapshot, identifier, [skill.current_version_id], f"Training run {run_id}")
+        version = SkillVersionRecord.model_validate(
+            {
+                **version.model_dump(mode="python"),
+                "metadata": {**version.metadata, "algorithm_report": {**report, "run_id": run_id}}
+                if report
+                else version.metadata,
+                "local_metadata": {"training": {"run_id": run_id, "input_hash": input_hash}},
+            }
+        )
+        try:
+            with self.database.transaction() as tx:
+                self._advance(tx, skill, skill.current_version_id)
+                self._insert_child(tx, skill, version, VersionNaming(algorithm=algorithm))
+                return SkillDataService(tx).version_by_id(skill.project_id, identifier)
+        except (IntegrityError, SkillConflictError):
+            # A concurrent identical publication may have committed while acquiring the owner lock.
+            existing = self.training_publication(skill.project_id, run_id, input_hash)
+            if existing is not None and self._matches_training_result(existing, skill, snapshot):
+                return existing
+            raise SkillConflictError("Current version or training publication changed") from None
+
+    @staticmethod
+    def _matches_training_result(version, skill, snapshot):
+        """Compare the complete published output and its captured parent."""
+        return (
+            version.skill_id == skill.skill_id
+            and version.parent_version_ids == [skill.current_version_id]
+            and version.bundle == snapshot.bundle
+            and version.resources == snapshot.resources
+            and version.implementation == snapshot.implementation
+            and version.config_schema_version == snapshot.config_schema_version
+            and version.config == snapshot.config
+            and version.content_hash == snapshot.content_hash
+            and version.local_snapshot_hash == snapshot.local_snapshot_hash
+        )
+
+    def _insert_child(self, tx, skill, version, naming):
+        """Allocate a label and insert a version while holding the owner write lock."""
+        store = SkillDataService(tx)
+        current = store.version(skill)
+        labels = [row["version_label"] for row in store._rows(SKILL_VERSIONS_TABLE, self._key(skill))]
+        label = naming.version_label or next_label(
+            current.version_label, labels, bump=naming.version_bump, algorithm=naming.algorithm
+        )
+        if label in labels:
+            raise SkillConflictError(f"Version label is already in use: {label}")
+        version = version.model_copy(update={"version_label": label})
+        tx.insert(SKILL_VERSIONS_TABLE, [version.model_dump()])
+        self._advance(tx, skill, version.version_id)
 
     def switch(self, skill: SkillRecord, version_id: str) -> SkillRecord:
         """Select an owned historical version with a compare-and-set update.

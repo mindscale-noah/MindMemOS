@@ -4,6 +4,39 @@ import logging
 from pathlib import Path
 
 _handlers: list[logging.Handler] = []
+_otel_handlers: list[logging.Handler] = []
+_level_without_otel: int | None = None
+
+
+def attach_otel_handler(handler: logging.Handler) -> None:
+    """Forward package logs to an OTel handler without changing console filtering.
+
+    Args:
+        handler: Run-scoped OpenTelemetry logging handler.
+    """
+    global _level_without_otel
+    logger = get_logger()
+    if not _otel_handlers:
+        _level_without_otel = logger.level
+    logger.addHandler(handler)
+    _otel_handlers.append(handler)
+    logger.setLevel(logging.DEBUG)
+
+
+def detach_otel_handler(handler: logging.Handler) -> None:
+    """Remove one OTel handler and restore the configured package level.
+
+    Args:
+        handler: Previously attached OpenTelemetry logging handler.
+    """
+    global _level_without_otel
+    logger = get_logger()
+    logger.removeHandler(handler)
+    _otel_handlers.remove(handler)
+    handler.close()
+    if not _otel_handlers:
+        logger.setLevel(_level_without_otel if _level_without_otel is not None else logging.NOTSET)
+        _level_without_otel = None
 
 
 def get_logger(name: str = "mindmemos_skill") -> logging.Logger:
@@ -64,6 +97,9 @@ def configure_logging(*, level: str | int = "INFO", log_file: str | Path | None 
     for handler in handlers:
         logger.addHandler(handler)
     _handlers.extend(handlers)
-    logger.setLevel(level)
+    global _level_without_otel
+    if _otel_handlers:
+        _level_without_otel = level
+    logger.setLevel(logging.DEBUG if _otel_handlers else level)
     logger.propagate = False
     return logger

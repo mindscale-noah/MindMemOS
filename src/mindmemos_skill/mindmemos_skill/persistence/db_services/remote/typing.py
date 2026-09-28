@@ -15,6 +15,9 @@ class RemoteSkillBindingRecord(RecordModel):
     """Stable configured remote deployment alias; contains no credentials."""
 
     project_id: str = Field(min_length=1)
+    """Local project owning this remote association."""
+
+    cloud_project_id: str = Field(min_length=1)
     """Cloud project resolved under the authenticated remote identity."""
 
     cloud_skill_id: str = Field(min_length=1)
@@ -49,6 +52,9 @@ class RemoteVersionBindingRecord(RecordModel):
     """Stable configured remote deployment alias; contains no credentials."""
 
     project_id: str = Field(min_length=1)
+    """Local project owning this remote version association."""
+
+    cloud_project_id: str = Field(min_length=1)
     """Cloud project resolved under the authenticated remote identity."""
 
     version_id: str = Field(min_length=1)
@@ -95,6 +101,9 @@ class RemoteTrajectoryBindingRecord(RecordModel):
     """Stable configured remote deployment alias; contains no credentials."""
 
     project_id: str = Field(min_length=1)
+    """Local project owning this remote trajectory association."""
+
+    cloud_project_id: str = Field(min_length=1)
     """Cloud project resolved under the authenticated remote identity."""
 
     trajectory_id: str = Field(min_length=1)
@@ -117,6 +126,9 @@ class RemoteOperationRecord(RecordModel):
     """Stable configured remote deployment alias; contains no credentials."""
 
     project_id: str = Field(min_length=1)
+    """Local project owning this pending remote operation."""
+
+    cloud_project_id: str = Field(min_length=1)
     """Cloud project resolved under the authenticated remote identity."""
 
     operation_id: str = Field(min_length=1)

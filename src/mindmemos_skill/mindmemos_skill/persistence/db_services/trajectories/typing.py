@@ -9,6 +9,9 @@ from ...typing import RecordModel
 class TrajectoryRecord(RecordModel):
     """Complete insertable record for trajectories."""
 
+    project_id: str = Field(min_length=1)
+    """Project that owns this physical rollout attempt."""
+
     trajectory_id: str = Field(min_length=1)
     """Local identity of one physical rollout attempt."""
 

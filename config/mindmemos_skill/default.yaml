@@ -1,8 +1,9 @@
 # MindMemOS Skill Service 配置。
 # 使用 create_service("config/mindmemos_skill/default.yaml") 组装服务。
-# 显式配置不会初始化数据库；使用前调用 service.initialize_storage()。
-# HTTP 启动入口会执行初始化。业务请求需提供 project_id。
+# create_service() 会自动初始化已配置的存储，失败时关闭已组装资源。
+# 本地模式将全部请求绑定到这个 project_id；个人部署时可自行修改。
 # 相对数据库路径基于进程工作目录；YAML 不展开环境变量。
+local_project_id: personal
 
 # 全局唯一的 SkillPersistence，所有 pipeline 使用同一个实例。
 # 数据库直接在这里定义，不支持多存储、资源名引用或额外的存储选择项。
@@ -26,6 +27,7 @@ repository_pipeline:
 # 名称直接对应请求中的 pipeline 字段，值就是该流程的完整定义。
 # 一个流程时请求可省略 pipeline；多个时必须指定，无默认流程。
 # {} 或省略字段表示未启用；当前没有内置可运行的训练/演进 pipeline。
+# Built-in training example: config/mindmemos_skill/training/service.yaml
 training_pipelines: {}
 evolution_pipelines: {}
 

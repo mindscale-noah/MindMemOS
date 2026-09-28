@@ -1,9 +1,48 @@
 """Registered schemas, query conditions, and portable search results."""
 
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import Table
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy import DateTime, Table
+from sqlalchemy.types import TypeDecorator
+
+
+class UTCDateTime(TypeDecorator):
+    """Normalize aware timestamps and restore UTC on SQLite reads."""
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    @property
+    def python_type(self):
+        """Expose the native type to infra record validation."""
+        return datetime
+
+    def process_bind_param(self, value, dialect):
+        """Normalize an aware timestamp before storage.
+
+        Args:
+            value: Timestamp or None.
+            dialect: Active SQLAlchemy backend dialect.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Timestamps must include a timezone")
+        return value.astimezone(UTC)
+
+    def process_result_value(self, value, dialect):
+        """Restore UTC when the backend returns a naive datetime.
+
+        Args:
+            value: Stored timestamp or None.
+            dialect: Active SQLAlchemy backend dialect.
+        """
+        if value is None:
+            return None
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 class TableSpec(BaseModel):
@@ -66,3 +105,49 @@ class SearchHit(BaseModel):
 
     distance: float
     """Cosine distance; smaller values indicate closer matches."""
+
+
+class Scope(BaseModel):
+    """Immutable equality boundaries for arbitrary registered columns."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    """Reject undeclared options and prevent scope changes during a request."""
+
+    fields: tuple[tuple[str, Any], ...]
+    """Column names and required values, stored as an immutable snapshot."""
+
+    @field_validator("fields", mode="before")
+    @classmethod
+    def normalize_fields(cls, value):
+        """Accept a mapping while keeping the validated scope immutable."""
+        if isinstance(value, Mapping):
+            return tuple(value.items())
+        return value
+
+    @model_validator(mode="after")
+    def check_fields(self):
+        """Reject empty, duplicate, or unusable isolation conditions."""
+        names = [name for name, _ in self.fields]
+        if (
+            not names
+            or len(names) != len(set(names))
+            or any(
+                not isinstance(name, str) or not name or name != name.strip() or value is None or value == ""
+                for name, value in self.fields
+            )
+        ):
+            raise ValueError("Scope fields must be unique, nonempty name-value pairs")
+        for _, value in self.fields:
+            try:
+                hash(value)
+            except TypeError as exc:
+                raise ValueError("Scope values must be immutable scalar values") from exc
+        object.__setattr__(self, "fields", tuple(sorted(self.fields)))
+        return self
+
+    def require(self, field: str) -> Any:
+        """Return a required dimension selected by the owning layer."""
+        for name, value in self.fields:
+            if name == field:
+                return value
+        raise ValueError(f"Scope is missing required field {field!r}")

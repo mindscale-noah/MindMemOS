@@ -2,29 +2,44 @@
 
 import argparse
 import asyncio
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from inspect import isawaitable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from ...errors import SkillConflictError, SkillNotFoundError
+import yaml
+
+from ...errors import SkillConflictError, SkillNotFoundError, UnsupportedPipelineError
+from ...pipelines.typing import SkillPipelineRequest
 from ..base import MindMemOSSkill
 from ..factory import create_service
+from .config import FastAPIConfig
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
 
-def create_app(service: MindMemOSSkill) -> "FastAPI":
+def create_app(
+    service: MindMemOSSkill,
+    *,
+    principal_from_request: Callable[[Any], object | Awaitable[object]] | None = None,
+    api_config: FastAPIConfig | None = None,
+) -> "FastAPI":
     """Expose an existing service over HTTP without rebuilding its backends.
 
     Args:
         service: Assembled service shared by all HTTP routes.
+        principal_from_request: Host account-system adapter returning an authenticated identity.
+        api_config: HTTP pipeline allowlist; omission denies all pipeline execution.
 
     Returns:
         A FastAPI application ready for an ASGI server.
     """
-    from fastapi import FastAPI, Request
+    from fastapi import Depends, FastAPI, Request
     from fastapi.responses import JSONResponse
+
+    from ..service import SkillService
 
     @asynccontextmanager
     async def lifespan(app):
@@ -35,6 +50,26 @@ def create_app(service: MindMemOSSkill) -> "FastAPI":
 
     app = FastAPI(title="MindMemOS Skill", lifespan=lifespan)
     app.state.service = service
+    policy = api_config or FastAPIConfig()
+
+    def allowed_pipeline(name: str | None, supported: set[str], kind: str) -> str:
+        """Resolve only a pipeline explicitly allowed by this HTTP deployment."""
+        selected = name or (next(iter(supported)) if len(supported) == 1 else None)
+        if selected is None or selected not in supported:
+            raise UnsupportedPipelineError(f"Unsupported {kind} pipeline {name!r}")
+        return selected
+
+    async def auto_evolve(request: SkillPipelineRequest | None = None):
+        """Run an evolution pipeline only when allowed by the HTTP policy."""
+        if request is None:
+            return await service.auto_evolve_skill()
+        selected = allowed_pipeline(request.pipeline, policy.evolution_pipelines, "evolution")
+        return await service.auto_evolve_skill(request.model_copy(update={"pipeline": selected}))
+
+    @app.exception_handler(UnsupportedPipelineError)
+    async def unsupported(request: Request, exc: UnsupportedPipelineError) -> JSONResponse:
+        """Report deployment capability limits with a stable error type."""
+        return JSONResponse(status_code=422, content={"error": "unsupport", "detail": str(exc)})
 
     @app.exception_handler(NotImplementedError)
     async def not_implemented(request: Request, exc: NotImplementedError) -> JSONResponse:
@@ -55,6 +90,11 @@ def create_app(service: MindMemOSSkill) -> "FastAPI":
     async def invalid(request: Request, exc: ValueError) -> JSONResponse:
         """Report invalid content and operation settings."""
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(PermissionError)
+    async def denied(request: Request, exc: PermissionError) -> JSONResponse:
+        """Reject missing or invalid project authorization."""
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
 
     @app.exception_handler(FileNotFoundError)
     async def missing_source(request: Request, exc: FileNotFoundError) -> JSONResponse:
@@ -77,17 +117,32 @@ def create_app(service: MindMemOSSkill) -> "FastAPI":
         "/skills/diff": service.diff_skill,
         "/skills/switch": service.switch_skill,
         "/skills/set-meta": service.set_skill_meta,
-        "/skills/auto-evolve": service.auto_evolve_skill,
-        "/skills/auto-train": service.auto_train_skill,
+        "/skills/auto-evolve": auto_evolve,
     }
+
+    async def bind_principal(request: Request):
+        """Bridge the host account identity into one service request."""
+        if principal_from_request is None:
+            yield
+            return
+        principal = principal_from_request(request)
+        if isawaitable(principal):
+            principal = await principal
+        if not isinstance(service, SkillService):
+            yield
+            return
+        with service.request_principal(principal):
+            yield
+
     for path, operation in operations.items():
         app.add_api_route(
             path,
             operation,
             methods=["POST"],
+            dependencies=[Depends(bind_principal)],
             responses=(
-                {501: {"description": "Operation is not implemented yet"}}
-                if path in {"/skills/auto-evolve", "/skills/auto-train"}
+                {501: {"description": "Operation is not implemented yet"}, 422: {"description": "Unsupported pipeline"}}
+                if path == "/skills/auto-evolve"
                 else {404: {"description": "Not found"}, 409: {"description": "Conflict"}}
             ),
         )
@@ -98,6 +153,7 @@ async def _main() -> None:
     """Build a service, wrap it in HTTP routes, and start the ASGI server."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="Explicit service YAML file")
+    parser.add_argument("--api-config", type=Path, help="HTTP pipeline allowlist YAML file")
     parser.add_argument("--home", type=Path, help="Local service home; omission uses the default home")
     parser.add_argument("--project-id", help="Optional local scope; empty uses the persisted generated scope")
     parser.add_argument("--host", default="127.0.0.1", help="Listening address")
@@ -107,12 +163,18 @@ async def _main() -> None:
         parser.error("--port must be between 1 and 65535")
     if args.config and (args.home or args.project_id):
         parser.error("--config cannot be combined with --home or --project-id")
+    api_config = (
+        FastAPIConfig.model_validate(yaml.safe_load(args.api_config.read_text(encoding="utf-8")))
+        if args.api_config
+        else FastAPIConfig()
+    )
     service = await create_service(args.config, home=args.home, project_id=args.project_id or None)
-    await service.initialize_storage()
 
     import uvicorn
 
-    await uvicorn.Server(uvicorn.Config(create_app(service), host=args.host, port=args.port)).serve()
+    await uvicorn.Server(
+        uvicorn.Config(create_app(service, api_config=api_config), host=args.host, port=args.port)
+    ).serve()
 
 
 def main() -> None:

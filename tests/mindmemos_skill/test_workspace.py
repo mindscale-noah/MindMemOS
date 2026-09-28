@@ -9,6 +9,7 @@ import yaml
 from mindmemos_skill.api import ServiceConfig, create_service
 from mindmemos_skill.api.factory import resolve_local_settings
 from mindmemos_skill.errors import SkillNotFoundError
+from mindmemos_skill.infra.database import Scope
 from mindmemos_skill.persistence.constants import SKILL_GRAPHS_TABLE
 from mindmemos_skill.persistence.db_services.skill_management.typing import SkillGraphRecord
 from mindmemos_skill.pipelines.typing import ListRequest, RegisterRequest, ShowRequest
@@ -83,14 +84,21 @@ async def test_home_precedence_and_invalid_manifest(tmp_path, monkeypatch):
 async def test_omitted_database_url_uses_home_without_default_scope(tmp_path, monkeypatch):
     monkeypatch.setenv("MINDMEMOS_HOME", str(tmp_path / "home"))
     config = yaml.safe_load(Path("config/mindmemos_skill/default.yaml").read_text())
+    config.pop("local_project_id")
     config["persistence"]["database"]["config"].pop("url", None)
-    async with await create_service(ServiceConfig.model_validate(config)) as service:
+    async with await create_service(
+        ServiceConfig.model_validate(config),
+        project_authorizer=lambda principal, project_id: Scope(fields={"project_id": project_id}),
+    ) as service:
         await service.initialize_storage()
         async with await create_service() as local:
             assert service.backends["database"].engine.url.database == local.backends["database"].engine.url.database
         with pytest.raises(ValueError, match="project_id is required"):
             await service.list_skills(ListRequest())
-        assert await service.list_skills(ListRequest(project_id="explicit")) == []
+        with pytest.raises(PermissionError, match="authorization is required"):
+            await service.list_skills(ListRequest(project_id="explicit"))
+        with service.request_principal("test-user"):
+            assert await service.list_skills(ListRequest(project_id="explicit")) == []
 
 
 @pytest.mark.asyncio

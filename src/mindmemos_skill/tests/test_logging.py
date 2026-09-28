@@ -6,6 +6,8 @@ import sys
 
 import pytest
 from mindmemos_skill.logging import config, configure_logging, get_logger
+from mindmemos_skill.logging.otel import attach_run_logs, detach_run_logs
+from opentelemetry.sdk._logs import LoggerProvider, LogRecordProcessor
 
 
 @pytest.fixture(autouse=True)
@@ -96,6 +98,38 @@ def test_failed_configuration_preserves_existing_output(tmp_path):
     with pytest.raises(OSError):
         configure_logging(log_file=tmp_path)
     assert logger.handlers == handlers
+
+
+def test_otel_bridge_keeps_console_level_independent(capsys):
+    """The OTel handler receives debug records while INFO console output stays filtered."""
+    observed = []
+
+    class CaptureLogs(LogRecordProcessor):
+        """Collect emitted OTel log records."""
+
+        def on_emit(self, record):
+            """Save the emitted record."""
+            observed.append(record.log_record)
+
+        def shutdown(self):
+            """Release no resources."""
+
+        def force_flush(self, timeout_millis=30000):
+            """Report synchronous completion."""
+            return True
+
+    provider = LoggerProvider(shutdown_on_exit=False)
+    provider.add_log_record_processor(CaptureLogs())
+    handler = attach_run_logs(provider, context=lambda: {"algorithm.run_id": "run"}, capture_level="debug")
+    try:
+        configure_logging(level="INFO")
+        get_logger("algos").debug("debug event")
+        assert [item.event_name for item in observed] == ["python.log"]
+        assert observed[0].attributes["algorithm.run_id"] == "run"
+        assert "debug event" not in capsys.readouterr().err
+    finally:
+        detach_run_logs(handler)
+        provider.shutdown()
 
 
 def test_import_has_no_logging_side_effects():
