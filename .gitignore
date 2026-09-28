@@ -48,6 +48,7 @@ data/
 !src/mindmemos_skill/mindmemos_skill/envs/data/*.py
 results/
 outputs/
+/output/
 docs/paper/
 docs/superpowers/
 resources/memory/

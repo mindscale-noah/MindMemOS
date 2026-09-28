@@ -86,7 +86,7 @@ with closing(create_service()) as service:
 
 统一通过 `create_service` 组装：不传配置时优先读取当前 HOME 的 `service.yaml`，不存在时使用本地默认设置，传入配置对象或 YAML 时按显式配置组装，返回原有 `SkillService`。没有 Workspace 类或第二个公开工厂。显式配置不能与 `home`、`database_path`、`project_id` 覆盖参数混用。本地请求省略 `project_id` 时使用绑定范围，显式传入其他范围则拒绝。
 
-`make skill-local` 使用同一工作区。自定义路径可以设置 `MINDMEMOS_HOME`，或使用 `SKILL_LOCAL_ARGS='--home /path/to/home'`。需要原有 YAML 服务组装时使用 `SKILL_LOCAL_ARGS='--config /path/to/config.yaml'`；默认 YAML 未指定 SQLite URL 时，也解析工作区数据库。通用服务/HTTP 请求仍要求显式项目范围，不套用本地默认身份。
+本地 Python 调用使用同一工作区。自定义路径可以设置 `MINDMEMOS_HOME`，或向 `create_service(home=...)` 传入路径；需要原有 YAML 服务组装时向 `create_service(config=...)` 传入配置文件。默认 YAML 未指定 SQLite URL 时，也解析工作区数据库。通用服务/HTTP 请求仍要求显式项目范围，不套用本地默认身份。
 
 高级用户可用 `--graph-db` 覆盖整个本地仓库数据库、用 `--project-id` 覆盖本次本地范围，默认绑定不会被改写。这两个参数不再是正常启动的前提。
 

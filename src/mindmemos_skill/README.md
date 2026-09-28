@@ -238,7 +238,7 @@ Install the optional HTTP dependencies and start the server from the repository 
 
 ```bash
 uv pip install -e './src/mindmemos_skill[fastapi]'
-make skill-fastapi
+make dev-skill
 ```
 
 Python and HTTP access share `config/mindmemos_skill/default.yaml`, without mode selection.
@@ -253,9 +253,8 @@ app = create_app(service)
 assert app.state.service is service
 ```
 
-`api/service.py` implements service assembly and business operations;
-`entries/local.py` assembles the service directly, while `entries/fastapi.py`
-wraps it with routes and launches the HTTP server.
+`api/service.py` implements business operations; `api/factory.py` assembles the
+service, while `entries/fastapi.py` wraps it with routes and launches the HTTP server.
 Open `http://127.0.0.1:8000/docs` for API documentation.
 
 | HTTP route | Local method |
@@ -263,27 +262,25 @@ Open `http://127.0.0.1:8000/docs` for API documentation.
 | `POST /skills/register` | `register_skill()` |
 | `POST /skills/delete` | `delete_skill()` |
 | `POST /skills/auto-evolve` | `auto_evolve_skill()` |
-| `POST /skills/auto-train` | `auto_train_skill()` |
 
 `GET /health` returns `{"status":"ok"}` for application availability only.
 Central operations accept typed JSON bodies. All routes and request types are listed in the
-[API guide](../../docs/mindmemos_skill/central_repository_api.md). Only auto-evolve and auto-train return 501.
+[API guide](../../docs/mindmemos_skill/central_repository_api.md). Unconfigured auto-evolve returns 501.
+Training remains available through the local Python `auto_train_skill()` method; there is no HTTP training route.
 The HTTP entry point initializes missing tables; create_app(service) itself does not.
 
-Use the repository Makefile to choose an entry point and override the configuration or address:
+Use the repository Makefile to override the HTTP configuration or address:
 
 ```bash
-make skill-local
-make skill-fastapi SKILL_CONFIG=config/mindmemos_skill/default.yaml SKILL_HOST=127.0.0.1 SKILL_PORT=8001
+make dev-skill SKILL_CONFIG=config/mindmemos_skill/default.yaml SKILL_HOST=127.0.0.1 SKILL_PORT=8001
 ```
 
-`make skill-local` assembles and prints the local service, then exits.
-`make skill-fastapi` runs the HTTP server until Ctrl-C. The default interpreter is
+`make dev-skill` runs the HTTP server until Ctrl-C. The default interpreter is
 `.venv/bin/python`; override it with `SKILL_PYTHON`. The Makefile adds this checkout's
 Skill source directory to the import path.
 
-Startup logic lives in `mindmemos_skill/api/entries/local.py` and
-`mindmemos_skill/api/entries/fastapi.py`. Service assembly does not import FastAPI or Uvicorn.
+HTTP startup logic lives in `mindmemos_skill/api/entries/fastapi.py`.
+Service assembly does not import FastAPI or Uvicorn.
 `run_skill.py` remains a personal debugging script. Python integrations can continue
 calling `create_service` directly.
 

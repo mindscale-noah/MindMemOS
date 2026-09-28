@@ -10,6 +10,8 @@
 
 通用分析器通过评分区分 success/error/unlabeled。所有定位都针对同一棵初始树；定位失败最多尝试两次，第二次 token 预算为 `min(initial * 2, 8192)`，消息保持一致。融合按深度从叶到根、同深度按源文档位置排序，每个节点读取此前修改后的当前树；`update_node` 在 `create_child` 之前执行。保留原始稳定 ID、Markdown 结构校验、重复子节点校验、内容过滤及 reject 规则。
 
+融合操作与子树检查对照 `TreeSkill-colleague-share` 的 `bc3b0a9` 实现：附加说明字段（例如子节点的 `rationale`）保留在 patch 审计中，不写入 Skill，也不导致整组拒绝；操作别名 `update` 归一为 `update_node`。非法操作组合产生 reject，单个子树的内容或结构错误只拒绝该操作，不撤销已经通过的更新。与原版一致，更新允许清空节点正文，清空后的无内容叶节点不再进入可路由节点集合；新建叶节点仍必须有非空白正文。JSON 截断仍记录为融合失败，不自动补全或新增重试，融合预算仍使用 `fusion_max_tokens`。
+
 `await run_experiment(...)` 在训练结束后，才把最终 Skill 用于 test。每条 test 数据只请求一次 rollout；模型内部的传输及解析重试仍按模型配置执行。test 不进入 trainer、分析器、融合器或选优逻辑。val 和 test 均可省略或为空；当前不定义验证集选择行为，非空 val 会明确报错。
 
 ## 通用与环境特殊流程
@@ -22,7 +24,17 @@
 - `envs/builtin_envs/spreadsheetbench/recalculation.py`：环境侧事务式公式重算；同目录 `runtime/uno_worker.py` 是由 LibreOffice 自己的 Python 启动的独立工作进程，不依赖本包或 Pydantic。
 - `envs/builtin_envs/spreadsheetbench/reference_reward.py`：仅供 reference 训练失败分析保留的历史单元格比较规则。任务执行统一使用环境侧 `reward.py`。
 
-通用训练入口接受公共 Environment 协议。参考分支的路由提示词本身面向 spreadsheet，迁移没有把它改写成新提示词；这不等于已验证它在其他任务领域的有效性。原有 `TreeSkill` 默认任务路由接口仍可使用；训练返回的 Skill 启用固定参考路由协议与融合后的稳定节点元数据。
+通用训练入口接受公共 Environment 协议。`TreeSkillTrainer` 初始化时按 `env_adapter.class_name` 构造注册式适配器，默认 `generic` 使用环境无关的分析与路由；`spreadsheetbench_reference` 保留原始 SpreadsheetBench 分析和路由协议，并校验配套执行环境。训练返回的 Skill 保留同一个适配器选择，路由继续使用融合后的稳定节点元数据。
+
+```yaml
+env_adapter:
+  class_name: spreadsheetbench_reference
+  config: {}
+```
+
+用户继承 `TreeSkillEnvAdapter` 并通过 `@TreeSkillEnvAdapter.register("my_env")` 注册，入口显式导入扩展模块后即可在配置中选择。只改变文本时覆盖 `render_trajectory()`、`render_task()` 或 `build_analysis_messages()`、`build_routing_messages()`；需要多轮工具分析时覆盖 `create_analyzer(runtime)`。默认分析器调用 Adapter 的消息方法；特殊分析器可以使用自己的消息协议。`analysis_system` 和 `routing_system` 接受完整提示词文本覆盖，reference 分析拒绝不适用的 `analysis_system` 配置。
+
+动态 Skill 快照版本 2 保存适配器注册名和配置，不保存分析器、模型实例或运行目录。恢复时用户扩展必须已经导入，缺失时明确报错。版本 1 的快照仍可加载：旧稳定 ID 路由恢复 SpreadsheetBench 协议，旧普通路由恢复原有消息格式；新建的 generic Skill 使用环境无关提示词。恢复不改写旧文件或数据库，重新导出时写入显式配置。
 
 reference 分析先完成失败轨迹分析，再处理成功轨迹。失败分析 Agent 必须在独立工作区中完成 `evaluate_output` 的 PASS 检查，并生成可解析报告，才会产出经验。按用户批准，仅该训练分析 Agent 可以访问相应训练样本的 `gold.xlsx`。任务执行 Agent 不获得 gold；test 也不会进入失败分析。评分和实验配置中的私有数据保持在审计侧。
 
@@ -128,3 +140,10 @@ experiment/
 提供离线端到端脚本，以及提示词哈希、用户消息、树修改、稳定 ID、定位重试、内容过滤、PASS 门控、私有数据边界、异常跳过、patch 审计和结构化模型调用的回归测试。离线通过不代表已经复现真实模型的 benchmark 分数。本次没有启动付费模型实验，也没有把未运行的 LibreOffice/真实模型集成描述为已验证。
 
 训练入口直接等待异步模型流程，不在业务代码内创建事件循环。同步环境采样通过工作线程执行；`Environment.rollout()` 与 `Skill.assemble()` 的现有同步契约不变。
+
+## 服务训练与自动恢复
+
+TreeSkill 可通过通用 `training` Pipeline 配置使用，与 Skill-Forest 共用业务流程。
+详见 [通用训练流程](training.md)。直接调用 `TreeSkillTrainer.train()` 时，同一输入与
+同一工作目录自动复用兼容的采样、模型响应及最终产物；恢复结果保留 TreeSkill 动态路由。
+旧目录缺少恢复清单时明确拒绝，不自动覆盖。独立 `run_experiment` 包装器仍要求全新实验根目录。

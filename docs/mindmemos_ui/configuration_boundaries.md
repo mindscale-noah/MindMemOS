@@ -67,7 +67,7 @@ Memory 配置仅包含 Memory 服务连接字段。字段名参考当前 SDK；�
 | TreeSkill `rollout_concurrency`、`analysis_concurrency`、`localization_concurrency` | 算法提供默认，部署者限定资源 | 当前 8、16、16；部署应按容量配置，不能直接把算法默认当全服务安全容量 | `TreeSkillTrainerConfig`；全服务队列/并发上限需独立实现 |
 | TreeSkill `analysis_max_turns`、`shell_timeout_seconds`、`transcript_max_chars` | 算法 / 执行环境管理 | 当前 20、120 秒、20000；实验可显式覆盖 | 训练配置；服务端执行限制仍为上界 |
 | TreeSkill 三阶段 temperature、max_tokens | 算法开发者 | 分析/定位/融合温度 1/0/0；token 限制 4096/2048/4096 | `TreeSkillTrainerConfig`；不从普通客户端连接配置读取 |
-| `analysis_adapter`、`annotation_mode`、`require_skill_match`、`success_score_threshold` | 算法 / 环境协议管理 | 当前 generic、required、true、1.0；阈值应匹配环境评分定义 | 协议变更需显式实验配置和记录，不能让普通请求随意关闭匹配检查 |
+| `env_adapter`、`annotation_mode`、`require_skill_match`、`success_score_threshold` | 算法 / 环境协议管理 | 当前 generic、required、true、1.0；阈值应匹配环境评分定义 | 协议变更需显式实验配置和记录，不能让普通请求随意关闭匹配检查 |
 | `algorithm_version`、`prompt_version`、各阶段 `*_task` | 算法开发者 | 随代码/协议版本管理，作为追踪信息 | 当前配置字段仍可被 YAML 覆盖；建议产品组装层限制任意修改，不能仅改版本名冒充新算法 |
 | `reference_routing`、`tree_metadata`、树结构及优化得到的指令 | 算法生成 / 版本管理 | 随 Skill 产物保存与恢复，不作为用户连接配置 | `TreeSkillConfig` 与 Skill 快照；结构和指令不放全局 ENV |
 | 执行器、Shell、环境变量、命令超时 | 部署者 / 环境适配层 | 当前使用运行 Python 和平台 Shell；按服务运行环境指定 | `ExecutionConfig`；远端执行使用服务端路径和依赖 |

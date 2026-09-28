@@ -33,10 +33,10 @@ def main() -> None:
     from mindmemos_skill.envs.builtin_envs.spreadsheetbench.reward import compare_workbooks
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--skillopt-envs", type=Path, required=True, help="Reference skillopt/envs directory")
+    parser.add_argument("--reference-envs", type=Path, required=True, help="Reference environment directory")
     parser.add_argument("--treeskill-env", type=Path, help="Reference registered_envs/spreadsheetbench directory")
     args = parser.parse_args()
-    root = args.skillopt_envs.resolve()
+    root = args.reference_envs.resolve()
     office_path = root / "officeqa/official_reward.py"
     office = _module(office_path)
     values = [

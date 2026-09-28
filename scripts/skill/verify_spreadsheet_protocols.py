@@ -45,13 +45,15 @@ def main() -> None:
     from mindmemos_skill.skill import Skill, SkillBundle, SkillResources
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workspace-source", type=Path, required=True, help="Skill-Forest repository root")
+    parser.add_argument("--workspace-actor", type=Path, required=True, help="Reference workspace react_agent.py file")
     parser.add_argument("--bash-source", type=Path, required=True, help="Original TreeSkill repository root")
     args = parser.parse_args()
-    forest_file = args.workspace_source / "skillopt/envs/spreadsheetbench/react_agent.py"
+    forest_file = args.workspace_actor
     module = ast.parse(forest_file.read_text())
     module.body = [
-        node for node in module.body if not (isinstance(node, ast.ImportFrom) and node.module == "skillopt.model")
+        node
+        for node in module.body
+        if not (isinstance(node, ast.ImportFrom) and any(alias.name == "chat_target_messages" for alias in node.names))
     ]
     forest = {}
     exec(compile(module, str(forest_file), "exec"), forest)

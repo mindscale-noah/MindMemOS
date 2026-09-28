@@ -23,8 +23,8 @@
 
 ## 已有数据升级
 
-升级路径：部署新版代码 → 正常执行 `await service.initialize_storage()` → 启动接入层。
-默认本地 `await create_service()` 已执行该初始化。显式 YAML 组装调用方仍显式初始化。
+升级路径：部署新版代码 → `await create_service(...)` 自动创建缺失表并迁移版本标签 → 启动接入层。
+默认本地、显式 YAML 和 ServiceConfig 组装均自动初始化；保留 `initialize_storage()` 作为可重复调用的幂等入口。
 迁移仅操作现有 v1 本地版本表的标签、审计元数据和索引，不改云服务 `src/mindmemos/` 及 remote 标签契约。
 更老的物理表名或缺失列仍按既有迁移流程处理，不在这里隐式重建数据库。
 

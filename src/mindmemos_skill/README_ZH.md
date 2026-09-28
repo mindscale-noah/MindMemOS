@@ -270,7 +270,7 @@ service = await create_service(ServiceConfig())
 
 ```bash
 uv pip install -e './src/mindmemos_skill[fastapi]'
-make skill-fastapi
+make dev-skill
 ```
 
 Python 直接调用与 HTTP 接入使用同一份 `config/mindmemos_skill/default.yaml`，默认配置 SQLite 中心仓。
@@ -286,7 +286,7 @@ app = create_app(service)
 assert app.state.service is service
 ```
 
-`api/service.py` 承担服务组装与业务接口实现，`entries/local.py` 负责直接组装，
+`api/factory.py` 负责组装服务，`api/service.py` 实现业务接口，
 `entries/fastapi.py` 负责添加路由及启动 HTTP 服务。
 
 启动后访问 `http://127.0.0.1:8000/docs` 查看接口，或使用：
@@ -301,25 +301,23 @@ curl -X POST http://127.0.0.1:8000/skills/list -H 'Content-Type: application/jso
 | `POST /skills/register` | `register_skill()` |
 | `POST /skills/delete` | `delete_skill()` |
 | `POST /skills/auto-evolve` | `auto_evolve_skill()` |
-| `POST /skills/auto-train` | `auto_train_skill()` |
 
 `GET /health` 返回 `{"status":"ok"}`，仅表示应用可访问。中心仓业务接口接收 JSON 请求体，
 完整路由与参数见[中心仓 API 说明](../../docs/mindmemos_skill/central_repository_api.md)。
-只有自动演化与训练仍返回 HTTP 501。HTTP 启动入口显式初始化表，create_app 本身不初始化。
+本地训练通过 Python 的 `auto_train_skill()` 调用，不开放 HTTP 路由。未配置的自动演化返回 HTTP 501。HTTP 启动入口显式初始化表，create_app 本身不初始化。
 
-统一通过仓库根目录的 Makefile 启动，可覆盖配置文件、监听地址和端口：
+通过仓库根目录的 Makefile 启动 HTTP 服务，可覆盖配置文件、监听地址和端口：
 
 ```bash
-make skill-local
-make skill-fastapi SKILL_CONFIG=config/mindmemos_skill/default.yaml SKILL_HOST=127.0.0.1 SKILL_PORT=8001
+make dev-skill SKILL_CONFIG=config/mindmemos_skill/default.yaml SKILL_HOST=127.0.0.1 SKILL_PORT=8001
 ```
 
-`make skill-local` 组装并打印本地服务后退出；`make skill-fastapi` 持续运行 HTTP 服务，
+`make dev-skill` 持续运行 HTTP 服务，
 按 Ctrl-C 停止。默认使用 `.venv/bin/python`，可通过 `SKILL_PYTHON` 指定解释器。
 Makefile 会加入当前仓库的 Skill 源码路径。
 
-具体启动逻辑分别位于 `mindmemos_skill/api/entries/local.py` 和
-`mindmemos_skill/api/entries/fastapi.py`。直接组装服务只需基础依赖，不会导入 FastAPI 或 Uvicorn。
+HTTP 启动逻辑位于 `mindmemos_skill/api/entries/fastapi.py`。
+直接组装服务只需基础依赖，不会导入 FastAPI 或 Uvicorn。
 `run_skill.py` 仅保留为个人调试脚本；Python 集成仍可直接调用 `create_service`。
 
 ## 数据库基础设施

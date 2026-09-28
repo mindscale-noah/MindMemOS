@@ -66,7 +66,8 @@
 | --- | --- | --- | --- | --- |
 | project_id | TEXT | 服务内全局唯一的项目标识 | 项目归属与权限校验 | NOT NULL；PK 部分 |
 | graph_id | TEXT | 项目内稳定的逻辑图标识 | 寻址图、协调并发 | NOT NULL；PK 部分 |
-| name | TEXT | 图的可读名称 | 管理界面展示 | NOT NULL；不要求唯一 |
+| name | TEXT | 图的可读名称 | 管理界面展示；新图默认与 alias 相同 | NOT NULL；历史值保留 |
+| alias | TEXT | 用户指定的图名及稳定查找键 | organize 定位逻辑图，graph-resolve/recommend 按名称解析 | NOT NULL；项目内唯一 |
 | description | TEXT | 图用途说明 | 解释此图的 Skill 集合用途 | NULL 允许 |
 | current_revision | BIGINT | 当前对外发布的 revision | 查找当前图版本 | NULL 表示尚未发布；非空时 > 0 |
 | created_at | TIMESTAMPTZ | 图身份创建时间 | 管理与排序 | NOT NULL DEFAULT CURRENT_TIMESTAMP |
@@ -74,11 +75,14 @@
 
 约束与索引：
 
-- PK：`S`。
+- PK：`S`；UNIQUE：`(project_id, alias)`，由数据库约束并发创建时不出现重名图。
+- 服务写入前还需拒绝 alias 与项目内另一图的完整 graph_id 相同，以免精确引用同时指向两张图；历史冲突由解析接口返回歧义错误。
 - FK：`(S, current_revision) → skill_graph_revisions(S, revision)`，允许 NULL。
 - current_revision 只通过锁住 graph 行的短发布事务修改。初始化图不依赖图版本已存在。
 - INDEX：`(project_id, updated_at)`。
 - 暂不设计图删除 API；禁止普通调用硬删有历史的图。
+
+已部署库升级时，先新增可空 alias 列及 `(project_id, alias)` 唯一索引，再部署兼容读写：新写入同时保存 alias，旧写入暂可保持 NULL，读取旧图时用稳定回填规则解析。随后为旧图按稳定的 `(project_id, graph_id)` 顺序回填：名称在项目内唯一且不与现有 alias 冲突时沿用 `name`，重名或冲突时以 `graph_id` 派生唯一 alias，原 `name` 不改。全部旧写入方退出且再次回填后，才改为非空。每步须可重复、中断后可恢复，并兼容过渡期的新旧服务；已有 graph_id、revision 和历史引用保持不变。
 
 ## 4. skill_graph_versions：不可变内容快照
 
@@ -226,7 +230,7 @@
 
 ### 8.1 请求契约（API 字段，不是新增数据库列）
 
-调用方在首次发送前生成并保存 idempotency_key；超时或断线重试使用相同 key 和完整请求。服务不能每次收到请求都替调用方生成新 key。所有写动作必填 expected_revision：0 表示尚未发布，否则为调用方读取到的当前 revision，不再支持省略后覆盖最新状态。
+图写入层的调用方在首次发送前生成并保存 idempotency_key；超时或断线重试使用相同 key 和完整请求。服务不能每次收到请求都替调用方生成新 key。所有图写入动作在进入写入层前必须确定 expected_revision：0 表示尚未发布，否则为受理时读取到的当前 revision，不允许在发布前重新读取并覆盖较新状态。面向普通用户的异步 `organize` HTTP 接口由服务端捕获并持久保存该值，不要求用户填写；内部写入层仍须显式提供。
 
 | 变量名 | 存储类型 | 物理含义 | 用途 | 适用范围 |
 | --- | --- | --- | --- | --- |

@@ -6,10 +6,10 @@
 
 | 注册名称 | 协议 | `reward.detail` |
 | --- | --- | --- |
-| `searchqa` | context QA；EM、token F1、substring EM | skillopt 原始 `[EVALUATION RESULT]` 文本 |
-| `officeqa` | 本地文档工具；官方固定版本的二元评分 | skillopt 原始失败原因；成功为空字符串 |
+| `searchqa` | context QA；EM、token F1、substring EM | 基准协议的 `[EVALUATION RESULT]` 文本 |
+| `officeqa` | 本地文档工具；官方固定版本的二元评分 | 基准协议的失败原因；成功为空字符串 |
 | `spreadsheetbench` | `workspace_tools` 或 `bash_only`；分别使用独立交互函数 | 统一 `[POST-EXECUTION VERIFICATION]` 逐格报告 |
-| `alfworld_bounded_history` | 单个独立 game，保留有限数量的历史 observation/action | skillopt 原始 episode 失败原因；成功为空字符串 |
+| `alfworld_bounded_history` | 单个独立 game，保留有限数量的历史 observation/action | 基准协议的 episode 失败原因；成功为空字符串 |
 
 SpreadsheetBench 数据入口加载 Verified 400：每题必须恰好匹配一个 `*init*.xlsx` 和一个 `*golden*.xlsx`，不要求文件名前缀一致；缺失或匹配到多个文件时明确报错。当前数据加载器不支持原始 912 题多用例版本。
 
@@ -83,7 +83,7 @@ execution = {
 ```sh
 .venv/bin/python -m pytest tests/mindmemos_skill/test_benchmark_envs.py -q
 .venv/bin/python scripts/skill/verify_env_parity.py \
-  --skillopt-envs /path/to/skillopt-self-validate/skillopt/envs \
+  --reference-envs /path/to/reference/envs \
   --treeskill-env /path/to/legacy/mindmemos_skill/envs/registered_envs/spreadsheetbench
 ```
 
@@ -253,7 +253,7 @@ SpreadsheetBench 两种交互模式使用同一个公共评分器。`bash_only` 
 
 参考源是用户指定的 [TreeSkill-colleague-share](https://github.com/ChengzhePiao/TreeSkill-colleague-share)，
 本地 checkout 提交 `bc3b0a9d55870d8ad77c38839c4fa5baf111e638`，相关 tracked 文件无修改。
-Skill-Forest 参考本地 `skillopt-self-validate`，HEAD 为
+Skill-Forest 参考本地 workspace actor 快照，HEAD 为
 `5d041ffe6e63409d7f05135e7c705cf85357900e`，但 `react_agent.py`、`azure_openai.py` 有未提交修改，
 因此此次对齐的是当前文件快照，不能将其表述为纯 HEAD 版本或历史实验运行时的确定版本。
 
@@ -276,7 +276,7 @@ endpoint、API key、实际部署别名和 Python 依赖环境仍须由运行方
 
 ```bash
 .venv/bin/python scripts/skill/verify_spreadsheet_protocols.py \
-  --workspace-source /path/to/skillopt-self-validate \
+  --workspace-actor /path/to/reference/envs/spreadsheetbench/react_agent.py \
   --bash-source /path/to/TreeSkill-colleague-share
 ```
 
@@ -291,7 +291,7 @@ SDK 请求测试另外验证三个 YAML 的实际请求体、thinking 去除、t
 
 参考文件 SHA-256：
 
-- Skill-Forest `skillopt/envs/spreadsheetbench/react_agent.py`：`34ee1f148ef22afe1ecf53ef5367c8cd53eb62460444201e3ec66896ad15919f`
+- Skill-Forest `envs/spreadsheetbench/react_agent.py`：`34ee1f148ef22afe1ecf53ef5367c8cd53eb62460444201e3ec66896ad15919f`
 - TreeSkill `src/react_agent/agent.py`：`18600c6b1b453d16719603bfb45c93ddc1d45fd9314ddedc9b35afb3447fa8cb`
 - TreeSkill `src/react_agent/models.py`：`392bbdb46f252901089171c032e7af1ff6a3def355f4add1448d749a752773cb`
 
@@ -314,3 +314,10 @@ SDK 请求测试另外验证三个 YAML 的实际请求体、thinking 去除、t
 
 因此当前结论是：指定场景中的 actor 消息协议通过直接差分，评分按用户要求统一；
 完整实验复现仍需固定算法配置、数据 manifest、Skill 资源、模型服务和参考源码快照，不能仅切换 env mode 就保证分数相同。
+
+### 环境标识与缓存
+
+LiveMath 的默认评估/提示词标识为 `livemath-mcq-v1` / `livemath-math-v1`；
+SearchQA 为 `searchqa-v1`，ALFWorld 为 `alfworld-bounded-history-v1`。
+这些标识参与 rollout 身份核对。历史输出不重写；恢复旧任务时使用该任务保存的完整配置，
+新默认配置使用新的工作目录，避免配置不匹配导致恢复被拒绝。

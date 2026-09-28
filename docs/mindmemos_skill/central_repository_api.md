@@ -6,7 +6,7 @@
 ## 初始化与调用
 
 默认配置 `config/mindmemos_skill/default.yaml` 使用本地 SQLite，且不启用 remote 表。
-显式配置组装不连接数据库；省略配置参数时，本地工厂会初始化存储。工厂、pipeline 业务方法（包括仓库和图查询）及关闭接口均为异步，构造函数与配置校验仍同步。HTTP 请求格式不变。Python 调用示例：
+`create_service()` 在返回前自动初始化已配置的业务存储和可观测性存储，适用于显式配置与默认本地配置；初始化失败时关闭已组装资源。工厂、pipeline 业务方法（包括仓库和图查询）及关闭接口均为异步，构造函数与配置校验仍同步。HTTP 请求格式不变。Python 调用示例：
 
 ```python
 import asyncio
@@ -16,7 +16,6 @@ from mindmemos_skill.pipelines.typing import RegisterRequest, CommitRequest, Exp
 
 async def main():
     async with await create_service("config/mindmemos_skill/default.yaml") as service:
-        await service.initialize_storage()
         first = await service.register_skill(RegisterRequest(
             project_id="demo", name="Data analysis", alias="analysis",
             source="./my-skill", message="Initial registration",
@@ -65,7 +64,7 @@ if __name__ == "__main__":
 前缀歧义时报错并列出候选。展示名称不作为引用。alias 不得占用其他 Skill 的完整 ID。
 列表与历史支持 limit/offset，默认 100，单页最多 1000。
 
-HTTP 启动入口自动调用 initialize_storage；手工 create_app(service) 不负责初始化。
+HTTP 启动入口复用 `create_service()` 的自动初始化；`create_app(service)` 只包装已有服务，不重复初始化。
 HTTP 入口用于可信本地调用，project_id 是调用参数，不是认证身份；目前没有实现多租户认证授权。
 路径参数指向服务进程所在机器的文件系统。远程客户端可以直接传 snapshot，不需要共享导入目录。
 错误语义为：对象不存在 404，歧义/别名/版本冲突或仍被引用 409，请求无效 422。
@@ -143,15 +142,15 @@ training_pipelines:
 
 服务工厂只构造一个 SkillPersistence，以 `persistence` 参数传给所有 pipeline。每个 pipeline 构造函数接收 `config` 和 `persistence`，前者包含其完整配置。没有配置全局存储时注入 None；需要存储的自定义流程应明确拒绝，仓库流程在工厂预检时拒绝。所有流程配置由对应模型在构造前校验，内部组件实现名称及参数也应由该模型验证。
 
-训练和演进请求通过 `pipeline` 字段选中配置中的名称，HTTP 与 Python 一致。只有一个定义时可省略，多个时必须指定；空字典或省略字段禁用对应操作，不设默认流程，也不提供并发调度。训练与演进可使用相同的请求名称，按操作分别解析。
+本地 Python 训练请求通过 `pipeline` 字段选中配置中的名称；FastAPI 不开放训练路由。当前内部演进调用也按名称选择配置，目标公开演进 API 则由 Project 绑定 pipeline。Python 入口只有一个定义时可省略名称，多个时必须指定；空字典或省略字段禁用对应操作，不设默认流程，也不提供并发调度。训练与演进可使用相同的配置名称，按操作分别解析。
 
 旧 `backends`、`persistence_backend`、字符串形式的 `repository_pipeline`、训练/演进名称列表和单数默认选择字段不再接受。迁移配置时把原数据库参数原样放进 `persistence.database`，存储选项放进 `persistence.config`，各 pipeline 参数直接放进对应定义；保留数据库 URL 和工作目录即可沿用已有数据。RepositoryPipeline 必须显式定义，不会自动补装。
 
 关闭服务会先逆序关闭 pipeline，再关闭数据库。具体 pipeline 覆盖 `close()` 释放其内部资源，并自行处理构造失败时的部分资源；不能关闭借用的全局存储。
 
-训练请求使用 `TrainingRequest(project_id=..., base_version_id=..., tasks=..., split=...)`，不接受 `skill_ref`。
+训练请求使用 `TrainingRequest(project_id=..., base_version_id=..., work_dir=..., tasks=..., split=...)`，不接受 `skill_ref`。
 精确版本查询通过 `persistence.skills.version_by_id(project_id, version_id)` 校验项目归属。
-未配置具体训练/演进 pipeline 时对应操作仍报告未实现；此重构没有提供训练算法。
+内置 `training` Pipeline 通过配置切换 TreeSkill / Skill-Forest；见 [通用训练流程](training.md)。未配置训练/演进 pipeline 时对应操作仍报告未实现。
 UI 图查询使用 `service.graph_queries(project_id)`，不再通过 Service 读取数据库连接。
 
 此次重构不改变表、记录格式、版本关系、已有事务或云服务的数据契约，不需要数据迁移。
