@@ -1,6 +1,6 @@
 """Explicit service storage and self-contained pipeline definitions."""
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -35,14 +35,36 @@ class PersistenceConfig(BaseModel):
     """Database implementation and connection settings owned by this service."""
 
 
+class ObservabilityConfig(BaseModel):
+    """Select one service-wide backend for algorithm traces and audit logs."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject unsupported observability settings."""
+
+    backend: ImplementationConfig
+    """One supported SQLite or PostgreSQL database connection."""
+
+    capture_level: Literal["info", "debug"] = "info"
+    """Whether agent inputs and outputs are retained alongside call metadata."""
+
+    service_name: Name = "mindmemos-skill"
+    """OpenTelemetry service.name attached to persisted spans."""
+
+
 class ServiceConfig(BaseModel):
     """Define one persistence and complete pipeline configurations at their call sites."""
 
     model_config = ConfigDict(extra="forbid")
     """Reject obsolete backend graphs and unknown service fields."""
 
+    local_project_id: Name | None = None
+    """Explicit project bound to all requests in a personal local deployment."""
+
     persistence: PersistenceConfig | None = None
     """Single global store; omission leaves storage unavailable."""
+
+    observability: ObservabilityConfig | None = None
+    """Optional service-wide trace and algorithm audit backend."""
 
     repository_pipeline: ImplementationConfig | None = None
     """Explicit repository definition; omission disables repository operations."""

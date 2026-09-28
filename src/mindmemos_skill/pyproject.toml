@@ -10,6 +10,7 @@ dependencies = [
     "filelock>=3.20,<4",
     "json-repair>=0.63.4,<1",
     "openai>=2,<3",
+    "opentelemetry-sdk>=1.38,<2",
     "python-dotenv>=1,<2",
     "tenacity>=9,<10",
     "pydantic>=2,<3",
