@@ -2,23 +2,73 @@
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 import pytest
-from mindmemos_lite import prompts
-from mindmemos_lite.components.extractor.task_experience.extractor import TrajectoryExperienceExtractor
+from mindmemos_lite.api.mappers import to_add_command
+from mindmemos_lite.api.schemas import AddRequest
 from mindmemos_lite.components.extractor.task_experience import (
     ExperienceResolution,
     ExtractedExperienceCandidate,
     TrajectoryExperienceBuilder,
 )
 from mindmemos_lite.components.extractor.task_experience.builder import _truncate_tool_message
+from mindmemos_lite.components.extractor.task_experience.extractor import TrajectoryExperienceExtractor
 from mindmemos_lite.components.text import TextPreprocessor
 from mindmemos_lite.config import TextProcessingConfig, TrajectoryAddConfig
+from mindmemos_lite.service.base import _pipeline_message
 from mindmemos_lite.typing import (
     AddPipelineInput,
     DialogueMessage,
     FileMessage,
     MemoryRequestContext,
 )
+from mindmemos_sdk.memory.models import DialogueMessage as SDKDialogueMessage
+from mindmemos_sdk.memory.models import serialize_messages
+
+from mindmemos_lite import prompts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extract_type", ["plan", "experience"])
+async def test_message_agent_reaches_extraction_llm_from_sdk_and_api(monkeypatch, extract_type) -> None:
+    monkeypatch.setattr(prompts, "PLAN_EXTRACTION_SYSTEM_PROMPT", "Extract plans as experiences JSON.")
+    monkeypatch.setattr(prompts, "PLAN_EXTRACTION_SYSTEM_PROMPT_ZH", "Extract plans as experiences JSON.")
+    calls = []
+
+    class Client:
+        async def chat(self, **kwargs):
+            calls.append(kwargs["messages"])
+            return SimpleNamespace(parsed={"experiences": []})
+
+    messages = serialize_messages(
+        [
+            SDKDialogueMessage(role="user", content="Make a plan"),
+            SDKDialogueMessage(role="assistant", content="First inspect the inputs", agent="planner"),
+            SDKDialogueMessage(role="tool", content="Inputs inspected", agent="executor"),
+        ]
+    )
+    assert "agent" not in messages[0]
+    command = to_add_command(AddRequest(messages=messages, metadata={"extract_type": extract_type}))
+    builder = _builder(TrajectoryExperienceExtractor(llm_client=Client()), _StubDedup())
+    await builder.build(
+        AddPipelineInput(
+            messages=[_pipeline_message(message) for message in command.messages],
+            metadata=command.metadata,
+            task="Make a plan",
+        ),
+        _context(),
+        config=TrajectoryAddConfig(),
+    )
+
+    assert len(calls) == 1
+    turns = json.loads(calls[0][1]["content"])["turns"]
+    assert "agent" not in turns[0]
+    assert [(turn["message_index"], turn["role"], turn["agent"]) for turn in turns[1:]] == [
+        (1, "assistant", "planner"),
+        (2, "tool", "executor"),
+    ]
 
 
 @pytest.mark.parametrize("lang", ["en", "zh"])
@@ -102,9 +152,7 @@ class _RecordingExtractor:
         return [
             ExtractedExperienceCandidate(
                 ref_id=f"e{offset}",
-                content=(
-                    f"在无外网环境中, 直接使用 pip 安装包会失败(变体{offset}). 需要先确认网络或使用离线镜像。"
-                ),
+                content=(f"在无外网环境中, 直接使用 pip 安装包会失败(变体{offset}). 需要先确认网络或使用离线镜像。"),
                 confidence=0.9,
                 source_message_indices=indices,
             )

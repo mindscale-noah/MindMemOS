@@ -36,6 +36,9 @@ class DialogueMessage(BaseModel):
     timestamp: int | None = None
     """Dialogue timestamp in 13-digit milliseconds. Leave unset when unavailable."""
 
+    agent: str | None = None
+    """Agent that produced this dialogue message, when known."""
+
 
 class UrlMessage(BaseModel):
     """A URL reference to add as memory.
@@ -184,7 +187,9 @@ def serialize_messages(messages: list[Message | dict[str, Any]]) -> list[dict[st
     """Serialize typed or raw message objects for request bodies."""
     result: list[dict[str, Any]] = []
     for msg in messages:
-        if isinstance(msg, BaseModel):
+        if isinstance(msg, DialogueMessage):
+            result.append(msg.model_dump(exclude={"agent"} if msg.agent is None else set()))
+        elif isinstance(msg, BaseModel):
             result.append(msg.model_dump())
         else:
             result.append(msg)

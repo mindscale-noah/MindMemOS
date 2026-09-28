@@ -134,6 +134,7 @@ class DialogueMessage:
     role: str
     content: str
     timestamp: int | None = None
+    agent: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.role, "role")

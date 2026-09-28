@@ -57,6 +57,7 @@ docs/superpowers/
 docs/lite/
 docs/sdk/
 resources/memory/
+resources/swebench/
 
 # Node / openclaw plugin build artifacts
 node_modules/

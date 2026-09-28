@@ -188,7 +188,9 @@ def to_status_response(result: MemoryMutationResult, request_id: str) -> ApiResp
 
 def _to_message(message):
     if isinstance(message, DialogueMessageInput):
-        return DialogueMessage(role=message.role, content=message.content, timestamp=message.timestamp)
+        return DialogueMessage(
+            role=message.role, content=message.content, timestamp=message.timestamp, agent=message.agent
+        )
     if isinstance(message, UrlMessageInput):
         return UrlMessage(url=message.url)
     if isinstance(message, FileMessageInput):

@@ -66,13 +66,15 @@ def _normalize_role(role: str) -> str:
 
 def _normalize_message(
     message: DialogueMessage | TextMessage | UrlMessage | FileMessage,
+    *,
+    keep_system: bool = False,
 ) -> tuple[str, str, int | None] | None:
     """Reduce one add input to the ``(role, text, timestamp)`` the prompt expects.
 
     The caller keeps every surviving message at its original request position, so
     extracted ``source_message_indices`` keep pointing at the real source message.
-    System messages carry no trajectory evidence, and file/URL attachments are
-    not evidence for this pipeline, so both are dropped.
+    System messages are normally dropped, except when preserving an explicitly
+    prepared parent-memory view. File/URL attachments are always dropped.
     """
     if isinstance(message, TextMessage):
         role, text, timestamp = "user", message.text, None
@@ -80,7 +82,7 @@ def _normalize_message(
         role, text, timestamp = _normalize_role(message.role), message.content, message.timestamp
     else:
         return None
-    if role == "system" or not text.strip():
+    if (role == "system" and not keep_system) or not text.strip():
         return None
     return role, text, timestamp
 
@@ -240,17 +242,23 @@ class TrajectoryExperienceBuilder:
         turn_by_index: dict[int, dict[str, Any]] = {}
         preprocessed_by_index: dict[int, PreprocessedText] = {}
         source_by_index: dict[int, SourceRef] = {}
+        prepared_parent_view = (
+            inp.metadata.get("extract_type") == "plan"
+            and inp.metadata.get("trajectory_view") == "chronological_parent_v1"
+        )
         for index, message in enumerate(inp.messages):
-            normalized = _normalize_message(message)
+            normalized = _normalize_message(message, keep_system=prepared_parent_view)
             if normalized is None:
                 continue
             role, text, timestamp = normalized
             turn = {
                 "message_index": index,
                 "role": role,
-                "text": _truncate_tool_message(text, role, cfg),
+                "text": text if prepared_parent_view else _truncate_tool_message(text, role, cfg),
                 "timestamp": timestamp,
             }
+            if isinstance(message, DialogueMessage) and message.agent is not None:
+                turn["agent"] = message.agent
             turns.append(turn)
             turn_by_index[index] = turn
             pp = await self._preprocess(turn["text"])

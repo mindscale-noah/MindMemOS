@@ -1,0 +1,41 @@
+dataset_name: SWE-bench/SWE-bench_Verified
+dataset_path: resources/swebench/verified.jsonl
+image_map_path: outputs/swebench-verified/train50-baseline50-defaultthinking-c10-20260923-recovery03/images.json
+output_dir: outputs/swebench-verified/train50-baseline50-defaultthinking-c10-20260923-recovery03
+seed: 42
+train_size: 50
+test_size: 50
+rollouts_per_task: 1
+max_delegations: 4
+parent:
+  model: deepseek-v4-flash
+  max_turns: 12
+  max_tokens: null
+  temperature: 0
+  timeout_seconds: 180
+child:
+  model: deepseek-v4-flash
+  max_turns: 20
+  max_tokens: null
+  temperature: 0
+  timeout_seconds: 180
+memory:
+  plan_project_id: swebench-plan-001
+  experience_project_id: swebench-experience-001
+  user_id: swebench-verified
+  task_top_k: 5
+  experiences_per_task: 100
+  timeout_seconds: 600
+docker:
+  workdir: /testbed
+  command_prefix: source /opt/miniconda3/etc/profile.d/conda.sh && conda activate
+    testbed
+  memory_limit: 8g
+  cpus: 2
+  command_timeout_seconds: 120
+  output_limit_chars: 24000
+  pull_missing: true
+  remove_downloaded: true
+  restore_base_commit: true
+  platform: linux/amd64
+task_concurrency: 10

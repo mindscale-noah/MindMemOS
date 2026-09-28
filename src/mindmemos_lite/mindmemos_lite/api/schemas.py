@@ -32,6 +32,7 @@ class DialogueMessageInput(_StrictModel):
     role: NonEmptyStr
     content: NonEmptyStr
     timestamp: int | None = None
+    agent: str | None = None
 
 
 MemoryMessageInput = DialogueMessageInput | UrlMessageInput | FileMessageInput | TextMessageInput

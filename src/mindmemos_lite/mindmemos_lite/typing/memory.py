@@ -173,6 +173,9 @@ class DialogueMessage(BaseModel):
     timestamp: int | None = None
     """Dialogue event time as a 13-digit millisecond timestamp, or None when omitted."""
 
+    agent: str | None = None
+    """Agent that produced this dialogue message, when known."""
+
 
 class SourceRef(BaseModel):
     """Purpose: Describe an external source referenced by memory extraction.
