@@ -41,6 +41,8 @@
 
 父子模型可以相同，但两个记忆项目和对应 key 必须不同。
 
+四阶段脚本将 `SWEBENCH_MEMORY_BASE_URL` 默认设为 `http://127.0.0.1:8000`，即本机 Lite API 的默认地址；已导出的同名环境变量优先，其次读取传入的本地凭据文件。`SWEBENCH_PLAN_MEMORY_KEY` 与 `SWEBENCH_EXPERIENCE_MEMORY_KEY` 也已在脚本中声明，但不写入实际密钥值；可由本地凭据文件或运行前导出的环境变量提供。脚本提交到 GitHub 时不会包含项目密钥。
+
 ## 四阶段运行
 
 先复制 `config/eval/swebench_verified.example.yaml` 并修改路径、模型和项目名。相对路径以运行时当前目录为基准。输出目录必须是全新目录；split 后配置被冻结，修改参数应使用新实验目录。

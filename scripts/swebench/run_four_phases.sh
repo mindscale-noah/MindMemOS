@@ -48,6 +48,22 @@ fi
 
 export PYTHONPATH="$repo_root/src/mindmemos_eval:$repo_root/src/mindmemos_sdk${PYTHONPATH:+:$PYTHONPATH}"
 
+# Memory service settings for extract/test. An exported value wins, then the
+# local env file, then the Lite API's default address on this machine.
+# Leave project keys out of this Git-tracked script: put them in the local env
+# file or export them in the shell before running extract/test.
+memory_url_from_file=$("$python_bin" - "$env_file" <<'PY'
+import sys
+
+from dotenv import dotenv_values
+
+print(dotenv_values(sys.argv[1]).get("SWEBENCH_MEMORY_BASE_URL") or "")
+PY
+)
+export SWEBENCH_MEMORY_BASE_URL="${SWEBENCH_MEMORY_BASE_URL:-${memory_url_from_file:-http://127.0.0.1:8000}}"
+export SWEBENCH_PLAN_MEMORY_KEY="${SWEBENCH_PLAN_MEMORY_KEY:-}"
+export SWEBENCH_EXPERIENCE_MEMORY_KEY="${SWEBENCH_EXPERIENCE_MEMORY_KEY:-}"
+
 case "$phase" in
   prepare)
     # Freeze a fresh 50/50 split and config. Supply a local image map covering
