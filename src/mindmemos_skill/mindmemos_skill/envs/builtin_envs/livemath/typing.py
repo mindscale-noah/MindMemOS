@@ -81,12 +81,34 @@ class SourceRecord(BaseModel):
     mcq: SourceMCQ
     """Question, options, and private answer key."""
 
+    theorem_type: list[str] = Field(default_factory=list)
+    """Public mathematical task categories from the original benchmark."""
+
+    @field_validator("theorem_type", mode="before")
+    @classmethod
+    def normalize_theorem_type(cls, value):
+        """Normalize scalar and list categories from official monthly releases.
+
+        Args:
+            value: Source category string, list, or null.
+
+        Returns:
+            Nonempty category labels in source order.
+        """
+        if value is None:
+            return []
+        items = [value] if isinstance(value, str) else value
+        return [str(item).strip() for item in items if str(item).strip()]
+
 
 class LiveMathTask(Task):
     """Public multiple-choice task; no theorem, sketch, or answer metadata."""
 
     choices: list[Choice]
     """Complete displayed options after optional deterministic shuffling."""
+
+    task_type: str = "math_mcq"
+    """Public task category retained for algorithm-specific reflection rendering."""
 
 
 class LiveMathRewardData(RewardData):
@@ -106,7 +128,7 @@ class LiveMathRewardData(RewardData):
 
 
 class LiveMathReward(Reward):
-    """Skillopt-compatible exact-choice scoring details."""
+    """Exact-choice scoring details."""
 
     predicted_label: str
     """Parsed model answer label."""

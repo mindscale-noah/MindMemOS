@@ -15,7 +15,7 @@ from .typing import SearchQAResult, SearchQARewardData, SearchQATask
 
 
 def _truncate(context: str, limit: int) -> str:
-    """Preserve skillopt DOC-boundary truncation, including its fallback suffix."""
+    """Preserve DOC-boundary truncation, including its fallback suffix."""
     if len(context) <= limit:
         return context
     result = ""

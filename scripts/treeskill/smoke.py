@@ -40,7 +40,7 @@ class SmokeAgent(OpenAIChatAgent):
 
     def run_messages(self, *, messages, tools=None, response_format=None):
         user = messages[-1]["content"]
-        payload = json.loads(user.split("\n\n", 1)[1])
+        payload = {} if user.startswith("Route") else json.loads(user.split("\n\n", 1)[1])
         if user.startswith("Analyze"):
             output = {
                 "instance_id": payload["instance_id"],

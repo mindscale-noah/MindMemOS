@@ -45,7 +45,7 @@ class LiveMathEnvironment(Environment[LiveMathConfig]):
             raise TypeError("LiveMath requires LiveMathTask and LiveMathRewardData")
         if reward_data.correct_choice not in task.choices:
             raise ValueError("Reference answer is not one of the displayed choices")
-        text = skill_text(skills)
+        text = skill_text(skills).strip()
         system = SYSTEM_PROMPT.format(skill_section=f"## Skill\n{text}\n\n" if text else "")
         choices = "\n".join(f"{choice.label}. {choice.text}" for choice in task.choices)
         user = f"## Question\n{task.instruction}\n\n## Choices\n{choices}"

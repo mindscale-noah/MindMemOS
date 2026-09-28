@@ -54,7 +54,7 @@ async def _main():
         if env.config.transactional_recalculation:
             preflight = preflight_recalculation_runtime
     else:
-        if config.algorithm.analysis_adapter == "spreadsheetbench_reference":
+        if config.algorithm.env_adapter.class_name == "spreadsheetbench_reference":
             raise ValueError("spreadsheetbench_reference analysis requires its matching reference environment")
         env = Environment.build(config.environment, config.environment_options)
     if args.preflight_only:

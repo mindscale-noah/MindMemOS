@@ -32,5 +32,5 @@ class SearchQAConfig(BaseModel):
     max_context_chars: int = Field(default=6000, ge=1)
     """Passage character budget, truncated at DOC boundaries."""
 
-    evaluator_version: str = "skillopt-searchqa-v1"
+    evaluator_version: str = "searchqa-v1"
     """Identity of the exact-match, token F1, and feedback protocol."""

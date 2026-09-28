@@ -48,8 +48,8 @@ class Router(OpenAIChatAgent):
         self.output = output
         self.calls = []
 
-    def run(self, *, system, user):
-        self.calls.append((system, user))
+    def run(self, *, messages):
+        self.calls.append((messages[0]["content"], messages[1]["content"]))
         if isinstance(self.output, Exception):
             raise self.output
         return AgentResult(output=self.output, trajectory=[], usage={"total_tokens": 17})
@@ -75,9 +75,9 @@ def test_subtree_selection_preserves_ancestors_and_uses_public_task():
     assert "Root intro." in text and "Use formulas." in text and "references/check.md" in text
     assert "Formatting" not in text and "Not a heading" not in text
     assert result.response.usage["total_tokens"] == 17
-    payload = json.loads(router.calls[0][1].split("\n\n", 1)[1])
-    assert payload["task"] == {"id": "one", "instruction": "Verify the formulas"}
-    assert payload["skill_tree"][0]["local_content"] == "Root intro."
+    task_text, tree_text = router.calls[0][1].split("Task:\n", 1)[1].split("\n\nSkill tree:\n", 1)
+    assert json.loads(task_text) == {"id": "one", "instruction": "Verify the formulas"}
+    assert json.loads(tree_text)[0]["local_content"] == "Root intro."
     assert skill.bundle.files["SKILL.md"] == CONTENT
 
 

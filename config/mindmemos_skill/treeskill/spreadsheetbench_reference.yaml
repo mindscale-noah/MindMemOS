@@ -63,7 +63,9 @@ algorithm:
     presence_penalty: 2.0
     extra_body: *id001
     seed: 41
-  analysis_adapter: spreadsheetbench_reference
+  env_adapter:
+    class_name: spreadsheetbench_reference
+    config: {}
   samples_per_task: 1
   rollout_concurrency: 16
   min_trajectories: 1

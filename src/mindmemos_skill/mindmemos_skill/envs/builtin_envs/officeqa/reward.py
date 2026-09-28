@@ -6,7 +6,7 @@ from .typing import OfficeQARewardData
 
 
 def evaluate(answer: str, reward_data: OfficeQARewardData, *, fail_reason: str = "") -> Reward:
-    """Score the extracted answer with exact skillopt failure text.
+    """Score the extracted answer with the benchmark failure text.
 
     Args:
         answer: Model answer after the rollout's tag extraction.

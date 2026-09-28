@@ -11,6 +11,9 @@ from ...typing import Task
 class OfficeQATask(Task):
     """A question and an explicit public document allowlist."""
 
+    task_type: str = "officeqa"
+    """Released task category used by reflection headers."""
+
     documents: dict[str, Path]
     """Public relative document names mapped to released text files."""
 

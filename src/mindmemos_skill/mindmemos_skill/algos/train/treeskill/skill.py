@@ -9,9 +9,9 @@ from ....envs.typing import Task
 from ....logging import get_logger
 from ....skill import Skill, SkillBundle, SkillResources, SkillSnapshot
 from .config import TreeSkillConfig
-from .prompts import ROUTING_SYSTEM_PROMPT
+from .env_adapter import TreeSkillEnvAdapter
 from .tree import parse_tree, render_selection
-from .typing import RoutingResult, SkillNode
+from .typing import RoutingResult, SkillNode, TreeSkillRoutingContext
 
 
 def _prompt_node(node: SkillNode) -> dict:
@@ -58,6 +58,7 @@ class TreeSkill(Skill):
         """
         super().__init__(bundle=bundle, resources=resources)
         self.config = config.model_copy(deep=True)
+        self.env_adapter = TreeSkillEnvAdapter.build(self.config.env_adapter.class_name, self.config.env_adapter.config)
         if router is not None and router.config != config.router:
             raise ValueError("Router config must match TreeSkill config")
         self.router = router
@@ -78,7 +79,7 @@ class TreeSkill(Skill):
         """Record routing settings alongside the source content."""
         snapshot = super().snapshot()
         snapshot.implementation = "treeskill"
-        snapshot.config_schema_version = 1
+        snapshot.config_schema_version = 2
         snapshot.config = self.config.model_dump(mode="json", exclude={"router": {"api_key"}})
         return snapshot
 
@@ -101,9 +102,16 @@ class TreeSkill(Skill):
             router: Optional borrowed router matching the stored settings.
         """
         source = Skill.from_snapshot(snapshot)
-        if snapshot.implementation != "treeskill" or snapshot.config_schema_version != 1:
+        if snapshot.implementation != "treeskill" or snapshot.config_schema_version not in (1, 2):
             raise ValueError("Unsupported TreeSkill snapshot implementation or schema version")
         recorded_config = dict(snapshot.config)
+        if snapshot.config_schema_version == 1 and "env_adapter" not in recorded_config:
+            # Historical stable-ID routing always used the spreadsheet request protocol.
+            if recorded_config.get("reference_routing", False):
+                recorded_config["env_adapter"] = {"class_name": "spreadsheetbench_reference"}
+            else:
+                recorded_config["env_adapter"] = {"class_name": "legacy"}
+
         recorded_router = dict(recorded_config["router"])
         if recorded_router.get("api_key") == "**********":
             recorded_router.pop("api_key")
@@ -156,7 +164,7 @@ class TreeSkill(Skill):
             model = RouterModel()
             model.response = None
             routed = asyncio.run(
-                TreeSkillRouter(chat_model=model).route(
+                TreeSkillRouter(chat_model=model, env_adapter=self.env_adapter).route(
                     skill=self,
                     task=task,
                     tree_metadata=self.config.tree_metadata or None,
@@ -172,12 +180,11 @@ class TreeSkill(Skill):
         tree = parse_tree(source.files["SKILL.md"])
         if not tree.roots:
             return RoutingResult(bundle=source, fallback_reason="no_heading_tree")
-        payload = {"task": task.model_dump(mode="json"), "skill_tree": [_prompt_node(root) for root in tree.roots]}
-        router = self.router if self.router is not None else OpenAIChatAgent(self.config.router)
-        response = router.run(
-            system=ROUTING_SYSTEM_PROMPT,
-            user="Route skill subtrees for this task.\n\n" + json.dumps(payload, ensure_ascii=False, indent=2),
+        messages = self.env_adapter.build_routing_messages(
+            TreeSkillRoutingContext(task=task, tree=[_prompt_node(root) for root in tree.roots])
         )
+        router = self.router if self.router is not None else OpenAIChatAgent(self.config.router)
+        response = router.run(messages=messages)
         if not isinstance(response.output, str):
             raise TypeError("TreeSkill router must return text containing its JSON selection")
         try:

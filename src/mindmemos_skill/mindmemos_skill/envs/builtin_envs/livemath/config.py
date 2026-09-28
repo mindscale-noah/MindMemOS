@@ -30,10 +30,10 @@ class LiveMathConfig(BaseModel):
     agent: OpenAIChatConfig
     """Model, endpoint, and request limits included in audit identity; credentials are masked."""
 
-    evaluator_version: str = "skillopt-mcq-v1"
+    evaluator_version: str = "livemath-mcq-v1"
     """Evaluation protocol version included in resume identity."""
 
-    prompt_version: str = "skillopt-math-v1"
+    prompt_version: str = "livemath-math-v1"
     """Prompt protocol version included in resume identity."""
 
 

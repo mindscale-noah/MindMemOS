@@ -1,4 +1,4 @@
-"""Preserve skillopt episode success and exact failure feedback."""
+"""Evaluate episode success with deterministic failure feedback."""
 
 from ...typing import Reward
 
@@ -12,7 +12,7 @@ def evaluate(*, won: bool, done: bool, max_steps: int) -> Reward:
         max_steps: Configured action budget used in timeout feedback.
 
     Returns:
-        Binary success and the original skillopt failure string.
+        Binary success and the episode failure string.
     """
     detail = (
         "" if won else ("Episode ended without completing the task" if done else f"Timeout after {max_steps} steps")

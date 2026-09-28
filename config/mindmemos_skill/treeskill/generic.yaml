@@ -25,7 +25,9 @@ algorithm:
     temperature: 0.0
     response_validation: content
     reasoning_effort: medium
-  analysis_adapter: generic
+  env_adapter:
+    class_name: generic
+    config: {}
   samples_per_task: 1
   rollout_concurrency: 8
   min_trajectories: 8

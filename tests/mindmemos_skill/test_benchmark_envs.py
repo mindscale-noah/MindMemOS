@@ -361,6 +361,8 @@ def test_alfworld_history_success_and_cleanup(tmp_path, monkeypatch):
     final_prompt = agent.requests[-1][-1]["content"]
     assert "Observation 2:" in final_prompt and "Observation 1:" not in final_prompt
     assert result.trajectory[-1]["reward"] == 10
+    assert result.reward.model_extra["task_description"] == "put apple in bowl"
+    assert result.reward.model_extra["task_type"] == "other"
 
 
 def test_alfworld_provider_failure_is_not_cached(tmp_path, monkeypatch):

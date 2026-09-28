@@ -6,13 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from ....agents.typing import AgentResult
 from ....envs.data import DataSample
-from ....envs.typing import RolloutResult
+from ....envs.typing import RolloutResult, Task
 from ....skill.typing import SkillBundle
 
 
@@ -172,66 +172,6 @@ class LocalizationResult(_StrictModel):
 
     evidence: tuple[LocatedEvidence, ...] = ()
     """Validated localized lessons in their original response order."""
-
-
-class NewChildSpec(_StrictModel):
-    """One recursively structured new child requested by node fusion."""
-
-    heading: str = Field(min_length=1)
-    """Plain Markdown heading text without heading markers."""
-
-    content: str = ""
-    """Proposed Markdown instruction text, excluding child sections when node-local."""
-
-    children: tuple[NewChildSpec, ...] = ()
-    """Ordered direct child nodes or recursively proposed child subtrees."""
-
-
-class NodeFusionEdit(_StrictModel):
-    """One model-proposed node-local edit."""
-
-    operation: Literal["update_node", "create_child", "reject"]
-    """Requested update_node, create_child or reject operation."""
-
-    rationale: str = Field(min_length=1)
-    """Model-provided justification for placement or editing."""
-
-    content: str | None = None
-    """Proposed Markdown instruction text, excluding child sections when node-local."""
-
-    new_child: NewChildSpec | None = None
-    """Structured proposed child subtree, required only for create_child."""
-
-    @model_validator(mode="after")
-    def validate_operation_payload(self) -> NodeFusionEdit:
-        if self.operation == "update_node":
-            if self.content is None or self.new_child is not None:
-                raise ValueError("update_node requires content and must not include new_child")
-        elif self.operation == "create_child":
-            if self.new_child is None or self.content is not None:
-                raise ValueError("create_child requires new_child and must not include content")
-        elif self.content is not None or self.new_child is not None:
-            raise ValueError("reject must not include content or new_child")
-        return self
-
-
-class NodeFusionDecision(_StrictModel):
-    """Complete response for one target-node fusion call."""
-
-    rationale: str = Field(min_length=1)
-    """Model-provided justification for placement or editing."""
-
-    edits: tuple[NodeFusionEdit, ...] = Field(min_length=1, max_length=2)
-    """One or two validated edits for the same target node."""
-
-    @model_validator(mode="after")
-    def validate_edit_set(self) -> NodeFusionDecision:
-        operations = [edit.operation for edit in self.edits]
-        if "reject" in operations and len(operations) != 1:
-            raise ValueError("reject cannot be mixed with another operation")
-        if len(operations) != len(set(operations)):
-            raise ValueError("node fusion may return each operation at most once")
-        return self
 
 
 class AppliedEditRecord(_StrictModel):
@@ -557,3 +497,53 @@ class TrajectoryAnalyzer(Protocol):
         *,
         trajectories_by_id: Mapping[str, TrainingRollout],
     ) -> tuple[list[TrajectoryAnalysisRecord], list[str]]: ...
+
+
+if TYPE_CHECKING:
+    from .config import TreeSkillTrainerConfig
+
+
+class TreeSkillAnalysisContext(BaseModel):
+    """Inputs available to generic training analysis, excluding private samples."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    """Prevent reassignment; nested evidence is borrowed and must not be mutated."""
+
+    evidence: TraceEvidence
+    """One normalized training trajectory and its allowed feedback."""
+
+    source: Literal["error", "success", "unlabeled"]
+    """Outcome category chosen using the trainer's existing score threshold."""
+
+
+class TreeSkillRoutingContext(BaseModel):
+    """Public inputs for either stable-ID or legacy subtree routing."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    """Prevent reassignment of routing inputs."""
+
+    task: Task
+    """Public task retaining its concrete environment-specific type."""
+
+    tree: list[dict[str, Any]]
+    """Public recursive Skill tree payload with identifiers and node content."""
+
+    public_context: dict[str, Any] = Field(default_factory=dict)
+    """Explicit public preview overrides; never private reward inputs."""
+
+
+@dataclass(frozen=True)
+class TreeSkillAnalysisRuntime:
+    """Borrow live model dependencies without serializing or owning their lifecycle."""
+
+    config: TreeSkillTrainerConfig
+    """Fixed training-stage settings shared with the trainer."""
+
+    chat_model: ChatModel
+    """Recorded optimizer model transport."""
+
+    failure_chat_model: ChatModel
+    """Recorded transport for optional tool-using failure analysis."""
+
+    output_root: Path
+    """Run-local directory for analyzer artifacts."""

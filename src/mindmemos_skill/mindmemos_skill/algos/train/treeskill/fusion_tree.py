@@ -112,17 +112,12 @@ def update_node_content(tree: MarkdownSkillTree, node_id: str, content: str) -> 
     if node is None:
         raise ValueError(f"unknown TreeSkill node: {node_id!r}")
     replacement = content.strip("\n")
-    if not replacement and not node.child_ids:
-        raise ValueError("a leaf node cannot be updated to empty content")
     _validate_local_content(replacement)
 
     lines = tree.markdown_content.splitlines()
     updated_lines = lines[: node.section_start + 1] + replacement.splitlines() + lines[node.intro_end :]
     updated = _join_skill(tree.frontmatter, updated_lines)
     reparsed = parse_skill_markdown(updated, previous_ids_by_key=tree.ids_by_key)
-    refreshed = reparsed.node_by_key.get(node.node_key)
-    if refreshed is None or refreshed.node_id != node_id:
-        raise ValueError("updated node lost its stable identity after reparsing")
     return reparsed
 
 
@@ -487,7 +482,7 @@ def _normalize_generated_heading(heading: str) -> str:
     match = re.match(r"^#{1,6}\s+(.+)$", value)
     if match:
         value = match.group(1).strip()
-    if not value or "\n" in value or "\r" in value:
+    if not value or "\n" in value or "\r" in value or re.fullmatch(r"#+", value):
         raise ValueError("new node heading must be non-empty single-line text")
     return value
 
@@ -498,11 +493,11 @@ def _render_new_subtree(node: NewTreeNode, level: int) -> tuple[list[str], int]:
     heading = _normalize_generated_heading(node.heading)
     content = node.content.strip("\n")
     _validate_local_content(content)
-    if not content and not node.children:
+    if not content.strip() and not node.children:
         raise ValueError("a new leaf node must contain local content")
 
     lines = [f"{'#' * level} {heading}"]
-    if content:
+    if content.strip():
         lines.extend(["", *content.splitlines()])
     child_names: set[str] = set()
     node_count = 1

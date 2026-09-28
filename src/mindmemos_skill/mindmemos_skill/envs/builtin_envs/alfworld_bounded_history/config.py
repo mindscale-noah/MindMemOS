@@ -41,5 +41,5 @@ class ALFWorldConfig(BaseModel):
     history_length: int = Field(default=5, ge=0)
     """Number of preceding observation/action pairs included in each prompt."""
 
-    evaluator_version: str = "skillopt-alfworld-bounded-history-v1"
+    evaluator_version: str = "alfworld-bounded-history-v1"
     """Identity of task success and failure-text semantics."""

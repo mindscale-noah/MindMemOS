@@ -67,8 +67,8 @@ def test_source_changes_invalidate_provenance(data):
 @pytest.mark.parametrize(
     "prediction", ["tag", "label", "text", "punctuation", "last_tag", "first_token", "wrong", "empty"]
 )
-def test_skillopt_scoring_formats(data, prediction):
-    """Keep tag, text, and final-line label parsing compatible with skillopt."""
+def test_exact_choice_scoring_formats(data, prediction):
+    """Keep tag, text, and final-line label parsing consistent with the benchmark contract."""
     sample = data.load()[0]
     correct = sample.reward_data.correct_choice
     wrong = next(choice.label for choice in sample.task.choices if choice.label != correct.label)

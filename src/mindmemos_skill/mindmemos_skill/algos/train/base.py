@@ -21,6 +21,17 @@ class SkillTrainer(Algorithm[ConfigT], ABC):
     persists the returned skill. Register implementations with Algorithm.register.
     """
 
+    def build_report(self, work_dir: Path) -> dict | None:
+        """Return a compact JSON report for the selected result when available.
+
+        Args:
+            work_dir: Trainer-owned run directory containing committed artifacts.
+
+        Returns:
+            Algorithm-specific report, or None when the trainer has no report.
+        """
+        return None
+
     @abstractmethod
     async def train(
         self,
@@ -39,8 +50,10 @@ class SkillTrainer(Algorithm[ConfigT], ABC):
             train_samples: Materialized samples available for candidate training.
             validation_samples: Materialized samples for candidate selection,
                 separate from training; empty means no validation set supplied.
-            work_dir: Dedicated directory for this run's local artifacts. Use
-                distinct subdirectories for independent environment rollouts.
+            work_dir: Stable directory for this run. Implementations automatically
+                reuse compatible completed work, return a compatible final result,
+                and reject incompatible or unrecognized existing artifacts.
+                Use distinct subdirectories for independent environment rollouts.
 
         Returns:
             The selected skill candidate without writing it to a database.

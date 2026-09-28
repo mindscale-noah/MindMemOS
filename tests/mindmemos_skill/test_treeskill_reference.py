@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from mindmemos_skill.algos.train.treeskill import TreeSkillEnvAdapter
 from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench import (
     SpreadsheetBenchReferenceAnalyzer,
-    routing_user_prompt,
 )
 from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_policy import (
     FORMAT_ERROR_MESSAGE,
@@ -17,6 +17,7 @@ from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_policy 
     format_reference_observation,
     parse_policy_response,
 )
+from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
 from mindmemos_skill.algos.train.treeskill.fusion import TreeSkillNodeFuser
 from mindmemos_skill.algos.train.treeskill.fusion_tree import (
     TreeMetadataError,
@@ -32,7 +33,6 @@ from mindmemos_skill.algos.train.treeskill.localization import TreeSkillEvidence
 from mindmemos_skill.algos.train.treeskill.prompts import (
     LOCALIZATION_SYSTEM_PROMPT,
     NODE_FUSION_SYSTEM_PROMPT,
-    ROUTING_SYSTEM_PROMPT,
     fusion_user_prompt,
     localization_user_prompt,
 )
@@ -42,6 +42,7 @@ from mindmemos_skill.algos.train.treeskill.typing import (
     LocatedEvidence,
     NewTreeNode,
     TrajectoryAnalysisRecord,
+    TreeSkillRoutingContext,
 )
 from mindmemos_skill.envs import Task
 from mindmemos_skill.envs.builtin_envs.spreadsheetbench.reference_reward import compare_workbooks
@@ -189,7 +190,9 @@ def test_treeskill_user_prompts_match_reference_payloads() -> None:
         "spreadsheet_content": "('Revenue', 'Cost')",
     }
     expected_routing = {"task": routing_context, "skill_tree": tree_payload}
-    assert routing_user_prompt(tree, task, routing_context) == (
+    assert TreeSkillEnvAdapter.build("spreadsheetbench_reference", {}).build_routing_messages(
+        TreeSkillRoutingContext(task=task, tree=tree_payload, public_context=routing_context)
+    )[1]["content"] == (
         "Route skill subtrees for this spreadsheet task.\n\n"
         + json.dumps(expected_routing, ensure_ascii=False, indent=2)
     )
@@ -473,3 +476,127 @@ async def test_node_fusion_rejects_analysis_artifacts_in_updates_and_new_subtree
     assert failures == []
     assert [edit.accepted for edit in edits] == [False, False]
     assert all("ground-truth or gold-answer reference" in edit.message for edit in edits)
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        ({}, "node fusion returned no edits"),
+        ({"edits": [{}, {}, {}]}, "node fusion returned more than two edits"),
+        ({"edits": [None]}, "node fusion edit is not an object"),
+        ({"edits": [{"operation": "delete"}]}, "unsupported node fusion operation: delete"),
+        ({"edits": [{}, {"operation": "update", "content": "x"}]}, "reject cannot be mixed with other edits"),
+        ({"edits": [{"operation": "update", "content": "x"}] * 2}, "duplicate update_node edit"),
+        ({"edits": [{"operation": "update", "content": 1}]}, "update_node requires string content"),
+        (
+            {"edits": [{"operation": "update", "content": "x", "new_child": None}]},
+            "update_node must not include new_child",
+        ),
+        ({"edits": [{"operation": "create_child", "new_child": []}]}, "create_child requires new_child"),
+        (
+            {"edits": [{"operation": "create_child", "new_child": {}, "content": None}]},
+            "create_child must not include top-level content",
+        ),
+    ],
+)
+def test_fusion_operation_rejections_match_reference(payload, reason):
+    from mindmemos_skill.algos.train.treeskill.fusion import normalize_node_fusion_edits
+
+    assert normalize_node_fusion_edits(payload, "001") == [
+        {"operation": "reject", "target_node_id": "001", "rationale": reason}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_child", [False, True])
+async def test_fusion_preserves_valid_update_and_audits_extra_child_fields(tmp_path, invalid_child):
+    tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
+    child = {
+        "heading": "## Verification",
+        "content": "",
+        "rationale": "Audit-only explanation.",
+        "children": [
+            {
+                "heading": "Reload",
+                "content": "   " if invalid_child else "Reload after saving.",
+                "rationale": "Keep this explanation out of the skill.",
+                "children": [],
+            }
+        ],
+    }
+    model = ScriptedChatModel(
+        [
+            json.dumps(
+                {
+                    "extra_note": "Allowed by upstream",
+                    "edits": [
+                        {"operation": "create_child", "new_child": child},
+                        {
+                            "operation": " UPDATE ",
+                            "content": "Inspect sheet names before editing.",
+                            "target_node_id": "999",
+                        },
+                    ],
+                }
+            )
+        ]
+    )
+    evidence = [
+        LocatedEvidence(
+            instance_id="t1",
+            evidence_id="e1",
+            record_source="success",
+            reusable_lesson="Verify saved workbooks.",
+            target_node_id="001",
+            rationale="Relevant.",
+        )
+    ]
+    final, edits, failures = await TreeSkillNodeFuser(
+        chat_model=model,
+        task="fuse",
+        temperature=0.0,
+        max_tokens=4096,
+        audit_dir=tmp_path,
+    ).fuse(tree, evidence)
+    assert failures == []
+    assert [edit.operation for edit in edits] == ["update_node", "create_child"]
+    assert [edit.accepted for edit in edits] == [True, not invalid_child]
+    assert "Inspect sheet names before editing." in final.full_content
+    assert "Audit-only explanation" not in final.full_content
+    assert len(final.nodes) == (1 if invalid_child else 3)
+    assert "Audit-only explanation" in "\n".join(path.read_text() for path in tmp_path.rglob("*.json"))
+    assert len(model.calls) == 1
+    assert model.calls[0]["max_tokens"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_truncated_fusion_response_remains_a_failure_without_retry():
+    tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
+    model = ScriptedChatModel(['{"edits": [{"operation": "update_node", "content": "unfinished'])
+    evidence = [
+        LocatedEvidence(
+            instance_id="t1",
+            evidence_id="e1",
+            record_source="success",
+            reusable_lesson="Verify saved workbooks.",
+            target_node_id="001",
+            rationale="Relevant.",
+        )
+    ]
+    final, edits, failures = await TreeSkillNodeFuser(
+        chat_model=model,
+        task="fuse",
+        temperature=0.0,
+        max_tokens=4096,
+    ).fuse(tree, evidence)
+    assert final == tree
+    assert edits == []
+    assert len(failures) == len(model.calls) == 1
+
+
+def test_reference_tree_checks_allow_empty_update_but_reject_invalid_new_leaf():
+    tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
+    assert update_node_content(tree, "001", "").nodes == ()
+    for heading, content in [("###", "Valid content"), ("Valid heading", "   ")]:
+        with pytest.raises(ValueError):
+            create_child_subtree(tree, "001", NewTreeNode(heading=heading, content=content))

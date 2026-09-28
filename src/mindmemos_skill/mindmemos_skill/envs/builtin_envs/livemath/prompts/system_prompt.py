@@ -1,4 +1,4 @@
-"""Skillopt LiveMath prompt with public skill instructions inserted explicitly."""
+"""LiveMath prompt with public skill instructions inserted explicitly."""
 
 SYSTEM_PROMPT = """You are an expert mathematical reasoning agent solving multiple-choice questions.
 

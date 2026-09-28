@@ -1,13 +1,15 @@
 """Adapt recorded OpenAIChatAgent calls to the reference algorithm protocol."""
 
-import asyncio
 from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
 from time import perf_counter
+from uuid import uuid4
 
 from ....agents import AgentResult, OpenAIChatAgent, OpenAIChatConfig
-from ....common.json import write_json
+from ....common.asyncio import run_sync
+from ....common.checkpoint import boundary, fingerprint
+from ....common.json import read_json, write_json
 from .typing import ChatResponse
 
 
@@ -26,7 +28,7 @@ class RecordedChatModel:
         self.directory = directory
         self.factory = factory
         self._lock = Lock()
-        self._counter = 0
+        self._requests: dict[str, int] = {}
 
     async def chat(
         self, task, messages, format_parser: Callable | None = None, *, feedback_on_parse_error=False, **kwargs
@@ -48,12 +50,16 @@ class RecordedChatModel:
             options["max_completion_tokens"] = options.pop("max_tokens")
         options["parse_retry_mode"] = "feedback" if feedback_on_parse_error else "direct"
         config = self.config.model_copy(update=options)
+        identity = fingerprint(
+            {"task": task, "messages": messages, "config": config.model_dump(mode="json", exclude={"api_key"})}
+        )
         with self._lock:
-            self._counter += 1
-            directory = self.directory / f"{self._counter:06d}"
+            occurrence = self._requests.get(identity, 0)
+            self._requests[identity] = occurrence + 1
+            directory = self.directory / f"{identity}-{occurrence:06d}"
         transport = _RecordedTransport(config, self.factory(config), directory, task)
         agent = OpenAIChatAgent(config, model=transport, output_parser=format_parser)
-        result = await asyncio.to_thread(agent.run, messages=messages)
+        result = await run_sync(agent.run, messages=messages)
         if transport.last_result is None or not isinstance(transport.last_result.output, str):
             raise TypeError("Algorithm model must return text")
         return ChatResponse(content=transport.last_result.output, parsed=result.output if format_parser else None)
@@ -94,6 +100,20 @@ class _RecordedTransport(OpenAIChatAgent):
             "messages": messages,
             "response_format": response_format or self.config.response_format,
         }
+        checkpoint = self.directory / "completed" / f"{self.attempt:02d}.json"
+        committed = boundary(checkpoint, payload)
+        if committed is not None:
+            if "error" in committed:
+                raise RuntimeError(committed["error"])
+            self.last_result = AgentResult.model_validate(committed["response"])
+            return self.last_result
+        if path.exists():
+            saved = read_json(path)
+            if any(saved[key] != value for key, value in payload.items()):
+                raise ValueError(f"Recorded model request changed: {path}")
+            archived = self.directory / "interrupted" / uuid4().hex / path.name
+            archived.parent.mkdir(parents=True, exist_ok=True)
+            path.replace(archived)
         write_json(path, {**payload, "status": "running"})
         start = perf_counter()
         try:
@@ -111,6 +131,7 @@ class _RecordedTransport(OpenAIChatAgent):
                     "error": f"{type(exc).__name__}: {exc}",
                 },
             )
+            boundary(checkpoint, payload, payload={"error": f"{type(exc).__name__}: {exc}"})
             raise
         self.last_result = result
         write_json(
@@ -122,6 +143,7 @@ class _RecordedTransport(OpenAIChatAgent):
                 "response": result.model_dump(mode="json"),
             },
         )
+        boundary(checkpoint, payload, payload={"response": result.model_dump(mode="json")})
         return result
 
 
@@ -153,6 +175,6 @@ class RecordedRouter(OpenAIChatAgent):
         """
         with self._lock:
             self._counter += 1
-            directory = self.directory / f"{self._counter:06d}"
+            directory = self.directory / f"{self._counter:06d}-{uuid4().hex}"
         transport = _RecordedTransport(self.config, self.factory(self.config), directory, "treeskill_subtree_routing")
         return OpenAIChatAgent(self.config, model=transport).run(**kwargs)

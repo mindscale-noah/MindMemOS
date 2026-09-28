@@ -6,8 +6,8 @@ import asyncio
 from collections.abc import Mapping
 
 from ....common.json import parse_model
-from .prompts import ANALYSIS_SYSTEM_PROMPT, analysis_user_prompt
-from .typing import ChatModel, TraceEvidence, TrajectoryAnalysisRecord
+from .env_adapter import TreeSkillEnvAdapter
+from .typing import ChatModel, TraceEvidence, TrajectoryAnalysisRecord, TreeSkillAnalysisContext
 from .typing import TrainingRollout as Trajectory
 
 
@@ -23,6 +23,7 @@ class TreeSkillTrajectoryAnalyzer:
         success_score_threshold: float,
         temperature: float,
         max_tokens: int,
+        env_adapter: TreeSkillEnvAdapter | None = None,
     ) -> None:
         """init  .
 
@@ -33,7 +34,9 @@ class TreeSkillTrajectoryAnalyzer:
             success_score_threshold: Minimum recorded reward classified as successful.
             temperature: Sampling temperature passed unchanged to the model.
             max_tokens: Completion-token budget passed to the model.
+            env_adapter: Stateless message adaptation selected by the trainer.
         """
+        self.env_adapter = env_adapter if env_adapter is not None else TreeSkillEnvAdapter()
         self._chat_model = chat_model
         self._task = task
         self._concurrency = concurrency
@@ -63,11 +66,10 @@ class TreeSkillTrajectoryAnalyzer:
                 item: Explicit item for this operation.
             """
             source = self._record_source(item)
-            messages = [
-                {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
-                {"role": "user", "content": analysis_user_prompt(item, source=source)},
-            ]
             try:
+                messages = self.env_adapter.build_analysis_messages(
+                    TreeSkillAnalysisContext(evidence=item, source=source)
+                )
                 async with semaphore:
                     response = await self._chat_model.chat(
                         task=self._task,
@@ -97,4 +99,4 @@ class TreeSkillTrajectoryAnalyzer:
         return "success" if evidence.score >= self._success_score_threshold else "error"
 
 
-__all__ = ["ChatModel", "TrajectoryAnalyzer", "TreeSkillTrajectoryAnalyzer"]
+__all__ = ["TreeSkillTrajectoryAnalyzer"]

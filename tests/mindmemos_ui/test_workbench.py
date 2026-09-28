@@ -438,9 +438,10 @@ async def test_task_assembly_runs_real_skill_contract_and_compares_versions(tmp_
     monkeypatch.setenv(AGENT_API_KEY_ENV, "runtime-credential")
     calls = []
 
-    def route(self, *, system, user):
+    def route(self, *, messages):
         assert self.config.api_key.get_secret_value() == "runtime-credential"
-        calls.append(json.loads(user.split("\n\n", 1)[1])["task"])
+        user = messages[-1]["content"]
+        calls.append(json.loads(user.split("Task:\n", 1)[1].split("\n\nSkill tree:", 1)[0]))
         return AgentResult(output='{"selected_subtree_ids": ["002"]}')
 
     monkeypatch.setattr(OpenAIChatAgent, "run", route)

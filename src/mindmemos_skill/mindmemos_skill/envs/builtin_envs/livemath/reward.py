@@ -1,4 +1,4 @@
-"""Deterministic MCQ evaluation adapted from skillopt's LiveMath evaluator."""
+"""Deterministic exact-choice evaluation for LiveMath."""
 
 import json
 import re

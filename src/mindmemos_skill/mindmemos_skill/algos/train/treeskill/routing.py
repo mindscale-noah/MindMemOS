@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from ....common.json import parse_model
 from ....envs.typing import Task
 from ....skill import Skill
-from .env_specific.spreadsheetbench import routing_user_prompt
+from .env_adapter import TreeSkillEnvAdapter
 from .fusion_tree import (
     TreeMetadataError,
     ancestor_closure,
@@ -15,9 +15,9 @@ from .fusion_tree import (
     parse_skill_markdown,
     parse_tree_with_metadata,
     render_selected_subtrees,
+    tree_prompt_payload,
 )
-from .prompts import ROUTING_SYSTEM_PROMPT
-from .typing import ChatModel, TreeRoutingResult, _RoutePayload
+from .typing import ChatModel, TreeRoutingResult, TreeSkillRoutingContext, _RoutePayload
 
 
 class TreeSkillRouter:
@@ -30,6 +30,7 @@ class TreeSkillRouter:
         task: str = "treeskill_subtree_routing",
         temperature: float = 0.0,
         max_tokens: int = 512,
+        env_adapter: TreeSkillEnvAdapter | None = None,
     ) -> None:
         """init  .
 
@@ -38,7 +39,9 @@ class TreeSkillRouter:
             task: Stage audit label or public task supplied by the caller.
             temperature: Sampling temperature passed unchanged to the model.
             max_tokens: Completion-token budget passed to the model.
+            env_adapter: Registered routing behavior retained by the dynamic Skill.
         """
+        self.env_adapter = env_adapter if env_adapter is not None else TreeSkillEnvAdapter()
         self._chat_model = chat_model
         self._task = task
         self._temperature = temperature
@@ -86,13 +89,11 @@ class TreeSkillRouter:
 
         response = await self._chat_model.chat(
             task=self._task,
-            messages=[
-                {"role": "system", "content": ROUTING_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": routing_user_prompt(tree, task, routing_context),
-                },
-            ],
+            messages=self.env_adapter.build_routing_messages(
+                TreeSkillRoutingContext(
+                    task=task, tree=tree_prompt_payload(tree), public_context=dict(routing_context or {})
+                )
+            ),
             temperature=self._temperature,
             max_tokens=self._max_tokens,
         )

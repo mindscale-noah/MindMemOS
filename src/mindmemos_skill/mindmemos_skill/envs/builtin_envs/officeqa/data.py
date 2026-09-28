@@ -72,6 +72,7 @@ class OfficeQAData(Data[OfficeQADataConfig]):
                         id=str(row.get("uid") or row.get("id") or "").strip(),
                         instruction=str(row["question"]).strip(),
                         documents=documents,
+                        task_type=str(row.get("task_type", "officeqa")),
                         source_files=files,
                         source_docs=urls,
                         oracle_context=context,

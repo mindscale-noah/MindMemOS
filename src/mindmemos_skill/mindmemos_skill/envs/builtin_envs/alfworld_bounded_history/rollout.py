@@ -140,6 +140,25 @@ class ALFWorldEnvironment(Environment[ALFWorldConfig]):
         return RolloutResult(
             output=output,
             trajectory=trajectory,
-            reward=evaluate(won=won, done=done, max_steps=self.config.max_steps),
+            reward=evaluate(won=won, done=done, max_steps=self.config.max_steps).model_copy(
+                update={
+                    "task_description": description,
+                    "task_type": next(
+                        (
+                            name
+                            for name in (
+                                "pick_and_place",
+                                "pick_two_obj_and_place",
+                                "look_at_obj_in_light",
+                                "pick_heat_then_place_in_recep",
+                                "pick_cool_then_place_in_recep",
+                                "pick_clean_then_place_in_recep",
+                            )
+                            if name in str(task.gamefile)
+                        ),
+                        "other",
+                    ),
+                },
+            ),
             usage=total_usage(responses),
         )

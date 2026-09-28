@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
-from ....common.json import parse_model, strict_json_schema_response_format
+from ....common.json import extract_json_object, strict_json_schema_response_format
 from .artifacts import record_patch
 from .fusion_tree import (
     create_child_subtree,
@@ -18,9 +19,7 @@ from .typing import (
     FusionFailure,
     LocatedEvidence,
     MarkdownSkillTree,
-    NewChildSpec,
     NewTreeNode,
-    NodeFusionDecision,
 )
 from .validation import analysis_artifact_reason
 
@@ -142,62 +141,60 @@ class TreeSkillNodeFuser:
                 failures.append(FusionFailure(target_node_id=target_id, error=f"{type(exc).__name__}: {exc}"))
                 continue
             try:
-                decision = parse_model(response.content or "", NodeFusionDecision)
+                payload = extract_json_object(response.content or "", repair=False)
+                ordered_edits = normalize_node_fusion_edits(payload, target_id)
             except Exception as exc:
                 failures.append(FusionFailure(target_node_id=target_id, error=f"{type(exc).__name__}: {exc}"))
                 continue
 
-            ordered_edits = sorted(
-                decision.edits,
-                key=lambda edit: {"update_node": 0, "create_child": 1, "reject": 2}[edit.operation],
-            )
             for edit in ordered_edits:
                 before = current.full_content
                 try:
-                    if edit.operation == "reject":
+                    if edit["operation"] == "reject":
                         records.append(
                             AppliedEditRecord(
                                 target_node_id=target_id,
                                 operation="reject",
                                 accepted=True,
-                                message=edit.rationale,
+                                message=str(edit.get("rationale", "")),
                             )
                         )
                         continue
                     try:
-                        if edit.operation == "update_node":
-                            assert edit.content is not None
-                            artifact_reason = analysis_artifact_reason(edit.content)
+                        if edit["operation"] == "update_node":
+                            artifact_reason = analysis_artifact_reason(edit["content"])
                             if artifact_reason:
                                 records.append(
                                     AppliedEditRecord(
                                         target_node_id=target_id,
-                                        operation=edit.operation,
+                                        operation=edit["operation"],
                                         accepted=False,
                                         message=artifact_reason,
                                     )
                                 )
                                 continue
-                            current = update_node_content(current, target_id, edit.content)
+                            current = update_node_content(current, target_id, edit["content"])
                         else:
-                            assert edit.new_child is not None
-                            artifact_reason = _new_child_artifact_reason(edit.new_child)
+                            if str(edit.get("parent_node_id") or target_id).strip() != target_id:
+                                raise ValueError("parent_node_id must be the target node for create_child")
+                            child = _new_tree_node(edit["new_child"])
+                            artifact_reason = _new_child_artifact_reason(child)
                             if artifact_reason:
                                 records.append(
                                     AppliedEditRecord(
                                         target_node_id=target_id,
-                                        operation=edit.operation,
+                                        operation=edit["operation"],
                                         accepted=False,
                                         message=artifact_reason,
                                     )
                                 )
                                 continue
-                            current = create_child_subtree(current, target_id, _new_tree_node(edit.new_child))
+                            current = create_child_subtree(current, target_id, child)
                     except Exception as exc:
                         records.append(
                             AppliedEditRecord(
                                 target_node_id=target_id,
-                                operation=edit.operation,
+                                operation=edit["operation"],
                                 accepted=False,
                                 message=f"{type(exc).__name__}: {exc}",
                             )
@@ -206,21 +203,21 @@ class TreeSkillNodeFuser:
                     records.append(
                         AppliedEditRecord(
                             target_node_id=target_id,
-                            operation=edit.operation,
+                            operation=edit["operation"],
                             accepted=True,
-                            message=edit.rationale,
+                            message=str(edit.get("rationale", "")),
                         )
                     )
                 finally:
                     if self._audit_dir is not None:
                         record_patch(
-                            self._audit_dir / f"{len(records):04d}-{target_id}-{edit.operation}",
+                            self._audit_dir / f"{len(records):04d}-{target_id}-{edit['operation']}",
                             before=before,
                             after=current.full_content,
                             payload={
                                 "target_node_id": target_id,
-                                "proposal": edit.model_dump(mode="json"),
-                                "decision_rationale": decision.rationale,
+                                "proposal": edit,
+                                "decision_rationale": str(payload.get("rationale", "")),
                                 "result": records[-1].model_dump(mode="json"),
                                 "evidence": [item.model_dump(mode="json") for item in grouped[target_id]],
                             },
@@ -228,15 +225,73 @@ class TreeSkillNodeFuser:
         return current, records, failures
 
 
-def _new_tree_node(spec: NewChildSpec) -> NewTreeNode:
+def normalize_node_fusion_edits(payload: dict[str, Any], target_node_id: str) -> list[dict[str, Any]]:
+    """Normalize model edits using the upstream tree-only fusion checks.
+
+    Args:
+        payload: Decoded model JSON, including optional audit-only fields.
+        target_node_id: Runner-owned target that overrides any model-supplied ID.
+
+    Returns:
+        Ordered edits, or one rejection explaining an invalid operation set.
+    """
+
+    # Ported from TreeSkill-colleague-share bc3b0a9, tree_only_fusion.py.
+    def reject(reason: str) -> list[dict[str, Any]]:
+        return [{"operation": "reject", "target_node_id": target_node_id, "rationale": reason}]
+
+    raw_edits = payload.get("edits") if isinstance(payload.get("edits"), list) else []
+    if not raw_edits:
+        return reject("node fusion returned no edits")
+    if len(raw_edits) > 2:
+        return reject("node fusion returned more than two edits")
+    normalized = []
+    seen = set()
+    for raw_edit in raw_edits:
+        if not isinstance(raw_edit, dict):
+            return reject("node fusion edit is not an object")
+        operation = str(raw_edit.get("operation") or "reject").strip().lower()
+        if operation == "update":
+            operation = "update_node"
+        if operation not in {"update_node", "create_child", "reject"}:
+            return reject(f"unsupported node fusion operation: {operation}")
+        edit = dict(raw_edit, operation=operation, target_node_id=target_node_id)
+        if operation == "reject":
+            if len(raw_edits) != 1:
+                return reject("reject cannot be mixed with other edits")
+            return [edit]
+        if operation in seen:
+            return reject(f"duplicate {operation} edit")
+        seen.add(operation)
+        if operation == "update_node":
+            if "content" not in edit or not isinstance(edit.get("content"), str):
+                return reject("update_node requires string content")
+            if "new_child" in edit:
+                return reject("update_node must not include new_child")
+        else:
+            if not isinstance(edit.get("new_child"), dict):
+                return reject("create_child requires new_child")
+            if "content" in edit:
+                return reject("create_child must not include top-level content")
+        normalized.append(edit)
+    return sorted(normalized, key=lambda edit: {"update_node": 0, "create_child": 1}[edit["operation"]])
+
+
+def _new_tree_node(spec: dict[str, Any]) -> NewTreeNode:
+    """Read upstream subtree fields, retaining extra fields only in the audit."""
+    children = spec.get("children") or []
+    if not isinstance(children, list):
+        raise ValueError("children must be a list")
+    if any(not isinstance(child, dict) for child in children):
+        raise ValueError("children must contain objects")
     return NewTreeNode(
-        heading=spec.heading,
-        content=spec.content,
-        children=tuple(_new_tree_node(child) for child in spec.children),
+        heading=str(spec.get("heading") or ""),
+        content=str(spec.get("content") or ""),
+        children=tuple(_new_tree_node(child) for child in children),
     )
 
 
-def _new_child_artifact_reason(spec: NewChildSpec) -> str:
+def _new_child_artifact_reason(spec: NewTreeNode) -> str:
     reason = analysis_artifact_reason(spec.heading) or analysis_artifact_reason(spec.content)
     if reason:
         return reason

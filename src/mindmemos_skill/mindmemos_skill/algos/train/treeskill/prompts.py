@@ -7,7 +7,6 @@ import re
 from importlib.resources import files
 from typing import Any
 
-from .env_specific.spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
 from .fusion_tree import tree_prompt_payload
 from .typing import LocatedEvidence, MarkdownSkillTree, TraceEvidence, TrajectoryAnalysisRecord
 
@@ -38,6 +37,13 @@ Return JSON only:
     }
   ]
 }"""
+
+ROUTING_SYSTEM_PROMPT = """Select the existing Markdown skill-tree subtrees needed for the public task.
+Use only the supplied task and tree. Return every relevant subtree without redundant
+parent-child selections. Ancestor context will be included automatically. Do not invent
+node IDs. Return JSON with selected_subtree_ids (a list of existing IDs) and rationale.
+Return an empty list when no Skill content is relevant."""
+"""Environment-neutral routing contract for new generic adapters."""
 
 LOCALIZATION_SYSTEM_PROMPT = _load_prompt_template("locating_system_prompt.txt")
 NODE_FUSION_SYSTEM_PROMPT = _load_prompt_template("node_fusion_system_prompt.txt")

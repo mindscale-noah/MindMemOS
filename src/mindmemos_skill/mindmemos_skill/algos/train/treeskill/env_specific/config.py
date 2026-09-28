@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import AliasChoices, Field
 
 from .....envs.builtin_envs.spreadsheetbench.config import SpreadsheetBenchConfig
+from ..config import TreeSkillEnvAdapterConfig
 
 
 class SpreadsheetBenchReferenceConfig(SpreadsheetBenchConfig):
@@ -32,3 +33,10 @@ class SpreadsheetBenchReferenceConfig(SpreadsheetBenchConfig):
 
     transactional_recalculation: bool = True
     """Include the exact canonical recalculation command and helper."""
+
+
+class TreeSkillSpreadsheetBenchReferenceEnvAdapterConfig(TreeSkillEnvAdapterConfig):
+    """Configure routing while preserving the released tool-analysis protocol."""
+
+    analysis_system: None = None
+    """Generic one-call analysis overrides are incompatible with reference tool analysis."""

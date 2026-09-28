@@ -31,11 +31,11 @@ class LiveMathData(Data[LiveMathDataConfig]):
             records = TypeAdapter(list[SourceRecord]).validate_json(content)
             for record in records:
                 identifier = f"{record.month}:{record.no}"
-                choices = list(record.mcq.choices)
-                correct = record.mcq.correct_choice
+                choices = [Choice(label=choice.label.strip(), text=choice.text.strip()) for choice in record.mcq.choices]
+                correct = Choice(label=record.mcq.correct_choice.label.strip(), text=record.mcq.correct_choice.text.strip())
                 if correct.label not in {choice.label for choice in choices}:
                     choices.append(correct)
-                choices.sort(key=lambda choice: choice.label)
+                    choices.sort(key=lambda choice: choice.label)
                 if self.config.choice_seed is not None:
                     digest = sha256(f"{self.config.choice_seed}:{identifier}".encode()).hexdigest()
                     Random(int(digest[:16], 16)).shuffle(choices)
@@ -49,7 +49,10 @@ class LiveMathData(Data[LiveMathDataConfig]):
                     choices = remapped
                 samples.append(
                     DataSample(
-                        task=LiveMathTask(id=identifier, instruction=record.mcq.question, choices=choices),
+                        task=LiveMathTask(
+                            id=identifier, instruction=record.mcq.question.strip(), choices=choices,
+                            task_type=record.theorem_type[0] if record.theorem_type else "math_mcq",
+                        ),
                         reward_data=LiveMathRewardData(
                             correct_choice=correct,
                             source_file=str(path),

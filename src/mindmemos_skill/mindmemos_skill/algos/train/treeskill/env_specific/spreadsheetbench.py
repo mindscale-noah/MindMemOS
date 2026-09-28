@@ -22,10 +22,19 @@ from .....envs.builtin_envs.spreadsheetbench.typing import (
     SpreadsheetContext,
     SpreadsheetObservation,
 )
+from ..env_adapter import TreeSkillEnvAdapter
 from ..errors import TreeSkillModelRequestError
-from ..typing import AnalysisItem, ChatModel, TraceEvidence, TrajectoryAnalysisRecord
+from ..typing import (
+    AnalysisItem,
+    ChatModel,
+    TraceEvidence,
+    TrajectoryAnalysisRecord,
+    TrajectoryAnalyzer,
+    TreeSkillAnalysisRuntime,
+    TreeSkillRoutingContext,
+)
 from ..typing import TrainingRollout as Trajectory
-from .config import SpreadsheetBenchReferenceConfig
+from .config import SpreadsheetBenchReferenceConfig, TreeSkillSpreadsheetBenchReferenceEnvAdapterConfig
 from .spreadsheetbench_policy import (
     TASK_COMPLETE_SIGNAL,
     PolicyResponseType,
@@ -34,6 +43,7 @@ from .spreadsheetbench_policy import (
     parse_policy_response,
     run_reference_bash,
 )
+from .spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
 
 _ERROR_ITEM_PATTERN = re.compile(
     r"^#\s+(Failure Cause Item|Failure Memory Item)\s+(\d+)\s*\n"
@@ -504,41 +514,6 @@ def _safe_name(value: str) -> str:
 __all__ = ["SpreadsheetBenchReferenceAnalyzer"]
 
 
-def routing_user_prompt(
-    tree,
-    task,
-    routing_context: Mapping[str, Any] | None = None,
-) -> str:
-    """Routing user prompt.
-
-    Args:
-        tree: Parsed Markdown tree with stable heading identities.
-        task: Stage audit label or public task supplied by the caller.
-        routing_context: Optional public spreadsheet preview and task-field overrides.
-    """
-    from ..fusion_tree import tree_prompt_payload
-
-    context = dict(routing_context or {})
-    if isinstance(task, SpreadsheetBenchTask):
-        context.setdefault("instruction_type", task.instruction_type)
-        context.setdefault("answer_position", task.answer_position)
-        context.setdefault("spreadsheet_content", spreadsheet_preview(task.cases[0].path))
-    payload = {
-        "task": {
-            "instance_id": context.get("instance_id", task.id),
-            "instruction_type": context.get("instruction_type", ""),
-            "answer_position": context.get("answer_position", ""),
-            "instruction": context.get("instruction", task.instruction),
-            "spreadsheet_content": _truncate(
-                str(context.get("spreadsheet_content", "") or ""),
-                5000,
-            ),
-        },
-        "skill_tree": tree_prompt_payload(tree),
-    }
-    return f"Route skill subtrees for this spreadsheet task.\n\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
-
-
 def _truncate(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
@@ -689,3 +664,96 @@ def validate_reference_skill(skill) -> None:
         sha256(package[name]).hexdigest() != expected for name, expected in REFERENCE_SKILL_SHA256.items()
     ):
         raise ValueError("Reference mode requires the unmodified authorized Human-Written xlsx package")
+
+
+@TreeSkillEnvAdapter.register("spreadsheetbench_reference")
+class TreeSkillSpreadsheetBenchReferenceEnvAdapter(TreeSkillEnvAdapter):
+    """Bind released spreadsheet analysis and routing without changing rollout execution."""
+
+    config_type = TreeSkillSpreadsheetBenchReferenceEnvAdapterConfig
+    """Reject generic analysis overrides that the released analyzer cannot apply."""
+
+    def validate_environment(self, env) -> None:
+        """Require the released execution protocol for reference training.
+
+        Args:
+            env: Caller-owned task environment.
+
+        Raises:
+            TypeError: The environment does not implement the reference spreadsheet protocol.
+        """
+        if not isinstance(env, SpreadsheetBenchReferenceEnvironment):
+            raise TypeError("SpreadsheetBench reference adaptation requires SpreadsheetBenchReferenceEnvironment")
+
+    def render_task(self, task) -> str:
+        """Read only the public workbook preview used by the released router.
+
+        Args:
+            task: Public task; generic tasks can supply an explicit public preview instead.
+
+        Returns:
+            First-sheet preview, or an empty string for tasks without a workbook.
+        """
+        return spreadsheet_preview(task.cases[0].path) if isinstance(task, SpreadsheetBenchTask) else ""
+
+    def build_routing_messages(self, context: TreeSkillRoutingContext) -> list[dict[str, str]]:
+        """Construct the exact released spreadsheet routing request.
+
+        Args:
+            context: Public task, tree payload and optional public field overrides.
+
+        Returns:
+            Complete messages matching the reference protocol.
+        """
+        task = context.task
+        public = dict(context.public_context)
+        if isinstance(task, SpreadsheetBenchTask):
+            public.setdefault("instruction_type", task.instruction_type)
+            public.setdefault("answer_position", task.answer_position)
+        if "spreadsheet_content" not in public:
+            public["spreadsheet_content"] = self.render_task(task)
+        payload = {
+            "task": {
+                "instance_id": public.get("instance_id", task.id),
+                "instruction_type": public.get("instruction_type", ""),
+                "answer_position": public.get("answer_position", ""),
+                "instruction": public.get("instruction", task.instruction),
+                "spreadsheet_content": _truncate(str(public.get("spreadsheet_content", "") or ""), 5000),
+            },
+            "skill_tree": context.tree,
+        }
+        return [
+            {
+                "role": "system",
+                "content": self.config.routing_system
+                if self.config.routing_system is not None
+                else ROUTING_SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": f"Route skill subtrees for this spreadsheet task.\n\n{json.dumps(payload, ensure_ascii=False, indent=2)}",
+            },
+        ]
+
+    def create_analyzer(self, runtime: TreeSkillAnalysisRuntime) -> TrajectoryAnalyzer:
+        """Create the released success and tool-using failure analyzer.
+
+        Args:
+            runtime: Borrowed recorded models, stage settings and run-local directory.
+
+        Returns:
+            Reference analyzer; no model or tool call occurs until analyze().
+        """
+        config = runtime.config
+        return SpreadsheetBenchReferenceAnalyzer(
+            chat_model=runtime.chat_model,
+            failure_chat_model=runtime.failure_chat_model,
+            task=config.analysis_task,
+            output_root=runtime.output_root,
+            concurrency=config.analysis_concurrency,
+            success_score_threshold=config.success_score_threshold,
+            temperature=config.analysis_temperature,
+            max_tokens=config.analysis_max_tokens,
+            max_turns=config.analysis_max_turns,
+            shell_timeout_seconds=config.shell_timeout_seconds,
+        )

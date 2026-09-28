@@ -1,29 +1,35 @@
 """One-round active TreeSkill training with immutable input and local artifacts."""
 
-import asyncio
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from itertools import chain
 from pathlib import Path
 from time import perf_counter
 
+from filelock import FileLock
+
 from ....agents import OpenAIChatAgent
+from ....common.asyncio import run_sync
+from ....common.checkpoint import boundary, read_boundary
+from ....common.concurrency import map_with_context
 from ....common.json import write_json
 from ....envs import Environment
 from ....envs.data import DataSample
-from ....skill import Skill, SkillBundle, SkillSet
+from ....skill import Skill, SkillBundle, SkillSet, SkillSnapshot
 from ...base import Algorithm
 from ..base import SkillTrainer
-from .analysis import TreeSkillTrajectoryAnalyzer
+from ..recovery import implementation_identity
 from .artifacts import REFERENCE_COMMIT, experiment_config, model_usage, normalize_skill_text
 from .config import TreeSkillConfig, TreeSkillTrainerConfig
+from .env_adapter import TreeSkillEnvAdapter
 from .evidence import render_trajectory
 from .fusion import TreeSkillNodeFuser
 from .fusion_tree import compile_tree_metadata, parse_skill_markdown
 from .localization import TreeSkillEvidenceLocator
 from .model import RecordedChatModel, RecordedRouter
 from .skill import TreeSkill
-from .typing import AnnotationMode, TraceEvidence, TrainingRollout
+from .typing import AnnotationMode, TraceEvidence, TrainingRollout, TreeSkillAnalysisRuntime
 
 
 def sample_tasks(*, env, skill, samples, directory, repeats, concurrency):
@@ -50,8 +56,24 @@ def sample_tasks(*, env, skill, samples, directory, repeats, concurrency):
         """
         index, sample, repeat = slot
         identifier = f"task-{index:06d}-sample-{repeat:03d}"
-        attempt = 1
-        work_dir = directory / identifier / f"attempt-{attempt:02d}"
+        slot_dir = directory / identifier
+        checkpoint = slot_dir / "completed.json"
+        identity = {
+            "task": sample.model_dump(mode="json"),
+            "skill": skill.snapshot().model_dump(mode="json"),
+            "environment": env.config.model_dump(mode="json", exclude={"agent": {"api_key"}}),
+        }
+        saved = boundary(checkpoint, identity)
+        if saved is not None:
+            if "failure" in saved:
+                return None, saved["failure"]
+            result = env.result_type.model_validate(saved["result"])
+            return TrainingRollout(
+                trajectory_id=identifier, sample=sample, result=result, work_dir=Path(saved["work_dir"])
+            ), None
+        attempts = [int(path.name.removeprefix("attempt-")) for path in slot_dir.glob("attempt-*")]
+        attempt = max(attempts, default=0) + 1
+        work_dir = slot_dir / f"attempt-{attempt:02d}"
         try:
             result = env.rollout(
                 sample.task,
@@ -60,7 +82,6 @@ def sample_tasks(*, env, skill, samples, directory, repeats, concurrency):
                 skill_set=SkillSet({"0": skill}, max_concurrency=1),
                 resume=False,
             )
-            return TrainingRollout(trajectory_id=identifier, sample=sample, result=result, work_dir=work_dir), None
         except Exception as exc:
             failure = {
                 "trajectory_id": identifier,
@@ -69,10 +90,13 @@ def sample_tasks(*, env, skill, samples, directory, repeats, concurrency):
                 "error": f"{type(exc).__name__}: {exc}",
             }
             write_json(work_dir / "error.json", failure)
-        return None, failure
+            boundary(checkpoint, identity, payload={"failure": failure})
+            return None, failure
+        boundary(checkpoint, identity, payload={"result": result.model_dump(mode="json"), "work_dir": str(work_dir)})
+        return TrainingRollout(trajectory_id=identifier, sample=sample, result=result, work_dir=work_dir), None
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        outcomes = list(executor.map(execute_slot, slots))
+        outcomes = map_with_context(executor, execute_slot, slots)
     records = [record for record, _ in outcomes if record is not None]
     records.sort(key=lambda record: (record.result.finished_at, record.trajectory_id))
     failures = [failure for _, failure in outcomes if failure is not None]
@@ -138,8 +162,9 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             config: One-round protocol settings.
             agent_factory: Model transport constructor for injection and offline testing.
         """
-        super().__init__(config)
+        super().__init__(config.model_copy(deep=True))
         self.agent_factory = agent_factory
+        self.env_adapter = TreeSkillEnvAdapter.build(self.config.env_adapter.class_name, self.config.env_adapter.config)
 
     async def train(
         self,
@@ -156,21 +181,52 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             skill: Initial Skill; its source and resources remain unchanged.
             env: Borrowed task environment, never a trajectory input.
             train_samples: Materialized tasks used for active sampling.
-            validation_samples: Must be empty; upstream has no validation selection.
-            work_dir: Fresh experiment directory; existing directories are rejected.
+            validation_samples: Disjoint external data, excluded from one-round optimization.
+            work_dir: Run directory; compatible committed work is reused automatically.
 
         Returns:
             Final routable Skill, including an unchanged candidate when no edit applies.
 
         Raises:
-            ValueError: Samples are empty, duplicated, or validation is requested.
+            ValueError: Samples are invalid or existing work has an incompatible identity.
         """
+        root = Path(work_dir).expanduser().resolve()
+        root.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(root.parent / f".{root.name}.lock"), timeout=0):
+            return await self._run_train(skill, env, train_samples, validation_samples, root)
+
+    async def _run_train(self, skill, env, train_samples, validation_samples, root):
+        """Validate a run and reuse committed calls under the directory lock."""
+        self.env_adapter.validate_environment(env)
         if not train_samples:
             raise ValueError("TreeSkill requires training tasks")
         if len({sample.task.id for sample in train_samples}) != len(train_samples):
             raise ValueError("Training task IDs must be unique")
-        root = Path(work_dir).expanduser().resolve()
-        root.mkdir(parents=True, exist_ok=False)
+        external_ids = [sample.task.id for sample in validation_samples]
+        if len(set(external_ids)) != len(external_ids) or set(external_ids) & {
+            sample.task.id for sample in train_samples
+        }:
+            raise ValueError("External validation IDs must be unique and disjoint from training")
+        identity = {
+            "implementation": implementation_identity(self, env),
+            "config": experiment_config(self.config),
+            "skill": skill.snapshot().model_dump(mode="json"),
+            "train": [sample.model_dump(mode="json") for sample in train_samples],
+            "validation": [sample.model_dump(mode="json") for sample in validation_samples],
+            "environment": env.config.model_dump(mode="json", exclude={"agent": {"api_key"}}),
+        }
+        manifest = root / "recovery_manifest.json"
+        if root.exists() and any(root.iterdir()) and not manifest.exists():
+            raise ValueError("No compatible recovery manifest; legacy runs require a new work_dir")
+        boundary(manifest, identity, payload={"protocol": 1})
+        for path in chain(root.glob("rollouts/train/*/completed.json"), root.glob("model_calls/**/completed/*.json")):
+            read_boundary(path)
+        completed = boundary(root / "completed.json", identity)
+        if completed is not None:
+            return TreeSkill.from_snapshot(
+                SkillSnapshot.model_validate(completed["skill"]),
+                router=RecordedRouter(self.config.router, root / "model_calls/router", factory=self.agent_factory),
+            )
         start = perf_counter()
         config = experiment_config(self.config)
         write_json(root / "config.json", config)
@@ -187,10 +243,11 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         try:
             result = await self._train(skill, env, train_samples, root, summary)
             write_json(root / "final_skill.json", result.snapshot().model_dump(mode="json"))
-            result.export(root / "final_skill")
+            result.export(root / "final_skill", overwrite=True)
             summary["status"] = (
                 "completed" if summary["train"]["complete"] and not summary["training"]["has_failures"] else "partial"
             )
+            boundary(root / "completed.json", identity, payload={"skill": result.snapshot().model_dump(mode="json")})
             return result
         except BaseException as exc:
             summary.update(status="failed", error=f"{type(exc).__name__}: {exc}")
@@ -206,7 +263,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         config = self.config
         initial = Skill(bundle=source.bundle.model_copy(deep=True), resources=source.resources.model_copy(deep=True))
         start = perf_counter()
-        records, failures = await asyncio.to_thread(
+        records, failures = await run_sync(
             sample_tasks,
             env=env,
             skill=initial,
@@ -266,35 +323,18 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             reason = "skill_has_no_content_bearing_markdown_headings"
         else:
             model = RecordedChatModel(config.optimizer, root / "model_calls/optimizer", factory=self.agent_factory)
-            if config.analysis_adapter == "spreadsheetbench_reference":
-                from .env_specific.spreadsheetbench import SpreadsheetBenchReferenceAnalyzer
-
-                failure_model = RecordedChatModel(
-                    config.failure_optimizer or config.optimizer,
-                    root / "model_calls/failure",
-                    factory=self.agent_factory,
-                )
-                analyzer = SpreadsheetBenchReferenceAnalyzer(
+            analyzer = self.env_adapter.create_analyzer(
+                TreeSkillAnalysisRuntime(
+                    config=config,
                     chat_model=model,
-                    failure_chat_model=failure_model,
-                    task=config.analysis_task,
+                    failure_chat_model=RecordedChatModel(
+                        config.failure_optimizer or config.optimizer,
+                        root / "model_calls/failure",
+                        factory=self.agent_factory,
+                    ),
                     output_root=root / "stages/reference_analysis",
-                    concurrency=config.analysis_concurrency,
-                    success_score_threshold=config.success_score_threshold,
-                    temperature=config.analysis_temperature,
-                    max_tokens=config.analysis_max_tokens,
-                    max_turns=config.analysis_max_turns,
-                    shell_timeout_seconds=config.shell_timeout_seconds,
                 )
-            else:
-                analyzer = TreeSkillTrajectoryAnalyzer(
-                    chat_model=model,
-                    task=config.analysis_task,
-                    concurrency=config.analysis_concurrency,
-                    success_score_threshold=config.success_score_threshold,
-                    temperature=config.analysis_temperature,
-                    max_tokens=config.analysis_max_tokens,
-                )
+            )
             start = perf_counter()
             analyses, analysis_failures = await analyzer.analyze(
                 evidence, trajectories_by_id={record.trajectory_id: record for record in records}
@@ -364,7 +404,12 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         write_json(root / "tree_metadata.json", compile_tree_metadata(current))
         bundle = SkillBundle(files={"SKILL.md": current.full_content}) if changed else initial.bundle
         candidate = TreeSkill(
-            TreeSkillConfig(router=config.router, reference_routing=True, tree_metadata=compile_tree_metadata(current)),
+            TreeSkillConfig(
+                router=config.router,
+                reference_routing=True,
+                tree_metadata=compile_tree_metadata(current),
+                env_adapter=config.env_adapter.model_copy(deep=True),
+            ),
             bundle=bundle,
             resources=initial.resources,
             router=RecordedRouter(config.router, root / "model_calls/router", factory=self.agent_factory),

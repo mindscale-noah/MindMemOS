@@ -1,4 +1,4 @@
-"""SQuAD normalization and byte-compatible skillopt feedback."""
+"""SQuAD normalization and structured answer feedback."""
 
 import re
 import string

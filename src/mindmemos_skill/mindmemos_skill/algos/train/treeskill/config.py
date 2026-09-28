@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ....agents.buitin_agents.openai_chat.config import OpenAIChatConfig
+from ..config import EnvAdapterSelection
 from .typing import AnnotationMode
 
 
@@ -15,6 +14,9 @@ class TreeSkillConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     """Reject unknown router settings."""
+
+    env_adapter: EnvAdapterSelection = Field(default_factory=EnvAdapterSelection)
+    """Registered adaptation restored with this dynamic Skill."""
 
     reference_routing: bool = False
     """Use the pinned upstream routing protocol and stable fusion node IDs."""
@@ -41,8 +43,8 @@ class TreeSkillTrainerConfig(BaseModel):
     failure_optimizer: OpenAIChatConfig | None = None
     """Reference failure-analysis model; None reuses optimizer settings."""
 
-    analysis_adapter: Literal["generic", "spreadsheetbench_reference"] = "generic"
-    """Explicit environment-specific analysis protocol."""
+    env_adapter: EnvAdapterSelection = Field(default_factory=EnvAdapterSelection)
+    """Registered environment adaptation bound during trainer construction."""
 
     samples_per_task: int = Field(default=1, ge=1)
     """Independent training trajectories sampled from each task."""
@@ -155,3 +157,16 @@ class TreeSkillExperimentConfig(BaseModel):
 
     strict_reference_skill: bool = False
     """Require exact authorized reference xlsx package hashes before reproduction."""
+
+
+class TreeSkillEnvAdapterConfig(BaseModel):
+    """Override generic analysis and routing instructions with literal text."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    """Reject unknown settings and avoid run-local mutable configuration."""
+
+    analysis_system: str | None = None
+    """Complete analysis system prompt; None uses the bundled protocol."""
+
+    routing_system: str | None = None
+    """Complete routing system prompt; None uses the adapter's default protocol."""
