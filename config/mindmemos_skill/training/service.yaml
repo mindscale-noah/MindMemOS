@@ -1,0 +1,45 @@
+# Both entries use the same pipeline; replace model names before calling training.
+# YAML does not interpolate environment variables. Agents use their normal credential configuration.
+persistence:
+  config:
+    include_remote: false
+  database:
+    class_name: sqlite
+    config:
+      url: sqlite:///data/skill-training.db
+repository_pipeline:
+  class_name: repository
+training_pipelines:
+  treeskill:
+    class_name: training
+    config:
+      trainer:
+        class_name: treeskill
+        config:
+          optimizer: {model: replace-with-optimizer-model}
+          router: {model: replace-with-router-model}
+          env_adapter: {class_name: livemath, config: {}}
+      environment:
+        class_name: livemath
+        config:
+          agent: {model: replace-with-execution-model}
+      evaluation_concurrency: 1
+  skill_forest:
+    class_name: training
+    config:
+      trainer:
+        class_name: skill_forest
+        config:
+          optimizer: {model: replace-with-optimizer-model}
+          env_adapter: {class_name: livemath, config: {}}
+          num_trees: 3
+          expansion_budget: 3
+          rollout_concurrency: 3
+          model_concurrency: 2
+          expansion_concurrency: 1
+      environment:
+        class_name: livemath
+        config:
+          agent: {model: replace-with-execution-model}
+      evaluation_concurrency: 1
+evolution_pipelines: {}
