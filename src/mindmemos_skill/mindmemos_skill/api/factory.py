@@ -2,7 +2,6 @@
 
 import os
 import tempfile
-from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from inspect import signature
 from pathlib import Path
@@ -16,11 +15,11 @@ from mindmemos_sdk.config.paths import get_mindmemos_home
 from sqlalchemy.engine import URL
 
 from ..infra import Infrastructure
-from ..infra.database import Database, Scope
-from ..persistence.observability import AlgorithmAuditPersistence
+from ..infra.database import Database
 from ..persistence.store import SkillPersistence
 from ..pipelines import EvolutionPipeline, Pipeline, TrainingPipeline
 from ..pipelines.repository import RepositoryPipeline
+from ..registry import Registrable
 from .config import ImplementationConfig, LocalServiceConfig, PersistenceConfig, ServiceConfig
 from .service import SkillService
 
@@ -34,7 +33,6 @@ async def create_service(
     home: str | Path | None = None,
     database_path: str | Path | None = None,
     project_id: str | None = None,
-    project_authorizer: Callable[[object, str], Scope | Awaitable[Scope]] | None = None,
 ) -> SkillService:
     """Assemble one service, using local defaults only when config is omitted.
 
@@ -43,12 +41,10 @@ async def create_service(
         home: Local root; omitted local roots use the shared HOME resolver.
         database_path: Optional local SQLite override, not persisted.
         project_id: Optional local scope override, never a cloud authentication claim.
-        project_authorizer: Host-supplied project access check for explicit cloud configurations.
 
     Returns:
-        A service with all configured storage initialized. Local defaults bind a
-        project scope; explicit configurations require project IDs on requests.
-        The caller must close the service.
+        The assembled service. Local defaults initialize storage and bind a scope;
+        explicit configurations require project IDs on requests. The caller must close it.
 
     Raises:
         ValueError: Explicit configuration is mixed with local overrides, or configuration is invalid.
@@ -64,8 +60,6 @@ async def create_service(
         resolved = (
             load_service_config(source.read_text(encoding="utf-8")) if source.exists() else default_service_config()
         )
-        if resolved.local_project_id is not None and project_id is None:
-            scope = resolved.local_project_id
         if database_path is not None:
             if resolved.persistence is None or resolved.persistence.database.class_name != "sqlite":
                 raise ValueError("database_path requires SQLite persistence")
@@ -83,9 +77,6 @@ async def create_service(
             source = Path(config).expanduser()
             load_dotenv(source.with_suffix(".env"), override=False, interpolate=False)
             resolved = load_service_config(source.read_text(encoding="utf-8"))
-        scope = resolved.local_project_id
-    if scope is not None and project_authorizer is not None:
-        raise ValueError("Local project binding cannot be combined with a cloud project authorizer")
     if resolved.persistence is not None:
         database = resolved.persistence.database
         if database.class_name == "sqlite" and "url" not in database.config:
@@ -96,15 +87,14 @@ async def create_service(
                 hide_password=False
             )
 
-    service = await _assemble_service(resolved, local_project_id=scope, project_authorizer=project_authorizer)
-    try:
-        async with AsyncExitStack() as startup:
-            if local_root is not None:
-                await startup.enter_async_context(AsyncFileLock(str(local_root / ".workspace.lock")))
-            await service.initialize_storage()
-    except BaseException:
-        await service.close()
-        raise
+    service = await _assemble_service(resolved, local_project_id=scope)
+    if local_root is not None:
+        try:
+            async with AsyncFileLock(str(local_root / ".workspace.lock")):
+                await service.initialize_storage()
+        except BaseException:
+            await service.close()
+            raise
     return service
 
 
@@ -184,12 +174,6 @@ def validate_service_config(config: ServiceConfig) -> None:
             raise ValueError("persistence.database must select a Database implementation")
         database_type.config_type.model_validate(database_spec.config)
         signature(database_type).bind(None)
-    if config.observability is not None and config.observability.backend is not None:
-        backend_spec = config.observability.backend
-        backend_type = Infrastructure.resolve(backend_spec.class_name)
-        if not issubclass(backend_type, Database):
-            raise ValueError("observability.backend must select a Database implementation")
-        backend_type.config_type.model_validate(backend_spec.config)
     if config.repository_pipeline is not None:
         if config.persistence is None:
             raise ValueError("repository_pipeline requires global persistence")
@@ -200,39 +184,18 @@ def validate_service_config(config: ServiceConfig) -> None:
         _validate_pipeline(spec, EvolutionPipeline)
 
 
-async def _assemble_service(
-    config: ServiceConfig,
-    *,
-    local_project_id: str | None,
-    project_authorizer: Callable[[object, str], Scope | Awaitable[Scope]] | None = None,
-) -> SkillService:
+async def _assemble_service(config: ServiceConfig, *, local_project_id: str | None) -> SkillService:
     """Validate definitions, build one store, and inject it into independent pipelines."""
     validate_service_config(config)
-    backends: dict[str, Any] = {}
-    observability = None
-    observability_database = None
+    backends: dict[str, Registrable[Any]] = {}
     try:
         persistence = None
         if config.persistence is not None:
             database_spec = config.persistence.database
             database = Infrastructure.build(database_spec.class_name, database_spec.config)
             backends["database"] = database
-            persistence = SkillPersistence(config.persistence.config, database=database, require_session=True)
+            persistence = SkillPersistence(config.persistence.config, database=database)
             backends["persistence"] = persistence
-        if config.observability is not None and config.observability.backend is not None:
-            backend_spec = config.observability.backend
-            observability_database = Infrastructure.build(backend_spec.class_name, backend_spec.config)
-            backends["observability_database"] = observability_database
-        otlp = config.observability.otlp if config.observability is not None else None
-        observability = AlgorithmAuditPersistence(
-            observability_database,
-            capture_level=config.observability.capture_level if config.observability is not None else "info",
-            service_name=config.observability.service_name if config.observability is not None else "mindmemos-skill",
-            otlp_endpoint=str(otlp.endpoint) if otlp is not None else None,
-            otlp_timeout=otlp.timeout if otlp is not None else 5.0,
-        )
-        if observability_database is not None:
-            backends["observability"] = observability
 
         def build_pipeline(path: str, spec: ImplementationConfig) -> Pipeline:
             """Construct a pipeline whose typed config owns all non-storage dependencies."""
@@ -257,20 +220,13 @@ async def _assemble_service(
             repository=repository,
             training_pipelines=training,
             evolution_pipelines=evolution,
-            observability=observability,
             local_project_id=local_project_id,
-            persistence=persistence,
-            project_authorizer=project_authorizer,
         )
     except BaseException:
-        if observability is not None and observability_database is None:
-            observability.close()
         async with AsyncExitStack() as cleanup:
             for backend in backends.values():
                 if isinstance(backend, Pipeline):
                     cleanup.push_async_callback(backend.close)
                 elif isinstance(backend, Database):
-                    cleanup.callback(backend.close)
-                elif isinstance(backend, AlgorithmAuditPersistence):
                     cleanup.callback(backend.close)
         raise
