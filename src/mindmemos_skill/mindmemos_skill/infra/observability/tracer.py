@@ -5,9 +5,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import LoggerProvider, LogRecordProcessor, ReadWriteLogRecord
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 
 def _json_value(value: Any) -> Any:
@@ -137,6 +141,8 @@ class OpenTelemetryRecorder:
         on_span_end: Callable[[ReadableSpan], None],
         on_log_emit: Callable[[ReadWriteLogRecord], None],
         on_export_error: Callable[[Exception], None],
+        otlp_endpoint: str | None = None,
+        otlp_timeout: float = 5.0,
     ) -> None:
         """Configure a local provider without changing the process global provider.
 
@@ -146,13 +152,24 @@ class OpenTelemetryRecorder:
             on_span_end: Sink callback for every completed span.
             on_log_emit: Sink callback for every emitted OTel log.
             on_export_error: Callback for a sink failure.
+            otlp_endpoint: Optional OTLP/HTTP collector base URL.
+            otlp_timeout: Timeout in seconds for each OTLP export request.
         """
         resource = Resource.create({SERVICE_NAME: service_name})
         self.provider = TracerProvider(resource=resource)
         self.provider.add_span_processor(_CallbackSpanProcessor(on_span_end, on_export_error))
+        if otlp_endpoint is not None:
+            base = otlp_endpoint.rstrip("/")
+            self.provider.add_span_processor(
+                BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{base}/v1/traces", timeout=otlp_timeout))
+            )
         self.tracer = self.provider.get_tracer(instrumentation_name)
         self.logger_provider = LoggerProvider(resource=resource, shutdown_on_exit=False)
         self.logger_provider.add_log_record_processor(_CallbackLogProcessor(on_log_emit, on_export_error))
+        if otlp_endpoint is not None:
+            self.logger_provider.add_log_record_processor(
+                BatchLogRecordProcessor(OTLPLogExporter(endpoint=f"{base}/v1/logs", timeout=otlp_timeout))
+            )
 
     def close(self) -> None:
         """Stop the local provider after its active spans have ended."""

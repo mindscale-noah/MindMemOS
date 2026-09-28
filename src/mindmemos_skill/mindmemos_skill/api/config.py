@@ -2,7 +2,7 @@
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from ..persistence.config import SkillPersistenceConfig
 
@@ -35,20 +35,43 @@ class PersistenceConfig(BaseModel):
     """Database implementation and connection settings owned by this service."""
 
 
+class OTLPConfig(BaseModel):
+    """Send algorithm logs and spans to an OTLP/HTTP collector."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject unknown exporter settings."""
+
+    endpoint: AnyHttpUrl
+    """Collector base URL; the exporter appends /v1/logs or /v1/traces."""
+
+    timeout: float = Field(default=5.0, gt=0)
+    """Timeout in seconds for each OTLP/HTTP export request."""
+
+
 class ObservabilityConfig(BaseModel):
-    """Select one service-wide backend for algorithm traces and audit logs."""
+    """Configure optional SQL audit storage and OTLP export for algorithm runs."""
 
     model_config = ConfigDict(extra="forbid")
     """Reject unsupported observability settings."""
 
-    backend: ImplementationConfig
-    """One supported SQLite or PostgreSQL database connection."""
+    backend: ImplementationConfig | None = None
+    """Optional SQLite or PostgreSQL database for run state and audit queries."""
+
+    otlp: OTLPConfig | None = None
+    """Optional OTLP/HTTP destination for logs and spans."""
 
     capture_level: Literal["info", "debug"] = "info"
     """Whether agent inputs and outputs are retained alongside call metadata."""
 
     service_name: Name = "mindmemos-skill"
-    """OpenTelemetry service.name attached to persisted spans."""
+    """OpenTelemetry service.name attached to emitted logs and spans."""
+
+    @model_validator(mode="after")
+    def require_sink(self) -> "ObservabilityConfig":
+        """Reject an observability block without any output destination."""
+        if self.backend is None and self.otlp is None:
+            raise ValueError("observability requires backend or otlp")
+        return self
 
 
 class ServiceConfig(BaseModel):
