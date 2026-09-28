@@ -1,6 +1,8 @@
 """Run-scoped OpenTelemetry persistence and Agent capture contracts."""
 
 from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 import pytest
 from mindmemos_skill.agents.buitin_agents.openai_chat.agent import OpenAIChatAgent
@@ -17,6 +19,8 @@ from mindmemos_skill.persistence.observability.constants import OBSERVABILITY_LO
 from mindmemos_skill.pipelines import Pipeline, TrainingPipeline
 from mindmemos_skill.pipelines.train import training_run_id
 from mindmemos_skill.pipelines.typing import SkillPipelineResult, TrainingRequest
+from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.sdk._logs import LogRecordProcessor
 from opentelemetry.sdk.trace import SpanProcessor
 from pydantic import BaseModel
@@ -297,6 +301,91 @@ def test_invalid_observability_configuration_is_rejected():
         ServiceConfig.model_validate(
             {"observability": {"backend": {"class_name": "sqlite"}, "capture_level": "verbose"}}
         )
+    with pytest.raises(ValueError, match="requires backend or otlp"):
+        ServiceConfig.model_validate({"observability": {}})
+    with pytest.raises(ValueError):
+        ServiceConfig.model_validate({"observability": {"otlp": {"endpoint": "ftp://localhost:4318"}}})
+
+
+@pytest.mark.parametrize("with_database", [False, True])
+def test_otlp_exports_logs_and_spans_with_optional_sql_audit(tmp_path, with_database):
+    """Send real OTLP/HTTP payloads while preserving optional local audit writes."""
+    received = []
+
+    class Receiver(BaseHTTPRequestHandler):
+        """Capture OTLP requests on a local HTTP endpoint."""
+
+        def do_POST(self):
+            """Accept one protobuf export request."""
+            received.append((self.path, self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-protobuf")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            """Keep the test receiver silent."""
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Receiver)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    database = (
+        SQLiteDatabase(SQLiteConfig(url=f"sqlite+pysqlite:///{tmp_path / 'audit.db'}")) if with_database else None
+    )
+    try:
+        store = AlgorithmAuditPersistence(
+            database,
+            service_name="mindmemos-skill-test",
+            otlp_endpoint=f"http://127.0.0.1:{server.server_port}",
+        )
+        try:
+            store.initialize_storage()
+            with store.trace_run(project_id="project", run_id="otlp", algorithm="forest", base_version_id="v0"):
+                get_logger("otlp_probe").info("probe ready")
+            if database is not None:
+                assert store.get_run("project", "otlp").status == "completed"
+                assert any(log.body.get("message") == "probe ready" for log in store.logs("project", "otlp"))
+        finally:
+            store.close()
+    finally:
+        if database is not None:
+            database.close()
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+    paths = {path for path, _ in received}
+    assert paths == {"/v1/logs", "/v1/traces"}
+    log_request = ExportLogsServiceRequest.FromString(next(body for path, body in received if path == "/v1/logs"))
+    trace_request = ExportTraceServiceRequest.FromString(next(body for path, body in received if path == "/v1/traces"))
+    logs = [
+        record
+        for resource in log_request.resource_logs
+        for scope in resource.scope_logs
+        for record in scope.log_records
+    ]
+    spans = [
+        span for resource in trace_request.resource_spans for scope in resource.scope_spans for span in scope.spans
+    ]
+    assert any(record.body.string_value == "probe ready" or "probe ready" in str(record.body) for record in logs)
+    assert any(span.name == "algorithm.train" for span in spans)
+    assert any(
+        attr.key == "service.name" and attr.value.string_value == "mindmemos-skill-test"
+        for attr in log_request.resource_logs[0].resource.attributes
+    )
+
+
+@pytest.mark.asyncio
+async def test_service_accepts_otlp_without_audit_database():
+    """Build and close an OTLP-only service without creating SQL audit storage."""
+    service = await create_service(
+        ServiceConfig.model_validate({"observability": {"otlp": {"endpoint": "http://127.0.0.1:4318"}}})
+    )
+    try:
+        assert service._observability.database is None
+        assert "observability_database" not in service.backends
+    finally:
+        await service.close()
 
 
 @pytest.mark.asyncio

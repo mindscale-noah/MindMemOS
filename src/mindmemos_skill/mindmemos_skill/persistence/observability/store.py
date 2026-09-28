@@ -74,6 +74,8 @@ class AlgorithmAuditPersistence:
         *,
         capture_level: Literal["info", "debug"] = "info",
         service_name: str = "mindmemos-skill",
+        otlp_endpoint: str | None = None,
+        otlp_timeout: float = 5.0,
     ) -> None:
         self.database = database
         self.capture_level = capture_level
@@ -88,6 +90,8 @@ class AlgorithmAuditPersistence:
             on_span_end=self._write_span,
             on_log_emit=self._write_log,
             on_export_error=self._mark_export_failure,
+            otlp_endpoint=otlp_endpoint,
+            otlp_timeout=otlp_timeout,
         )
 
         def log_context() -> dict[str, str] | None:

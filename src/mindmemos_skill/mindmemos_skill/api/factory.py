@@ -184,7 +184,7 @@ def validate_service_config(config: ServiceConfig) -> None:
             raise ValueError("persistence.database must select a Database implementation")
         database_type.config_type.model_validate(database_spec.config)
         signature(database_type).bind(None)
-    if config.observability is not None:
+    if config.observability is not None and config.observability.backend is not None:
         backend_spec = config.observability.backend
         backend_type = Infrastructure.resolve(backend_spec.class_name)
         if not issubclass(backend_type, Database):
@@ -219,14 +219,17 @@ async def _assemble_service(
             backends["database"] = database
             persistence = SkillPersistence(config.persistence.config, database=database, require_session=True)
             backends["persistence"] = persistence
-        if config.observability is not None:
+        if config.observability is not None and config.observability.backend is not None:
             backend_spec = config.observability.backend
             observability_database = Infrastructure.build(backend_spec.class_name, backend_spec.config)
             backends["observability_database"] = observability_database
+        otlp = config.observability.otlp if config.observability is not None else None
         observability = AlgorithmAuditPersistence(
             observability_database,
             capture_level=config.observability.capture_level if config.observability is not None else "info",
             service_name=config.observability.service_name if config.observability is not None else "mindmemos-skill",
+            otlp_endpoint=str(otlp.endpoint) if otlp is not None else None,
+            otlp_timeout=otlp.timeout if otlp is not None else 5.0,
         )
         if observability_database is not None:
             backends["observability"] = observability
