@@ -125,9 +125,7 @@ class CollectionRepository:
         """Retrieve one point and return it only if it belongs to ``project_id``."""
 
         collection = (
-            await self._collection_holding_project(project_id)
-            if self._is_vector_repository
-            else self.collection
+            await self._collection_holding_project(project_id) if self._is_vector_repository else self.collection
         )
         if collection is None:
             return None
@@ -144,9 +142,7 @@ class CollectionRepository:
         """Retrieve points by id, keeping only those owned by ``project_id``."""
 
         collection = (
-            await self._collection_holding_project(project_id)
-            if self._is_vector_repository
-            else self.collection
+            await self._collection_holding_project(project_id) if self._is_vector_repository else self.collection
         )
         if collection is None:
             return []
@@ -170,9 +166,7 @@ class CollectionRepository:
         """Scroll the collection inside one project."""
 
         collection = (
-            await self._collection_holding_project(project_id)
-            if self._is_vector_repository
-            else self.collection
+            await self._collection_holding_project(project_id) if self._is_vector_repository else self.collection
         )
         if collection is None:
             return [], None
@@ -189,9 +183,7 @@ class CollectionRepository:
         """Count points inside one project."""
 
         collection = (
-            await self._collection_holding_project(project_id)
-            if self._is_vector_repository
-            else self.collection
+            await self._collection_holding_project(project_id) if self._is_vector_repository else self.collection
         )
         if collection is None:
             return 0

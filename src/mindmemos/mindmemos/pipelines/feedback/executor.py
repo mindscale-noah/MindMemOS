@@ -152,12 +152,8 @@ class FeedbackActionExecutor:
             vectors=[vector.model_copy(update={"memory_id": new_memory_id})],
             relationships=[
                 GraphRelationship(
-                    source=GraphNodeRef(
-                        kind="Memory", project_id=context.project_id, node_id=new_memory_id
-                    ),
-                    target=GraphNodeRef(
-                        kind="Memory", project_id=context.project_id, node_id=action.target_memory_id
-                    ),
+                    source=GraphNodeRef(kind="Memory", project_id=context.project_id, node_id=new_memory_id),
+                    target=GraphNodeRef(kind="Memory", project_id=context.project_id, node_id=action.target_memory_id),
                     rel_type=REL_DERIVED_FROM,
                     project_id=context.project_id,
                     metadata={"reason": action.reason or "", "created_at": now.isoformat()},
@@ -206,9 +202,7 @@ class FeedbackActionExecutor:
         mutation = result.mutations[0] if result.mutations else None
         changed = bool(mutation and mutation.changed)
         status = "ok" if changed else "error"
-        return action.model_copy(
-            update={"result_memory_id": action.target_memory_id, "status": status}
-        )
+        return action.model_copy(update={"result_memory_id": action.target_memory_id, "status": status})
 
     async def _vectorize(self, text: str) -> VectorWrite:
         embed_resp = await self._embed_client.embed(task="memory.feedback.mutation", text=text)
@@ -277,8 +271,6 @@ class FeedbackActionExecutor:
     @_sparse_encoder.setter
     def _sparse_encoder(self, value: SparseVectorEncoder | None) -> None:
         self.__sparse_encoder = value
-
-
 
 
 def _feedback_metadata(reason: str | None, now: datetime) -> dict[str, str]:

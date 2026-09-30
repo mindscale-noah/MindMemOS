@@ -104,9 +104,7 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
         embed = self._explicit_embed or get_embed_client()
         rerank = self._explicit_rerank if self._explicit_rerank is not None else _optional_rerank_client()
         text_preprocessor = self._explicit_text_preprocessor or get_text_preprocessor()
-        sparse_encoder = self._explicit_sparse_encoder or SparseVectorEncoder(
-            get_config().algo_config.text_processing
-        )
+        sparse_encoder = self._explicit_sparse_encoder or SparseVectorEncoder(get_config().algo_config.text_processing)
         project_em = self._explicit_entity_manager or get_entity_manager(project_id=context.project_id)
         project_entity_schema = project_em.get_all_dicts() if project_em else []
 
@@ -122,9 +120,7 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
         property_filter = query_builder.all_property_filter(entity_schema=project_entity_schema)
         initial_time_window = None
         if not parsed_filters.has_time_filter:
-            initial_time_window = await query_builder.extract_time_from_query(
-                inp.query, prompts=request_prompts
-            )
+            initial_time_window = await query_builder.extract_time_from_query(inp.query, prompts=request_prompts)
 
         expander = self._expander or SchemaSearchExpander(
             db_reader=self.db_reader,
@@ -176,9 +172,7 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
         """Fallback to direct memory recall when schema entity recall is empty."""
 
         text_preprocessor = self._explicit_text_preprocessor or get_text_preprocessor()
-        sparse_encoder = self._explicit_sparse_encoder or SparseVectorEncoder(
-            get_config().algo_config.text_processing
-        )
+        sparse_encoder = self._explicit_sparse_encoder or SparseVectorEncoder(get_config().algo_config.text_processing)
         preprocessed = text_preprocessor.preprocess_query(inp.query, include_entities=False)
         if not preprocessed.tokens:
             return []

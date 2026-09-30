@@ -27,11 +27,7 @@ class AddRecordRepository(CollectionRepository):
         )
 
     async def get(self, project_id: str, add_record_id: str) -> QdrantRecord | None:
-        """Retrieve one add-record by id, scoped to ``project_id``.
-
-        Used by skill trace rebind to patch the ``skill_bindings`` of a specific
-        trace once its skill content is registered (design §2.1).
-        """
+        """Retrieve one add-record by id, scoped to ``project_id``."""
 
         return await self._get_one_scoped(project_id, add_record_id)
 

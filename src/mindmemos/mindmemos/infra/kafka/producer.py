@@ -75,14 +75,14 @@ class KafkaProducer:
             logger.info("kafka producer stopped")
 
     async def send(
-            self,
-            topic: str,
-            value: Any,
-            *,
-            key: str | None = None,
-            dispatch_key: str | None = None,
-            headers: dict[str, str] | None = None,
-            wait: bool = False,
+        self,
+        topic: str,
+        value: Any,
+        *,
+        key: str | None = None,
+        dispatch_key: str | None = None,
+        headers: dict[str, str] | None = None,
+        wait: bool = False,
     ) -> asyncio.Future[Any]:
         """Enqueue one Kafka message for asynchronous delivery.
 
@@ -112,8 +112,8 @@ class KafkaProducer:
                 key = dispatch_key
 
         with tracer.start_as_current_span(
-                f"kafka.publish {topic}",
-                kind=SpanKind.PRODUCER,
+            f"kafka.publish {topic}",
+            kind=SpanKind.PRODUCER,
         ) as span:
             span.set_attribute("messaging.system", "kafka")
             span.set_attribute("messaging.destination.name", topic)
@@ -195,7 +195,7 @@ class KafkaProducer:
             logger.info(
                 f"kafka message wait duration: {wait_duration * 1000:.2f}ms",
                 topic=topic,
-                wait_duration_ms=wait_duration * 1000
+                wait_duration_ms=wait_duration * 1000,
             )
         return send_future
 

@@ -67,9 +67,7 @@ class MemoryRepository(CollectionRepository):
         """Search via dense semantic vector."""
 
         collection = self.collection_for_vector_size(len(vector))
-        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(
-            collection
-        ):
+        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(collection):
             return []
         return await self._engine.query(
             collection,
@@ -121,9 +119,7 @@ class MemoryRepository(CollectionRepository):
         """Run Qdrant-side RRF over dense and sparse prefetches."""
 
         collection = self.collection_for_vector_size(len(dense_vector))
-        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(
-            collection
-        ):
+        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(collection):
             return []
         scoped_filter = self._engine.project_filter(project_id, filter_=filter_)
         return await self._engine.query(

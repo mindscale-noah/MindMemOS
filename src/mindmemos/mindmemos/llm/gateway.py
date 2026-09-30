@@ -254,12 +254,7 @@ def build_platform_gateway_router(router_cfg: ModelRouterConfig, alias: str) -> 
         raise ValueError("platform_gateway router requires a platform_gateway endpoint")
     api_base = str(endpoint.api_base)
     api_key = str(endpoint.api_key)
-    if (
-        not is_trusted_platform_gateway_url(api_base)
-        or "{userId}" in api_base
-        or not api_key
-        or api_key == "EMPTY"
-    ):
+    if not is_trusted_platform_gateway_url(api_base) or "{userId}" in api_base or not api_key or api_key == "EMPTY":
         raise ValueError("platform_gateway router requires a hydrated private Platform route")
     if alias not in {"chat", "embedding", "rerank"}:
         raise ValueError(f"unsupported platform_gateway alias: {alias}")
