@@ -6,7 +6,12 @@ class SkillError(MindMemOSError):
 
 
 class SkillBundleError(SkillError):
-    """Raised when cloud bundle paths or canonical bytes violate the strict contract."""
+    """Raised when a skill bundle is empty or contains no whitelisted file.
+
+    The whitelist (see design §4.2) currently only admits ``SKILL.md``; a bundle
+    that carries none of the whitelisted files cannot produce a stable
+    ``content_hash`` and is rejected here.
+    """
 
 
 class SkillVersionNotFoundError(SkillError):
@@ -19,10 +24,6 @@ class SkillNotFoundError(SkillError):
 
 class SkillContentNotFoundError(SkillError):
     """A skill version exists but its ``skill_blob`` content row is missing."""
-
-
-class SkillConflictError(SkillError):
-    """A cloud revision, immutable identity, or operation id conflicts."""
 
 
 class SkillEditError(SkillError):

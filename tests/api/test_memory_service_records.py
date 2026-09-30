@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from mindmemos.typing.service import (
     AddPipelineAsyncResult,
     AddPipelineInput,
     AddPipelineSyncResult,
+    AddStreamCancelled,
     DreamingPipelineInput,
     DreamingPipelineResult,
     FeedbackPipelineInput,
@@ -85,6 +87,37 @@ class FakeAddPipeline:
         return False
 
 
+class FakeStreamingAddPipeline(FakeAddPipeline):
+    async def add_sync_stream(
+        self,
+        inp: AddPipelineInput,
+        context: MemoryRequestContext,
+        *,
+        add_record_id: str | None = None,
+        progress=None,
+        cancel_check=None,
+    ):
+        self.sync_calls.append(
+            {
+                "inp": inp,
+                "ctx": context,
+                "add_record_id": add_record_id,
+            }
+        )
+        if progress is not None:
+            await progress("llm_extracting", "extracting", 40)
+        return AddPipelineSyncResult(
+            status="ok",
+            memories=[
+                MemoryAddEventItem(
+                    operation="add",
+                    memory_id="mem-1",
+                    content=inp.messages[0].content,
+                )
+            ],
+        )
+
+
 class FailingAddPipeline(FakeAddPipeline):
     async def add_sync(
         self,
@@ -94,6 +127,79 @@ class FailingAddPipeline(FakeAddPipeline):
         add_record_id: str | None = None,
     ) -> AddPipelineSyncResult:
         raise RuntimeError("add failed")
+
+
+class SlowStreamingAddPipeline(FakeStreamingAddPipeline):
+    async def add_sync_stream(
+        self,
+        inp: AddPipelineInput,
+        context: MemoryRequestContext,
+        *,
+        add_record_id: str | None = None,
+        progress=None,
+        cancel_check=None,
+    ):
+        self.sync_calls.append(
+            {
+                "inp": inp,
+                "ctx": context,
+                "add_record_id": add_record_id,
+            }
+        )
+        await asyncio.sleep(0.05)
+        return AddPipelineSyncResult(
+            status="ok",
+            memories=[
+                MemoryAddEventItem(
+                    operation="add",
+                    memory_id="mem-1",
+                    content=inp.messages[0].content,
+                )
+            ],
+        )
+
+
+class CancellingStreamingAddPipeline(FakeStreamingAddPipeline):
+    async def add_sync_stream(
+        self,
+        inp: AddPipelineInput,
+        context: MemoryRequestContext,
+        *,
+        add_record_id: str | None = None,
+        progress=None,
+        cancel_check=None,
+    ):
+        self.sync_calls.append(
+            {
+                "inp": inp,
+                "ctx": context,
+                "add_record_id": add_record_id,
+            }
+        )
+        raise AddStreamCancelled("memory_planning", "cancelled by user")
+
+
+class HangingStreamingAddPipeline(FakeStreamingAddPipeline):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+
+    async def add_sync_stream(
+        self,
+        inp: AddPipelineInput,
+        context: MemoryRequestContext,
+        *,
+        add_record_id: str | None = None,
+        progress=None,
+        cancel_check=None,
+    ):
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
 
 
 class FakeAsyncAddPipeline(FakeAddPipeline):
@@ -175,6 +281,7 @@ class FakeDreamingPipeline:
 class FakeRecorder:
     add_calls: list[dict] = field(default_factory=list)
     failed_calls: list[dict] = field(default_factory=list)
+    cancelled_calls: list[dict] = field(default_factory=list)
     search_calls: list[dict] = field(default_factory=list)
 
     async def record_add_input(
@@ -188,7 +295,6 @@ class FakeRecorder:
         skill_bindings=None,
         score=None,
         task_id=None,
-        extra_payload=None,
     ) -> str:
         self.add_calls.append(
             {
@@ -200,13 +306,15 @@ class FakeRecorder:
                 "skill_bindings": skill_bindings,
                 "score": score,
                 "task_id": task_id,
-                "extra_payload": extra_payload,
             }
         )
         return add_record_id
 
     async def mark_add_failed(self, ctx, add_record_id, error) -> None:
         self.failed_calls.append({"ctx": ctx, "add_record_id": add_record_id, "error": error})
+
+    async def mark_add_cancelled(self, ctx, add_record_id, reason) -> None:
+        self.cancelled_calls.append({"ctx": ctx, "add_record_id": add_record_id, "reason": reason})
 
     async def record_search(self, inp, result, *, ctx, request_submitted_at, task_completed_at) -> None:
         self.search_calls.append(
@@ -356,6 +464,133 @@ async def test_memory_service_records_add_result_for_schema_add_pipeline() -> No
 
 
 @pytest.mark.asyncio
+async def test_add_request_prompt_language_reaches_add_pipeline() -> None:
+    recorder = FakeRecorder()
+    pipeline = FakeAddPipeline()
+    service = make_service(
+        add_pipeline=pipeline,
+        add_pipeline_name="schema_add",
+        operation_recorder=recorder,
+    )
+
+    await service.add(make_context(), add_request().model_copy(update={"prompt_language": "ZH"}))
+
+    assert pipeline.sync_calls[0]["inp"].prompt_language == "ZH"
+    assert recorder.add_calls[0]["inp"].prompt_language == "ZH"
+
+
+@pytest.mark.asyncio
+async def test_memory_service_streams_schema_add_progress_and_completion() -> None:
+    recorder = FakeRecorder()
+    pipeline = FakeStreamingAddPipeline()
+    service = make_service(
+        add_pipeline=pipeline,
+        add_pipeline_name="schema_add",
+        operation_recorder=recorder,
+    )
+
+    events = [event async for event in service.add_stream(make_context(), add_request())]
+
+    assert [event["event"] for event in events] == ["progress", "progress", "completed"]
+    assert events[0]["stage"] == "accepted"
+    assert events[1]["stage"] == "llm_extracting"
+    assert events[-1]["data"]["memories"][0]["memory_id"] == "mem-1"
+    assert len(recorder.add_calls) == 1
+    assert recorder.add_calls[0]["status"] == "processing"
+    assert pipeline.sync_calls[0]["add_record_id"] == recorder.add_calls[0]["add_record_id"]
+
+
+@pytest.mark.asyncio
+async def test_memory_service_stream_rejects_async_mode_before_recording_or_running_pipeline() -> None:
+    recorder = FakeRecorder()
+    pipeline = FakeStreamingAddPipeline()
+    service = make_service(
+        add_pipeline=pipeline,
+        add_pipeline_name="schema_add",
+        operation_recorder=recorder,
+    )
+
+    events = [
+        event
+        async for event in service.add_stream(
+            make_context(),
+            add_request().model_copy(update={"mode": "async"}),
+        )
+    ]
+
+    assert events == [
+        {
+            "event": "error",
+            "stage": "accepted",
+            "message": "streaming add only supports sync mode",
+        }
+    ]
+    assert recorder.add_calls == []
+    assert pipeline.sync_calls == []
+
+
+@pytest.mark.asyncio
+async def test_memory_service_streams_heartbeat_while_schema_add_is_idle() -> None:
+    recorder = FakeRecorder()
+    pipeline = SlowStreamingAddPipeline()
+    service = make_service(
+        add_pipeline=pipeline,
+        add_pipeline_name="schema_add",
+        operation_recorder=recorder,
+    )
+    service.stream_heartbeat_seconds = 0.01
+
+    events = [event async for event in service.add_stream(make_context(), add_request())]
+
+    assert events[0]["event"] == "progress"
+    assert events[-1]["event"] == "completed"
+    heartbeat_events = [event for event in events if event["event"] == "heartbeat"]
+    assert heartbeat_events
+    assert heartbeat_events[0]["stage"] == "waiting"
+    assert heartbeat_events[0]["message_i18n"]["zh"] == "记忆提取仍在进行，请稍候"
+    assert events[-1]["data"]["memories"][0]["memory_id"] == "mem-1"
+
+
+@pytest.mark.asyncio
+async def test_memory_service_records_cancelled_add_for_streaming_schema_pipeline() -> None:
+    recorder = FakeRecorder()
+    pipeline = CancellingStreamingAddPipeline()
+    service = make_service(
+        add_pipeline=pipeline,
+        add_pipeline_name="schema_add",
+        operation_recorder=recorder,
+    )
+
+    events = [event async for event in service.add_stream(make_context(), add_request())]
+
+    assert [event["event"] for event in events] == ["progress", "cancelled"]
+    assert len(recorder.cancelled_calls) == 1
+    assert recorder.cancelled_calls[0]["add_record_id"] == recorder.add_calls[0]["add_record_id"]
+    assert recorder.cancelled_calls[0]["reason"] == "cancelled by user"
+
+
+@pytest.mark.asyncio
+async def test_memory_service_cancels_streaming_pipeline_when_consumer_disconnects() -> None:
+    recorder = FakeRecorder()
+    pipeline = HangingStreamingAddPipeline()
+    service = make_service(
+        add_pipeline=pipeline,
+        add_pipeline_name="schema_add",
+        operation_recorder=recorder,
+    )
+    service.stream_heartbeat_seconds = 0.01
+    events = service.add_stream(make_context(), add_request())
+
+    accepted = await anext(events)
+    heartbeat = await anext(events)
+    await events.aclose()
+
+    assert accepted["event"] == "progress"
+    assert heartbeat["event"] == "heartbeat"
+    await asyncio.wait_for(pipeline.cancelled.wait(), timeout=0.2)
+
+
+@pytest.mark.asyncio
 async def test_memory_service_records_failed_add_for_vanilla_add_pipeline() -> None:
     recorder = FakeRecorder()
     service = make_service(
@@ -435,7 +670,7 @@ async def test_add_request_missing_optional_actor_fields_stay_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_add_projects_legacy_skill_context_to_audit_without_writing_old_store() -> None:
+async def test_add_binds_skill_context_and_passes_bindings_to_recorder() -> None:
     recorder = FakeRecorder()
     skill_store = FakeSkillStore()
     service = make_service(add_pipeline=FakeAddPipeline(), operation_recorder=recorder, skill_store=skill_store)
@@ -449,8 +684,10 @@ async def test_add_projects_legacy_skill_context_to_audit_without_writing_old_st
         ),
     )
 
-    assert skill_store.calls == []
+    # The store was driven with the trace id that the recorder also received.
+    assert len(skill_store.calls) == 1
     call = recorder.add_calls[0]
+    assert skill_store.calls[0]["add_record_id"] == call["add_record_id"]
     assert call["add_record_id"]
     assert [b.name for b in call["skill_bindings"]] == ["prd-writer"]
     # skill_context never leaks into the pipeline input contract.
@@ -482,8 +719,9 @@ async def test_vanilla_add_records_skill_bindings_at_service() -> None:
 
     assert result.status == "ok"
     assert len(recorder.add_calls) == 1
-    assert skill_store.calls == []
+    assert len(skill_store.calls) == 1
     call = recorder.add_calls[0]
+    assert call["add_record_id"] == skill_store.calls[0]["add_record_id"]
     assert call["add_record_id"]
     assert [binding.name for binding in call["skill_bindings"]] == ["prd-writer"]
     assert call["score"] == 1.0
@@ -507,7 +745,7 @@ async def test_add_without_skill_context_passes_no_bindings() -> None:
 
 
 @pytest.mark.asyncio
-async def test_legacy_skill_context_does_not_invoke_injected_old_store() -> None:
+async def test_add_skill_binding_failure_never_blocks_add() -> None:
     recorder = FakeRecorder()
     skill_store = FakeSkillStore(raise_on_bind=True)
     service = make_service(add_pipeline=FakeAddPipeline(), operation_recorder=recorder, skill_store=skill_store)
@@ -521,9 +759,9 @@ async def test_legacy_skill_context_does_not_invoke_injected_old_store() -> None
         ),
     )
 
+    # Add still succeeds and is still recorded, just without skill bindings.
     assert result.status == "ok"
-    assert skill_store.calls == []
-    assert [binding.name for binding in recorder.add_calls[0]["skill_bindings"]] == ["prd-writer"]
+    assert recorder.add_calls[0]["skill_bindings"] is None
 
 
 @pytest.mark.asyncio
@@ -573,6 +811,23 @@ async def test_search_request_actor_identity_merged_into_context_and_stripped_fr
     assert call["ctx"].agent_id == "caller-agent"
     assert isinstance(call["inp"], SearchPipelineInput)
     assert not hasattr(call["inp"], "user_id")
+    assert call["inp"].filters == {"user_id": "caller-user"}
+
+
+@pytest.mark.asyncio
+async def test_search_request_without_user_id_keeps_project_wide_scope() -> None:
+    recorder = FakeRecorder()
+    service = make_service(
+        search_pipeline=FakeSearchPipeline(),
+        search_pipeline_name="search_pipeline",
+        operation_recorder=recorder,
+    )
+
+    await service.search(make_context(), SearchRequest(query="Qdrant"))
+
+    call = recorder.search_calls[0]
+    assert call["ctx"].user_id is None
+    assert call["inp"].filters is None
 
 
 @pytest.mark.asyncio

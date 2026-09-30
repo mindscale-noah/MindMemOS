@@ -1,15 +1,16 @@
 """Collection-agnostic Qdrant primitives shared by all repositories.
 
 ``QdrantEngine`` owns the :class:`AsyncQdrantClient` and every Qdrant operation
-that carries no memory/skill business semantics: it deals only in collection
+that carries no business semantics: it deals only in collection
 names, point structs, records and project-scoped filters. Typed adapters such as
-``QdrantStore`` and ``SkillVersionRepository`` compose one engine and delegate
+``QdrantStore`` composes one engine and delegates
 the low-level work here, so connection handling, payload sanitisation, record
 mapping and project scoping live in exactly one place.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -79,6 +80,8 @@ class QdrantEngine:
             if cfg.batch_upsert_enabled
             else None
         )
+        self._collection_locks: dict[str, asyncio.Lock] = {}
+        self._ensured_collection_specs: dict[str, tuple[Any, ...]] = {}
 
     @property
     def client(self) -> AsyncQdrantClient:
@@ -92,6 +95,27 @@ class QdrantEngine:
 
         return self._cfg
 
+    async def collection_exists(self, collection: str) -> bool:
+        """Return whether a physical Qdrant collection exists."""
+
+        return bool(await self._client.collection_exists(collection))
+
+    async def collection_names(self) -> list[str]:
+        """Return all physical Qdrant collection names."""
+
+        return [item.name for item in (await self._client.get_collections()).collections]
+
+    async def dense_vector_size(self, collection: str, vector_name: str) -> int | None:
+        """Return one existing dense vector size without creating the collection."""
+
+        if not await self.collection_exists(collection):
+            return None
+        info = await self._client.get_collection(collection)
+        vectors = info.config.params.vectors
+        params = vectors.get(vector_name) if isinstance(vectors, dict) else vectors
+        size = getattr(params, "size", None)
+        return int(size) if isinstance(size, int) and size > 0 else None
+
     async def ensure_collection(self, spec: QdrantCollectionSpec) -> None:
         """Create one collection and its payload indexes (no ``auto_create`` gate).
 
@@ -100,7 +124,27 @@ class QdrantEngine:
         with an empty ``vectors_config`` (payload + filter only).
         """
 
+        fingerprint = self._collection_spec_fingerprint(spec)
+        if self._ensured_collection_specs.get(spec.name) == fingerprint:
+            return
+
+        lock = self._collection_locks.setdefault(spec.name, asyncio.Lock())
+        async with lock:
+            if self._ensured_collection_specs.get(spec.name) == fingerprint:
+                return
+            if await self._ensure_collection_locked(spec):
+                self._ensured_collection_specs[spec.name] = fingerprint
+
+    async def _ensure_collection_locked(self, spec: QdrantCollectionSpec) -> bool:
+        """Ensure one collection while its process-local name lock is held.
+
+        Return ``True`` only when the complete requested schema is known to be
+        present. A transient payload-index failure is intentionally left
+        uncached so a later call can repair it.
+        """
+
         exists = await self._client.collection_exists(spec.name)
+        created = False
         if not exists:
             vectors_config: dict[str, qmodels.VectorParams] = {}
             sparse_vectors_config: dict[str, qmodels.SparseVectorParams] | None = None
@@ -113,19 +157,40 @@ class QdrantEngine:
                 sparse_vectors_config = {
                     spec.sparse_vector_name: qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
                 }
-            await self._client.create_collection(
-                collection_name=spec.name,
-                vectors_config=vectors_config,
-                sparse_vectors_config=sparse_vectors_config,
-                on_disk_payload=spec.on_disk_payload,
-            )
-        elif spec.on_disk_payload is not None:
-            await self._client.update_collection(
-                collection_name=spec.name,
-                collection_params=qmodels.CollectionParamsDiff(on_disk_payload=spec.on_disk_payload),
-            )
+            try:
+                await self._client.create_collection(
+                    collection_name=spec.name,
+                    vectors_config=vectors_config,
+                    sparse_vectors_config=sparse_vectors_config,
+                    on_disk_payload=spec.on_disk_payload,
+                )
+                created = True
+            except Exception:
+                # Another service instance may win the create race after our
+                # existence check. Treat that as success only when Qdrant now
+                # confirms the requested collection exists.
+                if not await self._client.collection_exists(spec.name):
+                    raise
 
+        existing_payload_indexes: set[str] = set()
+        if not created and (spec.on_disk_payload is not None or spec.payload_indexes):
+            info = await self._client.get_collection(spec.name)
+            existing_payload_indexes = set((getattr(info, "payload_schema", None) or {}).keys())
+            current_on_disk_payload = getattr(
+                getattr(getattr(info, "config", None), "params", None),
+                "on_disk_payload",
+                None,
+            )
+            if spec.on_disk_payload is not None and current_on_disk_payload != spec.on_disk_payload:
+                await self._client.update_collection(
+                    collection_name=spec.name,
+                    collection_params=qmodels.CollectionParamsDiff(on_disk_payload=spec.on_disk_payload),
+                )
+
+        complete = True
         for index in spec.payload_indexes:
+            if index.field_name in existing_payload_indexes:
+                continue
             try:
                 await self._client.create_payload_index(
                     collection_name=spec.name,
@@ -133,12 +198,29 @@ class QdrantEngine:
                     field_schema=index.field_schema,
                 )
             except Exception as exc:
+                complete = False
                 logger.debug(
                     "qdrant payload index create skipped",
                     collection=spec.name,
                     field_name=index.field_name,
                     error=str(exc),
                 )
+        return complete
+
+    @staticmethod
+    def _collection_spec_fingerprint(spec: QdrantCollectionSpec) -> tuple[Any, ...]:
+        """Return a stable process-local identity for one requested schema."""
+
+        return (
+            spec.vector_size,
+            spec.dense_vector_name,
+            spec.sparse_vector_name,
+            spec.distance,
+            spec.enable_dense,
+            spec.enable_sparse,
+            spec.on_disk_payload,
+            tuple((index.field_name, repr(index.field_schema)) for index in spec.payload_indexes),
+        )
 
     async def upsert(self, collection: str, points: list[qmodels.PointStruct]) -> None:
         """Upsert point structs into one collection (no-op on empty input)."""
@@ -186,6 +268,22 @@ class QdrantEngine:
         )
         return [self.record_from(record) for record in records], next_offset
 
+    async def count(
+        self,
+        collection: str,
+        *,
+        count_filter: qmodels.Filter | None = None,
+        exact: bool = True,
+    ) -> int:
+        """Count points in a collection with an already-built filter."""
+
+        result = await self._client.count(
+            collection_name=collection,
+            count_filter=count_filter,
+            exact=exact,
+        )
+        return int(result.count)
+
     async def query(
         self,
         collection: str,
@@ -219,20 +317,6 @@ class QdrantEngine:
         await self._client.set_payload(
             collection_name=collection,
             points=[point_id],
-            payload=self.safe_payload(payload),
-        )
-
-    async def set_payload_by_filter(
-        self,
-        collection: str,
-        filter_: qmodels.Filter,
-        payload: dict[str, Any],
-    ) -> None:
-        """Atomically set payload fields on points matching the filter at update time."""
-
-        await self._client.set_payload(
-            collection_name=collection,
-            points=filter_,
             payload=self.safe_payload(payload),
         )
 

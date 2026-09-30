@@ -444,27 +444,6 @@ class MemoryAgentBenchContextResult(BaseModel):
     add_summary: MemoryAgentBenchAddSummary | None = None
 
 
-class MemoryAgentBenchDreamingSummary(BaseModel):
-    """Synchronous Dreaming stage executed between baseline and post-Dreaming queries."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    code: str
-    request_id: str | None = None
-    message: str = ""
-    elapsed_seconds: float = 0.0
-
-
-class MemoryAgentBenchEvaluationPhase(BaseModel):
-    """Question results and aggregate metrics for one evaluation phase."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    contexts: list[MemoryAgentBenchContextResult] = Field(default_factory=list)
-    metrics: dict[str, list[float]] = Field(default_factory=dict)
-    averaged_metrics: dict[str, float] = Field(default_factory=dict)
-
-
 class MemoryAgentBenchRunResult(BaseModel):
     """Whole-run MemoryAgentBench results and aggregate metrics."""
 
@@ -475,8 +454,6 @@ class MemoryAgentBenchRunResult(BaseModel):
     contexts: list[MemoryAgentBenchContextResult] = Field(default_factory=list)
     metrics: dict[str, list[float]] = Field(default_factory=dict)
     averaged_metrics: dict[str, float] = Field(default_factory=dict)
-    baseline: MemoryAgentBenchEvaluationPhase | None = None
-    dreaming: MemoryAgentBenchDreamingSummary | None = None
 
     def format_report(self) -> str:
         """Format an official-style metric report."""
@@ -488,23 +465,14 @@ class MemoryAgentBenchRunResult(BaseModel):
             if summary and summary.failed_chunks:
                 for chunk_idx, reason in summary.failed_chunks:
                     lines.append(f"    - add failed: chunk {chunk_idx}: {reason}")
-        metric_sections = (
-            (
-                ("Baseline before Dreaming", self.baseline.averaged_metrics),
-                ("After Dreaming", self.averaged_metrics),
-            )
-            if self.baseline is not None
-            else (("Metrics", self.averaged_metrics),)
-        )
-        for label, metrics in metric_sections:
-            lines.append("-" * 60)
-            lines.append(label)
-            if not metrics:
-                lines.append("  No scored questions.")
-                continue
-            for name in sorted(metrics):
+        lines.append("-" * 60)
+        if not self.averaged_metrics:
+            lines.append("No scored questions.")
+        else:
+            for name in sorted(self.averaged_metrics):
                 marker = " (primary)" if self.primary_metric and name == self.primary_metric else ""
-                lines.append(f"  {name}: {metrics[name]:.4f}{marker}")
+                value = self.averaged_metrics[name]
+                lines.append(f"  {name}: {value:.4f}{marker}")
         lines.append("=" * 60)
         return "\n".join(lines)
 
@@ -685,36 +653,19 @@ class MemoryAgentBenchEnv:
         max_context_concurrency: int = 2,
         max_qa_concurrency: int = 10,
         add: bool = True,
-        dreaming_after_add: bool = False,
         score: bool = True,
         max_queries: int = 0,
         print_report: bool = True,
         show_progress: bool = True,
-        _question_plan: dict[int, list[tuple[int, MemoryAgentBenchQuestion]]] | None = None,
     ) -> MemoryAgentBenchRunResult:
         """Run the benchmark over a list of MemoryAgentBench items."""
-        if dreaming_after_add:
-            return await self._run_dataset_with_dreaming(
-                data,
-                max_context_concurrency=max_context_concurrency,
-                max_qa_concurrency=max_qa_concurrency,
-                add=add,
-                score=score,
-                max_queries=max_queries,
-                print_report=print_report,
-                show_progress=show_progress,
-            )
-
         ctx_sem = asyncio.Semaphore(max_context_concurrency)
         qa_sem = asyncio.Semaphore(max_qa_concurrency)
         total_chunks = sum(len(self.chunk_context(item.context)) for item in data) if add else 0
         all_questions = [item.build_questions(item.source) for item in data]
-        if _question_plan is None:
-            total_questions = sum(len(questions) for questions in all_questions)
-            if max_queries > 0:
-                total_questions = min(total_questions, max_queries)
-        else:
-            total_questions = sum(len(questions) for questions in _question_plan.values())
+        total_questions = sum(len(questions) for questions in all_questions)
+        if max_queries > 0:
+            total_questions = min(total_questions, max_queries)
 
         add_pbar = (
             tqdm(total=total_chunks, desc="添加记忆 (chunk)", unit="chunk", position=0)
@@ -746,16 +697,10 @@ class MemoryAgentBenchEnv:
                     if add
                     else None
                 )
-                if _question_plan is None:
-                    questions = [(None, question) for question in all_questions[context_id]]
-                else:
-                    questions = _question_plan.get(context_id, [])
+                questions = item.build_questions(item.source)
 
-                async def run_question(
-                    planned_query_id: int | None,
-                    question: MemoryAgentBenchQuestion,
-                ) -> MemoryAgentBenchQAResult | None:
-                    query_id = planned_query_id if planned_query_id is not None else await next_query_id()
+                async def run_question(question: MemoryAgentBenchQuestion) -> MemoryAgentBenchQAResult | None:
+                    query_id = await next_query_id()
                     if query_id is None:
                         return None
                     async with qa_sem:
@@ -771,13 +716,7 @@ class MemoryAgentBenchEnv:
                             qa_pbar.update()
                         return result
 
-                qa_raw = (
-                    await asyncio.gather(
-                        *(run_question(planned_query_id, question) for planned_query_id, question in questions)
-                    )
-                    if questions
-                    else []
-                )
+                qa_raw = await asyncio.gather(*(run_question(question) for question in questions)) if questions else []
                 qa_results = [result for result in qa_raw if result is not None]
                 if ctx_pbar is not None:
                     ctx_pbar.update()
@@ -820,141 +759,6 @@ class MemoryAgentBenchEnv:
         if print_report:
             print(run.format_report(), flush=True)
         return run
-
-    async def _run_dataset_with_dreaming(
-        self,
-        data: list[MemoryAgentBenchItem],
-        *,
-        max_context_concurrency: int,
-        max_qa_concurrency: int,
-        add: bool,
-        score: bool,
-        max_queries: int,
-        print_report: bool,
-        show_progress: bool,
-    ) -> MemoryAgentBenchRunResult:
-        """Run Add, baseline queries, one synchronous Dreaming, then the same queries again."""
-        if not add:
-            raise ValueError("dreaming_after_add requires add=True")
-
-        ctx_sem = asyncio.Semaphore(max_context_concurrency)
-        total_chunks = sum(len(self.chunk_context(item.context)) for item in data)
-        add_pbar = (
-            tqdm(total=total_chunks, desc="添加记忆 (chunk)", unit="chunk", position=0) if show_progress else None
-        )
-
-        async def add_one(context_id: int, item: MemoryAgentBenchItem) -> MemoryAgentBenchAddSummary:
-            async with ctx_sem:
-                return await self.add_context(
-                    item,
-                    context_id,
-                    on_chunk_done=add_pbar.update if add_pbar else None,
-                )
-
-        try:
-            add_summaries = await asyncio.gather(*(add_one(idx, item) for idx, item in enumerate(data)))
-        finally:
-            if add_pbar is not None:
-                add_pbar.close()
-
-        incomplete = [
-            summary
-            for summary in add_summaries
-            if summary.failed_chunks or summary.added_chunks != summary.total_chunks
-        ]
-        if incomplete:
-            details = ", ".join(
-                f"context={summary.context_id} added={summary.added_chunks}/{summary.total_chunks} "
-                f"failed={len(summary.failed_chunks)}"
-                for summary in incomplete
-            )
-            raise RuntimeError(f"refusing Dreaming after incomplete MemoryAgentBench add: {details}")
-
-        question_plan = self._build_question_plan(data, max_queries=max_queries)
-        baseline_run = await self.run_dataset(
-            data,
-            max_context_concurrency=max_context_concurrency,
-            max_qa_concurrency=max_qa_concurrency,
-            add=False,
-            dreaming_after_add=False,
-            score=score,
-            max_queries=max_queries,
-            print_report=False,
-            show_progress=show_progress,
-            _question_plan=question_plan,
-        )
-        self._attach_add_summaries(baseline_run, add_summaries)
-
-        dreaming_started = time.perf_counter()
-        dreaming_result = await self._memory.dreaming(mode="sync")
-        dreaming_summary = MemoryAgentBenchDreamingSummary(
-            code=dreaming_result.code,
-            request_id=dreaming_result.request_id,
-            message=dreaming_result.message,
-            elapsed_seconds=time.perf_counter() - dreaming_started,
-        )
-        if dreaming_summary.code != "ok":
-            raise RuntimeError(
-                f"MemoryAgentBench Dreaming failed: code={dreaming_summary.code!r} message={dreaming_summary.message!r}"
-            )
-
-        run = await self.run_dataset(
-            data,
-            max_context_concurrency=max_context_concurrency,
-            max_qa_concurrency=max_qa_concurrency,
-            add=False,
-            dreaming_after_add=False,
-            score=score,
-            max_queries=max_queries,
-            print_report=False,
-            show_progress=show_progress,
-            _question_plan=question_plan,
-        )
-        self._attach_add_summaries(run, add_summaries)
-        run.baseline = MemoryAgentBenchEvaluationPhase(
-            contexts=baseline_run.contexts,
-            metrics=baseline_run.metrics,
-            averaged_metrics=baseline_run.averaged_metrics,
-        )
-        run.dreaming = dreaming_summary
-        if print_report:
-            print(run.format_report(), flush=True)
-        return run
-
-    @staticmethod
-    def _attach_add_summaries(
-        run: MemoryAgentBenchRunResult,
-        add_summaries: list[MemoryAgentBenchAddSummary],
-    ) -> None:
-        """Attach the shared Add-stage timing to one answer phase."""
-        summaries_by_context = {summary.context_id: summary for summary in add_summaries}
-        construction_times: list[float] = []
-        for context in run.contexts:
-            summary = summaries_by_context[context.context_id]
-            context.add_summary = summary
-            for qa in context.qa_results:
-                qa.memory_construction_time = summary.memory_construction_time
-                construction_times.append(summary.memory_construction_time)
-        if construction_times:
-            run.metrics["memory_construction_time"] = construction_times
-            run.averaged_metrics["memory_construction_time"] = sum(construction_times) / len(construction_times)
-
-    @staticmethod
-    def _build_question_plan(
-        data: list[MemoryAgentBenchItem],
-        *,
-        max_queries: int,
-    ) -> dict[int, list[tuple[int, MemoryAgentBenchQuestion]]]:
-        """Select one deterministic question set for both Dreaming evaluation phases."""
-        plan: dict[int, list[tuple[int, MemoryAgentBenchQuestion]]] = {}
-        query_id = 0
-        for context_id, item in enumerate(data):
-            for question in item.build_questions(item.source):
-                if max_queries > 0 and query_id >= max_queries:
-                    return plan
-                plan.setdefault(context_id, []).append((query_id, question))
-                query_id += 1
-        return plan
 
     @staticmethod
     def load_dataset(
@@ -1040,7 +844,5 @@ def save_memoryagentbench_results(path: str | Path, run: MemoryAgentBenchRunResu
         "averaged_metrics": run.averaged_metrics,
         "primary_metric": run.primary_metric,
         "contexts": [ctx.model_dump() for ctx in run.contexts],
-        "baseline": run.baseline.model_dump() if run.baseline is not None else None,
-        "dreaming": run.dreaming.model_dump() if run.dreaming is not None else None,
     }
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

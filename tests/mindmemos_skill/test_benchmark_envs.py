@@ -1,444 +1,795 @@
-from __future__ import annotations
+"""Exercise benchmark protocols, exact feedback, privacy, and rollout recovery."""
 
 import json
-from contextlib import nullcontext
-from datetime import UTC, datetime
-from typing import Any
+import subprocess
 
+import openpyxl
 import pytest
-from mindmemos_skill.agents import Agent, AgentConfig, AgentExecutionRequest, SkillInjection
-from mindmemos_skill.agents.react import ReactAgent
-from mindmemos_skill.algos.evolve.skill_grpo_with_replay_buffer.prompts import experience_extraction_messages
-from mindmemos_skill.datasets import LiveMathIdSplitDataset
-from mindmemos_skill.envs import ALFWorldBoundedHistoryEnv, EnvRolloutContext, LiveMathEnv
-from mindmemos_skill.envs.registered_envs.alfworld_bounded_history import (
-    ALFWORLD_SYSTEM_PROMPT as BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT,
-)
-from mindmemos_skill.envs.registered_envs.alfworld_bounded_history import (
-    format_bounded_history_observation,
-)
-from mindmemos_skill.envs.registered_envs.alfworld_bounded_history.env import ALFWorldBoundedHistoryEnvConfig
-from mindmemos_skill.envs.registered_envs.livemath import build_system, build_user, evaluate, refinement
-from mindmemos_skill.envs.registered_envs.livemath.env import LiveMathEnvConfig
-from mindmemos_skill.envs.registered_envs.spreadsheetbench.env import SpreadsheetBenchEnvConfig
-from mindmemos_skill.envs.registered_envs.spreadsheetbench.prompts import build_messages as spreadsheetbench_messages
-from mindmemos_skill.llm import ChatResponse
-from mindmemos_skill.typing import (
-    Rollout,
-    Skill,
-    SkillBinding,
-    SkillInjectionMode,
-    SkillUsageType,
-    Task,
-    Trajectory,
-)
+from mindmemos_skill.agents import OpenAIChatAgent, OpenAIChatConfig
+from mindmemos_skill.agents.buitin_agents.openai_chat.callbacks import parse_action
+from mindmemos_skill.agents.typing import AgentResult
+from mindmemos_skill.envs import Environment
+from mindmemos_skill.envs.builtin_envs.alfworld_bounded_history import ALFWorldConfig, ALFWorldEnvironment
+from mindmemos_skill.envs.builtin_envs.officeqa import OfficeQAConfig, OfficeQAEnvironment
+from mindmemos_skill.envs.builtin_envs.officeqa.scoring import score_answer
+from mindmemos_skill.envs.builtin_envs.officeqa.tools import run_tool
+from mindmemos_skill.envs.builtin_envs.searchqa import SearchQAConfig, SearchQAEnvironment
+from mindmemos_skill.envs.builtin_envs.searchqa.reward import evaluate as search_reward
+from mindmemos_skill.envs.builtin_envs.searchqa.typing import SearchQARewardData, SearchQATask
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench import SpreadsheetBenchConfig, SpreadsheetBenchEnvironment
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench.reward import compare_workbooks, verification_report
+from mindmemos_skill.envs.data import Data
 
 
-class ScriptedMessageAgent(Agent[AgentConfig]):
-    def __init__(self, responses: list[str]) -> None:
-        super().__init__({})
-        self.responses = list(responses)
-        self.calls: list[tuple[list[dict[str, Any]], list[dict[str, Any]] | None]] = []
+class ScriptedAgent(OpenAIChatAgent):
+    """Record public requests and return deterministic scripted responses."""
 
-    def inject_skills(self, skills, *, mode: SkillInjectionMode | None = None):
-        del skills
-        return nullcontext(SkillInjection(mode=mode or SkillInjectionMode.SYSTEM_PROMPT))
+    def __init__(self, outputs):
+        super().__init__(OpenAIChatConfig(model="test-model"))
+        self.outputs = iter(outputs)
+        self.requests = []
 
-    def bind_skills(self, trajectory: Trajectory) -> list[SkillBinding]:
-        del trajectory
-        return []
+    def run(self, *, system, user):
+        return self.run_messages(messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
 
-    async def execute(self, request: AgentExecutionRequest) -> Trajectory:
-        raise AssertionError(f"benchmark env must use respond(), not execute(): {request.task.task_id}")
-
-    async def respond(
-        self,
-        request: AgentExecutionRequest,
-        messages: list[dict[str, Any]],
-        *,
-        tools=(),
-    ) -> ChatResponse:
-        del request
-        self.calls.append((list(messages), None if tools is None else list(tools)))
-        return ChatResponse(finish_reason="stop", content=self.responses.pop(0), model="fake")
+    def run_messages(self, *, messages, tools=None):
+        self.requests.append(json.loads(json.dumps(messages)))
+        output = next(self.outputs)
+        event = {"role": "assistant", "content": output} if isinstance(output, str) else output
+        return AgentResult(
+            output=event["content"],
+            trajectory=[*messages, event],
+            usage={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+        )
 
 
-class RecordingChatClient:
-    def __init__(self, content: str) -> None:
-        self.content = content
-        self.calls: list[dict[str, Any]] = []
-
-    async def chat(self, task: str, messages: list[dict[str, Any]], *, model=None, **kwargs):
-        self.calls.append({"task": task, "messages": messages, "model": model, **kwargs})
-        return ChatResponse(finish_reason="stop", content=self.content, model="fake")
+def workbook(path, values):
+    book = openpyxl.Workbook()
+    for coordinate, value in values.items():
+        book.active[coordinate] = value
+    book.save(path)
+    book.close()
 
 
-def test_builtin_env_configs_only_accept_max_turns() -> None:
-    config_types = (ALFWorldBoundedHistoryEnvConfig, LiveMathEnvConfig, SpreadsheetBenchEnvConfig)
-
-    for config_type in config_types:
-        assert "max_turns" in config_type.model_fields
-        assert "max_steps" not in config_type.model_fields
-
-    with pytest.raises(ValueError, match="max_steps"):
-        ALFWorldBoundedHistoryEnvConfig.model_validate({"max_steps": 3})
-
-
-def test_spreadsheetbench_prompt_exposes_qualified_answer_position() -> None:
-    task = Task(
-        task_id="case-1",
-        instruction="Fill the requested output cells.",
-        metadata={"answer_position": "B2:B5", "answer_sheet": "Results"},
-    )
-
-    messages = spreadsheetbench_messages(task=task, skill_names=[], expose_answer_position=True)
-
-    assert (
-        "Answer position (cells to verify) — these are the cells that will be graded, "
-        "so make sure their final computed values are correct:\nResults!B2:B5"
-        in messages[1]["content"]
-    )
-
-
-def test_spreadsheetbench_prompt_hides_answer_position_by_default() -> None:
-    task = Task(
-        task_id="case-1",
-        instruction="Fill the requested output cells.",
-        metadata={"answer_position": "B2:B5", "answer_sheet": "Results"},
-    )
-
-    messages = spreadsheetbench_messages(task=task, skill_names=[])
-
-    assert "Answer position" not in messages[1]["content"]
-
-
-def test_alfworld_bounded_history_prompt_keeps_only_two_recent_steps() -> None:
-    prompt = format_bounded_history_observation(
-        current_observation="current observation",
-        admissible_actions=["help", "look"],
-        task_description="put the mug in the cabinet",
-        history=[("old observation", "old action"), ("recent one", "action one"), ("recent two", "action two")],
-    )
-
-    assert "already taken 3 step(s)" in prompt
-    assert "most recent 2 observations" in prompt
-    assert "old observation" not in prompt
-    assert "old action" not in prompt
-    assert "recent one" in prompt
-    assert "recent two" in prompt
-    assert "'help'" not in prompt
-
-
-def make_skill(name: str = "main", content: str = "Compare every option.") -> Skill:
-    return Skill(
-        skill_id=f"skill-{name}",
-        version_id=f"version-{name}",
-        version_label="1.0.0",
-        content_hash=f"sha256:{name}",
-        name=name,
-        blob={"SKILL.md": content},
-        created_at=datetime(2026, 8, 5, tzinfo=UTC),
-    )
-
-
-@pytest.mark.asyncio
-async def test_livemath_messages_and_reward_match_skill_grpo(tmp_path) -> None:
-    choices = [{"label": "A", "text": "first"}, {"label": "B", "text": "second"}]
-    item = {
-        "id": "202601:1",
-        "question": "Which option is exact?",
-        "choices": choices,
-        "correct_choice": {"label": "B", "text": "second"},
-        "theorem": "",
-        "sketch": "",
-    }
-    task = Task(task_id=item["id"], instruction="dataset text", metadata=item)
-    skill = make_skill()
-    agent = ScriptedMessageAgent(["I am unsure.", "<answer>B</answer>"])
-    env = LiveMathEnv({"max_turns": 2})
-
-    trajectory = await env.rollout(
-        agent,
-        task,
-        [skill],
-        context=EnvRolloutContext(
-            rollout=Rollout(rollout_id="rollout-live"),
-            workspace_root=tmp_path,
-        ),
-    )
-
-    system = build_system("Compare every option.")
-    user = build_user(item, False, False)
-    assert agent.calls == [
-        ([{"role": "system", "content": system}, {"role": "user", "content": user}], []),
-        (
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": refinement("I am unsure.")},
-            ],
-            [],
-        ),
-    ]
-    assert trajectory.events == [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-        {"role": "assistant", "content": "I am unsure."},
-        {"role": "user", "content": refinement("I am unsure.")},
-        {"role": "assistant", "content": "<answer>B</answer>"},
-    ]
-    assert trajectory.reward.score == 1.0
-    assert trajectory.reward.metadata == evaluate("<answer>B</answer>", item["correct_choice"], choices)
-    assert trajectory.metadata["conversation"] == [
-        {"type": "message", "turn": 1, "content": "I am unsure."},
-        {"type": "message", "turn": 2, "content": "<answer>B</answer>"},
-    ]
-
-    workspace = tmp_path / "rollout" / "202601_1" / "rollout-live" / "0"
-    assert (workspace / "target_system_prompt.txt").read_text(encoding="utf-8") == system
-    assert (workspace / "target_user_prompt.txt").read_text(encoding="utf-8") == user
-    prediction = json.loads((workspace / "prediction" / "prediction.json").read_text(encoding="utf-8"))
-    assert prediction["hard"] == 1
-    assert prediction["soft"] == 1.0
-
-
-def test_livemath_dataset_normalization_and_choice_shuffle_match_source(tmp_path) -> None:
-    raw_dir = tmp_path / "raw" / "data" / "202601"
-    raw_dir.mkdir(parents=True)
-    (raw_dir / "qa_202601_final.json").write_text(
+@pytest.fixture
+def spreadsheet(tmp_path):
+    directory = tmp_path / "case"
+    directory.mkdir()
+    workbook(directory / "1_case_init.xlsx", {"A1": 1})
+    workbook(directory / "1_case_golden.xlsx", {"A1": 2})
+    source = tmp_path / "dataset.json"
+    source.write_text(
         json.dumps(
             [
                 {
-                    "month": "202601",
-                    "no": 1,
-                    "mcq": {
-                        "question": "Which option is correct?",
-                        "choices": [
-                            {"label": "A", "text": "wrong"},
-                            {"label": "B", "text": "right"},
-                        ],
-                        "correct_choice": {"label": "B", "text": "right"},
-                    },
+                    "id": "case",
+                    "instruction": "Increment A1",
+                    "spreadsheet_path": "case",
+                    "answer_position": "Sheet!A1:A2",
                 }
             ]
-        ),
-        encoding="utf-8",
+        )
     )
-    split_dir = tmp_path / "split" / "train"
-    split_dir.mkdir(parents=True)
-    (split_dir / "items.json").write_text(
-        json.dumps([{"id": "202601:1", "source_file": "data/202601/qa_202601_final.json"}]),
-        encoding="utf-8",
+    return source
+
+
+@pytest.mark.parametrize("name", ["searchqa", "officeqa", "spreadsheetbench", "alfworld_bounded_history"])
+def test_builtin_registration(name):
+    assert Environment.resolve(name)
+    assert Data.resolve(name)
+
+
+def test_no_fast_registration():
+    with pytest.raises(ValueError, match="Unknown"):
+        Environment.resolve("alfworld_fast")
+
+
+@pytest.mark.parametrize(
+    "won,done,expected",
+    [
+        (True, True, ""),
+        (False, True, "Episode ended without completing the task"),
+        (False, False, "Timeout after 17 steps"),
+    ],
+)
+def test_alfworld_exact_terminal_feedback(won, done, expected):
+    from mindmemos_skill.envs.builtin_envs.alfworld_bounded_history.reward import evaluate
+
+    reward = evaluate(won=won, done=done, max_steps=17)
+    assert reward.detail == expected
+    assert reward.score == float(won)
+
+
+def test_search_feedback_is_exact_and_private(tmp_path):
+    path = tmp_path / "questions.jsonl"
+    path.write_text(
+        json.dumps({"id": "q1", "question": "Who?", "context": "Public passage", "answers": ["Secret O'Brien"]})
     )
+    sample = Data.build("searchqa", {"data_path": path}).load()[0]
+    agent = ScriptedAgent(["<answer>Alice</answer>"])
+    env = SearchQAEnvironment(SearchQAConfig(agent=agent.config), agent=agent)
+    result = env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data)
+    expected = "[EVALUATION RESULT]\nQuestion: Who?\nPredicted answer: 'Alice'\nGold answers: [\"Secret O'Brien\"]\nExact Match: 0.0\nF1: 0.0000"
+    assert result.reward.detail == expected
+    assert result.trajectory[-1] == {"role": "system", "content": expected}
+    assert "Secret" not in json.dumps(agent.requests)
+    assert result.usage.total_tokens == 12
+    assert env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data) == result
+    assert len(agent.requests) == 1
 
-    task = LiveMathIdSplitDataset(
-        data_path=tmp_path / "raw",
-        split_dir=tmp_path / "split",
-        seed=42,
-    ).train_tasks()[0]
 
-    assert task.task_id == "202601:1"
-    assert task.metadata["correct_choice"]["text"] == "right"
-    assert task.metadata["correct_choice"]["label"] in {"A", "B"}
-    assert "## Question\nWhich option is correct?" in task.instruction
+def test_search_normalization_empty_semantics_and_last_tag():
+    task = SearchQATask(id="q", instruction="Who?")
+    data = SearchQARewardData(answers=["The red fox"], source_sha256="hash")
+    reward = search_reward("<answer>wrong</answer><ANSWER>RED, FOX!</ANSWER>", task, data)
+    assert (reward.em, reward.f1, reward.sub_em) == (1, 1, 1)
+    assert search_reward("", task, data).sub_em == 1
+    assert search_reward("<answer>red</answer>", task, data).f1 == pytest.approx(2 / 3)
 
 
-@pytest.mark.asyncio
-async def test_livemath_uses_react_message_interface_without_reformatting_prompt() -> None:
-    item = {
-        "id": "live:react",
-        "question": "Choose.",
-        "choices": [{"label": "A", "text": "yes"}, {"label": "B", "text": "no"}],
-        "correct_choice": {"label": "A", "text": "yes"},
+@pytest.mark.parametrize(
+    "gold,prediction,expected",
+    [
+        ("113864", "113,864 thousand dollars", 1),
+        ("73", "<FINAL_ANSWER>73%</FINAL_ANSWER>", 1),
+        ("30", "The inputs were 10 and 20.\nThe final result is 30.", 0),
+        ("2.66", "2.66 percentage points", 1),
+        ("[8, 152260]", "[8,152,260]", 1),
+        ("[1, 2]", "[2, 1]", 0),
+        ("543 million", "543 billion", 0),
+        ("March 1977", "April 1977", 0),
+        ("100", "100 in 2023", 1),
+        ("100", "100.01", 0),
+    ],
+)
+def test_office_official_scoring(gold, prediction, expected):
+    assert score_answer(gold, prediction) == expected
+
+
+def test_office_tools_score_and_private_reference(tmp_path):
+    documents = tmp_path / "docs"
+    documents.mkdir()
+    (documents / "bulletin.txt").write_text("Revenue: 42\nOther context")
+    source = tmp_path / "questions.csv"
+    source.write_text("uid,question,ground_truth,source_files\nq1,Revenue?,42,bulletin.txt\n")
+    sample = Data.build("officeqa", {"data_path": source, "docs_root": documents}).load()[0]
+    tool = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {"id": "read1", "type": "function", "function": {"name": "read", "arguments": '{"path":"bulletin.txt"}'}}
+        ],
     }
-    task = Task(task_id=item["id"], instruction="ignored", metadata=item)
-    skill = make_skill()
-    llm = RecordingChatClient("<answer>A</answer>")
-    agent = ReactAgent({"model": "test-model", "temperature": 0.2}, llm=llm)
+    agent = ScriptedAgent([tool, "<answer>41</answer>"])
+    env = OfficeQAEnvironment(OfficeQAConfig(agent=agent.config), agent=agent)
+    result = env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data)
+    assert result.reward.detail == "predicted '41' but expected '42'"
+    assert result.usage.total_tokens == 24
+    assert "Revenue: 42" in json.dumps(agent.requests[-1])
+    assert "ground_truth" not in json.dumps(agent.requests)
+    assert run_tool("read", {"path": str(source)}, sample.task.documents, 1000).startswith("Error:")
+    assert run_tool("read", {"path": "../questions.csv"}, sample.task.documents, 1000).startswith("Error:")
 
-    trajectory = await LiveMathEnv({}).rollout(
-        agent,
-        task,
-        [skill],
-        context=EnvRolloutContext(rollout=Rollout(rollout_id="react-rollout")),
+
+@pytest.mark.parametrize(
+    "input_name,reference_name",
+    [
+        ("1_case_init.xlsx", "1_case_golden.xlsx"),
+        ("initial.xlsx", "golden.xlsx"),
+        ("1_42930_init.xlsx", "1_43930_golden.xlsx"),
+    ],
+)
+def test_shared_case_discovery(spreadsheet, input_name, reference_name):
+    directory = spreadsheet.parent / "case"
+    (directory / "1_case_init.xlsx").rename(directory / input_name)
+    (directory / "1_case_golden.xlsx").rename(directory / reference_name)
+    forest = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    assert len(forest.task.cases) == 1
+    assert forest.task.cases[0].path.name == input_name
+    assert forest.reward_data.cases[0].path.name == reference_name
+    assert forest.task.answer_position == "Sheet!A1:A2"
+    assert "golden" not in forest.task.model_dump_json()
+
+
+@pytest.mark.parametrize("name", ["spreadsheetbench"])
+@pytest.mark.parametrize("kind", ["init", "golden"])
+@pytest.mark.parametrize("count", [0, 2])
+def test_case_discovery_rejects_missing_or_ambiguous_files(spreadsheet, name, kind, count):
+    directory = spreadsheet.parent / "case"
+    if count == 0:
+        (directory / f"1_case_{kind}.xlsx").unlink()
+    else:
+        workbook(directory / f"2_case_{kind}.xlsx", {"A1": 3})
+    with pytest.raises(ValueError, match="Expected one init and one golden workbook"):
+        Data.build(name, {"data_path": spreadsheet}).load()
+
+
+def test_workbook_feedback_golden_and_order(tmp_path):
+    gold, output = tmp_path / "gold.xlsx", tmp_path / "out.xlsx"
+    workbook(gold, {"A1": 2, "A2": None, "B1": "secret", "B2": "5"})
+    workbook(output, {"A1": 1, "A2": None, "B1": "wrong", "B2": 5})
+    assert compare_workbooks(gold, output, "Sheet!A1:B2") == (False, "value@Sheet!A1: gt=2 pred=1")
+    assert verification_report(output, gold, "Sheet!A1:B2") == (
+        "## Output Verification\n  Sheet!A1: got=1, expected=2 ✗\n"
+        "  Sheet!B1: got='wrong', expected='secret' ✗\n  Sheet!B2: got=5, expected='5' ✓\n"
+        "  (+1 empty cells correct, omitted)"
     )
 
-    assert llm.calls == [
-        {
-            "task": "live:react",
-            "messages": [
-                {"role": "system", "content": build_system(skill.content)},
-                {"role": "user", "content": build_user(item, False, False)},
-            ],
-            "model": "test-model",
-            "temperature": 0.2,
-            "tools": [],
-        }
-    ]
-    assert trajectory.agent.skill_injection_mode is SkillInjectionMode.SYSTEM_PROMPT
-    assert trajectory.skill_bindings[0].usage is SkillUsageType.INJECTED
-    assert trajectory.reward.score == 1.0
+
+def test_workbook_report_truncation(tmp_path):
+    gold, output = tmp_path / "gold.xlsx", tmp_path / "out.xlsx"
+    workbook(gold, {f"A{index}": index for index in range(1, 500)})
+    workbook(output, {f"A{index}": -index for index in range(1, 500)})
+    report = verification_report(output, gold, "Sheet!A1:A499")
+    full = "## Output Verification\n" + "\n".join(
+        f"  Sheet!A{index}: got={-index}, expected={index} ✗" for index in range(1, 500)
+    )
+    assert (
+        report == full[:6000] + f"\n  ...[verification report truncated, {len(full)} chars total]...\n" + full[-6000:]
+    )
 
 
-class FakeALFWorldSimulator:
-    def __init__(self) -> None:
-        self.admissible_actions = ["help", "look", "go to cabinet 1"]
-        self.responses: list[str] = []
-        self.closed = False
-
-    def reset(self):
-        return "Welcome. Your task is to: put the mug in the cabinet.", {}
-
-    def step(self, model_response: str):
-        self.responses.append(model_response)
-        if len(self.responses) == 1:
-            self.admissible_actions = ["look", "open cabinet 1"]
-            return "You see a closed cabinet.", 0.0, False, {"won": False, "is_action_valid": 1}
-        return "You won the game!", 10.0, True, {"won": True, "is_action_valid": 1}
-
-    def close(self) -> None:
-        self.closed = True
+def test_shared_ranges_and_missing_sheet(tmp_path):
+    gold, output = tmp_path / "gold.xlsx", tmp_path / "out.xlsx"
+    workbook(gold, {"A1": 2, "A2": 3})
+    workbook(output, {"A1": 2, "A2": 3})
+    assert compare_workbooks(gold, output, "Sheet'!A:A") == (True, "")
+    assert compare_workbooks(gold, output, "Missing!A1") == (False, "worksheet not found: Missing")
 
 
-class FakeALFWorldBoundedHistoryEnv(ALFWorldBoundedHistoryEnv):
-    def __init__(self, config, simulator: FakeALFWorldSimulator) -> None:
-        super().__init__(config)
-        self.simulator = simulator
-        self.build_args: tuple[Task, int] | None = None
-
-    def _build_simulator(self, task: Task, sample_index: int):
-        self.build_args = (task, sample_index)
-        return self.simulator
-
-
-@pytest.mark.asyncio
-async def test_alfworld_bounded_history_matches_agent_inputs_and_extraction_trajectory(tmp_path) -> None:
-    simulator = FakeALFWorldSimulator()
-    env = FakeALFWorldBoundedHistoryEnv({"max_turns": 3, "seed": 42}, simulator)
-    agent = ScriptedMessageAgent(
+def test_spreadsheet_full_rollout_feedback_and_resume(spreadsheet, tmp_path, monkeypatch):
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    agent = ScriptedAgent(
         [
-            "<think>inspect first</think><action>look</action>",
-            "<think>open it now</think><action>open cabinet 1</action>",
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call1",
+                        "type": "function",
+                        "function": {"name": "shell", "arguments": '{"commands": ["python solution.py"]}'},
+                    }
+                ],
+            },
+            "Done",
         ]
     )
-    task = Task(
-        task_id="valid_seen:bounded-history",
-        instruction="Complete the ALFWorld task.",
-        system_prompt="Previous attempt failed. Open the cabinet before placing the mug.",
-        tags=["validation"],
-        metadata={
-            "gamefile": "/json_2.1.1/valid_seen/task/game.tw-pddl",
-            "resolved_gamefile": "/data/task/game.tw-pddl",
-            "task_type": "pick_and_place",
-        },
+    executed = []
+
+    def controlled_execution(name, arguments, directory, config):
+        executed.append(directory)
+        book = openpyxl.load_workbook(directory / "input.xlsx")
+        book.active["A1"] = book.active["A1"].value + 1
+        book.save(directory / "output.xlsx")
+        book.close()
+        return "exit_code: 0"
+
+    monkeypatch.setattr(
+        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.workspace_tools.run_tool", controlled_execution
     )
-    skill = make_skill("route", "Open closed receptacles before placing objects.")
-
-    trajectory = await env.rollout(
-        agent,
-        task,
-        [skill],
-        context=EnvRolloutContext(
-            rollout=Rollout(rollout_id="rollout-bounded-history"),
-            workspace_root=tmp_path,
-            metadata={"sample_index": 3},
-        ),
-    )
-
-    first_user = """
-
-## Skill Knowledge
-Below is a skill document with learned strategies. Use these guidelines to inform your decisions:
-
-Open closed receptacles before placing objects.
-
-
-
-You are an expert agent operating in the ALFRED Embodied Environment.
-Your current observation is: Welcome. Your task is to: put the mug in the cabinet.
-Your admissible actions of the current situation are: ['look'
- 'go to cabinet 1'].
-
-Now it's your turn to take an action.
-You should first reason step-by-step about the current situation. This reasoning process MUST be enclosed within <think> </think> tags.
-Once you've finished your reasoning, you should choose an admissible action for current step and present it within <action> </action> tags.
-"""
-    second_user = """
-
-## Skill Knowledge
-Below is a skill document with learned strategies. Use these guidelines to inform your decisions:
-
-Open closed receptacles before placing objects.
-
-
-
-You are an expert agent operating in the ALFRED Embodied Environment. Your task is to: put the mug in the cabinet.
-Prior to this step, you have already taken 1 step(s). Below are the most recent 1 observations and the corresponding actions you took: [Observation 1: 'Welcome. Your task is to: put the mug in the cabinet.', Action 1: 'look']
-You are now at step 2 and your current observation is: You see a closed cabinet.
-Your admissible actions of the current situation are: ['look'
- 'open cabinet 1'].
-
-Now it's your turn to take an action.
-You should first reason step-by-step about the current situation. This reasoning process MUST be enclosed within <think> </think> tags.
-Once you've finished your reasoning, you should choose an admissible action for current step and present it within <action> </action> tags.
-"""
-    system = (
-        f"{BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT}\n\n"
-        "Previous attempt failed. Open the cabinet before placing the mug."
-    )
-    assert agent.calls == [
-        (
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": first_user},
-            ],
-            None,
-        ),
-        (
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": second_user},
-            ],
-            None,
-        ),
+    env = SpreadsheetBenchEnvironment(SpreadsheetBenchConfig(agent=agent.config), agent=agent)
+    result = env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data)
+    reports = [
+        f"## Eval Result (case {number}): PASS\n\n\n## Output Verification\n  Sheet!A1: got={number + 1}, expected={number + 1} ✓\n  (+1 empty cells correct, omitted)"
+        for number in (1,)
     ]
-    assert trajectory.events == [
+    assert result.reward.detail == "[POST-EXECUTION VERIFICATION]\n\n" + "\n\n---\n\n".join(reports)
+    assert result.reward.score == 1 and result.reward.success
+    assert "golden" not in json.dumps(agent.requests)
+    assert len(executed) == 1
+    assert env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data) == result
+    assert len(executed) == 1
+
+
+def test_bash_only_rollout(spreadsheet, tmp_path, monkeypatch):
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    action = 'Action:\n{"name":"bash","arguments":{"command":"edit workbook"}}'
+    agent = ScriptedAgent([action, "ACTION: TASK_COMPLETE"])
+
+    def controlled_action(action, directory, config):
+        workbook(directory / "output.xlsx", {"A1": 2})
+        return "done"
+
+    monkeypatch.setattr(
+        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.bash_only.run_bash_action", controlled_action
+    )
+    env = SpreadsheetBenchEnvironment(
+        SpreadsheetBenchConfig(
+            interaction_mode="bash_only",
+            tool_agent="text_action",
+            skill_loading_mode="system_prompt",
+            max_turns=15,
+            agent=agent.config,
+        ),
+        agent=agent,
+    )
+    result = env.rollout(sample.task, tmp_path / "tree", reward_data=sample.reward_data)
+    assert "[POST-EXECUTION VERIFICATION]" in result.reward.detail and result.reward.success
+    assert result.trajectory[-3] == {"role": "user", "content": "Observation: done"}
+    assert "golden" not in json.dumps(agent.requests)
+    assert result.usage.total_tokens == 24
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'Action:\n{"name":"bash","arguments":{"command":"echo }"}}',
+        "Action:\n{'name':'bash','arguments':{'command':'echo hi'}}",
+        'Action:\n{"name":"bash","arguments":{"command":"echo hi"}',
+    ],
+)
+def test_text_action_parser(text):
+    assert parse_action(text)["name"] == "bash"
+
+
+def test_alfworld_history_success_and_cleanup(tmp_path, monkeypatch):
+    game = tmp_path / "game.json"
+    game.write_text("{}")
+    source = tmp_path / "items.json"
+    source.write_text(json.dumps([{"id": "game", "gamefile": str(game)}]))
+    sample = Data.build("alfworld_bounded_history", {"data_path": source}).load()[0]
+
+    class Simulator:
+        closed = False
+        steps = 0
+
+        def reset(self):
+            return ["Your task is to: put apple in bowl"], {"admissible_commands": [["look", "help"]]}
+
+        def step(self, actions):
+            self.steps += 1
+            return (
+                [f"observation {self.steps}"],
+                [0],
+                [self.steps == 3],
+                {"admissible_commands": [["look"]], "won": [self.steps == 3]},
+            )
+
+        def close(self):
+            self.closed = True
+
+    simulator = Simulator()
+    monkeypatch.setattr(
+        "mindmemos_skill.envs.builtin_envs.alfworld_bounded_history.rollout._create_simulator", lambda *args: simulator
+    )
+    agent = ScriptedAgent(["<think>inspect</think><action>look</action>"] * 3)
+    env = ALFWorldEnvironment(ALFWorldConfig(agent=agent.config, simulator={}, history_length=1), agent=agent)
+    result = env.rollout(sample.task, tmp_path / "alf", reward_data=sample.reward_data)
+    assert result.reward.success and result.reward.detail == ""
+    assert simulator.closed and result.usage.total_tokens == 36
+    final_prompt = agent.requests[-1][-1]["content"]
+    assert "Observation 2:" in final_prompt and "Observation 1:" not in final_prompt
+    assert result.trajectory[-1]["reward"] == 10
+    assert result.reward.model_extra["task_description"] == "put apple in bowl"
+    assert result.reward.model_extra["task_type"] == "other"
+
+
+def test_alfworld_provider_failure_is_not_cached(tmp_path, monkeypatch):
+    game = tmp_path / "game.json"
+    game.write_text("{}")
+    source = tmp_path / "items.json"
+    source.write_text(json.dumps([{"id": "game", "gamefile": str(game)}]))
+    sample = Data.build("alfworld_bounded_history", {"data_path": source}).load()[0]
+
+    class Simulator:
+        closed = False
+
+        def reset(self):
+            return ["Your task is to: inspect"], {"admissible_commands": [["look"]]}
+
+        def close(self):
+            self.closed = True
+
+    simulator = Simulator()
+    monkeypatch.setattr(
+        "mindmemos_skill.envs.builtin_envs.alfworld_bounded_history.rollout._create_simulator", lambda *args: simulator
+    )
+    agent = ScriptedAgent([])
+    env = ALFWorldEnvironment(ALFWorldConfig(agent=agent.config, simulator={}), agent=agent)
+    with pytest.raises(StopIteration):
+        env.rollout(sample.task, tmp_path / "failed", reward_data=sample.reward_data)
+    assert simulator.closed
+    assert not (tmp_path / "failed/audit/result.json").exists()
+
+
+def test_office_parsed_pages_keep_only_referenced_evidence(tmp_path):
+    root = tmp_path / "docs"
+    (root / "jsons").mkdir(parents=True)
+    (root / "jsons/bulletin.json").write_text(
+        json.dumps(
+            {
+                "document": {
+                    "elements": [
+                        {"bbox": [{"page_id": 2}], "content": "<table><tr><td>Revenue</td><td>42</td></tr></table>"},
+                        {"bbox": [{"page_id": 3}], "content": "UNRELATED_PAGE"},
+                    ]
+                }
+            }
+        )
+    )
+    source = tmp_path / "items.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "q",
+                    "question": "Revenue?",
+                    "answer": "SECRET_REFERENCE",
+                    "source_files": ["bulletin.pdf"],
+                    "source_docs": ["https://example.invalid/bulletin?page=2"],
+                }
+            ]
+        )
+    )
+    sample = Data.build("officeqa", {"data_path": source, "docs_root": root}).load()[0]
+    assert "Revenue | 42" in sample.task.oracle_context
+    assert "UNRELATED_PAGE" not in sample.task.oracle_context
+    assert "SECRET_REFERENCE" not in sample.task.model_dump_json()
+
+
+def test_agent_tool_call_sdk_boundary(monkeypatch):
+    import httpx
+    import openai
+
+    payloads = []
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "tool-response",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "test",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {"name": "read", "arguments": '{"path":"public.txt"}'},
+                                }
+                            ],
+                        },
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        openai, "DefaultHttpxClient", lambda **kwargs: httpx.Client(transport=httpx.MockTransport(respond), **kwargs)
+    )
+    agent = OpenAIChatAgent(OpenAIChatConfig(model="test", api_key="test-key"))
+    messages = [{"role": "user", "content": "Read public.txt"}]
+    tools = [
         {
-            "step": 0,
-            "action": "look",
-            "reasoning": "inspect first",
-            "model_response": "<think>inspect first</think><action>look</action>",
-            "env_feedback": "You see a closed cabinet.",
-            "reward": 0.0,
-            "done": False,
-        },
-        {
-            "step": 1,
-            "action": "open cabinet 1",
-            "reasoning": "open it now",
-            "model_response": "<think>open it now</think><action>open cabinet 1</action>",
-            "env_feedback": "You won the game!",
-            "reward": 10.0,
-            "done": True,
-        },
+            "type": "function",
+            "function": {"name": "read", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}},
+        }
     ]
-    assert all("role" not in event for event in trajectory.events)
-    assert trajectory.reward.score == 1.0
-    assert env.build_args == (task, 3)
+    result = agent.run_messages(messages=messages, tools=tools)
+    assert result.output == ""
+    assert result.trajectory[-1]["tool_calls"][0]["id"] == "call-1"
+    assert payloads[0]["tools"] == tools
+    with pytest.raises(RuntimeError):
+        agent.run_messages(messages=messages)
 
-    extraction_user = experience_extraction_messages(
-        task=task,
-        skill=skill,
-        trajectories=[trajectory],
-        max_experiences=3,
-    )[1]["content"]
-    assert BOUNDED_HISTORY_ALFWORLD_SYSTEM_PROMPT not in extraction_user
-    assert "Previous attempt failed" not in extraction_user
-    assert "[step 0 think] inspect first" in extraction_user
-    assert "[step 0 action] look" in extraction_user
-    assert "[step 0 obs]    You see a closed cabinet." in extraction_user
-    assert ("[step 0 obs]    You see a closed cabinet.\n[step 1 think] open it now") in extraction_user
-    assert "#### [1] SYSTEM" not in extraction_user
 
-    workspace = tmp_path / "rollout" / "valid_seen_bounded-history" / "rollout-bounded-history" / "0"
-    saved = json.loads((workspace / "prediction" / "conversation.json").read_text(encoding="utf-8"))
-    assert saved == trajectory.events
+@pytest.mark.parametrize("protocol", ["openai_tool", "text_action"])
+def test_spreadsheet_skill_tool_and_protocol_switch(spreadsheet, tmp_path, monkeypatch, protocol):
+    from mindmemos_skill.skill import Skill, SkillBundle, SkillResources, SkillSet
+
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    actions = [
+        {"name": "skill", "arguments": {"name": "xlsx"}},
+        {"name": "shell", "arguments": {"commands": ["python solution.py"]}},
+    ]
+    if protocol == "text_action":
+        outputs = ["Action:\n" + json.dumps(action) for action in actions] + ["ACTION: TASK_COMPLETE"]
+    else:
+        outputs = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": str(index),
+                        "type": "function",
+                        "function": {"name": action["name"], "arguments": json.dumps(action["arguments"])},
+                    }
+                ],
+            }
+            for index, action in enumerate(actions)
+        ] + ["Done"]
+    agent = ScriptedAgent(outputs)
+
+    def execute(command, directory, config):
+        assert (directory / "skills/xlsx/references/guide.md").read_bytes() == b"Original reference\r\n"
+        workbook(directory / "output.xlsx", {"A1": 2})
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("mindmemos_skill.envs.builtin_envs.spreadsheetbench.tools.execute", execute)
+    env = SpreadsheetBenchEnvironment(SpreadsheetBenchConfig(agent=agent.config, tool_agent=protocol), agent=agent)
+    result = env.rollout(
+        sample.task,
+        tmp_path / "result",
+        reward_data=sample.reward_data,
+        skill_set=SkillSet(
+            {
+                "0": Skill(
+                    bundle=SkillBundle(files={"SKILL.md": "Use Python literal values."}),
+                    resources=SkillResources(files={"references/guide.md": b"Original reference\r\n"}),
+                )
+            },
+            max_concurrency=1,
+        ),
+    )
+    assert result.reward.success and result.reward.skill_loaded
+    assert "Use Python literal values." not in json.dumps(agent.requests[0])
+    assert "Use Python literal values." in json.dumps(agent.requests[1])
+    assert "[POST-EXECUTION VERIFICATION]" not in json.dumps(agent.requests)
+    assert result.reward.n_turns == 3
+
+
+@pytest.mark.parametrize(
+    "sheet,position,cell",
+    [
+        ("Sheet3", "Sheet3'!A:G", "G3"),
+        ("Sheet1", "'Sheet1'!BD2:308", "BD308"),
+        ("b2b, sez, de", "'b2b, sez, de'!A5:V10", "V10"),
+    ],
+)
+def test_shared_spreadsheet_special_ranges(tmp_path, sheet, position, cell):
+    gold, output = tmp_path / "gold.xlsx", tmp_path / "output.xlsx"
+    book = openpyxl.Workbook()
+    book.active.title = sheet
+    book.active[cell] = 42
+    book.save(gold)
+    book.save(output)
+    assert compare_workbooks(gold, output, position) == (True, "")
+    assert f"{sheet}!{cell}: got=42, expected=42 ✓" in verification_report(output, gold, position)
+    book.active[cell] = 43
+    book.save(output)
+    book.close()
+    assert compare_workbooks(gold, output, position)[0] is False
+    assert f"{sheet}!{cell}: got=43, expected=42 ✗" in verification_report(output, gold, position)
+
+
+@pytest.mark.parametrize("outcome", ["correct", "wrong", "missing", "formula", "corrupt"])
+def test_spreadsheet_environments_share_reward(spreadsheet, tmp_path, monkeypatch, outcome):
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+
+    def produce(directory):
+        if outcome == "corrupt":
+            (directory / "output.xlsx").write_text("not a workbook")
+        elif outcome != "missing":
+            workbook(directory / "output.xlsx", {"A1": {"correct": 2, "wrong": 3, "formula": "=1+1"}[outcome]})
+        return "done"
+
+    monkeypatch.setattr(
+        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.workspace_tools.run_tool",
+        lambda name, arguments, directory, config: produce(directory),
+    )
+    monkeypatch.setattr(
+        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.bash_only.run_bash_action",
+        lambda action, directory, config: produce(directory),
+    )
+    forest_agent = ScriptedAgent(['Action: {"name":"shell","arguments":{"commands":["edit"]}}', "Done"])
+    tree_agent = ScriptedAgent(['Action: {"name":"bash","arguments":{"command":"edit"}}', "Done", "Done"])
+    forest = SpreadsheetBenchEnvironment(
+        SpreadsheetBenchConfig(agent=forest_agent.config, tool_agent="text_action"), agent=forest_agent
+    )
+    tree = SpreadsheetBenchEnvironment(
+        SpreadsheetBenchConfig(
+            interaction_mode="bash_only",
+            tool_agent="text_action",
+            skill_loading_mode="system_prompt",
+            max_turns=15,
+            agent=tree_agent.config,
+        ),
+        agent=tree_agent,
+    )
+    left = forest.rollout(sample.task, tmp_path / "forest", reward_data=sample.reward_data)
+    right = tree.rollout(sample.task, tmp_path / "tree", reward_data=sample.reward_data)
+    left_reward = left.reward.model_dump(
+        exclude={"n_turns", "skill_loaded", "skill_loading_mode", "skill_tool_exposed"}
+    )
+    right_reward = right.reward.model_dump(exclude={"n_turns", "finished", "stop_reason"})
+    assert left_reward == right_reward
+    assert left.reward.score == float(outcome == "correct")
+    assert right.trajectory[-1] == {"role": "system", "content": right.reward.detail}
+    assert all(
+        "[POST-EXECUTION VERIFICATION]" not in json.dumps(agent.requests) for agent in (forest_agent, tree_agent)
+    )
+
+
+def test_spreadsheet_empty_range_is_not_a_pass(tmp_path):
+    gold = tmp_path / "gold.xlsx"
+    workbook(gold, {"A1": 2})
+    with pytest.raises(ValueError, match="answer_position"):
+        compare_workbooks(gold, gold, " , ")
+
+
+def test_spreadsheet_default_sheet_and_row_major_report(tmp_path):
+    gold, output = tmp_path / "gold.xlsx", tmp_path / "output.xlsx"
+    book = openpyxl.Workbook()
+    target = book.create_sheet("Target")
+    target["A2"], target["B1"] = 2, 3
+    book.save(gold)
+    target["A2"], target["B1"] = 20, 30
+    book.save(output)
+    book.close()
+    assert compare_workbooks(gold, output, "A1:B2", answer_sheet="Target") == (False, "value@Target!B1: gt=3 pred=30")
+    report = verification_report(output, gold, "A1:B2", answer_sheet="Target")
+    assert report.index("Target!B1") < report.index("Target!A2")
+
+
+def test_spreadsheet_shared_reward_aggregates_cases(spreadsheet, tmp_path):
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.reward import evaluate
+
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    reference = sample.reward_data.cases[0]
+    reward_data = sample.reward_data.model_copy(
+        update={"cases": [reference, reference.model_copy(update={"number": "2"})]}
+    )
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    workbook(first / "output.xlsx", {"A1": 2})
+    result = evaluate(reward_data, [first, second])
+    assert result.score == result.soft == 0.5
+    assert result.success is False and result.hard == 0
+    assert result.n_cases == 2 and result.n_pass == result.n_exec_pass == 1
+    assert result.fail_reason == "output-not-found"
+
+
+@pytest.mark.parametrize(
+    "options,error",
+    [
+        ({"interaction_mode": "bash_only"}, "tool_agent"),
+        ({"interaction_mode": "bash_only", "tool_agent": "text_action"}, "skill_loading_mode"),
+        ({"interaction_mode": "unknown"}, "interaction_mode"),
+    ],
+)
+def test_spreadsheet_mode_validation(options, error):
+    with pytest.raises(ValueError, match=error):
+        SpreadsheetBenchConfig(agent=OpenAIChatConfig(model="test-model"), **options)
+
+
+@pytest.mark.parametrize("response", ['Action: {"name":"bash","arguments":{"command":"echo same"}}', "Action: broken"])
+def test_bash_only_stagnation(spreadsheet, tmp_path, monkeypatch, response):
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    agent = ScriptedAgent([response] * 3)
+    monkeypatch.setattr(
+        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.bash_only.run_bash_action",
+        lambda action, directory, config: "same output",
+    )
+    env = SpreadsheetBenchEnvironment(
+        SpreadsheetBenchConfig(
+            agent=agent.config,
+            interaction_mode="bash_only",
+            tool_agent="text_action",
+            skill_loading_mode="system_prompt",
+            max_turns=15,
+            stagnation_limit=3,
+        ),
+        agent=agent,
+    )
+    result = env.rollout(sample.task, tmp_path / "stagnation", reward_data=sample.reward_data)
+    assert len(agent.requests) == 3
+    assert result.reward.finished is False
+    assert "3 consecutive times" in result.reward.stop_reason
+    assert result.reward.fail_reason == "output-not-found"
+
+
+def test_bash_only_scores_output_at_turn_limit(spreadsheet, tmp_path, monkeypatch):
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    agent = ScriptedAgent(['Action: {"name":"bash","arguments":{"command":"edit"}}'])
+
+    def edit(action, directory, config):
+        workbook(directory / "output.xlsx", {"A1": 2})
+        return "done"
+
+    monkeypatch.setattr("mindmemos_skill.envs.builtin_envs.spreadsheetbench.bash_only.run_bash_action", edit)
+    env = SpreadsheetBenchEnvironment(
+        SpreadsheetBenchConfig(
+            agent=agent.config,
+            interaction_mode="bash_only",
+            tool_agent="text_action",
+            skill_loading_mode="system_prompt",
+            max_turns=1,
+        ),
+        agent=agent,
+    )
+    result = env.rollout(sample.task, tmp_path / "limit", reward_data=sample.reward_data)
+    assert result.reward.success and result.reward.score == 1
+    assert result.reward.finished is False
+    assert result.reward.fail_reason == ""
+    assert result.reward.stop_reason == "Max turns exceeded"
+
+
+def test_subclass_hooks_share_scoring_and_isolate_concurrent_rollouts(spreadsheet, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.typing import SpreadsheetObservation
+
+    barrier = Barrier(2)
+    schema = {"type": "function", "function": {"name": "custom", "parameters": {"type": "object"}}}
+
+    class Model(OpenAIChatAgent):
+        def run_messages(self, *, messages, tools=None):
+            assert tools == [schema]
+            assert messages[0]["content"] == "Custom policy"
+            return AgentResult(
+                output=messages[1]["content"],
+                trajectory=[{"role": "assistant", "content": messages[1]["content"]}],
+                usage={"total_tokens": 3},
+            )
+
+    class CustomEnvironment(SpreadsheetBenchEnvironment):
+        def _system_prompt(self, context):
+            return "Custom policy"
+
+        def _user_prompt(self, context):
+            assert "reward_data" not in type(context).model_fields
+            return context.task.id
+
+        def _get_observation(self, response, context):
+            barrier.wait(timeout=5)
+            assert response.output.text == context.task.id
+            workbook(context.directory / "output.xlsx", {"A1": 2})
+            return SpreadsheetObservation(
+                assistant={"role": "assistant", "content": context.task.id},
+                output=context.task.id,
+                complete=True,
+            )
+
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    config = SpreadsheetBenchConfig(agent=OpenAIChatConfig(model="offline"), tools=[schema])
+    env = CustomEnvironment(config, agent=Model(config.agent))
+
+    def run(identifier):
+        return env.rollout(
+            sample.task.model_copy(update={"id": identifier}),
+            tmp_path / identifier,
+            reward_data=sample.reward_data,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(run, ["first", "second"]))
+    assert [result.output for result in results] == ["first", "second"]
+    assert all(result.reward.success for result in results)
+    assert all(result.trajectory[-1]["content"] == result.reward.detail for result in results)
+    assert results[0].reward == results[1].reward
+    assert all(result.usage.calls == [{"total_tokens": 3}] for result in results)
+    assert all(result.usage.reported for result in results)
+    assert CustomEnvironment._run is SpreadsheetBenchEnvironment._run
+    assert CustomEnvironment._interact is SpreadsheetBenchEnvironment._interact
+    # The base class still renders its own prompts and cannot inherit custom hooks.
+    base_agent = ScriptedAgent(["Done"])
+    base = SpreadsheetBenchEnvironment(SpreadsheetBenchConfig(agent=base_agent.config), agent=base_agent)
+    base.rollout(sample.task, tmp_path / "base", reward_data=sample.reward_data)
+    assert base_agent.requests[0][0]["content"] != "Custom policy"
+
+
+def test_spreadsheet_resume_checks_tool_schemas(spreadsheet, tmp_path):
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    agent = ScriptedAgent(["Done"])
+    config = SpreadsheetBenchConfig(agent=agent.config)
+    env = SpreadsheetBenchEnvironment(config, agent=agent)
+    root = tmp_path / "run"
+    original = env.rollout(sample.task, root, reward_data=sample.reward_data)
+    assert env.rollout(sample.task, root, reward_data=sample.reward_data) == original
+    assert len(agent.requests) == 1
+    changed = SpreadsheetBenchEnvironment(config.model_copy(update={"tools": []}), agent=agent)
+    with pytest.raises(ValueError, match="inputs changed"):
+        changed.rollout(sample.task, root, reward_data=sample.reward_data)
+    assert len(agent.requests) == 1

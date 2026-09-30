@@ -41,9 +41,7 @@ async def start_kafka() -> None:
 
     await ensure_topics(cfg)
     await get_producer().start()
-    _task_semaphore = (
-        asyncio.Semaphore(cfg.global_max_concurrency) if cfg.global_max_concurrency > 0 else None
-    )
+    _task_semaphore = asyncio.Semaphore(cfg.global_max_concurrency) if cfg.global_max_concurrency > 0 else None
 
     for consumer_cfg in cfg.consumers:
         handler = _handlers.get(consumer_cfg.group_id)

@@ -1,0 +1,97 @@
+# Pinned reference generation settings and ordered 200/200 split.
+data: spreadsheetbench
+data_options:
+  data_path: data/mindmemos_skill/spreadsheetbench/dataset.json
+  data_root: data/mindmemos_skill/spreadsheetbench
+split_file: resources/mindmemos_skill/treeskill/reference/splits.json
+initial_skill: data/mindmemos_skill/authorized_skills/xlsx
+train_limit: 200
+test_limit: 200
+strict_reference_skill: true
+environment: spreadsheetbench_reference
+environment_options:
+  agent:
+    model: openai/Qwen/Qwen3.5-35B-A3B
+    timeout_s: 600
+    max_retries: 3
+    max_completion_tokens: 16384
+    parse_max_attempts: 3
+    temperature: 0.7
+    response_validation: content
+    top_p: 1.0
+    presence_penalty: 2.0
+    extra_body: &id001
+      top_k: 40
+      min_p: 0.0
+      repetition_penalty: 1.0
+      chat_template_kwargs:
+        enable_thinking: false
+    seed: 41
+    stop:
+    - 'Observation:'
+  max_turns: 100
+  shell_timeout_seconds: 120
+  reference_stagnation_limit: 5
+  transactional_recalculation: true
+algorithm:
+  optimizer:
+    model: openai/Qwen/Qwen3.5-35B-A3B
+    timeout_s: 1800
+    max_retries: 3
+    max_completion_tokens: 16384
+    parse_max_attempts: 3
+    temperature: 1.0
+    response_validation: content
+    top_p: 0.95
+    presence_penalty: 1.5
+    extra_body:
+      top_k: 20
+      min_p: 0.0
+      repetition_penalty: 1.0
+      chat_template_kwargs:
+        enable_thinking: true
+    seed: 41
+  router:
+    model: openai/Qwen/Qwen3.5-35B-A3B
+    timeout_s: 600
+    max_retries: 3
+    max_completion_tokens: 512
+    parse_max_attempts: 3
+    temperature: 0.0
+    response_validation: content
+    top_p: 1.0
+    presence_penalty: 2.0
+    extra_body: *id001
+    seed: 41
+  env_adapter:
+    class_name: spreadsheetbench_reference
+    config: {}
+  samples_per_task: 1
+  rollout_concurrency: 16
+  min_trajectories: 1
+  max_trajectories: 200
+  transcript_max_chars: 20000
+  annotation_mode: required
+  require_skill_match: true
+  success_score_threshold: 1.0
+  analysis_concurrency: 128
+  localization_concurrency: 16
+  analysis_temperature: 1.0
+  localization_temperature: 0.0
+  fusion_temperature: 0.0
+  analysis_max_tokens: 16384
+  localization_max_tokens: 2048
+  fusion_max_tokens: 4096
+  failure_optimizer:
+    model: openai/Qwen/Qwen3.5-35B-A3B
+    timeout_s: 600
+    max_retries: 3
+    max_completion_tokens: 16384
+    parse_max_attempts: 3
+    temperature: 1.0
+    response_validation: content
+    top_p: 1.0
+    presence_penalty: 2.0
+    extra_body: *id001
+    seed: 41
+  analysis_max_turns: 100

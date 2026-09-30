@@ -51,7 +51,6 @@ class _Recorder:
         skill_bindings=None,
         score=None,
         task_id=None,
-        extra_payload=None,
     ):
         self.add_inputs.append(
             {
@@ -63,7 +62,6 @@ class _Recorder:
                 "skill_bindings": skill_bindings,
                 "score": score,
                 "task_id": task_id,
-                "extra_payload": extra_payload,
             }
         )
         return add_record_id

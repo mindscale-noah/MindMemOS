@@ -71,8 +71,7 @@ def _memory(memories: list[dict[str, Any]]):
         body = json.loads(request.content)
         captured.append({"path": request.url.path, "body": body})
         data = {"memories": memories} if request.url.path.endswith("/search") else {"memories": []}
-        message = "consolidation complete" if request.url.path.endswith("/dreaming") else ""
-        return httpx.Response(200, json={"code": "ok", "message": message, "request_id": "r", "data": data})
+        return httpx.Response(200, json={"code": "ok", "message": "", "request_id": "r", "data": data})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     transport = AsyncHttpTransport(base_url="https://api.test", api_key="dev", client=client)
@@ -190,100 +189,6 @@ async def test_run_dataset_uses_each_item_source_when_unfiltered():
 
 
 @pytest.mark.asyncio
-async def test_run_dataset_answers_before_and_after_dreaming():
-    memory, captured = _memory([{"id": "m1", "memory": "The capital is Beta."}])
-    env = MemoryAgentBenchEnv(
-        memory,
-        answer_llm=_llm("Beta"),
-        sub_dataset="factconsolidation_sh_6k",
-        chunk_size=1000,
-    )
-
-    run = await env.run_dataset(
-        [_fact_item(), _fact_item()],
-        dreaming_after_add=True,
-        show_progress=False,
-        print_report=False,
-    )
-
-    paths = [call["path"] for call in captured]
-    dreaming_indexes = [index for index, path in enumerate(paths) if path.endswith("/dreaming")]
-    add_indexes = [index for index, path in enumerate(paths) if path.endswith("/add")]
-    search_indexes = [index for index, path in enumerate(paths) if path.endswith("/search")]
-    assert len(dreaming_indexes) == 1
-    assert len(search_indexes) == 4
-    assert max(add_indexes) < min(search_indexes) < dreaming_indexes[0] < max(search_indexes)
-    assert len([index for index in search_indexes if index < dreaming_indexes[0]]) == 2
-    assert len([index for index in search_indexes if index > dreaming_indexes[0]]) == 2
-    assert captured[dreaming_indexes[0]]["body"]["mode"] == "sync"
-    assert run.baseline is not None
-    assert len(run.baseline.contexts) == 2
-    assert sum(context.num_questions for context in run.baseline.contexts) == 2
-    assert run.baseline.averaged_metrics["substring_exact_match"] == 1.0
-    assert run.averaged_metrics["substring_exact_match"] == 1.0
-    baseline_questions = [
-        (qa.context_id, qa.query_id, qa.qa_pair_id) for context in run.baseline.contexts for qa in context.qa_results
-    ]
-    post_dreaming_questions = [
-        (qa.context_id, qa.query_id, qa.qa_pair_id) for context in run.contexts for qa in context.qa_results
-    ]
-    assert baseline_questions == post_dreaming_questions
-    assert run.dreaming is not None
-    assert run.dreaming.code == "ok"
-    assert run.dreaming.message == "consolidation complete"
-    assert all(context.add_summary is not None for context in run.contexts)
-    assert all(context.add_summary is not None for context in run.baseline.contexts)
-    assert all(qa.memory_construction_time > 0 for context in run.contexts for qa in context.qa_results)
-    assert all(qa.memory_construction_time > 0 for context in run.baseline.contexts for qa in context.qa_results)
-
-
-@pytest.mark.asyncio
-async def test_dreaming_reuses_the_max_queries_question_plan():
-    memory, captured = _memory([{"id": "m1", "memory": "The capital is Beta."}])
-    env = MemoryAgentBenchEnv(
-        memory,
-        answer_llm=_llm("Beta"),
-        sub_dataset="factconsolidation_sh_6k",
-        chunk_size=10000,
-    )
-
-    run = await env.run_dataset(
-        [_fact_item(), _fact_item()],
-        dreaming_after_add=True,
-        max_queries=1,
-        show_progress=False,
-        print_report=False,
-    )
-
-    assert run.baseline is not None
-    baseline_questions = [
-        (qa.context_id, qa.query_id, qa.qa_pair_id) for context in run.baseline.contexts for qa in context.qa_results
-    ]
-    post_dreaming_questions = [
-        (qa.context_id, qa.query_id, qa.qa_pair_id) for context in run.contexts for qa in context.qa_results
-    ]
-    assert baseline_questions == post_dreaming_questions == [(0, 0, "fact-1")]
-    assert len([call for call in captured if call["path"].endswith("/search")]) == 2
-
-
-@pytest.mark.asyncio
-async def test_run_dataset_rejects_dreaming_after_add_when_add_is_disabled():
-    memory, captured = _memory([])
-    env = MemoryAgentBenchEnv(memory, answer_llm=_llm("x"), sub_dataset="factconsolidation_sh_6k")
-
-    with pytest.raises(ValueError, match="requires add=True"):
-        await env.run_dataset(
-            [_fact_item()],
-            add=False,
-            dreaming_after_add=True,
-            show_progress=False,
-            print_report=False,
-        )
-
-    assert captured == []
-
-
-@pytest.mark.asyncio
 async def test_adapter_passes_configured_rerank(monkeypatch):
     captured: dict[str, Any] = {}
 
@@ -309,13 +214,7 @@ async def test_adapter_passes_configured_rerank(monkeypatch):
 
     monkeypatch.setattr(memoryagentbench_adapter, "MemoryAgentBenchEnv", _FakeEnv)
 
-    runner = RunnerConfig(
-        rerank=False,
-        top_k=5,
-        search_strategy="fast",
-        dreaming_after_add=True,
-        show_progress=False,
-    )
+    runner = RunnerConfig(rerank=False, top_k=5, search_strategy="fast", show_progress=False)
     result = await MemoryAgentBenchAdapter().run(
         memory=object(),
         answer_llm=object(),
@@ -334,4 +233,3 @@ async def test_adapter_passes_configured_rerank(monkeypatch):
     assert result == {"ok": True}
     assert captured["init"]["top_k"] == 3
     assert captured["init"]["rerank"] is True
-    assert captured["run"]["dreaming_after_add"] is True

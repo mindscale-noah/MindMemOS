@@ -26,6 +26,7 @@ from .registry import (
     validate_embedding_dimension,
 )
 from .rerank import RerankClient
+from .runtime import provider_binding_runtime_enabled, require_model_endpoint
 
 __all__ = [
     "ChatResponse",
@@ -40,6 +41,8 @@ __all__ = [
     "get_embed_client",
     "get_llm_client",
     "get_rerank_client",
+    "provider_binding_runtime_enabled",
+    "require_model_endpoint",
     "init_embed_client",
     "init_llm_client",
     "init_rerank_client",

@@ -1,10 +1,8 @@
 """Online skill-evolution algorithm clients.
 
-Three implementations satisfy :class:`SkillEvolutionClient`:
+Two implementations satisfy :class:`SkillEvolutionClient`:
 
 - :class:`NoopSkillEvolutionClient` — the no-evolution baseline.
-- :class:`MindMemOSSkillEvolutionClient` — uses the shared asynchronous SDK
-  backend over HTTP.
 - :class:`FastAPISkillEvolutionClient` — drives the real MindMemOS server:
   register the staged skills once, record each finished rollout as an *injected*
   ``/v1/memory/add`` trace, then call ``POST /v1/skills/evolve``. When the server
@@ -34,8 +32,6 @@ from mindmemos_sdk.skills import (
     serialize_bundle,
 )
 from mindmemos_sdk.transport import HttpTransport
-
-from ...backend import MindMemOSBackend
 
 _DIALOGUE_ROLES = {"user", "assistant", "system", "tool"}
 
@@ -104,94 +100,6 @@ class _ManagedSkill:
     cloud_skill_id: str
     version_id: str
     content_hash: str
-
-
-class MindMemOSSkillEvolutionClient:
-    """Drive skill evolution through a shared HTTP backend."""
-
-    def __init__(
-        self,
-        backend: MindMemOSBackend,
-        *,
-        transcript_metadata: dict[str, Any] | None = None,
-    ) -> None:
-        self._backend = backend
-        self._transcript_metadata = transcript_metadata or {}
-        self._managed: list[_ManagedSkill] = []
-
-    async def prepare(self, skill_dirs: list[Path]) -> None:
-        await self._backend.start()
-        self._managed = []
-        for directory in skill_dirs:
-            managed = await self._register_skill(Path(directory))
-            if managed is not None:
-                self._managed.append(managed)
-
-    async def _register_skill(self, directory: Path) -> _ManagedSkill | None:
-        files = read_local_bundle(directory)
-        if not files:
-            return None
-        data = await self._backend.skills.register(name=directory.name, content=serialize_bundle(files))
-        return _ManagedSkill(
-            name=directory.name,
-            directory=directory,
-            cloud_skill_id=data.cloud_skill_id,
-            version_id=data.version_id,
-            content_hash=data.content_hash,
-        )
-
-    async def record_case(self, result: SkillCaseResult) -> None:
-        if not self._managed:
-            return
-        messages = _to_dialogue_messages(result.messages)
-        if not messages:
-            return
-        skill_context = [
-            SkillContext(
-                name=managed.name,
-                content_hash=managed.content_hash,
-                base_version_id=managed.version_id,
-                usage=SkillUsage.INJECTED,
-            )
-            for managed in self._managed
-        ]
-        await self._backend.memory.add(
-            messages,
-            skill_context=skill_context,
-            metadata={**self._transcript_metadata, "case_id": result.case_id},
-            mode="async",
-            score=result.score,
-            task_id=result.case_id,
-        )
-
-    async def evolve(self) -> list[EvolveOutcome]:
-        outcomes: list[EvolveOutcome] = []
-        for managed in self._managed:
-            outcomes.append(await self._evolve_one(managed))
-        return outcomes
-
-    async def _evolve_one(self, managed: _ManagedSkill) -> EvolveOutcome:
-        data = await self._backend.skills.evolve(managed.cloud_skill_id, mode="sync")
-        outcome = EvolveOutcome(
-            skill_name=managed.name,
-            cloud_skill_id=managed.cloud_skill_id,
-            evolved=data.evolved,
-            pending_count=data.pending_count,
-            threshold=data.threshold,
-            new_version_id=data.new_version_id,
-            new_version_ids=list(data.new_version_ids),
-            summarized_count=data.summarized_count,
-            consumed_count=data.consumed_count,
-        )
-        if data.evolved and data.new_version_id:
-            content = await self._backend.skills.get_content(managed.cloud_skill_id, data.new_version_id)
-            _write_bundle(managed.directory, deserialize_bundle(content.content))
-            managed.version_id = data.new_version_id
-            managed.content_hash = content.version.content_hash
-        return outcome
-
-    async def aclose(self) -> None:
-        await self._backend.aclose()
 
 
 class FastAPISkillEvolutionClient:

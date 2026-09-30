@@ -1,12 +1,13 @@
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import mindmemos.pipelines.add.schema.schema_add as schema_add
 import pytest
-from mindmemos.components.extractor.schema import _schema_higher_order
+from mindmemos.components.extractor.schema.v1 import _schema_higher_order
 from mindmemos.components.memory_modeling.schema import EntityManager, EntityType
-from mindmemos.config import get_config, init_config, reset_config
+from mindmemos.config import bind_config_overrides, get_config, init_config, reset_config
 from mindmemos.infra import db
 from mindmemos.llm import ChatResponse, EmbeddingResponse
 from mindmemos.pipelines.add import SchemaAddPipeline
@@ -54,7 +55,6 @@ class FakeLLM:
         elif task == "memory.add.entity_generation":
             content = """
             {
-              "message_mapping": {},
               "entities": [
                 {
                   "name": "User",
@@ -72,8 +72,8 @@ class FakeLLM:
               "edges": []
             }
             """
-        elif task == "memory.add.episode_description":
-            content = '{"title":"User Preference About Qdrant","content":"The user said they like Qdrant."}'
+        elif task == "memory.add.episode_entity":
+            content = '{"title":"User Preference About Qdrant","content":"The user said they like Qdrant.","search_fields":["Qdrant","preference"]}'
         elif task == "memory.add.episode_objectify":
             content = "On 2026-05-28, the user said they like Qdrant for vector search."
         else:
@@ -97,7 +97,6 @@ class ManyPropertiesLLM(FakeLLM):
             ]
             content = json.dumps(
                 {
-                    "message_mapping": {},
                     "entities": [
                         {
                             "name": "User",
@@ -164,6 +163,20 @@ class RecordingFakeEmbed(FakeEmbed):
 
     async def embed(self, task, text, **kwargs):
         self.calls.append(SimpleNamespace(task=task, text=text))
+        return await super().embed(task, text, **kwargs)
+
+
+class RequestScopedLLM(FakeLLM):
+    async def chat(self, task, messages, format_parser=None, **kwargs):
+        if not get_config().chat_model_router.endpoints:
+            raise RuntimeError("No chat model endpoint configured")
+        return await super().chat(task, messages, format_parser=format_parser, **kwargs)
+
+
+class RequestScopedEmbed(FakeEmbed):
+    async def embed(self, task, text, **kwargs):
+        if not get_config().embed_model_router.endpoints:
+            raise RuntimeError("No embed model endpoint configured")
         return await super().embed(task, text, **kwargs)
 
 
@@ -309,10 +322,10 @@ class FakeWriter:
         mutations = []
         for command in plan.memory_updates:
             self.updated.append(command)
-            mutations.append(MemoryDbMutationResult(memory_id=f"{command.memory_id}-new", changed=True, hard=False))
+            mutations.append(MemoryDbMutationResult(memory_id=f"{command.memory_id}-new", changed=True))
         for command in plan.memory_deletes:
             self.deleted.append(command.memory_id)
-            mutations.append(MemoryDbMutationResult(memory_id=command.memory_id, changed=True, hard=command.hard))
+            mutations.append(MemoryDbMutationResult(memory_id=command.memory_id, changed=True))
         return MemoryDbWriteResult(
             memory_ids=[memory.memory_id for memory in write_plan.memories],
             entity_ids=[entity.entity_id for entity in write_plan.entities],
@@ -329,11 +342,11 @@ class FakeWriter:
 
     async def update_memory(self, ctx, req):
         self.updated.append(req)
-        return SimpleNamespace(status="ok", memory_id=f"{req.memory_id}-new", changed=True, hard=False)
+        return SimpleNamespace(status="ok", memory_id=f"{req.memory_id}-new", changed=True)
 
     async def delete_memory(self, ctx, req):
         self.deleted.append(req.memory_id)
-        return SimpleNamespace(status="ok", memory_id=req.memory_id, changed=True, hard=req.hard)
+        return SimpleNamespace(status="ok", memory_id=req.memory_id, changed=True)
 
 
 class FakeRecorder:
@@ -458,19 +471,19 @@ class PropertyMergeLLM(FakeLLM):
         return await super().chat(task, messages, format_parser=format_parser, **kwargs)
 
 
-class EmptyBoundaryLLM(FakeLLM):
+class HigherOrderLLM(FakeLLM):
     async def chat(self, task, messages, format_parser=None, **kwargs):
-        if task == "memory.add.episode_boundary":
-            content = "[]"
+        if task == "memory.add.higher_order_generation":
+            content = '{"updates":[{"property_name":"preference_summary","action":"update","value":"User consistently prefers vector databases. Evidence: Qdrant memories in 2026. Confidence: high.","reasoning":"Repeated preference evidence."}]}'
             parsed = format_parser(content) if format_parser else None
             return ChatResponse(finish_reason="stop", content=content, parsed=parsed)
         return await super().chat(task, messages, format_parser=format_parser, **kwargs)
 
 
-class HigherOrderLLM(FakeLLM):
+class EmptyBoundaryLLM(FakeLLM):
     async def chat(self, task, messages, format_parser=None, **kwargs):
-        if task == "memory.add.higher_order_generation":
-            content = '{"updates":[{"property_name":"preference_summary","action":"update","value":"User consistently prefers vector databases. Evidence: Qdrant memories in 2026. Confidence: high.","reasoning":"Repeated preference evidence."}]}'
+        if task == "memory.add.episode_boundary":
+            content = "[]"
             parsed = format_parser(content) if format_parser else None
             return ChatResponse(finish_reason="stop", content=content, parsed=parsed)
         return await super().chat(task, messages, format_parser=format_parser, **kwargs)
@@ -492,7 +505,6 @@ class DuplicateEdgeLLM(FakeLLM):
         if task == "memory.add.entity_generation":
             content = """
             {
-              "message_mapping": {},
               "entities": [
                 {
                   "name": "User",
@@ -547,7 +559,6 @@ class MixedSchemaTypeLLM(FakeLLM):
         if task == "memory.add.entity_generation":
             content = """
             {
-              "message_mapping": {},
               "entities": [
                 {
                   "name": "User",
@@ -601,6 +612,143 @@ def config_context():
         yield
     finally:
         reset_config()
+
+
+@pytest.mark.asyncio
+async def test_schema_add_pipeline_resolves_request_scoped_clients_when_provider_binding_enabled(monkeypatch, tmp_path):
+    config_path = tmp_path / "project-namespaced.yaml"
+    config_path.write_text(
+        Path("config/mindmemos/dev.example.yaml")
+        .read_text(encoding="utf-8")
+        .replace("    vector_size: 2560", "    vector_size: 2560\n    project_collection_namespace_enabled: true"),
+        encoding="utf-8",
+    )
+    reset_config()
+    init_config(config_path=config_path)
+    cfg = get_config()
+    cfg.provider_binding.enabled = True
+    cfg.chat_model_router.endpoints.clear()
+    cfg.embed_model_router.endpoints.clear()
+    llm = RequestScopedLLM()
+    embed = RequestScopedEmbed()
+    monkeypatch.setattr(schema_add, "get_llm_client", lambda: llm)
+    monkeypatch.setattr(schema_add, "get_embed_client", lambda: embed)
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    reader = MemoryDbReader(clients=clients)
+    pipeline = SchemaAddPipeline(
+        db_reader=reader,
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    assert pipeline._explicit_llm is None
+    assert pipeline._explicit_embed is None
+
+    with bind_config_overrides(
+        allow_project_embedding_dimensions=True,
+        project_config={
+            "chat_model_router": {
+                "endpoints": [
+                    {
+                        "model": "openai/request-chat",
+                        "api_key": "sk-request",
+                        "api_base": "https://example.test/v1",
+                    }
+                ]
+            },
+            "embed_model_router": {
+                "endpoints": [
+                    {
+                        "model": "openai/request-embed",
+                        "api_key": "sk-request",
+                        "api_base": "https://example.test/v1",
+                        "dimensions": 3,
+                    }
+                ]
+            },
+        },
+    ):
+        runtime = pipeline._resolve_add_runtime(make_context())
+        assert runtime.chunker.llm_client is llm
+        assert runtime.extractor.llm_client is llm
+        assert runtime.planner.llm_client is llm
+        assert runtime.planner.embed_client is embed
+        result = await pipeline.add_sync(
+            AddPipelineInput(
+                mode="sync",
+                timestamp=1770000000000,
+                force_generation=True,
+                messages=[{"role": "user", "content": "I like Qdrant for vector search."}],
+            ),
+            make_context(),
+        )
+
+    assert result.status == "ok"
+    assert writer.calls
+
+
+def test_schema_add_pipeline_resolves_clients_from_current_runtime_when_provider_binding_disabled(monkeypatch):
+    cfg = get_config()
+    cfg.provider_binding.enabled = False
+    llm = RequestScopedLLM()
+    embed = RequestScopedEmbed()
+    monkeypatch.setattr(schema_add, "get_llm_client", lambda: llm)
+    monkeypatch.setattr(schema_add, "get_embed_client", lambda: embed)
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    reader = MemoryDbReader(clients=clients)
+
+    pipeline = SchemaAddPipeline(
+        db_reader=reader,
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    runtime = pipeline._resolve_add_runtime(make_context())
+    assert runtime.chunker.llm_client is llm
+    assert runtime.extractor.llm_client is llm
+    assert runtime.planner.llm_client is llm
+    assert runtime.planner.embed_client is embed
+
+
+@pytest.mark.asyncio
+async def test_schema_add_sync_stream_resolves_explicit_consistency():
+    class FakeBuffer:
+        async def append(self, context, inp, *, force_generation, source_add_record_id):
+            return ["buffer-record-1"]
+
+    class FakeRecorder:
+        async def mark_add_completed(self, context, add_record_id, result):
+            return None
+
+    pipeline = SchemaAddPipeline.__new__(SchemaAddPipeline)
+    pipeline.add_buffer = FakeBuffer()
+    pipeline.recorder = FakeRecorder()
+    pipeline._explicit_consistency = "strong"
+    observed = {}
+
+    async def drain(context, *, consistency, force, progress, cancel_check):
+        observed["consistency"] = consistency
+        return []
+
+    pipeline._ensure_drain_and_wait = drain
+
+    result = await pipeline.add_sync_stream(
+        AddPipelineInput(
+            mode="sync",
+            timestamp=1770000000000,
+            messages=[{"role": "user", "content": "Remember this."}],
+        ),
+        make_context(),
+    )
+
+    assert result.status == "ok"
+    assert observed["consistency"] == "strong"
 
 
 @pytest.mark.asyncio
@@ -704,9 +852,7 @@ async def test_schema_add_pipeline_caps_properties_per_entity():
     # Non-schema property names (p0..p19) are rewritten to "default_property" by the
     # normalizer, so we verify the cap by counting default_property memories on the person
     # entity instead of checking for the raw p0..p14 names.
-    default_count = sum(
-        1 for m in plan.memories if m.property_name == "default_property" and m.entity_type == "person"
-    )
+    default_count = sum(1 for m in plan.memories if m.property_name == "default_property" and m.entity_type == "person")
     assert default_count == 15, f"cap should keep 15, got {default_count}"
 
 
@@ -747,7 +893,7 @@ async def test_schema_add_pipeline_passes_locomo_named_speakers_to_extractor():
         "memory.add.schema_selection",
         "memory.add.entity_generation",
         "memory.add.episode_objectify",
-        "memory.add.episode_description",
+        "memory.add.episode_entity",
     ]:
         prompt = llm.prompts_by_task[task][0]
         assert caroline_line in prompt
@@ -931,6 +1077,43 @@ async def test_schema_add_buffer_orders_by_added_time_not_event_time():
     assert [record.payload["event_timestamp_ms"] for record in records] == [1770000000000, 1770000000000]
     assert all(before <= record.payload["added_at"] <= after for record in records)
     assert records[0].buffer_sequence < records[1].buffer_sequence
+
+
+@pytest.mark.asyncio
+async def test_schema_add_buffer_preserves_prompt_language():
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    buffer = AddRecordBuffer(clients=clients)
+    inp = AddPipelineInput(
+        mode="sync",
+        prompt_language="ZH",
+        messages=[{"role": "user", "content": "Prefer stable algorithms."}],
+    )
+
+    await buffer.append(make_context(), inp, force_generation=True)
+
+    records = await buffer.list_buffered(make_context(), limit=10)
+    assert records[0].payload["prompt_language"] == "ZH"
+    assert schema_add._reconstruct_input_from_records(records).prompt_language == "ZH"
+
+
+def test_schema_add_prompt_language_for_records_prefers_explicit_request(monkeypatch):
+    records = [
+        schema_add.BufferedAddRecord(
+            add_record_id="record-1",
+            payload={
+                "prompt_language": "ZH",
+                "messages": [{"role": "user", "content": "Prefer stable algorithms."}],
+            },
+        )
+    ]
+    monkeypatch.setattr(
+        schema_add,
+        "detect_prompt_language",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("language should not be auto-detected")),
+    )
+
+    assert schema_add._prompt_language_for_records(records, "Prefer stable algorithms.") == "ZH"
 
 
 @pytest.mark.asyncio
@@ -1242,7 +1425,8 @@ async def test_schema_add_pipeline_forces_split_when_llm_returns_no_boundary_at_
             mode="async",
             timestamp=1770000000000,
             messages=[
-                {"role": "user", "content": f"message {index}"} for index in range(get_config().algo_config.add.schema.chunker.max_episode_length)
+                {"role": "user", "content": f"message {index}"}
+                for index in range(get_config().algo_config.add.schema.chunker.max_episode_length)
             ],
         ),
         make_context(),
@@ -1255,6 +1439,7 @@ async def test_schema_add_pipeline_forces_split_when_llm_returns_no_boundary_at_
 
 @pytest.mark.asyncio
 async def test_schema_add_pipeline_property_merge_archives_existing_and_writes_merged_value():
+    get_config().algo_config.add.schema.version = "v1"
     writer = FakeWriter()
     qdrant = FakeQdrant()
     clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
@@ -1330,6 +1515,7 @@ async def test_schema_add_pipeline_property_merge_archives_existing_and_writes_m
 
 @pytest.mark.asyncio
 async def test_schema_add_pipeline_higher_order_runs_for_updated_entity(monkeypatch):
+    get_config().algo_config.add.schema.version = "v1"
     writer = FakeWriter()
     qdrant = FakeQdrant()
     clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
@@ -1447,7 +1633,7 @@ async def test_schema_add_pipeline_marks_episode_failed_when_generation_fails():
 @pytest.mark.asyncio
 async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_error(monkeypatch):
     """P1 fix: when a parallel schema-selection task fails, the still-running
-    objectify/description tasks are cancelled (not orphaned) and the original
+    objectify/entity tasks are cancelled (not orphaned) and the original
     exception propagates unwrapped instead of an ExceptionGroup, so the outer
     episode-retry loop keeps its semantics.
 
@@ -1466,7 +1652,7 @@ async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_
 
     def _mark_started(name: str) -> None:
         started.add(name)
-        if {"objectify", "description"} <= started:
+        if {"objectify", "entity"} <= started:
             both_started.set()
 
     class TrackingExtractor:
@@ -1489,19 +1675,30 @@ async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_
             finished.add("objectify")
             return "objectified"
 
-        async def generate_episode_description(self, conversation_text, dialogue_timestamp, *, prompt_set):
-            _mark_started("description")
+        async def generate_episode_entity(self, conversation_text, dialogue_timestamp, max_fields, *, prompt_set):
+            _mark_started("entity")
             try:
                 await asyncio.sleep(0.3)
             except asyncio.CancelledError:
                 raise
-            finished.add("description")
-            return {"title": "t", "content": "c"}
+            finished.add("entity")
+            return {"title": "t", "content": "c", "search_fields": []}
+
+    class TrackingPlanner:
+        async def plan_episode_edges(self, *, episode_name, episode_description, context, prompt_set):
+            await asyncio.sleep(0.3)
+            return []
+
+        async def recall_reference_entities(self, *, conversation_text, context):
+            await asyncio.sleep(0.3)
+            return []
 
     pipeline = SchemaAddPipeline.__new__(SchemaAddPipeline)
     rt = SimpleNamespace(
+        version="v2",
         extractor=TrackingExtractor(),
-        use_search_fields=False,
+        planner=TrackingPlanner(),
+        search_fields_max=10,
         project_em=object(),
     )
 
@@ -1522,7 +1719,7 @@ async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_
 
     with pytest.raises(RuntimeError, match="schema selection failed"):
         await pipeline._generate_episode_memory(
-            [SimpleNamespace()],
+            [SimpleNamespace(payload={})],
             context=make_context(),
             consistency="fast",
             rt=rt,
@@ -1531,5 +1728,107 @@ async def test_generate_episode_memory_cancels_stranded_tasks_and_unwraps_group_
     # Give any stranded (non-cancelled) tasks time to finish so the
     # assertion reliably distinguishes "cancelled" from "orphaned".
     await asyncio.sleep(0.5)
-    assert {"objectify", "description"} <= started
+    assert {"objectify", "entity"} <= started
     assert finished == set()
+
+
+class BoundaryPromptCaptureLLM(FakeLLM):
+    """FakeLLM that records the prompt sent to the episode-boundary task."""
+
+    def __init__(self):
+        self.boundary_prompts: list[str] = []
+
+    async def chat(self, task, messages, format_parser=None, **kwargs):
+        if task == "memory.add.episode_boundary":
+            self.boundary_prompts.append(str(messages[0]["content"]))
+        return await super().chat(task, messages, format_parser, **kwargs)
+
+
+async def _add_one_turn_and_capture_boundary_prompt(llm: BoundaryPromptCaptureLLM) -> str:
+    writer = FakeWriter()
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    pipeline = SchemaAddPipeline(
+        db_reader=MemoryDbReader(clients=clients),
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        llm_client=llm,
+        embed_client=FakeEmbed(),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    await pipeline.add_sync(
+        AddPipelineInput(
+            mode="sync",
+            timestamp=1770000000000,
+            force_generation=True,
+            messages=[{"role": "user", "content": "I like Qdrant."}],
+        ),
+        make_context(),
+    )
+
+    assert llm.boundary_prompts
+    return llm.boundary_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_schema_add_pipeline_segments_with_version_matched_boundary_prompt():
+    """v1 chunking must use the develop boundary prompt (with the reasoning field),
+    v2 the token-saving variant without it — the shared chunking path picks the
+    prompt set by version instead of always using the latest one."""
+    schema_cfg = get_config().algo_config.add.schema
+    schema_cfg.version = "v1"
+    schema_cfg.chunker.split_mode = "llm"
+    v1_prompt = await _add_one_turn_and_capture_boundary_prompt(BoundaryPromptCaptureLLM())
+    assert '"reasoning"' in v1_prompt
+
+    schema_cfg.version = "v2"
+    v2_prompt = await _add_one_turn_and_capture_boundary_prompt(BoundaryPromptCaptureLLM())
+    assert '"reasoning"' not in v2_prompt
+
+
+async def _add_one_turn_and_get_plan(*, writer: FakeWriter) -> tuple:
+    qdrant = FakeQdrant()
+    clients = SimpleNamespace(qdrant=qdrant, neo4j=SimpleNamespace())
+    pipeline = SchemaAddPipeline(
+        db_reader=MemoryDbReader(clients=clients),
+        db_writer=writer,
+        add_buffer=AddRecordBuffer(clients=clients),
+        llm_client=FakeLLM(),
+        embed_client=FakeEmbed(),
+        entity_manager=EntityManager("config/presets/entity_modeling_locomo.json"),
+    )
+
+    await pipeline.add_sync(
+        AddPipelineInput(
+            mode="sync",
+            timestamp=1770000000000,
+            force_generation=True,
+            messages=[{"role": "user", "content": "I like Qdrant."}],
+        ),
+        make_context(),
+    )
+
+    assert writer.calls
+    _, plan, _ = writer.calls[0]
+    return plan
+
+
+@pytest.mark.asyncio
+async def test_schema_add_writes_version_matched_labels():
+    """v1 must label its output schema_add_v1 (develop parity, keeps eval buckets
+    comparable); v2 labels its output schema_add."""
+    schema_cfg = get_config().algo_config.add.schema
+    schema_cfg.version = "v1"
+    plan = await _add_one_turn_and_get_plan(writer=FakeWriter())
+    person_entities = [entity for entity in plan.entities if entity.entity_type == "person"]
+    assert person_entities and all(
+        entity.metadata.get("add_algorithm") == "schema_add_v1" for entity in person_entities
+    )
+    assert plan.memories and all(memory.mem_extract_version == "schema_add_v1" for memory in plan.memories)
+
+    schema_cfg.version = "v2"
+    plan = await _add_one_turn_and_get_plan(writer=FakeWriter())
+    person_entities = [entity for entity in plan.entities if entity.entity_type == "person"]
+    assert person_entities and all(entity.metadata.get("add_algorithm") == "schema_add" for entity in person_entities)
+    assert plan.memories and all(memory.mem_extract_version == "schema_add" for memory in plan.memories)

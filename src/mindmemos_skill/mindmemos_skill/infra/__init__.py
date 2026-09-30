@@ -1,5 +1,8 @@
-"""Independent structured-database and optional vector-store capabilities.
+"""Business-independent infrastructure families and registration."""
 
-Business schemas belong to :mod:`mindmemos_skill.persistence`, while this
-package owns only backend-neutral contracts, provider registries, and adapters.
-"""
+from .base import Infrastructure
+from .registry import ensure_registered
+
+ensure_registered()
+
+__all__ = ["Infrastructure"]

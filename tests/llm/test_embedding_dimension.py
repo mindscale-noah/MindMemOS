@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from mindmemos.errors import EmbeddingDimensionError
+from mindmemos.errors import ApiError, EmbeddingDimensionError
 from mindmemos.llm.embedding import EmbedClient
 
 
@@ -62,3 +62,6 @@ def test_embedding_dimension_error_message_guides_operator() -> None:
     assert "immutable" in msg
     assert "1024" in msg
     assert "2560" in msg
+    assert isinstance(err, ApiError)
+    assert err.status_code == 409
+    assert err.code == "embedding.dimension_mismatch"

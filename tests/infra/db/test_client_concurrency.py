@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from mindmemos.config import Neo4jConfig, QdrantConfig
@@ -101,6 +102,12 @@ async def test_qdrant_engine_updates_existing_collection_payload_storage():
         async def collection_exists(self, collection_name):
             return True
 
+        async def get_collection(self, collection_name):
+            return SimpleNamespace(
+                config=SimpleNamespace(params=SimpleNamespace(on_disk_payload=True)),
+                payload_schema={},
+            )
+
         async def update_collection(self, **kwargs):
             self.updated.append(kwargs)
 
@@ -116,6 +123,34 @@ async def test_qdrant_engine_updates_existing_collection_payload_storage():
 
     assert client.updated[0]["collection_name"] == "test_memos"
     assert client.updated[0]["collection_params"].on_disk_payload is False
+
+
+@pytest.mark.asyncio
+async def test_qdrant_engine_serializes_concurrent_shared_collection_creation():
+    class FakeQdrantClient:
+        def __init__(self):
+            self.exists = False
+            self.created = 0
+
+        async def collection_exists(self, collection_name):
+            await asyncio.sleep(0)
+            return self.exists
+
+        async def create_collection(self, **kwargs):
+            self.created += 1
+            await asyncio.sleep(0)
+            self.exists = True
+
+        async def create_payload_index(self, **kwargs):
+            return None
+
+    client = FakeQdrantClient()
+    engine = QdrantEngine(_qdrant_config(max_client_concurrency=8), client=client)
+    spec = QdrantCollectionSpec(name="test_memos__d_2", vector_size=2)
+
+    await asyncio.gather(*(engine.ensure_collection(spec) for _ in range(8)))
+
+    assert client.created == 1
 
 
 def _qdrant_config(*, max_client_concurrency: int) -> QdrantConfig:

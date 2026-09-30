@@ -3,6 +3,7 @@
 from .agentic import AgenticConfig
 from .default_search import DefaultSearchConfig
 from .rerank import RerankConfig
+from .retention import MemoryRetentionConfig
 from .root import SearchConfig
 from .schema import (
     DualPathConfig,
@@ -21,6 +22,7 @@ __all__ = [
     "EdgeSearchConfig",
     "EntitySearchConfig",
     "EntityWeightsConfig",
+    "MemoryRetentionConfig",
     "PropertySearchConfig",
     "RerankConfig",
     "SchemaSearchConfig",

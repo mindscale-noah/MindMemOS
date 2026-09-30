@@ -2,32 +2,29 @@
 
 Holds default actor identity (``user_id`` / ``app_id`` / ``agent_id`` /
 ``session_id``) so callers don't repeat it on every call; any field can be
-overridden per request. The compatibility sync client executes requests directly
-through its HTTP transport.
+overridden per request. All HTTP I/O goes through :class:`HttpTransport`.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import Any, TypeVar
+from typing import Any
 
-from ..skills import SkillManager
+from ..skills import SkillManager, detect_skill_context
 from ..transport import HttpTransport
-from .core import MemoryCore, MemoryDefaults, MemoryRequest
+from .core import MemoryCore, MemoryDefaults
 from .models import (
     AddMode,
     AddResult,
     FeedbackMode,
     GetResult,
+    MemoryPageResult,
+    MemoryScrollResult,
     MemorySearchHit,
     Message,
     SearchResult,
     SearchStrategy,
     StatusResult,
 )
-
-_UNSET = object()
-T = TypeVar("T")
 
 
 class MemoryClient:
@@ -42,28 +39,24 @@ class MemoryClient:
         default_agent_id: str | None = None,
         default_session_id: str | None = None,
         skill_manager: SkillManager | None = None,
-        memory_defaults: MemoryDefaults | None = None,
     ) -> None:
-        if not isinstance(transport, HttpTransport):
-            raise TypeError("transport must be an HttpTransport")
         self._transport = transport
         self._skill_manager = skill_manager
-        base_defaults = memory_defaults or MemoryDefaults()
-        self._defaults = replace(
-            base_defaults,
-            user_id=default_user_id if default_user_id is not None else base_defaults.user_id,
-            app_id=default_app_id if default_app_id is not None else base_defaults.app_id,
-            agent_id=default_agent_id if default_agent_id is not None else base_defaults.agent_id,
-            session_id=default_session_id if default_session_id is not None else base_defaults.session_id,
+        self._core = MemoryCore(
+            MemoryDefaults(
+                user_id=default_user_id,
+                app_id=default_app_id,
+                agent_id=default_agent_id,
+                session_id=default_session_id,
+            )
         )
-        self._core = MemoryCore(self._defaults)
 
     def add(
         self,
         messages: list[Message | dict[str, Any]],
         *,
         user_id: str | None = None,
-        mode: AddMode | None = None,
+        mode: AddMode = "sync",
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
@@ -73,9 +66,8 @@ class MemoryClient:
         task_id: str | None = None,
     ) -> AddResult:
         """Add content to the memory store."""
-        messages = self._apply_default_role(messages)
         if self._skill_manager is not None:
-            if self._defaults.add_auto_skill_context and skill_context is None:
+            if skill_context is None:
                 skill_context = self._detect_and_ensure_skill_context(messages)
             else:
                 skill_context = self._ensure_provided_skill_context(skill_context)
@@ -83,7 +75,7 @@ class MemoryClient:
         request = self._core.add(
             messages,
             user_id=user_id,
-            mode=mode if mode is not None else self._defaults.add_mode,
+            mode=mode,
             app_id=app_id,
             agent_id=agent_id,
             session_id=session_id,
@@ -92,41 +84,23 @@ class MemoryClient:
             score=score,
             task_id=task_id,
         )
-        return self._execute(request)
-
-    def _apply_default_role(self, messages: list[Message | dict[str, Any]]) -> list[Message | dict[str, Any]]:
-        """Fill the configured role only for raw dialogue-shaped dictionaries."""
-        if not self._defaults.add_default_role:
-            return messages
-        result: list[Message | dict[str, Any]] = []
-        for message in messages:
-            if isinstance(message, dict) and "content" in message and "role" not in message:
-                result.append({**message, "role": self._defaults.add_default_role})
-            else:
-                result.append(message)
-        return result
+        envelope = self._transport.post_envelope(request.path, json=request.body)
+        return request.parse(envelope)
 
     def _detect_and_ensure_skill_context(self, messages: list[Message | dict[str, Any]]) -> list[Any]:
-        return self._skill_manager.resolve_skill_context(messages)
+        contexts = detect_skill_context(messages, registry=self._skill_manager.registry)
+        return self._ensure_provided_skill_context(contexts)
 
     def _ensure_provided_skill_context(self, skill_context: list[Any]) -> list[Any]:
         ensured: list[Any] = []
-        ensure_cloud = getattr(
-            self._skill_manager,
-            "ensure_latest_cloud_version",
-            None,
-        )
-        used_centralized_manager = callable(ensure_cloud)
         for raw_context in skill_context:
             context = raw_context if hasattr(raw_context, "name") else self._skill_context_from_dict(raw_context)
             skill_id = self._skill_manager.skill_id_for_context(context)
             if skill_id:
                 ensured.append(self._skill_manager.ensure_skill_context(skill_id, usage=context.usage))
-                if callable(ensure_cloud):
-                    ensure_cloud(skill_id)
             else:
                 ensured.append(context)
-        if ensured and not used_centralized_manager:
+        if ensured:
             self._skill_manager.flush_pending_uploads()
         return ensured
 
@@ -140,12 +114,13 @@ class MemoryClient:
         self,
         query: str,
         *,
-        top_k: int | None | object = _UNSET,
+        top_k: int | None = 10,
         user_id: str | None = None,
-        search_strategy: SearchStrategy | None = None,
-        rerank: bool | None = None,
-        score_threshold: float | None | object = _UNSET,
-        filters: dict[str, Any] | None | object = _UNSET,
+        search_strategy: SearchStrategy = "fast",
+        rerank: bool = False,
+        score_threshold: float | None = None,
+        token_budget: int | None = None,
+        filters: dict[str, Any] | None = None,
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
@@ -153,30 +128,80 @@ class MemoryClient:
         """Search memories."""
         request = self._core.search(
             query,
-            top_k=self._defaults.search_top_k if top_k is _UNSET else top_k,
+            top_k=top_k,
             user_id=user_id,
-            search_strategy=search_strategy or self._defaults.search_strategy,
-            rerank=self._defaults.search_rerank if rerank is None else rerank,
-            score_threshold=(self._defaults.search_score_threshold if score_threshold is _UNSET else score_threshold),
-            filters=self._defaults.search_filters if filters is _UNSET else filters,
+            search_strategy=search_strategy,
+            rerank=rerank,
+            score_threshold=score_threshold,
+            token_budget=token_budget,
+            filters=filters,
             app_id=app_id,
             agent_id=agent_id,
             session_id=session_id,
         )
-        return self._execute(request)
+        envelope = self._transport.post_envelope(request.path, json=request.body)
+        return request.parse(envelope)
 
     def get(
         self,
         *,
-        filters: dict[str, Any] | None | object = _UNSET,
-        top_k: int | None | object = _UNSET,
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
     ) -> GetResult:
         """List or filter memories in the current project."""
-        request = self._core.get(
-            filters=self._defaults.get_filters if filters is _UNSET else filters,
-            top_k=self._defaults.get_top_k if top_k is _UNSET else top_k,
+        request = self._core.get(filters=filters, top_k=top_k)
+        envelope = self._transport.post_envelope(request.path, json=request.body)
+        return request.parse(envelope)
+
+    def list(
+        self,
+        *,
+        filters: dict[str, Any] | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        include_total: bool = True,
+        user_id: str | None = None,
+        app_id: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> MemoryPageResult:
+        """List memories using page/page_size pagination."""
+        request = self._core.list(
+            filters=filters,
+            page=page,
+            page_size=page_size,
+            include_total=include_total,
+            user_id=user_id,
+            app_id=app_id,
+            agent_id=agent_id,
+            session_id=session_id,
         )
-        return self._execute(request)
+        envelope = self._transport.post_envelope(request.path, json=request.body)
+        return request.parse(envelope)
+
+    def scroll(
+        self,
+        *,
+        filters: dict[str, Any] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+        user_id: str | None = None,
+        app_id: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> MemoryScrollResult:
+        """Scroll memories using an opaque cursor."""
+        request = self._core.scroll(
+            filters=filters,
+            limit=limit,
+            cursor=cursor,
+            user_id=user_id,
+            app_id=app_id,
+            agent_id=agent_id,
+            session_id=session_id,
+        )
+        envelope = self._transport.post_envelope(request.path, json=request.body)
+        return request.parse(envelope)
 
     def update(
         self,
@@ -185,7 +210,8 @@ class MemoryClient:
     ) -> StatusResult:
         """Update one memory by id."""
         request = self._core.update(memory_id, content)
-        return self._execute(request)
+        envelope = self._transport.post_envelope(request.path, json=request.body)
+        return request.parse(envelope)
 
     def delete(
         self,
@@ -193,13 +219,14 @@ class MemoryClient:
     ) -> StatusResult:
         """Delete one memory by id."""
         request = self._core.delete(memory_id)
-        return self._execute(request)
+        envelope = self._transport.post_envelope(request.path, json=request.body)
+        return request.parse(envelope)
 
     def feedback(
         self,
         *,
         feedback: str | None = None,
-        mode: FeedbackMode | None | object = _UNSET,
+        mode: FeedbackMode | None = None,
         messages: list[Message | dict[str, Any]] | None = None,
         recalled_memories: list[MemorySearchHit | dict[str, Any]] | None = None,
         user_id: str | None = None,
@@ -214,7 +241,7 @@ class MemoryClient:
         """
         request = self._core.feedback(
             feedback=feedback,
-            mode=self._defaults.feedback_mode if mode is _UNSET else mode,
+            mode=mode,
             messages=messages,
             recalled_memories=recalled_memories,
             user_id=user_id,
@@ -222,12 +249,13 @@ class MemoryClient:
             agent_id=agent_id,
             session_id=session_id,
         )
-        return self._execute(request)
+        envelope = self._transport.post_envelope(request.path, json=request.body)
+        return request.parse(envelope)
 
     def dreaming(
         self,
         *,
-        mode: AddMode | None = None,
+        mode: AddMode = "async",
         user_id: str | None = None,
         app_id: str | None = None,
         agent_id: str | None = None,
@@ -235,14 +263,11 @@ class MemoryClient:
     ) -> StatusResult:
         """Trigger the dreaming pipeline."""
         request = self._core.dreaming(
-            mode=mode if mode is not None else self._defaults.dreaming_mode,
+            mode=mode,
             user_id=user_id,
             app_id=app_id,
             agent_id=agent_id,
             session_id=session_id,
         )
-        return self._execute(request)
-
-    def _execute(self, request: MemoryRequest[T]) -> T:
         envelope = self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)

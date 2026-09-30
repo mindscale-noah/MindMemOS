@@ -1,6 +1,6 @@
 # MindMemOS 评测指南
 
-本文说明如何对 MindMemOS 跑三个标准 benchmark（LoCoMo、LongMemEval、PersonaMem），以及如何用 `metrics.py` 统计耗时与 token 用量。
+本文集中说明 LoCoMo、LongMemEval、PersonaMem、MemoryAgentBench 和 SpreadsheetBench-Verified 的复现入口，以及如何用 `metrics.py` 统计耗时与 token 用量。
 
 ---
 
@@ -57,14 +57,213 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 
 ---
 
-## 数据集下载
+## Memory 数据集下载
 
-示例配置中引用的 benchmark 数据集**不在**本仓库中，需自行从各 benchmark 作者（LoCoMo、LongMemEval、PersonaMem）处获取，并按 ``config/mindmemos_eval/memory_evaluation_locomo.example.yaml`` 中的路径放置。
+使用 Python 3.12+，从仓库根目录执行以下命令。数据本体不随仓库分发；统一下载脚本从官方来源
+获取数据，版本固定在 [`config/datasets/sources.json`](../../config/datasets/sources.json)。
 
-复制示例配置并填入 LLM key：
+```bash
+python -m pip install huggingface_hub
+python scripts/download_datasets.py list --benchmark memory
+python scripts/download_datasets.py download --benchmark memory --dataset locomo
+python scripts/download_datasets.py download --benchmark memory --dataset longmemeval
+python scripts/download_datasets.py download --benchmark memory --dataset personamem
+python scripts/download_datasets.py download --benchmark memory --dataset memoryagentbench
+```
+
+默认下载到 `data/mindmemos_memory/<dataset>/`，保留官方文件格式：
+
+| 数据集 | 官方来源 | 相对于该数据集下载目录的文件 |
+| --- | --- | --- |
+| LoCoMo | [snap-research/locomo](https://github.com/snap-research/locomo) | `locomo10.json` |
+| LongMemEval | [longmemeval-cleaned](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned) | `longmemeval_s_cleaned.json`、`longmemeval_m_cleaned.json`、`longmemeval_oracle.json` |
+| PersonaMem v1 | [PersonaMem-v1](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v1) | `questions_{32k,128k,1M}.csv` 与对应的 `shared_contexts_{32k,128k,1M}.jsonl` |
+| MemoryAgentBench | [ai-hyz/MemoryAgentBench](https://huggingface.co/datasets/ai-hyz/MemoryAgentBench) | 官方四个数据分区的 `data/*.parquet`，以及 `entity2id.json` |
+
+复制评测配置，然后在本地副本中更新数据路径和 LLM API key：
+
 ```bash
 cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
 ```
+
+```yaml
+benchmarks:
+  locomo:
+    dataset: data/mindmemos_memory/locomo/locomo10.json
+  longmemeval:
+    dataset: data/mindmemos_memory/longmemeval/longmemeval_s_cleaned.json
+  personamem:
+    dataset: data/mindmemos_memory/personamem/questions_32k.csv
+    context_dataset: data/mindmemos_memory/personamem/shared_contexts_32k.jsonl
+```
+
+PersonaMem 的问题文件和上下文文件需使用相同的上下文长度；使用 `memory_evaluation_personamem.yaml`
+时也需更新这两个字段。LongMemEval 下载的是官方 cleaned 版本，不是示例配置原先引用的本地 smoke 样本。
+MemoryAgentBench 保留官方 Parquet 格式，当前评测器的本地 `dataset` 入口接受 JSON/JSONL，
+需要先转换所需分区再配置该路径。下载脚本不执行格式转换，也不筛选 FactConsolidation 子集。
+
+使用 `--data-root` 指定父目录、`--verify-only` 校验已有下载，或使用 `--offline` 从已有
+Hugging Face 缓存准备数据：
+
+```bash
+python scripts/download_datasets.py download --benchmark memory --dataset locomo --data-root /path/to/memory
+python scripts/download_datasets.py download --benchmark memory --dataset locomo --verify-only
+python scripts/download_datasets.py download --benchmark memory --dataset personamem --offline
+```
+
+自定义目录示例会写入 `/path/to/memory/locomo/`，校验该目录时也需传入相同的 `--data-root`。
+LoCoMo 首次通过直接链接下载需要联网。已有目录只校验，不覆盖；每个下载目录中的
+`download_receipt.json` 记录来源与本地文件哈希。实验 split 随代码提交到 GitHub，脚本不下载或生成 split。
+
+---
+
+## 各数据集复现
+
+除非特别说明，下面的命令都从仓库根目录执行。LoCoMo、LongMemEval、PersonaMem 和 MemoryAgentBench 的数据集不随仓库分发，需要先从对应 benchmark 的官方渠道获取。
+
+> **API key 文件**：`--api-key-output` 会完整写入一个新的 `api_keys.yaml`，仅包含本次评测生成的身份。请使用独立路径，并让服务端的 `auth.api_key_file` 指向该文件；不要覆盖日常开发环境正在使用的 key 文件。
+
+### LoCoMo
+
+1. 按上节下载 LoCoMo，并将复制后的配置中 `benchmarks.locomo.dataset` 设置为：
+
+   ```text
+   data/mindmemos_memory/locomo/locomo10.json
+   ```
+
+2. 复制配置并填入 eval 进程使用的 LLM API key：
+
+   ```bash
+   cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml \
+     config/mindmemos_eval/memory_evaluation_locomo.yaml
+   ```
+
+3. 启动服务后运行：
+
+   ```bash
+   uv run python -m mindmemos_eval.cli memory \
+     --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+     --benchmark-list locomo \
+     --algorithm schema \
+     --manifest-output reports/locomo_schema.jsonl \
+     --api-key-output config/mindmemos/eval_api_keys.yaml
+   ```
+
+### LongMemEval
+
+LongMemEval 与 LoCoMo 共用 `memory_evaluation_locomo.example.yaml`。将数据集路径写入复制后的配置，例如：
+
+```yaml
+benchmarks:
+  longmemeval:
+    dataset: data/mindmemos_memory/longmemeval/longmemeval_s_cleaned.json
+```
+
+运行评测：
+
+```bash
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-list longmemeval \
+  --algorithm vanilla \
+  --manifest-output reports/longmemeval_vanilla.jsonl \
+  --api-key-output config/mindmemos/eval_api_keys.yaml
+```
+
+先用 `--limit 2 --session-limit 2` 做全链路冒烟测试，再移除限制运行完整数据集。
+
+### PersonaMem
+
+1. 按上节下载 PersonaMem，并在复制后的配置中分别设置 `dataset` 和 `context_dataset`：
+
+   ```text
+   data/mindmemos_memory/personamem/questions_32k.csv
+   data/mindmemos_memory/personamem/shared_contexts_32k.jsonl
+   ```
+
+2. 复制配置并填入 eval 进程使用的 LLM API key：
+
+   ```bash
+   cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml \
+     config/mindmemos_eval/memory_evaluation_personamem.yaml
+   ```
+
+3. 启动服务后运行：
+
+   ```bash
+   uv run python -m mindmemos_eval.cli memory \
+     --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
+     --benchmark-list personamem \
+     --algorithm schema \
+     --manifest-output reports/personamem_schema.jsonl \
+     --api-key-output config/mindmemos/eval_api_keys.yaml
+   ```
+
+### MemoryAgentBench
+
+1. 复制 MemoryAgentBench 配置：
+
+   ```bash
+   cp config/mindmemos_eval/dreaming_evaluation_mab.example.yaml \
+     config/mindmemos_eval/dreaming_evaluation_mab.yaml
+   ```
+
+2. 按配置中的 `benchmarks.memoryagentbench.dataset` 准备数据文件，并确认 `sub_dataset`、`chunk_size` 与目标实验一致。
+
+3. 运行当前分支支持的 Vanilla 基线：
+
+   ```bash
+   uv run python -m mindmemos_eval.cli memory \
+     --benchmark-config config/mindmemos_eval/dreaming_evaluation_mab.yaml \
+     --benchmark-list memoryagentbench \
+     --algorithm vanilla \
+     --manifest-output reports/memoryagentbench_vanilla.jsonl \
+     --api-key-output config/mindmemos/eval_api_keys.yaml
+   ```
+
+> **当前边界**：上述命令复现 MemoryAgentBench 的 Vanilla 基线。当前 `develop` 分支的 `memory` CLI 尚未暴露 Add → Dreaming → Answer/Search → Score 的完整开关，因此不能仅凭配置文件名复现主 README 表格中的 Vanilla + Dreaming 行。
+
+### SpreadsheetBench-Verified
+
+SpreadsheetBench 使用独立的 Skill evaluator，首次运行时会自动下载并解压 Verified-400 数据集。先执行两条任务的冒烟测试：
+
+```bash
+uv run python -m mindmemos_eval.cli skill spreadsheetbench \
+  --data-root data/SpreadsheetBench \
+  --download \
+  --model gpt-5.4-mini \
+  --api-key <YOUR_KEY> \
+  --base-url https://your-llm-provider/v1 \
+  --limit 2 \
+  --concurrency 1 \
+  --run-dir results/spreadsheetbench_smoke
+```
+
+复现 Init-skill 路径时，加入仓库内置初始 Skill：
+
+```bash
+uv run python -m mindmemos_eval.cli skill spreadsheetbench \
+  --data-root data/SpreadsheetBench \
+  --skill resources/skill_evolve/spreadsheetbench_init_skill/xlsx \
+  --model gpt-5.4-mini \
+  --api-key <YOUR_KEY> \
+  --base-url https://your-llm-provider/v1 \
+  --concurrency 1 \
+  --run-dir results/spreadsheetbench_init
+```
+
+连接 MindMemOS Skill Evolution 服务时，再加入：
+
+```text
+--evolve
+--evolve-every 1
+--evolution-base-url http://127.0.0.1:8000
+--evolution-api-key <MINDMEMOS_API_KEY>
+```
+
+No-skill 基线不传 `--skill`；Init-skill 传入初始 Skill，但不传 `--evolve`。
+
+> **当前边界**：当前 CLI 可以运行 No-skill、Init-skill 和在线 evolution 路径，但没有单独暴露主 README 表格中 Unsup./Sup. 两种实验协议的完整选择参数。对外报告结果时还需记录实际模型、并发、随机种子和重复运行次数。
 
 ---
 

@@ -6,6 +6,7 @@ from typing import Any
 
 from qdrant_client import models as qmodels
 
+from ..filters import SEARCH_RECORD_PAYLOAD_INDEX_SCHEMA
 from ..models import QdrantRecord, SearchRecordPoint
 from .base import CollectionRepository
 
@@ -20,9 +21,9 @@ class SearchRecordRepository(CollectionRepository):
     async def upsert(self, points: list[SearchRecordPoint]) -> None:
         """Upsert many search-record points."""
 
-        await self._engine.upsert(
-            self.collection,
-            [self._payload_point(point.search_record_id, point.payload) for point in points],
+        await self._upsert_payload_points_by_project(
+            [(point.search_record_id, point.payload) for point in points],
+            payload_indexes=list(SEARCH_RECORD_PAYLOAD_INDEX_SCHEMA),
         )
 
     async def scroll(

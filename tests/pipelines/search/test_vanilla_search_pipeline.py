@@ -553,54 +553,6 @@ async def test_vanilla_search_passes_dedup_candidate_cap(monkeypatch, configured
 
 
 @pytest.mark.asyncio
-async def test_vanilla_search_appends_archived_lineage_candidates() -> None:
-    hits = [
-        MemoryDbSearchHit(
-            memory_id="current",
-            score=0.9,
-            memory=memory("current", "Current Qdrant preference."),
-            source="rrf",
-            rank=1,
-        )
-    ]
-    reader = FakeReader(
-        hits,
-        lineage_by_id={"current": ["old-1", "old-2"], "old-1": ["root-1"], "old-2": []},
-        archived_memories=[
-            memory(
-                "old-1",
-                "Old Qdrant preference.",
-                status="archived",
-                created_at=datetime(2026, 1, 1, tzinfo=UTC),
-            ),
-            memory(
-                "old-2",
-                "Newer archived Qdrant preference.",
-                status="archived",
-                created_at=datetime(2026, 1, 3, tzinfo=UTC),
-            ),
-        ],
-    )
-    engine = make_engine(reader)
-
-    result = await engine.search_candidates(SearchPipelineInput(query="Qdrant", top_k=3), make_context())
-
-    assert [item.id for item in result] == ["current", "old-2", "old-1"]
-    assert result[0].lineage is not None
-    assert result[0].lineage.role == "current"
-    assert result[0].lineage.derived_from_memory_ids == ["old-2", "old-1"]
-    assert result[1].lineage is not None
-    assert result[1].lineage.role == "archived"
-    assert result[1].lineage.derived_to_memory_ids == ["current"]
-    assert result[2].lineage is not None
-    assert result[2].lineage.role == "archived"
-    assert result[2].lineage.derived_from_memory_ids == ["root-1"]
-    assert result[2].lineage.derived_to_memory_ids == ["current"]
-    assert [call.memory_ids for call in reader.lineage_calls] == [["current"], ["old-1", "old-2"]]
-    assert reader.get_memories_calls[-1].memory_ids == ["old-1", "old-2"]
-
-
-@pytest.mark.asyncio
 async def test_vanilla_search_prefers_resolved_event_date_over_source_time() -> None:
     hits = [
         MemoryDbSearchHit(

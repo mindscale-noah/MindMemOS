@@ -4,14 +4,11 @@ from ._schema_utils import build_episode_entity, memory_embedding_text, parse_js
 from .base import (
     SchemaEpisodeExtractor,
     SchemaExtractionNormalizerProtocol,
-    SchemaMergePolicyProtocol,
-    SchemaSearchFieldExtractorProtocol,
     SchemaWritePlanBuilderProtocol,
 )
 from .schema_extractor import SchemaAddExtractor
 from .schema_normalizer import SchemaExtractionNormalizer
 from .schema_planner import SchemaAddPlanner
-from .search_field import SchemaSearchFieldExtractor
 
 __all__ = [
     "SchemaAddExtractor",
@@ -19,9 +16,6 @@ __all__ = [
     "SchemaEpisodeExtractor",
     "SchemaExtractionNormalizer",
     "SchemaExtractionNormalizerProtocol",
-    "SchemaMergePolicyProtocol",
-    "SchemaSearchFieldExtractor",
-    "SchemaSearchFieldExtractorProtocol",
     "SchemaWritePlanBuilderProtocol",
     "build_episode_entity",
     "memory_embedding_text",

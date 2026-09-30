@@ -111,13 +111,17 @@ async def test_close_llm_clients_closes_litellm_cache(monkeypatch) -> None:
     async def fake_close() -> None:
         calls.append("closed")
 
+    async def fake_close_gateway() -> None:
+        calls.append("gateway-closed")
+
     cleared = []
     monkeypatch.setattr(registry, "clear_router_cache", lambda: cleared.append(True))
     monkeypatch.setattr(registry.litellm, "close_litellm_async_clients", fake_close)
+    monkeypatch.setattr(registry, "close_gateway_http_client", fake_close_gateway, raising=False)
     registry.litellm.aclient_session = object()
 
     await registry.close_llm_clients()
 
-    assert calls == ["closed"]
+    assert calls == ["gateway-closed", "closed"]
     assert cleared == [True]
     assert registry.litellm.aclient_session is None

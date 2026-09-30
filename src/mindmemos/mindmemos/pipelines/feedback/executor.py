@@ -8,7 +8,7 @@ from uuid import uuid4
 from ...components.extractor.schema import memory_embedding_text
 from ...components.text import SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
 from ...config import TextProcessingConfig, get_config
-from ...llm import EmbedClient, get_embed_client
+from ...llm import EmbedClient, get_embed_client, provider_binding_runtime_enabled, require_model_endpoint
 from ...typing import (
     REL_DERIVED_FROM,
     FeedbackActionResult,
@@ -152,12 +152,8 @@ class FeedbackActionExecutor:
             vectors=[vector.model_copy(update={"memory_id": new_memory_id})],
             relationships=[
                 GraphRelationship(
-                    source=GraphNodeRef(
-                        kind="Memory", project_id=context.project_id, node_id=new_memory_id
-                    ),
-                    target=GraphNodeRef(
-                        kind="Memory", project_id=context.project_id, node_id=action.target_memory_id
-                    ),
+                    source=GraphNodeRef(kind="Memory", project_id=context.project_id, node_id=new_memory_id),
+                    target=GraphNodeRef(kind="Memory", project_id=context.project_id, node_id=action.target_memory_id),
                     rel_type=REL_DERIVED_FROM,
                     project_id=context.project_id,
                     metadata={"reason": action.reason or "", "created_at": now.isoformat()},
@@ -206,9 +202,7 @@ class FeedbackActionExecutor:
         mutation = result.mutations[0] if result.mutations else None
         changed = bool(mutation and mutation.changed)
         status = "ok" if changed else "error"
-        return action.model_copy(
-            update={"result_memory_id": action.target_memory_id, "status": status}
-        )
+        return action.model_copy(update={"result_memory_id": action.target_memory_id, "status": status})
 
     async def _vectorize(self, text: str) -> VectorWrite:
         embed_resp = await self._embed_client.embed(task="memory.feedback.mutation", text=text)
@@ -245,7 +239,11 @@ class FeedbackActionExecutor:
     @property
     def _embed_client(self) -> EmbedClient:
         if self.__embed_client is None:
-            self.__embed_client = get_embed_client()
+            require_model_endpoint("embedding")
+            client = get_embed_client()
+            if not provider_binding_runtime_enabled():
+                self.__embed_client = client
+            return client
         return self.__embed_client
 
     @_embed_client.setter
@@ -273,8 +271,6 @@ class FeedbackActionExecutor:
     @_sparse_encoder.setter
     def _sparse_encoder(self, value: SparseVectorEncoder | None) -> None:
         self.__sparse_encoder = value
-
-
 
 
 def _feedback_metadata(reason: str | None, now: datetime) -> dict[str, str]:

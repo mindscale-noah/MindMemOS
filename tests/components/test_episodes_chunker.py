@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 from mindmemos.components.chunker import EpisodesChunker
+from mindmemos.config.algo.add.schema.chunker import EpisodesChunkerConfig
 
 
 @pytest.mark.asyncio
@@ -34,3 +35,10 @@ async def test_llm_chunker_leaves_buffer_when_boundary_parse_fails() -> None:
     )
 
     assert boundaries == []
+
+
+def test_streaming_window_size_defaults_to_develop_value() -> None:
+    """The shared default must stay develop-compatible (15); v2 opts into a larger
+    window explicitly via config (see the *_v2 eval examples)."""
+    assert EpisodesChunkerConfig().streaming_window_size == 15
+    assert EpisodesChunker().streaming_window_size == 15

@@ -14,11 +14,10 @@ from typing import Any
 
 from tqdm.auto import tqdm
 
-from ..backend import build_mindmemos_backend
 from ..llm import LLMClient, LLMConfig
 from .agents import ReactAgentFactory, RunResult
 from .args import add_common_skill_args, add_spreadsheetbench_args
-from .evolve import MindMemOSSkillEvolutionClient, NoopSkillEvolutionClient, SkillEvolutionClient
+from .evolve import FastAPISkillEvolutionClient, NoopSkillEvolutionClient, SkillEvolutionClient
 
 SkillArgRegistrar = Callable[[argparse.ArgumentParser], None]
 
@@ -125,25 +124,15 @@ async def _run_and_close(
 
 
 def _build_evolver(args: argparse.Namespace, benchmark_name: str) -> SkillEvolutionClient:
-    if not args.evolve:
-        return NoopSkillEvolutionClient()
-
-    base_url = getattr(args, "evolution_base_url", None)
-    if not base_url:
+    if args.evolve and args.evolution_base_url:
+        return FastAPISkillEvolutionClient(
+            args.evolution_base_url,
+            api_key=args.evolution_api_key,
+            transcript_metadata={"benchmark": benchmark_name},
+        )
+    if args.evolve:
         print(f"{benchmark_name}: --evolve set without --evolution-base-url; running with no-op evolution.")
-        return NoopSkillEvolutionClient()
-
-    backend = build_mindmemos_backend(
-        base_url=base_url,
-        api_key=getattr(args, "evolution_api_key", None),
-        timeout_seconds=getattr(args, "evolution_timeout_seconds", 1200.0),
-        user_id=f"{benchmark_name}-eval",
-        app_id="mindmemos-eval",
-    )
-    return MindMemOSSkillEvolutionClient(
-        backend,
-        transcript_metadata={"benchmark": benchmark_name},
-    )
+    return NoopSkillEvolutionClient()
 
 
 class SkillEvalRunner:

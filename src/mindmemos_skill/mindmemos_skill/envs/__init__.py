@@ -1,31 +1,9 @@
-"""Benchmark environment lifecycle and extension contracts."""
+"""Skill algorithm environment implementations."""
 
-from ..registry import get_env, list_envs
-from .base import BaseEnv, EnvConfigT, EnvRolloutContext, PreparedRollout
-from .registered_envs import (
-    ALFWorldBoundedHistoryEnv,
-    ALFWorldBoundedHistoryEnvConfig,
-    LiveMathEnv,
-    LiveMathEnvConfig,
-    OfficeQAEnv,
-    OfficeQAEnvConfig,
-    SpreadsheetBenchEnv,
-    SpreadsheetBenchEnvConfig,
-)
+from .base import Environment
+from .registry import ensure_registered
+from .typing import Reward, RolloutRequest, RolloutResult, Task, Usage
 
-__all__ = [
-    "ALFWorldBoundedHistoryEnv",
-    "ALFWorldBoundedHistoryEnvConfig",
-    "BaseEnv",
-    "EnvConfigT",
-    "EnvRolloutContext",
-    "LiveMathEnv",
-    "LiveMathEnvConfig",
-    "OfficeQAEnv",
-    "OfficeQAEnvConfig",
-    "PreparedRollout",
-    "SpreadsheetBenchEnv",
-    "SpreadsheetBenchEnvConfig",
-    "get_env",
-    "list_envs",
-]
+ensure_registered()
+
+__all__ = ["Environment", "Reward", "RolloutRequest", "RolloutResult", "Task", "Usage"]

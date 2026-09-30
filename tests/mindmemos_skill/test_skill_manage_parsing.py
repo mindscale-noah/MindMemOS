@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from mindmemos_skill.algos.skill_manage.errors import SkillManageError
-from mindmemos_skill.algos.skill_manage.parsing import (
+from mindmemos_skill.algos.manage.skill_manage.errors import SkillManageError
+from mindmemos_skill.algos.manage.skill_manage.parsing import (
     normalize_content,
     parse_skill_document,
 )

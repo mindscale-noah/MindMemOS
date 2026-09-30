@@ -1,55 +1,22 @@
-"""Backend-neutral structured database capability used by persistence."""
+"""Database operations, schema types, and concrete backends."""
 
-from .backends import bootstrap_database, create_database, register_builtin_databases
-from .database import DatabaseUnitOfWork, ScopedDatabase
-from .models import (
-    ComparisonOperator,
-    DatabaseCapabilities,
-    DatabaseConfig,
-    DatabaseRequirements,
-    FieldSpec,
-    FieldType,
-    FilterExpression,
-    FilterGroup,
-    IndexKind,
-    IndexSpec,
-    Page,
-    Predicate,
-    Record,
-    RecordQuery,
-    SchemaMigration,
-    Sort,
-    TableSpec,
-)
-from .registry import DatabaseFactory, DatabaseRegistry, TableRegistry
-from .scope import DatabaseScope, ScopeValue
+from .base import Database
+from .builtin_backends import PostgresDatabase, SQLiteDatabase
+from .config import PostgresConfig, SQLiteConfig
+from .tables import TableRegistry
+from .typing import Filter, Scope, SearchHit, TableSpec
+from .vector import Vector
 
 __all__ = [
-    "ComparisonOperator",
-    "DatabaseCapabilities",
-    "DatabaseConfig",
-    "DatabaseFactory",
-    "DatabaseRegistry",
-    "DatabaseRequirements",
-    "DatabaseScope",
-    "DatabaseUnitOfWork",
-    "FieldSpec",
-    "FieldType",
-    "FilterExpression",
-    "FilterGroup",
-    "IndexKind",
-    "IndexSpec",
-    "Page",
-    "Predicate",
-    "Record",
-    "RecordQuery",
-    "SchemaMigration",
-    "ScopeValue",
-    "ScopedDatabase",
-    "Sort",
+    "Database",
+    "SQLiteDatabase",
+    "PostgresDatabase",
+    "SQLiteConfig",
+    "PostgresConfig",
     "TableRegistry",
     "TableSpec",
-    "bootstrap_database",
-    "create_database",
-    "register_builtin_databases",
+    "Filter",
+    "Scope",
+    "SearchHit",
+    "Vector",
 ]

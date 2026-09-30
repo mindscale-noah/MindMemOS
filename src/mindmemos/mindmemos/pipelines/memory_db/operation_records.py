@@ -79,7 +79,6 @@ class MemoryOperationRecorder:
         skill_bindings: list[SkillBinding] | None = None,
         score: float | None = None,
         task_id: str | None = None,
-        extra_payload: dict | None = None,
     ) -> str:
         """Write the add input record up front, before the output is known.
 
@@ -101,7 +100,6 @@ class MemoryOperationRecorder:
             score=score,
             task_id=task_id,
             status=status,
-            extra_payload=extra_payload,
         )
         await self._add_records.append(point)
         return point.add_record_id
@@ -168,6 +166,19 @@ class MemoryOperationRecorder:
             {
                 "status": "error",
                 "error": error,
+                "task_completed_at": utcnow(),
+            },
+        )
+
+    async def mark_add_cancelled(self, ctx: MemoryRequestContext, add_record_id: str, reason: str) -> None:
+        """Patch an add record when streaming work is explicitly cancelled."""
+
+        await self._add_records.patch(
+            ctx.project_id,
+            add_record_id,
+            {
+                "status": "cancelled",
+                "error": reason,
                 "task_completed_at": utcnow(),
             },
         )

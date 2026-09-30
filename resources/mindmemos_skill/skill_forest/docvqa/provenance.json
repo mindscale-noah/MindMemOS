@@ -1,0 +1,36 @@
+{
+  "benchmark": "DocVQA",
+  "manifest_type": "id_split",
+  "source_repo": "lmms-lab/DocVQA",
+  "source_repo_type": "dataset",
+  "source_url": "https://huggingface.co/datasets/lmms-lab/DocVQA",
+  "source_revision": "539088ef8a8ada01ac8e2e6d4e372586748a265e",
+  "source_config": "DocVQA",
+  "source_split": "validation",
+  "source_split_name": "docvqa_validation_10pct",
+  "split_method": "10% subset sampled from the DocVQA validation split",
+  "counts": {
+    "train": 107,
+    "val": 53,
+    "test": 374
+  },
+  "item_fields": [
+    "id",
+    "questionId",
+    "docId",
+    "image_path",
+    "ucsf_document_id",
+    "ucsf_document_page_no",
+    "topic",
+    "source_dataset",
+    "source_config",
+    "source_split",
+    "sample_seed"
+  ],
+  "notes": [
+    "This is a split manifest, not the full DocVQA payload.",
+    "Materialize full CSV rows and image files before evaluation.",
+    "This manifest corresponds to docvqa_validation_10pct.",
+    "All released train/val/test items originate from a 10% subset of the official DocVQA validation split."
+  ]
+}

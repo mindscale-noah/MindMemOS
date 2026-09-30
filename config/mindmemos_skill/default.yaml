@@ -1,0 +1,72 @@
+# MindMemOS Skill Service 配置。
+# 使用 create_service("config/mindmemos_skill/default.yaml") 组装服务。
+# create_service() 会自动初始化已配置的存储，失败时关闭已组装资源。
+# 本地模式将全部请求绑定到这个 project_id；个人部署时可自行修改。
+# 相对数据库路径基于进程工作目录；YAML 不展开环境变量。
+local_project_id: personal
+
+# 全局唯一的 SkillPersistence，所有 pipeline 使用同一个实例。
+# 数据库直接在这里定义，不支持多存储、资源名引用或额外的存储选择项。
+persistence:
+  config:
+    # 是否登记远端绑定及操作表；不会自动连接云端或启动同步。
+    include_remote: true
+  database:
+    class_name: sqlite
+    config:
+      url: sqlite+pysqlite:///./data/mindmemos_skill/central.db
+      timeout: 5.0
+      # 删除 url 时，使用 MINDMEMOS_HOME/workspace.json 中的数据库路径。
+      # 不要填 null；绝对路径例：sqlite+pysqlite:////absolute/path/central.db
+
+# 明确定义仓库入口，不会根据 persistence 自动补装。
+repository_pipeline:
+  class_name: repository
+  config: {}
+
+# 名称直接对应请求中的 pipeline 字段，值就是该流程的完整定义。
+# 一个流程时请求可省略 pipeline；多个时必须指定，无默认流程。
+# {} 或省略字段表示未启用；当前没有内置可运行的训练/演进 pipeline。
+# Built-in training example: config/mindmemos_skill/training/service.yaml
+training_pipelines: {}
+evolution_pipelines: {}
+
+# 自定义流程格式示意；注册名和内部字段须与具体实现的 config_type 一致。
+# 每个流程就地定义 algorithm/environment/agent 等组件，允许重复配置。
+# 组件的归属与层级由具体流程决定，不存在全局 backends/resources/dependencies。
+#
+# training_pipelines:
+#   train_a:
+#     class_name: custom_train_a
+#     config:
+#       algorithm:
+#         class_name: algorithm_a
+#         config: {max_iterations: 10}
+#       environment:
+#         class_name: environment_a
+#         config:
+#           agent:
+#             class_name: agent_a
+#             config: {model: model_a}
+#   train_b:
+#     class_name: custom_train_b
+#     config:
+#       algorithm:
+#         class_name: algorithm_a
+#         config: {max_iterations: 20}
+#       environment:
+#         class_name: environment_a
+#         config:
+#           agent:
+#             class_name: agent_a
+#             config: {model: model_a}
+#
+# PostgreSQL：仅替换 persistence.database，其他业务配置保持不变。
+# database:
+#   class_name: postgres
+#   config:
+#     url: postgresql+psycopg://USER:PASSWORD@127.0.0.1:5432/mindmemos
+#     pool_size: 5
+#     max_overflow: 10
+#     pool_timeout: 30.0
+# 凭据不要提交到版本库，可在 Python 中读取环境变量并填入配置。

@@ -70,7 +70,6 @@ class MemoryAgentBenchAdapter:
             max_context_concurrency=runner.max_conv_concurrency,
             max_qa_concurrency=runner.max_qa_concurrency,
             add=runner.add,
-            dreaming_after_add=runner.dreaming_after_add,
             score=runner.score,
             max_queries=max_queries,
             show_progress=runner.show_progress,

@@ -677,7 +677,7 @@ class PersonaMemEnv:
         """Return (user_id, session_id) for this scope.
 
         Run-to-run isolation is handled at the project_id level (each run gets its
-        own project_id via --auth-config-output / --reuse-api-key). user_id/session_id
+        own project_id via --api-key-output / --reuse-api-key). user_id/session_id
         stay stable so that --reuse-api-key + --no-add can read memories added by
         a prior run of the same project.
         """

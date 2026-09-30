@@ -100,20 +100,13 @@ def add_skill_evolution_args(parser: argparse.ArgumentParser) -> None:
         "--evolution-base-url",
         default=os.getenv("MINDMEMOS_BASE_URL"),
         metavar="URL",
-        help="MindMemOS FastAPI base URL.",
+        help="MindMemOS FastAPI base URL hosting /v1/skills/evolve; required for real evolution.",
     )
     parser.add_argument(
         "--evolution-api-key",
         default=os.getenv("MINDMEMOS_API_KEY"),
         metavar="KEY",
         help="MindMemOS API key used for skill registration, memory trace recording, and evolution calls.",
-    )
-    parser.add_argument(
-        "--evolution-timeout-seconds",
-        type=float,
-        default=float(os.getenv("MINDMEMOS_EVOLUTION_TIMEOUT_SECONDS", "1200")),
-        metavar="SECONDS",
-        help="HTTP timeout for skill registration, trace recording, and evolution calls.",
     )
     parser.add_argument(
         "--continue-on-evolution-error",

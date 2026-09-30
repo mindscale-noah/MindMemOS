@@ -178,6 +178,9 @@ class ModelEndpointConfig:
     api_base: str
     """Model API base URL."""
 
+    transport: str = "litellm"
+    """Execution transport: upstream LiteLLM or the private Platform gateway."""
+
     rpm: int | None = None
     """Allowed requests per minute."""
 
@@ -225,6 +228,9 @@ class ModelRouterConfig:
     allowed_fails: int | None = None
 
     cool_down: int | float | None = None
+
+    retry_after: int | float = 0
+    """Minimum delay in seconds before LiteLLM retries a failed endpoint."""
 
     format_parser_max_attempts: int = 3
     """Maximum chat generations when format_parser rejects model output."""
@@ -275,17 +281,14 @@ class QdrantConfig:
     skill_blob_collection: str = field(default="skill_blob_v1")
     """Qdrant skill bundle content (dedup) collection name"""
 
-    skill_family_collection: str = field(default="skill_family_v1")
-    """Qdrant cloud Skill family pointer and revision collection"""
-
-    skill_operation_collection: str = field(default="skill_operation_v1")
-    """Qdrant idempotent cloud Skill operation ledger collection"""
-
     skill_trace_pending_collection: str = field(default="skill_trace_pending_v1")
     """Qdrant pending skill-trace collection name"""
 
     skill_trace_summary_collection: str = field(default="skill_trace_summary_v1")
     """Qdrant skill trajectory-summary collection name (self-evolution input)"""
+
+    provider_binding_collection: str = field(default="provider_binding_v1")
+    """Qdrant dynamic provider binding collection name."""
 
     semantic_vector_name: str = field(default="semantic")
     """Dense semantic vector name."""
@@ -295,6 +298,9 @@ class QdrantConfig:
 
     vector_size: int = field(default=1024)
     """Semantic embedding dimension."""
+
+    project_collection_namespace_enabled: bool = field(default=False)
+    """Create dimension-shared vector collections so projects can use different embedding dimensions."""
 
     distance: str = field(default="Cosine")
     """Dense vector distance function: Cosine, Euclid, Dot, or Manhattan."""
@@ -391,26 +397,12 @@ class Neo4jConfig:
 
 
 @dataclass
-class SkillDatabaseConfig:
-    """Relation database used only by the cloud Skill control plane."""
-
-    provider: str = field(default_factory=lambda: _env_str("MINDMEMOS_SKILL_DB_PROVIDER", "sqlite") or "sqlite")
-    path: str = field(default_factory=lambda: _env_str("MINDMEMOS_SKILL_DB_PATH", "./data/skill-cloud.db") or "./data/skill-cloud.db")
-    dsn: str | None = secret_field(default_factory=lambda: _env_str("MINDMEMOS_SKILL_DB_DSN"))
-    pool_size: int = field(default_factory=lambda: _env_int("MINDMEMOS_SKILL_DB_POOL_SIZE", 10))
-    auto_create: bool = field(default_factory=lambda: _env_bool("MINDMEMOS_SKILL_DB_AUTO_CREATE", True))
-
-
-@dataclass
 class DatabaseConfig:
     qdrant: QdrantConfig = field(default_factory=QdrantConfig)
     """Qdrant configuration."""
 
     neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
     """Neo4j configuration."""
-
-    skill: SkillDatabaseConfig = field(default_factory=SkillDatabaseConfig)
-    """Relational Skill control-plane configuration."""
 
     default_consistency: str = field(default="fast")
     """Default write consistency: fast or strong."""
@@ -453,6 +445,12 @@ class AuthConfig:
 
     gateway_jwt_audience: str = field(default="memory-data-plane")
     """Expected audience for Gateway JWTs."""
+
+
+@dataclass
+class ProviderBindingConfig:
+    enabled: bool = field(default=False)
+    """Whether dynamic provider binding is enabled."""
 
 
 @dataclass
@@ -518,9 +516,7 @@ class KafkaConfig:
     enabled: bool = field(default=False)
     """Whether Kafka infrastructure is enabled."""
 
-    bootstrap_servers: str = field(
-        default_factory=lambda: _env_str("MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-    )
+    bootstrap_servers: str = field(default_factory=lambda: _env_str("MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
     """Kafka broker addresses, comma-separated."""
 
     client_id: str = field(default="memos")
@@ -579,6 +575,9 @@ class MemoryConfig:
 
     auth: AuthConfig = field(default_factory=AuthConfig)
     """HTTP API authentication config."""
+
+    provider_binding: ProviderBindingConfig = field(default_factory=ProviderBindingConfig)
+    """Dynamic provider binding config."""
 
     kafka: KafkaConfig = frozen_field(default_factory=KafkaConfig)
     """Kafka infrastructure config"""

@@ -1,9 +1,9 @@
 SHELL := /bin/bash
 
 PRESERVE_ENV_VARS := \
+	MINDMEMOS_HOME \
 	MINDMEMOS_CONFIG_NAME \
 	MINDMEMOS_CONFIG_PATH \
-	MINDMEMOS_API_KEY_FILE \
 	MINDMEMOS_API_HOST \
 	MINDMEMOS_API_PORT \
 	MINDMEMOS_QDRANT_URL \
@@ -92,8 +92,13 @@ PROFILE_OUT ?= tmp/profile.svg
 PROFILE_SECONDS ?= 60
 PROFILE_RATE ?= 100
 PROFILE_PID ?= $(PID)
+SKILL_PYTHON ?= .venv/bin/python
+SKILL_CONFIG ?= config/mindmemos_skill/default.yaml
+SKILL_API_CONFIG ?= config/mindmemos_skill/fastapi.yaml
+SKILL_HOST ?= 127.0.0.1
+SKILL_PORT ?= 8000
 
-.PHONY: dev dev-setup hooks-install format lint dev-core api profile-api db db-observability db-clean dev-down
+.PHONY: dev dev-setup hooks-install format lint dev-core api profile-api db db-observability db-clean dev-down dev-skill
 
 dev-setup:
 	$(UV) sync
@@ -118,6 +123,9 @@ dev: db-observability
 
 api:
 	$(UV) run uvicorn mindmemos.api.app:app --host $(API_HOST) --port $(API_PORT) $(API_RELOAD_FLAGS)
+
+dev-skill:
+	PYTHONPATH="$(CURDIR)/src/mindmemos_skill:$(PYTHONPATH)" "$(SKILL_PYTHON)" -m mindmemos_skill.api.entries.fastapi --config "$(SKILL_CONFIG)" --api-config "$(SKILL_API_CONFIG)" --host "$(SKILL_HOST)" --port "$(SKILL_PORT)"
 
 profile-api:
 	@pid="$(PROFILE_PID)"; \
@@ -156,12 +164,11 @@ db-clean:
 dev-down:
 	$(COMPOSE) down
 
-.PHONY: test-skill-manage-pg
-test-skill-manage-pg:
-	test -n "$${MINDMEMOS_SKILL_TEST_PG_DSN:-}"
-	mkdir -p outputs/skill_manage_tests
-	$(UV) run --locked --all-packages --extra pgvector pytest \
-		tests/integration/mindmemos_skill -m integration_pgvector \
-		--strict-markers --strict-config -q -ra \
-		--junitxml=outputs/skill_manage_tests/pgvector.xml
-	$(UV) run --locked python -c 'import xml.etree.ElementTree as ET; suites = list(ET.parse("outputs/skill_manage_tests/pgvector.xml").iter("testsuite")); assert sum(int(s.get("tests", 0)) for s in suites) > 0; assert not any(int(s.get("skipped", 0)) for s in suites), "PG integration tests must not skip"'
+UI_PORT ?= 8765
+UI_ARGS ?=
+.PHONY: ui ui-build
+ui:
+	PYTHONPATH="$(CURDIR)/src/mindmemos_ui:$(CURDIR)/src/mindmemos_sdk:$(CURDIR)/src/mindmemos_skill:$(PYTHONPATH)" "$(SKILL_PYTHON)" -m mindmemos_ui.cli --port "$(UI_PORT)" $(UI_ARGS)
+
+ui-build:
+	cd src/mindmemos_ui/frontend && npm ci && npm run build

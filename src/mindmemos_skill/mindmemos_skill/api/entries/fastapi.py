@@ -1,0 +1,1395 @@
+"""Expose Skill HTTP routes and the Uvicorn ASGI application."""
+
+import base64
+import binascii
+import json
+import os
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
+from inspect import isawaitable
+from ipaddress import ip_address
+from pathlib import Path
+from typing import TYPE_CHECKING, Annotated, Literal, Self
+from uuid import UUID, uuid4
+
+from dotenv import load_dotenv
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StringConstraints,
+    model_validator,
+)
+
+from ...algos.manage.skill_manage import SceneRecord
+from ...common.time_utils import utcnow
+from ...config.config import FastAPIConfig
+from ...config.loader import load_skill_config
+from ...envs.typing import Task
+from ...errors import (
+    GraphConflictError,
+    GraphNotFoundError,
+    SkillAliasConflictError,
+    SkillAmbiguousVersionError,
+    SkillConflictError,
+    SkillInUseError,
+    SkillNotFoundError,
+    SkillVersionNotFoundError,
+)
+from ...infra.database import Scope
+from ...persistence.db_services.skills.typing import UserVersionLabel
+from ...skill import Skill, SkillBundle, SkillResources
+from ..auth import Nonempty, SkillHttpError, SkillHttpIdentity, build_identity_resolver
+from ..base import MindMemOSSkill
+from ..constants import SKILL_API_HOST_ENV, SKILL_CONFIG_PATH_ENV
+from ..factory import create_service
+from ..service import SkillService, parse_skill_header
+from ..typing import (
+    CommitRequest,
+    DiffRequest,
+    HistoryRequest,
+    ListTrajectoriesRequest,
+    OrganizeRequest,
+    RecommendRequest,
+    RegisterRequest,
+    ReportTrajectoryRequest,
+    SetMetaRequest,
+    ShowRequest,
+    ShowTrajectoryRequest,
+    SkillPageRequest,
+    SkillRequest,
+    SwitchRequest,
+    TrainingSplit,
+    VersionResolveRequest,
+)
+
+
+class HttpRequest(BaseModel):
+    """Reject undeclared public HTTP fields."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Do not silently accept server-owned or misspelled fields."""
+
+
+class RegisterHttpRequest(HttpRequest):
+    """Create a Skill family and its initial source version."""
+
+    name: Nonempty
+    """Display name matching the SKILL.md frontmatter name."""
+
+    bundle: dict[str, str]
+    """Complete source text files keyed by normalized relative path."""
+
+    resources: dict[str, str] = Field(default_factory=dict)
+    """Complete auxiliary files encoded as base64 by normalized relative path."""
+
+    alias: Nonempty
+    """Unique display alias within the authorized project."""
+
+    version: UserVersionLabel
+    """Explicit initial version label such as v1.0.0."""
+
+    message: Nonempty
+    """Registration and initial version explanation."""
+
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    """Mutable user-defined family metadata, separate from file frontmatter."""
+
+
+class SkillFilters(HttpRequest):
+    """Optional Skill family fields and trajectory actor filters."""
+
+    name: Nonempty | None = None
+    """Case-sensitive whole-name wildcard pattern."""
+
+    alias: Nonempty | None = None
+    """Case-sensitive whole-alias wildcard pattern."""
+
+    agent_id: Nonempty | None = None
+    """Exact Agent identity on the same matching trajectory as user_id."""
+
+    user_id: Nonempty | None = None
+    """Exact user identity on the same matching trajectory as agent_id."""
+
+
+class ListHttpRequest(HttpRequest):
+    """Filter and continue a stable Skill family cursor within one project."""
+
+    filters: SkillFilters = Field(default_factory=SkillFilters)
+    """Optional conjunctive family and trajectory filters."""
+
+    limit: int = Field(default=20, ge=1, le=100)
+    """Maximum number of Skill families returned in this page."""
+
+    cursor: str | None = Field(default=None, min_length=1, max_length=2048)
+    """Opaque continuation token returned by the preceding list response."""
+
+
+class ListCursor(BaseModel):
+    """Server-owned list position bound to one project and filter set."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject unknown cursor fields and incompatible future encodings."""
+
+    version: Literal[1] = 1
+    """Encoding contract version for safe future cursor changes."""
+
+    project_id: Nonempty
+    """Project authorized for the original list request."""
+
+    filters: SkillFilters
+    """Filters applied before cursor pagination."""
+
+    snapshot_at: AwareDatetime
+    """Inclusive creation cutoff captured at the first page."""
+
+    last_created_at: AwareDatetime
+    """Creation time of the last returned family."""
+
+    last_skill_id: Nonempty
+    """Identity breaking creation-time ties at the cursor position."""
+
+
+class ShowHttpRequest(HttpRequest):
+    """Select one family and optionally one historical version."""
+
+    skill_id: Nonempty
+    """Exact Skill family identity."""
+
+    skill_version_id: Nonempty | None = None
+    """Exact owned version; omission selects the family current version."""
+
+
+class CommitHttpRequest(HttpRequest):
+    """Create one child version from a complete source bundle."""
+
+    skill_id: Nonempty
+    """Exact existing Skill family identity."""
+
+    bundle: dict[str, str]
+    """Complete new source text bundle, excluding inherited resources."""
+
+    resources: dict[str, str] | None = None
+    """Complete base64-encoded auxiliary files; None inherits parent resources."""
+
+    message: Nonempty
+    """Explanation saved on the new immutable version."""
+
+    version: UserVersionLabel | None = None
+    """Unique version label, or None to allocate from the selected component."""
+
+    version_bump: Literal["patch", "minor", "major"] = "patch"
+    """Component incremented when a version label is omitted."""
+
+    active: bool
+    """Whether to conditionally select the new version as current."""
+
+    base_version_id: Nonempty | None = None
+    """Expected current version for optimistic concurrency, when supplied."""
+
+
+class HistoryHttpRequest(HttpRequest):
+    """Page the immutable version history of one family."""
+
+    skill_id: Nonempty
+    """Exact Skill family identity."""
+
+    limit: int = Field(default=20, ge=1, le=100)
+    """Maximum number of versions in this page."""
+
+    offset: int = Field(default=0, ge=0)
+    """Number of prior versions to skip."""
+
+
+class DiffHttpRequest(HttpRequest):
+    """Select two owned versions in the same authorized project."""
+
+    skill_id: Nonempty
+    """Source Skill family identity."""
+
+    from_skill_version_id: Nonempty | None = None
+    """Source version; omission selects the source family current version."""
+
+    to_skill_id: Nonempty | None = None
+    """Target family; omission uses the source family."""
+
+    to_skill_version_id: Nonempty
+    """Exact target version belonging to the target family."""
+
+
+class ActivateHttpRequest(HttpRequest):
+    """Select a previously saved version as current."""
+
+    skill_id: Nonempty
+    """Exact Skill family identity."""
+
+    skill_version_id: Nonempty
+    """Exact version belonging to the family."""
+
+
+class UpdateInfoHttpRequest(HttpRequest):
+    """Change family display fields without creating a source version."""
+
+    skill_id: Nonempty
+    """Exact Skill family identity."""
+
+    name: Nonempty | None = None
+    """Replacement name; omitted leaves the current name unchanged."""
+
+    alias: Nonempty | None = None
+    """Replacement alias; explicit null clears the alias."""
+
+    metadata: dict[str, JsonValue] | None = None
+    """Replacement family metadata; empty object clears it."""
+
+    @model_validator(mode="after")
+    def validate_changes(self) -> Self:
+        """Distinguish omitted values from explicit null and reject empty edits."""
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("name cannot be null")
+        if "metadata" in self.model_fields_set and self.metadata is None:
+            raise ValueError("metadata cannot be null")
+        if not {"name", "alias", "metadata"} & self.model_fields_set:
+            raise ValueError("At least one family field must be supplied")
+        return self
+
+
+class DeleteHttpRequest(HttpRequest):
+    """Delete one unreferenced Skill family."""
+
+    skill_id: Nonempty
+    """Exact Skill family identity."""
+
+
+class VersionResolveHttpRequest(HttpRequest):
+    """Resolve a source hash only when the matching version is unambiguous."""
+
+    content_hash: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    """Client-computed canonical bundle SHA-256 hash."""
+
+    skill_id: Nonempty | None = None
+    """Optional exact family identity narrowing the search."""
+
+    skill_version_id: Nonempty | None = None
+    """Optional exact version identity requiring skill_id too."""
+
+    @model_validator(mode="after")
+    def require_version_owner(self) -> Self:
+        """Prevent a version identifier without its claimed family."""
+        if self.skill_version_id is not None and self.skill_id is None:
+            raise ValueError("skill_id is required with skill_version_id")
+        return self
+
+
+class SkillResolveHttpRequest(HttpRequest):
+    """Select a current or immutable Skill version from one reference."""
+
+    skill_ref: Nonempty
+    """Skill alias, family ID or unique prefix, or version ID or unique prefix."""
+
+
+class TrajectoryReportHttpRequest(HttpRequest):
+    """Report one actual Skill version used in an Agent execution."""
+
+    user_id: Nonempty
+    """Business user identity supplied by the Harness context."""
+
+    agent_id: Nonempty
+    """Agent identity that performed the execution."""
+
+    messages: list[dict[str, JsonValue]] = Field(min_length=1)
+    """Ordered interaction messages with role and content per item."""
+
+    skill_version_id: Nonempty
+    """Exact loaded version resolved by the client before reporting."""
+
+    session_id: Nonempty | None = None
+    """Optional Harness session identity."""
+
+    started_at: AwareDatetime | None = None
+    """Actual execution start time when known."""
+
+    finished_at: AwareDatetime | None = None
+    """Actual execution finish time when known."""
+
+    status: Nonempty = "completed"
+    """Caller-declared execution status."""
+
+    @model_validator(mode="after")
+    def validate_messages(self) -> Self:
+        """Require the minimum message shape and ordered timestamps."""
+        if any(not message.get("role") or "content" not in message for message in self.messages):
+            raise ValueError("Each message requires role and content")
+        if self.started_at and self.finished_at and self.finished_at < self.started_at:
+            raise ValueError("finished_at must not precede started_at")
+        return self
+
+
+class TrajectoryShowHttpRequest(HttpRequest):
+    """Read one stored trajectory report."""
+
+    trajectory_id: Nonempty
+    """Server-generated trajectory identity."""
+
+
+class TrajectoryListHttpRequest(HttpRequest):
+    """Page reported trajectories bound to one Skill family."""
+
+    skill_id: Nonempty
+    """Exact family identity."""
+
+    skill_version_id: Nonempty | None = None
+    """Optional exact version filter."""
+
+    status: Nonempty | None = None
+    """Optional caller-declared execution status filter."""
+
+    received_at_from: AwareDatetime | None = None
+    """Inclusive server receipt time lower bound."""
+
+    received_at_to: AwareDatetime | None = None
+    """Inclusive server receipt time upper bound."""
+
+    limit: int = Field(default=20, ge=1, le=100)
+    """Maximum number of trajectory summaries returned."""
+
+    cursor: Nonempty | None = None
+    """Opaque server pagination cursor."""
+
+
+class TrajectoryListCursor(BaseModel):
+    """Server-owned continuation position for one trajectory filter set."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject unknown fields and unsupported cursor encodings."""
+
+    version: Literal[1] = 1
+    """Cursor encoding contract version."""
+
+    project_id: Nonempty
+    """Project authorized for the original page."""
+
+    skill_id: Nonempty
+    """Exact family requested on the original page."""
+
+    skill_version_id: Nonempty | None = None
+    """Exact version filter from the original page."""
+
+    status: Nonempty | None = None
+    """Status filter from the original page."""
+
+    received_at_from: AwareDatetime | None = None
+    """Lower receipt bound from the original page."""
+
+    received_at_to: AwareDatetime | None = None
+    """Upper receipt bound from the original page."""
+
+    snapshot_at: AwareDatetime
+    """First-page receipt cutoff."""
+
+    last_received_at: AwareDatetime
+    """Receipt time of the last returned attempt."""
+
+    last_trajectory_id: Nonempty
+    """Identity breaking ties at the last receipt time."""
+
+
+class OrganizeHttpRequest(HttpRequest):
+    """Organize an explicit Skill version collection synchronously."""
+
+    graph_id: Nonempty | None = None
+    """Exact graph identity within the authenticated project."""
+
+    alias: Nonempty | None = None
+    """Existing graph alias form; currently used as the exact graph identity."""
+
+    message: Nonempty | None = None
+    """Optional explanation stored on a new graph revision."""
+
+    skill_version_ids: list[Nonempty]
+    """Complete exact version scope; an empty list publishes an empty graph."""
+
+    scene_records: dict[str, SceneRecord] = Field(default_factory=dict)
+    """Optional caller-authored scenes keyed by Skill family identity."""
+
+    @model_validator(mode="after")
+    def require_graph_identity(self) -> Self:
+        """Require one unambiguous graph identity."""
+        if self.graph_id is None and self.alias is None:
+            raise ValueError("graph_id or alias is required")
+        if self.graph_id is not None and self.alias is not None and self.graph_id != self.alias:
+            raise ValueError("graph_id and alias must match when both are supplied")
+        return self
+
+
+class GraphResolveHttpRequest(HttpRequest):
+    """Resolve a project-scoped graph ID, alias, or unique ID prefix."""
+
+    graph_ref: Nonempty
+    """Graph reference selected by the caller."""
+
+
+class GraphSnapshotsHttpRequest(HttpRequest):
+    """Select one graph within the authenticated project."""
+
+    graph_id: Nonempty
+    """Exact graph identity."""
+
+
+class GraphSnapshotHttpRequest(GraphSnapshotsHttpRequest):
+    """Select one immutable snapshot of a project-owned graph."""
+
+    graph_version_id: Nonempty
+    """Exact immutable graph snapshot identity."""
+
+
+class RecommendHttpRequest(GraphResolveHttpRequest):
+    """Recommend Skill versions from one immutable published graph."""
+
+    graph_version_id: Nonempty | None = None
+    """Exact snapshot; omission pins the graph's current published revision."""
+
+    query: Nonempty
+    """Task instruction used for graph retrieval."""
+
+    top_k: int | None = Field(default=None, ge=1)
+    """Maximum recommended Skill versions, subject to project policy."""
+
+
+class EvolveHttpRequest(HttpRequest):
+    """Queue evolution from one exact stored version."""
+
+    skill_version_id: Nonempty
+    """Exact baseline version belonging to the authorized project."""
+
+    auto_accept: bool = True
+    """Whether the evolved version becomes the active Skill version."""
+
+
+class TaskShowHttpRequest(HttpRequest):
+    """Read one project-scoped asynchronous business task."""
+
+    task_id: Nonempty
+    """Server-generated task identity."""
+
+
+class TrainingHttpRequest(HttpRequest):
+    """Accept serialized samples before the selected environment restores their types."""
+
+    pipeline: Nonempty | None = None
+    """Configured training pipeline name."""
+
+    environment: Nonempty | None = None
+    """Configured environment profile name."""
+
+    project_id: Nonempty | None = None
+    """Ignored caller hint; authenticated project scope replaces it."""
+
+    base_version_id: Nonempty
+    """Exact parent version used by the training run."""
+
+    auto_accept: bool = True
+    """Whether the trained version becomes the active Skill version."""
+
+    work_dir: Nonempty
+    """Stable output directory for this training run."""
+
+    tasks: list[dict[str, JsonValue]] = Field(min_length=1)
+    """Public tasks and private scoring data parsed using the selected environment."""
+
+    split: TrainingSplit
+    """Explicit train, validation, and test task membership."""
+
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+IdentityResolver = Callable[[str], SkillHttpIdentity | Awaitable[SkillHttpIdentity]]
+ServiceFactory = Callable[[], Awaitable[tuple[MindMemOSSkill, FastAPIConfig]]]
+
+
+def _snapshot(files: dict[str, str], resources: dict[str, str] | None = None):
+    """Construct a canonical source snapshot with uploaded auxiliary bytes."""
+    try:
+        decoded = SkillResources.deserialize(json.dumps(resources or {}))
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("Invalid Skill resource encoding") from exc
+    return Skill(bundle=SkillBundle(files=files), resources=decoded).snapshot()
+
+
+def _family_data(family) -> dict:
+    """Return portable family fields with public identity names."""
+    return {
+        "skill_id": family.skill_id,
+        "name": family.name,
+        "alias": family.alias,
+        "metadata": family.metadata,
+        "current_skill_version_id": family.current_version_id,
+        "created_at": family.created_at,
+        "updated_at": family.updated_at,
+    }
+
+
+def _version_data(version) -> dict:
+    """Return complete source content without server-local annotations."""
+    bundle = SkillBundle.deserialize(version.bundle)
+    try:
+        _, description, meta = parse_skill_header(bundle)
+    except ValueError:
+        description, meta = version.description, version.metadata
+    return {
+        "skill_version_id": version.version_id,
+        "version_label": version.version_label,
+        "parent_skill_version_ids": version.parent_version_ids,
+        "content_hash": version.content_hash,
+        "description": description,
+        "meta": meta,
+        "implementation": version.implementation,
+        "config_schema_version": version.config_schema_version,
+        "config": version.config,
+        "bundle": bundle.files,
+        "resources": {"files": json.loads(SkillResources.deserialize(version.resources).serialize())},
+        "created_at": version.created_at,
+    }
+
+
+def _legacy_graph_data(skill_set: dict, *, include_graph_id: bool = True) -> dict:
+    """Keep existing graph HTTP payloads stable over the Skill Set service."""
+    result = dict(skill_set)
+    result.pop("mode")
+    skill_set_id = result.pop("skill_set_id")
+    if include_graph_id:
+        result["graph_id"] = skill_set_id
+    if "snapshot_id" in result:
+        result["graph_version_id"] = result.pop("snapshot_id")
+    return result
+
+
+async def _selected_graph_version(
+    service: MindMemOSSkill, graph_ref: str, version_ref: str | None, project_id: str
+) -> tuple[str, UUID]:
+    """Resolve a public graph and its pinned version for an existing operation."""
+    graph = await service.resolve_graph(graph_ref, project_id)
+    if version_ref is None:
+        selected = graph["graph_version_id"]
+        if selected is None:
+            raise ValueError("Graph has no published version")
+    elif version_ref.startswith("skgv-"):
+        version = await service.resolve_graph(version_ref, project_id)
+        if version["graph_id"] != graph["graph_id"]:
+            raise ValueError("Graph version does not belong to the selected graph")
+        selected = version["graph_version_id"]
+    else:
+        return graph["graph_id"], UUID(version_ref)
+    return graph["graph_id"], UUID(selected.removeprefix("skgv-"))
+
+
+def _encode_cursor(cursor: ListCursor | TrajectoryListCursor) -> str:
+    """Encode a validated continuation position for the next HTTP request."""
+    return base64.urlsafe_b64encode(cursor.model_dump_json().encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(value: str) -> ListCursor:
+    """Reject malformed or unsupported continuation tokens."""
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        payload = base64.b64decode(padded, altchars=b"-_", validate=True)
+        return ListCursor.model_validate_json(payload)
+    except (binascii.Error, ValueError) as exc:
+        raise SkillHttpError(422, "invalid_cursor", "Invalid Skill list cursor") from exc
+
+
+def _decode_trajectory_cursor(value: str) -> TrajectoryListCursor:
+    """Reject malformed or unsupported trajectory continuation tokens."""
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        payload = base64.b64decode(padded, altchars=b"-_", validate=True)
+        return TrajectoryListCursor.model_validate_json(payload)
+    except (binascii.Error, ValueError) as exc:
+        raise SkillHttpError(422, "invalid_cursor", "Invalid trajectory list cursor") from exc
+
+
+def create_app(
+    service: MindMemOSSkill | None = None,
+    *,
+    identity_from_bearer: IdentityResolver | None = None,
+    api_config: FastAPIConfig | None = None,
+    service_factory: ServiceFactory | None = None,
+) -> "FastAPI":
+    """Wrap one assembled service in the documented HTTP contract.
+
+    Args:
+        service: Shared service whose resources this application closes, if already assembled.
+        identity_from_bearer: Trusted account adapter resolving MindMemOS Bearer
+            credentials into an authorized project and Skill scopes.
+        api_config: Deployment pipeline policy for future configured algorithms.
+        service_factory: Async service constructor used by a process-managed deployment.
+
+    Returns:
+        FastAPI application using the existing service backends.
+    """
+    from fastapi import Depends, FastAPI, Request
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+
+    if service is None and service_factory is None:
+        raise ValueError("A service or service_factory is required")
+
+    @asynccontextmanager
+    async def lifespan(app):
+        nonlocal service, policy, identity_from_bearer
+        if service is None:
+            assert service_factory is not None
+            service, policy = await service_factory()
+            identity_from_bearer = build_identity_resolver(policy.auth)
+            app.state.service = service
+            app.state.api_config = policy
+        try:
+            yield
+        finally:
+            if service is not None:
+                await service.close()
+            if service_factory is not None:
+                service = None
+                app.state.service = None
+
+    policy = api_config or FastAPIConfig()
+    if service is not None and identity_from_bearer is None:
+        identity_from_bearer = build_identity_resolver(policy.auth)
+    app = FastAPI(title="MindMemOS Skill", lifespan=lifespan)
+    app.state.service = service
+    app.state.api_config = policy
+
+    @app.middleware("http")
+    async def assign_request_id(request: Request, call_next):
+        """Assign a request ID even when body validation fails."""
+        request.state.request_id = f"req_{uuid4().hex}"
+        if policy.auth.mode == "none":
+            server = request.scope.get("server")
+            if server is not None:
+                try:
+                    if not ip_address(server[0]).is_loopback:
+                        return error(
+                            request, 503, "authentication_unavailable", "Unauthenticated HTTP requires loopback"
+                        )
+                except ValueError:
+                    pass
+        return await call_next(request)
+
+    def envelope(request: Request, data, *, status_code: int = 200) -> JSONResponse:
+        """Serialize one successful business response."""
+        return JSONResponse(
+            status_code=status_code,
+            content=jsonable_encoder(
+                {
+                    "code": "accepted" if status_code == 202 else "ok",
+                    "request_id": request.state.request_id,
+                    "data": data,
+                }
+            ),
+        )
+
+    def error(request: Request, status_code: int, code: str, message: str) -> JSONResponse:
+        """Serialize one stable error without exposing a traceback."""
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "code": "error",
+                "request_id": request.state.request_id,
+                "error": {"code": code, "message": message},
+            },
+        )
+
+    @app.exception_handler(SkillHttpError)
+    async def http_error(request: Request, exc: SkillHttpError) -> JSONResponse:
+        """Return classified capability and identity errors."""
+        return error(request, exc.status_code, exc.code, exc.message)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_body(request: Request, exc: RequestValidationError) -> JSONResponse:
+        """Return malformed public input as invalid_request."""
+        return error(request, 422, "invalid_request", str(exc))
+
+    @app.exception_handler(ValueError)
+    async def invalid_value(request: Request, exc: ValueError) -> JSONResponse:
+        """Return validation failures raised after body parsing."""
+        return error(request, 422, "invalid_request", str(exc))
+
+    @app.exception_handler(SkillNotFoundError)
+    async def missing(request: Request, exc: SkillNotFoundError) -> JSONResponse:
+        """Hide project ownership for missing or foreign records."""
+        return error(request, 404, "skill_not_found", str(exc))
+
+    @app.exception_handler(GraphNotFoundError)
+    async def missing_graph(request: Request, exc: GraphNotFoundError) -> JSONResponse:
+        """Hide graph ownership for missing or foreign identities."""
+        return error(request, 404, "graph_not_found", str(exc))
+
+    @app.exception_handler(GraphConflictError)
+    async def ambiguous_graph(request: Request, exc: GraphConflictError) -> JSONResponse:
+        """Reject ambiguous graph ID prefixes."""
+        return error(request, 409, "graph_ambiguous", str(exc))
+
+    @app.exception_handler(SkillVersionNotFoundError)
+    async def missing_version(request: Request, exc: SkillVersionNotFoundError) -> JSONResponse:
+        """Return a non-enumerating version lookup failure."""
+        return error(request, 404, "skill_version_not_found", str(exc))
+
+    @app.exception_handler(SkillInUseError)
+    async def in_use(request: Request, exc: SkillInUseError) -> JSONResponse:
+        """Prevent deletion while retained evidence references a Skill."""
+        return error(request, 409, "skill_in_use", str(exc))
+
+    @app.exception_handler(SkillConflictError)
+    async def conflict(request: Request, exc: SkillConflictError) -> JSONResponse:
+        """Expose a stable version or identity conflict category."""
+        return error(request, 409, "version_conflict", str(exc))
+
+    @app.exception_handler(SkillAliasConflictError)
+    async def alias_conflict(request: Request, exc: SkillAliasConflictError) -> JSONResponse:
+        """Separate alias collisions from version races."""
+        return error(request, 409, "alias_conflict", str(exc))
+
+    @app.exception_handler(SkillAmbiguousVersionError)
+    async def ambiguous_version(request: Request, exc: SkillAmbiguousVersionError) -> JSONResponse:
+        """Require an exact version ID when the same hash has multiple owners."""
+        return error(request, 409, "ambiguous_skill_version", str(exc))
+
+    @app.exception_handler(NotImplementedError)
+    async def unavailable(request: Request, exc: NotImplementedError) -> JSONResponse:
+        """Expose unavailable backend operations without claiming completion."""
+        return error(request, 501, "capability_unavailable", str(exc))
+
+    @app.exception_handler(PermissionError)
+    async def forbidden(request: Request, exc: PermissionError) -> JSONResponse:
+        """Reject a project authorization failure."""
+        return error(request, 403, "permission_denied", str(exc))
+
+    async def authenticated(request: Request):
+        """Bind the credential's project and scopes for one service request."""
+        if identity_from_bearer is None:
+            if not isinstance(service, SkillService) or service.local_project_id is None:
+                raise SkillHttpError(503, "authentication_unavailable", "Skill authentication is not configured")
+            identity = SkillHttpIdentity(project_id=service.local_project_id, scopes={"skill:write"})
+        else:
+            authorization = request.headers.get("authorization")
+            if not authorization:
+                raise SkillHttpError(401, "auth.missing_authorization", "Missing Authorization header")
+            scheme, _, credential = authorization.partition(" ")
+            if scheme.lower() != "bearer" or not credential.strip():
+                raise SkillHttpError(401, "auth.invalid_authorization_scheme", "Expected Bearer credential")
+            resolved = identity_from_bearer(credential.strip())
+            if isawaitable(resolved):
+                resolved = await resolved
+            identity = SkillHttpIdentity.model_validate(resolved)
+            if identity.principal is None:
+                identity.principal = resolved
+        if identity.request_id is not None:
+            request.state.request_id = identity.request_id
+        if isinstance(service, SkillService):
+            with service.request_principal(identity.principal if identity.principal is not None else identity):
+                yield identity
+        else:
+            yield identity
+
+    def require(scope: str):
+        """Check one Skill scope after credential resolution."""
+
+        async def dependency(identity: SkillHttpIdentity = Depends(authenticated)) -> SkillHttpIdentity:
+            """Return an identity authorized for this operation."""
+            if scope not in identity.scopes and not (scope == "skill:read" and "skill:write" in identity.scopes):
+                raise SkillHttpError(403, "auth.insufficient_scope", "Insufficient Skill scope")
+            return identity
+
+        return dependency
+
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        """Report process availability, not business readiness."""
+        return {"status": "ok"}
+
+    @app.post("/v1/skills/register", status_code=201)
+    async def register(
+        request: Request, body: RegisterHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Register one source bundle under the authenticated project."""
+        bundle = SkillBundle(files=body.bundle)
+        result = await service.register_skill(
+            RegisterRequest(
+                project_id=identity.project_id,
+                name=body.name,
+                alias=body.alias,
+                source=_snapshot(bundle.files, body.resources),
+                version_label=body.version,
+                message=body.message,
+                metadata=body.metadata,
+                require_frontmatter=True,
+            )
+        )
+        return envelope(
+            request,
+            {
+                "skill_id": result.skill.skill_id,
+                "skill_version_id": result.version.version_id,
+                "version_label": result.version.version_label,
+                "content_hash": result.version.content_hash,
+                "description": result.version.description,
+                "meta": result.version.metadata,
+                "metadata": result.skill.metadata,
+            },
+            status_code=201,
+        )
+
+    @app.post("/v1/skills/list")
+    async def list_skills(
+        request: Request, body: ListHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
+    ):
+        """Filter families and return a bounded cursor page."""
+        state = _decode_cursor(body.cursor) if body.cursor is not None else None
+        if state is not None and (
+            state.project_id != identity.project_id
+            or ("filters" in body.model_fields_set and body.filters != state.filters)
+        ):
+            raise SkillHttpError(422, "invalid_cursor", "Cursor project or filters differ from this request")
+        filters = state.filters if state is not None else body.filters
+        snapshot_at = state.snapshot_at if state is not None else utcnow()
+        page = await service.list_skill_page(
+            SkillPageRequest(
+                project_id=identity.project_id,
+                name_pattern=filters.name,
+                alias_pattern=filters.alias,
+                user_id=filters.user_id,
+                agent_id=filters.agent_id,
+                limit=body.limit,
+                snapshot_at=snapshot_at,
+                after_created_at=state.last_created_at if state is not None else None,
+                after_skill_id=state.last_skill_id if state is not None else None,
+            )
+        )
+        selected = page.items
+        next_cursor = (
+            _encode_cursor(
+                ListCursor(
+                    project_id=identity.project_id,
+                    filters=filters,
+                    snapshot_at=snapshot_at,
+                    last_created_at=selected[-1].created_at,
+                    last_skill_id=selected[-1].skill_id,
+                )
+            )
+            if page.has_more
+            else None
+        )
+        return envelope(
+            request,
+            {
+                "items": [_family_data(family) for family in selected],
+                "limit": body.limit,
+                "next_cursor": next_cursor,
+                "has_more": next_cursor is not None,
+            },
+        )
+
+    @app.post("/v1/skills/show")
+    async def show(
+        request: Request, body: ShowHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
+    ):
+        """Return portable family metadata and the complete selected version."""
+        result = await service.show_skill(
+            ShowRequest(project_id=identity.project_id, skill_ref=body.skill_id, version_id=body.skill_version_id)
+        )
+        return envelope(request, {"skill": _family_data(result.skill), "version": _version_data(result.version)})
+
+    @app.post("/v1/skills/commit", status_code=201)
+    async def commit(
+        request: Request, body: CommitHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Create one immutable child and conditionally select it as current."""
+        bundle = SkillBundle(files=body.bundle)
+        result = await service.commit_skill(
+            CommitRequest(
+                project_id=identity.project_id,
+                skill_ref=body.skill_id,
+                source=_snapshot(bundle.files, body.resources),
+                message=body.message,
+                version_label=body.version,
+                version_bump=body.version_bump,
+                active=body.active,
+                base_version_id=body.base_version_id,
+                inherit_resources=body.resources is None,
+                require_frontmatter=True,
+            )
+        )
+        return envelope(
+            request,
+            {
+                "skill_id": result.skill.skill_id,
+                "skill_version_id": result.version.version_id,
+                "version_label": result.version.version_label,
+                "active": body.active,
+                "current_skill_version_id": result.skill.current_version_id,
+            },
+            status_code=201,
+        )
+
+    @app.post("/v1/skills/history")
+    async def history(
+        request: Request, body: HistoryHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
+    ):
+        """Return one bounded immutable version history page."""
+        versions = await service.skill_history(
+            HistoryRequest(
+                project_id=identity.project_id, skill_ref=body.skill_id, limit=body.limit + 1, offset=body.offset
+            )
+        )
+        return envelope(
+            request,
+            {
+                "items": [
+                    {
+                        "skill_version_id": version.version_id,
+                        "version_label": version.version_label,
+                        "parent_skill_version_ids": version.parent_version_ids,
+                        "content_hash": version.content_hash,
+                        "implementation": version.implementation,
+                        "status": version.status,
+                        "origin": version.origin,
+                        "created_at": version.created_at,
+                    }
+                    for version in versions[: body.limit]
+                ],
+                "limit": body.limit,
+                "offset": body.offset,
+                "has_more": len(versions) > body.limit,
+            },
+        )
+
+    @app.post("/v1/skills/diff")
+    async def diff(
+        request: Request, body: DiffHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
+    ):
+        """Compare stored versions across two families in the same project."""
+        result = await service.diff_skill(
+            DiffRequest(
+                project_id=identity.project_id,
+                skill_ref=body.skill_id,
+                from_version_id=body.from_skill_version_id,
+                to_skill_ref=body.to_skill_id,
+                to_version_id=body.to_skill_version_id,
+            )
+        )
+        return envelope(
+            request,
+            {
+                "from_skill_id": result.from_skill_id,
+                "from_skill_version_id": result.from_version_id,
+                "to_skill_id": result.to_skill_id,
+                "to_skill_version_id": result.to_version_id,
+                "files": result.files,
+                "implementation_changed": result.implementation_changed,
+            },
+        )
+
+    @app.post("/v1/skills/activate")
+    async def activate(
+        request: Request, body: ActivateHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Select an existing owned version as the family current version."""
+        family = await service.switch_skill(
+            SwitchRequest(project_id=identity.project_id, skill_ref=body.skill_id, version_id=body.skill_version_id)
+        )
+        return envelope(request, {"skill_id": family.skill_id, "current_skill_version_id": family.current_version_id})
+
+    @app.post("/v1/skills/update-info")
+    async def update_info(
+        request: Request, body: UpdateInfoHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Replace requested family display fields without editing versions."""
+        family = await service.set_skill_meta(
+            SetMetaRequest(
+                project_id=identity.project_id,
+                skill_ref=body.skill_id,
+                name=body.name,
+                alias=body.alias,
+                clear_alias="alias" in body.model_fields_set and body.alias is None,
+                metadata=body.metadata,
+            )
+        )
+        return envelope(request, _family_data(family))
+
+    @app.post("/v1/skills/delete")
+    async def delete(
+        request: Request, body: DeleteHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Soft-delete a family while retaining its stored history."""
+        await service.delete_skill(SkillRequest(project_id=identity.project_id, skill_ref=body.skill_id))
+        return envelope(request, {"deleted": True})
+
+    @app.post("/v1/skills/version-resolve")
+    async def resolve_version(
+        request: Request, body: VersionResolveHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
+    ):
+        """Resolve an exact source version or reject an ambiguous hash."""
+        result = await service.resolve_skill_version(
+            VersionResolveRequest(
+                project_id=identity.project_id,
+                content_hash=body.content_hash,
+                skill_id=body.skill_id,
+                skill_version_id=body.skill_version_id,
+            )
+        )
+        return envelope(request, result)
+
+    @app.post("/v1/skills/skill-resolve")
+    async def skill_resolve(
+        request: Request, body: SkillResolveHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
+    ):
+        """Resolve one family alias or immutable version in the credential's project."""
+        detail = await service.resolve_skill_reference(body.skill_ref, identity.project_id)
+        return envelope(
+            request,
+            {
+                "skill_id": detail.skill.skill_id,
+                "skill_version_id": detail.version.version_id,
+                "alias": detail.skill.alias,
+                "is_current": detail.skill.current_version_id == detail.version.version_id,
+                "version_label": detail.version.version_label,
+            },
+        )
+
+    @app.post("/v1/skills/trajectories/report", status_code=201)
+    async def report_trajectory(
+        request: Request,
+        body: TrajectoryReportHttpRequest,
+        identity: SkillHttpIdentity = Depends(require("skill:write")),
+    ):
+        """Store one execution against its exact loaded Skill version."""
+        report = await service.report_trajectory(
+            ReportTrajectoryRequest(
+                project_id=identity.project_id,
+                user_id=body.user_id,
+                agent_id=body.agent_id,
+                messages=body.messages,
+                skill_version_id=body.skill_version_id,
+                session_id=body.session_id,
+                status=body.status,
+                started_at=body.started_at,
+                finished_at=body.finished_at,
+            )
+        )
+        return envelope(
+            request,
+            {
+                "trajectory_id": report.trajectory_id,
+                "skill_version_id": report.skill_version_id,
+                "stored_at": report.received_at,
+            },
+            status_code=201,
+        )
+
+    @app.post("/v1/skills/trajectories/show")
+    async def show_trajectory(
+        request: Request, body: TrajectoryShowHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
+    ):
+        """Return one project-owned physical attempt and its version binding."""
+        record = await service.show_trajectory(
+            ShowTrajectoryRequest(project_id=identity.project_id, trajectory_id=body.trajectory_id)
+        )
+        return envelope(
+            request,
+            {
+                "trajectory_id": record.trajectory_id,
+                "task_id": record.task_id,
+                "source": record.source,
+                "skill_id": record.skill_id,
+                "skill_version_id": record.skill_version_id,
+                "skill_bindings": record.skill_bindings,
+                "user_id": record.user_id,
+                "agent_id": record.agent_id,
+                "session_id": record.session_id,
+                "task_instruction": record.task_instruction,
+                "task_system_prompt": record.task_system_prompt,
+                "environment": record.env_ref,
+                "trajectory": record.trajectory,
+                "status": record.status,
+                "started_at": record.started_at,
+                "finished_at": record.finished_at,
+                "received_at": record.received_at,
+            },
+        )
+
+    @app.post("/v1/skills/trajectories/list")
+    async def list_trajectories(
+        request: Request, body: TrajectoryListHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
+    ):
+        """Page one family's reported execution summaries by receipt order."""
+        state = _decode_trajectory_cursor(body.cursor) if body.cursor is not None else None
+        if state is not None and (
+            state.project_id != identity.project_id
+            or state.skill_id != body.skill_id
+            or ("skill_version_id" in body.model_fields_set and state.skill_version_id != body.skill_version_id)
+            or ("status" in body.model_fields_set and state.status != body.status)
+            or ("received_at_from" in body.model_fields_set and state.received_at_from != body.received_at_from)
+            or ("received_at_to" in body.model_fields_set and state.received_at_to != body.received_at_to)
+        ):
+            raise SkillHttpError(422, "invalid_cursor", "Cursor project or filters differ from this request")
+        skill_version_id = state.skill_version_id if state is not None else body.skill_version_id
+        status = state.status if state is not None else body.status
+        received_at_from = state.received_at_from if state is not None else body.received_at_from
+        received_at_to = state.received_at_to if state is not None else body.received_at_to
+        snapshot_at = state.snapshot_at if state is not None else utcnow()
+        rows = await service.list_trajectories(
+            ListTrajectoriesRequest(
+                project_id=identity.project_id,
+                skill_id=body.skill_id,
+                skill_version_id=skill_version_id,
+                status=status,
+                received_at_from=received_at_from,
+                received_at_to=received_at_to,
+                snapshot_at=snapshot_at,
+                after_received_at=state.last_received_at if state is not None else None,
+                after_trajectory_id=state.last_trajectory_id if state is not None else None,
+                limit=body.limit + 1,
+            )
+        )
+        selected = rows[: body.limit]
+        next_cursor = (
+            _encode_cursor(
+                TrajectoryListCursor(
+                    project_id=identity.project_id,
+                    skill_id=body.skill_id,
+                    skill_version_id=skill_version_id,
+                    status=status,
+                    received_at_from=received_at_from,
+                    received_at_to=received_at_to,
+                    snapshot_at=snapshot_at,
+                    last_received_at=selected[-1].received_at,
+                    last_trajectory_id=selected[-1].trajectory_id,
+                )
+            )
+            if len(rows) > body.limit
+            else None
+        )
+        return envelope(
+            request,
+            {
+                "items": [
+                    {
+                        "trajectory_id": row.trajectory_id,
+                        "task_id": row.task_id,
+                        "skill_id": row.skill_id,
+                        "skill_version_id": row.skill_version_id,
+                        "user_id": row.user_id,
+                        "agent_id": row.agent_id,
+                        "status": row.status,
+                        "started_at": row.started_at,
+                        "finished_at": row.finished_at,
+                        "received_at": row.received_at,
+                    }
+                    for row in selected
+                ],
+                "next_cursor": next_cursor,
+                "has_more": next_cursor is not None,
+            },
+        )
+
+    @app.post("/v1/skills/algos/organize")
+    async def organize(
+        request: Request, body: OrganizeHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Publish an exact project-owned Skill collection through skill_manage."""
+        try:
+            result = await service.organize_skills(
+                OrganizeRequest(
+                    project_id=identity.project_id,
+                    graph_id=body.graph_id or body.alias,
+                    actor_id=identity.actor_id or identity.project_id,
+                    message=body.message,
+                    skill_version_ids=body.skill_version_ids,
+                    scene_records=body.scene_records,
+                )
+            )
+        except NotImplementedError as exc:
+            raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
+        data = result.model_dump(mode="json")
+        data["graph_version_id"] = f"skgv-{result.graph_version_id.hex}"
+        return envelope(request, data)
+
+    @app.post("/v1/skills/graph-resolve")
+    async def graph_resolve(
+        request: Request, body: GraphResolveHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
+    ):
+        """Resolve one graph alias or immutable snapshot in the credential's project."""
+        return envelope(request, await service.resolve_graph(body.graph_ref, identity.project_id))
+
+    @app.post("/v1/skills/graphs/delete")
+    async def delete_graph(
+        request: Request, body: GraphResolveHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Soft-delete one graph in the credential's project."""
+        await service.delete_graph(body.graph_ref, identity.project_id)
+        return envelope(request, {"deleted": True})
+
+    @app.post("/v1/skills/graphs/list")
+    async def list_graphs(request: Request, identity: SkillHttpIdentity = Depends(require("skill:read"))):
+        """List organization graphs in the credential's project."""
+        items = await service.list_skill_sets(identity.project_id)
+        return envelope(request, {"items": [_legacy_graph_data(item) for item in items]})
+
+    @app.post("/v1/skills/graphs/snapshots")
+    async def graph_snapshots(
+        request: Request,
+        body: GraphSnapshotsHttpRequest,
+        identity: SkillHttpIdentity = Depends(require("skill:read")),
+    ):
+        """List immutable snapshots and revisions of one project-owned graph."""
+        items = await service.list_skill_set_snapshots(body.graph_id, identity.project_id)
+        return envelope(request, {"items": [_legacy_graph_data(item) for item in items]})
+
+    @app.post("/v1/skills/graphs/snapshot")
+    async def graph_snapshot(
+        request: Request,
+        body: GraphSnapshotHttpRequest,
+        identity: SkillHttpIdentity = Depends(require("skill:read")),
+    ):
+        """Read a graph snapshot without exposing another project's versions."""
+        graph_id, version_id = await _selected_graph_version(
+            service, body.graph_id, body.graph_version_id, identity.project_id
+        )
+        item = await service.get_skill_set_snapshot(graph_id, version_id, identity.project_id)
+        return envelope(request, _legacy_graph_data(item, include_graph_id=False))
+
+    @app.post("/v1/skills/algos/recommend")
+    async def recommend(
+        request: Request, body: RecommendHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Rank exact versions in a pinned project-owned graph snapshot."""
+        try:
+            graph_id, version_id = await _selected_graph_version(
+                service, body.graph_ref, body.graph_version_id, identity.project_id
+            )
+            result = await service.recommend_skills(
+                RecommendRequest(
+                    project_id=identity.project_id,
+                    graph_id=graph_id,
+                    graph_version_id=version_id,
+                    task=Task(id=request.state.request_id, instruction=body.query),
+                    limit=body.top_k or 5,
+                )
+            )
+        except NotImplementedError as exc:
+            raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
+        data = result.model_dump(mode="json")
+        data["graph_version_id"] = f"skgv-{result.graph_version_id.hex}"
+        return envelope(request, data)
+
+    @app.post("/v1/skills/algos/evolve", status_code=202)
+    async def evolve(
+        request: Request, body: EvolveHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Accept one evolution task for the authorized project."""
+        if len(policy.evolution_pipelines) != 1:
+            raise SkillHttpError(422, "pipeline_unavailable", "A single Skill evolution pipeline is required")
+        pipeline = next(iter(policy.evolution_pipelines))
+        try:
+            snapshot = await service.submit_evolution(
+                identity.project_id, body.skill_version_id, pipeline=pipeline, auto_accept=body.auto_accept
+            )
+        except (NotImplementedError, ValueError) as exc:
+            raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
+        return envelope(request, snapshot, status_code=202)
+
+    @app.post("/v1/skills/tasks/show")
+    async def show_task(
+        request: Request, body: TaskShowHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
+    ):
+        """Read a task belonging to the authenticated project."""
+        try:
+            snapshot = await service.task_status(identity.project_id, body.task_id)
+        except NotImplementedError as exc:
+            raise SkillHttpError(501, "task_api_unavailable", "Skill task storage is not configured") from exc
+        if snapshot is None:
+            raise SkillHttpError(404, "task_not_found", "Skill task not found")
+        return envelope(request, snapshot)
+
+    @app.post("/v1/skills/algos/train", status_code=202)
+    async def train_async(
+        request: Request, body: TrainingHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Accept one authorized training request for background execution."""
+        snapshot = await service.submit_training({**body.model_dump(mode="json"), "project_id": identity.project_id})
+        return envelope(request, snapshot, status_code=202)
+
+    @app.post("/v1/skills/tasks/progress")
+    async def task_progress(
+        request: Request,
+        body: TaskShowHttpRequest,
+        after: int = 0,
+        identity: SkillHttpIdentity = Depends(require("skill:read")),
+    ):
+        """Read progress boundaries chosen by the training algorithm."""
+        if after < 0:
+            raise ValueError("after must be nonnegative")
+        try:
+            snapshot = await service.task_status(identity.project_id, body.task_id)
+        except NotImplementedError as exc:
+            raise SkillHttpError(501, "task_api_unavailable", "Skill task storage is not configured") from exc
+        if snapshot is None:
+            raise SkillHttpError(404, "task_not_found", "Skill task not found")
+        return envelope(request, await service.task_progress(identity.project_id, body.task_id, after=after))
+
+    return app
+
+
+def authorize_project(principal: object, project_id: str) -> Scope:
+    """Bind a database request to the project authenticated by the bearer key.
+
+    Args:
+        principal: Trusted identity returned by the configured credential resolver.
+        project_id: Project requested by the caller.
+
+    Returns:
+        Project-scoped database predicate.
+
+    Raises:
+        PermissionError: The requested project differs from the authenticated one.
+    """
+    identity = SkillHttpIdentity.model_validate(principal)
+    if identity.project_id != project_id:
+        raise PermissionError("Authenticated project differs from the requested project")
+    return Scope(fields={"project_id": project_id})
+
+
+async def build_http_service() -> tuple[SkillService, FastAPIConfig]:
+    """Build a service for the HTTP process from the combined configuration.
+
+    Returns:
+        Initialized service and its HTTP policy.
+    """
+    load_dotenv(Path(".env"), override=False, interpolate=False)
+    path = Path(os.getenv(SKILL_CONFIG_PATH_ENV, "config/mindmemos_skill/service.example.yaml"))
+    config = load_skill_config(path.read_text(encoding="utf-8"))
+    policy = config.fastapi
+    host = os.getenv(SKILL_API_HOST_ENV, "127.0.0.1")
+    try:
+        local_host = host == "localhost" or ip_address(host).is_loopback
+    except ValueError:
+        local_host = False
+    if policy.auth.mode == "none" and not local_host:
+        raise ValueError("Unauthenticated Skill HTTP requires a loopback address")
+    if policy.auth.mode == "none" and config.service.local_project_id is None:
+        raise ValueError("Unauthenticated Skill HTTP requires local_project_id")
+    if policy.auth.mode != "none" and config.service.local_project_id is not None:
+        raise ValueError("Authenticated Skill HTTP cannot bind a local project")
+    service = await create_service(
+        config.service,
+        project_authorizer=authorize_project if policy.auth.mode != "none" else None,
+    )
+    return service, policy
+
+
+app = create_app(service_factory=build_http_service)
+"""ASGI application started by the Skill Uvicorn command."""

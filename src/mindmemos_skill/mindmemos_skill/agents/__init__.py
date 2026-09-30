@@ -1,28 +1,24 @@
-"""Agent abstraction layer for MindMemOS."""
+"""Agent invocation implementations."""
 
-from ..registry import get_agent, list_agents
-from ..typing import AgentExecutionRequest
 from .base import Agent
-from .claude import ClaudeAgentConfig, ClaudeSDKAgentConfig
-from .config import AgentConfig
-from .deepseek_harness import DeepSeekHarnessAgentConfig
-from .openclaw import OpenClawAgentConfig
-from .react import ReactAgentConfig, Tool, tool
-from .skill_runtime import SkillInjection, SkillRuntime
+from .buitin_agents.claude import ClaudeAgent, ClaudeConfig
+from .buitin_agents.codex import CodexAgent, CodexConfig
+from .buitin_agents.deepseek_harness import DeepSeekHarnessAgent, DeepSeekHarnessConfig
+from .buitin_agents.openai_chat import OpenAIChatAgent, OpenAIChatConfig
+from .registry import ensure_registered
+from .typing import AgentResult
+
+ensure_registered()
 
 __all__ = [
     "Agent",
-    "AgentConfig",
-    "AgentExecutionRequest",
-    "ClaudeAgentConfig",
-    "ClaudeSDKAgentConfig",
-    "DeepSeekHarnessAgentConfig",
-    "OpenClawAgentConfig",
-    "ReactAgentConfig",
-    "SkillInjection",
-    "SkillRuntime",
-    "Tool",
-    "get_agent",
-    "list_agents",
-    "tool",
+    "AgentResult",
+    "CodexAgent",
+    "CodexConfig",
+    "ClaudeAgent",
+    "ClaudeConfig",
+    "DeepSeekHarnessAgent",
+    "DeepSeekHarnessConfig",
+    "OpenAIChatAgent",
+    "OpenAIChatConfig",
 ]

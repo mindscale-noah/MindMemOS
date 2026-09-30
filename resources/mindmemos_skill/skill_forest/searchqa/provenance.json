@@ -1,0 +1,22 @@
+{
+  "benchmark": "SearchQA",
+  "manifest_type": "id_split",
+  "source_repo": "lucadiliello/searchqa",
+  "source_repo_type": "dataset",
+  "source_url": "https://huggingface.co/datasets/lucadiliello/searchqa",
+  "source_id_field": "key",
+  "counts": {
+    "train": 400,
+    "val": 200,
+    "test": 1400
+  },
+  "item_fields": [
+    "id"
+  ],
+  "notes": [
+    "This is a split manifest, not the full SearchQA payload.",
+    "Materialize full split items from lucadiliello/searchqa before evaluation.",
+    "The IDs in items.json exactly match the key field in lucadiliello/searchqa."
+  ],
+  "source_revision": "c1a979068ba118d85467179b704031d113d689cc"
+}

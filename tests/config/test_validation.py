@@ -21,7 +21,6 @@ auth:
     finally:
         reset_config()
 
-
 def test_telemetry_requires_endpoint_during_config_init(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("MINDMEMOS_TELEMETRY_ENDPOINT", "")
     config_path = tmp_path / "dev.yaml"

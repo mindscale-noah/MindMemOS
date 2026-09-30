@@ -1,0 +1,119 @@
+"""Interact through workspace file, shell, and optional skill tools."""
+
+import json
+
+from ....agents.typing import ToolTurn
+from .prompts.workspace_tools import SYSTEM_PROMPT
+from .tools import TOOLS, run_tool
+from .typing import SpreadsheetObservation
+
+
+def available_tools(config, text):
+    """Return tool declarations for this interaction.
+
+    Args:
+        config: Environment mode and Skill-loading settings.
+        text: Already assembled Skill instructions.
+
+    Returns:
+        Tool schemas exposed to the current agent.
+    """
+    if config.skill_loading_mode == "system_prompt" and text.strip():
+        return [tool for tool in TOOLS if tool["function"]["name"] != "skill"]
+    return TOOLS
+
+
+def system_prompt(context, config):
+    """Render system instructions for the configured protocol.
+
+    Args:
+        context: Public task, prepared paths, Skill text, and tools for one case.
+        config: Environment execution and protocol settings.
+
+    Returns:
+        Initial system message.
+    """
+    system = SYSTEM_PROMPT
+    tools = context.tools
+    if config.skill_loading_mode == "system_prompt" and context.skill_text.strip():
+        system += f"\n\n## Skill\n{context.skill_text.strip()}"
+    elif context.skill_text.strip():
+        system += (
+            "\n\nA `skill` tool is available with expert skills: xlsx. Call it first "
+            '(e.g. skill(name="xlsx")) to load detailed guidance and the absolute '
+            "path to reusable reference scripts before you start."
+        )
+    if config.tool_agent == "text_action":
+        system += (
+            '\n\nCall tools using Action: followed by a JSON object with "name" and "arguments". '
+            "Wait for Observation: before continuing. To finish, output ACTION: TASK_COMPLETE.\n"
+            f"Available tools: {json.dumps(tools)}"
+        )
+    return system
+
+
+def user_prompt(context, config):
+    """Render public task instructions.
+
+    Args:
+        context: Public task, prepared paths, Skill text, and tools for one case.
+        config: Environment execution and protocol settings.
+
+    Returns:
+        Initial user message.
+    """
+    task = context.task
+    parts = ["The source file 'input.xlsx' is in your working directory.", f"Task:\n{task.instruction}"]
+    if task.answer_position.strip():
+        parts.append(
+            "Answer position (cells to verify) — these are the cells that will be "
+            "graded, so make sure their final computed values are correct:\n" + task.answer_position.strip()
+        )
+    parts.append("Complete the task and save the result as 'output.xlsx' (do not modify 'input.xlsx').")
+    user = "\n\n".join(parts)
+    if config.execution.shell_command[0].lower().endswith(("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh")):
+        user += "\n\nShell command prefix: " + json.dumps(config.execution.shell_command)
+    return user
+
+
+def get_observation(response, context, config, agent):
+    """Execute parsed tool calls and encode feedback for the shared loop.
+
+    Args:
+        response: Agent result containing a parsed tool turn.
+        context: Public workspace and tool definitions for this case.
+        config: Execution limits and protocol settings.
+        agent: Agent providing the observation encoding callback.
+
+    Returns:
+        Assistant history, tool feedback, and completion diagnostics.
+    """
+    turn = response.output
+    if not isinstance(turn, ToolTurn):
+        raise TypeError("Tool agent must return ToolTurn")
+    event = response.trajectory[-1]
+    assistant = {key: event[key] for key in ("role", "content", "tool_calls") if key in event}
+    if turn.error:
+        return SpreadsheetObservation(
+            assistant=assistant, messages=[{"role": "user", "content": f"Observation: {turn.error}"}], output=turn.text
+        )
+    feedback = []
+    loaded = False
+    for call in turn.calls:
+        if call.name not in {tool["function"]["name"] for tool in context.tools}:
+            observation = f"Error: unknown tool {call.name}"
+        else:
+            observation = call.error or run_tool(call.name, call.arguments, context.directory, config.execution)
+        if call.name == "skill" and not call.error and not observation.startswith("Error:"):
+            loaded = True
+            feedback.extend(
+                [
+                    agent.observation(call, "Result of 'skill' delivered in the following user message."),
+                    {"role": "user", "content": observation},
+                ]
+            )
+        else:
+            feedback.append(agent.observation(call, observation))
+    return SpreadsheetObservation(
+        assistant=assistant, messages=feedback, complete=not turn.calls, skill_loaded=loaded, output=turn.text
+    )

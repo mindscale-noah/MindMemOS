@@ -8,12 +8,17 @@ input via the typed request body, delegate to the service, wrap the result in
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends
+from starlette.responses import StreamingResponse
 
 from .deps import require_scopes
 from .mappers import (
     to_add_api_response,
     to_memory_list_api_response,
+    to_memory_page_api_response,
+    to_memory_scroll_api_response,
     to_status_api_response,
 )
 from .schemas import (
@@ -26,6 +31,10 @@ from .schemas import (
     FeedbackRequest,
     GetRequest,
     MemoryListData,
+    MemoryPageData,
+    MemoryPageRequest,
+    MemoryScrollData,
+    MemoryScrollRequest,
     SearchRequest,
     UpdateRequest,
 )
@@ -40,6 +49,8 @@ router = APIRouter(
 AddResponse = ApiResponse[AddData]
 GetResponse = ApiResponse[MemoryListData]
 SearchResponse = ApiResponse[MemoryListData]
+ListResponse = ApiResponse[MemoryPageData]
+ScrollResponse = ApiResponse[MemoryScrollData]
 DeleteResponse = ApiResponse[None]
 UpdateResponse = ApiResponse[None]
 FeedbackResponse = ApiResponse[None]
@@ -58,6 +69,31 @@ async def add_memory(
     return to_add_api_response(result, auth.request_id)
 
 
+@router.post("/add/stream")
+async def add_memory_stream(
+    payload: AddRequest,
+    auth: AuthContext = Depends(require_scopes(SCOPE_MEM_WRITE)),
+    service: MemoryService = Depends(get_memory_service),
+) -> StreamingResponse:
+    """Stream sync add progress as Server-Sent Events."""
+
+    async def stream():
+        async for item in service.add_stream(auth, payload, cancel_check=None):
+            event_name = str(item.get("event") or "progress")
+            data = {key: value for key, value in item.items() if key != "event"}
+            yield f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/get", response_model=GetResponse)
 async def get_memory(
     payload: GetRequest,
@@ -66,6 +102,26 @@ async def get_memory(
 ) -> GetResponse:
     result = await service.get(auth, payload)
     return to_memory_list_api_response(result, auth.request_id)
+
+
+@router.post("/list", response_model=ListResponse)
+async def list_memory(
+    payload: MemoryPageRequest,
+    auth: AuthContext = Depends(require_scopes(SCOPE_MEM_READ)),
+    service: MemoryService = Depends(get_memory_service),
+) -> ListResponse:
+    result = await service.list(auth, payload)
+    return to_memory_page_api_response(result, auth.request_id)
+
+
+@router.post("/scroll", response_model=ScrollResponse)
+async def scroll_memory(
+    payload: MemoryScrollRequest,
+    auth: AuthContext = Depends(require_scopes(SCOPE_MEM_READ)),
+    service: MemoryService = Depends(get_memory_service),
+) -> ScrollResponse:
+    result = await service.scroll(auth, payload)
+    return to_memory_scroll_api_response(result, auth.request_id)
 
 
 @router.post("/delete", response_model=DeleteResponse)

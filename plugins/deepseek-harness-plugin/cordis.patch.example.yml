@@ -1,0 +1,31 @@
+# Sample registration for the MindMemOS dsh plugin.
+#
+# Merge the `insert:` entry below into one of dsh's patch layers — typically
+# the profile `cordis.patch.yml` or `$DSH_HOME/cordis.patch.yml`. Each `id`
+# must be unique and stable; the last write to a row wins, so a later layer can
+# override `config` wholesale.
+
+# ── Once published to npm ────────────────────────────────────────────────────
+# - insert:
+#     - id: mindmemos-memory
+#       name: '@mindmemos/deepseek-harness-plugin'
+#       config:
+#         userId: alice
+#         appId: deepseek-harness
+
+# ── Local / pre-publish (points at the built output) ─────────────────────────
+- insert:
+    - id: mindmemos-memory
+      # Absolute path to the compiled plugin entry. `npm run build` first.
+      # On Windows this MUST be a file:// URL — a bare `C:/…` path is read as
+      # a `c:` URL scheme by Node's ESM loader (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+      name: 'file:///C:/…/plugins/deepseek-harness-plugin/dist/index.js'
+      config:
+        topK: 5
+        addMode: async
+        # Scope search + add to one user. Omit for project-wide search (add
+        # then inherits the CLI's default user).
+        userId: alice
+        appId: deepseek-harness
+        minQueryLength: 2
+        maxConversationMessages: 80

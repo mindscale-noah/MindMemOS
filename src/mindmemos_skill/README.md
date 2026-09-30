@@ -1,333 +1,376 @@
-# mindmemos-skill
+# MindMemOS Skill
 
-Skill components for MindMemOS.
+## Environment data
 
-This package is the home for reusable skill definitions, runtime helpers, and
-related integrations. It owns a backend-neutral storage infra layer and does
-not depend on `mindmemos_sdk`.
+`mindmemos_skill.envs.data` exports `Data`, `DataSample`, and `RewardData`.
+Implement `Data._load()` to adapt local dataset files into samples. `load()`
+validates sample structure and unique, nonblank task IDs. `DataSample` pairs
+public `Task` inputs with a typed `RewardData` subclass containing private
+answers, tests, or references. `RewardData` forbids undeclared fields;
+`Reward` remains the evaluated output. The environment requires `reward_data`
+as a keyword argument, passes it only to its trusted `_run` implementation,
+and records its type and fields in audit/request.json for resume checking.
+Reference file versions or hashes must be provided by the dataset adapter.
 
-## Installation
+Data uses the shared registry (`Data.register`, `Data.build`) without adding a
+top-level service backend category. It loads all samples into memory and does
+not download data automatically. Source formats and configurations belong to
+concrete adapters, including adapters for already downloaded datasets.
 
-The core package contains the management contracts and SQLite-backed
-persistence infrastructure without installing model or PostgreSQL clients:
+```python
+samples = data.load()
+splits = data.split(samples, ratios={"train": 0.8, "val": 0.1, "test": 0.1}, seed=42)
+data.save_splits(splits, "output/splits.json")
+splits = data.split(samples, split_file="output/splits.json")
+sample = splits["train"][0]
+result = env.rollout(sample.task, "output/rollout-001", reward_data=sample.reward_data)
+```
+
+Random splitting requires an explicit integer seed and nonnegative ratios
+summing to one (absolute tolerance 1e-9). IDs are sorted before a local shuffle;
+input order, ratio key order, and global RNG state do not affect membership.
+Integer counts use largest remainders, with ties resolved by split name.
+Every sample is assigned once; empty splits and empty datasets are allowed.
+
+File mode accepts a JSON object such as `{"train": ["q-1"], "val": [], "test": ["q-2"]}`.
+It is exclusive with ratios and seed, preserves file order, and allows subsets.
+Unknown IDs, duplicate IDs, overlapping splits, and blank names raise errors.
+`save_splits` atomically stores only names and IDs, without private input data.
+Stable membership requires stable source IDs; changed datasets can change seeded
+membership. Use the exported manifest to freeze a selection.
+
+## Minimal environment contract
+
+`Environment.rollout(task, work_dir, *, reward_data, skill_set=None, resume=True)` executes one
+sample and returns a `RolloutResult` with `output`, ordered `trajectory` records,
+and a structured `reward`. The task is a `Task` object with required stable `id` and `instruction` fields; subclasses may add fields.
+Supply `skill_set=SkillSet({"skill-id": skill}, max_concurrency=4)`; omitting it runs a baseline.
+`SkillSet` selects all members by default. Dynamic collections override `select(task)`
+and record non-secret selection settings through `config_snapshot()`. The collection calls
+each selected member's `assemble(task)` concurrently, bounded by `max_concurrency` per call,
+and preserves selection order. `_run` receives the resulting `list[Skill]` without reassembly.
+The removed `skills=` rollout argument is not accepted.
+Assembly owns creation of the task-local copy and replacement of its bundle.
+Concrete classes, auxiliary resources, and export methods remain available.
+Environments never check whether a Skill is static or dynamic or assemble it again.
+Agent dependencies can be injected through the existing service factory.
+The base class provides persistence, not a model backend or task evaluator.
+The built-in [LiveMath environment](mindmemos_skill/envs/builtin_envs/livemath/README.md)
+loads official local monthly JSON, uses the shared split API, runs one
+OpenAI-compatible chat call with optional static or dynamic Skill instances, and evaluates the
+choice locally. Install the `livemath` optional dependencies to run the model.
+It exposes only public prompts to the model and keeps private scoring in audit/.
+
+`Reward` requires `score` (finite number), `success` (boolean), and `detail`
+(text containing detailed evaluation data). It accepts extra JSON fields and
+can be subclassed for environment-specific metrics. `Usage` has nonnegative
+`input_tokens`, `output_tokens`, and `total_tokens`, all defaulting to zero,
+plus extra JSON fields for provider-specific usage. Implementations aggregate
+all LLM calls, including evaluation calls, and supply the provider-reported
+total; it is not inferred. Default zeros mean usage was not supplied, not
+verified absence of consumption.
+
+The base class fills UTC `started_at`, `finished_at`, and monotonic
+`duration_s` around assembly and `_run`, including preparation, agent execution, and scoring.
+Cache reads and result persistence are excluded. Resume preserves the original
+timing and usage. Saved selection and assembly are reused without selecting or assembling again;
+changed candidates or collection settings require a new work directory. Legacy ordered-list
+records remain readable with a static SkillSet when their source inputs match. Subclass fields on Reward and Usage survive serialization.
+To restore their concrete Python types and validators, declare a RolloutResult
+subclass with those field types and set the environment's `result_type` to it.
+Otherwise, base Reward and Usage objects retain the extension data.
+Legacy request records without task IDs or reward_data are not migrated; use a new work directory.
+
+The supplied `work_dir` is the root of one independent rollout. The environment
+stores private inputs in `audit/request.json` and atomically publishes the
+validated result as `audit/result.json`. Only the absolute `work_dir/workspace/`
+path is passed to `_run` for public task files, skills, and agent artifacts.
+Resume is an optional environment capability declared by `supports_resume`, which
+defaults to `True` for existing environments. An environment declaring
+`supports_resume = False` raises `NotImplementedError` when `resume=True`, including
+when the argument is omitted. Pass `resume=False` to execute such an environment;
+audit persistence and input validation still apply. Unsupported resume is rejected
+before skill assembly or filesystem operations.
+
+The two subdirectories cannot be symbolic links. With resume enabled, matching completed runs, including zero-reward runs, are
+loaded without execution. Changed task or reward-data fields or types, skill types or config, environment classes, or config
+require a new directory. Corrupt records raise errors. Exceptions are propagated
+without caching completion. The environment does not manage attempts or retry
+automatically; retry and sampling orchestration belong to the caller.
+`resume=False` removes the previous completion before rerunning matching inputs.
+Existing workspace files remain in place, so implementations must prepare them
+appropriately when invoked again. Pass only `workspace` and public task
+materials to the agent; do not change the process-wide working directory.
+The agent backend must restrict file access to `workspace`: changing cwd alone
+does not prevent reading `../audit`. Do not expose the complete Task snapshot
+to the agent when it contains private evaluation data.
+
+Use a separate directory per independent sample; concurrent use of the same
+directory is unsupported. Include agent/model, data, and evaluator versions and
+execution settings in the environment config for resume checking. Code and
+dependency state outside config are not automatically fingerprinted.
+Task and private reward-data fields (including subclass fields), source Skill snapshots,
+and assembled bundles are serialized for resume checking. `_run` receives the original
+task/reward objects and complete task-local Skill copies. Config is persisted in
+plain text and must not contain credentials. See [中文说明](README_ZH.md) for usage.
+
+[中文说明](README_ZH.md)
+
+`mindmemos-skill` is the Python package for Skill-related functionality in MindMemOS.
+It provides the abstract `MindMemOSSkill` interface, shared registration, and
+`create_service(config)` for assembling a service from a typed configuration or YAML.
+The FastAPI entry layer wraps an existing service for HTTP access.
+Business operations remain unimplemented.
+
+## Requirements
+
+- Python >=3.11,<3.14
+- Pydantic 2 and PyYAML 6.
+
+## Local installation
+
+From the repository root, install the package into the active development environment:
 
 ```bash
-pip install mindmemos-skill
+uv pip install -e ./src/mindmemos_skill
 ```
 
-Install only the runtime capabilities an application uses:
+Verify the import:
+
+```python
+import mindmemos_skill
+```
+
+The distribution name is `mindmemos-skill`; the Python import name is `mindmemos_skill`.
+The package is not yet registered in the repository's uv workspace.
+
+## Package layout
+
+```text
+src/mindmemos_skill/
+├── pyproject.toml
+├── README.md
+├── README_ZH.md
+└── mindmemos_skill/
+    ├── __init__.py
+    ├── api/          # Abstract service interface and factory
+    ├── common/       # Shared JSON and IO utilities
+    ├── infra/        # Business-independent infrastructure
+    ├── algos/        # Skill algorithms
+    ├── agents/       # Agent invocation
+    ├── logging/      # Logging support
+    ├── persistence/  # Business tables, queries, and writes
+    ├── skill/        # Skill definitions and operations
+    ├── envs/         # Algorithm environments and data structures
+    └── registry/     # Shared registration mechanism
+```
+
+Package metadata and the version are maintained in `pyproject.toml`.
+
+The central repository API supports registration, listing, inspection, commit, export,
+history, diff, version selection, metadata changes, and reference-safe deletion.
+See the [API guide](../../docs/mindmemos_skill/central_repository_api.md) for request types,
+configuration, and Python examples. Automatic training and evolution remain unimplemented.
+
+## Logging
+
+Configure logging explicitly at application startup, then obtain module loggers:
+
+```python
+from mindmemos_skill.logging import configure_logging, get_logger
+
+configure_logging(level="INFO", log_file="logs/skill.log")
+logger = get_logger("algos")
+logger.info("Skill training started")
+```
+
+Records include the timestamp, level, logger name, and message, and go to both
+stderr and the file. Files use UTF-8 append mode; missing parent directories are
+created. Omit `log_file` for console-only output. Use `logger.exception(...)` to
+include a traceback. Package submodules can use `from ..logging import get_logger`
+and `get_logger(__name__)`.
+
+Importing the module does not configure logging. Configuration applies only to
+the `mindmemos_skill` namespace and leaves the root logger unchanged. Repeated
+configuration closes and replaces handlers created by this module, preserving
+caller-added handlers. Configure before starting worker threads; concurrent
+reconfiguration, log rotation, and multiprocess shared-file management are not supported.
+
+## Service assembly
+
+Service assembly, pipeline business operations (including repository and graph reads),
+and service/pipeline cleanup are asynchronous. Use `await` inside an async function.
+Use `async with await create_service(...) as service:` to close owned resources
+automatically, or call `await service.close()` explicitly. Only process entry points
+should own an event loop with `asyncio.run(...)`. Constructors and configuration
+validation remain synchronous.
+
+Install this package, then run from the repository root:
+
+```python
+from mindmemos_skill import create_service
+service = await create_service("config/mindmemos_skill/default.yaml")
+```
+
+Alternatively, pass a configuration object directly:
+
+```python
+from mindmemos_skill import ServiceConfig, create_service
+
+service = await create_service(ServiceConfig())
+```
+
+Both inputs produce the same `SkillService` implementing `MindMemOSSkill`. An explicit empty config creates no storage or pipelines; omitting the config argument uses the local workspace repository.
+
+Configuration contains one `persistence` with an inline `database`, an optional `repository_pipeline`, and named `training_pipelines` / `evolution_pipelines` mappings containing complete definitions. See the [default configuration](../../config/mindmemos_skill/default.yaml) and [assembly contract](../../docs/mindmemos_skill/central_repository_api.md).
+
+Each pipeline owns its nested algorithm, environment and agent settings. Repeated configuration creates independent components; there are no global resource references. The factory constructs one `SkillPersistence` and passes it to every pipeline through the fixed `persistence` keyword. Pipeline constructors accept `config` and `persistence`; their `config_type` models validate nested settings, and the implementation constructs local components through their existing registries.
+
+Import extensions explicitly before assembly. The factory validates pipeline capabilities, options and constructor signatures before constructing the database. It does not infer or synthesize repository pipelines. Pipelines validate their own internal implementation choices and must never pass persistence into trainers or evolvers.
+
+`service.backends` is diagnostic only. Its keys are `database`, `persistence`, `repository_pipeline`, `training_pipelines.<name>` and `evolution_pipelines.<name>`, not YAML references. Service shutdown closes pipelines in reverse construction order before closing the database. Pipelines release their owned components and clean up partial constructor failures, without closing global persistence.
+
+Run `.venv/bin/python -m pytest tests/mindmemos_skill -q` from the repository root.
+
+## FastAPI access
+
+Install the optional HTTP dependencies and start the server from the repository root:
 
 ```bash
-pip install 'mindmemos-skill[llm]'
-pip install 'mindmemos-skill[pgvector]'
-pip install 'mindmemos-skill[claude-sdk]'
-pip install 'mindmemos-skill[alfworld]'
+uv pip install -e './src/mindmemos_skill[fastapi]'
+make dev-skill
 ```
 
-## Storage infra
-
-Storage is split into two independent capabilities:
-
-- `mindmemos_skill.infra.database` stores core structured persistence data.
-  It has its own backend registry and ships SQLite by default.
-- `mindmemos_skill.infra.vector_store` is an optional algorithm index. It has a
-  separate backend registry and ships PostgreSQL + pgvector by default.
-
-SQLite is not a VectorStore, and PGVector is not selected as the core database.
-Custom providers are registered independently in the capability they
-implement. Infra owns only generic records, schemas, filtering, and adapter
-contracts; `mindmemos_skill.persistence` owns the Skill business table catalog.
-
-Bootstrap the core persistence database through `DatabaseConfig`:
+Python and HTTP access share `config/mindmemos_skill/default.yaml`, without mode selection.
+The HTTP adapter accepts an existing service and calls its methods without rebuilding backends:
 
 ```python
-from mindmemos_skill.infra.database import (
-    DatabaseConfig,
-    FieldSpec,
-    FieldType,
-    TableRegistry,
-    TableSpec,
-    bootstrap_database,
-)
+from mindmemos_skill import ServiceConfig, create_service
+from mindmemos_skill.api.entries.fastapi import create_app
 
-tables = TableRegistry(
-    (
-        TableSpec(
-            name="runtime_logs",
-            primary_key="log_id",
-            fields=(FieldSpec(name="message", field_type=FieldType.TEXT, nullable=False),),
-        ),
-    )
-)
-tables.freeze()
-
-database = await bootstrap_database(
-    DatabaseConfig(provider="sqlite", options={"path": ".mindmemos/skill.db"}),
-    tables,
-)
+service = await create_service(ServiceConfig())
+app = create_app(service)
+assert app.state.service is service
 ```
 
-Change `provider` and `options` to use another registered structured database.
-Algorithms that need similarity search configure
-`infra.vector_store.BackendConfig` separately, so core persistence remains
-usable without a vector database.
+`api/service.py` implements business operations; `api/factory.py` assembles the
+service, while `entries/fastapi.py` wraps it with routes and launches the HTTP server.
+Open `http://127.0.0.1:8000/docs` for API documentation.
 
-For Skill persistence, use the business-owned catalog and canonical default
-path (`~/.mindmemos/skill/state.db`):
+| HTTP route | Local method |
+| --- | --- |
+| `POST /skills/register` | `register_skill()` |
+| `POST /skills/delete` | `delete_skill()` |
+| `POST /skills/auto-evolve` | `auto_evolve_skill()` |
 
-```python
-from mindmemos_skill.persistence import bootstrap_skill_database
+`GET /health` returns `{"status":"ok"}` for application availability only.
+Central operations accept typed JSON bodies. All routes and request types are listed in the
+[API guide](../../docs/mindmemos_skill/central_repository_api.md). Unconfigured auto-evolve returns 501.
+Training remains available through the local Python `auto_train_skill()` method; there is no HTTP training route.
+The HTTP entry point initializes missing tables; create_app(service) itself does not.
 
-database = await bootstrap_skill_database()
-async with database.transaction() as unit_of_work:
-    await unit_of_work.upsert_records("skill_versions", version_records)
-    await unit_of_work.upsert_records("skill_sync_state", (sync_state_record,))
-```
-
-The current public schema is `mindmemos-skill` version 2, adding Skill Manage
-graph tables to the initial version 1 catalog. SQLite records ordered,
-forward-only migrations. The `bootstrap_skill_database(...)` helper creates a
-consistent backup before an upgrade; `SkillApplication.from_config(...)` uses
-the generic bootstrap and requires an operator-provided backup.
-Use `get_skill_database_status(...)` to inspect pending versions or
-`backup_skill_database(...)` to create a manual backup. Migration failures roll
-back both DDL and the version ledger. Use the transaction-bound `unit_of_work`
-inside the context; do not call the outer `database` object until the context
-exits.
-
-## Skill Manage graph index
-
-The `skill_manage` capability builds and updates a graph over registered,
-immutable Skill versions, then retrieves Skills with embedding seeds and graph
-ranking. Install `mindmemos-skill[llm,pgvector]` and configure both structured
-storage and vector storage on PostgreSQL with the pgvector extension. Plain
-SQLite applications remain supported without enabling this capability.
-
-For example, configure an application from environment-provided credentials:
-
-```python
-import os
-
-from mindmemos_skill import SkillApplication
-from mindmemos_skill.application.skill_manage import (
-    SkillManageBuildRequest,
-    SkillManageRetrieveRequest,
-)
-from mindmemos_skill.typing import SkillVersionRef
-
-application = await SkillApplication.from_config({
-    "local": {
-        "root_dir": "~/.mindmemos/skill",
-        "database": {
-            "provider": "postgres",
-            "options": {"dsn": os.environ["SKILL_DATABASE_DSN"]},
-        },
-        "vector_store": {
-            "provider": "pgvector",
-            "options": {"dsn": os.environ["SKILL_DATABASE_DSN"]},
-        },
-    },
-    "runtime": {
-        "models": {
-            "embed": {
-                "kind": "embedding",
-                "model": "openai/text-embedding-3-small",
-                "dimension": 1536,
-                "api_key": os.environ["OPENAI_API_KEY"],
-            },
-        },
-        "algorithms": {
-            "graphs": {
-                "type": "skill_manage",
-                "model_roles": {"embedding": "embed"},
-            },
-        },
-    },
-})
-try:
-    # Use IDs of a version already registered in this application's repository.
-    result = await application.build_skill_index(SkillManageBuildRequest(
-        project_id="my-project",
-        graph_id="my-graph",
-        version_refs=(SkillVersionRef(skill_id=skill_id, version_id=version_id),),
-        idempotency_key="initial-build-1",
-    ))
-    hits = await application.retrieve_skills(SkillManageRetrieveRequest(
-        project_id="my-project", graph_id="my-graph", query="parse a CSV file",
-    ))
-finally:
-    await application.close()
-```
-
-`upsert_skill_index` replaces/adds one version; `remove_skill_from_index` removes
-a family or version from the index without deleting the canonical Skill.
-Persisted writes accept `expected_revision` for optimistic concurrency and an
-`idempotency_key` for replay. A classified transient storage failure before
-publication permits the same request/key to open a new attempt; committed
-requests replay their result. Unknown failures remain non-retryable. Keep the
-request unchanged when retrying; request hashes currently follow the DTO shape,
-so changing that shape across releases needs an explicit compatibility review.
-
-Inspect operations with `get_skill_manage_operation(operation_id, project_id=...,
-graph_id=...)`. Use `repair_skill_index(project_id=..., graph_id=...)` to reconcile
-interrupted writes and `maintain_skill_index(project_id=..., graph_id=...)` to
-collect retired generations according to configured retention. The default
-version loader assumes a single-tenant local repository; project IDs scope the
-index and do not provide repository authorization.
-
-Opening the current persistence catalog applies schema v2 even without a graph
-algorithm configured. Back up existing databases before upgrading; PostgreSQL
-backups are the operator's responsibility. Older code rejects a v2 migration
-ledger, so rolling back requires restoring a compatible backup, not deleting
-ledger entries. No database is migrated merely by installing this package.
-
-Run graph integration tests only against a disposable database; they reset test
-tables. A dedicated local service is provided:
+Use the repository Makefile to override the HTTP configuration or address:
 
 ```bash
-docker compose -f dockers/docker-compose.skill-manage-test.yml up -d --wait
-MINDMEMOS_SKILL_TEST_PG_DSN=postgresql://mindmemos:mindmemos@127.0.0.1:54329/skill_manage_test \
-  make test-skill-manage-pg
+make dev-skill SKILL_CONFIG=config/mindmemos_skill/default.yaml SKILL_HOST=127.0.0.1 SKILL_PORT=8001
 ```
 
-## Skill application
+`make dev-skill` runs the HTTP server until Ctrl-C. The default interpreter is
+`.venv/bin/python`; override it with `SKILL_PYTHON`. The Makefile adds this checkout's
+Skill source directory to the import path.
 
-`SkillApplication` is the public lifecycle root. Its async classmethod compiles
-configuration, constructs configured model clients, Agents and algorithms, and
-owns their database and lifecycle:
+HTTP startup logic lives in `mindmemos_skill/api/entries/fastapi.py`.
+Service assembly does not import FastAPI or Uvicorn.
+`run_skill.py` remains a personal debugging script. Python integrations can continue
+calling `create_service` directly.
+
+## Database infrastructure
+
+`infra` provides SQLite + sqlite-vec by default and optional PostgreSQL + pgvector.
+Business-owned SQLAlchemy tables and Pydantic input models are registered centrally,
+then accessed by table name through shared CRUD, upsert, and vector-search operations.
+Backend-specific adapters live in `infra/database/builtin_backends/`. Registration does not
+connect or create tables; initialization is explicit, and service shutdown closes pools.
+
+See the [database guide](mindmemos_skill/infra/database/README.md) for registration examples,
+operation semantics, configuration, and integration tests.
+
+## Skill content
+
+`SkillBundle` reads a directory or `SKILL.md`, serializes canonical SDK-compatible
+JSON, computes its SHA-256 hash, and exports managed files to a directory. Only
+`SKILL.md` belongs to the mutable bundle. `Skill.from_path()` also preserves
+auxiliary files such as references and scripts, and `Skill.export()` exports the
+complete directory. Nonempty destinations require `overwrite=True`, which replaces
+the directory and removes stale files. Resources remain unchanged by assembly and optimization.
+`Skill.assemble(task)` defaults to a complete independent Skill copy with unchanged content.
+`Skill(bundle=..., resources=...)` is a data object with no configuration or registry.
+Algorithms can subclass it and override `assemble(task)` for task-dependent behavior.
+All optimizable content belongs in the bundle; implementation config is fixed.
+
+`Skill.snapshot()` captures source content and auxiliary bytes;
+`Skill.from_snapshot()` restores data and preserves existing implementation metadata without loading code. `with_bundle()` creates a new candidate.
+`persistence.skills.add_skill(skill, record)` preserves record metadata while
+replacing bundle/resource/config fields, and `get_skill(version_id)` restores the
+complete Skill. Bundle hashes exclude auxiliary files; the local snapshot hash
+includes them. Resource changes also invalidate rollout resume.
+Rollout requests retain both source and assembled content with hashes. Retries
+reuse saved assembly; `resume=False` assembles again. Old rollout request formats
+require a new work directory. See [the Chinese guide](README_ZH.md) for examples.
+
+TreeSkill's implementation lives in `algos/train/treeskill/`. Import `TreeSkill`
+and `TreeSkillConfig` from that module and construct it explicitly.
+Use `TreeSkill.from_snapshot()` explicitly when restoring routing behavior;
+`persistence.skills.get_skill()` returns source data without constructing a router.
+It parses the source Markdown tree, requests subtree IDs from a router agent,
+and renders the selected subtrees with ancestor introductions. References and
+other auxiliary files stay unchanged. This implements task-time routing only,
+not the training/evolution loop. Provider failures propagate; invalid selections
+log an explicit full-source fallback. Private `_route(task)` retains selection
+evidence and router usage internally; callers use `assemble(task)`. Router usage
+is not yet added to environment-agent usage.
+See the Chinese guide for configuration and reference-revision details.
+
+## Local CLI harnesses
+
+The `agents/` catalog includes `codex`, `claude`, and `deepseek_harness`, invoking
+separately installed `codex`, `claude`, and `dsh` executables. Importing or building
+an agent does not launch its CLI. All three expose synchronous
+`run(system=..., user=..., workspace=...) -> AgentResult`. Native events are retained
+in `trajectory`; reported usage is preserved in `usage`. DeepSeek usage is currently
+unavailable and remains an empty dictionary. Failed, incomplete, or empty runs raise.
 
 ```python
-from mindmemos_skill import SkillApplication
+from pathlib import Path
+from mindmemos_skill.agents import Agent
 
-application = await SkillApplication.from_config(
-    {
-        "local": {
-            "root_dir": "~/.mindmemos/skill",
-            "database": {"provider": "sqlite", "path": "state.db"},
-        }
-    }
-)
-try:
-    skills = await application.list_skills()
-finally:
-    await application.close()
+agent = Agent.build("codex", {"timeout_s": 300})
+result = agent.run(system="Solve the task using the workspace files.",
+                   user="Summarize report.txt.", workspace=Path("/absolute/task/workspace"))
+print(result.output)
 ```
 
-The classmethod also accepts `CompiledSkillApplicationConfig`, allowing an SDK
-config loader to compile once and inject the same normalized configuration.
-An embedding SDK or application may also pass an optional transport-neutral
-`SkillRemotePort` through `from_config(..., remote=adapter)`. The caller owns
-that adapter and its HTTP/Auth connection lifecycle; closing `SkillApplication`
-does not close the borrowed remote. Without one, all local capabilities remain
-available and the package has no HTTP or SDK dependency.
-When a remote is present, `await application.push(skill_ref, version_id=None)`
-uses a durable deterministic operation ID, records retry/lease state in the
-family outbox and validates the immutable acknowledgement against the same
-canonical `SKILL.md` hash used locally. The upload is built only from the persisted
-immutable single-file bundle (`SKILL.md`); scripts, local resources and
-source-tree files are never read or represented by the remote request.
-`await application.pull(skill_ref)` reads every remote metadata page, validates
-each immutable content hash, orders missing versions parent-first, and commits
-the complete import atomically. The cloud bundle replaces the full executable
-blob while private local resources are inherited only on the local machine.
-Pull does not rewrite immutable version facts or `last_sync_at`.
-`await application.sync(skill_ref)` pushes pending versions parent-first, asks
-the remote for missing versions and lifecycle revisions, then commits the
-imported versions and `last_sync_at` in one transaction. Edge and cloud never
-persist an active or head pointer; omitted-version reads use the shared
-`(created_at DESC, version_id DESC)` latest-available selector.
-Agent execution appends its trajectory attempt automatically. Product-side
-trace2skill and evolve runs use `run_trace2skill(...)` and `run_evolve(...)`:
-the algorithm orchestrator resolves persisted inputs, dispatches a configured
-algorithm by instance name, and applies `dry_run`, `persist`, or
-`persist_and_push` commit policy. Non-dry-run runs persist output trajectories,
-normalize changed candidates into immutable evolution versions, and append a
-result log; components can add detailed step reports through
-`record_algorithm_log(...)`.
-The script-side experiment layer additionally evaluates the resulting Skill
-through the selected dataset's test split and registered environment. The
-generic `skill_evaluation` method accepts either one explicit `SKILL.md`/Skill
-directory or true no-Skill execution, and writes a common `test/summary.json`,
-`results.jsonl`, and `skill.json` artifact set. This runner-level benchmark
-lives under `scripts/mindmemos_skill/`, remains outside this package, and does
-not change candidate acceptance.
+The caller prepares an existing, independent workspace and exports assembled Skills
+with `Skill.export(directory)` to `.agents/skills/<name>`, `.claude/skills/<name>`, or
+`.dsh/skills/<name>`, respectively. Harnesses own native tool execution, not Skill
+assembly or scoring. They do not accept legacy requests, Skill bindings, or callable
+tools. Environments requiring per-turn tool callbacks retain their corresponding
+Agent interface.
 
-## Low-level local management
+Shared settings are `cli_path`, `model`, `timeout_s`, and `extra_args`.
+`api_key` and `base_url` accept direct values. Missing fields resolve from
+`MINDMEMOS_AGENT_API_KEY` and `MINDMEMOS_AGENT_BASE_URL` when config is constructed.
+Credentials are masked in JSON snapshots. Without either source, CLIs preserve
+their native authentication and configuration. Codex and Claude support
+`reasoning_effort`; Claude also supports `max_turns` and `max_completion_tokens`.
+DeepSeek supports `profile` and `provider` (default `deepseek-official`), retains a fresh
+session directory per run, and validates v0 (dsh 0.1.0-rc.6) and v2 session formats.
+Unsupported formats raise explicitly. When Claude resolves a credential or
+endpoint from config or the shared environment, it disables user/project/local settings sources so their
+`env` values cannot override those choices. Other settings from those sources are
+also disabled for that run.
 
-`mindmemos_skill.management` owns the local management rules and can run
-without the SDK or a cloud connection. `LocalSkillManager.open()` uses the
-canonical SQLite database unless a test or embedding application supplies a
-different path:
-
-```python
-from mindmemos_skill.management import (
-    ExportSkillRequest,
-    LocalSkillManager,
-    PublishSkillRequest,
-    RegisterSkillRequest,
-)
-
-manager = await LocalSkillManager.open()
-registered = await manager.register(
-    RegisterSkillRequest(
-        source_path="./my-skill",
-        alias="my-skill",
-        version_label="1.0.0",
-    )
-)
-candidate = await manager.publish(
-    PublishSkillRequest(
-        skill_ref=registered.skill_id,
-        source_path="./my-skill-next",
-        version_label="1.1.0",
-    )
-)
-await manager.export(
-    ExportSkillRequest(skill_ref=registered.skill_id, target_path="./exported-skill")
-)
-await manager.close()
-```
-
-Registration and publication persist an immutable version and stable pending
-push operation in one transaction. Parent versions must already
-belong to the same family, version labels are unique and monotonically ordered
-as integer triples. Export restores the complete UTF-8 snapshot and preserves files it does not manage;
-if replacement fails partway through, overwritten files are restored.
-
-OpenClaw trace detection now lives with its runtime. `OpenClawSkillRuntime`
-interprets OpenClaw `read` / `write` / `edit` calls and emits canonical
-`SkillBinding` values directly; management does not parse agent messages.
-
-## Environment registry
-
-Built-in benchmark environments are selected by name. `livemath` and the
-bounded-history ALFWorld protocol registered as `alfworld_bounded_history` are currently shipped:
-
-```python
-from mindmemos_skill.envs import get_env
-
-env = get_env(name=env_name, config=env_params)
-```
-
-Future trainers should pass their configured `env_name` and `env_params`
-through this factory rather than importing benchmark classes. Packages outside
-MindMemOS can participate in the same selection path:
-
-```python
-from mindmemos_skill.envs import BaseEnv
-from mindmemos_skill.registry import ComponentType, register
-
-@register(type=ComponentType.ENV, name="my_benchmark")
-class MyBenchmarkEnv(BaseEnv):
-    ...
-```
-
-## Development
-
-From the repository root:
-
-```bash
-uv sync
-```
-
-The import package is `mindmemos_skill`.
+Custom gateways must support the native protocol: Responses for Codex, Anthropic
+Messages for Claude, and Chat Completions for DeepSeek. For a gateway exposing
+`/v1/messages`, Claude takes the gateway root URL; Codex and DeepSeek typically take
+the `/v1` base URL.

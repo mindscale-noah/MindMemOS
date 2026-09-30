@@ -24,6 +24,17 @@ function spawnFile(command: string, args: string[], stdin?: string): Promise<Spa
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
+      // The MindMemOS CLI is Python. On Windows, Python encodes its standard
+      // streams with the ANSI code page (e.g. GBK/cp936) when they are not a
+      // TTY, so piping here would corrupt non-ASCII output — and read our UTF-8
+      // stdin (for `--messages-json-file -`) back as that same code page.
+      // Force UTF-8 on all three streams so the `utf-8` decoding below and the
+      // UTF-8 stdin round-trip correctly regardless of locale.
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: "utf-8",
+        PYTHONUTF8: "1",
+      },
     });
 
     let stdout = "";

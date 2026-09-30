@@ -1,16 +1,13 @@
 """MindMemOS SDK package."""
 
-from .async_client import AsyncMindMemOSClient
 from .client import MindMemOSClient
-from .config import ConfigManager
+from .config import ConfigManager, SDKConfig
 from .errors import (
     ApiError,
     AuthRequiredError,
     ConfigError,
     InvalidRequestError,
     MindMemOSSDKError,
-    SkillCapabilityUnavailableError,
-    SkillRemoteError,
     TransportError,
 )
 from .memory import (
@@ -26,19 +23,15 @@ from .memory import (
     TextMessage,
     UrlMessage,
 )
-from .runtime import SDKPortalRuntime
-from .skills import AsyncSkillClient
 
 __all__ = [
     "__version__",
-    "AsyncMindMemOSClient",
-    "SDKPortalRuntime",
     "MindMemOSClient",
     "MemoryClient",
     "AsyncMemoryClient",
-    "AsyncSkillClient",
     "FeedbackMode",
     "ConfigManager",
+    "SDKConfig",
     "AddResult",
     "SearchResult",
     "GetResult",
@@ -53,8 +46,6 @@ __all__ = [
     "AuthRequiredError",
     "TransportError",
     "ApiError",
-    "SkillCapabilityUnavailableError",
-    "SkillRemoteError",
 ]
 
 __version__ = "0.1.4"

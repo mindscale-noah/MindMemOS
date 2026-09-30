@@ -1,0 +1,24 @@
+{
+  "name": "mindmemos-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "diff": "^8.0.4",
+    "highlight.js": "11.12.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.28",
+    "@types/react-dom": "18.3.7",
+    "prettier": "3.6.2",
+    "typescript": "5.9.3",
+    "vite": "6.4.3"
+  }
+}

@@ -9,7 +9,7 @@
   <a href="https://mindmemos.cn">
     <img src="https://img.shields.io/badge/Website-mindmemos.cn-0A66C2?logo=googlechrome&logoColor=white" alt="MindMemOS Website">
   </a>
-  <a href="https://mindmemos.cn/api-docs">
+  <a href="https://mindmemos.cn/#/api-docs">
     <img src="https://img.shields.io/badge/FastAPI-Docs-009688?logo=fastapi&logoColor=white" alt="MindMemOS FastAPI Docs">
   </a>
   <a href="https://pypi.org/project/mindmemos-sdk/">
@@ -26,7 +26,7 @@
   </a>
 </p>
 
-[Website](https://mindmemos.cn) · [FastAPI Docs](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [Local Docs](https://github.com/mindscale-noah/MindMemOS/blob/main/docs/README.md)
+[Website](https://mindmemos.cn) · [FastAPI Docs](https://mindmemos.cn/#/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [Local Docs](https://github.com/mindscale-noah/MindMemOS/blob/main/docs/README.md)
 
 This plugin connects OpenClaw conversations to MindMemOS through the local
 `mindmemos` CLI.
@@ -111,14 +111,29 @@ Optional plugin config:
   "enabled": true,
   "cli": "mindmemos",
   "topK": 5,
+  "tokenBudget": 2000,
   "addMode": "async",
-  "userId": "optional-user-override",
+  "userId": "alice",
   "appId": "openclaw",
   "sessionId": "optional-session-override",
   "minQueryLength": 2,
   "maxConversationMessages": 80
 }
 ```
+
+`userId` scopes both recall and storage to the same user. `tokenBudget` is
+optional: when set, recall runs with `memory search --token-budget` so the
+injected memories are capped by estimated tokens (token-budget retention) in
+addition to `topK`; omit it to keep legacy behavior. Configure the user with:
+
+```bash
+openclaw config set plugins.entries.mindmemos-memory.config.userId alice
+openclaw gateway restart
+```
+
+If `userId` is omitted, the plugin runs project-wide searches. Its `memory add`
+calls still inherit the default user from the local `mindmemos` CLI config; if
+neither location provides a user, storage fails because add requires `user_id`.
 
 The `cli` value is spawned by the gateway, which (under launchd/systemd) does
 not inherit your shell `PATH`. The default `"mindmemos"` therefore fails with

@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .EN.add.conv_split import CONV_BOUNDARY_DETECTION_PROMPT, CONV_FORCED_RESPLIT_PROMPT
+from .EN.add.conv_split_v1 import CONV_BOUNDARY_DETECTION_PROMPT_V1, CONV_FORCED_RESPLIT_PROMPT_V1
+from .EN.add.entity_description_rewrite import ENTITY_DESCRIPTION_REWRITE_PROMPT
 from .EN.add.entity_generation import ENTITY_GENERATION_PROMPT
+from .EN.add.entity_generation_v1 import ENTITY_GENERATION_PROMPT_V1
 from .EN.add.entity_merge import (
     DES_UPDATE_PROMPT,
     DUPLICATE_NAME_RESOLUTION_PROMPT,
@@ -14,6 +17,7 @@ from .EN.add.entity_merge import (
 )
 from .EN.add.episode_description import EPISODE_DESCRIPTION_PROMPT
 from .EN.add.episode_edge import EPISODE_EDGE_PROMPT
+from .EN.add.episode_entity import EPISODE_ENTITY_PROMPT
 from .EN.add.episode_inference import EPISODE_INFERENCE_PROMPT
 from .EN.add.episode_objectify import EPISODE_OBJECTIFY_PROMPT
 from .EN.add.higher_order_generation import HIGHER_ORDER_GENERATION_PROMPT
@@ -42,13 +46,18 @@ from .EN.retrieve.entity_relevance_filter import (
 )
 from .ZH.add.conv_split import CONV_BOUNDARY_DETECTION_PROMPT as CONV_BOUNDARY_DETECTION_PROMPT_ZH
 from .ZH.add.conv_split import CONV_FORCED_RESPLIT_PROMPT as CONV_FORCED_RESPLIT_PROMPT_ZH
+from .ZH.add.conv_split_v1 import CONV_BOUNDARY_DETECTION_PROMPT_V1 as CONV_BOUNDARY_DETECTION_PROMPT_V1_ZH
+from .ZH.add.conv_split_v1 import CONV_FORCED_RESPLIT_PROMPT_V1 as CONV_FORCED_RESPLIT_PROMPT_V1_ZH
+from .ZH.add.entity_description_rewrite import ENTITY_DESCRIPTION_REWRITE_PROMPT as ENTITY_DESCRIPTION_REWRITE_PROMPT_ZH
 from .ZH.add.entity_generation import ENTITY_GENERATION_PROMPT as ENTITY_GENERATION_PROMPT_ZH
+from .ZH.add.entity_generation_v1 import ENTITY_GENERATION_PROMPT_V1 as ENTITY_GENERATION_PROMPT_V1_ZH
 from .ZH.add.entity_merge import DES_UPDATE_PROMPT as DES_UPDATE_PROMPT_ZH
 from .ZH.add.entity_merge import DUPLICATE_NAME_RESOLUTION_PROMPT as DUPLICATE_NAME_RESOLUTION_PROMPT_ZH
 from .ZH.add.entity_merge import MERGE_DECISION_PROMPT as MERGE_DECISION_PROMPT_ZH
 from .ZH.add.entity_merge import SINGLE_ENTITY_MERGE_PROMPT as SINGLE_ENTITY_MERGE_PROMPT_ZH
 from .ZH.add.episode_description import EPISODE_DESCRIPTION_PROMPT as EPISODE_DESCRIPTION_PROMPT_ZH
 from .ZH.add.episode_edge import EPISODE_EDGE_PROMPT as EPISODE_EDGE_PROMPT_ZH
+from .ZH.add.episode_entity import EPISODE_ENTITY_PROMPT as EPISODE_ENTITY_PROMPT_ZH
 from .ZH.add.episode_inference import EPISODE_INFERENCE_PROMPT as EPISODE_INFERENCE_PROMPT_ZH
 from .ZH.add.episode_objectify import EPISODE_OBJECTIFY_PROMPT as EPISODE_OBJECTIFY_PROMPT_ZH
 from .ZH.add.higher_order_generation import HIGHER_ORDER_GENERATION_PROMPT as HIGHER_ORDER_GENERATION_PROMPT_ZH
@@ -60,7 +69,9 @@ from .ZH.add.schema_selection import (
 from .ZH.add.search_field_generation import (
     EPISODE_SEARCH_FIELD_AUGMENT_PROMPT as EPISODE_SEARCH_FIELD_AUGMENT_PROMPT_ZH,
 )
-from .ZH.add.search_field_generation import SEARCH_FIELD_GENERATION_PROMPT as SEARCH_FIELD_GENERATION_PROMPT_ZH
+from .ZH.add.search_field_generation import (
+    SEARCH_FIELD_GENERATION_PROMPT as SEARCH_FIELD_GENERATION_PROMPT_ZH,
+)
 from .ZH.add.search_field_generation import SEARCH_FIELD_UPDATE_PROMPT as SEARCH_FIELD_UPDATE_PROMPT_ZH
 from .ZH.add.vanilla import EXTRACTION_SYSTEM_PROMPT_ZH
 from .ZH.add.vanilla_entity import EXTRACTION_SYSTEM_PROMPT_ENTITY_ZH
@@ -88,6 +99,45 @@ class AddPromptSet:
     conv_boundary_detection: str
     conv_forced_resplit: str
     entity_generation: str
+    entity_description_rewrite: str
+    episode_edge: str
+    episode_entity: str
+    episode_objectify: str
+    schema_selection_for_generation: str
+
+
+def get_add_prompts(language: str | None = None) -> AddPromptSet:
+    normalized = (language or "EN").upper()
+    if normalized == "ZH":
+        return AddPromptSet(
+            conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT_ZH,
+            conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT_ZH,
+            entity_generation=ENTITY_GENERATION_PROMPT_ZH,
+            entity_description_rewrite=ENTITY_DESCRIPTION_REWRITE_PROMPT_ZH,
+            episode_edge=EPISODE_EDGE_PROMPT_ZH,
+            episode_entity=EPISODE_ENTITY_PROMPT_ZH,
+            episode_objectify=EPISODE_OBJECTIFY_PROMPT_ZH,
+            schema_selection_for_generation=SCHEMA_SELECTION_FOR_GENERATION_PROMPT_ZH,
+        )
+    return AddPromptSet(
+        conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT,
+        conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT,
+        entity_generation=ENTITY_GENERATION_PROMPT,
+        entity_description_rewrite=ENTITY_DESCRIPTION_REWRITE_PROMPT,
+        episode_edge=EPISODE_EDGE_PROMPT,
+        episode_entity=EPISODE_ENTITY_PROMPT,
+        episode_objectify=EPISODE_OBJECTIFY_PROMPT,
+        schema_selection_for_generation=SCHEMA_SELECTION_FOR_GENERATION_PROMPT,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AddPromptSetV1:
+    """Prompt set for the v1 (develop) LLM-heavy schema add flow."""
+
+    conv_boundary_detection: str
+    conv_forced_resplit: str
+    entity_generation: str
     episode_edge: str
     episode_inference: str
     episode_description: str
@@ -105,13 +155,13 @@ class AddPromptSet:
     single_entity_merge: str
 
 
-def get_add_prompts(language: str | None = None) -> AddPromptSet:
+def get_add_prompts_v1(language: str | None = None) -> AddPromptSetV1:
     normalized = (language or "EN").upper()
     if normalized == "ZH":
-        return AddPromptSet(
-            conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT_ZH,
-            conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT_ZH,
-            entity_generation=ENTITY_GENERATION_PROMPT_ZH,
+        return AddPromptSetV1(
+            conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT_V1_ZH,
+            conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT_V1_ZH,
+            entity_generation=ENTITY_GENERATION_PROMPT_V1_ZH,
             episode_edge=EPISODE_EDGE_PROMPT_ZH,
             episode_inference=EPISODE_INFERENCE_PROMPT_ZH,
             episode_description=EPISODE_DESCRIPTION_PROMPT_ZH,
@@ -128,10 +178,10 @@ def get_add_prompts(language: str | None = None) -> AddPromptSet:
             des_update=DES_UPDATE_PROMPT_ZH,
             single_entity_merge=SINGLE_ENTITY_MERGE_PROMPT_ZH,
         )
-    return AddPromptSet(
-        conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT,
-        conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT,
-        entity_generation=ENTITY_GENERATION_PROMPT,
+    return AddPromptSetV1(
+        conv_boundary_detection=CONV_BOUNDARY_DETECTION_PROMPT_V1,
+        conv_forced_resplit=CONV_FORCED_RESPLIT_PROMPT_V1,
+        entity_generation=ENTITY_GENERATION_PROMPT_V1,
         episode_edge=EPISODE_EDGE_PROMPT,
         episode_inference=EPISODE_INFERENCE_PROMPT,
         episode_description=EPISODE_DESCRIPTION_PROMPT,
@@ -199,22 +249,27 @@ def get_search_prompts(language: str | None = None) -> SearchPromptSet:
 
 __all__ = [
     "AddPromptSet",
+    "AddPromptSetV1",
     "ACTION_PLANNING_PROMPT",
     "BATCH_ENTITY_RELEVANCE_PROMPT",
     "BATCH_ENTITY_RELEVANCE_PROMPT_ZH",
     "CONV_BOUNDARY_DETECTION_PROMPT",
+    "CONV_BOUNDARY_DETECTION_PROMPT_V1",
+    "CONV_BOUNDARY_DETECTION_PROMPT_V1_ZH",
     "CONV_BOUNDARY_DETECTION_PROMPT_ZH",
     "CONV_FORCED_RESPLIT_PROMPT",
+    "CONV_FORCED_RESPLIT_PROMPT_V1",
+    "CONV_FORCED_RESPLIT_PROMPT_V1_ZH",
     "CONV_FORCED_RESPLIT_PROMPT_ZH",
     "DES_UPDATE_PROMPT",
     "DES_UPDATE_PROMPT_ZH",
     "DUPLICATE_NAME_RESOLUTION_PROMPT",
     "DUPLICATE_NAME_RESOLUTION_PROMPT_ZH",
+    "ENTITY_DESCRIPTION_REWRITE_PROMPT",
+    "ENTITY_DESCRIPTION_REWRITE_PROMPT_ZH",
     "ENTITY_GENERATION_PROMPT",
-    "EXTRACTION_SYSTEM_PROMPT",
-    "EXTRACTION_SYSTEM_PROMPT_ENTITY",
-    "EXTRACTION_SYSTEM_PROMPT_ENTITY_ZH",
-    "EXTRACTION_SYSTEM_PROMPT_ZH",
+    "ENTITY_GENERATION_PROMPT_V1",
+    "ENTITY_GENERATION_PROMPT_V1_ZH",
     "ENTITY_GENERATION_PROMPT_ZH",
     "ENTITY_RELEVANCE_FILTER_PROMPT",
     "ENTITY_RELEVANCE_FILTER_PROMPT_ZH",
@@ -222,12 +277,18 @@ __all__ = [
     "EPISODE_DESCRIPTION_PROMPT_ZH",
     "EPISODE_EDGE_PROMPT",
     "EPISODE_EDGE_PROMPT_ZH",
+    "EPISODE_ENTITY_PROMPT",
+    "EPISODE_ENTITY_PROMPT_ZH",
     "EPISODE_INFERENCE_PROMPT",
     "EPISODE_INFERENCE_PROMPT_ZH",
     "EPISODE_OBJECTIFY_PROMPT",
     "EPISODE_OBJECTIFY_PROMPT_ZH",
     "EPISODE_SEARCH_FIELD_AUGMENT_PROMPT",
     "EPISODE_SEARCH_FIELD_AUGMENT_PROMPT_ZH",
+    "EXTRACTION_SYSTEM_PROMPT",
+    "EXTRACTION_SYSTEM_PROMPT_ENTITY",
+    "EXTRACTION_SYSTEM_PROMPT_ENTITY_ZH",
+    "EXTRACTION_SYSTEM_PROMPT_ZH",
     "GLOBAL_PROPERTY_RERANK_PROMPT",
     "GLOBAL_PROPERTY_RERANK_PROMPT_ZH",
     "HIGHER_ORDER_GENERATION_PROMPT",
@@ -257,6 +318,7 @@ __all__ = [
     "TIME_EXTRACTION_PROMPT",
     "TIME_EXTRACTION_PROMPT_ZH",
     "get_add_prompts",
+    "get_add_prompts_v1",
     "get_extraction_system_prompt",
     "get_search_prompts",
 ]

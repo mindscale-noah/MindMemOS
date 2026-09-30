@@ -2,6 +2,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from mindmemos.config import (
     EpisodesChunkerConfig,
@@ -16,6 +17,11 @@ from mindmemos.config import (
 )
 from mindmemos.config.app import ModelEndpointConfig
 from mindmemos.llm.router import build_litellm_params
+
+skip_no_locomo_schema = pytest.mark.skipif(
+    not Path("config/locomo_schema.yaml").exists(),
+    reason="config/locomo_schema.yaml (gitignored local benchmark config) not present",
+)
 
 
 def test_dev_example_declares_all_algorithm_config_fields() -> None:
@@ -39,7 +45,11 @@ def test_vanilla_search_defaults_bound_prefetch_and_dedup_work() -> None:
 
 def test_dev_configs_keep_vanilla_settings_in_canonical_sections() -> None:
     legacy_flat_alias = "non" + "_schema"
-    for path in ("config/mindmemos/dev.yaml", "config/mindmemos/dev.example.yaml"):
+    # dev.yaml is a gitignored developer-local overlay; check it only when present.
+    paths = ["config/mindmemos/dev.example.yaml"]
+    if Path("config/mindmemos/dev.yaml").exists():
+        paths.append("config/mindmemos/dev.yaml")
+    for path in paths:
         raw_algo_config = _load_algo_config(path)
 
         assert "vanilla_add" not in raw_algo_config
@@ -78,15 +88,8 @@ def test_schema_add_defaults_align_with_original_generation_config() -> None:
 
     schema = cfg.add.schema
     assert schema.merge.entity_recall_top_k == 15
-    assert schema.merge.max_merge_retries == 8
-    assert schema.merge.use_property_merge is False
-    assert schema.extraction.use_search_fields is True
+    assert schema.extraction.enable_schema_selection is True
     assert schema.extraction.search_fields_max == 10
-    assert schema.extraction.episode_search_fields_augment is True
-    assert schema.extraction.episode_augment_count == 4
-    assert schema.higher_order.enabled is True
-    assert schema.higher_order.top_k == 10
-    assert schema.higher_order.min_evidence_count == 2
     assert schema.episode_edge.top_k == 10
 
 
@@ -130,6 +133,7 @@ def test_litellm_params_preserve_explicit_temperature() -> None:
     assert params["temperature"] == 0.7
 
 
+@skip_no_locomo_schema
 def test_locomo_schema_sets_router_failure_cooldown_policy() -> None:
     cfg = build_config(config_path="config/locomo_schema.yaml")
 

@@ -1,0 +1,70 @@
+"""Embedding transport validation using the SDK with a local mock transport."""
+
+import json
+
+import httpx
+import pytest
+from mindmemos_skill.infra.embedding import OpenAIEmbeddingClient, OpenAIEmbeddingConfig
+from openai import OpenAI
+
+
+def config(**updates):
+    return OpenAIEmbeddingConfig(model="test", base_url="http://test.invalid/v1", dimensions=2, batch_size=2, **updates)
+
+
+def test_batches_indices_and_borrowed_client_lifecycle():
+    calls = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        calls.append(payload)
+        data = [
+            {"object": "embedding", "index": i, "embedding": [float(i + 1), 1.0]} for i in range(len(payload["input"]))
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": "test",
+                "data": list(reversed(data)),
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+
+    with OpenAI(
+        api_key="test",
+        base_url="http://test.invalid/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    ) as sdk:
+        client = OpenAIEmbeddingClient(config(send_dimensions=True), client=sdk)
+        assert client.embed([]) == []
+        assert not calls
+        assert client.embed(["a", "b", "c"]) == [[1, 1], [2, 1], [1, 1]]
+        assert [payload["input"] for payload in calls] == [["a", "b"], ["c"]]
+        assert all(payload["dimensions"] == 2 and payload["encoding_format"] == "float" for payload in calls)
+        assert not sdk.is_closed()
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        [{"index": 1, "embedding": [1, 1]}],
+        [{"index": 0, "embedding": [1]}],
+        [{"index": 0, "embedding": [0, 0]}],
+        [],
+    ],
+)
+def test_invalid_provider_response_is_rejected(data):
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"object": "list", "model": "test", "data": data, "usage": {"prompt_tokens": 1, "total_tokens": 1}},
+        )
+
+    with OpenAI(
+        api_key="test",
+        base_url="http://test.invalid/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    ) as sdk:
+        with pytest.raises(ValueError):
+            OpenAIEmbeddingClient(config(), client=sdk).embed(["text"])

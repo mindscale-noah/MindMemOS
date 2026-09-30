@@ -31,6 +31,8 @@ class SchemaWritePlanBuilder(SchemaWritePlanBuilderProtocol):
     text_preprocessor: TextPreprocessor
     sparse_encoder: SparseVectorEncoder
     embed_texts: EmbedTexts
+    entity_description_max_chars: int = 500
+    """Per-entity description slice kept in the entity embedding text."""
 
     async def build(
         self,
@@ -70,7 +72,9 @@ class SchemaWritePlanBuilder(SchemaWritePlanBuilderProtocol):
         entity_by_name = {entity.entity_name: entity for entity in entities}
         final_entity_texts = {
             name: entity_write_embedding_text(
-                entity, [memory for memory in memories if memory.entity_id == entity.entity_id]
+                entity,
+                [memory for memory in memories if memory.entity_id == entity.entity_id],
+                description_max_chars=self.entity_description_max_chars,
             )
             for name, entity in entity_by_name.items()
         }

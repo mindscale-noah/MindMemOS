@@ -44,9 +44,7 @@ from mindmemos_eval.memory.envs.memoryagentbench import (
     MemoryAgentBenchAddSummary,
     MemoryAgentBenchAnswer,
     MemoryAgentBenchContextResult,
-    MemoryAgentBenchDreamingSummary,
     MemoryAgentBenchEnv,
-    MemoryAgentBenchEvaluationPhase,
     MemoryAgentBenchItem,
     MemoryAgentBenchQAResult,
     MemoryAgentBenchQuestion,
@@ -95,7 +93,6 @@ from mindmemos_eval.memory.envs.personamem import (
     load_personamem_questions,
 )
 
-from .backend import MindMemOSBackend, build_mindmemos_backend
 from .llm import LLMClient, LLMCompletion, LLMConfig, LLMProvider
 from .memory.base import (
     AlgorithmProfile,
@@ -165,7 +162,6 @@ from .skills.envs.spreadsheetbench import (
 )
 from .skills.evolve import (
     FastAPISkillEvolutionClient,
-    MindMemOSSkillEvolutionClient,
     NoopSkillEvolutionClient,
     SkillEvolutionClient,
 )
@@ -175,8 +171,6 @@ __all__ = [
     "LLMCompletion",
     "LLMConfig",
     "LLMProvider",
-    "MindMemOSBackend",
-    "build_mindmemos_backend",
     "BenchmarkRunManifest",
     "BenchmarkSpec",
     "AlgorithmProfile",
@@ -263,8 +257,6 @@ __all__ = [
     "MemoryAgentBenchQAResult",
     "MemoryAgentBenchAddSummary",
     "MemoryAgentBenchContextResult",
-    "MemoryAgentBenchDreamingSummary",
-    "MemoryAgentBenchEvaluationPhase",
     "MemoryAgentBenchRunResult",
     "calculate_memoryagentbench_metrics",
     "get_memoryagentbench_template",
@@ -292,7 +284,6 @@ __all__ = [
     "SpreadsheetBenchRunResult",
     "compare_workbooks",
     "FastAPISkillEvolutionClient",
-    "MindMemOSSkillEvolutionClient",
     "NoopSkillEvolutionClient",
     "SkillEvolutionClient",
     "SkillSet",

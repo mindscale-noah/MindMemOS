@@ -1,25 +1,12 @@
-"""每个对外提供服务的算法一个独立文件夹，这里重点定义的是算法流程，算法组件在components/内定义"""
+"""Skill algorithm implementations."""
 
-from .evolve import (
-    SkillGrpoEvolveInput,
-    SkillGrpoEvolveResult,
-    SkillGrpoWithExperienceValidation,
-    SkillGrpoWithExperienceValidationEvolveInput,
-    SkillGrpoWithExperienceValidationEvolveResult,
-    SkillGrpoWithoutReplayBuffer,
-    SkillGrpoWithoutReplayBufferEvolveInput,
-    SkillGrpoWithoutReplayBufferEvolveResult,
-    SkillGrpoWithReplayBuffer,
-)
+from .base import Algorithm
+from .evolve import SkillEvolver, SkillTrajectory
+from .manage import SkillManager
+from .train import SkillTrainer
 
-__all__ = [
-    "SkillGrpoEvolveInput",
-    "SkillGrpoEvolveResult",
-    "SkillGrpoWithExperienceValidation",
-    "SkillGrpoWithExperienceValidationEvolveInput",
-    "SkillGrpoWithExperienceValidationEvolveResult",
-    "SkillGrpoWithoutReplayBuffer",
-    "SkillGrpoWithoutReplayBufferEvolveInput",
-    "SkillGrpoWithoutReplayBufferEvolveResult",
-    "SkillGrpoWithReplayBuffer",
-]
+__all__ = ["Algorithm", "SkillManager", "SkillTrainer", "SkillEvolver", "SkillTrajectory"]
+
+from .registry import ensure_registered
+
+ensure_registered()

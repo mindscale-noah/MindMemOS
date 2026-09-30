@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from numbers import Real
 from typing import Any
 
@@ -42,6 +43,8 @@ CHOICE_RULES: tuple[ChoiceRule, ...] = (
         "telemetry.log_level", frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}), case_insensitive=True
     ),
     ChoiceRule("auth.mode", frozenset({"api_key", "gateway_jwt"})),
+    ChoiceRule("algo_config.search.retention.selector_version", frozenset({"mixed-v1", "mixed-v2"})),
+    ChoiceRule("algo_config.search.retention.estimator_version", frozenset({"heuristic-v2"})),
     ChoiceRule("database.qdrant.distance", frozenset({"Cosine", "Euclid", "Dot", "Manhattan"}), case_insensitive=True),
     ChoiceRule("database.default_consistency", frozenset({"fast", "strong"})),
     ChoiceRule("algo_config.common.prompt_language", frozenset({"EN", "ZH"}), case_insensitive=True),
@@ -52,6 +55,7 @@ CHOICE_RULES: tuple[ChoiceRule, ...] = (
     ),
     ChoiceRule("algo_config.text_processing.sparse_fallback_mode", frozenset({"tf", "log_tf"})),
     ChoiceRule("algo_config.add.schema.chunker.split_mode", frozenset({"llm", "rule"})),
+    ChoiceRule("algo_config.add.schema.version", frozenset({"v1", "v2"})),
     ChoiceRule("kafka.acks", frozenset({"0", "1", "all"})),
 )
 
@@ -101,12 +105,15 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("database.neo4j.read_retry_base_delay", min_value=0, support="non-negative number"),
     RangeRule("chat_model_router.allowed_fails", min_value=0, allow_none=True, support="non-negative integer"),
     RangeRule("chat_model_router.cool_down", min_value=0, allow_none=True, support="non-negative number"),
+    RangeRule("chat_model_router.retry_after", min_value=0, support="non-negative number"),
     RangeRule("chat_model_router.format_parser_max_attempts", min_value=1, support="positive integer >= 1"),
     RangeRule("embed_model_router.allowed_fails", min_value=0, allow_none=True, support="non-negative integer"),
     RangeRule("embed_model_router.cool_down", min_value=0, allow_none=True, support="non-negative number"),
+    RangeRule("embed_model_router.retry_after", min_value=0, support="non-negative number"),
     RangeRule("embed_model_router.format_parser_max_attempts", min_value=1, support="positive integer >= 1"),
     RangeRule("rerank_model_router.allowed_fails", min_value=0, allow_none=True, support="non-negative integer"),
     RangeRule("rerank_model_router.cool_down", min_value=0, allow_none=True, support="non-negative number"),
+    RangeRule("rerank_model_router.retry_after", min_value=0, support="non-negative number"),
     RangeRule("rerank_model_router.format_parser_max_attempts", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.text_processing.explicit_language_confidence", min_value=0, max_value=1),
     RangeRule("algo_config.text_processing.lang_zh_ratio", min_value=0, max_value=1),
@@ -208,15 +215,6 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         support="positive number",
     ),
     RangeRule(
-        "algo_config.add.schema.extraction.max_entities_per_conversation", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
-        "algo_config.add.schema.extraction.max_entity_resolve_concurrency", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
-        "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
         "algo_config.add.schema.merge.secondary_search_retry_backoff_base",
         min_value=0,
         include_min=False,
@@ -228,7 +226,47 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         include_min=False,
         support="positive number",
     ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entities_per_conversation", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entity_resolve_concurrency", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.description_rewrite_threshold",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.description_max_chars",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.reference_description_max_chars",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
     RangeRule("algo_config.search.request_top_k_max", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.search.retention.min_token_budget", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.search.retention.max_token_budget", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.search.retention.max_candidates", min_value=1, max_value=100),
+    RangeRule("algo_config.search.retention.relevance_weight", min_value=0, support="non-negative number"),
+    RangeRule("algo_config.search.retention.query_overlap_weight", min_value=0, support="non-negative number"),
+    RangeRule("algo_config.search.retention.recency_weight", min_value=0, support="non-negative number"),
+    RangeRule("algo_config.search.retention.cost_weight", min_value=0, support="non-negative number"),
+    RangeRule(
+        "algo_config.search.retention.recency_half_life_days",
+        min_value=0,
+        include_min=False,
+        support="positive number",
+    ),
+    RangeRule("algo_config.search.retention.missing_recency_score", min_value=0, max_value=1),
+    RangeRule("algo_config.search.retention.top_m_guarantee", min_value=0, max_value=100),
+    RangeRule("algo_config.search.retention.mmr_lambda", min_value=0, max_value=1),
     RangeRule(
         "algo_config.search.vanilla.dedup_threshold",
         min_value=0,
@@ -385,8 +423,6 @@ REQUIRED_STRING_PATHS: tuple[str, ...] = (
     "database.qdrant.search_record_collection",
     "database.qdrant.skill_version_collection",
     "database.qdrant.skill_blob_collection",
-    "database.qdrant.skill_family_collection",
-    "database.qdrant.skill_operation_collection",
     "database.qdrant.skill_trace_pending_collection",
     "database.qdrant.skill_trace_summary_collection",
     "database.qdrant.semantic_vector_name",
@@ -402,7 +438,7 @@ REQUIRED_STRING_PATHS: tuple[str, ...] = (
 )
 
 
-def validate_config(cfg: Any) -> None:
+def validate_config(cfg: Any, *, allow_project_embedding_dimensions: bool = False) -> None:
     """Validate a fully built config object before it becomes the process config."""
 
     _validate_choice_rules(cfg)
@@ -413,7 +449,7 @@ def validate_config(cfg: Any) -> None:
     _validate_model_router("chat_model_router", cfg.chat_model_router)
     _validate_model_router("embed_model_router", cfg.embed_model_router)
     _validate_model_router("rerank_model_router", cfg.rerank_model_router)
-    _validate_embedding_vector_size(cfg)
+    _validate_embedding_vector_size(cfg, allow_project_embedding_dimensions=allow_project_embedding_dimensions)
     _validate_algo(cfg)
     _validate_kafka(cfg.kafka)
 
@@ -493,11 +529,16 @@ def _validate_model_router(path: str, router: Any) -> None:
         _positive_optional(endpoint, "dimensions", f"{prefix}.dimensions")
 
 
-def _validate_embedding_vector_size(cfg: Any) -> None:
+def _validate_embedding_vector_size(cfg: Any, *, allow_project_embedding_dimensions: bool = False) -> None:
+    allow_project_dimension = (
+        allow_project_embedding_dimensions
+        and bool(cfg.provider_binding.enabled)
+        and bool(cfg.database.qdrant.project_collection_namespace_enabled)
+    )
     vector_size = cfg.database.qdrant.vector_size
     for index, endpoint in enumerate(cfg.embed_model_router.endpoints):
         dimensions = endpoint.dimensions
-        if dimensions is not None and dimensions != vector_size:
+        if dimensions is not None and dimensions != vector_size and not allow_project_dimension:
             raise InvalidConfigError(
                 f"embed_model_router.endpoints[{index}].dimensions",
                 support=f"must equal database.qdrant.vector_size ({vector_size})",
@@ -541,6 +582,13 @@ def _validate_schema_add(schema_add: Any) -> None:
 
 
 def _validate_search(search: Any) -> None:
+    retention = search.retention
+    if retention.min_token_budget > retention.max_token_budget:
+        raise InvalidConfigError(
+            "algo_config.search.retention.min_token_budget",
+            support="<= algo_config.search.retention.max_token_budget",
+        )
+
     vanilla = search.vanilla
     if vanilla.hybrid_prefetch_min > vanilla.hybrid_prefetch_max:
         raise InvalidConfigError(
@@ -654,6 +702,8 @@ def _validate_range(path: str, value: Any, rule: RangeRule) -> None:
         return
     if isinstance(value, bool) or not isinstance(value, Real):
         raise InvalidConfigError(path, support=rule.support or "number")
+    if not isfinite(value):
+        raise InvalidConfigError(path, support=rule.support or "finite number")
     if rule.min_value is not None:
         too_small = value < rule.min_value if rule.include_min else value <= rule.min_value
         if too_small:

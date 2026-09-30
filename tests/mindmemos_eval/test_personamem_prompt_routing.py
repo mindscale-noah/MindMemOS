@@ -62,4 +62,3 @@ def test_format_memory_with_date_passes_through_when_missing():
     assert _format_memory_with_date("m", None) == "m"
     assert _format_memory_with_date("m", "") == "m"
     assert _format_memory_with_date("m", "   ") == "m"
-

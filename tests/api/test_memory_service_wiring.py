@@ -2,17 +2,105 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from mindmemos.api.schemas import AddRequest, AuthContext
+from mindmemos.api.schemas import AddRequest, AuthContext, MemoryPageRequest, MemoryScrollRequest
 from mindmemos.api.services import memory_service
-from mindmemos.config import init_config, reset_config
+from mindmemos.config import get_config, init_config, reset_config
 from mindmemos.pipelines.delete.default import DefaultDeletePipeline
 from mindmemos.pipelines.feedback.default import DefaultFeedbackPipeline
 from mindmemos.pipelines.get.default import DefaultGetPipeline
-from mindmemos.pipelines.registry import PipelineType, register
+from mindmemos.pipelines.registry import register
 from mindmemos.pipelines.search.pipeline import SearchPipelineImpl
 from mindmemos.pipelines.update.default import DefaultUpdatePipeline
 from mindmemos.typing.memory import DialogueMessage, MemoryRequestContext
-from mindmemos.typing.service import AddPipelineInput, AddPipelineSyncResult, MemoryAddEventItem
+from mindmemos.typing.service import (
+    AddPipelineInput,
+    AddPipelineSyncResult,
+    GetPipelineResult,
+    MemoryAddEventItem,
+    MemoryListPipelineResult,
+    MemoryScrollPipelineResult,
+)
+
+
+@pytest.mark.asyncio
+async def test_management_reads_do_not_depend_on_configured_get_pipeline() -> None:
+    class GetOnlyPipeline:
+        async def get(self, inp, context) -> GetPipelineResult:
+            return GetPipelineResult(status="ok", memories=[])
+
+    class FakeCatalog:
+        def __init__(self) -> None:
+            self.list_calls = []
+            self.scroll_calls = []
+
+        async def list(self, inp, context) -> MemoryListPipelineResult:
+            self.list_calls.append((inp, context))
+            return MemoryListPipelineResult(memories=[], page=inp.page, page_size=inp.page_size)
+
+        async def scroll(self, inp, context) -> MemoryScrollPipelineResult:
+            self.scroll_calls.append((inp, context))
+            return MemoryScrollPipelineResult(memories=[])
+
+    auth = AuthContext(
+        request_id="req-1",
+        account_id="acc-1",
+        project_id="proj-1",
+        api_key_uuid="key-1",
+        memory_algorithm="vanilla",
+    )
+    catalog = FakeCatalog()
+    service = memory_service.MemoryService(get_pipeline=GetOnlyPipeline(), catalog=catalog)
+
+    await service.list(auth, MemoryPageRequest(page=2, page_size=5))
+    await service.scroll(auth, MemoryScrollRequest(limit=3))
+
+    assert len(catalog.list_calls) == 1
+    assert catalog.list_calls[0][0].page == 2
+    assert len(catalog.scroll_calls) == 1
+    assert catalog.scroll_calls[0][0].limit == 3
+
+
+@pytest.mark.asyncio
+async def test_dynamic_provider_binding_allows_project_embedding_dimension(tmp_path) -> None:
+    config_path = tmp_path / "project-namespaced.yaml"
+    config_path.write_text(
+        Path("config/mindmemos/dev.example.yaml")
+        .read_text(encoding="utf-8")
+        .replace("    vector_size: 2560", "    vector_size: 2560\n    project_collection_namespace_enabled: true"),
+        encoding="utf-8",
+    )
+
+    class Resolver:
+        async def resolve(self, _ctx):
+            return {
+                "embed_model_router": {
+                    "endpoints": [
+                        {
+                            "model": "openai/project-embed",
+                            "api_key": "sk-project",
+                            "api_base": "https://example.test/v1",
+                            "dimensions": 3,
+                        }
+                    ]
+                }
+            }
+
+    try:
+        init_config(config_path=config_path)
+        get_config().provider_binding.enabled = True
+        service = memory_service.MemoryService(provider_binding_resolver=Resolver())
+        auth = AuthContext(
+            request_id="req-1",
+            account_id="acc-1",
+            project_id="proj-1",
+            api_key_uuid="key-1",
+            memory_algorithm="vanilla",
+        )
+
+        with await service._provider_config_context(auth):
+            assert get_config().embed_model_router.endpoints[0].dimensions == 3
+    finally:
+        reset_config()
 
 
 def test_get_memory_service_wires_configured_non_algorithm_pipelines() -> None:
@@ -39,9 +127,9 @@ def test_get_memory_service_wires_configured_non_algorithm_pipelines() -> None:
         reset_config()
 
 
-def test_checked_in_dev_config_loads_and_selects_default_search_pipelines() -> None:
+def test_checked_in_example_config_loads_and_selects_default_search_pipelines() -> None:
     try:
-        init_config(config_path="config/mindmemos/dev.yaml")
+        init_config(config_path="config/mindmemos/dev.example.yaml")
         memory_service._service = None
 
         service = memory_service.get_memory_service()
@@ -80,19 +168,19 @@ pipelines:
 
 
 def test_get_memory_service_selects_non_algorithm_pipelines_from_config(tmp_path) -> None:
-    @register(type=PipelineType.GET, name="custom_get")
+    @register(type="get", name="custom_get")
     class CustomGetPipeline:
         pass
 
-    @register(type=PipelineType.DELETE, name="custom_delete")
+    @register(type="delete", name="custom_delete")
     class CustomDeletePipeline:
         pass
 
-    @register(type=PipelineType.UPDATE, name="custom_update")
+    @register(type="update", name="custom_update")
     class CustomUpdatePipeline:
         pass
 
-    @register(type=PipelineType.FEEDBACK, name="custom_feedback")
+    @register(type="feedback", name="custom_feedback")
     class CustomFeedbackPipeline:
         pass
 
@@ -149,7 +237,7 @@ pipelines:
 
 @pytest.mark.asyncio
 async def test_add_request_does_not_eagerly_create_unrelated_feedback_pipeline(tmp_path, monkeypatch) -> None:
-    @register(type=PipelineType.ADD, name="isolated_add_for_wiring_test")
+    @register(type="add", name="isolated_add_for_wiring_test")
     class IsolatedAddPipeline:
         async def add_sync(
             self, inp: AddPipelineInput, context: MemoryRequestContext, *, add_record_id: str | None = None

@@ -11,6 +11,7 @@ from .add_record import AddRecordRepository
 from .base import CollectionRepository
 from .entity import EntityRepository
 from .memory import MemoryRepository
+from .provider_binding import ProviderBindingRepository
 from .schema_add_buffer import SchemaAddBufferRepository
 from .search_record import SearchRecordRepository
 from .skill import SkillVersionRepository
@@ -21,6 +22,7 @@ __all__ = [
     "CollectionRepository",
     "EntityRepository",
     "MemoryRepository",
+    "ProviderBindingRepository",
     "SchemaAddBufferRepository",
     "SearchRecordRepository",
     "SkillVersionRepository",

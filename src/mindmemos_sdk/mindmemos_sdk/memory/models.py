@@ -99,6 +99,7 @@ class MemoryLineage(BaseModel):
     role: Literal["current", "archived"] = "current"
     derived_from_memory_ids: list[str] = Field(default_factory=list)
     """Ancestor memory IDs, newest first."""
+
     derived_to_memory_ids: list[str] = Field(default_factory=list)
 
 
@@ -114,6 +115,8 @@ class MemorySearchHit(BaseModel):
     event_time: str | None = None
     source_timestamp: str | None = None
     lineage: MemoryLineage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    """Business metadata attached to the memory by the server."""
 
 
 class SearchResult(BaseModel):
@@ -136,6 +139,29 @@ class GetResult(BaseModel):
 
     request_id: str | None = None
     memories: list[MemorySearchHit] = Field(default_factory=list)
+
+
+class MemoryPageResult(BaseModel):
+    """Typed result of ``MemoryClient.list``."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    request_id: str | None = None
+    memories: list[MemorySearchHit] = Field(default_factory=list)
+    page: int = 1
+    page_size: int = 20
+    total: int | None = None
+    has_more: bool = False
+
+
+class MemoryScrollResult(BaseModel):
+    """Typed result of ``MemoryClient.scroll``."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    request_id: str | None = None
+    memories: list[MemorySearchHit] = Field(default_factory=list)
+    next_cursor: str | None = None
 
 
 class StatusResult(BaseModel):
@@ -186,6 +212,7 @@ def serialize_feedback_recalled_memories(
         item.setdefault("event_time", None)
         item.setdefault("source_timestamp", None)
         item.setdefault("lineage", None)
+        item.setdefault("metadata", {})
         result.append(item)
     return result
 
@@ -227,12 +254,13 @@ def build_add_body(
 
 def build_search_body(
     *,
-    user_id: str,
+    user_id: str | None,
     query: str,
     top_k: int | None = 10,
     search_strategy: SearchStrategy = "fast",
     rerank: bool = False,
     score_threshold: float | None = None,
+    token_budget: int | None = None,
     filters: dict[str, Any] | None = None,
     app_id: str | None = None,
     agent_id: str | None = None,
@@ -241,16 +269,16 @@ def build_search_body(
     """Build a memory search request body without empty optional fields."""
     if not isinstance(rerank, bool):
         raise TypeError("rerank must be a bool")
-    body: dict[str, Any] = {
-        "user_id": user_id,
-        "query": query,
-        "search_strategy": search_strategy,
-    }
+    body: dict[str, Any] = {"query": query, "search_strategy": search_strategy}
+    if user_id:
+        body["user_id"] = user_id
     if top_k is not None:
         body["top_k"] = top_k
     body["rerank"] = rerank
     if score_threshold is not None:
         body["score_threshold"] = score_threshold
+    if token_budget is not None:
+        body["token_budget"] = token_budget
     if app_id:
         body["app_id"] = app_id
     if agent_id:
@@ -273,6 +301,59 @@ def build_get_body(
         body["filters"] = filters
     if top_k is not None:
         body["top_k"] = top_k
+    return body
+
+
+def build_list_body(
+    *,
+    filters: dict[str, Any] | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    include_total: bool = True,
+    user_id: str | None = None,
+    app_id: str | None = None,
+    agent_id: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Build a memory list request body without empty optional fields."""
+    body: dict[str, Any] = {"page": page, "page_size": page_size, "include_total": include_total}
+    if filters:
+        body["filters"] = filters
+    if user_id:
+        body["user_id"] = user_id
+    if app_id:
+        body["app_id"] = app_id
+    if agent_id:
+        body["agent_id"] = agent_id
+    if session_id:
+        body["session_id"] = session_id
+    return body
+
+
+def build_scroll_body(
+    *,
+    filters: dict[str, Any] | None = None,
+    limit: int = 100,
+    cursor: str | None = None,
+    user_id: str | None = None,
+    app_id: str | None = None,
+    agent_id: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Build a memory scroll request body without empty optional fields."""
+    body: dict[str, Any] = {"limit": limit}
+    if filters:
+        body["filters"] = filters
+    if cursor:
+        body["cursor"] = cursor
+    if user_id:
+        body["user_id"] = user_id
+    if app_id:
+        body["app_id"] = app_id
+    if agent_id:
+        body["agent_id"] = agent_id
+    if session_id:
+        body["session_id"] = session_id
     return body
 
 
