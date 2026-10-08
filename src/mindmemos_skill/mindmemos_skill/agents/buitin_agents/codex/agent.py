@@ -28,6 +28,7 @@ class CodexAgent(Agent[CodexConfig]):
         Returns:
             Final answer, native event trajectory, and reported token usage.
         """
+        self.config.require_connection()
         command = [
             self.config.cli_path,
             "exec",

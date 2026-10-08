@@ -23,21 +23,18 @@ from mindmemos_skill.envs.data import Data
 data = Data.build("spreadsheetbench", {"data_path": "/path/to/spreadsheetbench_verified_400/dataset.json", "data_root": "/path/to/spreadsheetbench_verified_400"})
 samples = data.load()
 splits = data.split(samples, split_file="/path/to/splits.json")
-env = Environment.build("spreadsheetbench", {"agent": {"model": "your-model", "max_completion_tokens": 16384}, "tool_agent": "openai_tool", "max_turns": 30, "skill_loading_mode": "tool", "execution": {"python_command": ["/path/to/venv/bin/python"]}})
-```
-
-```python
-bash_env = Environment.build("spreadsheetbench", {
-    "agent": {"model": "your-model"},
-    "interaction_mode": "bash_only",
-    "tool_agent": "text_action",
-    "skill_loading_mode": "system_prompt",
-    "max_turns": 15,
-    "stagnation_limit": 5,
+env = Environment.build("spreadsheetbench_tool_calling", {
+    "agent": {"model": "your-model", "max_completion_tokens": 16384},
+    "max_turns": 30,
+    "skill_loading_mode": "tool",
     "execution": {"python_command": ["/path/to/venv/bin/python"]},
 })
-```
 
-For a uv-managed project, use `"python_command": ["uv", "run", "--project", "/path/to/project", "python"]`.
-On Windows, an interpreter path can be `"C:/project/.venv/Scripts/python.exe"`.
-The default shell is `/bin/sh -c` on macOS/Linux and `cmd.exe /d /s /c` on Windows.
+text_env = Environment.build("spreadsheetbench_text_action", {
+    "agent": {"model": "your-model"},
+    "max_turns": 100,
+    "stagnation_limit": 5,
+    "shell_timeout_seconds": 120,
+    "transactional_recalculation": True,
+})
+```

@@ -1,5 +1,6 @@
 """Exercise benchmark protocols, exact feedback, privacy, and rollout recovery."""
 
+import asyncio
 import json
 import subprocess
 
@@ -16,7 +17,12 @@ from mindmemos_skill.envs.builtin_envs.officeqa.tools import run_tool
 from mindmemos_skill.envs.builtin_envs.searchqa import SearchQAConfig, SearchQAEnvironment
 from mindmemos_skill.envs.builtin_envs.searchqa.reward import evaluate as search_reward
 from mindmemos_skill.envs.builtin_envs.searchqa.typing import SearchQARewardData, SearchQATask
-from mindmemos_skill.envs.builtin_envs.spreadsheetbench import SpreadsheetBenchConfig, SpreadsheetBenchEnvironment
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench import (
+    SpreadsheetBenchTextActionConfig,
+    SpreadsheetBenchTextActionEnvironment,
+    SpreadsheetBenchToolCallingConfig,
+    SpreadsheetBenchToolCallingEnvironment,
+)
 from mindmemos_skill.envs.builtin_envs.spreadsheetbench.reward import compare_workbooks, verification_report
 from mindmemos_skill.envs.data import Data
 
@@ -28,11 +34,18 @@ class ScriptedAgent(OpenAIChatAgent):
         super().__init__(OpenAIChatConfig(model="test-model"))
         self.outputs = iter(outputs)
         self.requests = []
+        self.tool_requests = []
 
-    def run(self, *, system, user):
-        return self.run_messages(messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+    def run(self, *, system=None, user=None, messages=None, tools=None):
+        return self.run_messages(
+            messages=messages
+            if messages is not None
+            else [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            tools=tools,
+        )
 
     def run_messages(self, *, messages, tools=None):
+        self.tool_requests.append(tools)
         self.requests.append(json.loads(json.dumps(messages)))
         output = next(self.outputs)
         event = {"role": "assistant", "content": output} if isinstance(output, str) else output
@@ -73,10 +86,19 @@ def spreadsheet(tmp_path):
     return source
 
 
-@pytest.mark.parametrize("name", ["searchqa", "officeqa", "spreadsheetbench", "alfworld_bounded_history"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "searchqa",
+        "officeqa",
+        "spreadsheetbench_tool_calling",
+        "spreadsheetbench_text_action",
+        "alfworld_bounded_history",
+    ],
+)
 def test_builtin_registration(name):
     assert Environment.resolve(name)
-    assert Data.resolve(name)
+    assert Data.resolve("spreadsheetbench" if name.startswith("spreadsheetbench_") else name)
 
 
 def test_no_fast_registration():
@@ -108,13 +130,13 @@ def test_search_feedback_is_exact_and_private(tmp_path):
     sample = Data.build("searchqa", {"data_path": path}).load()[0]
     agent = ScriptedAgent(["<answer>Alice</answer>"])
     env = SearchQAEnvironment(SearchQAConfig(agent=agent.config), agent=agent)
-    result = env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data)
+    result = asyncio.run(env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data))
     expected = "[EVALUATION RESULT]\nQuestion: Who?\nPredicted answer: 'Alice'\nGold answers: [\"Secret O'Brien\"]\nExact Match: 0.0\nF1: 0.0000"
     assert result.reward.detail == expected
     assert result.trajectory[-1] == {"role": "system", "content": expected}
     assert "Secret" not in json.dumps(agent.requests)
     assert result.usage.total_tokens == 12
-    assert env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data) == result
+    assert asyncio.run(env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data)) == result
     assert len(agent.requests) == 1
 
 
@@ -162,13 +184,13 @@ def test_office_tools_score_and_private_reference(tmp_path):
     }
     agent = ScriptedAgent([tool, "<answer>41</answer>"])
     env = OfficeQAEnvironment(OfficeQAConfig(agent=agent.config), agent=agent)
-    result = env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data)
+    result = asyncio.run(env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data))
     assert result.reward.detail == "predicted '41' but expected '42'"
     assert result.usage.total_tokens == 24
     assert "Revenue: 42" in json.dumps(agent.requests[-1])
     assert "ground_truth" not in json.dumps(agent.requests)
-    assert run_tool("read", {"path": str(source)}, sample.task.documents, 1000).startswith("Error:")
-    assert run_tool("read", {"path": "../questions.csv"}, sample.task.documents, 1000).startswith("Error:")
+    assert run_tool("read", {"path": str(source)}, sample.task.documents, 1000).startswith("[read error:")
+    assert run_tool("read", {"path": "../questions.csv"}, sample.task.documents, 1000).startswith("[read error:")
 
 
 @pytest.mark.parametrize(
@@ -268,8 +290,8 @@ def test_spreadsheet_full_rollout_feedback_and_resume(spreadsheet, tmp_path, mon
     monkeypatch.setattr(
         "mindmemos_skill.envs.builtin_envs.spreadsheetbench.workspace_tools.run_tool", controlled_execution
     )
-    env = SpreadsheetBenchEnvironment(SpreadsheetBenchConfig(agent=agent.config), agent=agent)
-    result = env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data)
+    env = SpreadsheetBenchToolCallingEnvironment(SpreadsheetBenchToolCallingConfig(agent=agent.config), agent=agent)
+    result = asyncio.run(env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data))
     reports = [
         f"## Eval Result (case {number}): PASS\n\n\n## Output Verification\n  Sheet!A1: got={number + 1}, expected={number + 1} ✓\n  (+1 empty cells correct, omitted)"
         for number in (1,)
@@ -278,37 +300,35 @@ def test_spreadsheet_full_rollout_feedback_and_resume(spreadsheet, tmp_path, mon
     assert result.reward.score == 1 and result.reward.success
     assert "golden" not in json.dumps(agent.requests)
     assert len(executed) == 1
-    assert env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data) == result
+    assert asyncio.run(env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data)) == result
     assert len(executed) == 1
 
 
-def test_bash_only_rollout(spreadsheet, tmp_path, monkeypatch):
+def test_text_action_rollout(spreadsheet, tmp_path, monkeypatch):
     sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
     action = 'Action:\n{"name":"bash","arguments":{"command":"edit workbook"}}'
     agent = ScriptedAgent([action, "ACTION: TASK_COMPLETE"])
 
-    def controlled_action(action, directory, config):
-        workbook(directory / "output.xlsx", {"A1": 2})
+    def controlled_action(command, *, working_dir, timeout_seconds):
+        workbook(working_dir / "output.xlsx", {"A1": 2})
         return "done"
 
     monkeypatch.setattr(
-        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.bash_only.run_bash_action", controlled_action
+        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action.run_reference_bash", controlled_action
     )
-    env = SpreadsheetBenchEnvironment(
-        SpreadsheetBenchConfig(
-            interaction_mode="bash_only",
-            tool_agent="text_action",
-            skill_loading_mode="system_prompt",
+    env = SpreadsheetBenchTextActionEnvironment(
+        SpreadsheetBenchTextActionConfig(
             max_turns=15,
             agent=agent.config,
         ),
         agent=agent,
     )
-    result = env.rollout(sample.task, tmp_path / "tree", reward_data=sample.reward_data)
+    result = asyncio.run(env.rollout(sample.task, tmp_path / "tree", reward_data=sample.reward_data))
     assert "[POST-EXECUTION VERIFICATION]" in result.reward.detail and result.reward.success
-    assert result.trajectory[-3] == {"role": "user", "content": "Observation: done"}
+    assert result.trajectory[-2] == {"role": "user", "content": "Observation: done"}
     assert "golden" not in json.dumps(agent.requests)
     assert result.usage.total_tokens == 24
+    assert agent.tool_requests == [None, None]
 
 
 @pytest.mark.parametrize(
@@ -355,7 +375,7 @@ def test_alfworld_history_success_and_cleanup(tmp_path, monkeypatch):
     )
     agent = ScriptedAgent(["<think>inspect</think><action>look</action>"] * 3)
     env = ALFWorldEnvironment(ALFWorldConfig(agent=agent.config, simulator={}, history_length=1), agent=agent)
-    result = env.rollout(sample.task, tmp_path / "alf", reward_data=sample.reward_data)
+    result = asyncio.run(env.rollout(sample.task, tmp_path / "alf", reward_data=sample.reward_data))
     assert result.reward.success and result.reward.detail == ""
     assert simulator.closed and result.usage.total_tokens == 36
     final_prompt = agent.requests[-1][-1]["content"]
@@ -387,8 +407,8 @@ def test_alfworld_provider_failure_is_not_cached(tmp_path, monkeypatch):
     )
     agent = ScriptedAgent([])
     env = ALFWorldEnvironment(ALFWorldConfig(agent=agent.config, simulator={}), agent=agent)
-    with pytest.raises(StopIteration):
-        env.rollout(sample.task, tmp_path / "failed", reward_data=sample.reward_data)
+    with pytest.raises(RuntimeError, match="Synchronous operation raised StopIteration"):
+        asyncio.run(env.rollout(sample.task, tmp_path / "failed", reward_data=sample.reward_data))
     assert simulator.closed
     assert not (tmp_path / "failed/audit/result.json").exists()
 
@@ -466,7 +486,7 @@ def test_agent_tool_call_sdk_boundary(monkeypatch):
     monkeypatch.setattr(
         openai, "DefaultHttpxClient", lambda **kwargs: httpx.Client(transport=httpx.MockTransport(respond), **kwargs)
     )
-    agent = OpenAIChatAgent(OpenAIChatConfig(model="test", api_key="test-key"))
+    agent = OpenAIChatAgent(OpenAIChatConfig(model="test", api_key="test-key", base_url="https://test.invalid/v1"))
     messages = [{"role": "user", "content": "Read public.txt"}]
     tools = [
         {
@@ -482,32 +502,28 @@ def test_agent_tool_call_sdk_boundary(monkeypatch):
         agent.run_messages(messages=messages)
 
 
-@pytest.mark.parametrize("protocol", ["openai_tool", "text_action"])
-def test_spreadsheet_skill_tool_and_protocol_switch(spreadsheet, tmp_path, monkeypatch, protocol):
-    from mindmemos_skill.skill import Skill, SkillBundle, SkillResources, SkillSet
+def test_spreadsheet_native_skill_tool(spreadsheet, tmp_path, monkeypatch):
+    from mindmemos_skill.skill import Skill, SkillContent, SkillSet
 
     sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
     actions = [
         {"name": "skill", "arguments": {"name": "xlsx"}},
         {"name": "shell", "arguments": {"commands": ["python solution.py"]}},
     ]
-    if protocol == "text_action":
-        outputs = ["Action:\n" + json.dumps(action) for action in actions] + ["ACTION: TASK_COMPLETE"]
-    else:
-        outputs = [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": str(index),
-                        "type": "function",
-                        "function": {"name": action["name"], "arguments": json.dumps(action["arguments"])},
-                    }
-                ],
-            }
-            for index, action in enumerate(actions)
-        ] + ["Done"]
+    outputs = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": str(index),
+                    "type": "function",
+                    "function": {"name": action["name"], "arguments": json.dumps(action["arguments"])},
+                }
+            ],
+        }
+        for index, action in enumerate(actions)
+    ] + ["Done"]
     agent = ScriptedAgent(outputs)
 
     def execute(command, directory, config):
@@ -516,26 +532,35 @@ def test_spreadsheet_skill_tool_and_protocol_switch(spreadsheet, tmp_path, monke
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr("mindmemos_skill.envs.builtin_envs.spreadsheetbench.tools.execute", execute)
-    env = SpreadsheetBenchEnvironment(SpreadsheetBenchConfig(agent=agent.config, tool_agent=protocol), agent=agent)
-    result = env.rollout(
-        sample.task,
-        tmp_path / "result",
-        reward_data=sample.reward_data,
-        skill_set=SkillSet(
-            {
-                "0": Skill(
-                    bundle=SkillBundle(files={"SKILL.md": "Use Python literal values."}),
-                    resources=SkillResources(files={"references/guide.md": b"Original reference\r\n"}),
-                )
-            },
-            max_concurrency=1,
-        ),
+    env = SpreadsheetBenchToolCallingEnvironment(SpreadsheetBenchToolCallingConfig(agent=agent.config), agent=agent)
+    result = asyncio.run(
+        env.rollout(
+            sample.task,
+            tmp_path / "result",
+            reward_data=sample.reward_data,
+            skill_set=SkillSet(
+                {
+                    "0": Skill(
+                        source=SkillContent(
+                            content="Use Python literal values.",
+                            resources={"references/guide.md": b"Original reference\r\n"},
+                            name="test-skill",
+                            description="Task instructions",
+                            standard_format=False,
+                        )
+                    )
+                },
+                max_concurrency=1,
+            ),
+        )
     )
     assert result.reward.success and result.reward.skill_loaded
     assert "Use Python literal values." not in json.dumps(agent.requests[0])
     assert "Use Python literal values." in json.dumps(agent.requests[1])
     assert "[POST-EXECUTION VERIFICATION]" not in json.dumps(agent.requests)
     assert result.reward.n_turns == 3
+    assert all(agent.tool_requests)
+    assert any(event.get("role") == "tool" and "tool_call_id" in event for event in result.trajectory)
 
 
 @pytest.mark.parametrize(
@@ -578,33 +603,50 @@ def test_spreadsheet_environments_share_reward(spreadsheet, tmp_path, monkeypatc
         lambda name, arguments, directory, config: produce(directory),
     )
     monkeypatch.setattr(
-        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.bash_only.run_bash_action",
-        lambda action, directory, config: produce(directory),
+        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action.run_reference_bash",
+        lambda command, *, working_dir, timeout_seconds: produce(working_dir),
     )
-    forest_agent = ScriptedAgent(['Action: {"name":"shell","arguments":{"commands":["edit"]}}', "Done"])
-    tree_agent = ScriptedAgent(['Action: {"name":"bash","arguments":{"command":"edit"}}', "Done", "Done"])
-    forest = SpreadsheetBenchEnvironment(
-        SpreadsheetBenchConfig(agent=forest_agent.config, tool_agent="text_action"), agent=forest_agent
+    forest_agent = ScriptedAgent(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "edit",
+                        "type": "function",
+                        "function": {"name": "shell", "arguments": '{"commands":["edit"]}'},
+                    }
+                ],
+            },
+            "Done",
+        ]
     )
-    tree = SpreadsheetBenchEnvironment(
-        SpreadsheetBenchConfig(
-            interaction_mode="bash_only",
-            tool_agent="text_action",
-            skill_loading_mode="system_prompt",
+    tree_agent = ScriptedAgent(
+        ['Action: {"name":"bash","arguments":{"command":"edit"}}', "ACTION: TASK_COMPLETE", "ACTION: TASK_COMPLETE"]
+    )
+    forest = SpreadsheetBenchToolCallingEnvironment(
+        SpreadsheetBenchToolCallingConfig(agent=forest_agent.config), agent=forest_agent
+    )
+    tree = SpreadsheetBenchTextActionEnvironment(
+        SpreadsheetBenchTextActionConfig(
             max_turns=15,
             agent=tree_agent.config,
         ),
         agent=tree_agent,
     )
-    left = forest.rollout(sample.task, tmp_path / "forest", reward_data=sample.reward_data)
-    right = tree.rollout(sample.task, tmp_path / "tree", reward_data=sample.reward_data)
+    left = asyncio.run(forest.rollout(sample.task, tmp_path / "forest", reward_data=sample.reward_data))
+    right = asyncio.run(tree.rollout(sample.task, tmp_path / "tree", reward_data=sample.reward_data))
     left_reward = left.reward.model_dump(
         exclude={"n_turns", "skill_loaded", "skill_loading_mode", "skill_tool_exposed"}
     )
     right_reward = right.reward.model_dump(exclude={"n_turns", "finished", "stop_reason"})
     assert left_reward == right_reward
     assert left.reward.score == float(outcome == "correct")
-    assert right.trajectory[-1] == {"role": "system", "content": right.reward.detail}
+    for result in (left, right):
+        assert result.trajectory[-1]["role"] == "assistant"
+        assert "[POST-EXECUTION VERIFICATION]" not in json.dumps(result.trajectory)
+        assert "[POST-EXECUTION VERIFICATION]" in result.reward.detail
     assert all(
         "[POST-EXECUTION VERIFICATION]" not in json.dumps(agent.requests) for agent in (forest_agent, tree_agent)
     )
@@ -653,62 +695,57 @@ def test_spreadsheet_shared_reward_aggregates_cases(spreadsheet, tmp_path):
 @pytest.mark.parametrize(
     "options,error",
     [
-        ({"interaction_mode": "bash_only"}, "tool_agent"),
-        ({"interaction_mode": "bash_only", "tool_agent": "text_action"}, "skill_loading_mode"),
+        ({"interaction_mode": "bash_only"}, "interaction_mode"),
+        ({"tool_agent": "text_action"}, "tool_agent"),
         ({"interaction_mode": "unknown"}, "interaction_mode"),
     ],
 )
-def test_spreadsheet_mode_validation(options, error):
+@pytest.mark.parametrize("config_type", [SpreadsheetBenchToolCallingConfig, SpreadsheetBenchTextActionConfig])
+def test_spreadsheet_mode_validation(options, error, config_type):
     with pytest.raises(ValueError, match=error):
-        SpreadsheetBenchConfig(agent=OpenAIChatConfig(model="test-model"), **options)
+        config_type(agent=OpenAIChatConfig(model="test-model"), **options)
 
 
 @pytest.mark.parametrize("response", ['Action: {"name":"bash","arguments":{"command":"echo same"}}', "Action: broken"])
-def test_bash_only_stagnation(spreadsheet, tmp_path, monkeypatch, response):
+def test_text_action_stagnation(spreadsheet, tmp_path, monkeypatch, response):
     sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
     agent = ScriptedAgent([response] * 3)
     monkeypatch.setattr(
-        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.bash_only.run_bash_action",
-        lambda action, directory, config: "same output",
+        "mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action.run_reference_bash",
+        lambda command, *, working_dir, timeout_seconds: "same output",
     )
-    env = SpreadsheetBenchEnvironment(
-        SpreadsheetBenchConfig(
+    env = SpreadsheetBenchTextActionEnvironment(
+        SpreadsheetBenchTextActionConfig(
             agent=agent.config,
-            interaction_mode="bash_only",
-            tool_agent="text_action",
-            skill_loading_mode="system_prompt",
             max_turns=15,
             stagnation_limit=3,
         ),
         agent=agent,
     )
-    result = env.rollout(sample.task, tmp_path / "stagnation", reward_data=sample.reward_data)
+    result = asyncio.run(env.rollout(sample.task, tmp_path / "stagnation", reward_data=sample.reward_data))
     assert len(agent.requests) == 3
     assert result.reward.finished is False
     assert "3 consecutive times" in result.reward.stop_reason
     assert result.reward.fail_reason == "output-not-found"
 
 
-def test_bash_only_scores_output_at_turn_limit(spreadsheet, tmp_path, monkeypatch):
+def test_text_action_scores_output_at_turn_limit(spreadsheet, tmp_path, monkeypatch):
     sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
     agent = ScriptedAgent(['Action: {"name":"bash","arguments":{"command":"edit"}}'])
 
-    def edit(action, directory, config):
-        workbook(directory / "output.xlsx", {"A1": 2})
+    def edit(command, *, working_dir, timeout_seconds):
+        workbook(working_dir / "output.xlsx", {"A1": 2})
         return "done"
 
-    monkeypatch.setattr("mindmemos_skill.envs.builtin_envs.spreadsheetbench.bash_only.run_bash_action", edit)
-    env = SpreadsheetBenchEnvironment(
-        SpreadsheetBenchConfig(
+    monkeypatch.setattr("mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action.run_reference_bash", edit)
+    env = SpreadsheetBenchTextActionEnvironment(
+        SpreadsheetBenchTextActionConfig(
             agent=agent.config,
-            interaction_mode="bash_only",
-            tool_agent="text_action",
-            skill_loading_mode="system_prompt",
             max_turns=1,
         ),
         agent=agent,
     )
-    result = env.rollout(sample.task, tmp_path / "limit", reward_data=sample.reward_data)
+    result = asyncio.run(env.rollout(sample.task, tmp_path / "limit", reward_data=sample.reward_data))
     assert result.reward.success and result.reward.score == 1
     assert result.reward.finished is False
     assert result.reward.fail_reason == ""
@@ -734,7 +771,7 @@ def test_subclass_hooks_share_scoring_and_isolate_concurrent_rollouts(spreadshee
                 usage={"total_tokens": 3},
             )
 
-    class CustomEnvironment(SpreadsheetBenchEnvironment):
+    class CustomEnvironment(SpreadsheetBenchToolCallingEnvironment):
         def _system_prompt(self, context):
             return "Custom policy"
 
@@ -753,43 +790,64 @@ def test_subclass_hooks_share_scoring_and_isolate_concurrent_rollouts(spreadshee
             )
 
     sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
-    config = SpreadsheetBenchConfig(agent=OpenAIChatConfig(model="offline"), tools=[schema])
+    config = SpreadsheetBenchToolCallingConfig(agent=OpenAIChatConfig(model="offline"), tools=[schema])
     env = CustomEnvironment(config, agent=Model(config.agent))
 
     def run(identifier):
-        return env.rollout(
-            sample.task.model_copy(update={"id": identifier}),
-            tmp_path / identifier,
-            reward_data=sample.reward_data,
+        return asyncio.run(
+            env.rollout(
+                sample.task.model_copy(update={"id": identifier}),
+                tmp_path / identifier,
+                reward_data=sample.reward_data,
+            )
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(run, ["first", "second"]))
     assert [result.output for result in results] == ["first", "second"]
     assert all(result.reward.success for result in results)
-    assert all(result.trajectory[-1]["content"] == result.reward.detail for result in results)
+    assert all(result.trajectory[-1] == {"role": "assistant", "content": result.output} for result in results)
     assert results[0].reward == results[1].reward
     assert all(result.usage.calls == [{"total_tokens": 3}] for result in results)
     assert all(result.usage.reported for result in results)
-    assert CustomEnvironment._run is SpreadsheetBenchEnvironment._run
-    assert CustomEnvironment._interact is SpreadsheetBenchEnvironment._interact
+    assert CustomEnvironment._run is SpreadsheetBenchToolCallingEnvironment._run
+    assert CustomEnvironment._interact is SpreadsheetBenchToolCallingEnvironment._interact
     # The base class still renders its own prompts and cannot inherit custom hooks.
     base_agent = ScriptedAgent(["Done"])
-    base = SpreadsheetBenchEnvironment(SpreadsheetBenchConfig(agent=base_agent.config), agent=base_agent)
-    base.rollout(sample.task, tmp_path / "base", reward_data=sample.reward_data)
+    base = SpreadsheetBenchToolCallingEnvironment(
+        SpreadsheetBenchToolCallingConfig(agent=base_agent.config), agent=base_agent
+    )
+    asyncio.run(base.rollout(sample.task, tmp_path / "base", reward_data=sample.reward_data))
     assert base_agent.requests[0][0]["content"] != "Custom policy"
 
 
 def test_spreadsheet_resume_checks_tool_schemas(spreadsheet, tmp_path):
     sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
     agent = ScriptedAgent(["Done"])
-    config = SpreadsheetBenchConfig(agent=agent.config)
-    env = SpreadsheetBenchEnvironment(config, agent=agent)
+    config = SpreadsheetBenchToolCallingConfig(agent=agent.config)
+    env = SpreadsheetBenchToolCallingEnvironment(config, agent=agent)
     root = tmp_path / "run"
-    original = env.rollout(sample.task, root, reward_data=sample.reward_data)
-    assert env.rollout(sample.task, root, reward_data=sample.reward_data) == original
+    original = asyncio.run(env.rollout(sample.task, root, reward_data=sample.reward_data))
+    assert asyncio.run(env.rollout(sample.task, root, reward_data=sample.reward_data)) == original
     assert len(agent.requests) == 1
-    changed = SpreadsheetBenchEnvironment(config.model_copy(update={"tools": []}), agent=agent)
+    changed = SpreadsheetBenchToolCallingEnvironment(config.model_copy(update={"tools": []}), agent=agent)
     with pytest.raises(ValueError, match="inputs changed"):
-        changed.rollout(sample.task, root, reward_data=sample.reward_data)
+        asyncio.run(changed.rollout(sample.task, root, reward_data=sample.reward_data))
     assert len(agent.requests) == 1
+
+
+@pytest.mark.parametrize("name", ["spreadsheetbench", "spreadsheetbench_reference"])
+def test_obsolete_spreadsheet_environment_names_are_rejected(name):
+    with pytest.raises(ValueError, match="Unknown Environment"):
+        Environment.resolve(name)
+    assert Data.resolve("spreadsheetbench")
+
+
+def test_spreadsheet_protocols_share_lifecycle_without_inheriting_each_other():
+    native = SpreadsheetBenchToolCallingEnvironment
+    textual = SpreadsheetBenchTextActionEnvironment
+    assert not issubclass(native, textual)
+    assert not issubclass(textual, native)
+    assert native._run is textual._run
+    assert native._interact is textual._interact
+    assert native.config_type is not textual.config_type

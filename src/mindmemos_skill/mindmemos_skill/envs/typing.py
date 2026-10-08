@@ -13,7 +13,7 @@ from pydantic import (
     model_validator,
 )
 
-from ..skill.typing import SkillBundle, SkillSetIdentity, SkillSnapshot
+from ..skill.typing import SkillSetIdentity, SkillSnapshot
 
 
 class Task(BaseModel):
@@ -47,11 +47,11 @@ class RolloutRequest(BaseModel):
     selected_skill_ids: list[str] | None = None
     """Ordered assembled member IDs; None before assembly or in legacy records."""
 
-    assembled_bundles: list[SkillBundle] | None = None
-    """Actual task-time bundles, or None until assembly has completed."""
+    assembled_skills: list[SkillSnapshot] | None = None
+    """Actual task-time snapshots, or None until assembly has completed."""
 
     assembled_hashes: list[str] | None = None
-    """Content hashes of the assembled bundles, in the same order."""
+    """Full content-and-resource hashes of the assembled snapshots, in the same order."""
 
     environment: str
     """Fully qualified concrete environment class name."""
@@ -74,15 +74,15 @@ class RolloutRequest(BaseModel):
             ):
                 raise ValueError("Selected IDs must be unique members of the SkillSet")
             expected_count = len(ids)
-        if self.assembled_bundles is None:
+        if self.assembled_skills is None:
             if self.assembled_hashes is not None or self.selected_skill_ids is not None:
-                raise ValueError("Assembly hashes and selection require assembled bundles")
+                raise ValueError("Assembly hashes and selection require assembled snapshots")
         elif self.skill_set is not None and self.selected_skill_ids is None:
             raise ValueError("Assembled SkillSet requires selected IDs")
-        elif len(self.assembled_bundles) != expected_count or self.assembled_hashes != [
-            bundle.content_hash for bundle in self.assembled_bundles
+        elif len(self.assembled_skills) != expected_count or self.assembled_hashes != [
+            snapshot.skill_hash for snapshot in self.assembled_skills
         ]:
-            raise ValueError("Assembled bundles and hashes must match the selected Skill count")
+            raise ValueError("Assembled snapshots and hashes must match the selected Skill count")
         return self
 
 

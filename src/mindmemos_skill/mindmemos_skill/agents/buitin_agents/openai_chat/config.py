@@ -8,7 +8,7 @@ from ...config import AgentConnectionConfig
 
 
 class OpenAIChatConfig(AgentConnectionConfig):
-    """Configure a chat model without storing credentials in rollout snapshots."""
+    """Configure a chat model with serializable connection settings."""
 
     model: str = Field(min_length=1)
     """Provider model or deployment name."""
@@ -65,9 +65,6 @@ class OpenAIChatConfig(AgentConnectionConfig):
         default_factory=lambda: [5, 10, 30], min_length=1
     )
     """Wait schedule used by schedule mode; the final delay repeats if needed."""
-
-    sdk_max_retries: int = Field(default=0, ge=0)
-    """SDK retries inside each outer attempt; zero avoids nested retries."""
 
     invalid_tool_arguments: Literal["error", "empty"] = "error"
     """Return a parsing error or execute malformed JSON tool arguments as an empty object."""

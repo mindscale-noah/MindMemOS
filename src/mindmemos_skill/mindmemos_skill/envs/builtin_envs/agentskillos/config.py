@@ -13,7 +13,7 @@ from .source import evaluator_digest
 class AgentSkillOSRetrievalDataConfig(BaseModel):
     """Locate legacy retrieval-only files for the standalone comparison tool."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown source settings."""
 
     tasks_path: Path
@@ -26,7 +26,7 @@ class AgentSkillOSRetrievalDataConfig(BaseModel):
 class AgentSkillOSDataConfig(BaseModel):
     """Read the original official task JSON files and bundled input assets."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unsupported source settings."""
 
     benchmark_root: Path
@@ -39,7 +39,7 @@ class AgentSkillOSDataConfig(BaseModel):
 class AgentSkillOSConfig(BaseModel):
     """Execute native tool use and score actual artifacts with the official evaluator."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown execution settings and stale retrieval-only configuration."""
 
     agent: CodexConfig

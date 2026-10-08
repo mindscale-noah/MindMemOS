@@ -4,8 +4,7 @@ import json
 from pathlib import Path
 
 from ...agents.typing import AgentResult
-from ...skill import Skill, SkillBundle, SkillResources
-from ...skill.io import write_skill
+from ...skill import Skill, SkillContent
 from ..typing import Usage
 
 
@@ -36,12 +35,12 @@ def skill_text(skills: list[Skill]) -> str:
     """Render ordered prepared Skills without exposing evaluation references.
 
     Args:
-        skills: Complete Skill copies whose bundles are already assembled.
+        skills: Complete Skill copies whose documents are already assembled.
 
     Returns:
         Readable skill headings and contents, or an empty string.
     """
-    return "\n\n".join(skill.bundle.files["SKILL.md"] for skill in skills)
+    return "\n\n".join(skill.content for skill in skills)
 
 
 def export_skills(skills: list[Skill], directory: Path) -> str:
@@ -61,12 +60,31 @@ def export_skills(skills: list[Skill], directory: Path) -> str:
         return ""
     resources = {}
     for skill in skills:
-        for path, content in skill.resources.files.items():
+        for path, content in skill.resources.items():
             if path in resources and resources[path] != content:
                 raise ValueError(f"Conflicting Skill resource: {path}")
             resources[path] = content
     text = skill_text(skills)
-    write_skill(SkillBundle(files={"SKILL.md": text}), SkillResources(files=resources), directory)
+    source = SkillContent(
+        content=text,
+        resources=resources,
+        name="assembled",
+        description="Task-selected instructions",
+        standard_format=False,
+    )
+    # Benchmark inputs already occupy this workspace; install only Skill files.
+    directory = directory.absolute()
+    files = {"SKILL.md": source.content.encode("utf-8"), **source.resources}
+    for name in files:
+        target = directory / name
+        if any(path.is_symlink() for path in (target, *target.parents)):
+            raise ValueError("Skill workspace destinations must not contain symbolic links")
+        if target.exists() and not target.is_file():
+            raise ValueError(f"Skill workspace destination is not a file: {name}")
+    for name, content in files.items():
+        target = directory / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
     return text
 
 

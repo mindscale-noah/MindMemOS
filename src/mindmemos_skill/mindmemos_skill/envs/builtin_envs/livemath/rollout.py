@@ -18,6 +18,12 @@ from .typing import LiveMathResult, LiveMathRewardData, LiveMathTask
 class LiveMathEnvironment(Environment[LiveMathConfig]):
     """Solve one math MCQ without exposing private references to the model."""
 
+    task_type = LiveMathTask
+    """Public LiveMath task schema."""
+
+    reward_data_type = LiveMathRewardData
+    """Private LiveMath scoring schema."""
+
     config_type = LiveMathConfig
     """Single-call agent and evaluation protocol settings."""
 

@@ -1,9 +1,9 @@
 """SpreadsheetBench data, local execution, and workspace ReAct settings."""
 
 from pathlib import Path
-from typing import Literal, Self
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from ....agents.buitin_agents.openai_chat.config import OpenAIChatConfig
 from ....infra.execution import ExecutionConfig
@@ -12,7 +12,7 @@ from ....infra.execution import ExecutionConfig
 class SpreadsheetBenchDataConfig(BaseModel):
     """Read a released dataset and its workbook case directories."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown data settings."""
 
     data_path: Path
@@ -22,49 +22,46 @@ class SpreadsheetBenchDataConfig(BaseModel):
     """Workbook release root; defaults to the dataset file's directory."""
 
 
-class SpreadsheetBenchConfig(BaseModel):
-    """Configure workspace tools or a single-workbook bash action loop."""
+class SpreadsheetBenchExecutionConfig(BaseModel):
+    """Shared model and turn limits for the two spreadsheet protocols."""
 
-    model_config = ConfigDict(extra="forbid")
-    """Reject unrecorded rollout options."""
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+    """Reject unrecognized options, including obsolete protocol switches."""
 
     agent: OpenAIChatConfig
     """Recorded model and transport settings."""
 
-    tools: list[dict[str, JsonValue]] | None = None
-    """Optional tool schemas for a subclass; None selects the built-in mode defaults."""
-
-    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
-    """Local Python launcher, shell, and command timeout."""
-
-    interaction_mode: Literal["workspace_tools", "bash_only"] = "workspace_tools"
-    """Select the independent interaction loop and available tool set."""
-
-    stagnation_limit: int | None = Field(default=None, ge=2)
-    """Optional repeated-action cutoff in bash_only mode; None matches the original unlimited repetition."""
-
     max_turns: int = Field(default=30, ge=1)
     """Maximum model turns per workbook case."""
 
-    tool_agent: Literal["openai_tool", "text_action"] = "openai_tool"
-    """Agent registration name selecting the tool-call wire format."""
+    stagnation_limit: int | None = Field(default=None, ge=2)
+    """Consecutive identical observations allowed; None disables the cutoff."""
+
+
+class SpreadsheetBenchToolCallingConfig(SpreadsheetBenchExecutionConfig):
+    """Configure native structured tool calls over workspace tools."""
+
+    tools: list[dict[str, JsonValue]] | None = None
+    """Explicit tool schemas; None exposes the standard workspace tools."""
+
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    """Local Python launcher, shell, and command timeout for workspace tools."""
 
     skill_loading_mode: Literal["tool", "system_prompt"] = "tool"
-    """Load xlsx guidance through a tool, or inject it into the system prompt."""
+    """Load Skill instructions through a tool or preload them into the prompt."""
 
-    @model_validator(mode="after")
-    def validate_interaction_mode(self) -> Self:
-        """Reject unsupported bash-only protocol and skill-loading combinations.
 
-        Returns:
-            The validated interaction settings.
+class SpreadsheetBenchTextActionConfig(SpreadsheetBenchExecutionConfig):
+    """Configure text Action/Observation messages and bash execution."""
 
-        Raises:
-            ValueError: Bash-only mode uses a non-text protocol or tool-loaded skills.
-        """
-        if self.interaction_mode == "bash_only":
-            if self.tool_agent != "text_action":
-                raise ValueError("bash_only requires tool_agent='text_action'")
-            if self.skill_loading_mode != "system_prompt":
-                raise ValueError("bash_only requires skill_loading_mode='system_prompt'")
-        return self
+    max_turns: int = Field(default=100, ge=1)
+    """Maximum text-action turns per task."""
+
+    shell_timeout_seconds: int = Field(default=120, ge=1)
+    """Timeout for each local bash command."""
+
+    stagnation_limit: int = Field(default=5, ge=2)
+    """Consecutive identical actions or format errors allowed before stopping."""
+
+    transactional_recalculation: bool = True
+    """Include the canonical recalculation command and local helper."""

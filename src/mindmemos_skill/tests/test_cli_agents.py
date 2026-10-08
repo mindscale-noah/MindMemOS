@@ -63,7 +63,9 @@ def test_codex_requires_completed_nonempty_output(monkeypatch, tmp_path, events)
     """Never treat a partial stream or provider failure as success."""
     monkeypatch.setattr(codex_module, "run_cli", lambda *args: "\n".join(map(json.dumps, events)))
     with pytest.raises(RuntimeError):
-        Agent.build("codex", {}).run(system="", user="task", workspace=tmp_path)
+        Agent.build("codex", {"api_key": "secret", "base_url": "https://example.com/v1"}).run(
+            system="", user="task", workspace=tmp_path
+        )
 
 
 @pytest.mark.parametrize("failure", [False, True])
@@ -121,7 +123,7 @@ def test_deepseek_sessions_and_isolation(monkeypatch, tmp_path, reason, version)
         return "answer\n"
 
     monkeypatch.setattr(dsh_module, "run_cli", fake_run)
-    agent = Agent.build("deepseek_harness", {})
+    agent = Agent.build("deepseek_harness", {"api_key": "secret", "base_url": "https://example.com/v1"})
     if reason == "cancelled":
         with pytest.raises(RuntimeError):
             agent.run(system="instructions", user="task", workspace=tmp_path)
@@ -150,12 +152,17 @@ def test_process_stdin_exit_and_timeout(tmp_path):
         run_cli([sys.executable, "-c", "import time; time.sleep(10)"], tmp_path, CLIConfig(timeout_s=0.1), {})
 
 
-def test_claude_preserves_native_settings_without_overrides(monkeypatch, tmp_path):
-    """Keep native settings available when no explicit credentials or endpoint are selected."""
+def test_cli_process_excludes_ambient_model_credentials(monkeypatch, tmp_path):
+    """Pass configured credentials while removing competing parent model settings."""
+    from mindmemos_skill.agents.buitin_agents.constants import NATIVE_CONNECTION_ENV
 
-    def fake_run(command, *args):
-        assert "--setting-sources" not in command
-        return json.dumps({"type": "result", "subtype": "success", "result": "answer"})
-
-    monkeypatch.setattr(claude_module, "run_cli", fake_run)
-    assert Agent.build("claude", {}).run(system="", user="task", workspace=tmp_path).output == "answer"
+    for variable in NATIVE_CONNECTION_ENV:
+        monkeypatch.setenv(variable, "ambient-value")
+    overrides = {"CODEX_API_KEY": "configured-secret"}
+    script = (
+        "import os, json; print(json.dumps({name: os.environ.get(name) for name in "
+        + repr(NATIVE_CONNECTION_ENV)
+        + "}))"
+    )
+    result = json.loads(run_cli([sys.executable, "-c", script], tmp_path, CLIConfig(), overrides))
+    assert result == {variable: overrides.get(variable) for variable in NATIVE_CONNECTION_ENV}

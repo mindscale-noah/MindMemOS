@@ -10,7 +10,7 @@ from ....agents.buitin_agents.openai_chat.config import OpenAIChatConfig
 class OfficeQADataConfig(BaseModel):
     """Read questions separately from the public document corpus."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unsupported source options."""
 
     data_path: Path
@@ -23,7 +23,7 @@ class OfficeQADataConfig(BaseModel):
 class OfficeQAConfig(BaseModel):
     """Run bounded local document research with the official binary scorer."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unrecorded execution options."""
 
     agent: OpenAIChatConfig

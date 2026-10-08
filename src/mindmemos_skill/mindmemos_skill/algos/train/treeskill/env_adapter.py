@@ -2,6 +2,7 @@
 
 import json
 
+from ....envs.base import Environment
 from ....envs.typing import Task
 from ....registry.base import Registrable
 from .config import TreeSkillEnvAdapterConfig
@@ -21,7 +22,7 @@ class TreeSkillEnvAdapter(Registrable[TreeSkillEnvAdapterConfig]):
     config_type = TreeSkillEnvAdapterConfig
     """Default options inherited by user adapters."""
 
-    def __init__(self, config: TreeSkillEnvAdapterConfig | None = None):
+    def __init__(self, config: TreeSkillEnvAdapterConfig | None = None) -> None:
         """Bind immutable options without constructing model clients.
 
         Args:
@@ -29,7 +30,7 @@ class TreeSkillEnvAdapter(Registrable[TreeSkillEnvAdapterConfig]):
         """
         super().__init__(config.model_copy(deep=True) if config is not None else self.config_type())
 
-    def validate_environment(self, env) -> None:
+    def validate_environment(self, env: Environment) -> None:
         """Check compatibility before sampling starts.
 
         Args:

@@ -7,10 +7,10 @@ import subprocess
 from importlib.resources import files
 from pathlib import Path
 
-from .....common.json import extract_json_object
-from .....envs.builtin_envs.spreadsheetbench.recalculation import append_recalculation_instructions
-from .....envs.builtin_envs.spreadsheetbench.typing import SpreadsheetBenchTask as Task
+from ....common.json import extract_json_object
+from .recalculation import append_recalculation_instructions
 from .typing import PolicyAction, PolicyResponse, PolicyResponseType
+from .typing import SpreadsheetBenchTask as Task
 
 TASK_COMPLETE_SIGNAL = "ACTION: TASK_COMPLETE"
 _MAX_OBSERVATION_LENGTH = 6000
@@ -60,7 +60,7 @@ def build_reference_messages(
     prompt_name = (
         "trace2skill_preloaded_system_prompt.txt" if skill_content.strip() else "trace2skill_no_skill_system_prompt.txt"
     )
-    template = files(f"{__package__}.spreadsheetbench_prompts").joinpath(prompt_name).read_text(encoding="utf-8")
+    template = files(f"{__package__}.text_action_prompts").joinpath(prompt_name).read_text(encoding="utf-8")
     system = template.replace("{skill_content}", _strip_frontmatter(skill_content))
     system = system.replace("{skill_dir}", str(skill_dir.resolve()) if skill_dir is not None else "")
     user = f"""Task: Below is the spreadsheet manipulation question you need to solve:

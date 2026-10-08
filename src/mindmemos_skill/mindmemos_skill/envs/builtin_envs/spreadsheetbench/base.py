@@ -1,23 +1,19 @@
-"""Shared workbook execution with overridable prompts and tool observations."""
+"""Shared workbook lifecycle and interaction scheduling for spreadsheet environments."""
 
+from abc import abstractmethod
 from pathlib import Path
+from typing import TypeVar
+
+from pydantic import JsonValue
 
 from ....agents import OpenAIChatAgent
-from ....agents.buitin_agents.openai_chat.callbacks import (
-    native_observation,
-    parse_native_tools,
-    parse_text_action,
-    text_format_error,
-    text_observation,
-)
 from ....agents.typing import AgentResult
 from ....skill import Skill
 from ...base import Environment
 from ...data import RewardData
 from ...typing import RolloutResult, Task, Usage
-from ..common import export_skills, total_usage
-from . import bash_only, workspace_tools
-from .config import SpreadsheetBenchConfig
+from ..common import total_usage
+from .config import SpreadsheetBenchExecutionConfig
 from .reward import evaluate
 from .typing import (
     SpreadsheetBenchRewardData,
@@ -28,71 +24,78 @@ from .typing import (
 )
 from .workbooks import prepare_cases
 
+ConfigT = TypeVar("ConfigT", bound=SpreadsheetBenchExecutionConfig)
 
-@Environment.register("spreadsheetbench")
-class SpreadsheetBenchEnvironment(Environment[SpreadsheetBenchConfig]):
-    """Own workbook lifecycle and scoring while subclasses customize interaction."""
 
-    config_type = SpreadsheetBenchConfig
-    """Model, protocol, loop limits, and scoring settings."""
+class SpreadsheetExecutionEnvironment(Environment[ConfigT]):
+    """Share workbook preparation, audit scheduling, and scoring without choosing a protocol."""
 
-    def __init__(self, config: SpreadsheetBenchConfig, *, agent: OpenAIChatAgent | None = None) -> None:
-        """Construct the default agent protocol.
+    task_type = SpreadsheetBenchTask
+    """Public task schema shared by both protocols."""
 
-        Args:
-            config: Recorded execution and protocol settings.
-            agent: Optional model transport wrapped by the default tool parser.
-        """
-        super().__init__(config)
-        textual = config.tool_agent == "text_action"
-        self.agent = OpenAIChatAgent(
-            config.agent,
-            model=agent,
-            parse_response=parse_text_action if textual else parse_native_tools,
-            format_error=text_format_error if textual else str,
-            observation=text_observation if textual else native_observation,
-            native_tools=not textual,
-        )
+    reward_data_type = SpreadsheetBenchRewardData
+    """Private workbook scoring inputs."""
 
+    agent: OpenAIChatAgent
+    """Protocol-specific model transport owned by the concrete environment."""
+
+    @abstractmethod
+    def _prepare_context(self, task: SpreadsheetBenchTask, directory: Path, skills: list[Skill]) -> SpreadsheetContext:
+        """Export instructions and expose tools for one workbook case."""
+        raise NotImplementedError
+
+    @abstractmethod
     def _system_prompt(self, context: SpreadsheetContext) -> str:
-        """Render the system message from public rollout-local inputs."""
-        if self.config.interaction_mode == "bash_only":
-            return bash_only.system_prompt(context, self.config)
-        return workspace_tools.system_prompt(context, self.config)
+        """Build the protocol-specific system prompt."""
+        raise NotImplementedError
 
+    @abstractmethod
     def _user_prompt(self, context: SpreadsheetContext) -> str:
-        """Render initial task instructions without private scoring inputs."""
-        if self.config.interaction_mode == "bash_only":
-            return bash_only.user_prompt(context, self.config)
-        return workspace_tools.user_prompt(context, self.config)
+        """Build the public task prompt."""
+        raise NotImplementedError
 
+    @abstractmethod
     def _get_observation(self, response: AgentResult, context: SpreadsheetContext) -> SpreadsheetObservation:
-        """Decode a response, execute its tools, and encode public feedback."""
-        if self.config.interaction_mode == "bash_only":
-            return bash_only.get_observation(response, context, self.config, self.agent)
-        return workspace_tools.get_observation(response, context, self.config, self.agent)
+        """Execute the protocol's actions and encode their feedback."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _initial_skill_loaded(self, context: SpreadsheetContext) -> bool:
+        """Return whether instructions were preloaded into the system prompt."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _diagnostics(
+        self, context: SpreadsheetContext, loaded: bool, finished: bool, failure: str
+    ) -> dict[str, JsonValue]:
+        """Record protocol-specific completion information."""
+        raise NotImplementedError
+
+    def _validate_task(self, task: SpreadsheetBenchTask) -> None:
+        """Allow multiple workbook cases unless the concrete protocol restricts them."""
+
+    def _completion_error(self, context: SpreadsheetContext) -> str | None:
+        """Accept completion unless the concrete protocol requires another action."""
+        return None
+
+    def _completion_reminder(self, context: SpreadsheetContext, error: str) -> str:
+        """Ask the agent to resolve an unmet completion requirement."""
+        return error
+
+    def _turn_limit_output(self, output: str) -> str:
+        """Retain the final model output when the turn budget expires."""
+        return output
 
     def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Prepare public inputs, run the shared loop, and score private references."""
         if not isinstance(task, SpreadsheetBenchTask) or not isinstance(reward_data, SpreadsheetBenchRewardData):
             raise TypeError("SpreadsheetBench requires SpreadsheetBenchTask and SpreadsheetBenchRewardData")
-        textual = self.config.interaction_mode == "bash_only"
-        if textual and len(task.cases) != 1:
-            raise ValueError("bash_only requires exactly one workbook case")
+        self._validate_task(task)
         directories = prepare_cases(task, reward_data, workspace)
-        interactions, trajectory = [], []
+        interactions: list[SpreadsheetInteractionResult] = []
+        trajectory: list[dict[str, JsonValue]] = []
         for case, directory in zip(task.cases, directories, strict=True):
-            skill_directory = directory if textual else directory / "skills/xlsx"
-            text = export_skills(skills, skill_directory)
-            context = SpreadsheetContext(
-                task=task,
-                directory=directory,
-                skill_directory=skill_directory,
-                skill_text=text,
-                tools=self.config.tools
-                if self.config.tools is not None
-                else ([] if textual else workspace_tools.available_tools(self.config, text)),
-            )
+            context = self._prepare_context(task, directory, skills)
             interaction = self._interact(context)
             interactions.append(interaction)
             if trajectory:
@@ -100,10 +103,9 @@ class SpreadsheetBenchEnvironment(Environment[SpreadsheetBenchConfig]):
             trajectory.extend(interaction.trajectory)
         diagnostics = dict(interactions[-1].diagnostics)
         diagnostics["n_turns"] = sum(item.diagnostics["n_turns"] for item in interactions)
-        if not textual:
+        if "skill_loaded" in diagnostics:
             diagnostics["skill_loaded"] = all(item.diagnostics["skill_loaded"] for item in interactions)
         reward = evaluate(reward_data, directories).model_copy(update=diagnostics)
-        trajectory.append({"role": "system", "content": reward.detail})
         return RolloutResult(
             output=interactions[-1].output,
             trajectory=trajectory,
@@ -119,16 +121,16 @@ class SpreadsheetBenchEnvironment(Environment[SpreadsheetBenchConfig]):
 
     def _interact(self, context: SpreadsheetContext) -> SpreadsheetInteractionResult:
         """Drive one case using subclass hooks and rollout-local conversation state."""
-        textual = self.config.interaction_mode == "bash_only"
-        directory, text = context.directory, context.skill_text
-        responses, trajectory = [], []
+        directory = context.directory
+        responses: list[AgentResult] = []
+        trajectory: list[dict[str, JsonValue]] = []
         output = ""
         system, user = self._system_prompt(context), self._user_prompt(context)
         (directory / "system.md").write_text(system, encoding="utf-8")
         (directory / "task.md").write_text(user, encoding="utf-8")
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         trajectory.extend(messages)
-        loaded = self.config.skill_loading_mode == "system_prompt" and bool(text.strip())
+        loaded = self._initial_skill_loaded(context)
         previous, repeats, reminded = "", 0, False
         finished, failure = False, ""
         for _ in range(self.config.max_turns):
@@ -144,21 +146,15 @@ class SpreadsheetBenchEnvironment(Environment[SpreadsheetBenchConfig]):
             output = observation.output
             loaded = loaded or observation.skill_loaded
             if observation.complete:
-                if not textual or (directory / "output.xlsx").is_file():
+                completion_error = self._completion_error(context)
+                if completion_error is None:
                     finished = True
                     break
                 if reminded or len(responses) >= self.config.max_turns:
-                    failure = f"Output file was not created: {directory / 'output.xlsx'}"
+                    failure = completion_error
                     break
                 reminded = True
-                feedback = [
-                    {
-                        "role": "user",
-                        "content": f"[System Check] The output file was NOT created at: {directory / 'output.xlsx'}\n"
-                        "Please return to work again until you create the output file at the exact path "
-                        "specified above, then signal ACTION: TASK_COMPLETE again.",
-                    }
-                ]
+                feedback = [{"role": "user", "content": self._completion_reminder(context, completion_error)}]
             else:
                 feedback = observation.messages
             messages.extend(feedback)
@@ -174,17 +170,8 @@ class SpreadsheetBenchEnvironment(Environment[SpreadsheetBenchConfig]):
                     break
         if not finished and not failure:
             failure = "Max turns exceeded"
-            if textual:
-                output = "Max turns exceeded. Could not complete the task."
-        diagnostics = {"n_turns": len(responses)}
-        if textual:
-            diagnostics.update(finished=finished, stop_reason=failure)
-        else:
-            diagnostics.update(
-                skill_loaded=loaded,
-                skill_loading_mode=self.config.skill_loading_mode,
-                skill_tool_exposed=any(tool["function"]["name"] == "skill" for tool in context.tools),
-            )
+            output = self._turn_limit_output(output)
+        diagnostics = {"n_turns": len(responses), **self._diagnostics(context, loaded, finished, failure)}
         return SpreadsheetInteractionResult(
             output=output, trajectory=trajectory, usage=total_usage(responses), diagnostics=diagnostics
         )

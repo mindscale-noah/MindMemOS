@@ -22,6 +22,12 @@ from .typing import OfficeQARewardData, OfficeQATask
 class OfficeQAEnvironment(Environment[OfficeQAConfig]):
     """Own one document-tool conversation and its evaluated result."""
 
+    task_type = OfficeQATask
+    """Public OfficeQA task schema."""
+
+    reward_data_type = OfficeQARewardData
+    """Private OfficeQA scoring schema."""
+
     config_type = OfficeQAConfig
     """Model, tool-turn budget, and scoring identity."""
 

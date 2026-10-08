@@ -47,6 +47,12 @@ def _create_simulator(config: ALFWorldConfig, gamefile: Path):
 class ALFWorldEnvironment(Environment[ALFWorldConfig]):
     """Run one game with bounded history and no batch scheduling barrier."""
 
+    task_type = ALFWorldTask
+    """Public ALFWorld task schema."""
+
+    reward_data_type = ALFWorldRewardData
+    """Private ALFWorld scoring schema."""
+
     config_type = ALFWorldConfig
     """Recorded model, simulator, and history settings."""
 

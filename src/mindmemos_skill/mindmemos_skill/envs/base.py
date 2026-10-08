@@ -6,6 +6,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import ClassVar
 
+from ..common.asyncio import run_sync
+from ..common.skill_runtime import restore_assembled_skill
 from ..registry.base import ConfigT, Registrable
 from ..skill import Skill, SkillSet
 from .data.typing import RewardData
@@ -15,13 +17,19 @@ from .typing import RolloutRequest, RolloutResult, Task
 class Environment(Registrable[ConfigT], ABC):
     """Own rollout persistence while subclasses execute agents and score outputs."""
 
+    task_type: ClassVar[type[Task]] = Task
+    """Public task model used to restore serialized training requests."""
+
+    reward_data_type: ClassVar[type[RewardData]] = RewardData
+    """Private scoring model used to restore serialized training requests."""
+
     result_type: ClassVar[type[RolloutResult]] = RolloutResult
     """Result schema used for validation and resume; override for typed reward subclasses."""
 
     supports_resume: ClassVar[bool] = True
     """Whether saved rollout results and assembly can be reused; subclasses may disable this capability."""
 
-    def rollout(
+    async def rollout(
         self,
         task: Task,
         work_dir: str | Path,
@@ -87,7 +95,7 @@ class Environment(Registrable[ConfigT], ABC):
         if request_path.exists():
             previous = RolloutRequest.model_validate_json(request_path.read_text(encoding="utf-8"))
             source_request = previous.model_copy(
-                update={"assembled_bundles": None, "assembled_hashes": None, "selected_skill_ids": None}
+                update={"assembled_skills": None, "assembled_hashes": None, "selected_skill_ids": None}
             )
             # Legacy requests had an ordered static list and no selection policy.
             if previous.skill_set is None and type(skill_set) is SkillSet:
@@ -98,7 +106,7 @@ class Environment(Registrable[ConfigT], ABC):
             raise ValueError("Stored result has no request; use a new work_dir")
 
         if resume and result_path.exists():
-            if previous is None or previous.assembled_bundles is None:
+            if previous is None or previous.assembled_skills is None:
                 raise ValueError("Stored result has no assembled Skill record")
             result = self.result_type.model_validate_json(result_path.read_text(encoding="utf-8"))
             if result.started_at is None:
@@ -111,28 +119,30 @@ class Environment(Registrable[ConfigT], ABC):
         temporary_request = audit_dir / "request.json.tmp"
         started_at = datetime.now(timezone.utc)
         start = perf_counter()
-        if resume and previous is not None and previous.assembled_bundles is not None:
+        if resume and previous is not None and previous.assembled_skills is not None:
             selected_ids = previous.selected_skill_ids
             if selected_ids is None:
                 selected_ids = list(skills)
             prepared_skills = [
-                skills[key].with_bundle(bundle)
-                for key, bundle in zip(selected_ids, previous.assembled_bundles, strict=True)
+                restore_assembled_skill(skills[key], snapshot)
+                for key, snapshot in zip(selected_ids, previous.assembled_skills, strict=True)
             ]
         else:
             # Clear prior assembly before a forced rerun that may fail to assemble.
             temporary_request.write_text(request.model_dump_json(indent=2), encoding="utf-8")
             temporary_request.replace(request_path)
-            selected_ids = list(skill_set.select(task))
-            prepared_skills = skill_set.assemble(task, selected_ids=selected_ids)
-        bundles = [skill.bundle for skill in prepared_skills]
-        request.assembled_bundles = bundles
-        request.assembled_hashes = [bundle.content_hash for bundle in bundles]
+            selected_ids = list(await run_sync(skill_set.select, task))
+            prepared_skills = await skill_set.assemble(task, selected_ids=selected_ids)
+        snapshots = [skill.snapshot() for skill in prepared_skills]
+        request.assembled_skills = snapshots
+        request.assembled_hashes = [snapshot.skill_hash for snapshot in snapshots]
         request.selected_skill_ids = selected_ids
         request = RolloutRequest.model_validate_json(request.model_dump_json())
         temporary_request.write_text(request.model_dump_json(indent=2), encoding="utf-8")
         temporary_request.replace(request_path)
-        result = self._run(task=task, reward_data=reward_data, skills=prepared_skills, workspace=workspace)
+        result = await run_sync(
+            self._run, task=task, reward_data=reward_data, skills=prepared_skills, workspace=workspace
+        )
         duration_s = perf_counter() - start
         finished_at = datetime.now(timezone.utc)
         result.started_at = started_at
@@ -150,7 +160,7 @@ class Environment(Registrable[ConfigT], ABC):
         """Run the agent with skills in workspace and score its actual trajectory.
 
         Skills retain their concrete classes, auxiliary files, and export methods.
-        Their bundle is already assembled for this task; never reassemble here.
+        Their content is already assembled for this task; never reassemble here.
         Implementations own agent invocation, task preparation, and reward
         calculation. Pass only workspace and public task materials to the agent.
         Keep reward_data private and use it only for evaluation.

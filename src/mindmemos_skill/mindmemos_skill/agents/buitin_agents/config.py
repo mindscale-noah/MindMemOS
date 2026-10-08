@@ -6,7 +6,7 @@ from ..config import AgentConnectionConfig
 
 
 class CLIConfig(AgentConnectionConfig):
-    """Configure bounded CLI execution without persisting credentials."""
+    """Configure bounded CLI execution with explicit connection settings."""
 
     timeout_s: float = Field(default=300, gt=0, allow_inf_nan=False)
     """Maximum execution time in seconds, including native tool calls."""

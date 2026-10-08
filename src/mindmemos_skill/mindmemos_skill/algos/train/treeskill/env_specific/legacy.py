@@ -3,6 +3,7 @@
 import json
 
 from ..env_adapter import TreeSkillEnvAdapter
+from ..typing import TreeSkillRoutingContext
 from .spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
 
 
@@ -10,7 +11,7 @@ from .spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
 class TreeSkillLegacyEnvAdapter(TreeSkillEnvAdapter):
     """Restore version-one legacy routing without altering stored Skill content."""
 
-    def build_routing_messages(self, context) -> list[dict[str, str]]:
+    def build_routing_messages(self, context: TreeSkillRoutingContext) -> list[dict[str, str]]:
         """Reconstruct the original version-one messages.
 
         Args:

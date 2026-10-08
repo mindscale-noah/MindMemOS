@@ -1,5 +1,6 @@
 """End-to-end execution with actual files and the unchanged official scorer."""
 
+import asyncio
 import json
 from hashlib import sha256
 from pathlib import Path
@@ -17,7 +18,9 @@ from mindmemos_skill.envs.builtin_envs.agentskillos import (
     AgentSkillOSTask,
 )
 from mindmemos_skill.envs.data import Data
-from mindmemos_skill.skill import Skill, SkillBundle, SkillResources, SkillSet
+from mindmemos_skill.persistence.constants import SKILLS_TABLE
+from mindmemos_skill.persistence.db_services.skills.typing import SkillRecord
+from mindmemos_skill.skill import Skill, SkillContent, SkillSet
 
 SOURCE = Path(__file__).resolve().parents[3] / "data/agentskillos/source"
 
@@ -77,8 +80,13 @@ def sample(tmp_path):
 
 def skill_set(name="alpha"):
     skill = Skill(
-        bundle=SkillBundle(files={"SKILL.md": f"---\nname: {name}\n---\nDo the task."}),
-        resources=SkillResources(files={"scripts/helper.txt": b"AUXILIARY"}),
+        source=SkillContent(
+            content=f"---\nname: {name}\n---\nDo the task.",
+            resources={"scripts/helper.txt": b"AUXILIARY"},
+            name="test-skill",
+            description="Task instructions",
+            standard_format=False,
+        )
     )
     return SkillSet({"database-id": skill}, max_concurrency=1)
 
@@ -120,7 +128,7 @@ def test_task_success_not_retrieval(config, tmp_path, artifact, name, expected, 
     task, private = sample(tmp_path)
     agent = Executor(config.agent, artifact)
     env = AgentSkillOSEnvironment(config, agent=agent)
-    result = env.rollout(task, tmp_path / "run", reward_data=private, skill_set=skill_set(name))
+    result = asyncio.run(env.rollout(task, tmp_path / "run", reward_data=private, skill_set=skill_set(name)))
     assert result.reward.score == expected
     assert result.reward.success is bool(expected)
     detail = json.loads(result.reward.detail)
@@ -136,19 +144,19 @@ def test_resume_fresh_attempt_and_input_change(config, tmp_path):
     agent = Executor(config.agent, {"answer": 42})
     env = AgentSkillOSEnvironment(config, agent=agent)
     directory = tmp_path / "run"
-    first = env.rollout(task, directory, reward_data=private)
-    assert env.rollout(task, directory, reward_data=private) == first
+    first = asyncio.run(env.rollout(task, directory, reward_data=private))
+    assert asyncio.run(env.rollout(task, directory, reward_data=private)) == first
     assert agent.calls == 1
     agent.output = None
-    second = env.rollout(task, directory, reward_data=private, resume=False)
+    second = asyncio.run(env.rollout(task, directory, reward_data=private, resume=False))
     assert second.reward.score == 0
     assert first.output["artifact_directory"] != second.output["artifact_directory"]
     assert (agent.workspaces[0] / "workspace/answer.json").exists()
     (directory / "audit/result.json").unlink()
-    assert env.rollout(task, directory, reward_data=private).reward.score == 0
+    assert asyncio.run(env.rollout(task, directory, reward_data=private)).reward.score == 0
     task.files["input.txt"].write_text("MUTATED")
     with pytest.raises(ValueError, match="Public input changed"):
-        env.rollout(task, directory, reward_data=private, resume=False)
+        asyncio.run(env.rollout(task, directory, reward_data=private, resume=False))
     assert not (directory / "audit/result.json").exists()
 
 
@@ -156,14 +164,14 @@ def test_transport_and_evaluator_errors_are_not_task_failures(config, tmp_path):
     task, private = sample(tmp_path)
     env = AgentSkillOSEnvironment(config, agent=Executor(config.agent, fail=True))
     with pytest.raises(RuntimeError, match="transport"):
-        env.rollout(task, tmp_path / "run", reward_data=private)
+        asyncio.run(env.rollout(task, tmp_path / "run", reward_data=private))
     assert not (tmp_path / "run/audit/result.json").exists()
     bad = private.model_copy(deep=True)
     bad.task_config["evaluators"][0]["op_func"] = "nonexistent"
     agent = Executor(config.agent)
     env = AgentSkillOSEnvironment(config, agent=agent)
     with pytest.raises(RuntimeError, match="Unsupported evaluator"):
-        env.rollout(task, tmp_path / "bad", reward_data=bad)
+        asyncio.run(env.rollout(task, tmp_path / "bad", reward_data=bad))
     assert agent.calls == 0
 
 
@@ -196,11 +204,11 @@ def test_scoring_cannot_count_skill_resources_as_outputs(config, tmp_path):
     selected = skill_set()
     source = selected.skills["database-id"]
     selected = SkillSet(
-        {"id": Skill(bundle=source.bundle, resources=SkillResources(files={"answer.json": b'{"answer":42}'}))},
+        {"id": source.with_resources({"answer.json": b'{"answer":42}'})},
         max_concurrency=1,
     )
     env = AgentSkillOSEnvironment(config, agent=Executor(config.agent))
-    result = env.rollout(task, tmp_path / "run", reward_data=private, skill_set=selected)
+    result = asyncio.run(env.rollout(task, tmp_path / "run", reward_data=private, skill_set=selected))
     assert result.reward.score == 0
 
 
@@ -211,7 +219,7 @@ def test_official_sixty_percent_threshold_and_summary(config, tmp_path):
     private.task_config["evaluators"][0]["weight"] = 6
     private.task_config["evaluators"][1]["weight"] = 4
     env = AgentSkillOSEnvironment(config, agent=Executor(config.agent, {"wrong": 42}))
-    result = env.rollout(task, tmp_path / "run", reward_data=private)
+    result = asyncio.run(env.rollout(task, tmp_path / "run", reward_data=private))
     assert result.reward.score == 1
     assert json.loads(result.reward.detail)["task_evaluation"]["total_score"] == 60
     summary = summarize_results({"example": result}, {"other": "Infrastructure failure"})
@@ -239,7 +247,7 @@ def test_real_codex_adapter_and_official_scoring(config, tmp_path):
         agent=CodexConfig(model="offline-test", cli_path=str(cli), api_key="test"),
         benchmark_root=SOURCE,
     )
-    result = AgentSkillOSEnvironment(settings).rollout(task, tmp_path / "run", reward_data=private)
+    result = asyncio.run(AgentSkillOSEnvironment(settings).rollout(task, tmp_path / "run", reward_data=private))
     assert result.reward.score == 1
     assert result.usage.total_tokens == 7
     assert result.output["response"] == "Done"
@@ -250,7 +258,7 @@ def test_evaluator_exception_is_not_a_scored_zero(config, tmp_path):
     del private.task_config["evaluators"][1]["value"]
     env = AgentSkillOSEnvironment(config, agent=Executor(config.agent, {"answer": 42}))
     with pytest.raises(RuntimeError, match="Evaluator error"):
-        env.rollout(task, tmp_path / "run", reward_data=private)
+        asyncio.run(env.rollout(task, tmp_path / "run", reward_data=private))
     assert not (tmp_path / "run/audit/result.json").exists()
 
 
@@ -283,10 +291,12 @@ def test_skill_manage_to_execution_to_official_reward(config, tmp_path):
                     project_id="eval",
                     skill_id=name,
                     version_id=f"v-{name}",
-                    name=name,
-                    bundle="placeholder",
-                    content_hash="placeholder",
+                    **source.snapshot().model_dump(),
                 ),
+            )
+            database.insert(
+                SKILLS_TABLE,
+                [SkillRecord(project_id="eval", skill_id=name, name=name, active_version_id=f"v-{name}").model_dump()],
             )
         store = SkillGraphStore(
             database,
@@ -307,7 +317,7 @@ def test_skill_manage_to_execution_to_official_reward(config, tmp_path):
         algorithm = SkillManageAlgorithm(settings, store=store, embedding_model=embeddings)
         selection = SkillManageSkillSet(skills, algorithm=algorithm, limit=5, max_concurrency=1)
         env = AgentSkillOSEnvironment(config, agent=Executor(config.agent, {"answer": 42}))
-        result = env.rollout(task, tmp_path / "run", reward_data=private, skill_set=selection)
+        result = asyncio.run(env.rollout(task, tmp_path / "run", reward_data=private, skill_set=selection))
         assert result.reward.score == 1
         assert json.loads(result.reward.detail)["retrieval"]["ranked_skill_ids"] == ["alpha"]
         assert embeddings.calls[-1] == task.instruction

@@ -1,5 +1,6 @@
 """Exercise raw LiveMath adaptation, private scoring, and the real SDK boundary."""
 
+import asyncio
 import json
 
 import httpx
@@ -10,7 +11,7 @@ from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.builtin_envs.livemath import LiveMathConfig, LiveMathEnvironment
 from mindmemos_skill.envs.builtin_envs.livemath.reward import evaluate
 from mindmemos_skill.envs.data import Data
-from mindmemos_skill.skill import Skill, SkillBundle, SkillSet
+from mindmemos_skill.skill import Skill, SkillContent, SkillSet
 
 
 @pytest.fixture
@@ -119,10 +120,16 @@ def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
 
     agent = CapturingAgent(config.agent)
     env = LiveMathEnvironment(config, agent=agent)
-    skill = Skill(bundle=SkillBundle(files={"SKILL.md": "Check quantifiers"}))
+    skill = Skill(
+        source=SkillContent(
+            content="Check quantifiers", name="test-skill", description="Task instructions", standard_format=False
+        )
+    )
     root = tmp_path / "rollout"
-    result = env.rollout(
-        sample.task, root, reward_data=sample.reward_data, skill_set=SkillSet({"0": skill}, max_concurrency=1)
+    result = asyncio.run(
+        env.rollout(
+            sample.task, root, reward_data=sample.reward_data, skill_set=SkillSet({"0": skill}, max_concurrency=1)
+        )
     )
     assert result.reward.success and result.usage.total_tokens == 120
     assert result.usage.input_tokens == 100 and result.usage.output_tokens == 20
@@ -135,8 +142,10 @@ def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
     audit = json.loads((root / "audit/request.json").read_text())
     assert audit["reward_data"]["data"]["correct_choice"]["label"] == sample.reward_data.correct_choice.label
     assert (
-        env.rollout(
-            sample.task, root, reward_data=sample.reward_data, skill_set=SkillSet({"0": skill}, max_concurrency=1)
+        asyncio.run(
+            env.rollout(
+                sample.task, root, reward_data=sample.reward_data, skill_set=SkillSet({"0": skill}, max_concurrency=1)
+            )
         )
         == result
     )
@@ -144,14 +153,16 @@ def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
 
     class TaskSkill(Skill):
         def assemble(self, task):
-            return self.with_bundle(SkillBundle(files={"SKILL.md": self.bundle.files["SKILL.md"] + task.instruction}))
+            return self.with_content(self.content + task.instruction)
 
-    dynamic = TaskSkill(bundle=skill.bundle)
-    env.rollout(
-        sample.task,
-        tmp_path / "dynamic",
-        reward_data=sample.reward_data,
-        skill_set=SkillSet({"0": dynamic}, max_concurrency=1),
+    dynamic = TaskSkill(skill.source)
+    asyncio.run(
+        env.rollout(
+            sample.task,
+            tmp_path / "dynamic",
+            reward_data=sample.reward_data,
+            skill_set=SkillSet({"0": dynamic}, max_concurrency=1),
+        )
     )
     assert agent.calls == 2
 

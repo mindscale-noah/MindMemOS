@@ -3,12 +3,12 @@
 from .....envs.builtin_envs.spreadsheetbench.typing import SpreadsheetBenchTask
 from ..env_adapter import SkillForestEnvAdapter
 from ..typing import SkillForestTrajectoryContext
-from .common import SkillForestReferenceEnvAdapter, recorded_context, render_record, tool_conversation
+from .common import SkillForestReferenceEnvAdapter, recorded_context, render_record
 from .typing import ReflectionFeedback
 
 
-@SkillForestEnvAdapter.register("spreadsheetbench")
-class SkillForestSpreadsheetBenchEnvAdapter(SkillForestReferenceEnvAdapter):
+@SkillForestEnvAdapter.register("spreadsheetbench_tool_calling")
+class SkillForestSpreadsheetBenchToolCallingEnvAdapter(SkillForestReferenceEnvAdapter):
     """Adapt Skill-Forest training evidence to SpreadsheetBench."""
 
     ANALYST_ERROR_PROMPT = """\
@@ -129,8 +129,6 @@ Respond ONLY with a valid JSON object:
             for event in result.trajectory
             if not (event.get("role") == "system" and event.get("content") == result.reward.detail)
         ]
-        conversation = tool_conversation(events)
-        conversation.append({"role": "system", "content": result.reward.detail})
         steps = feedback.n_turns
         if steps is None:
             steps = sum(event.get("role") == "assistant" for event in events)
@@ -141,7 +139,7 @@ Respond ONLY with a valid JSON object:
             task.instruction_type,
             feedback.fail_reason,
             steps,
-            conversation,
+            events,
             system=system,
             user=user,
         )
