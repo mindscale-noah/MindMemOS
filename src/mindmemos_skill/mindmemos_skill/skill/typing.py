@@ -1,12 +1,210 @@
-"""Portable Skill content and implementation snapshots."""
+"""Validated Skill content and portable source snapshots."""
 
-import base64
-import hashlib
-import json
-from pathlib import Path, PurePosixPath
-from typing import Self
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
+
+from .content import content_hash, decode_resources, encode_resources, skill_hash, validate_resource_paths
+
+
+def parse_skill_header(content: str) -> tuple[str, str, dict[str, JsonValue]]:
+    """Read required name and description from a standard SKILL.md frontmatter.
+
+    Args:
+        content: Full source text, including its original line endings.
+
+    Returns:
+        Parsed name, description, and additional YAML metadata.
+
+    Raises:
+        ValueError: Frontmatter or required fields are invalid.
+    """
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        raise ValueError("Standard SKILL.md must begin with YAML frontmatter")
+    closing = next((index for index, line in enumerate(lines[1:], start=1) if line.rstrip("\r\n") == "---"), None)
+    if closing is None:
+        raise ValueError("Standard SKILL.md frontmatter has no closing delimiter")
+    try:
+        parsed = yaml.safe_load("".join(lines[1:closing]))
+    except yaml.YAMLError as error:
+        raise ValueError("SKILL.md frontmatter is invalid YAML") from error
+    if not isinstance(parsed, dict) or any(not isinstance(key, str) for key in parsed):
+        raise ValueError("SKILL.md frontmatter must be a mapping with text keys")
+    name, description = parsed.get("name"), parsed.get("description")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("SKILL.md frontmatter requires a nonempty name")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError("SKILL.md frontmatter requires a nonempty description")
+    extra = TypeAdapter(dict[str, JsonValue]).validate_python(
+        {key: value for key, value in parsed.items() if key not in {"name", "description"}}
+    )
+    return name.strip(), description.strip(), extra
+
+
+class SkillContent(BaseModel):
+    """Complete source files and display metadata for one Skill version."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject unknown content fields."""
+
+    content: str
+    """Full unchanged SKILL.md text, including original newline characters."""
+
+    resources: dict[str, bytes] = Field(default_factory=dict)
+    """Auxiliary relative paths and original file bytes, excluding SKILL.md."""
+
+    name: str | None = None
+    """Version display name; derived from standard frontmatter when omitted."""
+
+    description: str | None = None
+    """Version description; derived from standard frontmatter when omitted."""
+
+    standard_format: bool = True
+    """Require name and description in frontmatter when true."""
+
+    @field_validator("resources")
+    @classmethod
+    def validate_resources(cls, resources: dict[str, bytes]) -> dict[str, bytes]:
+        """Validate every auxiliary file path.
+
+        Args:
+            resources: Source file paths and their original bytes.
+
+        Returns:
+            The validated mapping.
+        """
+        validate_resource_paths(resources)
+        return resources
+
+    @model_validator(mode="after")
+    def validate_metadata(self) -> Self:
+        """Resolve standard frontmatter or require explicit nonstandard metadata."""
+        if self.standard_format:
+            name, description, _ = parse_skill_header(self.content)
+            if self.name is not None and self.name != name:
+                raise ValueError("Skill name disagrees with SKILL.md frontmatter")
+            if self.description is not None and self.description != description:
+                raise ValueError("Skill description disagrees with SKILL.md frontmatter")
+            self.name = name
+            self.description = description
+        elif not self.name or not self.name.strip() or not self.description or not self.description.strip():
+            raise ValueError("Nonstandard Skill content requires name and description")
+        return self
+
+    @property
+    def content_hash(self) -> str:
+        """Return the digest of the exact stored document text."""
+        return content_hash(self.content)
+
+    @property
+    def skill_hash(self) -> str:
+        """Return the digest of document text and all resource paths and bytes."""
+        return skill_hash(self.content, self.resources)
+
+
+class SkillSnapshot(BaseModel):
+    """Portable source content with both hashes checked at restoration."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject undeclared snapshot fields."""
+
+    implementation: str = Field(default="static", min_length=1)
+    """Runtime Skill implementation name, excluded from source hashes."""
+
+    config_schema_version: int = Field(default=1, ge=1)
+    """Version of fixed implementation configuration, excluded from hashes."""
+
+    config: dict[str, JsonValue] = Field(default_factory=dict)
+    """Fixed runtime options, excluded from source hashes."""
+
+    name: str = Field(min_length=1)
+    """Version display name, excluded from source hashes."""
+
+    description: str = Field(min_length=1)
+    """Version description, excluded from source hashes."""
+
+    standard_format: bool = True
+    """Whether original content was validated as standard SKILL.md format."""
+
+    content: str
+    """Unchanged full SKILL.md text."""
+
+    resources: dict[str, str] = Field(default_factory=dict)
+    """Auxiliary files encoded as standard Base64 by relative path."""
+
+    content_hash: str
+    """SHA-256 digest of UTF-8 content."""
+
+    skill_hash: str
+    """SHA-256 digest of versioned canonical source content and resources."""
+
+    @model_validator(mode="after")
+    def validate_hashes(self) -> Self:
+        """Reject snapshots whose content or resources changed after hashing."""
+        resources = decode_resources(self.resources)
+        SkillContent(
+            content=self.content,
+            resources=resources,
+            name=self.name,
+            description=self.description,
+            standard_format=self.standard_format,
+        )
+        if content_hash(self.content) != self.content_hash:
+            raise ValueError("Skill snapshot content hash mismatch")
+        if skill_hash(self.content, resources) != self.skill_hash:
+            raise ValueError("Skill snapshot source hash mismatch")
+        return self
+
+    @classmethod
+    def from_content(
+        cls,
+        source: SkillContent,
+        *,
+        implementation: str = "static",
+        config_schema_version: int = 1,
+        config: dict[str, JsonValue] | None = None,
+    ) -> Self:
+        """Capture a validated source without changing its text or bytes.
+
+        Args:
+            source: Version content and display metadata.
+            implementation: Runtime implementation name.
+            config_schema_version: Version of fixed runtime configuration.
+            config: Fixed runtime configuration, excluded from source hashes.
+
+        Returns:
+            Portable snapshot with both canonical digests.
+        """
+        source = SkillContent.model_validate(source.model_dump())
+        return cls(
+            implementation=implementation,
+            config_schema_version=config_schema_version,
+            config=config or {},
+            name=source.name,
+            description=source.description,
+            standard_format=source.standard_format,
+            content=source.content,
+            resources=encode_resources(source.resources),
+            content_hash=source.content_hash,
+            skill_hash=source.skill_hash,
+        )
+
+    def to_content(self) -> SkillContent:
+        """Restore source files while checking both stored digests.
+
+        Returns:
+            Original Skill content and resource bytes.
+        """
+        self.validate_hashes()
+        return SkillContent(
+            content=self.content,
+            resources=decode_resources(self.resources),
+            name=self.name,
+            description=self.description,
+            standard_format=self.standard_format,
+        )
 
 
 class SkillSetIdentity(BaseModel):
@@ -40,187 +238,52 @@ class SkillSetIdentity(BaseModel):
         return values
 
 
-class SkillBundle(BaseModel):
-    """Own the mutable text files managed by a Skill."""
+class FileChange(BaseModel):
+    """One changed document or resource in a source comparison."""
 
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
-    """Reject unknown fields and validate replacement file mappings."""
+    path: str
+    """Relative file path, including SKILL.md for the source document."""
 
-    files: dict[str, str]
-    """Managed relative paths and UTF-8 text; currently exactly SKILL.md."""
+    change: Literal["added", "deleted", "modified"]
+    """How the file differs between the source snapshots."""
 
-    @field_validator("files")
-    @classmethod
-    def normalize_files(cls, files: dict[str, str]) -> dict[str, str]:
-        """Validate the managed paths and normalize line endings.
+    binary: bool
+    """Whether either file contains non-text bytes or NUL characters."""
 
-        Args:
-            files: Source paths and text supplied by the caller.
-        """
-        if set(files) != {"SKILL.md"}:
-            raise ValueError("A Skill bundle must contain exactly SKILL.md")
-        return {path: content.replace("\r\n", "\n").replace("\r", "\n") for path, content in files.items()}
-
-    def serialize(self) -> str:
-        """Return the canonical JSON representation used by the SDK."""
-        files = self.normalize_files(self.files)
-        records = [{"path": path, "content": files[path]} for path in sorted(files)]
-        return json.dumps(records, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
-    @classmethod
-    def deserialize(cls, content: str) -> Self:
-        """Read canonical bundle JSON without interpreting invalid JSON as Markdown.
-
-        Args:
-            content: Serialized list of path/content records.
-
-        Raises:
-            ValueError: Records are malformed, duplicated, or unsupported.
-        """
-        records = json.loads(content)
-        if not isinstance(records, list):
-            raise ValueError("A serialized bundle must be a list of path/content records")
-        files = {}
-        for record in records:
-            if not isinstance(record, dict) or set(record) != {"path", "content"}:
-                raise ValueError("Each bundle record must contain path and content")
-            path, text = record["path"], record["content"]
-            if not isinstance(path, str) or not isinstance(text, str) or path in files:
-                raise ValueError("Bundle paths must be unique strings and contents must be strings")
-            files[path] = text
-        return cls(files=files)
-
-    @property
-    def content_hash(self) -> str:
-        """Compute SHA-256 from canonical UTF-8 bundle JSON."""
-        return hashlib.sha256(self.serialize().encode("utf-8")).hexdigest()
-
-    @classmethod
-    def from_path(cls, path: str | Path) -> Self:
-        """Read SKILL.md or a directory containing it.
-
-        Args:
-            path: Skill file or directory; auxiliary files are ignored.
-        """
-        from .io import read_bundle
-
-        return cls(files=read_bundle(path))
-
-    def export(self, directory: str | Path) -> Path:
-        """Write managed files without changing auxiliary files.
-
-        Args:
-            directory: Destination Skill directory, created when absent.
-
-        Returns:
-            Absolute destination directory.
-        """
-        from .io import write_bundle
-
-        return write_bundle(self.normalize_files(self.files), directory)
+    diff: str
+    """Unified text diff; empty for binary files."""
 
 
-class SkillResources(BaseModel):
-    """Preserve auxiliary files unchanged across bundle assembly and optimization."""
+class SnapshotDiff(BaseModel):
+    """Source file, display metadata, and runtime configuration differences."""
 
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
-    """Validate replacement mappings without interpreting auxiliary file content."""
+    files: list[FileChange]
+    """Changed files ordered by relative path."""
 
-    files: dict[str, bytes] = Field(default_factory=dict)
-    """Relative paths and original bytes, excluding the root SKILL.md."""
+    metadata_changed: bool
+    """Whether name, description, or standard-format policy differs."""
 
-    @field_validator("files")
-    @classmethod
-    def validate_paths(cls, files: dict[str, bytes]) -> dict[str, bytes]:
-        """Require portable paths contained within the Skill directory.
-
-        Args:
-            files: Auxiliary file paths and unmodified bytes.
-        """
-        for name in files:
-            path = PurePosixPath(name)
-            if (
-                not path.parts
-                or path.is_absolute()
-                or "\\" in name
-                or ".." in path.parts
-                or path.as_posix() != name
-                or path.parts[0] == "SKILL.md"
-            ):
-                raise ValueError("Resource paths must be relative and must not replace SKILL.md")
-            if any(parent.as_posix() in files for parent in path.parents):
-                raise ValueError("A resource cannot be both a file and a directory")
-        return dict(files)
-
-    def serialize(self) -> str:
-        """Encode resource bytes as a canonical JSON path-to-base64 mapping."""
-        files = self.validate_paths(self.files)
-        return json.dumps(
-            {path: base64.b64encode(content).decode("ascii") for path, content in files.items()},
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-
-    @classmethod
-    def deserialize(cls, content: str) -> Self:
-        """Restore auxiliary bytes from their persistence representation.
-
-        Args:
-            content: JSON object mapping relative paths to base64 strings.
-        """
-        records = json.loads(content)
-        if not isinstance(records, dict) or any(not isinstance(value, str) for value in records.values()):
-            raise ValueError("Resources must be a JSON path-to-base64 mapping")
-        return cls(files={path: base64.b64decode(value, validate=True) for path, value in records.items()})
+    implementation_changed: bool
+    """Whether implementation identity or fixed runtime configuration differs."""
 
 
-class SkillSnapshot(BaseModel):
-    """Describe a source Skill independently of database identities."""
+class DiffResult(BaseModel):
+    """Content and implementation changes between owned Skill versions."""
 
-    model_config = ConfigDict(extra="forbid")
-    """Reject unrecognized implementation or content fields."""
+    from_version_id: str
+    """Resolved starting version."""
 
-    implementation: str = Field(min_length=1)
-    """Source implementation metadata; reading content does not load an implementation."""
+    from_skill_id: str | None = None
+    """Source family identity for comparisons across families."""
 
-    config_schema_version: int = Field(default=1, ge=1)
-    """Version of the fixed implementation configuration format."""
+    to_version_id: str
+    """Resolved target version."""
 
-    config: dict[str, JsonValue] = Field(default_factory=dict)
-    """Fixed implementation options; optimizable content belongs in bundle."""
+    to_skill_id: str | None = None
+    """Target family identity for comparisons across families."""
 
-    bundle: str
-    """Canonical serialized source bundle, before task-specific assembly."""
+    files: list[FileChange]
+    """Changed files only, in path order."""
 
-    content_hash: str
-    """SHA-256 identity of the source bundle, never the assembled output."""
-
-    resources: str = "{}"
-    """Serialized auxiliary bytes, preserved independently of bundle assembly."""
-
-    local_snapshot_hash: str | None = None
-    """Optional hash of both source bundle and resources for local identity."""
-
-    def compute_local_hash(self) -> str:
-        """Hash canonical content and resources without implementation metadata."""
-        content = json.dumps(
-            {
-                "bundle": SkillBundle.deserialize(self.bundle).serialize(),
-                "resources": SkillResources.deserialize(self.resources).serialize(),
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
-
-    @model_validator(mode="after")
-    def validate_content(self) -> Self:
-        """Reject a corrupt source snapshot before restoring or resuming it."""
-        if SkillBundle.deserialize(self.bundle).content_hash != self.content_hash:
-            raise ValueError("Skill content hash does not match its bundle")
-        actual_hash = self.compute_local_hash()
-        if self.local_snapshot_hash is not None and self.local_snapshot_hash != actual_hash:
-            raise ValueError("Skill local snapshot hash does not match its resources and bundle")
-        return self
+    implementation_changed: bool
+    """Whether implementation name, configuration schema, or fixed options differ."""

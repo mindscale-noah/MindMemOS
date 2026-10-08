@@ -76,7 +76,9 @@ def test_custom_feedback_and_single_attempt():
 
 
 def test_response_format_reaches_openai_request():
-    config = OpenAIChatConfig(model="test", api_key="test-secret", response_format={"type": "json_object"})
+    config = OpenAIChatConfig(
+        model="test", api_key="test-secret", base_url="https://test.invalid/v1", response_format={"type": "json_object"}
+    )
     response = SimpleNamespace(
         choices=[
             SimpleNamespace(

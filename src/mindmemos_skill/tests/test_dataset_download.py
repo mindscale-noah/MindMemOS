@@ -16,7 +16,9 @@ SPEC.loader.exec_module(DOWNLOAD)
 
 def test_released_splits_are_disjoint():
     """Keep committed experiment splits independent of dataset acquisition."""
-    for path in (ROOT / "resources/mindmemos_skill").glob("*/*/splits.json"):
+    paths = list((ROOT / "resources/mindmemos_skill").glob("*/*/splits.json"))
+    paths.extend((ROOT / "resources/skill_evaluation").glob("*/data_splits/splits.json"))
+    for path in paths:
         splits = json.loads(path.read_text())
         assert set(splits) == {"train", "val", "test"}
         identifiers = [identifier for values in splits.values() for identifier in values]

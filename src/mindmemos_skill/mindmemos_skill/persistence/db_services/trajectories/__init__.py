@@ -1,6 +1,6 @@
 """Local rollout data service."""
 
 from .service import TrajectoryDataService
-from .typing import TrajectoryRecord
+from .typing import TrajectoryRecord, TrajectorySummary
 
-__all__ = ["TrajectoryDataService", "TrajectoryRecord"]
+__all__ = ["TrajectoryDataService", "TrajectoryRecord", "TrajectorySummary"]

@@ -7,7 +7,6 @@ import openai
 import pytest
 import tenacity
 from mindmemos_skill.agents import OpenAIChatAgent, OpenAIChatConfig
-from mindmemos_skill.agents.constants import AGENT_API_KEY_ENV, AGENT_BASE_URL_ENV
 
 
 @pytest.mark.parametrize(
@@ -80,19 +79,37 @@ def test_retry_policy_and_logging(monkeypatch, caplog, failures, max_retries, ex
             assert "reason:" in message and "Temporary test failure" in message
 
 
-@pytest.mark.parametrize("preset", ["workspace_tools", "bash_only_instruct", "bash_only_thinking"])
-def test_spreadsheet_preset_request(monkeypatch, preset):
-    """Verify actual SDK payloads from the recorded experiment actor presets."""
+@pytest.mark.parametrize("mode", ["workspace_tools", "bash_only_instruct", "bash_only_thinking"])
+def test_agent_request_modes(monkeypatch, mode):
+    """Verify SDK payloads for workspace and bash actor request modes."""
     import json
-    from pathlib import Path
 
-    import yaml
-    from mindmemos_skill.envs.builtin_envs.spreadsheetbench import SpreadsheetBenchConfig
-
-    path = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/spreadsheetbench" / f"{preset}.yaml"
-    monkeypatch.setenv(AGENT_API_KEY_ENV, "test-key")
-    monkeypatch.setenv(AGENT_BASE_URL_ENV, "https://unit-test.invalid/v1")
-    config = SpreadsheetBenchConfig.model_validate(yaml.safe_load(path.read_text())).agent
+    if mode == "workspace_tools":
+        config = OpenAIChatConfig(
+            model="gpt-5.4-mini",
+            max_completion_tokens=16384,
+            reasoning_effort="medium",
+            temperature=None,
+            response_validation="content",
+        )
+    else:
+        thinking = mode == "bash_only_thinking"
+        config = OpenAIChatConfig(
+            model="Qwen3.5-35B-A3B",
+            max_completion_tokens=None,
+            temperature=0.7,
+            seed=41,
+            stop=["Observation:"],
+            top_p=0.95 if thinking else 1.0,
+            presence_penalty=1.5 if thinking else 2.0,
+            extra_body={
+                "top_k": 20 if thinking else 40,
+                "chat_template_kwargs": {"enable_thinking": thinking},
+            },
+            strip_thinking=True,
+            response_validation="content",
+        )
+    config = config.model_copy(update={"api_key": "test-key", "base_url": "https://unit-test.invalid/v1"})
     requests = []
 
     def respond(request):
@@ -122,7 +139,7 @@ def test_spreadsheet_preset_request(monkeypatch, preset):
     )
     assert OpenAIChatAgent(config).run(system="system", user="task").output == "Done"
     payload = requests[0]
-    if preset == "workspace_tools":
+    if mode == "workspace_tools":
         assert payload["max_completion_tokens"] == 16384
         assert payload["reasoning_effort"] == "medium"
         assert "temperature" not in payload
@@ -131,10 +148,10 @@ def test_spreadsheet_preset_request(monkeypatch, preset):
         assert payload["temperature"] == 0.7
         assert payload["seed"] == 41
         assert payload["stop"] == ["Observation:"]
-        assert payload["top_p"] == (1.0 if preset.endswith("instruct") else 0.95)
-        assert payload["presence_penalty"] == (2.0 if preset.endswith("instruct") else 1.5)
-        assert payload["chat_template_kwargs"] == {"enable_thinking": preset.endswith("thinking")}
-        assert payload["top_k"] == (40 if preset.endswith("instruct") else 20)
+        assert payload["top_p"] == (0.95 if thinking else 1.0)
+        assert payload["presence_penalty"] == (1.5 if thinking else 2.0)
+        assert payload["chat_template_kwargs"] == {"enable_thinking": thinking}
+        assert payload["top_k"] == (20 if thinking else 40)
 
 
 @pytest.mark.parametrize("wait_mode,waits", [("schedule", [5, 10, 30]), ("equal_jitter", [1.5, 3, 6])])

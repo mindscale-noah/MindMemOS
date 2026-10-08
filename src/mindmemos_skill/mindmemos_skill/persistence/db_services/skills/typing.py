@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
 from ....common.time_utils import utcnow
+from ....skill import SkillSnapshot
 from ...typing import RecordModel
 from .versions import ALGORITHM_PATTERN, USER_VERSION_PATTERN
 
@@ -24,13 +25,16 @@ class SkillRecord(RecordModel):
     alias: str | None = Field(default=None, min_length=1)
     """Optional exact-match shortcut, unique within the local project."""
 
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    """Mutable user metadata belonging to the Skill family, separate from version metadata."""
+
     registration_source: str | None = None
     """Initial source reference for provenance only; never watched or synchronized."""
 
     registration_message: str | None = None
     """Initial registration explanation, separate from per-version commit messages."""
 
-    current_version_id: str = Field(min_length=1)
+    active_version_id: str = Field(min_length=1)
     """Only selected version for default reads and exports; belongs to this Skill."""
 
     created_at: AwareDatetime = Field(default_factory=utcnow)
@@ -38,6 +42,12 @@ class SkillRecord(RecordModel):
 
     updated_at: AwareDatetime = Field(default_factory=utcnow)
     """Last metadata or selected-version change; supplied by the writer."""
+
+    is_deleted: bool = False
+    """Whether this Skill is hidden from business operations."""
+
+    deleted_at: AwareDatetime | None = None
+    """Time of soft deletion; None while active."""
 
     @model_validator(mode="after")
     def validate_timing(self):
@@ -54,7 +64,7 @@ class SkillVersionRecord(RecordModel):
     """Project owning this immutable local Skill version."""
 
     version_id: str = Field(min_length=1)
-    """Local version identity; never inferred from a remote version ID."""
+    """Immutable Skill version identity."""
 
     skill_id: str = Field(min_length=1)
     """Local Skill family shared by all of its versions."""
@@ -62,23 +72,26 @@ class SkillVersionRecord(RecordModel):
     name: str = Field(min_length=1)
     """Human-readable Skill name."""
 
-    description: str | None = None
-    """Optional explanation of the Skill."""
+    description: str = Field(min_length=1)
+    """Immutable version description."""
+
+    standard_format: bool = True
+    """Whether the source requires standard frontmatter."""
 
     parent_version_ids: list[str] = Field(default_factory=list)
-    """Ordered local parent IDs; remote single-parent projection is separate."""
+    """Ordered parent version identities."""
 
-    bundle: str = Field(min_length=1)
-    """Serialized Skill bundle, preserved without cloud-specific rewriting."""
+    content: str
+    """Exact SKILL.md text, including original newlines."""
 
-    resources: str = "{}"
-    """Serialized auxiliary files outside the Skill bundle."""
+    resources: dict[str, str] = Field(default_factory=dict)
+    """Relative resource paths mapped to canonical Base64 bytes."""
 
     content_hash: str = Field(min_length=1)
-    """Hash of the local canonical bundle; not the remote hash."""
+    """Hash of the exact UTF-8 document."""
 
-    local_snapshot_hash: str | None = None
-    """Optional hash including local auxiliary resources."""
+    skill_hash: str
+    """Digest of complete source text and resource bytes."""
 
     implementation: str = "static"
     """Registered concrete Skill implementation name."""
@@ -87,16 +100,16 @@ class SkillVersionRecord(RecordModel):
     """Version of the fixed Skill configuration format."""
 
     config: dict[str, JsonValue] = Field(default_factory=dict)
-    """Fixed Skill implementation options; mutable content belongs in bundle."""
+    """Fixed Skill implementation options; mutable content belongs in content."""
 
     status: str = "draft"
-    """Local lifecycle state; remote lifecycle is stored separately."""
+    """Skill version lifecycle state."""
 
     version_revision: int = Field(default=0, ge=0)
     """Local metadata revision for conditional updates."""
 
     version_label: str | None = None
-    """Unique semantic display label; None remains readable for pre-upgrade writers."""
+    """Unique semantic display label."""
 
     commit_message: str | None = None
     """Reason for creating the version."""
@@ -119,6 +132,18 @@ class SkillVersionRecord(RecordModel):
     @model_validator(mode="after")
     def validate_lineage(self):
         """Reject invalid local lineage and reversed timestamps."""
+        SkillSnapshot(
+            implementation=self.implementation,
+            config_schema_version=self.config_schema_version,
+            config=self.config,
+            name=self.name,
+            description=self.description,
+            standard_format=self.standard_format,
+            content=self.content,
+            resources=self.resources,
+            content_hash=self.content_hash,
+            skill_hash=self.skill_hash,
+        )
         if self.version_id in self.parent_version_ids or len(set(self.parent_version_ids)) != len(
             self.parent_version_ids
         ):
@@ -128,6 +153,40 @@ class SkillVersionRecord(RecordModel):
         if self.updated_at < self.created_at:
             raise ValueError("updated_at must not precede created_at")
         return self
+
+
+class SkillVersionSummary(RecordModel):
+    """Projected version fields returned by a history page."""
+
+    version_id: str = Field(min_length=1)
+    """Immutable local version identity."""
+
+    version_label: str | None
+    """Display label, if assigned to this version."""
+
+    commit_message: str | None = None
+    """Author's submission message; None when no message was supplied."""
+
+    parent_version_ids: list[str]
+    """Ordered parent version identities."""
+
+    content_hash: str = Field(min_length=1)
+    """Hash of the exact UTF-8 document."""
+
+    skill_hash: str
+    """Digest of the full document and resource bytes."""
+
+    implementation: str
+    """Registered Skill implementation name."""
+
+    status: str
+    """Local lifecycle state."""
+
+    origin: str
+    """Local provenance of this version."""
+
+    created_at: AwareDatetime
+    """Time this version was created."""
 
 
 UserVersionLabel = Annotated[str, StringConstraints(pattern=USER_VERSION_PATTERN, max_length=96)]

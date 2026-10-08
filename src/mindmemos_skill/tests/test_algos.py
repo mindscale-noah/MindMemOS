@@ -3,7 +3,7 @@
 import pytest
 from mindmemos_skill.algos import Algorithm, SkillEvolver, SkillManager, SkillTrainer, SkillTrajectory
 from mindmemos_skill.envs import Reward, Task
-from mindmemos_skill.skill import Skill, SkillBundle
+from mindmemos_skill.skill import Skill, SkillContent
 from pydantic import BaseModel, ValidationError
 
 
@@ -67,7 +67,11 @@ def test_trajectory_accepts_unscored_history_and_preserves_subtypes():
     class DetailedReward(Reward):
         rationale: str
 
-    skill = Skill(bundle=SkillBundle(files={"SKILL.md": "Original instructions"}))
+    skill = Skill(
+        SkillContent(
+            content="Original instructions", name="original", description="Instructions", standard_format=False
+        )
+    )
     trajectory = SkillTrajectory(
         task=HistoricalTask(id="task-1", instruction="Solve it", source="archive"),
         skills={"skill-1": skill},

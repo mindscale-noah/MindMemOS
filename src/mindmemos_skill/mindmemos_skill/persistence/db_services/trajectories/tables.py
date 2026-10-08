@@ -1,10 +1,22 @@
 """Business tables owned by the trajectories data service."""
 
-from sqlalchemy import JSON, CheckConstraint, Column, Float, Index, Integer, MetaData, Table, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    Column,
+    Float,
+    Index,
+    Integer,
+    MetaData,
+    Table,
+    Text,
+    UniqueConstraint,
+    text,
+)
 
 from ....infra.database import TableSpec
 from ....infra.database.typing import UTCDateTime
-from ...constants import TRAJECTORIES_TABLE
+from ...constants import TRAJECTORIES_TABLE, TRAJECTORY_REPORT_ACTOR_INDEX, TRAJECTORY_REPORT_CURSOR_INDEX
 from .typing import TrajectoryRecord
 
 
@@ -22,8 +34,11 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         metadata,
         Column("project_id", Text, nullable=False, comment="Project owning this physical rollout attempt."),
         Column("trajectory_id", Text, primary_key=True, comment="Local identity of one physical rollout attempt."),
-        Column("trajectory_hash", Text, nullable=False, comment="Hash of the local trajectory representation."),
-        Column("task_id", Text, nullable=False, comment="Task identity within its dataset."),
+        Column("trajectory_hash", Text, nullable=False, comment="Hash of local events or reported messages."),
+        Column(
+            "source", Text, nullable=False, server_default=text("'local'"), comment="Local or Harness-reported source."
+        ),
+        Column("task_id", Text, nullable=False, comment="Local task identity or generated report task identity."),
         Column("rollout_id", Text, nullable=False, comment="Logical rollout identity shared by retries."),
         Column("attempt_no", Integer, nullable=False, comment="Zero-based physical attempt number."),
         Column("rollout_type", Text, nullable=False, comment="Purpose of the rollout, such as inference or training."),
@@ -54,15 +69,23 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             nullable=False,
             comment="Extra evaluation metrics, including success when available.",
         ),
-        Column("started_at", UTCDateTime(), nullable=False, comment="Execution start time."),
+        Column("started_at", UTCDateTime(), nullable=True, comment="Execution start time when known."),
         Column("finished_at", UTCDateTime(), nullable=True, comment="Execution completion time; absent while running."),
         Column("n_turn", Integer, nullable=False, comment="Number of agent interaction turns."),
         Column("error_info", Text, nullable=True, comment="Optional execution failure details."),
         Column("metadata", JSON, nullable=False, comment="Additional local execution annotations."),
-        Column("created_at", UTCDateTime(), nullable=False, comment="Time this local record was stored."),
+        Column("created_at", UTCDateTime(), nullable=False, comment="Time this trajectory record was stored."),
+        Column("skill_id", Text, nullable=True, comment="Family associated with a reported attempt."),
+        Column("skill_version_id", Text, nullable=True, comment="Exact loaded version of a reported attempt."),
+        Column("user_id", Text, nullable=True, comment="Business user associated with a reported attempt."),
+        Column("agent_id", Text, nullable=True, comment="Agent associated with a reported attempt."),
+        Column("session_id", Text, nullable=True, comment="Logical session of a reported attempt."),
+        Column("received_at", UTCDateTime(), nullable=True, comment="Server receipt time of a reported attempt."),
         UniqueConstraint("project_id", "rollout_id", "attempt_no"),
         UniqueConstraint("project_id", "trajectory_id"),
         CheckConstraint("attempt_no >= 0 AND n_turn >= 0"),
         Index("trajectories_task_idx", "task_id"),
+        Index(TRAJECTORY_REPORT_CURSOR_INDEX, "project_id", "skill_id", "received_at", "trajectory_id"),
+        Index(TRAJECTORY_REPORT_ACTOR_INDEX, "project_id", "skill_id", "user_id", "agent_id"),
     )
     return (TableSpec(name=TRAJECTORIES_TABLE, table=table, insert_model=TrajectoryRecord),)

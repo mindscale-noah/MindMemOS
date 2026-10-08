@@ -1,118 +1,1049 @@
-"""Verify HTTP access delegates to the existing Skill service contract."""
+"""Verify the public Skill HTTP entry and explicit backend capability boundaries."""
 
+import asyncio
+import base64
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+import jwt
 import pytest
 import pytest_asyncio
 import yaml
 from fastapi.testclient import TestClient
-from mindmemos_skill.api.entries.config import FastAPIConfig
-from mindmemos_skill.api.entries.fastapi import create_app
-from mindmemos_skill.api.service import SkillService
-from mindmemos_skill.persistence.observability import AlgorithmAuditPersistence
+from mindmemos_skill.api.auth import GatewayJwtResolver, SkillHttpIdentity
+from mindmemos_skill.api.constants import SKILL_API_HOST_ENV, SKILL_CONFIG_PATH_ENV
+from mindmemos_skill.api.entries.fastapi import build_http_service, create_app
+from mindmemos_skill.common.time_utils import utcnow
+from mindmemos_skill.config.config import FastAPIConfig, HttpAuthConfig
+from mindmemos_skill.infra.database import Scope
+from mindmemos_skill.infra.embedding import OpenAIEmbeddingClient
+from mindmemos_skill.persistence.constants import (
+    SKILL_GRAPH_VERSIONS_TABLE,
+    SKILL_GRAPHS_TABLE,
+    SKILL_VERSIONS_TABLE,
+    SKILLS_TABLE,
+    TRAJECTORIES_TABLE,
+)
 
 from mindmemos_skill import MindMemOSSkill, create_service
+
+from .service_config import deployment_config, repository_config
+
+GATEWAY_SECRET = "test-gateway-secret-with-at-least-64-bytes-for-all-test-algorithms"
+
+
+def gateway_token(
+    *,
+    project_id: str = "project-a",
+    scopes: list[str] | None = None,
+    secret: str = GATEWAY_SECRET,
+    algorithm: str = "HS256",
+    **overrides,
+) -> str:
+    """Sign a Gateway JWT with the Memory service's claim format."""
+    now = int(time.time())
+    claims = {
+        "iss": "mindmemos-gateway",
+        "aud": "memory-data-plane",
+        "sub": "account-a",
+        "account_id": "account-a",
+        "project_id": project_id,
+        "api_key_uuid": "key-a",
+        "memory_algorithm": "schema",
+        "scopes": scopes if scopes is not None else ["skill:read"],
+        "iat": now,
+        "exp": now + 60,
+    }
+    claims.update(overrides)
+    return jwt.encode(claims, secret, algorithm=algorithm)
 
 
 @pytest_asyncio.fixture
 async def service(tmp_path):
-    """Build a transport-independent service through the public YAML factory."""
-    path = tmp_path / "http.yaml"
-    path.write_text("{}\n")
-    return await create_service(path)
+    """Build one local Skill service with an isolated persistent database."""
+    return await create_service(repository_config(tmp_path / "home", "project"))
 
 
-def test_factory_and_http_discovery(service):
-    """Expose health, docs and all operations from the same service object."""
+@pytest_asyncio.fixture
+async def management_service(tmp_path, monkeypatch):
+    """Build configured management routes with deterministic local embeddings."""
+    monkeypatch.setattr(
+        OpenAIEmbeddingClient,
+        "embed",
+        lambda self, texts: [[1.0, 0.0, 0.0] if "csv" in text.lower() else [0.0, 1.0, 0.0] for text in texts],
+    )
+    algorithm = {
+        "embedding": {"model": "test", "base_url": "http://test.invalid/v1", "dimensions": 3},
+        "build_scene": False,
+        "llm_linking": False,
+        "query_rewrite": False,
+        "mode": "skill_only",
+    }
+    config = deployment_config(
+        {
+            "home": tmp_path / "home",
+            "persistence": {
+                "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'manage-http.db'}"}}
+            },
+            "repository_pipeline": {"class_name": "repository"},
+            "manage_pipeline": {"class_name": "graph_manage", "config": {"algorithm": algorithm}},
+        },
+        "project",
+    )
+    return await create_service(config)
+
+
+def test_public_route_discovery_and_no_legacy_export(service):
+    """Advertise target routes without publishing old or training routes."""
     assert isinstance(service, MindMemOSSkill)
-    assert service.backends == {}
     app = create_app(service)
     assert app.state.service is service
     with TestClient(app) as client:
         assert client.get("/health").json() == {"status": "ok"}
         assert client.get("/docs").status_code == 200
-        schema = client.get("/openapi.json").json()
-    assert "501" in schema["paths"]["/skills/auto-evolve"]["post"]["responses"]
-    assert "/skills/auto-train" not in schema["paths"]
+        paths = client.get("/openapi.json").json()["paths"]
+    assert "/v1/skills/register" in paths
+    assert "/v1/skills/version-resolve" in paths
+    assert "/v1/skills/skill-resolve" in paths
+    assert "/v1/skills/trajectories/report" in paths
+    assert "/v1/skills/algos/organize" in paths
+    assert "/v1/skills/algos/recommend" in paths
+    assert "/v1/skills/algos/evolve" in paths
+    assert "/v1/skills/tasks/show" in paths
+    assert "201" in paths["/v1/skills/register"]["post"]["responses"]
+    for route in ("evolve", "train"):
+        assert "202" in paths[f"/v1/skills/algos/{route}"]["post"]["responses"]
+    assert "200" in paths["/v1/skills/algos/organize"]["post"]["responses"]
+    assert "200" in paths["/v1/skills/algos/recommend"]["post"]["responses"]
+    assert not any(path.startswith("/skills/") for path in paths)
+    assert "/v1/skills/algos/train" in paths
+    assert "/v1/skills/tasks/progress" in paths
+    assert not any("export" in path for path in paths)
 
 
-@pytest.mark.asyncio
-async def test_pending_operations_return_501(service):
-    """Keep placeholder methods visibly unimplemented over HTTP."""
+def test_skill_http_preserves_uploaded_resources_and_exposes_graph_reads(service):
+    """The SDK contract retains binary resources without changing the project scope."""
     with TestClient(create_app(service)) as client:
-        response = client.post("/skills/auto-evolve")
-        assert response.status_code == 501
-        assert "not implemented" in response.json()["detail"]
-        assert client.get("/skills/auto-evolve").status_code == 405
-    with pytest.raises(NotImplementedError):
-        await service.auto_train_skill()
+        register = client.post(
+            "/v1/skills/register",
+            json={
+                "alias": "demo",
+                "skill": {
+                    "content": "---\nname: demo\ndescription: Example\n---\nOriginal",
+                    "name": "demo",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                    "resources": {"assets/data.bin": base64.b64encode(b"\x00source").decode("ascii")},
+                },
+            },
+        )
+        assert register.status_code == 201, register.text
+        skill_id = register.json()["data"]["skill_id"]
+        initial = register.json()["data"]["skill_version_id"]
+        shown = client.post("/v1/skills/show", json={"skill_id": skill_id})
+        assert shown.json()["data"]["version"]["resources"]["assets/data.bin"] == base64.b64encode(
+            b"\x00source"
+        ).decode("ascii")
+
+        committed = client.post(
+            "/v1/skills/commit",
+            json={
+                "skill_id": skill_id,
+                "active": True,
+                "base_version_id": initial,
+                "skill": {
+                    "content": "---\nname: demo\ndescription: Example\n---\nUpdated",
+                    "resources": {"assets/data.bin": base64.b64encode(b"\x00updated").decode("ascii")},
+                    "commit_message": "Update",
+                    "version_bump": "patch",
+                },
+            },
+        )
+        assert committed.status_code == 201, committed.text
+        assert committed.json()["data"]["version_label"] == "v1.0.1"
+        active_version_id = committed.json()["data"]["skill_version_id"]
+        assert skill_id.startswith("sk-")
+        assert initial.startswith("skv-")
+        for reference in ("demo", skill_id, skill_id[:8]):
+            resolved = client.post("/v1/skills/skill-resolve", json={"skill_ref": reference})
+            assert resolved.status_code == 200, resolved.text
+            assert resolved.json()["data"]["skill_version_id"] == active_version_id
+        historical = client.post("/v1/skills/skill-resolve", json={"skill_ref": initial[:9]})
+        assert historical.status_code == 200, historical.text
+        assert historical.json()["data"]["skill_version_id"] == initial
+        assert historical.json()["data"]["is_active"] is False
+        history = client.post("/v1/skills/history", json={"skill_id": skill_id}).json()["data"]["items"]
+        assert len(history) == 2
+        assert all("implementation" in row and "status" in row and "origin" in row for row in history)
+        assert client.post("/v1/skills/graphs/list", json={}).json()["data"]["items"] == []
+        assert client.post("/v1/skills/graphs/snapshots", json={"graph_id": "missing"}).json()["data"]["items"] == []
 
 
-def test_http_calls_service_implementation():
-    """Bind routes to the concrete service instead of separate business stubs."""
-    calls = []
-
-    class RecordingService(SkillService):
-        async def register_skill(self) -> None:
-            calls.append(self.backends)
-
-        async def delete_skill(self) -> None:
-            raise RuntimeError("Unexpected backend failure")
-
-    service = RecordingService(backends={}, observability=AlgorithmAuditPersistence(None))
-    with TestClient(create_app(service), raise_server_exceptions=False) as client:
-        assert client.post("/skills/register").status_code == 200
-        assert calls == [{}]
-        assert client.post("/skills/delete").status_code == 500
-
-
-def test_pipeline_allowlist_rejects_before_service_call():
-    """Deny unknown pipeline names without entering the execution service."""
-    calls = []
-
-    class RecordingService(SkillService):
-        async def auto_evolve_skill(self, request=None):
-            calls.append(request)
-            return {"status": "ok"}
-
-    service = RecordingService(backends={}, observability=AlgorithmAuditPersistence(None))
-    request = {"project_id": "project", "skill_ref": "skill", "pipeline": "local_only"}
+def test_unavailable_backends_return_stable_errors(service):
+    """Keep missing worker-backed operations explicit instead of returning success."""
     with TestClient(create_app(service)) as client:
-        denied = client.post("/skills/auto-evolve", json=request)
-        assert denied.status_code == 422
-        assert denied.json()["error"] == "unsupport"
-    with TestClient(create_app(service, api_config=FastAPIConfig(evolution_pipelines={"cloud"}))) as client:
-        denied = client.post("/skills/auto-evolve", json=request)
-        assert denied.status_code == 422
-        assert denied.json()["error"] == "unsupport"
-        allowed = client.post("/skills/auto-evolve", json=request | {"pipeline": "cloud"})
-        assert allowed.status_code == 200
-    assert len(calls) == 1
-    assert calls[0].pipeline == "cloud"
+        requests = {
+            "/v1/skills/graph-resolve": {"graph_ref": "g"},
+            "/v1/skills/algos/organize": {"alias": "g", "commit_message": "Organize", "skill_refs": []},
+            "/v1/skills/algos/recommend": {
+                "graph_ref": "g",
+                "graph_version_id": "00000000-0000-0000-0000-000000000001",
+                "query": "hello",
+            },
+            "/v1/skills/algos/evolve": {"skill_version_id": "v"},
+            "/v1/skills/tasks/show": {"task_id": "t"},
+        }
+        for path, body in requests.items():
+            response = client.post(path, json=body)
+            assert response.status_code in {404, 422, 501}, response.text
+            assert response.json()["error"]["code"] in {
+                "trajectory_api_unavailable",
+                "graph_resolution_unavailable",
+                "graph_not_found",
+                "pipeline_unavailable",
+                "task_api_unavailable",
+            }
+        assert client.post("/v1/skills/register", json={}).status_code == 422
+        assert client.post("/v1/skills/list", json={"project_id": "project"}).status_code == 422
+        assert client.post("/v1/skills/list", json={"offset": 0}).status_code == 422
+        assert client.post("/skills/register", json={}).status_code == 404
 
 
-def test_documented_http_allowlist_defaults_to_deny():
-    """Validate the shipped YAML policy as an empty execution allowlist."""
-    path = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/fastapi.yaml"
-    policy = FastAPIConfig.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
-    assert policy.evolution_pipelines == set()
+def test_manage_http_routes_publish_and_recommend_pinned_versions(management_service):
+    """Connect authorized HTTP calls to the two configured skill_manage pipelines."""
+
+    def resolver(token):
+        scopes = {"skill:write"} if token == "admin" else {"skill:read"}
+        return SkillHttpIdentity(project_id="project", scopes=scopes, actor_id="account-1")
+
+    headers = {"Authorization": "Bearer admin"}
+    with TestClient(create_app(management_service, identity_from_bearer=resolver)) as client:
+        versions = []
+        for name, description in (("csv", "Parse CSV tables"), ("images", "Draw pictures")):
+            response = client.post(
+                "/v1/skills/register",
+                headers=headers,
+                json={
+                    "alias": name,
+                    "skill": {
+                        "content": f"---\nname: {name}\ndescription: {description}\n---\n{description}",
+                        "name": name,
+                        "commit_version": "v1.0.0",
+                        "commit_message": "Initial version",
+                    },
+                },
+            )
+            assert response.status_code == 201, response.text
+            versions.append(response.json()["data"]["skill_version_id"])
+
+        body = {"alias": "collection", "commit_message": "Initial organization", "skill_refs": versions}
+        organized = client.post("/v1/skills/algos/organize", headers=headers, json=body)
+        assert organized.status_code == 200, organized.text
+        snapshot = organized.json()["data"]["graph_version_id"]
+        graph_id = organized.json()["data"]["graph_id"]
+        assert graph_id.startswith("skg-")
+        assert snapshot.startswith("skgv-")
+        graph_current = client.post("/v1/skills/graph-resolve", headers=headers, json={"graph_ref": "collection"})
+        assert graph_current.status_code == 200, graph_current.text
+        assert graph_current.json()["data"]["graph_id"] == graph_id
+        assert graph_current.json()["data"]["graph_version_id"] == snapshot
+        graph_prefix = client.post("/v1/skills/graph-resolve", headers=headers, json={"graph_ref": graph_id[:8]})
+        assert graph_prefix.json()["data"]["graph_id"] == graph_id
+        pinned = client.post("/v1/skills/graph-resolve", headers=headers, json={"graph_ref": snapshot[:9]})
+        assert pinned.json()["data"]["graph_version_id"] == snapshot
+        assert organized.json()["data"]["skill_version_ids"] == versions
+        graphs = client.post("/v1/skills/graphs/list", headers=headers, json={})
+        assert graphs.status_code == 200, graphs.text
+        assert any(
+            row["graph_id"] == graph_id and row["alias"] == "collection" for row in graphs.json()["data"]["items"]
+        )
+        snapshots = client.post("/v1/skills/graphs/snapshots", headers=headers, json={"graph_id": "collection"})
+        assert snapshots.status_code == 200, snapshots.text
+        assert any(row["graph_version_id"] == snapshot for row in snapshots.json()["data"]["items"])
+        snapshot_detail = client.post(
+            "/v1/skills/graphs/snapshot",
+            headers=headers,
+            json={"graph_id": "collection", "graph_version_id": snapshot},
+        )
+        assert snapshot_detail.status_code == 200, snapshot_detail.text
+        assert {node["skill_version_id"] for node in snapshot_detail.json()["data"]["nodes"]} == set(versions)
+        with management_service.repository.persistence.session(Scope(fields={"project_id": "project"})) as scoped:
+            snapshots = scoped.database.select(SKILL_GRAPH_VERSIONS_TABLE, filters={"graph_id": graph_id})
+        body = {"graph_id": graph_id, "commit_message": "Initial organization", "skill_refs": versions}
+        assert snapshots[0]["actor_id"] == "account-1"
+        assert snapshots[0]["message"] == "Initial organization"
+        assert (
+            client.post("/v1/skills/algos/organize", headers=headers, json=body).json()["data"]["graph_version_id"]
+            == snapshot
+        )
+        reworded = client.post(
+            "/v1/skills/algos/organize",
+            headers=headers,
+            json=body | {"commit_message": "Revised explanation"},
+        )
+        assert reworded.status_code == 200, reworded.text
+        assert reworded.json()["data"]["graph_version_id"] != snapshot
+        with management_service.repository.persistence.session(Scope(fields={"project_id": "project"})) as scoped:
+            snapshots = scoped.database.select(SKILL_GRAPH_VERSIONS_TABLE, filters={"graph_id": graph_id})
+        assert {row["message"] for row in snapshots} == {"Initial organization", "Revised explanation"}
+        foreign = client.post(
+            "/v1/skills/algos/organize",
+            headers=headers,
+            json={"graph_id": "foreign", "skill_refs": ["not-in-project"]},
+        )
+        assert foreign.status_code == 404
+
+        query = {"graph_ref": "collection", "graph_version_id": snapshot, "query": "Parse CSV records", "top_k": 1}
+        recommended = client.post("/v1/skills/algos/recommend", headers=headers, json=query)
+        assert recommended.status_code == 200, recommended.text
+        assert [item["version_id"] for item in recommended.json()["data"]["skills"]] == [versions[0]]
+
+        newer = client.post(
+            "/v1/skills/algos/organize",
+            headers=headers,
+            json={"graph_id": graph_id, "commit_message": "Image-only organization", "skill_refs": [versions[1]]},
+        )
+        assert newer.status_code == 200, newer.text
+        assert newer.json()["data"]["graph_version_id"] != snapshot
+        old_graph_version = client.post("/v1/skills/graph-resolve", headers=headers, json={"graph_ref": snapshot})
+        assert old_graph_version.json()["data"]["graph_version_id"] == snapshot
+        assert old_graph_version.json()["data"]["is_current"] is False
+        assert [
+            item["version_id"]
+            for item in client.post("/v1/skills/algos/recommend", headers=headers, json=query).json()["data"]["skills"]
+        ] == [versions[0]]
+        latest = client.post(
+            "/v1/skills/algos/recommend",
+            headers=headers,
+            json={"graph_ref": "collection", "query": "Parse CSV records", "top_k": 1},
+        )
+        assert latest.status_code == 200, latest.text
+        assert [item["version_id"] for item in latest.json()["data"]["skills"]] == [versions[1]]
+
+        reader = {"Authorization": "Bearer reader"}
+        assert client.post("/v1/skills/algos/organize", headers=reader, json=body).status_code == 403
+
+        assert client.post("/v1/skills/algos/recommend", headers=reader, json=query).status_code == 403
+        assert client.post("/v1/skills/graphs/list", headers=reader, json={}).status_code == 200
+        assert (
+            client.post("/v1/skills/algos/organize", headers=headers, json=body | {"project_id": "other"}).status_code
+            == 422
+        )
+        assert (
+            client.post("/v1/skills/algos/recommend", headers=headers, json=query | {"project_id": "other"}).status_code
+            == 422
+        )
+
+
+def test_graph_rollout_mode_keeps_legacy_storage_identity(management_service):
+    """The first rollout phase keeps old writers on the same graph family."""
+    management_service._manage_pipeline.config.prefixed_graph_ids = False
+    with TestClient(create_app(management_service)) as client:
+        created = client.post(
+            "/v1/skills/algos/organize",
+            json={"alias": "shared", "commit_message": "Empty graph", "skill_refs": []},
+        )
+        assert created.status_code == 200, created.text
+        assert created.json()["data"]["graph_id"] == "shared"
+        with management_service.repository.persistence.session(Scope(fields={"project_id": "project"})) as scoped:
+            graph = scoped.database.select(SKILL_GRAPHS_TABLE, filters={"graph_id": "shared"})
+        assert len(graph) == 1
+        assert graph[0]["alias"] == "shared"
+
+
+def test_skill_rollout_mode_keeps_legacy_id_generation(tmp_path):
+    """The compatibility phase shares deterministic ID formats with old writers."""
+    config = deployment_config(
+        {
+            "home": tmp_path / "home",
+            "persistence": {
+                "config": {"prefixed_ids": False},
+                "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'legacy-ids.db'}"}},
+            },
+            "repository_pipeline": {"class_name": "repository"},
+        },
+        "project",
+    )
+    service = asyncio.run(create_service(config))
+    with TestClient(create_app(service)) as client:
+        registered = client.post(
+            "/v1/skills/register",
+            json={
+                "alias": "legacy",
+                "skill": {
+                    "content": "---\nname: legacy\ndescription: Legacy\n---\nLegacy",
+                    "name": "legacy",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        assert registered.json()["data"]["skill_id"].startswith("sk_")
+        assert registered.json()["data"]["skill_version_id"].startswith("v_")
+        resolved = client.post("/v1/skills/skill-resolve", json={"skill_ref": "legacy"})
+        assert resolved.json()["data"]["skill_version_id"] == registered.json()["data"]["skill_version_id"]
+
+
+def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(service):
+    """Convert sparse Harness messages into a project-owned physical attempt."""
+    with TestClient(create_app(service)) as client:
+        registered = client.post(
+            "/v1/skills/register",
+            json={
+                "alias": "reported-skill",
+                "skill": {
+                    "content": "---\nname: reported-skill\ndescription: Example\n---\nBody",
+                    "name": "reported-skill",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        detail = registered.json()["data"]
+        version_id = detail["skill_version_id"]
+        report = client.post(
+            "/v1/skills/trajectories/report",
+            json={
+                "user_id": "user-1",
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "skill_version_id": version_id,
+                "messages": [
+                    {"role": "system", "content": "Be concise"},
+                    {"role": "user", "content": "Summarize the file"},
+                    {"role": "assistant", "content": "Done"},
+                ],
+            },
+        )
+        assert report.status_code == 201, report.text
+        response = report.json()["data"]
+        assert response["skill_version_id"] == version_id
+        with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
+            record = store.trajectories.get(response["trajectory_id"])
+        assert record is not None
+        assert record.source == "reported"
+        assert record.task_id != record.trajectory_id
+        assert record.rollout_id == record.trajectory_id
+        assert record.task_system_prompt == "Be concise"
+        assert record.task_instruction == "Summarize the file"
+        assert record.env_ref == "unknown"
+        assert record.started_at is None
+        assert record.received_at == record.created_at
+        assert record.skill_id == detail["skill_id"]
+        assert record.skill_version_id == version_id
+        assert record.user_id == "user-1" and record.agent_id == "agent-1"
+        assert record.session_id == "session-1"
+        assert record.n_turn == 1
+        assert record.trajectory[0]["role"] == "system"
+        assert record.skill_bindings[0]["version_id"] == version_id
+        assert response["stored_at"] == record.received_at.isoformat()
+        protected = client.post("/v1/skills/delete", json={"skill_id": detail["skill_id"]})
+        assert protected.status_code == 200
+        with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
+            assert store.trajectories.get(response["trajectory_id"]) is not None
+        missing = client.post(
+            "/v1/skills/trajectories/report",
+            json={
+                "user_id": "user-1",
+                "agent_id": "agent-1",
+                "skill_version_id": "missing",
+                "messages": [{"role": "user", "content": "Question"}],
+            },
+        )
+        assert missing.status_code == 404
+        assert missing.json()["error"]["code"] == "skill_version_not_found"
+
+
+def test_report_without_user_message_keeps_task_instruction_empty(service):
+    """Do not invent a user instruction when a report only has Agent output."""
+    with TestClient(create_app(service)) as client:
+        registered = client.post(
+            "/v1/skills/register",
+            json={
+                "alias": "output-only",
+                "skill": {
+                    "content": "---\nname: output-only\ndescription: Example\n---\nBody",
+                    "name": "output-only",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+        )
+        version_id = registered.json()["data"]["skill_version_id"]
+        report = client.post(
+            "/v1/skills/trajectories/report",
+            json={
+                "user_id": "user-1",
+                "agent_id": "agent-1",
+                "skill_version_id": version_id,
+                "messages": [{"role": "assistant", "content": "Done"}],
+            },
+        )
+        assert report.status_code == 201, report.text
+        with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
+            record = store.trajectories.get(report.json()["data"]["trajectory_id"])
+        assert record.task_instruction == ""
+        assert record.task_system_prompt is None
+
+
+def test_report_show_list_cursor_and_same_execution_actor_filter(service):
+    """Read reported attempts without cursor drift or cross-report actor matches."""
+    with TestClient(create_app(service)) as client:
+        registered = client.post(
+            "/v1/skills/register",
+            json={
+                "alias": "tracked",
+                "skill": {
+                    "content": "---\nname: tracked\ndescription: Example\n---\nBody",
+                    "name": "tracked",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+        )
+        skill_id = registered.json()["data"]["skill_id"]
+        version_id = registered.json()["data"]["skill_version_id"]
+
+        def report(user_id, agent_id):
+            response = client.post(
+                "/v1/skills/trajectories/report",
+                json={
+                    "user_id": user_id,
+                    "agent_id": agent_id,
+                    "skill_version_id": version_id,
+                    "messages": [{"role": "user", "content": user_id}],
+                },
+            )
+            assert response.status_code == 201, response.text
+            return response.json()["data"]["trajectory_id"]
+
+        older = report("user-a", "agent-a")
+        newer = report("user-b", "agent-b")
+        shown = client.post("/v1/skills/trajectories/show", json={"trajectory_id": older})
+        assert shown.status_code == 200
+        assert shown.json()["data"]["trajectory"][0]["content"] == "user-a"
+        assert shown.json()["data"]["skill_version_id"] == version_id
+        assert client.post("/v1/skills/trajectories/show", json={"trajectory_id": "missing"}).status_code == 404
+
+        first = client.post("/v1/skills/trajectories/list", json={"skill_id": skill_id, "limit": 1})
+        assert first.status_code == 200, first.text
+        first_page = first.json()["data"]
+        assert [item["trajectory_id"] for item in first_page["items"]] == [newer]
+        assert first_page["next_cursor"]
+        late = report("user-c", "agent-c")
+        second = client.post(
+            "/v1/skills/trajectories/list",
+            json={"skill_id": skill_id, "limit": 1, "cursor": first_page["next_cursor"]},
+        )
+        assert second.status_code == 200, second.text
+        assert [item["trajectory_id"] for item in second.json()["data"]["items"]] == [older]
+        assert second.json()["data"]["next_cursor"] is None
+        assert late not in {newer, older}
+        changed = client.post(
+            "/v1/skills/trajectories/list",
+            json={"skill_id": skill_id, "limit": 1, "cursor": first_page["next_cursor"], "status": "failed"},
+        )
+        assert changed.status_code == 422
+        assert changed.json()["error"]["code"] == "invalid_cursor"
+
+        matched = client.post("/v1/skills/list", json={"filters": {"user_id": "user-a", "agent_id": "agent-a"}})
+        assert matched.status_code == 200, matched.text
+        assert [item["skill_id"] for item in matched.json()["data"]["items"]] == [skill_id]
+        mismatched = client.post("/v1/skills/list", json={"filters": {"user_id": "user-a", "agent_id": "agent-b"}})
+        assert mismatched.status_code == 200, mismatched.text
+        assert mismatched.json()["data"]["items"] == []
+
+
+def test_history_and_trajectory_pages_select_only_summary_fields(service, monkeypatch):
+    """Keep large version and attempt content out of paginated database reads."""
+    with TestClient(create_app(service)) as client:
+        registered = client.post(
+            "/v1/skills/register",
+            json={
+                "alias": "projected",
+                "skill": {
+                    "content": "---\nname: projected\ndescription: Example\n---\nBody",
+                    "name": "projected",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        skill_id = registered.json()["data"]["skill_id"]
+        version_id = registered.json()["data"]["skill_version_id"]
+        for user_id in ("first", "second"):
+            reported = client.post(
+                "/v1/skills/trajectories/report",
+                json={
+                    "user_id": user_id,
+                    "agent_id": "agent",
+                    "skill_version_id": version_id,
+                    "messages": [{"role": "user", "content": user_id}],
+                },
+            )
+            assert reported.status_code == 201, reported.text
+
+        database = service.backends["database"]
+        original_select = database.select
+        selected_fields = []
+
+        def capture_select(table, **kwargs):
+            selected_fields.append((table, kwargs.get("fields")))
+            return original_select(table, **kwargs)
+
+        monkeypatch.setattr(database, "select", capture_select)
+        history = client.post("/v1/skills/history", json={"skill_id": skill_id, "limit": 1})
+        assert history.status_code == 200, history.text
+        assert len(history.json()["data"]["items"]) == 1
+        first = client.post(
+            "/v1/skills/trajectories/list",
+            json={"skill_id": skill_id, "skill_version_id": version_id, "limit": 1},
+        )
+        assert first.status_code == 200, first.text
+        cursor = first.json()["data"]["next_cursor"]
+        assert cursor is not None
+        second = client.post(
+            "/v1/skills/trajectories/list",
+            json={"skill_id": skill_id, "skill_version_id": version_id, "limit": 1, "cursor": cursor},
+        )
+        assert second.status_code == 200, second.text
+        assert len(second.json()["data"]["items"]) == 1
+
+        version_fields = [fields for table, fields in selected_fields if table == SKILL_VERSIONS_TABLE]
+        trajectory_fields = [fields for table, fields in selected_fields if table == TRAJECTORIES_TABLE]
+        assert {frozenset(fields) for fields in version_fields} == {
+            frozenset(
+                {
+                    "version_id",
+                    "version_label",
+                    "commit_message",
+                    "parent_version_ids",
+                    "content_hash",
+                    "skill_hash",
+                    "implementation",
+                    "status",
+                    "origin",
+                    "created_at",
+                }
+            ),
+            frozenset({"skill_id"}),
+        }
+        assert len(trajectory_fields) == 3
+        assert all(
+            set(fields)
+            == {
+                "trajectory_id",
+                "task_id",
+                "skill_id",
+                "skill_version_id",
+                "user_id",
+                "agent_id",
+                "status",
+                "started_at",
+                "finished_at",
+                "received_at",
+            }
+            for fields in trajectory_fields
+        )
+
+        with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
+            skill = store.skills.resolve_family("project", skill_id)
+            custom_history = store.skills.history(skill, limit=1, offset=0, fields=["version_id", "content"])
+            custom_attempts = store.trajectories.list_reported(
+                skill_id,
+                skill_version_id=version_id,
+                status=None,
+                received_at_from=None,
+                received_at_to=None,
+                snapshot_at=utcnow(),
+                after_received_at=None,
+                after_trajectory_id=None,
+                limit=1,
+                fields=["trajectory_id", "trajectory"],
+            )
+        assert set(custom_history[0]) == {"version_id", "content"}
+        assert "Body" in custom_history[0]["content"]
+        assert set(custom_attempts[0]) == {"trajectory_id", "trajectory"}
+        assert custom_attempts[0]["trajectory"][0]["role"] == "user"
+        assert selected_fields[-2:] == [
+            (SKILL_VERSIONS_TABLE, ["version_id", "content"]),
+            (TRAJECTORIES_TABLE, ["trajectory_id", "trajectory"]),
+        ]
+
+
+def test_bearer_project_scope_and_write_permission(service):
+    """Resolve project and permission from a trusted Bearer adapter."""
+
+    def resolver(token):
+        return SkillHttpIdentity(project_id="project", scopes={"skill:read"} if token == "reader" else {"skill:write"})
+
+    with TestClient(create_app(service, identity_from_bearer=resolver)) as client:
+        assert client.post("/v1/skills/list", json={}).status_code == 401
+        assert client.post("/v1/skills/list", json={}, headers={"Authorization": "Bearer reader"}).status_code == 200
+        assert client.post("/v1/skills/list", json={}, headers={"Authorization": "Bearer writer"}).status_code == 200
+        denied = client.post(
+            "/v1/skills/delete", json={"skill_id": "missing"}, headers={"Authorization": "Bearer reader"}
+        )
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "auth.insufficient_scope"
+        assert (
+            client.post(
+                "/v1/skills/list", json={"project_id": "different"}, headers={"Authorization": "Bearer reader"}
+            ).status_code
+            == 422
+        )
+
+
+def test_local_key_file_authenticates_and_rejects_other_keys(authenticated_service, tmp_path):
+    """Bind a local deployment to the key file's project on each request."""
+    key_file = tmp_path / "skill_keys.yaml"
+    key_file.write_text("project_id: project\napi_key: local-secret\n", encoding="utf-8")
+    config = FastAPIConfig(auth=HttpAuthConfig(mode="local", api_key_file=str(key_file)))
+
+    with TestClient(create_app(authenticated_service, api_config=config)) as client:
+        assert client.post("/v1/skills/list", json={}).status_code == 401
+        denied = client.post("/v1/skills/list", json={}, headers={"Authorization": "Bearer wrong"})
+        assert denied.status_code == 401
+        assert denied.json()["error"]["code"] == "auth.invalid_api_key"
+        accepted = client.post("/v1/skills/list", json={}, headers={"Authorization": "Bearer local-secret"})
+        assert accepted.status_code == 200
+        key_file.write_text("project_id: other\napi_key: local-secret\n", encoding="utf-8")
+        assert (
+            client.post("/v1/skills/list", json={}, headers={"Authorization": "Bearer local-secret"}).status_code == 200
+        )
+
+
+@pytest.mark.parametrize(
+    "scopes,enabled,expected", [(["skill:read"], True, 200), ([], True, 403), (["skill:write"], False, 401)]
+)
+def test_local_key_file_enforces_explicit_scopes_and_enabled(
+    authenticated_service, tmp_path, scopes, enabled, expected
+):
+    """Do not elevate configured local credentials to write permission."""
+    import yaml
+
+    key_file = tmp_path / "skill_keys.yaml"
+    key_file.write_text(
+        yaml.safe_dump({"project_id": "project", "api_key": "local-secret", "scopes": scopes, "enabled": enabled})
+    )
+    config = FastAPIConfig(auth=HttpAuthConfig(mode="local", api_key_file=str(key_file)))
+    headers = {"Authorization": "Bearer local-secret"}
+    with TestClient(create_app(authenticated_service, api_config=config)) as client:
+        assert client.post("/v1/skills/list", json={}, headers=headers).status_code == expected
+        if enabled:
+            assert client.post("/v1/skills/delete", json={"skill_id": "missing"}, headers=headers).status_code == 403
+
+
+def test_auth_config_requires_gateway_secret():
+    """Reject missing verification keys and the obsolete identity lookup mode."""
+    with pytest.raises(ValueError, match="gateway_jwt_secret"):
+        HttpAuthConfig(mode="gateway_jwt")
+    with pytest.raises(ValueError, match="gateway_jwt_secret"):
+        HttpAuthConfig(mode="gateway_jwt", gateway_jwt_secret="")
+    with pytest.raises(ValueError):
+        HttpAuthConfig(mode="cloud", cloud_base_url="https://account.example")
+    assert HttpAuthConfig(mode="gateway_jwt", gateway_jwt_secret="secret").mode == "gateway_jwt"
+
+
+def test_gateway_jwt_resolver_verifies_gateway_claims():
+    """Accept only signed, unexpired JWTs for the configured issuer and audience."""
+    resolver = GatewayJwtResolver(secret=GATEWAY_SECRET, issuer="mindmemos-gateway", audience="memory-data-plane")
+    identity = resolver(gateway_token(project_id="cloud-project", scopes=["skill:read"]))
+    assert identity.project_id == "cloud-project"
+    assert identity.scopes == {"skill:read"}
+
+    invalid = [
+        gateway_token(secret="another-gateway-secret-with-32-bytes"),
+        gateway_token(exp=int(time.time()) - 1),
+        gateway_token(iss="other-gateway"),
+        gateway_token(aud="other-plane"),
+        gateway_token(project_id=""),
+        gateway_token(scopes="skill:read"),
+        gateway_token(exp="tomorrow"),
+        gateway_token(algorithm="HS384"),
+        jwt.encode({"iss": "mindmemos-gateway", "aud": "memory-data-plane"}, GATEWAY_SECRET, algorithm="HS256"),
+    ]
+    for token in invalid:
+        with pytest.raises(Exception) as exc_info:
+            resolver(token)
+        assert exc_info.value.status_code == 401
+
+
+@pytest_asyncio.fixture
+async def authenticated_service(tmp_path):
+    """Assemble an unbound store whose project comes only from the request identity."""
+    config = repository_config(tmp_path / "home").service
+    config.persistence.database.config["url"] = f"sqlite+pysqlite:///{tmp_path / 'auth.db'}"
+
+    def authorize(principal, project_id):
+        if principal.project_id != project_id:
+            raise PermissionError("Project mismatch")
+        return Scope(fields={"project_id": project_id})
+
+    return await create_service(config, project_authorizer=authorize)
+
+
+def test_local_key_file_selects_project_on_unbound_service(authenticated_service, tmp_path):
+    """A local key file selects a project without a service-level local binding."""
+    key_file = tmp_path / "skill_keys.yaml"
+    key_file.write_text("project_id: project-a\napi_key: local-secret\n", encoding="utf-8")
+    config = FastAPIConfig(auth=HttpAuthConfig(mode="local", api_key_file=str(key_file)))
+    headers = {"Authorization": "Bearer local-secret"}
+    with TestClient(create_app(authenticated_service, api_config=config)) as client:
+        registered = client.post(
+            "/v1/skills/register",
+            json={
+                "alias": "local-skill",
+                "skill": {
+                    "content": "---\nname: local-skill\ndescription: Local\n---\nBody",
+                    "name": "local-skill",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+            headers=headers,
+        )
+        assert registered.status_code == 201, registered.text
+        key_file.write_text("project_id: project-b\napi_key: local-secret\n", encoding="utf-8")
+        listed = client.post("/v1/skills/list", json={}, headers=headers)
+        assert listed.status_code == 200
+        assert listed.json()["data"]["items"] == []
+
+
+def test_gateway_jwt_controls_project_and_skill_scopes(authenticated_service):
+    """Verified Gateway claims select the project and permitted Skill operations."""
+    config = FastAPIConfig(auth=HttpAuthConfig(mode="gateway_jwt", gateway_jwt_secret=GATEWAY_SECRET))
+    writer_a = gateway_token(project_id="project-a", scopes=["skill:write"])
+    reader_a = gateway_token(project_id="project-a", scopes=["skill:read"])
+    reader_b = gateway_token(project_id="project-b", scopes=["skill:read"])
+    with TestClient(create_app(authenticated_service, api_config=config)) as client:
+        registered = client.post(
+            "/v1/skills/register",
+            json={
+                "alias": "private-skill",
+                "skill": {
+                    "content": "---\nname: private-skill\ndescription: Private\n---\nBody",
+                    "name": "private-skill",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+            headers={"Authorization": f"Bearer {writer_a}"},
+        )
+        assert registered.status_code == 201, registered.text
+        skill = registered.json()["data"]
+        for token, expected_count in ((writer_a, 1), (reader_a, 1), (reader_b, 0)):
+            headers = {"Authorization": f"Bearer {token}"}
+            listed = client.post("/v1/skills/list", json={}, headers=headers)
+            assert listed.status_code == 200
+            assert len(listed.json()["data"]["items"]) == expected_count
+            if token == reader_a:
+                shown = client.post("/v1/skills/show", json={"skill_id": skill["skill_id"]}, headers=headers)
+                assert shown.status_code == 200
+                compared = client.post(
+                    "/v1/skills/diff",
+                    json={
+                        "skill_id": skill["skill_id"],
+                        "to_skill_version_id": skill["skill_version_id"],
+                    },
+                    headers=headers,
+                )
+                assert compared.status_code == 200
+            if token != writer_a:
+                denied = client.post("/v1/skills/delete", json={"skill_id": "missing"}, headers=headers)
+                assert denied.status_code == 403
+                assert denied.json()["error"]["code"] == "auth.insufficient_scope"
+        assert client.post("/v1/skills/list", json={}).status_code == 401
+        memory_only = client.post(
+            "/v1/skills/list",
+            json={},
+            headers={"Authorization": f"Bearer {gateway_token(scopes=['memory:read'])}"},
+        )
+        assert memory_only.status_code == 403
+        assert memory_only.json()["error"]["code"] == "auth.insufficient_scope"
+        for obsolete_scope in ("skill:*", "skill:manage", "skill:evolve", "skill:train"):
+            obsolete_headers = {"Authorization": f"Bearer {gateway_token(scopes=[obsolete_scope])}"}
+            for path, body in (
+                ("/v1/skills/list", {}),
+                ("/v1/skills/delete", {"skill_id": "missing"}),
+            ):
+                obsolete = client.post(path, json=body, headers=obsolete_headers)
+                assert obsolete.status_code == 403
+        expired = client.post(
+            "/v1/skills/list",
+            json={},
+            headers={"Authorization": f"Bearer {gateway_token(exp=int(time.time()) - 1)}"},
+        )
+        assert expired.status_code == 401
+        assert expired.json()["error"]["code"] == "auth.internal_token_expired"
+        invalid = client.post(
+            "/v1/skills/list",
+            json={},
+            headers={"Authorization": f"Bearer {gateway_token(secret='another-gateway-secret-with-32-bytes')}"},
+        )
+        assert invalid.status_code == 401
+        assert invalid.json()["error"]["code"] == "auth.invalid_internal_token"
+
+
+def test_list_cursor_keeps_scroll_stable_across_insert_and_rename(service):
+    """Continue a filtered page without offset drift or newly inserted rows."""
+
+    def register(client, name):
+        response = client.post(
+            "/v1/skills/register",
+            json={
+                "alias": name,
+                "skill": {
+                    "content": f"---\nname: {name}\ndescription: Example\n---\nBody",
+                    "name": name,
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+        )
+        assert response.status_code == 201, response.text
+        return response.json()["data"]["skill_id"]
+
+    with TestClient(create_app(service)) as client:
+        original = {register(client, f"item-{index}") for index in range(5)}
+        first = client.post("/v1/skills/list", json={"filters": {"alias": "item-*"}, "limit": 2})
+        assert first.status_code == 200, first.text
+        page = first.json()["data"]
+        assert page["has_more"] is True
+        assert page["next_cursor"]
+        assert "offset" not in page
+        seen = [item["skill_id"] for item in page["items"]]
+
+        added_later = register(client, "item-later")
+        renamed = client.post("/v1/skills/update-info", json={"skill_id": seen[0], "name": "renamed"})
+        assert renamed.status_code == 200
+        cursor = page["next_cursor"]
+        changed_filter = client.post(
+            "/v1/skills/list", json={"cursor": cursor, "filters": {"alias": "other-*"}, "limit": 2}
+        )
+        assert changed_filter.status_code == 422
+        assert changed_filter.json()["error"]["code"] == "invalid_cursor"
+        assert client.post("/v1/skills/list", json={"cursor": "broken", "limit": 2}).status_code == 422
+
+        while cursor is not None:
+            next_page = client.post("/v1/skills/list", json={"cursor": cursor, "limit": 2})
+            assert next_page.status_code == 200, next_page.text
+            data = next_page.json()["data"]
+            seen.extend(item["skill_id"] for item in data["items"])
+            cursor = data["next_cursor"]
+        assert len(seen) == len(set(seen))
+        assert set(seen) == original
+        assert added_later not in seen
+
+
+def test_list_cursor_breaks_creation_time_ties_with_skill_id(service):
+    """Read every family once when imported records share a creation time."""
+    with TestClient(create_app(service)) as client:
+        ids = []
+        for index in range(3):
+            name = f"tie-{index}"
+            response = client.post(
+                "/v1/skills/register",
+                json={
+                    "alias": name,
+                    "skill": {
+                        "content": f"---\nname: {name}\ndescription: Example\n---\nBody",
+                        "name": name,
+                        "commit_version": "v1.0.0",
+                        "commit_message": "Initial version",
+                    },
+                },
+            )
+            assert response.status_code == 201
+            ids.append(response.json()["data"]["skill_id"])
+        with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
+            rows = store.database.select(SKILLS_TABLE, order_by=["created_at"], limit=3)
+            for skill_id in ids:
+                store.database.update(
+                    SKILLS_TABLE, {"created_at": rows[0]["created_at"]}, filters={"skill_id": skill_id}
+                )
+
+        seen = []
+        cursor = None
+        while True:
+            body = {"limit": 1}
+            if cursor is not None:
+                body["cursor"] = cursor
+            response = client.post("/v1/skills/list", json=body)
+            assert response.status_code == 200, response.text
+            page = response.json()["data"]
+            seen.extend(item["skill_id"] for item in page["items"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+        assert seen == sorted(ids, reverse=True)
+
+
+def test_http_policy_yaml_remains_strict():
+    """Validate the deployment policy without accepting request-level pipeline names."""
+    path = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/dev.example.yaml"
+    policy = FastAPIConfig.model_validate(yaml.safe_load(path.read_text(encoding="utf-8"))["fastapi"])
+    assert policy.evolution_pipelines == {"simple"}
 
 
 def test_local_import_does_not_load_http_dependencies():
-    """Service assembly and entry imports do not load the optional HTTP stack."""
+    """Keep FastAPI and Uvicorn optional until create_app is called."""
     source = Path(__file__).resolve().parents[3] / "src/mindmemos_skill"
     subprocess.run(
         [
             sys.executable,
             "-c",
             "import sys, asyncio; from mindmemos_skill import ServiceConfig, create_service; "
-            "from mindmemos_skill.api.entries.fastapi import create_app; "
-            "service = asyncio.run(create_service(ServiceConfig())); "
+            "service = asyncio.run(create_service(ServiceConfig(home='.'))); "
             "assert service.backends == {}; "
-            "assert 'fastapi' not in sys.modules; assert 'uvicorn' not in sys.modules",
+            "assert 'fastapi' not in sys.modules; assert 'uvicorn' not in sys.modules; assert 'mindmemos_sdk' not in sys.modules",
         ],
-        cwd=source,
+        env={"PYTHONPATH": str(source)},
         check=True,
     )
+
+
+def test_local_entry_rejects_public_bind_without_authentication(monkeypatch):
+    """Reject unauthenticated deployment on a public configured address."""
+    path = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/dev.example.yaml"
+    monkeypatch.setenv(SKILL_CONFIG_PATH_ENV, str(path))
+    monkeypatch.setenv(SKILL_API_HOST_ENV, "0.0.0.0")
+    with pytest.raises(ValueError, match="loopback address"):
+        asyncio.run(build_http_service())
+
+
+def test_http_policy_cannot_override_project_binding(service):
+    """Reject conflicting default projects and authentication over a none-mode service."""
+    with pytest.raises(ValueError, match="default project"):
+        create_app(service, api_config=FastAPIConfig(auth=HttpAuthConfig(mode="none", default_project_id="other")))
+    with pytest.raises(ValueError, match="without a default project"):
+        create_app(
+            service, api_config=FastAPIConfig(auth=HttpAuthConfig(mode="gateway_jwt", gateway_jwt_secret="secret"))
+        )
+
+
+@pytest.mark.parametrize("mode", ["local", "gateway_jwt"])
+def test_complete_yaml_installs_authentication_without_host_overrides(tmp_path, mode):
+    """The complete YAML supplies credentials, project authorization and HTTP policy."""
+    config = repository_config(tmp_path / "home").model_dump(mode="json")
+    if mode == "local":
+        (tmp_path / "key.yaml").write_text("project_id: project-a\napi_key: local-secret\n")
+        config["fastapi"]["auth"] = {"mode": "local", "api_key_file": "key.yaml"}
+        credential = "local-secret"
+    else:
+        config["fastapi"]["auth"] = {"mode": "gateway_jwt", "gateway_jwt_secret": GATEWAY_SECRET}
+        credential = gateway_token()
+    path = tmp_path / "service.yaml"
+    path.write_text(yaml.safe_dump(config))
+    service = asyncio.run(create_service(path))
+    assert service.default_project_id is None
+    with TestClient(create_app(service)) as client:
+        assert client.post("/v1/skills/list", json={}).status_code == 401
+        assert client.post("/v1/skills/list", json={}, headers={"Authorization": "Bearer invalid"}).status_code == 401
+        accepted = client.post("/v1/skills/list", json={}, headers={"Authorization": f"Bearer {credential}"})
+        assert accepted.status_code == 200

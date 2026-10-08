@@ -1,16 +1,16 @@
 """Graph schema integrity, backend declarations, and portable round trips."""
 
 from datetime import timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from mindmemos_skill.common.time_utils import utcnow
+from mindmemos_skill.errors import GraphConflictError
 from mindmemos_skill.infra.database import SQLiteConfig, SQLiteDatabase
 from mindmemos_skill.persistence import (
     SkillGraphEdgeRecord,
     SkillGraphNodeRecord,
     SkillGraphRecord,
-    SkillGraphRevisionRecord,
     SkillGraphVersionRecord,
     SkillVersionRecord,
     build_persistence_tables,
@@ -20,11 +20,12 @@ from mindmemos_skill.persistence import (
 from mindmemos_skill.persistence.constants import (
     SKILL_GRAPH_EDGES_TABLE,
     SKILL_GRAPH_NODES_TABLE,
-    SKILL_GRAPH_REVISIONS_TABLE,
     SKILL_GRAPH_VERSIONS_TABLE,
     SKILL_GRAPHS_TABLE,
     SKILL_VERSIONS_TABLE,
 )
+from mindmemos_skill.persistence.db_services.skill_management.service import GraphQueryService
+from mindmemos_skill.skill import content_hash, skill_hash
 from sqlalchemy import create_mock_engine
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
@@ -34,7 +35,7 @@ from sqlalchemy.schema import CreateTable
 @pytest.fixture
 def database(tmp_path):
     db = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'graphs.db'}"))
-    store = create_persistence(db, include_remote=False)
+    store = create_persistence(db)
     ensure_collection(store)
     try:
         yield db
@@ -55,9 +56,50 @@ def add_version(db, project="p1", graph="g1"):
 
 def add_skill(db, version="skill-v1", project="p1"):
     record = SkillVersionRecord(
-        project_id=project, version_id=version, skill_id="skill1", name="Skill", bundle="content", content_hash="hash"
+        project_id=project,
+        version_id=version,
+        skill_id="skill1",
+        name="Skill",
+        content="content",
+        description="Instructions",
+        standard_format=False,
+        skill_hash=skill_hash("content", {}),
+        content_hash=content_hash("content"),
     )
     db.insert(SKILL_VERSIONS_TABLE, [record.model_dump()])
+
+
+def test_graph_resolve_rejects_ambiguous_family_and_version_prefixes(database):
+    """Graph and snapshot prefixes must identify exactly one project-owned row."""
+    for suffix in ("a", "b"):
+        graph_id = f"g-{suffix}"
+        snapshot = UUID(f"a{suffix}" + "0" * 30)
+        database.insert(
+            SKILL_GRAPHS_TABLE,
+            [
+                SkillGraphRecord(
+                    project_id="p1", graph_id=graph_id, public_id=f"skg-aa{suffix}", alias=graph_id, name=graph_id
+                ).model_dump()
+            ],
+        )
+        database.insert(
+            SKILL_GRAPH_VERSIONS_TABLE,
+            [
+                SkillGraphVersionRecord(
+                    project_id="p1",
+                    graph_id=graph_id,
+                    graph_version_id=snapshot,
+                    public_version_id=f"skgv-{snapshot.hex}",
+                ).model_dump()
+            ],
+        )
+    resolver = GraphQueryService(database, "p1")
+    assert resolver.resolve("g-a")["graph_id"] == "skg-aaa"
+    assert resolver.resolve("skg-aab")["graph_id"] == "skg-aab"
+    with pytest.raises(GraphConflictError, match="Ambiguous"):
+        resolver.resolve("skg-aa")
+    with pytest.raises(GraphConflictError, match="Ambiguous"):
+        resolver.resolve("skgv-a")
 
 
 def node(version, **changes):
@@ -168,56 +210,42 @@ def test_uniqueness_prevents_duplicate_skill_and_edge(database):
         database.insert(SKILL_GRAPH_EDGES_TABLE, [SkillGraphEdgeRecord(**values, edge_id=uuid4()).model_dump()])
 
 
-def test_revision_idempotency_and_current_pointer_constraints(database):
+def test_snapshot_idempotency_and_current_pointer_constraints(database):
     add_graph(database)
     add_graph(database, graph="g2")
     version = add_version(database)
-    revision = SkillGraphRevisionRecord(
-        project_id="p1",
-        graph_id="g1",
-        revision=1,
-        graph_version_id=version,
-        idempotency_key="request1",
-        request_hash="b" * 64,
-        action="build",
-        actor_id="actor",
+    assert (
+        database.update(SKILL_GRAPH_VERSIONS_TABLE, {"request_hash": "b" * 64}, filters={"graph_version_id": version})
+        == 1
     )
-    database.insert(SKILL_GRAPH_REVISIONS_TABLE, [revision.model_dump()])
     with pytest.raises(IntegrityError):
-        database.insert(SKILL_GRAPH_REVISIONS_TABLE, [revision.model_copy(update={"revision": 2}).model_dump()])
-    with pytest.raises(IntegrityError):
-        database.insert(SKILL_GRAPH_REVISIONS_TABLE, [revision.model_copy(update={"graph_id": "g2"}).model_dump()])
+        database.insert(
+            SKILL_GRAPH_VERSIONS_TABLE,
+            [
+                SkillGraphVersionRecord(
+                    project_id="p1", graph_id="g1", graph_version_id=uuid4(), request_hash="b" * 64
+                ).model_dump()
+            ],
+        )
     graph = database.tables.get(SKILL_GRAPHS_TABLE).table
     with database.engine.begin() as connection:
-        connection.execute(graph.update().where(graph.c.graph_id == "g1").values(current_revision=1))
+        connection.execute(graph.update().where(graph.c.graph_id == "g1").values(current_version_id=version))
     with pytest.raises(IntegrityError):
         with database.engine.begin() as connection:
-            connection.execute(graph.update().where(graph.c.graph_id == "g2").values(current_revision=1))
+            connection.execute(graph.update().where(graph.c.graph_id == "g2").values(current_version_id=version))
     with pytest.raises(IntegrityError):
-        database.delete(SKILL_GRAPH_REVISIONS_TABLE, filters={"project_id": "p1", "graph_id": "g1", "revision": 1})
-    assert database.update(SKILL_GRAPH_REVISIONS_TABLE, {"request_hash": "c" * 64}, filters={"revision": 1}) == 1
+        database.delete(
+            SKILL_GRAPH_VERSIONS_TABLE, filters={"project_id": "p1", "graph_id": "g1", "graph_version_id": version}
+        )
 
 
-def test_ready_constraints_and_restore_references(database):
+def test_ready_constraints(database):
     add_graph(database)
     version = add_version(database)
     table = database.tables.get(SKILL_GRAPH_VERSIONS_TABLE).table
     with pytest.raises(IntegrityError):
         with database.engine.begin() as connection:
             connection.execute(table.update().values(status="ready"))
-    revision = SkillGraphRevisionRecord(
-        project_id="p1",
-        graph_id="g1",
-        revision=2,
-        graph_version_id=version,
-        idempotency_key="restore1",
-        request_hash="a" * 64,
-        action="restore",
-        actor_id="a",
-        restored_from_revision=1,
-    )
-    with pytest.raises(IntegrityError):
-        database.insert(SKILL_GRAPH_REVISIONS_TABLE, [revision.model_dump()])
     for changes in (
         {"status": "ready"},
         {"vector_count": 1},
@@ -248,7 +276,7 @@ def test_invalid_node_values(changes):
 
 
 def test_postgres_ddl_types_and_circular_fk_creation():
-    registry = build_persistence_tables(include_remote=False)
+    registry = build_persistence_tables()
     nodes = registry.get(SKILL_GRAPH_NODES_TABLE).table
     ddl = str(CreateTable(nodes).compile(dialect=postgresql.dialect()))
     assert "embedding VECTOR" in ddl
@@ -261,6 +289,6 @@ def test_postgres_ddl_types_and_circular_fk_creation():
     )
     nodes.metadata.create_all(engine)
     assert any(
-        f"ALTER TABLE {SKILL_GRAPHS_TABLE} ADD CONSTRAINT skill_graphs_current_revision_fk" in sql for sql in statements
+        f"ALTER TABLE {SKILL_GRAPHS_TABLE} ADD CONSTRAINT skill_graphs_current_version_fk" in sql for sql in statements
     )
     assert all("resource_locks" not in sql and "skill_graph_operations" not in sql for sql in statements)
