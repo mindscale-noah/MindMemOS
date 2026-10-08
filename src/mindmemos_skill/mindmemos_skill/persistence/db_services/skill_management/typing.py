@@ -28,20 +28,32 @@ class GraphScopeRecord(RecordModel):
 class SkillGraphRecord(GraphScopeRecord):
     """Graph identity and its current publication pointer."""
 
+    public_id: str | None = None
+    """Stable graph identity exposed to callers."""
+
+    alias: str | None = None
+    """Project-unique exact graph shortcut."""
+
     name: Nonempty
     """Human-readable graph name."""
 
     description: str | None = None
     """Optional purpose of this graph."""
 
-    current_revision: int | None = Field(default=None, gt=0)
-    """Current published revision; None means unpublished."""
+    current_version_id: UUID | None = None
+    """Selected ready graph snapshot; None means unpublished."""
 
     created_at: AwareDatetime = Field(default_factory=utcnow)
     """Time the graph identity was created."""
 
     updated_at: AwareDatetime = Field(default_factory=utcnow)
     """Time graph metadata was last changed."""
+
+    is_deleted: bool = False
+    """Whether this graph is hidden from business operations."""
+
+    deleted_at: AwareDatetime | None = None
+    """Time of soft deletion; None while active."""
 
     @model_validator(mode="after")
     def validate_times(self):
@@ -56,6 +68,9 @@ class SkillGraphVersionRecord(GraphScopeRecord):
 
     graph_version_id: UUID
     """Immutable graph snapshot identity."""
+
+    public_version_id: str | None = None
+    """Stable prefixed identity for external snapshot resolution."""
 
     status: Literal["staging", "validating", "ready", "failed"] = "staging"
     """Candidate lifecycle stage."""
@@ -74,6 +89,15 @@ class SkillGraphVersionRecord(GraphScopeRecord):
 
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     """Effective algorithm and embedding configuration."""
+
+    request_hash: Digest | None = None
+    """Canonical build request identity for idempotent retries."""
+
+    actor_id: Nonempty | None = None
+    """Actor who created this snapshot, when known."""
+
+    message: str | None = None
+    """Explanation supplied when this snapshot was created."""
 
     created_at: AwareDatetime = Field(default_factory=utcnow)
     """Time this candidate was created."""
@@ -198,45 +222,4 @@ class SkillGraphEdgeRecord(GraphScopeRecord):
         """Reject persisted self loops."""
         if self.source_node_id == self.target_node_id:
             raise ValueError("Edge endpoints must differ")
-        return self
-
-
-class SkillGraphRevisionRecord(GraphScopeRecord):
-    """One successful publication and its idempotent result."""
-
-    revision: int = Field(gt=0)
-    """Monotonic publication number within the graph."""
-
-    graph_version_id: UUID
-    """Immutable content selected by this publication."""
-
-    idempotency_key: Nonempty
-    """Caller-provided retry identity, unique within the graph."""
-
-    request_hash: Digest
-    """SHA-256 of the canonical request and its contract version."""
-
-    action: Literal["build", "upsert", "remove", "restore"]
-    """Business action that produced this publication."""
-
-    restored_from_revision: int | None = Field(default=None, gt=0)
-    """Earlier publication restored by a restore action."""
-
-    actor_id: Nonempty
-    """Authenticated actor; not an isolation key."""
-
-    message: str | None = None
-    """Optional publication explanation."""
-
-    published_at: AwareDatetime = Field(default_factory=utcnow)
-    """Time the publication was recorded."""
-
-    @model_validator(mode="after")
-    def validate_restore(self):
-        """Require an earlier revision exactly for restore actions."""
-        if self.action == "restore":
-            if self.restored_from_revision is None or self.restored_from_revision >= self.revision:
-                raise ValueError("Restore requires an earlier revision")
-        elif self.restored_from_revision is not None:
-            raise ValueError("Only restore actions may reference a restored revision")
         return self

@@ -1,10 +1,9 @@
-"""Graph table definitions and validated records; publication services are not implemented."""
+"""Graph table definitions and validated records."""
 
 from .typing import (
     SkillGraphEdgeRecord,
     SkillGraphNodeRecord,
     SkillGraphRecord,
-    SkillGraphRevisionRecord,
     SkillGraphVersionRecord,
 )
 
@@ -13,5 +12,4 @@ __all__ = [
     "SkillGraphVersionRecord",
     "SkillGraphNodeRecord",
     "SkillGraphEdgeRecord",
-    "SkillGraphRevisionRecord",
 ]

@@ -1,10 +1,45 @@
 # Skill Manage 图推荐与动态 SkillSet
 
+## 服务 Pipeline
+
+服务通过单个 `manage_pipeline` 配置管理能力，内置注册名为 `graph_manage`。它同时负责组织、推荐和 Skill Set 查询，借用服务的 `SkillPersistence`。`algorithm` 使用 `SkillManageConfig` 的字段；推荐时配置必须与目标图快照的非密钥算法设置一致。不配置 `algorithm` 时仍可查询 Skill Set，组织与推荐调用会报未实现。Service 提供 `list_skill_sets()`、`list_skill_set_snapshots()` 和 `get_skill_set_snapshot()`；当前存储表示的 `mode` 为 `graph`。
+
+例如在 `service` 配置内定义一个入口（实际部署时填写可用的 embedding 模型地址和凭据）：
+
+```yaml
+manage_pipeline:
+  class_name: graph_manage
+  config:
+    algorithm:
+      embedding:
+        model: your-embedding-model
+        base_url: http://127.0.0.1:8000/v1
+        dimensions: 1536
+      build_scene: false
+      llm_linking: false
+      query_rewrite: false
+```
+
+`service.organize_skills(OrganizeRequest(...), reporter=...)` 接收 `graph_id`、`actor_id`、完整的 `skill_version_ids` 列表、可选的 `message` 和按 Skill 家族 ID 映射的可选 `scene_records`。服务先确认项目授权，再按精确版本读取已保存 Skill；同一图内每个家族只允许一个版本。`message` 保存于新建图版本。同一输入、说明和配置的重试复用已保存快照；说明变化会形成新快照并将其设为当前生效版本。
+
+`service.recommend_skills(RecommendRequest(...))` 接收 `graph_id`、可选的不可变 `graph_version_id`、公开 `Task` 和正整数 `limit`。省略快照 ID 时，在请求开始读取并固定当前图头。它从该快照恢复 `skill_manage` 的成员范围，校验版本所属项目、Skill 内容与算法配置，再调用推荐算法，按排名返回精确 `skill_version_ids`。显式指定旧快照的请求不随图头变化。Pipeline 调用通过工作线程执行同步存储和模型操作，调用者使用 `await`。
+
+HTTP 入口也已接通这两条同步 Pipeline：
+
+| 接口 | 请求字段 | 成功结果 | 权限 |
+| --- | --- | --- | --- |
+| `POST /v1/skills/algos/organize` | `alias` 或 `graph_id`、完整 `skill_version_ids`，可选 `message`、`scene_records` | `200`，含 `graph_version_id` 和输入版本 ID | `skill:write` |
+| `POST /v1/skills/algos/recommend` | `graph_ref`（当前实现按精确 `graph_id` 解释）、`query`，可选 `graph_version_id`、`top_k` | `200`，含有序的精确 `skill_version_ids` | `skill:read` |
+
+HTTP 身份提供项目边界与构图记录的 actor ID；请求体不接受项目 ID。当前 `alias` 直接用作精确 `graph_id`，尚无独立别名身份或前缀解析。组织完成才返回成功，不提交后台任务；`graph-resolve` 仍是占位能力。现有目标架构文档中的异步组织任务、可省略版本集合、独立 alias 身份及更完整的图引用解析尚未实现，不能把这版同步接口视为那些目标能力已经上线。
+
 `algos/manage/skill_manage/` 提供注册名为 `skill_manage` 的 `SkillManageAlgorithm` 和算法专属 `SkillManageSkillSet`。集合仅管理调用方传入的成员及组装并发，不解析版本 ID，不自动注册 Skill。外围调度负责选择版本并构造 `SkillGraphStore`；持久化层核验传入 Skill 的完整快照与已保存版本一致。
 
 ## 使用方式
 
 ```python
+import asyncio
+
 from mindmemos_skill.agents import OpenAIChatConfig
 from mindmemos_skill.algos.manage.skill_manage import (
     SceneRecord,
@@ -55,9 +90,9 @@ algorithm = SkillManageAlgorithm(config, store=store, scene_records=scenes)
 skill_set = SkillManageSkillSet(
     skills, algorithm=algorithm, limit=5, max_concurrency=4,
 )
-result = env.rollout(
+result = asyncio.run(env.rollout(
     task, work_dir, reward_data=reward_data, skill_set=skill_set,
-)
+))
 ```
 
 构造算法、集合和客户端不发起模型调用，也不读写数据库。首次 `select(task)` 校验外围版本绑定，然后构建或复用图；`assemble(task)` 在选择后调用选中成员自己的组装方法。每个集合使用独立的管理算法实例。省略 `skill_set` 仍为 baseline。
@@ -81,11 +116,11 @@ result = env.rollout(
 
 ## 持久化与恢复
 
-复用现有 `skill_graphs_v1`、`skill_graph_versions_v1`、`skill_graph_nodes_v1`、`skill_graph_edges_v1`、`skill_graph_revisions_v1`，业务代码通过统一表名常量访问。没有新增或变更数据库字段、约束或已有云服务的数据格式，无需数据迁移。
+当前使用 `skill_graphs_v1`、`skill_graph_versions_v1`、`skill_graph_nodes_v1`、`skill_graph_edges_v1` 四张核心表。每张图由 `current_version_id` 指向当前生效快照，不保存新的发布 revision。独立 Skill 服务不提供旧图表迁移或滚动部署桥接；当前结构详见 [图存储结构](graph_storage_schema.md)。
 
 外围必须提供同项目的精确版本绑定，且每个成员对应不同版本，以符合已有图节点唯一约束。算法只能处理显式成员，不通过数据库扩大候选范围。现有 Skill 数据、版本谱系、展示标签和中心仓当前版本指针不改变。
 
-先在事务外完成解析、模型推理和向量校验，再在单次事务内写入完整图快照、节点、边、revision 并更新图 head。并发发布锁定同一图的写入行；相同输入和配置按请求哈希幂等复用，跨项目和跨图隔离。失败或中断回滚本次图发布，不产生部分可见快照；重试可以重建。不同输入生成新快照，保留历史，不覆盖旧节点。模型调用发生于事务前，未完成发布的重试可能重复模型费用。
+先在事务外完成解析、模型推理和向量校验，再在单次事务内写入完整图快照、节点、边并更新 `current_version_id`。并发发布锁定同一图的写入行；相同输入和配置按请求哈希幂等复用，跨项目和跨图隔离。失败或中断回滚本次图发布，不产生部分可见快照；重试可以重建。不同输入生成新快照，保留旧快照与节点。模型调用发生于事务前，未完成发布的重试可能重复模型费用。
 
 重新打开数据库后可复用已保存图与向量。读取时检查节点/边数量、向量数及完整内容哈希；损坏明确报错。单次推荐固定使用已加载的 graph_version_id，不随当前 head 切换。
 

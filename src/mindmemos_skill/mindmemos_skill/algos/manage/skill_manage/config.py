@@ -11,7 +11,7 @@ from ....infra.embedding import OpenAIEmbeddingConfig
 class SkillManageConfig(BaseModel):
     """Configure graph construction, query rewriting, and ranked retrieval."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid", frozen=True)
     """Reject misspelled settings and freeze algorithm options."""
 
     embedding: OpenAIEmbeddingConfig

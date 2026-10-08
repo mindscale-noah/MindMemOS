@@ -1,6 +1,6 @@
 """In-memory historical execution evidence for skill evolution."""
 
-from pydantic import BaseModel, ConfigDict, JsonValue, SerializeAsAny
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, SerializeAsAny
 
 from ...envs.typing import Reward, Task
 from ...skill import Skill
@@ -20,6 +20,12 @@ class SkillTrajectory(BaseModel):
     task: SerializeAsAny[Task]
     """Task that produced this historical execution, including subtype fields."""
 
+    task_system_prompt: str | None = None
+    """System instruction active during the historical execution, if stored."""
+
+    task_metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    """Stored task context needed to interpret the execution evidence."""
+
     skills: dict[str, Skill]
     """IDs and actual skill snapshots used together; empty for a baseline run."""
 
@@ -28,3 +34,12 @@ class SkillTrajectory(BaseModel):
 
     reward: SerializeAsAny[Reward] | None = None
     """Existing evaluation feedback; None when the execution was not scored."""
+
+    status: str | None = None
+    """Recorded execution outcome, or None when the source omitted it."""
+
+    observed_score: float | None = None
+    """Stored environment score, without inferring success from its scale."""
+
+    feedback_detail: str | None = None
+    """Stored evaluation explanation, or None when no explanation was recorded."""

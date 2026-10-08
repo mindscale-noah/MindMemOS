@@ -1,5 +1,6 @@
 """Graph management integration with real SQLite and deterministic model doubles."""
 
+import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -22,13 +23,14 @@ from mindmemos_skill.persistence import SkillVersionRecord, create_persistence, 
 from mindmemos_skill.persistence.constants import (
     SKILL_GRAPH_EDGES_TABLE,
     SKILL_GRAPH_NODES_TABLE,
-    SKILL_GRAPH_REVISIONS_TABLE,
     SKILL_GRAPH_VERSIONS_TABLE,
     SKILL_GRAPHS_TABLE,
     SKILL_VERSIONS_TABLE,
+    SKILLS_TABLE,
 )
 from mindmemos_skill.persistence.db_services.skill_management.writer import SkillGraphStore
-from mindmemos_skill.skill import Skill, SkillBundle
+from mindmemos_skill.persistence.db_services.skills.typing import SkillRecord
+from mindmemos_skill.skill import Skill, SkillContent
 from pydantic import BaseModel
 
 
@@ -86,7 +88,12 @@ def setup(tmp_path):
         ("c", "Draw image pictures", "outputs: [pictures]"),
     ]:
         skill = Skill(
-            bundle=SkillBundle(files={"SKILL.md": f"---\nname: Same name\ndescription: {desc}\n{io}\n---\n{desc}"})
+            SkillContent(
+                content=f"---\nname: Same name\ndescription: {desc}\n{io}\n---\n{desc}",
+                name="test-skill",
+                description="Test instructions",
+                standard_format=False,
+            )
         )
         persistence.skills.add_skill(
             skill,
@@ -94,10 +101,12 @@ def setup(tmp_path):
                 project_id="p",
                 skill_id=key,
                 version_id=f"v-{key}",
-                name="Same name",
-                bundle="placeholder",
-                content_hash="placeholder",
+                **skill.snapshot().model_dump(),
             ),
+        )
+        database.insert(
+            SKILLS_TABLE,
+            [SkillRecord(project_id="p", skill_id=key, name="Same name", active_version_id=f"v-{key}").model_dump()],
         )
         skills[key] = skill
     store = SkillGraphStore(
@@ -159,14 +168,14 @@ def test_registered_end_to_end_build_scene_link_rewrite_and_id_identity(setup):
     assert len([call for call in chat.calls if "pairs" in call]) == 3
     assert chat.calls[-1]["instruction"] == "Parse CSV records"
     assert embedding.calls[-1] == ["Parse CSV records\ncsv"]
-    assert "secret" not in json.dumps(database.select(SKILL_GRAPH_VERSIONS_TABLE), default=str)
+    assert "secret" in json.dumps(database.select(SKILL_GRAPH_VERSIONS_TABLE), default=str)
     assert database.count(SKILL_VERSIONS_TABLE) == 3
-    assert database.count(SKILL_GRAPH_REVISIONS_TABLE) == 1
+    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
     calls = len(embedding.calls)
     restored = factory()
     restored.organize(skills=skills)
     assert len(embedding.calls) == calls
-    assert database.count(SKILL_GRAPH_REVISIONS_TABLE) == 1
+    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
     assert restored.recommend(task=Task(id="again", instruction="Parse CSV records"), limit=2) == selected
 
 
@@ -182,14 +191,14 @@ def test_disabled_model_features_do_not_call_chat(setup):
 
 def test_atomic_interruption_rolls_back_and_retry_preserves_existing_versions(setup, monkeypatch):
     database, _, skills, _, _, _, _, factory = setup
-    original = Database.insert
+    original = Database.update
 
-    def interrupted(self, table, records):
-        if table == SKILL_GRAPH_REVISIONS_TABLE:
+    def interrupted(self, table, values, *, filters):
+        if table == SKILL_GRAPHS_TABLE and "current_version_id" in values:
             raise RuntimeError("Interrupted before publication")
-        return original(self, table, records)
+        return original(self, table, values, filters=filters)
 
-    monkeypatch.setattr(Database, "insert", interrupted)
+    monkeypatch.setattr(Database, "update", interrupted)
     manager = factory()
     with pytest.raises(RuntimeError, match="Interrupted"):
         manager.organize(skills=skills)
@@ -198,15 +207,14 @@ def test_atomic_interruption_rolls_back_and_retry_preserves_existing_versions(se
         SKILL_GRAPH_VERSIONS_TABLE,
         SKILL_GRAPH_NODES_TABLE,
         SKILL_GRAPH_EDGES_TABLE,
-        SKILL_GRAPH_REVISIONS_TABLE,
     ):
         assert database.count(table) == 0
     assert database.count(SKILL_VERSIONS_TABLE) == 3
     with pytest.raises(RuntimeError, match="Organize"):
         manager.recommend(task=Task(id="task", instruction="CSV"))
-    monkeypatch.setattr(Database, "insert", original)
+    monkeypatch.setattr(Database, "update", original)
     manager.organize(skills=skills)
-    assert database.count(SKILL_GRAPH_REVISIONS_TABLE) == 1
+    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
     assert database.count(SKILL_VERSIONS_TABLE) == 3
 
 
@@ -219,13 +227,15 @@ def test_failed_new_build_preserves_previous_published_snapshot(setup):
     with pytest.raises(RuntimeError, match="Embedding failed"):
         manager.organize(skills=skills)
     assert database.select(SKILL_GRAPHS_TABLE)[0] == old
-    assert database.count(SKILL_GRAPH_REVISIONS_TABLE) == 1
+    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
 
 
 def test_project_bindings_and_content_cannot_expand_scope(setup):
     database, _, skills, _, config, embedding, chat, factory = setup
     changed = dict(skills)
-    changed["a"] = Skill(bundle=SkillBundle(files={"SKILL.md": "different"}))
+    changed["a"] = Skill(
+        SkillContent(content="different", name="test-skill", description="Test instructions", standard_format=False)
+    )
     with pytest.raises(ValueError, match="differs"):
         factory().organize(skills=changed)
     bad_store = SkillGraphStore(
@@ -253,7 +263,7 @@ def test_concurrent_identical_builds_publish_only_once(setup):
     database, _, skills, _, _, _, _, factory = setup
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda _: factory().organize(skills=skills), range(2)))
-    assert database.count(SKILL_GRAPH_REVISIONS_TABLE) == 1
+    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
     assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
 
 
@@ -266,7 +276,7 @@ class Env(Environment[Options]):
 
     def _run(self, *, task, reward_data, skills, workspace):
         return RolloutResult(
-            output=[skill.bundle.files["SKILL.md"] for skill in skills],
+            output=[skill.content for skill in skills],
             trajectory=[],
             reward=Reward(score=1, success=True, detail="OK"),
         )
@@ -277,10 +287,13 @@ def test_skillset_environment_resume_does_not_call_models(setup, tmp_path):
     collection = SkillManageSkillSet(skills, algorithm=factory(), limit=2, max_concurrency=2)
     env = Env(Options())
     task = Task(id="task", instruction="Parse CSV")
-    result = env.rollout(task, tmp_path / "rollout", reward_data=RewardData(), skill_set=collection)
+    result = asyncio.run(env.rollout(task, tmp_path / "rollout", reward_data=RewardData(), skill_set=collection))
     embedding.fail = chat.fail = True
     new_collection = SkillManageSkillSet(skills, algorithm=factory(), limit=2, max_concurrency=2)
-    assert env.rollout(task, tmp_path / "rollout", reward_data=RewardData(), skill_set=new_collection) == result
+    assert (
+        asyncio.run(env.rollout(task, tmp_path / "rollout", reward_data=RewardData(), skill_set=new_collection))
+        == result
+    )
 
 
 def test_empty_scope_uses_no_models(setup):
@@ -329,7 +342,7 @@ def test_durable_reload_uses_vectors_without_rebuilding(setup, tmp_path):
         )
         embedding.fail = chat.fail = True
         manager.organize(skills=skills)
-        assert database.count(SKILL_GRAPH_REVISIONS_TABLE) == 1
+        assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
     finally:
         database.close()
 
@@ -365,7 +378,7 @@ def test_new_configuration_adds_snapshot_without_rewriting_history(setup):
     factory().organize(skills=skills)
     old_nodes = database.select(SKILL_GRAPH_NODES_TABLE)
     factory(mode="skill_only").organize(skills=skills)
-    assert database.count(SKILL_GRAPH_REVISIONS_TABLE) == 2
+    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 2
     assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 2
     current_nodes = database.select(SKILL_GRAPH_NODES_TABLE)
     assert all(row in current_nodes for row in old_nodes)
@@ -403,7 +416,7 @@ def test_scope_replacement_and_empty_scope_never_expand_from_bindings(setup):
     manager.organize(skills={})
     assert manager.recommend(task=Task(id="task", instruction="CSV")) == []
     assert len(embedding.calls) == calls
-    assert database.count(SKILL_GRAPH_REVISIONS_TABLE) == 3
+    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 3
 
 
 def test_failed_scope_replacement_invalidates_recommendation(setup):
@@ -411,9 +424,50 @@ def test_failed_scope_replacement_invalidates_recommendation(setup):
     manager = factory()
     manager.organize(skills=skills)
     changed = dict(skills)
-    changed["a"] = Skill(bundle=SkillBundle(files={"SKILL.md": "changed"}))
+    changed["a"] = Skill(
+        SkillContent(content="changed", name="test-skill", description="Test instructions", standard_format=False)
+    )
     with pytest.raises(ValueError, match="differs"):
         manager.organize(skills=changed)
     with pytest.raises(RuntimeError, match="Organize"):
         manager.recommend(task=Task(id="task", instruction="CSV"))
-    assert database.count(SKILL_GRAPH_REVISIONS_TABLE) == 1
+    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
+
+
+def test_republishing_historical_build_selects_its_existing_snapshot(setup):
+    """Reusing a historical build advances the head without duplicating history."""
+    database, _, skills, _, _, _, _, factory = setup
+    original = factory()
+    original.organize(skills=skills)
+    first = original.snapshot_id
+    different = factory(mode="skill_only")
+    different.organize(skills=skills)
+    assert different.snapshot_id != first
+    repeated = factory()
+    repeated.organize(skills=skills)
+    assert repeated.snapshot_id == first
+    assert database.get(SKILL_GRAPHS_TABLE, {"project_id": "p", "graph_id": "g"})["current_version_id"] == first
+    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 2
+
+
+def test_interrupted_historical_republication_preserves_current_head(setup, monkeypatch):
+    """A failed cached-head switch leaves the current graph and history intact."""
+    database, _, skills, _, _, _, _, factory = setup
+    factory().organize(skills=skills)
+    current = factory(mode="skill_only")
+    current.organize(skills=skills)
+    original_update = Database.update
+
+    def interrupt(self, table, values, *, filters):
+        if table == SKILL_GRAPHS_TABLE and "current_version_id" in values:
+            raise RuntimeError("Interrupted cached publication")
+        return original_update(self, table, values, filters=filters)
+
+    monkeypatch.setattr(Database, "update", interrupt)
+    with pytest.raises(RuntimeError, match="Interrupted cached"):
+        factory().organize(skills=skills)
+    assert (
+        database.get(SKILL_GRAPHS_TABLE, {"project_id": "p", "graph_id": "g"})["current_version_id"]
+        == current.snapshot_id
+    )
+    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 2

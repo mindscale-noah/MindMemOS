@@ -55,6 +55,7 @@ def test_parse_fixture_skill_matches_golden_fields() -> None:
     ("content", "reason"),
     [
         ("# No frontmatter here\n", "missing frontmatter"),
+        ("name: Example\ndescription: Rules\n\nBody", "missing frontmatter"),
         ("---\nname: x\n---\n\n", "cannot derive description"),
         ("---\ndescription: only description\n---\n\nbody\n", "missing name"),
         ("---\nname: x\ndescription: y\nname: z\n---\n\nbody\n", "duplicate key"),
