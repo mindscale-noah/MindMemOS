@@ -81,53 +81,104 @@ MindMemOS uses `uv` to manage dependencies and run local commands. For detailed 
 
 #### 1.1 Prepare Configuration Files
 
+Copy these configuration files before the first use:
+
 ```bash
 cp .env.example .env
 cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
+cp config/mindmemos_skill/dev.example.yaml config/mindmemos_skill/dev.yaml
+cp config/presets/local.project.example.yaml config/presets/local.project.yaml
 ```
 
-Before startup, configure at least the following three model routers in `config/mindmemos/dev.yaml`:
+Complete the following configuration before startup:
 
-- `chat_model_router`: supports memory extraction, Skill evolution, and other generation tasks.
-- `embed_model_router`: generates semantic embeddings; make sure its dimensions match the Qdrant dimension configuration.
-- `rerank_model_router`: optional; reranks memory retrieval results.
+| Configuration file | Settings to complete |
+|---|---|
+| `config/mindmemos/dev.yaml` | `model`, `api_base`, and `api_key` for chat, embedding, and optional rerank routers. The embedding output dimension, `dimensions`, and `database.qdrant.vector_size` must match. |
+| `config/mindmemos_skill/dev.yaml` | Specify `model`, `base_url`, and `api_key` for graph management, training, and evolution models as needed. Also specify embedding `dimensions`. |
+| `config/presets/local.project.yaml` | **Customize your local API key**: edit `projects.<name>.api_key`. `default_project` selects the default UI/SDK project. Override it with `PROJECT=<name>`. Services identify the project from each request’s API key. |
 
-The schema memory-extraction flow is versioned: `algo_config.add.schema.version` defaults to `v2` (rule-based graph fusion) and can be pinned to `v1` (develop-compatible flow) per project. Storage is compatible in both directions; see the deployment guide for binding and effective timing.
+`make dev` generates local authentication configurations and `.mindmemos/settings.json`. You do not need to specify a Skill token manually. Configure model service keys and local API keys separately. Restart the services after changing the project file. For more project and authentication settings, see the [deployment guide](docs/deploy/instruction.md).
 
-Configure an API key and its bound `project_id` in `config/mindmemos/api_keys.yaml`.
+The schema extraction flow defaults to `algo_config.add.schema.version: v2` (rule-based graph fusion). Each project can select `v1` (the develop-compatible flow). Storage is compatible in both directions. See the deployment guide for binding and effective timing.
 
-#### 1.2 Start the Service
+#### 1.2 Startup and Management Commands
 
-Start the local service:
+Install `uv` and start the Docker engine first. Run `make setup` to prepare development dependencies. Python commands in the Makefile use `uv run`.
 
 ```bash
-make dev
+make dev                                # Memory + Skill + UI, all features
+make dev FEATURE=core                    # Core only, without async tasks or OTel
+make dev FEATURE=async                   # Core + async tasks, without OTel
+make dev SERVICE=memory                  # Memory + UI, all features
+make dev SERVICE=skill FEATURE=core      # Skill + UI, core features
+make dev PLAN=1                          # Validate and preview without starting
 ```
 
-`make dev` starts the full Docker dependency stack before starting FastAPI.
+| Command | Purpose |
+| --- | --- |
+| `make dev` | Start the selected Docker dependencies, APIs and UI; defaults to all features |
+| `make docker` | Start only the selected Docker dependencies |
+| `make api` | Start APIs against existing dependencies; UI is off by default |
+| `make ui` | Start only the UI using its existing SDK configuration |
+| `make status` | Show managed application status, addresses, features and the current Compose project's containers |
+| `make stop` | Stop managed APIs/UI and remove Compose containers and networks; preserve volumes |
+| `make clean` | List volumes, then stop services and delete Docker volumes after typing `DELETE` |
+| `make help` | Show commands and options; bare `make` also shows help |
 
-To start only core dependencies:
+The singular options `SERVICE` and `FEATURE` apply to `dev`, `docker` and `api`:
+
+| Option | Values and default behavior |
+| --- | --- |
+| `SERVICE` | Defaults to `all` (Memory + Skill); accepts `memory` or `skill` |
+| `FEATURE` | Defaults to `all` (core + async tasks + OTel); `core` enables core only; `async` enables core + async tasks |
+| `UI=0` / `UI=1` | Override the UI switch for `dev` or `api`; `docker` cannot enable UI |
+| `PLAN=1` | Validate and preview startup without starting services or writing SDK settings |
+| `API_PORT` / `SKILL_PORT` / `UI_PORT` | Override ports; defaults are `8000` / `8001` / `8765` |
+| `API_HOST` / `SKILL_HOST` | Override API bind addresses; defaults to `127.0.0.1` |
+| `MEMORY_CONFIG` / `SKILL_CONFIG` | Select application YAML files; otherwise use the service's configured path |
+| `PROJECT` / `PROJECT_CONFIG` | Select the default client project or project file; default file is `config/presets/local.project.yaml` |
+| `SERVICE_AUTH=1` | Keep authentication from each service YAML; skip shared local project settings and automatic UI connection setup |
+| `UI_HOME` | Select the UI SDK configuration directory; shared local project mode defaults to the repository's `.mindmemos/` |
+| `API_RELOAD=1` / `SKILL_RELOAD=1` | Enable code reload for the corresponding API |
+
+Use matching service and feature options when starting dependencies and APIs separately:
 
 ```bash
-make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+make docker SERVICE=skill FEATURE=async
+make api SERVICE=skill FEATURE=async UI=1
 ```
 
-The default local service port is 8000:
+Application feature switches and container selection come from the same effective configuration. Local dependency ports and credentials are applied from `.env`, so you do not need to edit matching ports in YAML. Source YAML files stay unchanged; private runtime snapshots are removed on normal exit. SQLite and external dependencies do not provision corresponding local database containers. See [Docker configuration](dockers/README.md) for container and configuration details.
 
-```text
-FastAPI:   http://127.0.0.1:8000
-```
+Once all selected applications pass their health checks, the launcher reports addresses and async/OTel status. Default addresses:
 
-Stop the local service:
+| Service | Address | API documentation |
+| --- | --- | --- |
+| Memory | <http://127.0.0.1:8000> | <http://127.0.0.1:8000/docs> |
+| Skill | <http://127.0.0.1:8001> | <http://127.0.0.1:8001/docs> |
+| UI | <http://127.0.0.1:8765> | — |
 
-```bash
-make dev-down
-```
+`Ctrl+C` stops the current APIs/UI and leaves containers running. `make stop` stops this workspace's managed applications and the current Compose project's containers. Stop manually launched applications separately. Selecting fewer features does not stop existing extra containers; run `make stop` first for a complete switch.
+
+`make clean` deletes Docker volumes holding database, Kafka and monitoring data. It preserves host SQLite files, YAML, `.env` and SDK settings. Restart after changing `.env` or source YAML.
+
+#### 1.3 Development Tools
+
+| Command | Purpose |
+| --- | --- |
+| `make setup` | Sync dependencies, install Git hooks, and prepare and check NLP assets |
+| `make hook` | Install Git pre-commit hooks |
+| `make lint` | Check Python code without changing files |
+| `make format` | Fix lint issues and format Python code |
+| `make ui-build` | Install frontend dependencies and build UI assets; requires Node.js/npm |
+| `make profile` | Record a Memory API CPU flame graph; use `PID` to select a process |
+
+Profiling options default to `PROFILE_SECONDS=60`, `PROFILE_RATE=100` and `PROFILE_OUT=tmp/profile.svg`. Set `UV` to override the uv executable.
 
 ### 2. Access Methods
 
-Cloud and local self-hosting use the same access protocol. Local keys come from `config/mindmemos/api_keys.yaml`; cloud keys are obtained from the [website](https://mindmemos.cn).
+Cloud and local self-hosting use the same access protocol. Local keys come from `config/presets/local.project.yaml`; cloud keys are obtained from the [website](https://mindmemos.cn).
 
 #### 2.1 HTTP API
 
@@ -178,7 +229,7 @@ mindmemos auth
 | Setting | Local Service | Cloud Service |
 | :--- | :--- | :--- |
 | `base_url` | `http://127.0.0.1:8000` | `https://mindmemos.cn` |
-| `api_key` | An enabled API key from `config/mindmemos/api_keys.yaml` | An API key obtained from the [MindMemOS website](https://mindmemos.cn) |
+| `api_key` | An enabled project API key from `config/presets/local.project.yaml` | An API key obtained from the [MindMemOS website](https://mindmemos.cn) |
 | `user_id` | A stable identifier for the current end user, such as `u_123` | A stable identifier for the current end user, such as `u_123` |
 
 The configuration is saved to `~/.mindmemos/settings.json`. Check the current configuration with:
@@ -369,7 +420,7 @@ python scripts/download_datasets.py download --benchmark skill --dataset spreads
 
 Memory datasets: `locomo`, `personamem` (v1), `memoryagentbench` (all four official partitions),
 and `longmemeval` (official cleaned release). Sources and pinned revisions are in
-[`config/datasets/sources.json`](config/datasets/sources.json).
+[`config/presets/dataset_download_sources.json`](config/presets/dataset_download_sources.json).
 Downloads go to `data/mindmemos_memory/<dataset>/` or `data/mindmemos_skill/<dataset>/`;
 use `--data-root` to change the parent directory and `--verify-only` on `download` to verify existing files.
 Set evaluation config paths to these downloaded files. Official formats are preserved; MemoryAgentBench

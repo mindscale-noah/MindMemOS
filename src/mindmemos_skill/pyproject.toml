@@ -6,19 +6,22 @@ readme = "README.md"
 authors = []
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "mindmemos-sdk>=0.1.4",
     "filelock>=3.20,<4",
     "json-repair>=0.63.4,<1",
     "openai>=2,<3",
+    "PyJWT>=2.10,<3",
     "opentelemetry-exporter-otlp-proto-http>=1.38,<2",
     "opentelemetry-sdk>=1.38,<2",
     "python-dotenv>=1,<2",
     "tenacity>=9,<10",
-    "pydantic>=2,<3",
+    "pydantic>=2.7,<3",
     "pyyaml>=6,<7",
     "sqlalchemy>=2.0,<2.1",
     "sqlite-vec>=0.1.6,<0.2",
 ]
+
+[project.scripts]
+mindmemos-skill = "mindmemos_skill.cli:main"
 
 [project.optional-dependencies]
 agentskillos = [
@@ -28,7 +31,8 @@ agentskillos = [
 spreadsheetbench = ["openpyxl>=3.1,<4", "pandas>=2,<3"]
 alfworld = ["alfworld>=0.4,<0.5"]
 postgres = ["psycopg[binary]>=3.2,<4", "pgvector>=0.3,<1"]
-fastapi = ["fastapi>=0.136.1", "uvicorn>=0.47.0"]
+kafka = ["aiokafka>=0.14,<1"]
+fastapi = ["fastapi>=0.136.1", "httpx>=0.28.1", "uvicorn>=0.47.0"]
 
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]
