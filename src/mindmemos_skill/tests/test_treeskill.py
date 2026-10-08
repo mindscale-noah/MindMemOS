@@ -1,5 +1,6 @@
 """TreeSkill subtree selection, full-Skill execution, and failure boundaries."""
 
+import asyncio
 import json
 from unittest.mock import patch
 
@@ -9,7 +10,7 @@ from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillConfig
 from mindmemos_skill.algos.train.treeskill.tree import parse_tree, render_selection
 from mindmemos_skill.envs import Environment, Reward, RolloutResult, Task
 from mindmemos_skill.envs.data import RewardData
-from mindmemos_skill.skill import Skill, SkillBundle, SkillResources, SkillSet
+from mindmemos_skill.skill import Skill, SkillContent, SkillSet
 from pydantic import BaseModel
 
 
@@ -59,8 +60,13 @@ def make_skill(output):
     router = Router(output)
     skill = TreeSkill(
         TreeSkillConfig(router=router.config),
-        bundle=SkillBundle(files={"SKILL.md": CONTENT}),
-        resources=SkillResources(files={"references/check.md": b"Original reference"}),
+        source=SkillContent(
+            content=CONTENT,
+            resources={"references/check.md": b"Original reference"},
+            name="test-skill",
+            description="Task instructions",
+            standard_format=False,
+        ),
         router=router,
     )
     return skill, router
@@ -71,14 +77,14 @@ def test_subtree_selection_preserves_ancestors_and_uses_public_task():
     result = skill._route(Task(id="one", instruction="Verify the formulas"))
     assert result.selected_subtree_ids == ["003"]
     assert result.ancestor_ids == ["001", "002"]
-    text = result.bundle.files["SKILL.md"]
+    text = result.content
     assert "Root intro." in text and "Use formulas." in text and "references/check.md" in text
     assert "Formatting" not in text and "Not a heading" not in text
     assert result.response.usage["total_tokens"] == 17
     task_text, tree_text = router.calls[0][1].split("Task:\n", 1)[1].split("\n\nSkill tree:\n", 1)
     assert json.loads(task_text) == {"id": "one", "instruction": "Verify the formulas"}
     assert json.loads(tree_text)[0]["local_content"] == "Root intro."
-    assert skill.bundle.files["SKILL.md"] == CONTENT
+    assert skill.content == CONTENT
 
 
 def test_parent_selection_is_not_repeated_and_no_top_k_limit():
@@ -102,7 +108,7 @@ def test_fences_and_empty_headings_are_not_routing_nodes():
 def test_explicit_empty_selection_is_not_full_skill_fallback(output):
     skill, _ = make_skill(output)
     result = skill._route(Task(id="one", instruction="No applicable skill"))
-    assert result.bundle.files["SKILL.md"] == ""
+    assert result.content == ""
     assert result.fallback_reason is None
 
 
@@ -110,7 +116,7 @@ def test_explicit_empty_selection_is_not_full_skill_fallback(output):
 def test_invalid_selection_falls_back_to_source_and_reports_reason(output):
     skill, _ = make_skill(output)
     result = skill._route(Task(id="one", instruction="Verify"))
-    assert result.bundle == skill.bundle and result.fallback_reason
+    assert result.content == skill.content and result.fallback_reason
     assert result.response.output == output
 
 
@@ -118,8 +124,8 @@ def test_provider_errors_propagate_and_no_heading_needs_no_model():
     skill, router = make_skill(RuntimeError("Provider unavailable"))
     with pytest.raises(RuntimeError, match="Provider unavailable"):
         skill.assemble(Task(id="one", instruction="Verify"))
-    plain = skill.with_bundle(SkillBundle(files={"SKILL.md": "Plain instructions"}))
-    assert plain.assemble(Task(id="two", instruction="Verify")).bundle == plain.bundle
+    plain = skill.with_content("Plain instructions")
+    assert plain.assemble(Task(id="two", instruction="Verify")).content == plain.content
     assert len(router.calls) == 1
 
 
@@ -134,31 +140,39 @@ def test_snapshot_and_environment_preserve_references_and_route_only_once(tmp_pa
             skills[0].export(workspace / "skill")
             assert (workspace / "skill/references/check.md").read_bytes() == b"Original reference"
             return RolloutResult(
-                output=skills[0].bundle.files["SKILL.md"],
+                output=skills[0].content,
                 trajectory=[],
                 reward=Reward(score=1, success=True, detail="Passed"),
             )
 
     env = LocalEnvironment(EnvironmentOptions())
     task = Task(id="one", instruction="Verify")
-    result = env.rollout(
-        task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": restored}, max_concurrency=1)
+    result = asyncio.run(
+        env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": restored}, max_concurrency=1))
     )
     assert (
-        env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": restored}, max_concurrency=1))
+        asyncio.run(
+            env.rollout(
+                task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": restored}, max_concurrency=1)
+            )
+        )
         == result
     )
     assert len(router.calls) == 1 and "Formatting" not in result.output
-    assert restored.bundle == skill.bundle
+    assert restored.content == skill.content
 
 
 def test_default_skill_is_static_and_restorable():
-    skill = Skill(bundle=SkillBundle(files={"SKILL.md": "Same instructions"}))
+    skill = Skill(
+        source=SkillContent(
+            content="Same instructions", name="test-skill", description="Task instructions", standard_format=False
+        )
+    )
     assert (
         skill.assemble(Task(id="one", instruction="First")).snapshot()
         == skill.assemble(Task(id="two", instruction="Second")).snapshot()
     )
-    assert Skill.from_snapshot(skill.snapshot()).bundle == skill.bundle
+    assert Skill.from_snapshot(skill.snapshot()).content == skill.content
 
 
 def test_assemble_returns_complete_skill_and_environment_uses_that_object(tmp_path):
@@ -167,8 +181,8 @@ def test_assemble_returns_complete_skill_and_environment_uses_that_object(tmp_pa
     prepared = skill.assemble(task)
     assert isinstance(prepared, TreeSkill) and prepared is not skill
     assert prepared.resources == skill.resources and prepared.router is router
-    assert "Formatting" not in prepared.bundle.files["SKILL.md"]
-    assert "Formatting" in skill.bundle.files["SKILL.md"]
+    assert "Formatting" not in prepared.content
+    assert "Formatting" in skill.content
 
     class IdentityEnvironment(Environment[EnvironmentOptions]):
         def _run(self, *, task, reward_data, skills, workspace):
@@ -180,8 +194,10 @@ def test_assemble_returns_complete_skill_and_environment_uses_that_object(tmp_pa
     from unittest.mock import patch
 
     with patch.object(skill, "assemble", return_value=prepared) as assemble:
-        IdentityEnvironment(EnvironmentOptions()).rollout(
-            task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)
+        asyncio.run(
+            IdentityEnvironment(EnvironmentOptions()).rollout(
+                task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)
+            )
         )
         assemble.assert_called_once_with(task)
 
@@ -194,11 +210,26 @@ def test_restore_and_export_defer_router_until_assembly(tmp_path):
         restored.export(tmp_path / "exported")
         assert restored.snapshot() == snapshot
         assert (tmp_path / "exported/references/check.md").read_bytes() == b"Original reference"
-        plain = restored.with_bundle(SkillBundle(files={"SKILL.md": "Plain instructions"}))
-        assert plain.assemble(Task(id="plain", instruction="Read")).bundle == plain.bundle
+        plain = restored.with_content("Plain instructions")
+        assert plain.assemble(Task(id="plain", instruction="Read")).content == plain.content
         factory.assert_not_called()
         prepared = restored.assemble(Task(id="route", instruction="Verify"))
         factory.assert_called_once_with(restored.config.router)
         assert len(router.calls) == 1
-        assert "Formatting" not in prepared.bundle.files["SKILL.md"]
+        assert "Formatting" not in prepared.content
         assert restored.snapshot() == snapshot
+
+
+def test_snapshot_restoration_preserves_explicit_router_credentials():
+    """Restore the complete router configuration without credential reinjection."""
+    skill, router = make_skill('{"selected_subtree_ids":["003"],"rationale":"verification"}')
+    router.config.api_key = "configured-secret"
+    router.config.base_url = "https://configured.invalid/v1"
+    skill.config.router = router.config
+    snapshot = skill.snapshot()
+    assert snapshot.config["router"]["api_key"] == "configured-secret"
+    restored = TreeSkill.from_snapshot(snapshot)
+    assert restored.config.router.api_key == "configured-secret"
+    restored = TreeSkill.from_snapshot(snapshot, router=router)
+    assert restored.config.router.api_key == "configured-secret"
+    assert "Verification" in restored.assemble(Task(id="one", instruction="Verify")).content

@@ -4,8 +4,11 @@ import difflib
 import json
 from pathlib import Path
 
+from pydantic import JsonValue
+
 from ....common.json import write_json
-from ....skill import SkillBundle
+from ....skill import content_hash
+from .config import TreeSkillTrainerConfig
 
 REFERENCE_COMMIT = "e83aae887f08eb9fa1596384404dc7757a6a7f2f"
 """Pinned upstream revision used by the prompt and algorithm parity tests."""
@@ -23,16 +26,16 @@ def normalize_skill_text(content: str) -> str:
     return content.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
 
 
-def compute_skill_content_hash(blob: dict[str, str]) -> str:
-    """Hash a bundle with the package's canonical serialization.
+def compute_skill_content_hash(content: str) -> str:
+    """Hash the exact UTF-8 document text.
 
     Args:
-        blob: Managed Skill files.
+        content: Complete Skill document.
 
     Returns:
         SHA-256 content identity.
     """
-    return SkillBundle(files=blob).content_hash
+    return content_hash(content)
 
 
 def record_patch(directory: Path, *, before: str, after: str, payload: dict) -> None:
@@ -57,19 +60,17 @@ def record_patch(directory: Path, *, before: str, after: str, payload: dict) -> 
     )
 
 
-def experiment_config(trainer_config):
-    """Serialize algorithm settings without credentials or artifact metadata.
+def experiment_config(trainer_config: TreeSkillTrainerConfig) -> dict[str, JsonValue]:
+    """Serialize algorithm settings including explicit connection settings.
 
     Args:
         trainer_config: Validated algorithm and provider settings.
 
     Returns:
-        JSON-compatible algorithm configuration with API keys removed.
+        JSON-compatible algorithm configuration with explicit API keys.
     """
     return {
-        "algorithm": trainer_config.model_dump(
-            mode="json", exclude={"optimizer": {"api_key"}, "router": {"api_key"}, "failure_optimizer": {"api_key"}}
-        ),
+        "algorithm": trainer_config.model_dump(mode="json"),
     }
 
 

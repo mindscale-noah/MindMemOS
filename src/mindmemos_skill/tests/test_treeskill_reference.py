@@ -8,16 +8,10 @@ from typing import Any
 
 import pytest
 from mindmemos_skill.algos.train.treeskill import TreeSkillEnvAdapter
-from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench import (
+from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
+from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_text_action import (
     SpreadsheetBenchReferenceAnalyzer,
 )
-from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_policy import (
-    FORMAT_ERROR_MESSAGE,
-    PolicyResponseType,
-    format_reference_observation,
-    parse_policy_response,
-)
-from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
 from mindmemos_skill.algos.train.treeskill.fusion import TreeSkillNodeFuser
 from mindmemos_skill.algos.train.treeskill.fusion_tree import (
     TreeMetadataError,
@@ -46,6 +40,12 @@ from mindmemos_skill.algos.train.treeskill.typing import (
 )
 from mindmemos_skill.envs import Task
 from mindmemos_skill.envs.builtin_envs.spreadsheetbench.reference_reward import compare_workbooks
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_policy import (
+    FORMAT_ERROR_MESSAGE,
+    PolicyResponseType,
+    format_reference_observation,
+    parse_policy_response,
+)
 
 
 class ScriptedChatModel:
@@ -93,7 +93,7 @@ def test_treeskill_prompt_resources_match_reference_files() -> None:
     )
 
 
-def test_spreadsheetbench_reference_prompt_resources_are_pinned() -> None:
+def test_spreadsheetbench_text_action_prompt_resources_are_pinned() -> None:
     prompt_package = "mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_prompts"
     expected_hashes = {
         "tree_only_skill_routing_system_prompt.txt": (
@@ -106,9 +106,12 @@ def test_spreadsheetbench_reference_prompt_resources_are_pinned() -> None:
         "success_analysis_system_llm.txt": ("0ba6a3a530e1cd50f4afdadd8af3448bf7f363a82fade2499b57e49655777f70"),
         "success_analysis_user_llm.txt": ("3c91275e61cf55df71fd37dd9c8be5026638f0c8edc60e033e18a45f6bbcb318"),
     }
-    resources = files(prompt_package)
-
     for name, expected in expected_hashes.items():
+        resources = files(
+            "mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_prompts"
+            if name.startswith("trace2skill_")
+            else prompt_package
+        )
         assert hashlib.sha256(resources.joinpath(name).read_bytes()).hexdigest() == expected
 
 
@@ -190,7 +193,7 @@ def test_treeskill_user_prompts_match_reference_payloads() -> None:
         "spreadsheet_content": "('Revenue', 'Cost')",
     }
     expected_routing = {"task": routing_context, "skill_tree": tree_payload}
-    assert TreeSkillEnvAdapter.build("spreadsheetbench_reference", {}).build_routing_messages(
+    assert TreeSkillEnvAdapter.build("spreadsheetbench_text_action", {}).build_routing_messages(
         TreeSkillRoutingContext(task=task, tree=tree_payload, public_context=routing_context)
     )[1]["content"] == (
         "Route skill subtrees for this spreadsheet task.\n\n"
@@ -376,7 +379,7 @@ async def test_treeskill_locator_and_fuser_record_failed_items_without_aborting(
     assert "endpoint unavailable" in failures[0].error
 
 
-def test_spreadsheetbench_reference_evaluator_uses_full_workbook_when_position_is_empty(
+def test_spreadsheetbench_text_action_evaluator_uses_full_workbook_when_position_is_empty(
     tmp_path: Path,
 ) -> None:
     openpyxl = pytest.importorskip("openpyxl")
@@ -398,7 +401,7 @@ def test_spreadsheetbench_reference_evaluator_uses_full_workbook_when_position_i
     assert observation.startswith("Result: FAIL")
 
 
-def test_spreadsheetbench_reference_evaluator_supports_whole_column_ranges(tmp_path: Path) -> None:
+def test_spreadsheetbench_text_action_evaluator_supports_whole_column_ranges(tmp_path: Path) -> None:
     openpyxl = pytest.importorskip("openpyxl")
     golden_path = tmp_path / "golden.xlsx"
     output_path = tmp_path / "output.xlsx"

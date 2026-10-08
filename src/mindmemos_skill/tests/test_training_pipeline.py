@@ -6,21 +6,22 @@ import pytest
 import pytest_asyncio
 from mindmemos_skill.algos.train.skill_forest import SkillForestTrainer
 from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillTrainer
-from mindmemos_skill.api.config import ServiceConfig
+from mindmemos_skill.api.typing import CommitRequest, RegisterRequest, ShowRequest, StructuredSkillInfo, TrainingRequest
 from mindmemos_skill.common.json import read_json
+from mindmemos_skill.config.config import ServiceConfig
 from mindmemos_skill.envs import Environment, Reward, RolloutResult, Task
 from mindmemos_skill.envs.data import DataSample, RewardData
 from mindmemos_skill.errors import SkillConflictError
 from mindmemos_skill.infra.database import Scope
 from mindmemos_skill.persistence.db_services.skills import SkillDataService
-from mindmemos_skill.pipelines.typing import CommitRequest, RegisterRequest, ShowRequest, TrainingRequest
-from mindmemos_skill.skill import Skill, SkillBundle, SkillResources
-from pydantic import BaseModel
-from test_skill_forest import FakeOptimizer
-from test_skill_forest import config as forest_config
-from test_treeskill_training import make_trainer, smoke
+from mindmemos_skill.skill import Skill, SkillContent
+from pydantic import BaseModel, ValidationError
 
 from mindmemos_skill import create_service
+
+from .test_skill_forest import FakeOptimizer
+from .test_skill_forest import config as forest_config
+from .test_treeskill_training import make_trainer, smoke
 
 
 class OfflineConfig(BaseModel):
@@ -30,14 +31,16 @@ class OfflineConfig(BaseModel):
 class OfflineEnvironment(Environment[OfflineConfig]):
     config_type = OfflineConfig
     supports_resume = False
+    instances = []
 
     def __init__(self, config):
         super().__init__(config)
         self.calls = []
+        self.instances.append(self)
 
     def _run(self, *, task, reward_data, skills, workspace):
         self.calls.append(task.id)
-        text = skills[0].bundle.files["SKILL.md"]
+        text = skills[0].content
         success = "improved" in text or "Verify" in text
         return RolloutResult(
             output="Saved",
@@ -48,23 +51,21 @@ class OfflineEnvironment(Environment[OfflineConfig]):
 
 @pytest_asyncio.fixture
 async def setup_service(tmp_path, monkeypatch):
+    monkeypatch.setattr(OfflineEnvironment, "instances", [])
     monkeypatch.setattr(Environment, "_registry", dict(Environment._registry))
     Environment.register("training_offline")(OfflineEnvironment)
     model = make_trainer().config.model_dump(mode="json")
     config = ServiceConfig.model_validate(
         {
+            "home": tmp_path / "home",
             "persistence": {
-                "config": {"include_remote": False},
                 "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'existing.db'}"}},
             },
             "repository_pipeline": {"class_name": "repository"},
             "training_pipelines": {
                 name: {
                     "class_name": "training",
-                    "config": {
-                        "trainer": {"class_name": name, "config": options},
-                        "environment": {"class_name": "training_offline"},
-                    },
+                    "config": {"trainer": {"class_name": name, "config": options}},
                 }
                 for name, options in (("treeskill", model), ("skill_forest", forest_config().model_dump(mode="json")))
             },
@@ -74,12 +75,24 @@ async def setup_service(tmp_path, monkeypatch):
         config, project_authorizer=lambda principal, project_id: Scope(fields={"project_id": project_id})
     )
     source = Skill(
-        bundle=SkillBundle(files={"SKILL.md": "# Workflow\nSave the output.\n"}),
-        resources=SkillResources(files={"helper.txt": "keep"}),
+        source=SkillContent(
+            content="# Workflow\nSave the output.\n",
+            resources={"helper.txt": "keep"},
+            name="test-skill",
+            description="Task instructions",
+            standard_format=False,
+        )
     )
     with service.request_principal("test-user"):
         initial = await service.register_skill(
-            RegisterRequest(project_id="project", name="Original", source=source.snapshot())
+            RegisterRequest(
+                project_id="project",
+                skill=StructuredSkillInfo(
+                    **source.snapshot().model_dump(
+                        include={"content", "resources", "name", "description", "standard_format"}
+                    )
+                ),
+            )
         )
     for name in config.training_pipelines:
         pipeline = service.backends[f"training_pipelines.{name}"]
@@ -92,9 +105,10 @@ async def setup_service(tmp_path, monkeypatch):
 def request_for(tmp_path, initial, algorithm):
     ids = [f"train-{index}" for index in range(6)]
     return TrainingRequest(
-        pipeline=algorithm,
+        algo=algorithm,
+        env={"class_name": "training_offline"},
         project_id="project",
-        base_version_id=initial.version.version_id,
+        init_skill_version_id=initial.skill_version_id,
         work_dir=str(tmp_path / algorithm),
         tasks=[
             DataSample(task=Task(id=identifier, instruction="Save and verify"), reward_data=RewardData())
@@ -105,17 +119,52 @@ def request_for(tmp_path, initial, algorithm):
 
 
 @pytest.mark.asyncio
+async def test_pipeline_uses_call_environment(setup_service, tmp_path):
+    """Pass the selected environment to training and held-out evaluation."""
+    service, initial, _, _ = setup_service
+    pipeline = service.backends["training_pipelines.treeskill"]
+    selected_environment = OfflineEnvironment(OfflineConfig())
+    request = request_for(tmp_path, initial, "treeskill")
+    assert "environment" not in type(pipeline.config).model_fields
+    with pytest.raises(AttributeError):
+        _ = pipeline.environment
+    with pytest.raises(TypeError, match="env"):
+        await pipeline.train(request)
+    with pipeline.persistence.session(Scope(fields={"project_id": "project"})):
+        await pipeline.train(request, env=selected_environment)
+    assert selected_environment.calls[-2:] == ["val", "test"]
+    assert OfflineEnvironment.instances == [selected_environment]
+
+
+def test_training_config_rejects_initial_environment():
+    """The configured training pipeline never owns an environment."""
+    from mindmemos_skill.pipelines.builtin_pipelines.training.config import TrainingPipelineConfig
+
+    with pytest.raises(ValidationError, match="environment"):
+        TrainingPipelineConfig.model_validate(
+            {
+                "trainer": {"class_name": "treeskill", "config": make_trainer().config.model_dump(mode="json")},
+                "environment": {"class_name": "training_offline"},
+            }
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("algorithm", ["treeskill", "skill_forest"])
 async def test_service_selects_trainer_and_publishes_once(setup_service, tmp_path, algorithm):
     service, initial, source, config = setup_service
     request = request_for(tmp_path, initial, algorithm)
-    result = await service.auto_train_skill(request)
+    result = await service.run_training(request)
     pipeline = service.backends[f"training_pipelines.{algorithm}"]
     assert isinstance(pipeline.trainer, TreeSkillTrainer if algorithm == "treeskill" else SkillForestTrainer)
-    version = (await service.show_skill(ShowRequest(project_id="project", skill_ref=result.skill_id))).version
-    assert version.parent_version_ids == [initial.version.version_id]
+    version = (await service.show_skill(ShowRequest(project_id="project", skill_id=result.skill_id))).version
+    assert version.parent_version_ids == [initial.skill_version_id]
     assert version.version_label.endswith(algorithm.replace("_", "-"))
     if algorithm == "skill_forest":
+        local_result = read_json(tmp_path / algorithm / "train" / "result.json")
+        assert local_result["validation"]["count"] == 1
+        assert local_result["test"]["count"] == 1
+        assert local_result["test"]["tasks"][0]["task_id"] == "test"
         report = version.metadata["algorithm_report"]
         assert report["run_id"] == result.run_id
         assert report["algorithm"] == "skill_forest"
@@ -127,20 +176,26 @@ async def test_service_selects_trainer_and_publishes_once(setup_service, tmp_pat
             if tree["winner"] is not None
         )
     restored = Skill.from_snapshot(source.snapshot())
-    assert restored.bundle.files["SKILL.md"] == "# Workflow\nSave the output.\n"
-    assert version.resources == initial.version.resources
-    assert pipeline.environment.calls[-2:] == ["val", "test"]
-    assert not {"val", "test"} & set(pipeline.environment.calls[:-2])
-    count = len(pipeline.environment.calls)
-    assert await service.auto_train_skill(request) == result
-    assert len(pipeline.environment.calls) == count
+    assert restored.content == "# Workflow\nSave the output.\n"
+    assert version.resources == source.snapshot().resources
+    environment = OfflineEnvironment.instances[-1]
+    assert environment.calls[-2:] == ["val", "test"]
+    assert not {"val", "test"} & set(environment.calls[:-2])
+    test_index = read_json(tmp_path / algorithm / "test" / "results.json")
+    assert [task["task_id"] for task in test_index["tasks"]] == ["test"]
+    assert test_index["tasks"][0]["result_path"] == "task-000000/completed.json"
+    assert test_index["tasks"][0]["score"] in {0.0, 1.0}
+    count = len(environment.calls)
+    assert await service.run_training(request) == result
+    assert len(OfflineEnvironment.instances[-1].calls) == 0
+    assert len(environment.calls) == count
     # A new service over an existing populated database recognizes the same publication.
     reopened = await create_service(
         config, project_authorizer=lambda principal, project_id: Scope(fields={"project_id": project_id})
     )
     try:
         with reopened.request_principal("test-user"):
-            assert await reopened.auto_train_skill(request) == result
+            assert await reopened.run_training(request) == result
     finally:
         await reopened.close()
     with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
@@ -153,53 +208,77 @@ async def test_commit_failure_preserves_candidate_and_reuses_work(setup_service,
     service, initial, _, _ = setup_service
     request = request_for(tmp_path, initial, "treeskill")
     pipeline = service.backends["training_pipelines.treeskill"]
-    original = SkillDataService.commit_training
+    original = SkillDataService.commit_algorithm
 
     def unavailable(*args, **kwargs):
         raise OSError("database unavailable")
 
-    monkeypatch.setattr(SkillDataService, "commit_training", unavailable)
+    monkeypatch.setattr(SkillDataService, "commit_algorithm", unavailable)
     with pytest.raises(OSError, match="unavailable"):
-        await service.auto_train_skill(request)
+        await service.run_training(request)
     assert (tmp_path / "treeskill/selected_skill.json").exists()
-    count = len(pipeline.environment.calls)
-    monkeypatch.setattr(SkillDataService, "commit_training", original)
-    result = await service.auto_train_skill(request)
-    assert result.version_id != initial.version.version_id
-    assert len(pipeline.environment.calls) == count
+    count = len(OfflineEnvironment.instances[-1].calls)
+    monkeypatch.setattr(SkillDataService, "commit_algorithm", original)
+    result = await service.run_training(request)
+    assert result.version_id != initial.skill_version_id
+    assert len(OfflineEnvironment.instances[-1].calls) == 0
+    assert len(OfflineEnvironment.instances[-2].calls) == count
+
+
+@pytest.mark.asyncio
+async def test_training_can_publish_without_activating(setup_service, tmp_path):
+    service, initial, _, _ = setup_service
+    request = request_for(tmp_path, initial, "treeskill").model_copy(update={"auto_accept": False})
+    result = await service.run_training(request)
+    detail = await service.show_skill(
+        ShowRequest(project_id="project", skill_id=initial.skill_id, version_id=result.version_id)
+    )
+    assert detail.version.parent_version_ids == [initial.skill_version_id]
+    assert detail.skill.active_version_id == initial.skill_version_id
+    assert await service.run_training(request) == result
+    with pytest.raises(SkillConflictError, match="different inputs"):
+        await service.run_training(request.model_copy(update={"auto_accept": True}))
 
 
 @pytest.mark.asyncio
 async def test_commit_acknowledgement_loss_and_concurrent_parent(setup_service, tmp_path, monkeypatch):
     service, initial, source, _ = setup_service
     request = request_for(tmp_path, initial, "treeskill")
-    original = SkillDataService.commit_training
+    original = SkillDataService.commit_algorithm
 
     def lose_ack(self, *args, **kwargs):
         original(self, *args, **kwargs)
         raise OSError("lost acknowledgement")
 
-    monkeypatch.setattr(SkillDataService, "commit_training", lose_ack)
+    monkeypatch.setattr(SkillDataService, "commit_algorithm", lose_ack)
     with pytest.raises(OSError, match="acknowledgement"):
-        await service.auto_train_skill(request)
-    monkeypatch.setattr(SkillDataService, "commit_training", original)
-    published = await service.auto_train_skill(request)
+        await service.run_training(request)
+    monkeypatch.setattr(SkillDataService, "commit_algorithm", original)
+    published = await service.run_training(request)
     changed = await service.commit_skill(
         CommitRequest(
             project_id="project",
-            skill_ref=initial.skill.skill_id,
+            skill_id=initial.skill_id,
             base_version_id=published.version_id,
-            source=source.snapshot(),
+            skill=StructuredSkillInfo(
+                **source.snapshot().model_dump(
+                    include={"content", "resources", "name", "description", "standard_format"}
+                )
+            ),
         )
     )
-    assert await service.auto_train_skill(request) == published
+    assert await service.run_training(request) == published
     assert (
-        await service.show_skill(ShowRequest(project_id="project", skill_ref=initial.skill.skill_id))
+        await service.show_skill(ShowRequest(project_id="project", skill_id=initial.skill_id))
     ).version.version_id == changed.version.version_id
-    with pytest.raises(SkillConflictError):
-        await service.auto_train_skill(request.model_copy(update={"work_dir": str(tmp_path / "other")}))
+    branch = await service.run_training(request.model_copy(update={"work_dir": str(tmp_path / "other")}))
+    historical_child = await service.show_skill(
+        ShowRequest(project_id="project", skill_id=initial.skill_id, version_id=branch.version_id)
+    )
+    assert historical_child.version.parent_version_ids == [initial.skill_version_id]
+    assert historical_child.skill.active_version_id == branch.version_id
     with pytest.raises(SkillConflictError, match="different inputs"):
-        await service.auto_train_skill(request.model_copy(update={"base_version_id": changed.version.version_id}))
+        await service.run_training(request.model_copy(update={"init_skill_version_id": changed.version.version_id}))
 
 
 @pytest.mark.asyncio
@@ -209,7 +288,14 @@ async def test_treeskill_automatically_recovers_without_repeating_calls(tmp_path
 
     trainer = make_trainer()
     env = OfflineEnvironment(OfflineConfig())
-    source = Skill(bundle=SkillBundle(files={"SKILL.md": "# Workflow\nSave the output.\n"}))
+    source = Skill(
+        source=SkillContent(
+            content="# Workflow\nSave the output.\n",
+            name="test-skill",
+            description="Task instructions",
+            standard_format=False,
+        )
+    )
     samples = [DataSample(task=Task(id="train", instruction="Save it"), reward_data=RewardData())]
     original = module.write_json
     stopped = False
@@ -237,13 +323,18 @@ async def test_treeskill_automatically_recovers_without_repeating_calls(tmp_path
     assert len(env.calls) == 1
     assert all(path.read_bytes() == value for path, value in calls.items())
     assert isinstance(await run(), TreeSkill)
-    assert (await asyncio.to_thread((await run()).assemble, Task(id="use", instruction="Save it"))).bundle.files[
-        "SKILL.md"
-    ]
+    assert (await asyncio.to_thread((await run()).assemble, Task(id="use", instruction="Save it"))).content
     assert read_json(tmp_path / "summary.json")["status"] == "completed"
     with pytest.raises(ValueError, match="mismatch"):
         await trainer.train(
-            skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# Changed\nDifferent"})),
+            skill=Skill(
+                source=SkillContent(
+                    content="# Changed\nDifferent",
+                    name="test-skill",
+                    description="Task instructions",
+                    standard_format=False,
+                )
+            ),
             env=env,
             train_samples=samples,
             validation_samples=[],
@@ -263,30 +354,36 @@ async def test_parent_changed_during_training_preserves_result(setup_service, tm
         await service.commit_skill(
             CommitRequest(
                 project_id="project",
-                skill_ref=initial.skill.skill_id,
-                base_version_id=initial.version.version_id,
-                source=source.snapshot(),
+                skill_id=initial.skill_id,
+                base_version_id=initial.skill_version_id,
+                skill=StructuredSkillInfo(
+                    **source.snapshot().model_dump(
+                        include={"content", "resources", "name", "description", "standard_format"}
+                    )
+                ),
             )
         )
         return selected
 
     monkeypatch.setattr(pipeline.trainer, "train", concurrent_edit)
     with pytest.raises(SkillConflictError):
-        await service.auto_train_skill(request)
+        await service.run_training(request)
     assert (tmp_path / "treeskill/selected_skill.json").exists()
     with pipeline.persistence.session(Scope(fields={"project_id": "project"})) as store:
-        assert len(store.skills.list_versions(initial.skill.skill_id)) == 2
+        assert len(store.skills.list_versions(initial.skill_id)) == 2
 
 
-def test_documented_service_config_is_valid():
+def test_service_example_config_is_valid():
     from pathlib import Path
 
-    from mindmemos_skill.api.factory import load_service_config
+    from mindmemos_skill.config.loader import read_skill_config
 
-    path = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/training/service.yaml"
-    config = load_service_config(path.read_text())
+    path = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/dev.example.yaml"
+    config = read_skill_config(path).service
+    assert config.repository_pipeline.class_name == "repository"
     assert set(config.training_pipelines) == {"treeskill", "skill_forest"}
-    assert {item.class_name for item in config.training_pipelines.values()} == {"training"}
+    assert "training_environments" not in config.model_fields
+    assert set(config.evolution_pipelines) == {"simple"}
 
 
 @pytest.mark.asyncio

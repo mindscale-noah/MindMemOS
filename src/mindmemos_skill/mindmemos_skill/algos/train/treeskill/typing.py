@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from ....agents.typing import AgentResult
 from ....envs.data import DataSample
 from ....envs.typing import RolloutResult, Task
-from ....skill.typing import SkillBundle
 
 
 class SkillNode(BaseModel):
@@ -57,7 +56,7 @@ class SkillTree(BaseModel):
         """Return all nodes in document order."""
         nodes = []
 
-        def visit(node):
+        def visit(node: SkillNode) -> None:
             """Visit.
 
             Args:
@@ -75,8 +74,8 @@ class SkillTree(BaseModel):
 class RoutingResult(BaseModel):
     """Expose routed content and selection evidence without mutable Skill state."""
 
-    bundle: SkillBundle
-    """Task-time bundle containing the selected subtree content."""
+    content: str
+    """Task-selected Markdown, which may be empty for an empty selection."""
 
     selected_subtree_ids: list[str] = Field(default_factory=list)
     """Selected roots after removing duplicates and covered descendants."""
@@ -487,7 +486,7 @@ class _RoutePayload(BaseModel):
 
 
 class ChatModel(Protocol):
-    async def chat(self, task: str, messages: list[dict[str, Any]], **kwargs: Any) -> Any: ...
+    async def chat(self, task: str, messages: list[dict[str, Any]], **kwargs: Any) -> ChatResponse: ...
 
 
 class TrajectoryAnalyzer(Protocol):

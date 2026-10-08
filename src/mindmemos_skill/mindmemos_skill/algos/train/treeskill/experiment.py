@@ -2,10 +2,12 @@
 
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
+
+from pydantic import JsonValue
 
 from ....common.json import write_json
 from ....envs import Environment
@@ -25,7 +27,7 @@ async def run_experiment(
     work_dir: Path,
     validation_samples: Sequence[DataSample] = (),
     test_samples: Sequence[DataSample] = (),
-    preflight=None,
+    preflight: Callable[[Path], dict[str, JsonValue]] | None = None,
 ) -> Skill:
     """Train once and report final held-out scores without using them for selection.
 
@@ -75,8 +77,7 @@ async def run_experiment(
         write_json(root / "summary.json", summary)
         if test_samples:
             testing_start = perf_counter()
-            records, failures = await asyncio.to_thread(
-                sample_tasks,
+            records, failures = await sample_tasks(
                 env=env,
                 skill=final,
                 samples=test_samples,

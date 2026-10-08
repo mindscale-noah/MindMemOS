@@ -1,21 +1,20 @@
 """End-to-end training artifacts, held-out separation and reference analysis gates."""
 
 import asyncio
-import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 from mindmemos_skill.agents import AgentResult, OpenAIChatAgent, OpenAIChatConfig
 from mindmemos_skill.algos.train.treeskill import TreeSkillTrainer, TreeSkillTrainerConfig
-from mindmemos_skill.algos.train.treeskill.env_specific.config import SpreadsheetBenchReferenceConfig
-from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench import (
+from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_text_action import (
     SpreadsheetBenchReferenceAnalyzer,
-    SpreadsheetBenchReferenceEnvironment,
 )
 from mindmemos_skill.algos.train.treeskill.experiment import run_experiment
 from mindmemos_skill.algos.train.treeskill.typing import ChatResponse, TraceEvidence, TrainingRollout
 from mindmemos_skill.envs import Reward, RolloutResult, Task
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench.config import SpreadsheetBenchTextActionConfig
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action import SpreadsheetBenchTextActionEnvironment
 from mindmemos_skill.envs.builtin_envs.spreadsheetbench.typing import (
     SpreadsheetBenchRewardData,
     SpreadsheetBenchTask,
@@ -23,17 +22,13 @@ from mindmemos_skill.envs.builtin_envs.spreadsheetbench.typing import (
     WorkbookReference,
 )
 from mindmemos_skill.envs.data import DataSample, RewardData
-from mindmemos_skill.skill import Skill, SkillBundle, SkillSet
+from mindmemos_skill.skill import Skill, SkillContent, SkillSet
 
-spec = importlib.util.spec_from_file_location(
-    "treeskill_smoke", Path(__file__).resolve().parents[3] / "scripts/treeskill/smoke.py"
-)
-smoke = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(smoke)
+from . import treeskill_smoke as smoke
 
 
 def make_trainer():
-    model = OpenAIChatConfig(model="offline", api_key="must-not-be-recorded")
+    model = OpenAIChatConfig(model="offline", api_key="explicit-test-key")
     return TreeSkillTrainer(TreeSkillTrainerConfig(optimizer=model, router=model), agent_factory=smoke.SmokeAgent)
 
 
@@ -71,7 +66,14 @@ async def test_empty_test_and_val_do_not_evaluate_or_route(tmp_path):
     root = tmp_path / "empty-test"
     await run_experiment(
         trainer=trainer,
-        skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# Workflow\nSave the output.\n"})),
+        skill=Skill(
+            source=SkillContent(
+                content="# Workflow\nSave the output.\n",
+                name="test-skill",
+                description="Task instructions",
+                standard_format=False,
+            )
+        ),
         env=smoke.SmokeEnvironment(smoke.SmokeConfig()),
         train_samples=[make_sample("train")],
         work_dir=root,
@@ -81,11 +83,15 @@ async def test_empty_test_and_val_do_not_evaluate_or_route(tmp_path):
     assert summary["model_usage"]["calls"] == 3
     assert not (root / "test").exists()
     assert not (root / "training/model_calls/router").exists()
-    assert "must-not-be-recorded" not in "\n".join(path.read_text() for path in root.rglob("*.json"))
+    assert "explicit-test-key" in "\n".join(path.read_text() for path in root.rglob("*.json"))
     with pytest.raises(FileExistsError):
         await run_experiment(
             trainer=trainer,
-            skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# X\nx"})),
+            skill=Skill(
+                source=SkillContent(
+                    content="# X\nx", name="test-skill", description="Task instructions", standard_format=False
+                )
+            ),
             env=smoke.SmokeEnvironment(smoke.SmokeConfig()),
             train_samples=[make_sample("train")],
             work_dir=root,
@@ -97,7 +103,11 @@ async def test_overlap_is_rejected_before_any_rollout(tmp_path):
     with pytest.raises(ValueError, match="Duplicate task ID"):
         await run_experiment(
             trainer=make_trainer(),
-            skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# X\nx"})),
+            skill=Skill(
+                source=SkillContent(
+                    content="# X\nx", name="test-skill", description="Task instructions", standard_format=False
+                )
+            ),
             env=smoke.SmokeEnvironment(smoke.SmokeConfig()),
             train_samples=[make_sample("same")],
             test_samples=[make_sample("same")],
@@ -115,7 +125,11 @@ async def test_collection_failures_are_not_zero_score_evidence(tmp_path):
     root = tmp_path / "failed"
     await run_experiment(
         trainer=make_trainer(),
-        skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# X\nx"})),
+        skill=Skill(
+            source=SkillContent(
+                content="# X\nx", name="test-skill", description="Task instructions", standard_format=False
+            )
+        ),
         env=FailingEnvironment(smoke.SmokeConfig()),
         train_samples=[make_sample("train")],
         work_dir=root,
@@ -235,17 +249,29 @@ def test_reference_policy_uses_original_messages_and_private_scoring(tmp_path):
             return AgentResult(output=output, trajectory=[], usage={})
 
     agent = Agent()
-    env = SpreadsheetBenchReferenceEnvironment(
-        SpreadsheetBenchReferenceConfig(agent=config, transactional_recalculation=False), agent=agent
+    env = SpreadsheetBenchTextActionEnvironment(
+        SpreadsheetBenchTextActionConfig(agent=config, transactional_recalculation=False), agent=agent
     )
-    result = env.rollout(
-        sample.task,
-        tmp_path / "run",
-        reward_data=sample.reward_data,
-        skill_set=SkillSet(
-            {"0": Skill(bundle=SkillBundle(files={"SKILL.md": "# Workbook\nPreserve cells."}))}, max_concurrency=1
-        ),
-        resume=False,
+    result = asyncio.run(
+        env.rollout(
+            sample.task,
+            tmp_path / "run",
+            reward_data=sample.reward_data,
+            skill_set=SkillSet(
+                {
+                    "0": Skill(
+                        source=SkillContent(
+                            content="# Workbook\nPreserve cells.",
+                            name="test-skill",
+                            description="Task instructions",
+                            standard_format=False,
+                        )
+                    )
+                },
+                max_concurrency=1,
+            ),
+            resume=False,
+        )
     )
     assert result.reward.score == 1
     assert all("reference.xlsx" not in json.dumps(call) and "gold.xlsx" not in json.dumps(call) for call in agent.calls)
@@ -264,7 +290,14 @@ async def test_mixed_collection_failure_skips_only_that_data(tmp_path):
     root = tmp_path / "mixed"
     final = await run_experiment(
         trainer=make_trainer(),
-        skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# Workflow\nSave the output.\n"})),
+        skill=Skill(
+            source=SkillContent(
+                content="# Workflow\nSave the output.\n",
+                name="test-skill",
+                description="Task instructions",
+                standard_format=False,
+            )
+        ),
         env=MixedEnvironment(smoke.SmokeConfig()),
         train_samples=[make_sample("bad"), make_sample("good")],
         test_samples=[make_sample("test")],
@@ -276,7 +309,7 @@ async def test_mixed_collection_failure_skips_only_that_data(tmp_path):
     assert summary["train"]["score_sum"] == 0 and summary["train"]["mean_score"] == 0
     assert summary["test"]["mean_score"] == 1
     assert summary["training"]["input_trajectories"] == 1
-    assert "Verify the saved output." in final.bundle.files["SKILL.md"]
+    assert "Verify the saved output." in final.content
     evidence = json.loads((root / "training/stages/evidence.json").read_text())
     assert [item["task_id"] for item in evidence] == ["good"]
 
@@ -333,7 +366,14 @@ async def test_router_provider_failure_is_a_skipped_test_not_full_skill_fallback
     root = tmp_path / "router-failure"
     await run_experiment(
         trainer=trainer,
-        skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# Workflow\nSave the output.\n"})),
+        skill=Skill(
+            source=SkillContent(
+                content="# Workflow\nSave the output.\n",
+                name="test-skill",
+                description="Task instructions",
+                standard_format=False,
+            )
+        ),
         env=smoke.SmokeEnvironment(smoke.SmokeConfig()),
         train_samples=[make_sample("train")],
         test_samples=[make_sample("test")],
@@ -345,21 +385,13 @@ async def test_router_provider_failure_is_a_skipped_test_not_full_skill_fallback
     assert summary["model_usage"]["failed_calls"] == 1
 
 
-def test_reference_config_and_split_are_pinned_without_live_dependencies():
-    import yaml
-    from mindmemos_skill.algos.train.treeskill.config import TreeSkillExperimentConfig
-
+def test_reference_split_is_pinned_without_live_dependencies():
     root = Path(__file__).resolve().parents[3]
-    config = TreeSkillExperimentConfig.model_validate(
-        yaml.safe_load((root / "config/mindmemos_skill/treeskill/spreadsheetbench_reference.yaml").read_text())
+    splits = json.loads(
+        (root / "resources/mindmemos_skill_eval/treeskill-spreadsheetbench/data_splits/splits.json").read_text()
     )
-    splits = json.loads((root / config.split_file).read_text())
     assert len(splits["train"]) == 200 and len(splits["test"]) == 200 and splits["val"] == []
     assert not set(splits["train"]) & set(splits["test"])
-    assert config.algorithm.analysis_concurrency == 128 and config.algorithm.localization_concurrency == 16
-    assert config.algorithm.optimizer.extra_body["chat_template_kwargs"]["enable_thinking"]
-    assert config.algorithm.failure_optimizer.extra_body["chat_template_kwargs"]["enable_thinking"] is False
-    assert config.strict_reference_skill
 
 
 def test_transactional_recalculation_preserves_literal_workbook(tmp_path):
@@ -374,31 +406,32 @@ def test_transactional_recalculation_preserves_literal_workbook(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_trained_snapshot_reloads_credentials_without_persisting_masks(tmp_path, monkeypatch):
-    from mindmemos_skill.agents.constants import AGENT_API_KEY_ENV
+async def test_trained_snapshot_preserves_explicit_credentials(tmp_path):
     from mindmemos_skill.algos.train.treeskill import TreeSkill
 
     trainer = make_trainer()
     final = await trainer.train(
-        skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# Workflow\nSave the output.\n"})),
+        skill=Skill(
+            source=SkillContent(
+                content="# Workflow\nSave the output.\n",
+                name="test-skill",
+                description="Task instructions",
+                standard_format=False,
+            )
+        ),
         env=smoke.SmokeEnvironment(smoke.SmokeConfig()),
         train_samples=[make_sample("train")],
         work_dir=tmp_path / "run",
     )
     snapshot = final.snapshot()
-    assert "api_key" not in snapshot.config["router"]
-    monkeypatch.setenv(AGENT_API_KEY_ENV, "restored-secret")
+    assert snapshot.config["router"]["api_key"] == "explicit-test-key"
     restored = TreeSkill.from_snapshot(snapshot)
-    assert restored.config.router.api_key.get_secret_value() == "restored-secret"
-    legacy = snapshot.model_copy(deep=True)
-    legacy.config["router"]["api_key"] = "**********"
-    assert TreeSkill.from_snapshot(legacy).config.router.api_key.get_secret_value() == "restored-secret"
+    assert restored.config.router.api_key == "explicit-test-key"
     injected = smoke.SmokeAgent(trainer.config.router)
     restored = TreeSkill.from_snapshot(snapshot, router=injected)
     assert restored.router is injected
     assert (
-        "Verify the saved output."
-        in (await asyncio.to_thread(restored.assemble, make_sample("new-task").task)).bundle.files["SKILL.md"]
+        "Verify the saved output." in (await asyncio.to_thread(restored.assemble, make_sample("new-task").task)).content
     )
 
 
@@ -414,21 +447,21 @@ def test_standalone_uno_worker_has_no_package_import_dependency():
 
 
 def test_treeskill_environment_inherits_scoring_and_rejects_changed_workbooks(tmp_path):
-    from mindmemos_skill.envs.builtin_envs.spreadsheetbench import SpreadsheetBenchEnvironment
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench import SpreadsheetBenchToolCallingEnvironment
 
     sample = spreadsheet_sample(tmp_path)
-    env = SpreadsheetBenchReferenceEnvironment(
-        SpreadsheetBenchReferenceConfig(agent=OpenAIChatConfig(model="offline"), transactional_recalculation=False)
+    env = SpreadsheetBenchTextActionEnvironment(
+        SpreadsheetBenchTextActionConfig(agent=OpenAIChatConfig(model="offline"), transactional_recalculation=False)
     )
-    assert type(env)._run is SpreadsheetBenchEnvironment._run
-    assert type(env)._interact is SpreadsheetBenchEnvironment._interact
+    assert type(env)._run is SpreadsheetBenchToolCallingEnvironment._run
+    assert type(env)._interact is SpreadsheetBenchToolCallingEnvironment._interact
     assert env.config.stagnation_limit == 5
     sample.task.cases[0].path.write_bytes(b"changed after loading")
     with pytest.raises(ValueError, match="workbook changed"):
-        env.rollout(sample.task, tmp_path / "run", reward_data=sample.reward_data)
+        asyncio.run(env.rollout(sample.task, tmp_path / "run", reward_data=sample.reward_data))
 
 
-def test_reference_config_accepts_previous_stagnation_option():
-    config = SpreadsheetBenchReferenceConfig(agent=OpenAIChatConfig(model="offline"), reference_stagnation_limit=7)
+def test_text_action_config_uses_explicit_stagnation_option():
+    config = SpreadsheetBenchTextActionConfig(agent=OpenAIChatConfig(model="offline"), stagnation_limit=7)
     assert config.stagnation_limit == 7
     assert config.model_dump()["stagnation_limit"] == 7

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ...envs.base import Environment
 from ...envs.data.typing import DataSample
+from ...infra.task_manager.progress import ProgressReporter
 from ...registry.base import ConfigT
 from ...skill import Skill
 from ..base import Algorithm
@@ -41,6 +42,7 @@ class SkillTrainer(Algorithm[ConfigT], ABC):
         train_samples: Sequence[DataSample],
         validation_samples: Sequence[DataSample],
         work_dir: Path,
+        progress: ProgressReporter | None = None,
     ) -> Skill:
         """Optimize a supplied skill through environment feedback.
 
@@ -54,6 +56,7 @@ class SkillTrainer(Algorithm[ConfigT], ABC):
                 reuse compatible completed work, return a compatible final result,
                 and reject incompatible or unrecognized existing artifacts.
                 Use distinct subdirectories for independent environment rollouts.
+            progress: Optional report sink; algorithms choose reporting boundaries.
 
         Returns:
             The selected skill candidate without writing it to a database.

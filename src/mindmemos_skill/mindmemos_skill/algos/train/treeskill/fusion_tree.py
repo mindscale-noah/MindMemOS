@@ -287,7 +287,7 @@ def compile_tree_metadata(tree: MarkdownSkillTree, *, router: str = "llm_subtree
         "enabled": True,
         "schema_version": 1,
         "router": router,
-        "skill_content_hash": compute_skill_content_hash({"SKILL.md": tree.full_content}),
+        "skill_content_hash": compute_skill_content_hash(tree.full_content),
         "root_ids": [node.node_id for node in tree.root_nodes],
         "nodes": [
             {
@@ -317,7 +317,7 @@ def parse_tree_with_metadata(content: str, metadata: Any) -> MarkdownSkillTree:
     if metadata.get("schema_version") != 1:
         raise TreeMetadataError("unsupported TreeSkill metadata schema")
     normalized = normalize_skill_text(content)
-    expected_hash = compute_skill_content_hash({"SKILL.md": normalized})
+    expected_hash = compute_skill_content_hash(normalized)
     if metadata.get("skill_content_hash") != expected_hash:
         raise TreeMetadataError("TreeSkill metadata content hash does not match SKILL.md")
 

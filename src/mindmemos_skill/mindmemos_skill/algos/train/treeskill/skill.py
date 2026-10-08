@@ -2,12 +2,14 @@
 
 import json
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
+
+from pydantic import JsonValue
 
 from ....agents import OpenAIChatAgent
 from ....envs.typing import Task
 from ....logging import get_logger
-from ....skill import Skill, SkillBundle, SkillResources, SkillSnapshot
+from ....skill import Skill, SkillContent, SkillSnapshot
 from .config import TreeSkillConfig
 from .env_adapter import TreeSkillEnvAdapter
 from .tree import parse_tree, render_selection
@@ -44,19 +46,17 @@ class TreeSkill(Skill):
         self,
         config: TreeSkillConfig,
         *,
-        bundle: SkillBundle,
-        resources: SkillResources | None = None,
+        source: SkillContent,
         router: OpenAIChatAgent | None = None,
-    ):
+    ) -> None:
         """Own source content and defer default router construction until routing.
 
         Args:
             config: Fixed model settings recorded in Skill snapshots.
-            bundle: Complete source Markdown, never the previous routed output.
-            resources: Unchanged references, scripts, and assets.
+            source: Complete source Markdown, metadata, and auxiliary bytes.
             router: Optional agent with exactly the recorded router configuration.
         """
-        super().__init__(bundle=bundle, resources=resources)
+        super().__init__(source)
         self.config = config.model_copy(deep=True)
         self.env_adapter = TreeSkillEnvAdapter.build(self.config.env_adapter.class_name, self.config.env_adapter.config)
         if router is not None and router.config != config.router:
@@ -73,23 +73,25 @@ class TreeSkill(Skill):
             router: Optional borrowed router matching the settings.
         """
         source = Skill.from_path(path)
-        return cls(config, bundle=source.bundle, resources=source.resources, router=router)
+        return cls(config, source=source.source, router=router)
 
     def snapshot(self) -> SkillSnapshot:
         """Record routing settings alongside the source content."""
         snapshot = super().snapshot()
         snapshot.implementation = "treeskill"
         snapshot.config_schema_version = 2
-        snapshot.config = self.config.model_dump(mode="json", exclude={"router": {"api_key"}})
+        snapshot.config = self.config.model_dump(mode="json")
         return snapshot
 
-    def with_bundle(self, bundle: SkillBundle) -> Self:
+    def with_content(self, content: str, *, name: str | None = None, description: str | None = None) -> Self:
         """Replace content while keeping routing settings isolated.
 
         Args:
-            bundle: Replacement source content for the candidate.
+            content: Replacement source document.
+            name: Explicit name for nonstandard content.
+            description: Explicit description for nonstandard content.
         """
-        candidate = super().with_bundle(bundle)
+        candidate = super().with_content(content, name=name, description=description)
         candidate.config = self.config.model_copy(deep=True)
         return candidate
 
@@ -108,37 +110,49 @@ class TreeSkill(Skill):
         if snapshot.config_schema_version == 1 and "env_adapter" not in recorded_config:
             # Historical stable-ID routing always used the spreadsheet request protocol.
             if recorded_config.get("reference_routing", False):
-                recorded_config["env_adapter"] = {"class_name": "spreadsheetbench_reference"}
+                recorded_config["env_adapter"] = {"class_name": "spreadsheetbench_text_action"}
             else:
                 recorded_config["env_adapter"] = {"class_name": "legacy"}
 
-        recorded_router = dict(recorded_config["router"])
-        if recorded_router.get("api_key") == "**********":
-            recorded_router.pop("api_key")
-        recorded_config["router"] = recorded_router
+        recorded_adapter = recorded_config.get("env_adapter")
+        if isinstance(recorded_adapter, dict) and recorded_adapter.get("class_name") == "spreadsheetbench_reference":
+            # Restore historical artifacts without registering the removed environment name.
+            recorded_config["env_adapter"] = {**recorded_adapter, "class_name": "spreadsheetbench_text_action"}
+
         config = TreeSkillConfig.model_validate(recorded_config)
         if router is not None:
-            if router.config.model_dump(exclude={"api_key"}) != config.router.model_dump(exclude={"api_key"}):
-                raise ValueError("Injected router must match the recorded non-secret settings")
+            if router.config.model_dump() != config.router.model_dump():
+                raise ValueError("Injected router must match the recorded settings")
             config.router = router.config.model_copy(deep=True)
         return cls(
             config,
-            bundle=source.bundle,
-            resources=source.resources,
+            source=source.source,
             router=router,
         )
 
     def assemble(self, task: Task) -> Self:
-        """Return a complete Skill copy with its task-selected subtree bundle.
+        """Return a complete Skill copy with its task-selected subtree content.
 
         Args:
             task: Public task input; private reward data is never supplied.
         """
-        return self.with_bundle(self._route(task).bundle)
+        routed = self._route(task).content
+        if routed == self.content:
+            return self.with_content(routed)
+        candidate = super().assemble(task)
+        candidate._source = SkillContent(
+            content=routed,
+            resources=self.resources,
+            name=self.source.name,
+            description=self.source.description,
+            standard_format=False,
+        )
+        candidate.config = self.config.model_copy(deep=True)
+        return candidate
 
     def _route(self, task: Task) -> RoutingResult:
         """Route once internally, preserving evidence and propagating provider errors."""
-        source = self.bundle
+        source = self.content
         if self.config.reference_routing:
             import asyncio
 
@@ -148,7 +162,7 @@ class TreeSkill(Skill):
             router_agent = self.router if self.router is not None else OpenAIChatAgent(self.config.router)
 
             class RouterModel:
-                async def chat(self, task, messages, **kwargs):
+                async def chat(self, task: str, messages: list[dict[str, JsonValue]], **kwargs: Any) -> ChatResponse:
                     """Chat.
 
                     Args:
@@ -171,15 +185,15 @@ class TreeSkill(Skill):
                 )
             )
             return RoutingResult(
-                bundle=SkillBundle(files={"SKILL.md": routed.skill_content}),
+                content=routed.skill_content,
                 selected_subtree_ids=list(routed.content_node_ids),
                 ancestor_ids=list(routed.ancestor_node_ids),
                 fallback_reason=routed.fallback_reason if routed.fallback_used else None,
                 response=model.response,
             )
-        tree = parse_tree(source.files["SKILL.md"])
+        tree = parse_tree(source)
         if not tree.roots:
-            return RoutingResult(bundle=source, fallback_reason="no_heading_tree")
+            return RoutingResult(content=source, fallback_reason="no_heading_tree")
         messages = self.env_adapter.build_routing_messages(
             TreeSkillRoutingContext(task=task, tree=[_prompt_node(root) for root in tree.roots])
         )
@@ -191,10 +205,10 @@ class TreeSkill(Skill):
             selected = _selected_ids(response.output)
             text, roots, ancestors = render_selection(tree, selected)
         except ValueError as exc:
-            get_logger(__name__).warning("TreeSkill used the full source bundle: %s", exc)
-            return RoutingResult(bundle=source, response=response, fallback_reason=str(exc))
+            get_logger(__name__).warning("TreeSkill used the full source content: %s", exc)
+            return RoutingResult(content=source, response=response, fallback_reason=str(exc))
         return RoutingResult(
-            bundle=SkillBundle(files={"SKILL.md": text}),
+            content=text,
             selected_subtree_ids=roots,
             ancestor_ids=ancestors,
             response=response,

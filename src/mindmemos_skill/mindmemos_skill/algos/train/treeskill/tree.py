@@ -15,7 +15,7 @@ def parse_tree(content: str) -> SkillTree:
     """Parse headings without treating YAML or fenced code as tree structure.
 
     Args:
-        content: Source Markdown from the mutable bundle.
+        content: Complete source Markdown.
 
     Returns:
         A tree with stable document-order IDs and original subtree text.
@@ -89,7 +89,7 @@ def render_selection(tree: SkillTree, selected_ids: list[str]) -> tuple[str, lis
         return "", [], []
     chosen, ancestors = [], []
 
-    def render(node):
+    def render(node: SkillNode) -> list[str]:
         """Render.
 
         Args:
