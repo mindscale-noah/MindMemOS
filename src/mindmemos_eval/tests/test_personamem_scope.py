@@ -103,12 +103,10 @@ def test_extract_rejects_word_after_option_in_tag():
 def test_extract_rejects_reasoning_inside_tag():
     # The two reported silent-misparse regressions: the first option letter
     # appearing inside the tag must NOT be read as the answer.
-    assert _extract_predicted_option(
-        "<final_answer>This is a difficult choice; option c is best</final_answer>"
-    ) is None
-    assert _extract_predicted_option(
-        "<final_answer>Between (b) and (c), I choose (c)</final_answer>"
-    ) is None
+    assert (
+        _extract_predicted_option("<final_answer>This is a difficult choice; option c is best</final_answer>") is None
+    )
+    assert _extract_predicted_option("<final_answer>Between (b) and (c), I choose (c)</final_answer>") is None
 
 
 def test_extract_rejects_trailing_punctuation_in_tag():

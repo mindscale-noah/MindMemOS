@@ -156,9 +156,7 @@ class _ScopeAdapter:
         uid = env._conv_user_id(0)
         runner_cfg = getattr(args, "runner_config", None)
         if runner_cfg is not None and runner_cfg.add:
-            await memory.add(
-                [{"role": "user", "content": "hi"}], user_id=uid, mode="sync", session_id=uid
-            )
+            await memory.add([{"role": "user", "content": "hi"}], user_id=uid, mode="sync", session_id=uid)
             self.added.append(uid)
         await memory.search("hi", user_id=uid)
         self.searched.append(uid)
@@ -511,7 +509,6 @@ def test_memory_cli_returns_one_when_database_reset_fails(monkeypatch):
     monkeypatch.setattr(cli, "run_benchmark_matrix", fail_run)
 
     assert cli.main([]) == 1
-
 
 
 # ---------- resolve_collections (dynamic Qdrant collection names) ----------

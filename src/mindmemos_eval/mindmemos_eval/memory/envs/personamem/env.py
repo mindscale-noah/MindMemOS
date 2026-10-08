@@ -797,9 +797,7 @@ class PersonaMemEnv:
                     error=f"search failed: {type(exc).__name__}: {exc}",
                 )
             search_elapsed = time.monotonic() - search_started
-            prompt = build_personamem_prompt(
-                item, retrieved_memories=memories, answer_prompt=self._answer_prompt
-            )
+            prompt = build_personamem_prompt(item, retrieved_memories=memories, answer_prompt=self._answer_prompt)
         else:
             prompt = build_personamem_prompt(item, visible_context=self._context_store.visible(item.scope))
 

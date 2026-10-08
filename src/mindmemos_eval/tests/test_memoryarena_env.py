@@ -224,7 +224,7 @@ class _RecordingTransport:
 
 @pytest.mark.asyncio
 async def test_per_episode_keys_isolate_projects_and_bound_concurrency(monkeypatch):
-    monkeypatch.setattr("mindmemos_eval.memory.memoryarena.env.AsyncHttpTransport", _RecordingTransport)
+    monkeypatch.setattr("mindmemos_eval.memory.envs.memoryarena.env.AsyncHttpTransport", _RecordingTransport)
     _RecordingTransport.reset()
 
     backend = MemoryArenaFormalBackend(agent_factory=_FakeAgent, env_client_factory=_FakeEnvClient)

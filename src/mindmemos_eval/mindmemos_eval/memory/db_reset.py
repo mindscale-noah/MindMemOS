@@ -142,8 +142,7 @@ def resolve_collections(server_config_path: str | Path | None = None) -> tuple[s
         return DEFAULT_COLLECTIONS
 
     collections = tuple(
-        str(qdrant.get(field_name, default_name))
-        for field_name, default_name in _QDRANT_COLLECTION_FIELDS
+        str(qdrant.get(field_name, default_name)) for field_name, default_name in _QDRANT_COLLECTION_FIELDS
     )
     logger.info("resolved_qdrant_collections path=%s collections=%s", path, collections)
     return collections

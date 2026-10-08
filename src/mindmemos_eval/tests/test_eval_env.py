@@ -134,3 +134,12 @@ async def test_llm_judge_scorer_handles_unparseable_output():
 
     assert result.score == 0.0
     assert result.passed is False
+
+
+@pytest.mark.parametrize("missing", ["api_key", "base_url"])
+def test_llm_client_requires_explicit_connection(missing):
+    """Reject unset connection values before the SDK can read environment defaults."""
+    options = {"model": "test", "api_key": "configured-secret", "base_url": "https://configured.invalid/v1"}
+    del options[missing]
+    with pytest.raises(ValueError, match=f"Provide {missing} in the LLM config"):
+        LLMClient(LLMConfig(**options))._ensure_client()

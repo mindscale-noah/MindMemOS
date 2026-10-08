@@ -51,7 +51,11 @@ def _memory(memories: list[dict[str, Any]]):
         body = json.loads(request.content)
         captured.append({"path": request.url.path, "body": body, "headers": dict(request.headers)})
         if request.url.path.endswith("/add"):
-            data = {"memories": [{"operation": "ADD", "content": item["memory"], "memory_id": item["id"]} for item in memories]}
+            data = {
+                "memories": [
+                    {"operation": "ADD", "content": item["memory"], "memory_id": item["id"]} for item in memories
+                ]
+            }
         else:
             data = {"memories": memories} if request.url.path.endswith("/search") else {"memories": []}
         return httpx.Response(200, json={"code": "ok", "message": "done", "request_id": "r", "data": data})
@@ -143,7 +147,9 @@ async def test_run_dataset_add_feedback_uses_offline_memory_contract(tmp_path):
     item = env.build_items([_row(str(history))], size="32k", persona_root=tmp_path)[0]
     # Make the fake LLM's answer correct regardless of deterministic shuffle.
     llm.reply = f"Final Answer: {item.correct_letter}"
-    run = await env.run_dataset([_row(str(history))], size="32k", persona_root=tmp_path, mode="add_feedback", show_progress=False)
+    run = await env.run_dataset(
+        [_row(str(history))], size="32k", persona_root=tmp_path, mode="add_feedback", show_progress=False
+    )
 
     assert run.metrics["step_accuracy"] == 1.0
     assert run.metrics["chain_accuracy"] == 1.0

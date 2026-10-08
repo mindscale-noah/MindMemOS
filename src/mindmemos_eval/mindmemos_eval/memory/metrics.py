@@ -383,15 +383,9 @@ def _eval_qa_token_series(row: dict[str, Any]) -> dict[str, list[float]]:
     series: dict[str, list[float]] = {"answer": [], "judge": []}
 
     if benchmark == "locomo":
-        qa_lists = [
-            conv.get("qa_results") or []
-            for conv in (er.get("conversations") or [])
-        ]
+        qa_lists = [conv.get("qa_results") or [] for conv in (er.get("conversations") or [])]
     elif benchmark == "longmemeval":
-        qa_lists = [
-            s.get("qa_results") or []
-            for s in (er.get("samples") or [])
-        ]
+        qa_lists = [s.get("qa_results") or [] for s in (er.get("samples") or [])]
     else:
         return series
 
@@ -1035,8 +1029,7 @@ def write_metrics_xlsx(path: str | Path, rows: list[dict[str, Any]]) -> None:
     eval_metrics_sheet = wb.create_sheet("eval_metrics")
     all_eval_rows = [[_xlsx_cell(v) for v in _eval_metrics_values(row)] for row in rows]
     non_empty_cols = [
-        i for i, header in enumerate(EVAL_METRICS_HEADERS)
-        if any(row[i] not in (None, "") for row in all_eval_rows)
+        i for i, header in enumerate(EVAL_METRICS_HEADERS) if any(row[i] not in (None, "") for row in all_eval_rows)
     ]
     eval_metrics_sheet.append([EVAL_METRICS_HEADERS[i] for i in non_empty_cols])
     for row in all_eval_rows:
