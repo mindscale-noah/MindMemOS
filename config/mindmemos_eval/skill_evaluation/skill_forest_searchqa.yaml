@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=./evaluation.schema.json
+service_config: ../skill_local_service/service.yaml
+algorithm: skill_forest
+environment:
+  class_name: searchqa
+  config:
+    agent:
+      # 模型连接：调用前填写 key 和 URL，不读取环境变量。
+      model: gpt-5.4-mini
+      api_key: null
+      base_url: null
+      # 单次请求的超时与重试；3 次重试最多产生 4 次请求。
+      timeout_s: 180
+      max_retries: 3
+      retry_initial_wait_s: 1
+      retry_max_wait_s: 60
+      # 包含推理 token 的输出上限；null 表示不传此限制。
+      max_completion_tokens: 4096
+      # null 表示不向模型服务传该参数；填写时需符合服务支持范围。
+      temperature: null
+      reasoning_effort: null
+    # 每道题的回答/自查轮数；额外轮次不接收私有参考答案反馈。
+    max_turns: 1
+    # 公开检索上下文的字符预算，优先按 [DOC] 边界截断。
+    max_context_chars: 6000
+    # 评分协议标识，用于审计和恢复核对；通常保持默认值。
+    evaluator_version: searchqa-v1
+data:
+  class_name: searchqa
+  config:
+    data_path: ../../../data/mindmemos_skill/skill_forest/searchqa/items.json
+initial_skill:
+  path: ../../../resources/mindmemos_skill_eval/skill_forest-searchqa/initial_skill/SKILL.md
+  name: skill_forest-searchqa-initial
+split_file: ../../../resources/mindmemos_skill_eval/skill_forest-searchqa/data_splits/splits.json
+limits:
+  train: null
+  val: null
+  test: null

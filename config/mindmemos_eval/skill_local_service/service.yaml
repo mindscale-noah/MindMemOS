@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=../../mindmemos_skill/service.schema.json
+# Local Skill benchmark service. Run commands from the repository root.
+# Set api_key and base_url explicitly in each model config before model calls.
+service:
+  home: ../../../data/mindmemos_skill
+  persistence:
+    database:
+      class_name: sqlite
+      config:
+        url: sqlite+pysqlite:///./output/skill_eval/local.sqlite
+  repository_pipeline:
+    class_name: repository
+    config: {}
+  training_pipelines:
+    treeskill:
+      class_name: training
+      config:
+        trainer:
+          class_name: treeskill
+          config:
+            optimizer: {model: gpt-5.4-mini, api_key: null, base_url: null}
+            router: {model: gpt-5.4-mini, api_key: null, base_url: null}
+            rollout_concurrency: 4
+            analysis_concurrency: 4
+            localization_concurrency: 4
+        evaluation_concurrency: 4
+    skill_forest:
+      class_name: training
+      config:
+        trainer:
+          class_name: skill_forest
+          config:
+            optimizer: {model: gpt-5.4-mini, api_key: null, base_url: null}
+            num_trees: 7
+            candidates_per_node: 3
+            max_depth: 3
+            expansion_budget: 7
+            expansion_concurrency: 4
+            rollout_concurrency: 4
+            model_concurrency: 4
+        evaluation_concurrency: 4
+fastapi:
+  auth:
+    mode: none
+    default_project_id: skill-local-eval

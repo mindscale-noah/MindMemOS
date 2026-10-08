@@ -160,11 +160,6 @@ from .skills.envs.spreadsheetbench import (
     SpreadsheetBenchRunResult,
     compare_workbooks,
 )
-from .skills.evolve import (
-    FastAPISkillEvolutionClient,
-    NoopSkillEvolutionClient,
-    SkillEvolutionClient,
-)
 
 __all__ = [
     "LLMClient",
@@ -283,9 +278,6 @@ __all__ = [
     "SpreadsheetBenchCaseResult",
     "SpreadsheetBenchRunResult",
     "compare_workbooks",
-    "FastAPISkillEvolutionClient",
-    "NoopSkillEvolutionClient",
-    "SkillEvolutionClient",
     "SkillSet",
     "ReactAgentTools",
     "PERSONAMEM_EVO_HF_DATASET",
