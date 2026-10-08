@@ -1,0 +1,2605 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MindMemOS Skill API</title><style>
+body{max-width:1100px;margin:40px auto;padding:0 24px;font:16px/1.6 system-ui;color:#172b2a;background:#f5f4ef}
+section{background:white;border:1px solid #dce5e1;border-radius:12px;padding:24px;margin:24px 0}
+h2{font-size:19px;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;
+text-align:left;vertical-align:top;padding:10px}pre{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+code{font-size:13px}summary{cursor:pointer}a{color:#16735f}
+</style><h1>MindMemOS Skill API</h1>
+<p>由当前服务的 OpenAPI 生成。请求约束如下；结构化写入中的嵌套类型见文末完整 Schema。</p>
+<p>项目身份由服务认证确定。任务受理返回 202；只有 succeeded 状态的 result 表示已完成。</p>
+<p><a href="target_architecture_and_api.md">架构与调用边界</a> · <a href="central_repository_api.md">中心仓示例</a></p>
+<section><h2>GET /health</h2><p>Report process availability, not business readiness.</p><p>无 JSON 请求字段。</p></section><section><h2>POST /v1/skills/register</h2><p>Register one source document under the authenticated project.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill</code></td><td>必填</td><td><pre>{
+  &quot;$ref&quot;: &quot;#/components/schemas/StructuredSkillInfo&quot;
+}</pre></td></tr><tr><td><code>alias</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Alias&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/list</h2><p>Filter families and return a bounded cursor page.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>filters</code></td><td>可选</td><td><pre>{
+  &quot;$ref&quot;: &quot;#/components/schemas/SkillFilters&quot;
+}</pre></td></tr><tr><td><code>limit</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1.0
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Limit&quot;
+}</pre></td></tr><tr><td><code>cursor</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;maxLength&quot;: 2048,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Cursor&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/show</h2><p>Return portable family metadata and the complete selected version.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Skill Id&quot;
+}</pre></td></tr><tr><td><code>skill_version_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Skill Version Id&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/commit</h2><p>Create one immutable child and conditionally select it as active.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Skill Id&quot;
+}</pre></td></tr><tr><td><code>skill</code></td><td>必填</td><td><pre>{
+  &quot;$ref&quot;: &quot;#/components/schemas/StructuredSkillInfo&quot;
+}</pre></td></tr><tr><td><code>base_version_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Base Version Id&quot;
+}</pre></td></tr><tr><td><code>active</code></td><td>可选</td><td><pre>{
+  &quot;type&quot;: &quot;boolean&quot;,
+  &quot;title&quot;: &quot;Active&quot;,
+  &quot;default&quot;: true
+}</pre></td></tr><tr><td><code>inherit_resources</code></td><td>可选</td><td><pre>{
+  &quot;type&quot;: &quot;boolean&quot;,
+  &quot;title&quot;: &quot;Inherit Resources&quot;,
+  &quot;default&quot;: false
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/history</h2><p>Return one bounded immutable version history page.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Skill Id&quot;
+}</pre></td></tr><tr><td><code>limit</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1.0
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Limit&quot;
+}</pre></td></tr><tr><td><code>offset</code></td><td>可选</td><td><pre>{
+  &quot;type&quot;: &quot;integer&quot;,
+  &quot;minimum&quot;: 0.0,
+  &quot;title&quot;: &quot;Offset&quot;,
+  &quot;default&quot;: 0
+}</pre></td></tr><tr><td><code>cursor</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Cursor&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/diff</h2><p>Compare stored versions across two families in the same project.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Skill Id&quot;
+}</pre></td></tr><tr><td><code>from_skill_version_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;From Skill Version Id&quot;
+}</pre></td></tr><tr><td><code>to_skill_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;To Skill Id&quot;
+}</pre></td></tr><tr><td><code>to_skill_version_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;To Skill Version Id&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/activate</h2><p>Select an existing owned version as the family active version.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Skill Id&quot;
+}</pre></td></tr><tr><td><code>skill_version_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Skill Version Id&quot;
+}</pre></td></tr><tr><td><code>expected_active_version_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Expected Active Version Id&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/update-info</h2><p>Replace requested family display fields without editing versions.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Skill Id&quot;
+}</pre></td></tr><tr><td><code>name</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Name&quot;
+}</pre></td></tr><tr><td><code>alias</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Alias&quot;
+}</pre></td></tr><tr><td><code>metadata</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;additionalProperties&quot;: {
+        &quot;$ref&quot;: &quot;#/components/schemas/JsonValue&quot;
+      },
+      &quot;type&quot;: &quot;object&quot;
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Metadata&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/delete</h2><p>Soft-delete a family while retaining its stored history.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Skill Id&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/version-resolve</h2><p>Resolve an exact source version or reject an ambiguous hash.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>content_hash</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Content Hash&quot;
+}</pre></td></tr><tr><td><code>skill_hash</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Skill Hash&quot;
+}</pre></td></tr><tr><td><code>skill_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Skill Id&quot;
+}</pre></td></tr><tr><td><code>skill_version_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Skill Version Id&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/skill-resolve</h2><p>Resolve one family alias or immutable version in the credential&#x27;s project.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_ref</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Skill Ref&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/trajectories/report</h2><p>Store one execution against its exact loaded Skill version.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>user_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;User Id&quot;
+}</pre></td></tr><tr><td><code>agent_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Agent Id&quot;
+}</pre></td></tr><tr><td><code>messages</code></td><td>必填</td><td><pre>{
+  &quot;items&quot;: {
+    &quot;additionalProperties&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/JsonValue&quot;
+    },
+    &quot;type&quot;: &quot;object&quot;
+  },
+  &quot;type&quot;: &quot;array&quot;,
+  &quot;minItems&quot;: 1,
+  &quot;title&quot;: &quot;Messages&quot;
+}</pre></td></tr><tr><td><code>skill_version_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Skill Version Id&quot;
+}</pre></td></tr><tr><td><code>session_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Session Id&quot;
+}</pre></td></tr><tr><td><code>started_at</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Started At&quot;
+}</pre></td></tr><tr><td><code>finished_at</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Finished At&quot;
+}</pre></td></tr><tr><td><code>status</code></td><td>可选</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Status&quot;,
+  &quot;default&quot;: &quot;completed&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/trajectories/show</h2><p>Return one project-owned physical attempt and its version binding.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>trajectory_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Trajectory Id&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/trajectories/list</h2><p>Page one family&#x27;s reported execution summaries by receipt order.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Skill Id&quot;
+}</pre></td></tr><tr><td><code>skill_version_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Skill Version Id&quot;
+}</pre></td></tr><tr><td><code>status</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Status&quot;
+}</pre></td></tr><tr><td><code>received_at_from</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Received At From&quot;
+}</pre></td></tr><tr><td><code>received_at_to</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;format&quot;: &quot;date-time&quot;
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Received At To&quot;
+}</pre></td></tr><tr><td><code>limit</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1.0
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Limit&quot;
+}</pre></td></tr><tr><td><code>cursor</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Cursor&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/algos/organize</h2><p>Publish an exact project-owned Skill collection through skill_manage.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_refs</code></td><td>必填</td><td><pre>{
+  &quot;items&quot;: {
+    &quot;type&quot;: &quot;string&quot;,
+    &quot;minLength&quot;: 1
+  },
+  &quot;type&quot;: &quot;array&quot;,
+  &quot;title&quot;: &quot;Skill Refs&quot;
+}</pre></td></tr><tr><td><code>graph_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Graph Id&quot;
+}</pre></td></tr><tr><td><code>alias</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Alias&quot;
+}</pre></td></tr><tr><td><code>commit_message</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Commit Message&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/graph-resolve</h2><p>Resolve one graph alias or immutable snapshot in the credential&#x27;s project.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>graph_ref</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Graph Ref&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/graphs/delete</h2><p>Soft-delete one graph in the credential&#x27;s project.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>graph_ref</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Graph Ref&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/graphs/list</h2><p>List organization graphs in the credential&#x27;s project.</p><p>无 JSON 请求字段。</p></section><section><h2>POST /v1/skills/graphs/snapshots</h2><p>List immutable snapshots and revisions of one project-owned graph.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>graph_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Graph Id&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/graphs/snapshot</h2><p>Read a graph snapshot without exposing another project&#x27;s versions.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>graph_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Graph Id&quot;
+}</pre></td></tr><tr><td><code>graph_version_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Graph Version Id&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/algos/recommend</h2><p>Rank exact versions in a pinned project-owned graph snapshot.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>graph_ref</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Graph Ref&quot;
+}</pre></td></tr><tr><td><code>graph_version_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Graph Version Id&quot;
+}</pre></td></tr><tr><td><code>query</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Query&quot;
+}</pre></td></tr><tr><td><code>top_k</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;integer&quot;,
+      &quot;minimum&quot;: 1.0
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Top K&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/algos/evolve</h2><p>Accept one evolution task for the authorized project.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>skill_version_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Skill Version Id&quot;
+}</pre></td></tr><tr><td><code>auto_accept</code></td><td>可选</td><td><pre>{
+  &quot;type&quot;: &quot;boolean&quot;,
+  &quot;title&quot;: &quot;Auto Accept&quot;,
+  &quot;default&quot;: true
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/tasks/show</h2><p>Read a task belonging to the authenticated project.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>task_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Task Id&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/algos/train</h2><p>Accept one authorized training request for background execution.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>algo</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Algo&quot;
+}</pre></td></tr><tr><td><code>env</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Env&quot;
+}</pre></td></tr><tr><td><code>project_id</code></td><td>可选</td><td><pre>{
+  &quot;anyOf&quot;: [
+    {
+      &quot;type&quot;: &quot;string&quot;,
+      &quot;minLength&quot;: 1
+    },
+    {
+      &quot;type&quot;: &quot;null&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Project Id&quot;
+}</pre></td></tr><tr><td><code>init_skill_version_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Init Skill Version Id&quot;
+}</pre></td></tr><tr><td><code>auto_accept</code></td><td>可选</td><td><pre>{
+  &quot;type&quot;: &quot;boolean&quot;,
+  &quot;title&quot;: &quot;Auto Accept&quot;,
+  &quot;default&quot;: true
+}</pre></td></tr><tr><td><code>work_dir</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Work Dir&quot;
+}</pre></td></tr><tr><td><code>tasks</code></td><td>必填</td><td><pre>{
+  &quot;items&quot;: {
+    &quot;additionalProperties&quot;: {
+      &quot;$ref&quot;: &quot;#/components/schemas/JsonValue&quot;
+    },
+    &quot;type&quot;: &quot;object&quot;
+  },
+  &quot;type&quot;: &quot;array&quot;,
+  &quot;minItems&quot;: 1,
+  &quot;title&quot;: &quot;Tasks&quot;
+}</pre></td></tr><tr><td><code>split</code></td><td>必填</td><td><pre>{
+  &quot;$ref&quot;: &quot;#/components/schemas/TrainingSplit&quot;
+}</pre></td></tr></tbody></table></section><section><h2>POST /v1/skills/tasks/progress</h2><p>Read progress boundaries chosen by the training algorithm.</p><table><thead><tr><th>字段</th><th>要求</th><th>约束</th></tr></thead><tbody><tr><td><code>task_id</code></td><td>必填</td><td><pre>{
+  &quot;type&quot;: &quot;string&quot;,
+  &quot;minLength&quot;: 1,
+  &quot;title&quot;: &quot;Task Id&quot;
+}</pre></td></tr></tbody></table></section><details><summary>完整 OpenAPI Schema</summary><pre>{
+  &quot;openapi&quot;: &quot;3.1.0&quot;,
+  &quot;info&quot;: {
+    &quot;title&quot;: &quot;MindMemOS Skill&quot;,
+    &quot;version&quot;: &quot;0.1.0&quot;
+  },
+  &quot;paths&quot;: {
+    &quot;/health&quot;: {
+      &quot;get&quot;: {
+        &quot;summary&quot;: &quot;Health&quot;,
+        &quot;description&quot;: &quot;Report process availability, not business readiness.&quot;,
+        &quot;operationId&quot;: &quot;health_health_get&quot;,
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;additionalProperties&quot;: {
+                    &quot;type&quot;: &quot;string&quot;
+                  },
+                  &quot;type&quot;: &quot;object&quot;,
+                  &quot;title&quot;: &quot;Response Health Health Get&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/register&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Register&quot;,
+        &quot;description&quot;: &quot;Register one source document under the authenticated project.&quot;,
+        &quot;operationId&quot;: &quot;register_v1_skills_register_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/RegisterHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;201&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/list&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;List Skills&quot;,
+        &quot;description&quot;: &quot;Filter families and return a bounded cursor page.&quot;,
+        &quot;operationId&quot;: &quot;list_skills_v1_skills_list_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/ListHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/show&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Show&quot;,
+        &quot;description&quot;: &quot;Return portable family metadata and the complete selected version.&quot;,
+        &quot;operationId&quot;: &quot;show_v1_skills_show_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/ShowHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/commit&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Commit&quot;,
+        &quot;description&quot;: &quot;Create one immutable child and conditionally select it as active.&quot;,
+        &quot;operationId&quot;: &quot;commit_v1_skills_commit_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/CommitHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;201&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/history&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;History&quot;,
+        &quot;description&quot;: &quot;Return one bounded immutable version history page.&quot;,
+        &quot;operationId&quot;: &quot;history_v1_skills_history_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/HistoryHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/diff&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Diff&quot;,
+        &quot;description&quot;: &quot;Compare stored versions across two families in the same project.&quot;,
+        &quot;operationId&quot;: &quot;diff_v1_skills_diff_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/DiffHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/activate&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Activate&quot;,
+        &quot;description&quot;: &quot;Select an existing owned version as the family active version.&quot;,
+        &quot;operationId&quot;: &quot;activate_v1_skills_activate_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/ActivateHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/update-info&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Update Info&quot;,
+        &quot;description&quot;: &quot;Replace requested family display fields without editing versions.&quot;,
+        &quot;operationId&quot;: &quot;update_info_v1_skills_update_info_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/UpdateInfoHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/delete&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Delete&quot;,
+        &quot;description&quot;: &quot;Soft-delete a family while retaining its stored history.&quot;,
+        &quot;operationId&quot;: &quot;delete_v1_skills_delete_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/DeleteHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/version-resolve&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Resolve Version&quot;,
+        &quot;description&quot;: &quot;Resolve an exact source version or reject an ambiguous hash.&quot;,
+        &quot;operationId&quot;: &quot;resolve_version_v1_skills_version_resolve_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/VersionResolveHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/skill-resolve&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Skill Resolve&quot;,
+        &quot;description&quot;: &quot;Resolve one family alias or immutable version in the credential&#x27;s project.&quot;,
+        &quot;operationId&quot;: &quot;skill_resolve_v1_skills_skill_resolve_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/SkillResolveHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/trajectories/report&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Report Trajectory&quot;,
+        &quot;description&quot;: &quot;Store one execution against its exact loaded Skill version.&quot;,
+        &quot;operationId&quot;: &quot;report_trajectory_v1_skills_trajectories_report_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/TrajectoryReportHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;201&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/trajectories/show&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Show Trajectory&quot;,
+        &quot;description&quot;: &quot;Return one project-owned physical attempt and its version binding.&quot;,
+        &quot;operationId&quot;: &quot;show_trajectory_v1_skills_trajectories_show_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/TrajectoryShowHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/trajectories/list&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;List Trajectories&quot;,
+        &quot;description&quot;: &quot;Page one family&#x27;s reported execution summaries by receipt order.&quot;,
+        &quot;operationId&quot;: &quot;list_trajectories_v1_skills_trajectories_list_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/TrajectoryListHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/algos/organize&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Organize&quot;,
+        &quot;description&quot;: &quot;Publish an exact project-owned Skill collection through skill_manage.&quot;,
+        &quot;operationId&quot;: &quot;organize_v1_skills_algos_organize_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/OrganizeHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/graph-resolve&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Graph Resolve&quot;,
+        &quot;description&quot;: &quot;Resolve one graph alias or immutable snapshot in the credential&#x27;s project.&quot;,
+        &quot;operationId&quot;: &quot;graph_resolve_v1_skills_graph_resolve_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/GraphResolveHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/graphs/delete&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Delete Graph&quot;,
+        &quot;description&quot;: &quot;Soft-delete one graph in the credential&#x27;s project.&quot;,
+        &quot;operationId&quot;: &quot;delete_graph_v1_skills_graphs_delete_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/GraphResolveHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/graphs/list&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;List Graphs&quot;,
+        &quot;description&quot;: &quot;List organization graphs in the credential&#x27;s project.&quot;,
+        &quot;operationId&quot;: &quot;list_graphs_v1_skills_graphs_list_post&quot;,
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/graphs/snapshots&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Graph Snapshots&quot;,
+        &quot;description&quot;: &quot;List immutable snapshots and revisions of one project-owned graph.&quot;,
+        &quot;operationId&quot;: &quot;graph_snapshots_v1_skills_graphs_snapshots_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/GraphSnapshotsHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/graphs/snapshot&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Graph Snapshot&quot;,
+        &quot;description&quot;: &quot;Read a graph snapshot without exposing another project&#x27;s versions.&quot;,
+        &quot;operationId&quot;: &quot;graph_snapshot_v1_skills_graphs_snapshot_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/GraphSnapshotHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/algos/recommend&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Recommend&quot;,
+        &quot;description&quot;: &quot;Rank exact versions in a pinned project-owned graph snapshot.&quot;,
+        &quot;operationId&quot;: &quot;recommend_v1_skills_algos_recommend_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/RecommendHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/algos/evolve&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Evolve&quot;,
+        &quot;description&quot;: &quot;Accept one evolution task for the authorized project.&quot;,
+        &quot;operationId&quot;: &quot;evolve_v1_skills_algos_evolve_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/EvolveHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;202&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/tasks/show&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Show Task&quot;,
+        &quot;description&quot;: &quot;Read a task belonging to the authenticated project.&quot;,
+        &quot;operationId&quot;: &quot;show_task_v1_skills_tasks_show_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/TaskShowHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/algos/train&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Train Async&quot;,
+        &quot;description&quot;: &quot;Accept one authorized training request for background execution.&quot;,
+        &quot;operationId&quot;: &quot;train_async_v1_skills_algos_train_post&quot;,
+        &quot;requestBody&quot;: {
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/TrainingHttpRequest&quot;
+              }
+            }
+          },
+          &quot;required&quot;: true
+        },
+        &quot;responses&quot;: {
+          &quot;202&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    &quot;/v1/skills/tasks/progress&quot;: {
+      &quot;post&quot;: {
+        &quot;summary&quot;: &quot;Task Progress&quot;,
+        &quot;description&quot;: &quot;Read progress boundaries chosen by the training algorithm.&quot;,
+        &quot;operationId&quot;: &quot;task_progress_v1_skills_tasks_progress_post&quot;,
+        &quot;parameters&quot;: [
+          {
+            &quot;name&quot;: &quot;after&quot;,
+            &quot;in&quot;: &quot;query&quot;,
+            &quot;required&quot;: false,
+            &quot;schema&quot;: {
+              &quot;type&quot;: &quot;integer&quot;,
+              &quot;default&quot;: 0,
+              &quot;title&quot;: &quot;After&quot;
+            }
+          }
+        ],
+        &quot;requestBody&quot;: {
+          &quot;required&quot;: true,
+          &quot;content&quot;: {
+            &quot;application/json&quot;: {
+              &quot;schema&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/TaskShowHttpRequest&quot;
+              }
+            }
+          }
+        },
+        &quot;responses&quot;: {
+          &quot;200&quot;: {
+            &quot;description&quot;: &quot;Successful Response&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {}
+              }
+            }
+          },
+          &quot;422&quot;: {
+            &quot;description&quot;: &quot;Validation Error&quot;,
+            &quot;content&quot;: {
+              &quot;application/json&quot;: {
+                &quot;schema&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/HTTPValidationError&quot;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  &quot;components&quot;: {
+    &quot;schemas&quot;: {
+      &quot;ActivateHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Skill Id&quot;
+          },
+          &quot;skill_version_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Skill Version Id&quot;
+          },
+          &quot;expected_active_version_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Expected Active Version Id&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill_version_id&quot;
+        ],
+        &quot;title&quot;: &quot;ActivateHttpRequest&quot;,
+        &quot;description&quot;: &quot;Select a previously saved version as active.&quot;
+      },
+      &quot;CommitHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Skill Id&quot;
+          },
+          &quot;skill&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/StructuredSkillInfo&quot;
+          },
+          &quot;base_version_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Base Version Id&quot;
+          },
+          &quot;active&quot;: {
+            &quot;type&quot;: &quot;boolean&quot;,
+            &quot;title&quot;: &quot;Active&quot;,
+            &quot;default&quot;: true
+          },
+          &quot;inherit_resources&quot;: {
+            &quot;type&quot;: &quot;boolean&quot;,
+            &quot;title&quot;: &quot;Inherit Resources&quot;,
+            &quot;default&quot;: false
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill_id&quot;,
+          &quot;skill&quot;
+        ],
+        &quot;title&quot;: &quot;CommitHttpRequest&quot;,
+        &quot;description&quot;: &quot;Publish complete structured source content.&quot;
+      },
+      &quot;DeleteHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Skill Id&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill_id&quot;
+        ],
+        &quot;title&quot;: &quot;DeleteHttpRequest&quot;,
+        &quot;description&quot;: &quot;Delete one unreferenced Skill family.&quot;
+      },
+      &quot;DiffHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Skill Id&quot;
+          },
+          &quot;from_skill_version_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;From Skill Version Id&quot;
+          },
+          &quot;to_skill_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;To Skill Id&quot;
+          },
+          &quot;to_skill_version_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;To Skill Version Id&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill_id&quot;,
+          &quot;to_skill_version_id&quot;
+        ],
+        &quot;title&quot;: &quot;DiffHttpRequest&quot;,
+        &quot;description&quot;: &quot;Select two owned versions in the same authorized project.&quot;
+      },
+      &quot;EvolveHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_version_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Skill Version Id&quot;
+          },
+          &quot;auto_accept&quot;: {
+            &quot;type&quot;: &quot;boolean&quot;,
+            &quot;title&quot;: &quot;Auto Accept&quot;,
+            &quot;default&quot;: true
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill_version_id&quot;
+        ],
+        &quot;title&quot;: &quot;EvolveHttpRequest&quot;,
+        &quot;description&quot;: &quot;Queue evolution from one exact stored version.&quot;
+      },
+      &quot;GraphResolveHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;graph_ref&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Graph Ref&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;graph_ref&quot;
+        ],
+        &quot;title&quot;: &quot;GraphResolveHttpRequest&quot;,
+        &quot;description&quot;: &quot;Resolve a project-scoped graph ID, alias, or unique ID prefix.&quot;
+      },
+      &quot;GraphSnapshotHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;graph_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Graph Id&quot;
+          },
+          &quot;graph_version_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Graph Version Id&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;graph_id&quot;,
+          &quot;graph_version_id&quot;
+        ],
+        &quot;title&quot;: &quot;GraphSnapshotHttpRequest&quot;,
+        &quot;description&quot;: &quot;Select one immutable snapshot of a project-owned graph.&quot;
+      },
+      &quot;GraphSnapshotsHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;graph_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Graph Id&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;graph_id&quot;
+        ],
+        &quot;title&quot;: &quot;GraphSnapshotsHttpRequest&quot;,
+        &quot;description&quot;: &quot;Select one graph within the authenticated project.&quot;
+      },
+      &quot;HTTPValidationError&quot;: {
+        &quot;properties&quot;: {
+          &quot;detail&quot;: {
+            &quot;items&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/ValidationError&quot;
+            },
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;title&quot;: &quot;Detail&quot;
+          }
+        },
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;title&quot;: &quot;HTTPValidationError&quot;
+      },
+      &quot;HistoryHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Skill Id&quot;
+          },
+          &quot;limit&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;integer&quot;,
+                &quot;minimum&quot;: 1.0
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Limit&quot;
+          },
+          &quot;offset&quot;: {
+            &quot;type&quot;: &quot;integer&quot;,
+            &quot;minimum&quot;: 0.0,
+            &quot;title&quot;: &quot;Offset&quot;,
+            &quot;default&quot;: 0
+          },
+          &quot;cursor&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Cursor&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill_id&quot;
+        ],
+        &quot;title&quot;: &quot;HistoryHttpRequest&quot;,
+        &quot;description&quot;: &quot;Page the immutable version history of one family.&quot;
+      },
+      &quot;JsonValue&quot;: {},
+      &quot;ListHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;filters&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/SkillFilters&quot;
+          },
+          &quot;limit&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;integer&quot;,
+                &quot;minimum&quot;: 1.0
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Limit&quot;
+          },
+          &quot;cursor&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;maxLength&quot;: 2048,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Cursor&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;title&quot;: &quot;ListHttpRequest&quot;,
+        &quot;description&quot;: &quot;Filter and continue a stable Skill family cursor within one project.&quot;
+      },
+      &quot;OrganizeHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_refs&quot;: {
+            &quot;items&quot;: {
+              &quot;type&quot;: &quot;string&quot;,
+              &quot;minLength&quot;: 1
+            },
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;title&quot;: &quot;Skill Refs&quot;
+          },
+          &quot;graph_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Graph Id&quot;
+          },
+          &quot;alias&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Alias&quot;
+          },
+          &quot;commit_message&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Commit Message&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill_refs&quot;
+        ],
+        &quot;title&quot;: &quot;OrganizeHttpRequest&quot;,
+        &quot;description&quot;: &quot;Organize explicit Skill references into a new or existing graph.&quot;
+      },
+      &quot;RecommendHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;graph_ref&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Graph Ref&quot;
+          },
+          &quot;graph_version_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Graph Version Id&quot;
+          },
+          &quot;query&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Query&quot;
+          },
+          &quot;top_k&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;integer&quot;,
+                &quot;minimum&quot;: 1.0
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Top K&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;graph_ref&quot;,
+          &quot;query&quot;
+        ],
+        &quot;title&quot;: &quot;RecommendHttpRequest&quot;,
+        &quot;description&quot;: &quot;Recommend Skill versions from one immutable published graph.&quot;
+      },
+      &quot;RegisterHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/StructuredSkillInfo&quot;
+          },
+          &quot;alias&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Alias&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill&quot;
+        ],
+        &quot;title&quot;: &quot;RegisterHttpRequest&quot;,
+        &quot;description&quot;: &quot;Register portable source content without server-side file access.&quot;
+      },
+      &quot;ShowHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Skill Id&quot;
+          },
+          &quot;skill_version_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Skill Version Id&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;title&quot;: &quot;ShowHttpRequest&quot;,
+        &quot;description&quot;: &quot;Select one family and optionally one historical version.&quot;
+      },
+      &quot;SkillFilters&quot;: {
+        &quot;properties&quot;: {
+          &quot;name&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Name&quot;
+          },
+          &quot;alias&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Alias&quot;
+          },
+          &quot;agent_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Agent Id&quot;
+          },
+          &quot;user_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;User Id&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;title&quot;: &quot;SkillFilters&quot;,
+        &quot;description&quot;: &quot;Optional Skill family fields and trajectory actor filters.&quot;
+      },
+      &quot;SkillResolveHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_ref&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Skill Ref&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill_ref&quot;
+        ],
+        &quot;title&quot;: &quot;SkillResolveHttpRequest&quot;,
+        &quot;description&quot;: &quot;Select a current or immutable Skill version from one reference.&quot;
+      },
+      &quot;StructuredSkillInfo&quot;: {
+        &quot;properties&quot;: {
+          &quot;metadata&quot;: {
+            &quot;additionalProperties&quot;: {
+              &quot;$ref&quot;: &quot;#/components/schemas/JsonValue&quot;
+            },
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;title&quot;: &quot;Metadata&quot;
+          },
+          &quot;commit_message&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Commit Message&quot;
+          },
+          &quot;commit_version&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;maxLength&quot;: 96,
+                &quot;pattern&quot;: &quot;^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Commit Version&quot;
+          },
+          &quot;version_bump&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;enum&quot;: [
+              &quot;patch&quot;,
+              &quot;minor&quot;,
+              &quot;major&quot;
+            ],
+            &quot;title&quot;: &quot;Version Bump&quot;,
+            &quot;default&quot;: &quot;patch&quot;
+          },
+          &quot;commit_source&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;enum&quot;: [
+              &quot;user&quot;,
+              &quot;algo&quot;
+            ],
+            &quot;title&quot;: &quot;Commit Source&quot;,
+            &quot;default&quot;: &quot;user&quot;
+          },
+          &quot;content&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;title&quot;: &quot;Content&quot;
+          },
+          &quot;resources&quot;: {
+            &quot;additionalProperties&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;title&quot;: &quot;Resources&quot;
+          },
+          &quot;name&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Name&quot;
+          },
+          &quot;description&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Description&quot;
+          },
+          &quot;standard_format&quot;: {
+            &quot;type&quot;: &quot;boolean&quot;,
+            &quot;title&quot;: &quot;Standard Format&quot;,
+            &quot;default&quot;: true
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;content&quot;
+        ],
+        &quot;title&quot;: &quot;StructuredSkillInfo&quot;,
+        &quot;description&quot;: &quot;Complete portable source content for registration or a version commit.&quot;
+      },
+      &quot;TaskShowHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;task_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Task Id&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;task_id&quot;
+        ],
+        &quot;title&quot;: &quot;TaskShowHttpRequest&quot;,
+        &quot;description&quot;: &quot;Read one project-scoped asynchronous business task.&quot;
+      },
+      &quot;TrainingHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;algo&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Algo&quot;
+          },
+          &quot;env&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Env&quot;
+          },
+          &quot;project_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Project Id&quot;
+          },
+          &quot;init_skill_version_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Init Skill Version Id&quot;
+          },
+          &quot;auto_accept&quot;: {
+            &quot;type&quot;: &quot;boolean&quot;,
+            &quot;title&quot;: &quot;Auto Accept&quot;,
+            &quot;default&quot;: true
+          },
+          &quot;work_dir&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Work Dir&quot;
+          },
+          &quot;tasks&quot;: {
+            &quot;items&quot;: {
+              &quot;additionalProperties&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/JsonValue&quot;
+              },
+              &quot;type&quot;: &quot;object&quot;
+            },
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;minItems&quot;: 1,
+            &quot;title&quot;: &quot;Tasks&quot;
+          },
+          &quot;split&quot;: {
+            &quot;$ref&quot;: &quot;#/components/schemas/TrainingSplit&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;algo&quot;,
+          &quot;env&quot;,
+          &quot;init_skill_version_id&quot;,
+          &quot;work_dir&quot;,
+          &quot;tasks&quot;,
+          &quot;split&quot;
+        ],
+        &quot;title&quot;: &quot;TrainingHttpRequest&quot;,
+        &quot;description&quot;: &quot;Accept serialized samples before the selected environment restores their types.&quot;
+      },
+      &quot;TrainingSplit&quot;: {
+        &quot;properties&quot;: {
+          &quot;train&quot;: {
+            &quot;items&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;minItems&quot;: 1,
+            &quot;title&quot;: &quot;Train&quot;
+          },
+          &quot;val&quot;: {
+            &quot;items&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;title&quot;: &quot;Val&quot;
+          },
+          &quot;test&quot;: {
+            &quot;items&quot;: {
+              &quot;type&quot;: &quot;string&quot;
+            },
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;title&quot;: &quot;Test&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;train&quot;
+        ],
+        &quot;title&quot;: &quot;TrainingSplit&quot;,
+        &quot;description&quot;: &quot;Assign task IDs to disjoint training, validation, and test sets.&quot;
+      },
+      &quot;TrajectoryListHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Skill Id&quot;
+          },
+          &quot;skill_version_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Skill Version Id&quot;
+          },
+          &quot;status&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Status&quot;
+          },
+          &quot;received_at_from&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;format&quot;: &quot;date-time&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Received At From&quot;
+          },
+          &quot;received_at_to&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;format&quot;: &quot;date-time&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Received At To&quot;
+          },
+          &quot;limit&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;integer&quot;,
+                &quot;minimum&quot;: 1.0
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Limit&quot;
+          },
+          &quot;cursor&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Cursor&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill_id&quot;
+        ],
+        &quot;title&quot;: &quot;TrajectoryListHttpRequest&quot;,
+        &quot;description&quot;: &quot;Page reported trajectories bound to one Skill family.&quot;
+      },
+      &quot;TrajectoryReportHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;user_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;User Id&quot;
+          },
+          &quot;agent_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Agent Id&quot;
+          },
+          &quot;messages&quot;: {
+            &quot;items&quot;: {
+              &quot;additionalProperties&quot;: {
+                &quot;$ref&quot;: &quot;#/components/schemas/JsonValue&quot;
+              },
+              &quot;type&quot;: &quot;object&quot;
+            },
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;minItems&quot;: 1,
+            &quot;title&quot;: &quot;Messages&quot;
+          },
+          &quot;skill_version_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Skill Version Id&quot;
+          },
+          &quot;session_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Session Id&quot;
+          },
+          &quot;started_at&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;format&quot;: &quot;date-time&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Started At&quot;
+          },
+          &quot;finished_at&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;format&quot;: &quot;date-time&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Finished At&quot;
+          },
+          &quot;status&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Status&quot;,
+            &quot;default&quot;: &quot;completed&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;user_id&quot;,
+          &quot;agent_id&quot;,
+          &quot;messages&quot;,
+          &quot;skill_version_id&quot;
+        ],
+        &quot;title&quot;: &quot;TrajectoryReportHttpRequest&quot;,
+        &quot;description&quot;: &quot;Report one actual Skill version used in an Agent execution.&quot;
+      },
+      &quot;TrajectoryShowHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;trajectory_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Trajectory Id&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;trajectory_id&quot;
+        ],
+        &quot;title&quot;: &quot;TrajectoryShowHttpRequest&quot;,
+        &quot;description&quot;: &quot;Read one stored trajectory report.&quot;
+      },
+      &quot;UpdateInfoHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;skill_id&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;minLength&quot;: 1,
+            &quot;title&quot;: &quot;Skill Id&quot;
+          },
+          &quot;name&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Name&quot;
+          },
+          &quot;alias&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Alias&quot;
+          },
+          &quot;metadata&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;additionalProperties&quot;: {
+                  &quot;$ref&quot;: &quot;#/components/schemas/JsonValue&quot;
+                },
+                &quot;type&quot;: &quot;object&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Metadata&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;skill_id&quot;
+        ],
+        &quot;title&quot;: &quot;UpdateInfoHttpRequest&quot;,
+        &quot;description&quot;: &quot;Change family display fields without creating a source version.&quot;
+      },
+      &quot;ValidationError&quot;: {
+        &quot;properties&quot;: {
+          &quot;loc&quot;: {
+            &quot;items&quot;: {
+              &quot;anyOf&quot;: [
+                {
+                  &quot;type&quot;: &quot;string&quot;
+                },
+                {
+                  &quot;type&quot;: &quot;integer&quot;
+                }
+              ]
+            },
+            &quot;type&quot;: &quot;array&quot;,
+            &quot;title&quot;: &quot;Location&quot;
+          },
+          &quot;msg&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;title&quot;: &quot;Message&quot;
+          },
+          &quot;type&quot;: {
+            &quot;type&quot;: &quot;string&quot;,
+            &quot;title&quot;: &quot;Error Type&quot;
+          },
+          &quot;input&quot;: {
+            &quot;title&quot;: &quot;Input&quot;
+          },
+          &quot;ctx&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;title&quot;: &quot;Context&quot;
+          }
+        },
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;required&quot;: [
+          &quot;loc&quot;,
+          &quot;msg&quot;,
+          &quot;type&quot;
+        ],
+        &quot;title&quot;: &quot;ValidationError&quot;
+      },
+      &quot;VersionResolveHttpRequest&quot;: {
+        &quot;properties&quot;: {
+          &quot;content_hash&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Content Hash&quot;
+          },
+          &quot;skill_hash&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;pattern&quot;: &quot;^[0-9a-f]{64}$&quot;
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Skill Hash&quot;
+          },
+          &quot;skill_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Skill Id&quot;
+          },
+          &quot;skill_version_id&quot;: {
+            &quot;anyOf&quot;: [
+              {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;minLength&quot;: 1
+              },
+              {
+                &quot;type&quot;: &quot;null&quot;
+              }
+            ],
+            &quot;title&quot;: &quot;Skill Version Id&quot;
+          }
+        },
+        &quot;additionalProperties&quot;: false,
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;title&quot;: &quot;VersionResolveHttpRequest&quot;,
+        &quot;description&quot;: &quot;Resolve a source hash only when the matching version is unambiguous.&quot;
+      }
+    }
+  }
+}</pre></details></html>

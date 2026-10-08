@@ -1,4 +1,4 @@
-"""Assemble the Skill service from explicit configuration or local defaults."""
+"""Assemble the Skill service from explicit deployment configuration."""
 
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
@@ -7,8 +7,8 @@ from typing import Any
 
 from filelock import AsyncFileLock
 
-from ..config.config import ImplementationConfig, ServiceConfig
-from ..config.loader import resolve_service_config, validate_service_config
+from ..config.config import FastAPIConfig, ImplementationConfig, ServiceConfig, SkillConfig
+from ..config.loader import read_skill_config, resolve_service_config, validate_service_config
 from ..infra import Infrastructure
 from ..infra.database import Database, Scope
 from ..infra.task_manager import LocalTaskManager
@@ -21,42 +21,51 @@ from .service import SkillService
 
 
 async def create_service(
-    config: ServiceConfig | str | Path | None = None,
+    config: SkillConfig | ServiceConfig | str | Path,
     *,
-    home: str | Path | None = None,
-    database_path: str | Path | None = None,
-    project_id: str | None = None,
     project_authorizer: Callable[[object, str], Scope | Awaitable[Scope]] | None = None,
 ) -> SkillService:
-    """Assemble one service, using local defaults only when config is omitted.
+    """Assemble and initialize resources from explicit deployment configuration.
 
     Args:
-        config: Explicit configuration or YAML path; otherwise load home/service.yaml or local defaults.
-        home: Local root; omitted local roots use the shared HOME resolver.
-        database_path: Optional local SQLite override, not persisted.
-        project_id: Optional local scope override, never a cloud authentication claim.
-        project_authorizer: Host-supplied project access check for explicit cloud configurations.
+        config: Complete YAML or SkillConfig; ServiceConfig constructs unbound resources
+            for a trusted host that supplies request identity and project authorization.
+        project_authorizer: Host authorization callback for authenticated requests.
 
     Returns:
-        A service with all configured storage initialized. Local defaults bind a
-        project scope; explicit configurations require project IDs on requests.
-        The caller must close the service.
+        Initialized service owned by the caller. Only none mode binds a default project.
 
     Raises:
-        ValueError: Explicit configuration is mixed with local overrides, or configuration is invalid.
-        OSError: A configuration or local storage path cannot be accessed.
+        ValueError: Configuration or authentication settings are inconsistent.
+        OSError: Configuration or storage files cannot be accessed.
     """
-    resolved, scope, local_root = resolve_service_config(
-        config, home=home, database_path=database_path, project_id=project_id
-    )
+    policy = None
+    if isinstance(config, ServiceConfig):
+        resources = config
+    else:
+        deployment = (
+            SkillConfig.model_validate(config.model_dump(exclude_unset=True))
+            if isinstance(config, SkillConfig)
+            else read_skill_config(config)
+        )
+        policy = deployment.fastapi
+        resources = deployment.service
+    resolved = resolve_service_config(resources)
+    scope = policy.auth.default_project_id if policy is not None and policy.auth.mode == "none" else None
     if scope is not None and project_authorizer is not None:
-        raise ValueError("Local project binding cannot be combined with a cloud project authorizer")
+        raise ValueError("Unauthenticated project binding cannot be combined with a project authorizer")
+    if policy is not None and policy.auth.mode != "none" and project_authorizer is None:
+        from .auth import authorize_project
 
-    service = await _assemble_service(resolved, local_project_id=scope, project_authorizer=project_authorizer)
+        project_authorizer = authorize_project
+    resolved.home.mkdir(parents=True, exist_ok=True)
+
+    service = await _assemble_service(
+        resolved, default_project_id=scope, project_authorizer=project_authorizer, api_config=policy
+    )
     try:
         async with AsyncExitStack() as startup:
-            if local_root is not None:
-                await startup.enter_async_context(AsyncFileLock(str(local_root / ".workspace.lock")))
+            await startup.enter_async_context(AsyncFileLock(str(resolved.home / ".storage.lock")))
             await service.initialize_storage()
             manager = service.task_manager
             if isinstance(manager, KafkaTaskManager):
@@ -70,7 +79,8 @@ async def create_service(
 async def _assemble_service(
     config: ServiceConfig,
     *,
-    local_project_id: str | None,
+    default_project_id: str | None,
+    api_config: FastAPIConfig | None,
     project_authorizer: Callable[[object, str], Scope | Awaitable[Scope]] | None = None,
 ) -> SkillService:
     """Validate definitions, build one store, and inject it into independent pipelines."""
@@ -139,17 +149,21 @@ async def _assemble_service(
             repository=repository,
             manage_pipeline=manage,
             training_pipelines=training,
-            training_environments=config.training_environments,
             evolution_pipelines=evolution,
             observability=observability,
-            local_project_id=local_project_id,
+            default_project_id=default_project_id,
+            api_config=api_config,
             persistence=persistence,
             project_authorizer=project_authorizer,
             disabled_services=config.disabled_services,
         )
         if config.task_manager is not None and "tasks" not in disabled:
             if config.task_manager.mode == "local":
-                manager = LocalTaskManager(service.execute_task)
+                manager = LocalTaskManager(
+                    service.execute_task,
+                    max_concurrency=config.task_manager.max_concurrency,
+                    max_buffered=config.task_manager.max_buffered,
+                )
             else:
                 manager = KafkaTaskManager(
                     store=TaskDataService(database),
@@ -158,6 +172,7 @@ async def _assemble_service(
                     group_id=config.task_manager.group_id,
                     handler=service.execute_task if config.task_manager.worker else None,
                     max_concurrency=config.task_manager.max_concurrency,
+                    max_buffered=config.task_manager.max_buffered,
                     scan_interval_seconds=config.task_manager.scan_interval_seconds,
                 )
             service.attach_task_manager(manager)

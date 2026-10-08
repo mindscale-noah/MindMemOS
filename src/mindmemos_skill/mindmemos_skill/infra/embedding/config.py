@@ -1,12 +1,12 @@
 """Explicit OpenAI-compatible embedding connection and batching settings."""
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OpenAIEmbeddingConfig(BaseModel):
     """Configure embeddings without selecting an implicit model or endpoint."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid", frozen=True, hide_input_in_errors=True)
     """Reject unknown settings and omit credentials from validation errors."""
 
     model: str = Field(min_length=1)
@@ -15,7 +15,7 @@ class OpenAIEmbeddingConfig(BaseModel):
     base_url: str = Field(min_length=1)
     """Explicit OpenAI-compatible API base URL."""
 
-    api_key: SecretStr | None = Field(default=None, repr=False)
+    api_key: str | None = Field(default=None)
     """Provider credential; None supports unauthenticated local endpoints."""
 
     dimensions: int = Field(gt=0, strict=True)

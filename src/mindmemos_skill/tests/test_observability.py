@@ -8,8 +8,9 @@ import pytest
 from mindmemos_skill.agents.buitin_agents.openai_chat.agent import OpenAIChatAgent
 from mindmemos_skill.agents.buitin_agents.openai_chat.config import OpenAIChatConfig
 from mindmemos_skill.agents.typing import AgentResult
-from mindmemos_skill.api.config import ServiceConfig
+from mindmemos_skill.api.typing import AlgoSkillEvolveResult, TrainingRequest
 from mindmemos_skill.common.concurrency import map_with_context
+from mindmemos_skill.config.config import ServiceConfig
 from mindmemos_skill.envs import Task
 from mindmemos_skill.envs.data import DataSample, RewardData
 from mindmemos_skill.infra.database import SQLiteConfig, SQLiteDatabase
@@ -17,8 +18,7 @@ from mindmemos_skill.logging import get_logger, log_function
 from mindmemos_skill.persistence.observability import AlgorithmAuditPersistence, get_log_context
 from mindmemos_skill.persistence.observability.constants import OBSERVABILITY_LOGS_TABLE, OBSERVABILITY_SPANS_TABLE
 from mindmemos_skill.pipelines import Pipeline, TrainingPipeline
-from mindmemos_skill.pipelines.train import training_run_id
-from mindmemos_skill.pipelines.typing import SkillPipelineResult, TrainingRequest
+from mindmemos_skill.pipelines.builtin_pipelines.training.training import training_run_id
 from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.sdk._logs import LogRecordProcessor
@@ -26,6 +26,8 @@ from opentelemetry.sdk.trace import SpanProcessor
 from pydantic import BaseModel
 
 from mindmemos_skill import create_service
+
+from .service_config import deployment_config
 
 
 class FakeTransport:
@@ -299,12 +301,12 @@ def test_invalid_observability_configuration_is_rejected():
     """The service accepts one supported backend and explicit capture levels."""
     with pytest.raises(ValueError):
         ServiceConfig.model_validate(
-            {"observability": {"backend": {"class_name": "sqlite"}, "capture_level": "verbose"}}
+            {"home": ".", "observability": {"backend": {"class_name": "sqlite"}, "capture_level": "verbose"}}
         )
     with pytest.raises(ValueError, match="requires backend or otlp"):
-        ServiceConfig.model_validate({"observability": {}})
+        ServiceConfig.model_validate({"home": ".", "observability": {}})
     with pytest.raises(ValueError):
-        ServiceConfig.model_validate({"observability": {"otlp": {"endpoint": "ftp://localhost:4318"}}})
+        ServiceConfig.model_validate({"home": ".", "observability": {"otlp": {"endpoint": "ftp://localhost:4318"}}})
 
 
 @pytest.mark.parametrize("with_database", [False, True])
@@ -379,7 +381,7 @@ def test_otlp_exports_logs_and_spans_with_optional_sql_audit(tmp_path, with_data
 async def test_service_accepts_otlp_without_audit_database():
     """Build and close an OTLP-only service without creating SQL audit storage."""
     service = await create_service(
-        ServiceConfig.model_validate({"observability": {"otlp": {"endpoint": "http://127.0.0.1:4318"}}})
+        ServiceConfig.model_validate({"home": ".", "observability": {"otlp": {"endpoint": "http://127.0.0.1:4318"}}})
     )
     try:
         assert service._observability.database is None
@@ -400,15 +402,18 @@ async def test_service_emits_otel_spans_and_logs_without_database(tmp_path, monk
     class ProbeTraining(TrainingPipeline[ProbeConfig]):
         config_type = ProbeConfig
 
-        async def train(self, request):
+        async def train(self, request, *, env, adapter=None, reporter=None):
             """Invoke an Agent inside the always-active training context."""
             config = OpenAIChatConfig(model="offline")
             OpenAIChatAgent(config, model=FakeTransport(config)).run(messages=[{"role": "user", "content": "task"}])
-            return SkillPipelineResult(
-                project_id=request.project_id,
+            return AlgoSkillEvolveResult(
                 skill_id="skill",
-                base_version_id=request.base_version_id,
+                base_version_id=request.init_skill_version_id,
                 version_id="v1",
+                content="Output",
+                resources={},
+                content_hash="hash",
+                skill_hash="hash",
                 run_id=training_run_id(request.project_id, request.work_dir),
             )
 
@@ -447,8 +452,12 @@ async def test_service_emits_otel_spans_and_logs_without_database(tmp_path, monk
             return True
 
     service = await create_service(
-        ServiceConfig.model_validate(
-            {"local_project_id": "project", "training_pipelines": {"probe": {"class_name": "otel_probe"}}}
+        deployment_config(
+            {
+                "home": tmp_path / "home",
+                "training_pipelines": {"probe": {"class_name": "otel_probe"}},
+            },
+            "project",
         )
     )
     try:
@@ -458,13 +467,14 @@ async def test_service_emits_otel_spans_and_logs_without_database(tmp_path, monk
         audit.telemetry.logger_provider.add_log_record_processor(CaptureLogs())
         request = TrainingRequest(
             project_id="project",
-            pipeline="probe",
-            base_version_id="v0",
+            algo="probe",
+            env={"class_name": "searchqa", "config": {"agent": {"model": "offline"}}},
+            init_skill_version_id="v0",
             work_dir=str(tmp_path / "run"),
             tasks=[DataSample(task=Task(id="one", instruction="Save"), reward_data=RewardData())],
             split={"train": ["one"]},
         )
-        await service.auto_train_skill(request)
+        await service.run_training(request)
         assert span_names == ["algorithm.agent.call", "algorithm.train"]
         assert log_names == ["algorithm.run.started", "agent.call", "algorithm.run.completed"]
     finally:
@@ -484,26 +494,28 @@ async def test_service_uses_one_global_observability_backend(tmp_path, monkeypat
     class ProbeTraining(TrainingPipeline[ProbeConfig]):
         config_type = ProbeConfig
 
-        async def train(self, request):
+        async def train(self, request, *, env, adapter=None, reporter=None):
             """Return a completed version while adding one child operation."""
             session = get_log_context()
             assert session is not None
             with session.span("algorithm.stage.probe"):
                 pass
-            return SkillPipelineResult(
-                project_id=request.project_id,
+            return AlgoSkillEvolveResult(
                 skill_id="skill",
-                base_version_id=request.base_version_id,
+                base_version_id=request.init_skill_version_id,
                 version_id="v1",
+                content="Output",
+                resources={},
+                content_hash="hash",
+                skill_hash="hash",
                 run_id=training_run_id(request.project_id, request.work_dir),
             )
 
     audit_path = tmp_path / ("skills.db" if shared_database else "audit.db")
-    config = ServiceConfig.model_validate(
+    config = deployment_config(
         {
-            "local_project_id": "project",
+            "home": tmp_path / "home",
             "persistence": {
-                "config": {"include_remote": False},
                 "database": {"class_name": "sqlite", "config": {"url": f"sqlite+pysqlite:///{tmp_path / 'skills.db'}"}},
             },
             "observability": {
@@ -511,27 +523,29 @@ async def test_service_uses_one_global_observability_backend(tmp_path, monkeypat
             },
             "repository_pipeline": {"class_name": "repository"},
             "training_pipelines": {"probe": {"class_name": "audit_probe"}},
-        }
+        },
+        "project",
     )
     service = await create_service(config)
     try:
         await service.initialize_storage()
         request = TrainingRequest(
             project_id="project",
-            pipeline="probe",
-            base_version_id="v0",
+            algo="probe",
+            env={"class_name": "searchqa", "config": {"agent": {"model": "offline"}}},
+            init_skill_version_id="v0",
             work_dir=str(tmp_path / "run"),
             tasks=[DataSample(task=Task(id="one", instruction="Save"), reward_data=RewardData())],
             split={"train": ["one"]},
         )
-        result = await service.auto_train_skill(request)
+        result = await service.run_training(request)
         run = await service.algorithm_run("project", result.run_id)
         assert run.status == "completed" and run.published_version_id == "v1"
         assert [item.name for item in await service.algorithm_spans("project", result.run_id)] == [
             "algorithm.train",
             "algorithm.stage.probe",
         ]
-        with pytest.raises(ValueError, match="bound local scope"):
+        with pytest.raises(ValueError, match="default project"):
             await service.algorithm_spans("other", result.run_id)
         assert service.backends["observability"].database is service.backends["observability_database"]
     finally:

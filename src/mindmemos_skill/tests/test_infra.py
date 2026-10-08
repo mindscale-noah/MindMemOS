@@ -10,6 +10,7 @@ from mindmemos_skill.infra.database import (
     Filter,
     PostgresConfig,
     PostgresDatabase,
+    Scope,
     SQLiteConfig,
     SQLiteDatabase,
     TableRegistry,
@@ -96,6 +97,26 @@ def test_crud_defaults_projection_and_filters(db):
     assert db.get("items", "a")["note"] is None
     assert db.delete("items", filters={"id": "b"}) == 1
     assert db.count("items") == 2
+
+
+def test_or_filters_and_literal_prefix_preserve_scope(db):
+    seed(db)
+    assert db.select(
+        "items",
+        any_filters=[Filter(field="id", value="a"), Filter(field="name", value="beta")],
+        fields=["id"],
+    ) == [{"id": "a"}, {"id": "b"}]
+    db.update("items", {"name": "a%_literal"}, filters={"id": "a"})
+    db.update("items", {"name": "aXXliteral"}, filters={"id": "b"})
+    assert db.select("items", filters=[Filter(field="name", op="starts_with", value="a%_")], fields=["id"]) == [
+        {"id": "a"}
+    ]
+    with db.scoped(Scope(fields={"id": "a"})) as scoped:
+        assert scoped.select("items", any_filters=[Filter(field="id", value="b")]) == []
+    with pytest.raises(ValueError, match="any_filters"):
+        db.select("items", any_filters=[])
+    with pytest.raises(ValueError, match="any_filters"):
+        db.select("items", any_filters=iter(()))
 
 
 def test_vector_search_filter_before_top_k(db):
@@ -303,15 +324,19 @@ async def test_service_shutdown_closes_database(tmp_path):
     from fastapi.testclient import TestClient
     from mindmemos_skill.api.entries.fastapi import create_app
 
-    from mindmemos_skill import ServiceConfig, create_service
+    from mindmemos_skill import create_service
+
+    from .service_config import deployment_config
 
     service = await create_service(
-        ServiceConfig.model_validate(
+        deployment_config(
             {
+                "home": tmp_path / "home",
                 "persistence": {
                     "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'service.db'}"}}
-                }
-            }
+                },
+            },
+            "project",
         )
     )
     database = service.backends["database"]

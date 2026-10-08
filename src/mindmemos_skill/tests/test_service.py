@@ -13,6 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mindmemos_skill import MindMemOSSkill, ServiceConfig, create_service
 
+from .service_config import deployment_config
+from .skill_sources import register_detail, structured
+
 
 class AgentOptions(BaseModel):
     """Typed options owned by the example pipeline's nested agent."""
@@ -45,7 +48,7 @@ def registered_pipeline(monkeypatch):
             self.agent = config.agent.model_copy(deep=True)
             events.append(("created", self))
 
-        async def train(self, request):
+        async def train(self, request, *, env, adapter=None, reporter=None):
             raise NotImplementedError
 
         async def close(self):
@@ -57,13 +60,15 @@ def registered_pipeline(monkeypatch):
 def write_config(tmp_path, value):
     """Write a test YAML file and return its path."""
     path = tmp_path / "service.yaml"
-    path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+    deployment = deployment_config({"home": str(tmp_path / "home"), **value}, "project")
+    path.write_text(yaml.safe_dump(deployment.model_dump(mode="json"), sort_keys=False), encoding="utf-8")
     return path
 
 
 def assembly_config(tmp_path):
     """Repeat local configuration instead of referencing a shared resource."""
     return {
+        "home": tmp_path / "home",
         "persistence": {"database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'db'}"}}},
         "training_pipelines": {
             name: {"class_name": "training", "config": {"agent": {"count": 7}}} for name in ("first", "second")
@@ -76,7 +81,7 @@ def assembly_config(tmp_path):
 async def test_assembly_shares_only_global_persistence(tmp_path, registered_pipeline, source):
     """Create independent pipeline components and exactly one database/store."""
     config = assembly_config(tmp_path)
-    value = ServiceConfig.model_validate(config) if source == "config" else write_config(tmp_path, config)
+    value = deployment_config(config, "project") if source == "config" else write_config(tmp_path, config)
     service = await create_service(value)
     assert isinstance(service, MindMemOSSkill)
     first, second = (event[1] for event in registered_pipeline)
@@ -134,13 +139,13 @@ async def test_invalid_assembly_does_not_construct_backends(tmp_path, registered
 def test_removed_global_selectors_are_rejected(field):
     """Never silently accept the old graph or default selection format."""
     with pytest.raises(ValidationError):
-        ServiceConfig.model_validate({field: {}})
+        ServiceConfig.model_validate({"home": ".", field: {}})
 
 
 @pytest.mark.parametrize("storage", [[{}, {}], {"first": {}, "second": {}}])
 def test_multiple_persistence_definitions_are_rejected(storage):
     with pytest.raises(ValidationError):
-        ServiceConfig.model_validate({"persistence": storage})
+        ServiceConfig.model_validate({"home": ".", "persistence": storage})
 
 
 @pytest.mark.parametrize(
@@ -192,7 +197,12 @@ async def test_builtin_loading_in_fresh_process(tmp_path):
 async def test_persistence_does_not_implicitly_enable_repository(tmp_path):
     service = await create_service(
         ServiceConfig.model_validate(
-            {"persistence": {"database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'db'}"}}}}
+            {
+                "home": tmp_path / "home",
+                "persistence": {
+                    "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'db'}"}}
+                },
+            }
         )
     )
     try:
@@ -248,7 +258,7 @@ async def test_factory_closes_completed_pipelines_on_later_failure(tmp_path, reg
         def __init__(self, config, *, persistence):
             raise RuntimeError("construction failed")
 
-        async def train(self, request):
+        async def train(self, request, *, env, adapter=None, reporter=None):
             raise NotImplementedError
 
     config = assembly_config(tmp_path)
@@ -264,36 +274,41 @@ async def test_factory_closes_completed_pipelines_on_later_failure(tmp_path, reg
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["yaml", "config"])
 async def test_explicit_service_is_ready_and_reopening_preserves_data(tmp_path, source):
-    """Initialize explicit configurations and migrate retained versions automatically."""
-    from mindmemos_skill.persistence.constants import SKILL_VERSIONS_TABLE
-    from mindmemos_skill.pipelines.typing import RegisterRequest, ShowRequest
-    from mindmemos_skill.skill import Skill, SkillBundle
+    """Initialize explicit configurations and preserve retained versions."""
+    from mindmemos_skill.api.typing import RegisterRequest, ShowRequest
+    from mindmemos_skill.skill import Skill, SkillContent
 
     settings = {
-        "local_project_id": "project",
+        "home": tmp_path / "home",
         "persistence": {"database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'ready.db'}"}}},
         "repository_pipeline": {"class_name": "repository"},
     }
-    value = write_config(tmp_path, settings) if source == "yaml" else ServiceConfig.model_validate(settings)
+    value = write_config(tmp_path, settings) if source == "yaml" else deployment_config(settings, "project")
     async with await create_service(value) as service:
-        item = await service.register_skill(
+        item = await register_detail(
+            service,
             RegisterRequest(
+                skill=structured(
+                    Skill(
+                        SkillContent(
+                            content="Preserve",
+                            name="test-skill",
+                            description="Test instructions",
+                            standard_format=False,
+                        )
+                    ).snapshot(),
+                    name="Existing",
+                ),
                 project_id="project",
-                name="Existing",
-                source=Skill(bundle=SkillBundle(files={"SKILL.md": "Preserve"})).snapshot(),
-            )
-        )
-        # Simulate a version written before display labels were populated.
-        service.backends["database"].update(
-            SKILL_VERSIONS_TABLE, {"version_label": None}, filters={"version_id": item.version.version_id}
+            ),
         )
     async with await create_service(value) as service:
-        restored = await service.show_skill(ShowRequest(project_id="project", skill_ref=item.skill.skill_id))
+        restored = await service.show_skill(ShowRequest(project_id="project", skill_id=item.skill.skill_id))
         assert restored.version.version_label == "v1.0.0"
         assert restored.version.version_id == item.version.version_id
-        assert restored.version.bundle == item.version.bundle
+        assert restored.version.content == item.version.content
         await service.initialize_storage()
-        assert await service.show_skill(ShowRequest(project_id="project", skill_ref=item.skill.skill_id)) == restored
+        assert await service.show_skill(ShowRequest(project_id="project", skill_id=item.skill.skill_id)) == restored
 
 
 @pytest.mark.asyncio
@@ -328,9 +343,10 @@ async def test_observability_only_is_initialized_without_repository(tmp_path):
 
     config = ServiceConfig.model_validate(
         {
+            "home": tmp_path / "home",
             "observability": {
                 "backend": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'audit.db'}"}}
-            }
+            },
         }
     )
     async with await create_service(config) as service:

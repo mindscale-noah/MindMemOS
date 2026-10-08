@@ -4,13 +4,15 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
 from uuid import UUID
-from warnings import warn
 
 from ..infra.task_manager import ProgressEvent, ProgressReporter, TaskSnapshot
 from ..persistence import SkillRecord, SkillVersionRecord, SkillVersionSummary, TrajectoryRecord, TrajectorySummary
 from ..registry import Registrable
 from ..skill.typing import DiffResult
 from .typing import (
+    ActiveRequest,
+    AlgoSkillEvolveResult,
+    CommitFromLocalRequest,
     CommitRequest,
     DiffRequest,
     ExportRequest,
@@ -21,7 +23,9 @@ from .typing import (
     OrganizeResult,
     RecommendRequest,
     RecommendResult,
+    RegisterFromLocalRequest,
     RegisterRequest,
+    RegisterResult,
     ReportTrajectoryRequest,
     SetMetaRequest,
     ShowRequest,
@@ -30,9 +34,7 @@ from .typing import (
     SkillPage,
     SkillPageRequest,
     SkillPipelineRequest,
-    SkillPipelineResult,
     SkillRequest,
-    SwitchRequest,
     TrainingRequest,
     VersionResolution,
     VersionResolveRequest,
@@ -48,7 +50,7 @@ class MindMemOSSkill(ABC):
 
         Args:
             reference: Graph identity or alias in the authorized project.
-            project_id: Explicit project, or the bound local project.
+            project_id: Explicit project, or the configured default project.
         """
         raise NotImplementedError
 
@@ -58,7 +60,7 @@ class MindMemOSSkill(ABC):
 
         Args:
             reference: Active graph identity or alias.
-            project_id: Authorized project, or the bound local project.
+            project_id: Authorized project, or the configured default project.
         """
         raise NotImplementedError
 
@@ -68,7 +70,7 @@ class MindMemOSSkill(ABC):
 
         Args:
             reference: Skill identity or alias in the authorized project.
-            project_id: Explicit project, or the bound local project.
+            project_id: Explicit project, or the configured default project.
         """
         raise NotImplementedError
 
@@ -77,7 +79,7 @@ class MindMemOSSkill(ABC):
         """List authorized Skill Sets and their publication pointers.
 
         Args:
-            project_id: Explicit project, or the bound local project when omitted.
+            project_id: Explicit project, or the configured default project when omitted.
 
         Returns:
             Project-owned Skill Set records.
@@ -90,7 +92,7 @@ class MindMemOSSkill(ABC):
 
         Args:
             skill_set_id: Exact project-local Skill Set identity.
-            project_id: Explicit project, or the bound local project when omitted.
+            project_id: Explicit project, or the configured default project when omitted.
 
         Returns:
             Project-owned snapshots and revision numbers.
@@ -104,7 +106,7 @@ class MindMemOSSkill(ABC):
         Args:
             skill_set_id: Exact project-local Skill Set identity.
             snapshot_id: Immutable snapshot identity.
-            project_id: Explicit project, or the bound local project when omitted.
+            project_id: Explicit project, or the configured default project when omitted.
 
         Returns:
             Snapshot members and relations for its representation mode.
@@ -117,7 +119,7 @@ class MindMemOSSkill(ABC):
 
         Args:
             version_id: Exact immutable Skill version identity.
-            project_id: Explicit project, or the bound local project when omitted.
+            project_id: Explicit project, or the configured default project when omitted.
 
         Returns:
             The project-owned version record.
@@ -130,7 +132,7 @@ class MindMemOSSkill(ABC):
 
         Args:
             skill_id: Exact project-local Skill family identity.
-            project_id: Explicit project, or the bound local project when omitted.
+            project_id: Explicit project, or the configured default project when omitted.
 
         Returns:
             Project-owned versions in creation order.
@@ -243,11 +245,35 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def register_skill(self, request: RegisterRequest) -> SkillDetail:
+    async def register_skill(self, request: RegisterRequest) -> RegisterResult:
         """Register a new central Skill and initial version.
 
         Args:
             request: Validated operation inputs and explicit local project scope.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def register_from_local(self, request: RegisterFromLocalRequest) -> RegisterResult:
+        """Register a standard local Skill through the structured write pipeline.
+
+        Args:
+            request: Authorized project, local source, and alias.
+
+        Returns:
+            Family and initial version identity with both source hashes.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def commit_from_local(self, request: CommitFromLocalRequest) -> SkillDetail:
+        """Commit a standard local Skill through the structured write pipeline.
+
+        Args:
+            request: Authorized family, local source, and publication options.
+
+        Returns:
+            Family and exact newly persisted version.
         """
         raise NotImplementedError
 
@@ -375,7 +401,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def switch_skill(self, request: SwitchRequest) -> SkillRecord:
+    async def active_skill(self, request: ActiveRequest) -> SkillRecord:
         """Select an existing version without modifying external files.
 
         Args:
@@ -404,7 +430,7 @@ class MindMemOSSkill(ABC):
     @abstractmethod
     async def run_evolution(
         self, request: SkillPipelineRequest | None = None, *, reporter: ProgressReporter | None = None
-    ) -> SkillPipelineResult:
+    ) -> AlgoSkillEvolveResult:
         """Run the configured evolution pipeline and return its result.
 
         Args:
@@ -419,7 +445,7 @@ class MindMemOSSkill(ABC):
     @abstractmethod
     async def run_training(
         self, request: TrainingRequest | None = None, *, reporter: ProgressReporter | None = None
-    ) -> SkillPipelineResult:
+    ) -> AlgoSkillEvolveResult:
         """Run the configured training pipeline and return its result.
 
         Args:
@@ -430,27 +456,3 @@ class MindMemOSSkill(ABC):
             Completed training result.
         """
         raise NotImplementedError
-
-    async def auto_evolve_skill(self, request: SkillPipelineRequest | None = None) -> SkillPipelineResult:
-        """Call run_evolution for callers using the deprecated method name.
-
-        Args:
-            request: Evolution selection; required when a pipeline is configured.
-
-        Returns:
-            Completed evolution result.
-        """
-        warn("auto_evolve_skill() is deprecated; use run_evolution()", DeprecationWarning, stacklevel=2)
-        return await self.run_evolution(request)
-
-    async def auto_train_skill(self, request: TrainingRequest | None = None) -> SkillPipelineResult:
-        """Call run_training for callers using the deprecated method name.
-
-        Args:
-            request: Tasks, split membership, and an exact input Skill version.
-
-        Returns:
-            Completed training result.
-        """
-        warn("auto_train_skill() is deprecated; use run_training()", DeprecationWarning, stacklevel=2)
-        return await self.run_training(request)

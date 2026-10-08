@@ -7,8 +7,8 @@
 | 机制 | 用途 | 实施边界 |
 | --- | --- | --- |
 | 不可变版本 | 固定输入，独立生成候选 | 每次尝试新建 graph_version_id 或 Skill 候选版本 |
-| 短事务发布与 expected_revision | 防止陈旧结果覆盖新发布 | 发布事务锁图的当前记录，校验后原子更新 |
-| 成功请求幂等 | 重试返回原结果 | revisions 保存 idempotency_key 与 request_hash；同图唯一 |
+| 短事务发布与当前版本指针 | 原子选择生效图版本 | 发布事务锁图身份行，再更新 `current_version_id` |
+| 成功请求幂等 | 重试返回原结果 | 图版本保存同图唯一的 `request_hash` |
 
 默认流程：读取固定输入 → 独立计算 → 写入独立候选并封存 → 短事务发布。允许重复计算，不允许同一请求重复成功发布。
 
@@ -16,9 +16,9 @@
 
 同一个候选只有创建它的执行流程写入，不向用户开放任意候选写 API。该流程完成全部批次后才封存；重试使用新候选，不接管原候选。第一版不做候选自动 GC，因此不引入候选清理与运行中写入的自动竞争机制。
 
-最终发布在同一事务内锁 graph 行、重新检查幂等结果、验证 expected_revision、检查 ready，插入 revision 并更新 current_revision。新 key 的无内容变化请求仍新增 revision，复用图内容；同 key 重放不新增 revision。详见 [图存储结构](graph_storage_schema.md)。
+当前发布在同一事务内锁 graph 行、重新检查请求哈希、插入 ready 快照并更新 `current_version_id`。相同请求重试返回原快照，不切回旧图头。当前接口未提供预期版本条件，因此不同请求按实际取得写锁的顺序更新图头；如需防止过期任务覆盖新结果，需要补充受理时的预期当前版本校验。详见 [图存储结构](graph_storage_schema.md)。
 
-这些是待实现服务契约。当前阶段先实现五张图表、字段验证、约束和表注册，不把通用数据库 CRUD 描述为已经具备完整发布协议。
+当前构图发布已实现；图存储使用四张核心表，不记录独立发布历史。
 
 ## 3. 单 Skill 演进
 
@@ -30,7 +30,7 @@ trace2skill、skilltree、skill-forest 均按“固定 Skill + 固定轨迹/任�
 
 文件 checkpoint 按算法的实际需求实现，保存固定输入及摘要、算法版本与配置、候选与评估状态、迭代位置、随机状态和预算使用。独立执行尝试使用独立目录；恢复从完整 checkpoint 读取，在新目录与新候选上继续，不让两个进程覆盖同一工作文件。
 
-采用完整临时文件写入后原子替换；多文件状态最后更新 manifest。跨实例恢复要求文件可被接手实例访问，本地临时目录不能保证实例销毁后的恢复。恢复算法进度不表示恢复发布权，最后仍检查 expected_revision 与成功幂等结果。
+采用完整临时文件写入后原子替换；多文件状态最后更新 manifest。跨实例恢复要求文件可被接手实例访问，本地临时目录不能保证实例销毁后的恢复。恢复算法进度不表示恢复发布权；如未来加入预期当前版本条件，仍须在发布事务内检查。
 
 ## 5. 暂缓的机制
 
@@ -42,6 +42,6 @@ trace2skill、skilltree、skill-forest 均按“固定 Skill + 固定轨迹/任�
 
 ## 6. 模块边界
 
-persistence/db_services/skill_management/ 定义五张图表及其记录类型，后续同目录实现图业务查询和发布。顶层 persistence 负责工厂、ensure_collection 与注册；infra 只提供连接、事务和存储类型，不放业务表。
+persistence/db_services/skill_management/ 定义四张核心图表及其记录类型，并实现图查询、发布和旧库迁移。顶层 persistence 负责工厂、初始化与注册；infra 只提供连接、事务和存储类型，不放业务表。
 
-本轮不创建 coordination 模块，不修改商用 mindmemos 云表，不执行已有数据库迁移。ensure_collection 创建缺失表，不能代替 schema migration。
+本轮不创建 coordination 模块，不修改商用 mindmemos 云表。服务初始化会自动迁移旧图头；低层 `ensure_collection` 仍只创建缺失表，不能代替升级入口。

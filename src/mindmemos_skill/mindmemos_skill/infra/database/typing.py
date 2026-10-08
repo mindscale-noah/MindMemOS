@@ -90,7 +90,7 @@ class Filter(BaseModel):
     field: str
     """Registered column name."""
 
-    op: Literal["eq", "ne", "gt", "ge", "lt", "le", "in", "is_null", "not_null"] = "eq"
+    op: Literal["eq", "ne", "gt", "ge", "lt", "le", "in", "is_null", "not_null", "starts_with"] = "eq"
     """Comparison operator."""
 
     value: Any = None

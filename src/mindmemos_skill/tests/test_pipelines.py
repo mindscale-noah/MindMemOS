@@ -2,19 +2,22 @@
 
 import pytest
 from mindmemos_skill.algos import Algorithm, SkillEvolver
-from mindmemos_skill.api.config import ImplementationConfig, ServiceConfig
+from mindmemos_skill.config.config import ImplementationConfig, ServiceConfig
 from mindmemos_skill.pipelines import (
+    AlgoSkillEvolveResult,
     EvolutionPipeline,
     Pipeline,
     SkillPipelineRequest,
-    SkillPipelineResult,
     TrainingPipeline,
     TrainingRequest,
     TrainingSplit,
 )
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from mindmemos_skill import create_service
+from mindmemos_skill import (
+    create_service,
+    demos,  # noqa: F401
+)
 
 
 class Options(BaseModel):
@@ -58,7 +61,7 @@ class Training(TrainingPipeline[Options]):
 
     config_type = Options
 
-    async def train(self, request):
+    async def train(self, request, *, env, adapter=None, reporter=None):
         raise NotImplementedError
 
 
@@ -81,6 +84,7 @@ async def test_pipeline_composition_owns_algorithms_and_shares_only_persistence(
     Algorithm.register("evolution")(Evolver)
     config = ServiceConfig.model_validate(
         {
+            "home": tmp_path / "home",
             "persistence": {"database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'db'}"}}},
             "evolution_pipelines": {
                 name: {
@@ -107,7 +111,7 @@ async def test_pipeline_composition_owns_algorithms_and_shares_only_persistence(
     assert Pipeline.resolve("evolution") is Evolution
     assert Algorithm.resolve("evolution") is Evolver
     with pytest.raises(ValueError, match="request is required"):
-        await service.auto_evolve_skill()
+        await service.run_evolution()
     await service.close()
 
 
@@ -125,10 +129,11 @@ async def test_pipeline_configuration_is_validated_before_construction(monkeypat
 
     config = ServiceConfig.model_validate(
         {
+            "home": ".",
             "training_pipelines": {
                 "valid": {"class_name": "training"},
                 "invalid": {"class_name": "training", "config": {"limit": 0}},
-            }
+            },
         }
     )
     with pytest.raises(ValidationError):
@@ -161,26 +166,31 @@ def test_request_requires_scope_and_rejects_implicit_selection_options():
 def test_result_requires_persisted_identity_and_execution_provenance():
     """A pending run or candidate alone cannot represent a completed result."""
     values = {
-        "project_id": "project",
         "skill_id": "skill",
         "base_version_id": "v1",
         "version_id": "v2",
         "run_id": "run1",
+        "content": "Evolved instructions",
+        "resources": {},
+        "content_hash": "content-hash",
+        "skill_hash": "skill-hash",
     }
-    result = SkillPipelineResult.model_validate(values)
-    assert SkillPipelineResult.model_validate_json(result.model_dump_json()) == result
-    for missing in ("version_id", "base_version_id", "run_id"):
+    result = AlgoSkillEvolveResult.model_validate(values)
+    assert AlgoSkillEvolveResult.model_validate_json(result.model_dump_json()) == result
+    for missing in ("version_id", "base_version_id", "run_id", "content", "resources", "content_hash", "skill_hash"):
         with pytest.raises(ValidationError):
-            SkillPipelineResult.model_validate({key: value for key, value in values.items() if key != missing})
+            AlgoSkillEvolveResult.model_validate({key: value for key, value in values.items() if key != missing})
     with pytest.raises(ValidationError):
-        SkillPipelineResult.model_validate(values | {"status": "running"})
+        AlgoSkillEvolveResult.model_validate(values | {"status": "running"})
 
 
 def training_input():
     """Return three materialized tasks and a complete held-out partition."""
     return {
         "project_id": "project",
-        "base_version_id": "v1",
+        "init_skill_version_id": "v1",
+        "algo": "training",
+        "env": {"class_name": "demo_offline"},
         "work_dir": "output/training-test",
         "tasks": [
             {"task": {"id": identifier, "instruction": "Solve it"}, "reward_data": {}} for identifier in ("a", "b", "c")
@@ -227,11 +237,11 @@ def test_training_request_rejects_invalid_version_or_task_partition(failure):
     """Validate the required input version and task-to-split correspondence."""
     values = training_input()
     if failure == "version_missing":
-        values.pop("base_version_id")
+        values.pop("init_skill_version_id")
     elif failure == "version_null":
-        values["base_version_id"] = None
+        values["init_skill_version_id"] = None
     elif failure == "version_blank":
-        values["base_version_id"] = " "
+        values["init_skill_version_id"] = " "
     elif failure == "duplicate":
         values["tasks"].append(values["tasks"][0])
     elif failure == "unknown":
@@ -261,7 +271,9 @@ def test_training_preserves_public_task_and_private_scoring_subtypes():
     )
     request = TrainingRequest(
         project_id="project",
-        base_version_id="v1",
+        init_skill_version_id="v1",
+        algo="training",
+        env={"class_name": "demo_offline"},
         work_dir="output/training-test",
         tasks=[sample],
         split=TrainingSplit(train=["a"]),

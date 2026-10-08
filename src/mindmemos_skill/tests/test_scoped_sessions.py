@@ -4,13 +4,14 @@ import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
+from mindmemos_skill.api.auth import SkillHttpIdentity
 from mindmemos_skill.api.entries.fastapi import create_app
+from mindmemos_skill.api.typing import ListRequest
 from mindmemos_skill.infra.database import Scope, SQLiteConfig, SQLiteDatabase, TableSpec, Vector
-from mindmemos_skill.pipelines.typing import ListRequest
 from pydantic import BaseModel
 from sqlalchemy import Column, MetaData, Table, Text
 
-from mindmemos_skill import ServiceConfig, create_service
+from mindmemos_skill import FastAPIConfig, HttpAuthConfig, ServiceConfig, create_service
 
 
 class Row(BaseModel):
@@ -65,6 +66,8 @@ def test_scoped_database_guards_reads_writes_and_search(database):
     with database.scoped(Scope(fields={"project_id": "mine"})) as scoped:
         scoped.insert(table, [{"item_id": "same", "embedding": [0.0, 1.0]}])
         assert scoped.count(table) == 1
+        assert scoped.select_distinct(table, "item_id") == ["same"]
+        assert scoped.select_distinct(table, "project_id") == ["mine"]
         assert scoped.get(table, {"project_id": "mine", "item_id": "same"})["project_id"] == "mine"
         assert scoped.search(table, vector_field="embedding", query_vector=[0.0, 1.0])[0].record["project_id"] == "mine"
         assert scoped.update(table, {"agent_id": "a"}, filters={}) == 1
@@ -136,10 +139,12 @@ async def test_cloud_service_requires_authorization_and_closes_graph_capability(
     """The service rejects missing identity and does not leak a graph query handle."""
     config = ServiceConfig.model_validate(
         {
+            "home": tmp_path / "home",
             "persistence": {
                 "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'cloud.db'}"}}
             },
             "repository_pipeline": {"class_name": "repository"},
+            "manage_pipeline": {"class_name": "graph_manage"},
         }
     )
 
@@ -158,8 +163,7 @@ async def test_cloud_service_requires_authorization_and_closes_graph_capability(
             await service.list_skills(ListRequest(project_id="one"))
         with service.request_principal("one"):
             assert await service.list_skills(ListRequest(project_id="one")) == []
-            graphs = await service.graph_queries("one")
-            assert await graphs.list_graphs() == []
+            assert await service.list_skill_sets("one") == []
             with pytest.raises(PermissionError, match="access denied"):
                 await service.list_skills(ListRequest(project_id="two"))
         with service.request_principal("extra"):
@@ -169,16 +173,25 @@ async def test_cloud_service_requires_authorization_and_closes_graph_capability(
             with pytest.raises(PermissionError, match="scope fields"):
                 await service.list_skills(ListRequest(project_id="one"))
         with pytest.raises(PermissionError, match="authorization is required"):
-            await graphs.list_graphs()
+            await service.list_skill_sets("one")
         with pytest.raises(RuntimeError, match="session is required"):
             service.repository.persistence.skills
         with TestClient(
-            create_app(service, principal_from_request=lambda request: request.headers.get("x-test-principal"))
+            create_app(
+                service,
+                api_config=FastAPIConfig(auth=HttpAuthConfig(mode="gateway_jwt", gateway_jwt_secret="test")),
+                identity_from_bearer=lambda token: SkillHttpIdentity(
+                    project_id=token, scopes={"skill:read"}, principal=token
+                ),
+            )
         ) as client:
-            assert client.post("/skills/list", json={"project_id": "one"}).status_code == 403
+            assert client.post("/v1/skills/list", json={}).status_code == 401
+            assert client.post("/v1/skills/list", json={}, headers={"Authorization": "Bearer one"}).status_code == 200
             assert (
-                client.post("/skills/list", json={"project_id": "one"}, headers={"x-test-principal": "one"}).status_code
-                == 200
+                client.post(
+                    "/v1/skills/list", json={"project_id": "one"}, headers={"Authorization": "Bearer one"}
+                ).status_code
+                == 422
             )
     finally:
         await service.close()
@@ -189,6 +202,7 @@ async def test_principal_context_does_not_outlive_request(tmp_path):
     """A child task inheriting context cannot use a principal after request exit."""
     config = ServiceConfig.model_validate(
         {
+            "home": tmp_path / "home",
             "persistence": {
                 "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'cloud.db'}"}}
             },

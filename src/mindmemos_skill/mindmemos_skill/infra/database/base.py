@@ -7,7 +7,7 @@ from copy import copy
 from itertools import groupby
 from typing import Any
 
-from sqlalchemy import UniqueConstraint, func, select
+from sqlalchemy import UniqueConstraint, func, or_, select
 
 from ..base import Infrastructure
 from .tables import TableRegistry
@@ -265,32 +265,66 @@ class Database(Infrastructure, ABC):
         rows = self.select(table, filters=key, limit=1)
         return rows[0] if rows else None
 
-    def select(self, table: str, *, filters=None, fields=None, order_by=None, limit: int = 100, offset: int = 0):
+    def select(
+        self,
+        table: str,
+        *,
+        filters=None,
+        any_filters=None,
+        fields=None,
+        order_by=None,
+        limit: int | None = 100,
+        offset: int = 0,
+    ):
         """Read records using deterministic ordering and bounded pagination.
 
         Args:
             table: Registered table name.
             filters: Equality mapping or AND-combined Filter objects.
+            any_filters: Optional OR-combined Filter objects, AND-combined with filters.
             fields: Columns to return; None returns all columns.
             order_by: Column names, prefixed with '-' for descending order.
-            limit: Maximum records to return, including zero.
+            limit: Maximum records to return, including zero; None has no limit.
             offset: Number of sorted records to skip.
 
         Returns:
             A list of record dictionaries with native Python values.
         """
         spec = self.tables.get(table)
-        if type(limit) is not int or type(offset) is not int or limit < 0 or offset < 0:
-            raise ValueError("limit and offset must be nonnegative integers")
+        if (limit is not None and (type(limit) is not int or limit < 0)) or type(offset) is not int or offset < 0:
+            raise ValueError("limit must be a nonnegative integer or None; offset must be a nonnegative integer")
         columns = self._columns(spec, fields)
         ordering = []
         for name in order_by or []:
             column = column_for(spec, name.removeprefix("-"))
             ordering.append(column.desc() if name.startswith("-") else column.asc())
         ordering.extend(spec.table.primary_key.columns)
-        statement = select(*columns).where(filter_clause(spec, filters)).order_by(*ordering).limit(limit).offset(offset)
+        conditions = [filter_clause(spec, filters)]
+        if any_filters is not None:
+            choices = list(any_filters)
+            if not choices:
+                raise ValueError("any_filters must contain at least one condition")
+            conditions.append(or_(*(filter_clause(spec, [condition]) for condition in choices)))
+        statement = select(*columns).where(*conditions).order_by(*ordering).limit(limit).offset(offset)
         with self._connect() as connection:
             return [dict(row) for row in connection.execute(statement).mappings()]
+
+    def select_distinct(self, table: str, field: str, *, filters=None) -> list[Any]:
+        """Return distinct values of one registered column matching the filters.
+
+        Args:
+            table: Registered table name.
+            field: Column whose unique values are returned.
+            filters: Equality mapping or AND-combined Filter objects.
+
+        Returns:
+            Matching values without duplicates.
+        """
+        spec = self.tables.get(table)
+        column = column_for(spec, field)
+        statement = select(column).where(filter_clause(spec, filters)).distinct()
+        with self._connect() as connection:
+            return list(connection.execute(statement).scalars())
 
     def count(self, table: str, *, filters=None) -> int:
         """Count matching rows without fetching records.

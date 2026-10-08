@@ -76,7 +76,7 @@ def execute(
     """
     python = _resolve_executable(config.python_command)
     invocation = [*python, *command[1:]] if command[0] in {"python", "python3"} else command
-    env = os.environ.copy()
+    env = {name: value for name, value in os.environ.items() if name not in config.excluded_environment}
     env.update(config.environment)
     search_path = env.get(PATH_ENV, os.defpath)
     with tempfile.TemporaryDirectory(prefix="python-launcher-") as temporary:

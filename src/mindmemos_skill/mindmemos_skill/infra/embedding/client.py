@@ -46,7 +46,7 @@ class OpenAIEmbeddingClient:
 
         with OpenAI(
             base_url=self.config.base_url,
-            api_key=self.config.api_key.get_secret_value() if self.config.api_key else "unused",
+            api_key=self.config.api_key if self.config.api_key else "unused",
             timeout=self.config.timeout_s,
             max_retries=self.config.max_retries,
         ) as client:

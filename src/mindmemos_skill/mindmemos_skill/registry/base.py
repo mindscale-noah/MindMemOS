@@ -72,6 +72,15 @@ class Registrable(Generic[ConfigT]):
         return decorator
 
     @classmethod
+    def registered_types(cls) -> dict[str, type[Self]]:
+        """Return the registered implementation catalog without constructing resources.
+
+        Returns:
+            An independent mapping from registration names to implementation classes.
+        """
+        return {name: cast(type[Self], implementation) for name, implementation in sorted(cls._registry.items())}
+
+    @classmethod
     def name_for(cls, implementation: type) -> str:
         """Return the unambiguous registered name for a concrete class.
 
@@ -105,12 +114,12 @@ class Registrable(Generic[ConfigT]):
         return cast(type[Self], cls._registry[name])
 
     @classmethod
-    def build(cls, name: str, options: dict[str, Any], /, **dependencies: Any) -> Self:
+    def build(cls, name: str, options: dict[str, Any] | BaseModel, /, **dependencies: Any) -> Self:
         """Validate configuration and construct the named implementation.
 
         Args:
             name: Exact registration name within this family.
-            options: Raw configuration fields for the selected implementation.
+            options: Raw fields or the selected implementation's validated configuration model.
             **dependencies: Existing backend instances passed as constructor keywords.
 
         Returns:
