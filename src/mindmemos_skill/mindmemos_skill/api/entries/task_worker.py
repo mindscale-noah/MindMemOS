@@ -5,7 +5,7 @@ import asyncio
 import signal
 from pathlib import Path
 
-from ...config.loader import load_service_config
+from ...config.loader import read_skill_config
 from ..factory import create_service
 
 
@@ -15,14 +15,15 @@ async def run_worker(config_path: Path) -> None:
     Args:
         config_path: Service YAML with task_manager.mode=kafka and worker=true.
     """
-    config = load_service_config(config_path.read_text(encoding="utf-8"))
+    deployment = read_skill_config(config_path)
+    config = deployment.service
     if config.task_manager is None or config.task_manager.mode != "kafka" or not config.task_manager.worker:
         raise ValueError("Worker config requires task_manager.mode=kafka and worker=true")
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
     for name in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(name, stopping.set)
-    async with await create_service(config_path):
+    async with await create_service(deployment):
         await stopping.wait()
 
 
