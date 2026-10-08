@@ -8,6 +8,7 @@ back in.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 
 import pytest
@@ -34,7 +35,17 @@ _FORMER_EVAL_EXPORTS = [
 
 def test_sdk_imports_without_eval_package():
     """Importing the SDK must not pull in the eval package."""
-    assert "mindmemos_eval" not in sys.modules
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import mindmemos_sdk; assert 'mindmemos_eval' not in sys.modules",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
     assert mindmemos_sdk.__version__
 
 

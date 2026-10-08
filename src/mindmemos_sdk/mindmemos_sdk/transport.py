@@ -27,16 +27,17 @@ from .errors import ApiError, AuthRequiredError, TransportError
 
 OK_CODE = "ok"
 QUEUED_CODE = "queued"
-SUCCESS_CODES = frozenset({OK_CODE, QUEUED_CODE})
+ACCEPTED_CODE = "accepted"
+SUCCESS_CODES = frozenset({OK_CODE, QUEUED_CODE, ACCEPTED_CODE})
 
 
 class Envelope(BaseModel):
-    """Parsed unified response envelope returned by every memory API."""
+    """Parsed response envelope returned by Memory and Skill APIs."""
 
     code: str = OK_CODE
     message: str = ""
     request_id: str | None = None
-    data: dict[str, Any] | None = None
+    data: dict[str, Any] | list[dict[str, Any]] | None = None
 
 
 class HttpTransport:
@@ -50,6 +51,7 @@ class HttpTransport:
         timeout_seconds: float = 30.0,
         max_retries: int = 2,
         client: httpx.Client | None = None,
+        require_api_key: bool = True,
     ) -> None:
         """Handle init."""
         self._base_url = base_url.rstrip("/")
@@ -58,6 +60,7 @@ class HttpTransport:
         self._max_retries = max(0, max_retries)
         self._client = client or httpx.Client(timeout=timeout_seconds)
         self._owns_client = client is None
+        self._require_api_key = require_api_key
 
     def close(self) -> None:
         """Release underlying transport resources."""
@@ -75,11 +78,12 @@ class HttpTransport:
         path: str,
         *,
         json: Any,
+        params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         request_id: str | None = None,
     ) -> Envelope:
         """Send a POST request and return the parsed response envelope."""
-        return self._request_envelope("POST", path, json=json, headers=headers, request_id=request_id)
+        return self._request_envelope("POST", path, json=json, params=params, headers=headers, request_id=request_id)
 
     def get_envelope(
         self,
@@ -111,11 +115,11 @@ class HttpTransport:
         headers: dict[str, str] | None = None,
         request_id: str | None = None,
     ) -> Envelope:
-        if not self._api_key:
+        if self._require_api_key and not self._api_key:
             raise AuthRequiredError("No api_key configured. Run `mindmemos auth` first.")
 
         url = f"{self._base_url}{path}"
-        request_headers = {"Authorization": f"Bearer {self._api_key}"}
+        request_headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         if request_id:
             request_headers["X-Request-Id"] = request_id
         if headers:
@@ -167,13 +171,14 @@ def parse_envelope(response: httpx.Response) -> Envelope:
         )
 
     code = body.get("code")
-    message = body.get("message") or ""
+    error = body.get("error")
+    message = body.get("message") or (error.get("message") if isinstance(error, dict) else "") or ""
     request_id = body.get("request_id")
 
     if response.status_code >= 400 or (code is not None and code not in SUCCESS_CODES):
         raise ApiError(
             message or f"API error (HTTP {response.status_code}, code={code}).",
-            code=code,
+            code=error.get("code", code) if isinstance(error, dict) else code,
             status_code=response.status_code,
             request_id=request_id,
             response_body=body,
@@ -198,6 +203,7 @@ class AsyncHttpTransport:
         timeout_seconds: float = 600.0,
         max_retries: int = 2,
         client: httpx.AsyncClient | None = None,
+        require_api_key: bool = True,
     ) -> None:
         """Handle init."""
         self._base_url = base_url.rstrip("/")
@@ -206,6 +212,7 @@ class AsyncHttpTransport:
         self._max_retries = max(0, max_retries)
         self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
         self._owns_client = client is None
+        self._require_api_key = require_api_key
 
     async def aclose(self) -> None:
         """Close the process-wide HTTP client."""
@@ -223,11 +230,14 @@ class AsyncHttpTransport:
         path: str,
         *,
         json: Any,
+        params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         request_id: str | None = None,
     ) -> Envelope:
         """Send a POST request and return the parsed response envelope."""
-        return await self._request_envelope("POST", path, json=json, headers=headers, request_id=request_id)
+        return await self._request_envelope(
+            "POST", path, json=json, params=params, headers=headers, request_id=request_id
+        )
 
     async def get_envelope(
         self,
@@ -259,11 +269,11 @@ class AsyncHttpTransport:
         headers: dict[str, str] | None = None,
         request_id: str | None = None,
     ) -> Envelope:
-        if not self._api_key:
+        if self._require_api_key and not self._api_key:
             raise AuthRequiredError("No api_key configured. Run `mindmemos auth` first.")
 
         url = f"{self._base_url}{path}"
-        request_headers = {"Authorization": f"Bearer {self._api_key}"}
+        request_headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         if request_id:
             request_headers["X-Request-Id"] = request_id
         if headers:

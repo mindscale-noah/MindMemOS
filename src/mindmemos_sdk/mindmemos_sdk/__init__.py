@@ -23,12 +23,15 @@ from .memory import (
     TextMessage,
     UrlMessage,
 )
+from .skills import AsyncSkillClient, SkillClient
 
 __all__ = [
     "__version__",
     "MindMemOSClient",
     "MemoryClient",
     "AsyncMemoryClient",
+    "SkillClient",
+    "AsyncSkillClient",
     "FeedbackMode",
     "ConfigManager",
     "SDKConfig",

@@ -15,7 +15,6 @@ from mindmemos_sdk.memory import (
     TextMessage,
     UrlMessage,
 )
-from mindmemos_sdk.skills import HashState, SkillContext, SkillRecord
 from mindmemos_sdk.transport import HttpTransport
 
 
@@ -83,54 +82,6 @@ def test_add_typed_messages_serialized():
     assert msgs[4] == {"text": "raw-dict-still-ok"}
 
 
-def test_add_sends_skill_context_when_provided():
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"code": "ok", "data": {"memories": []}})
-
-    client = MemoryClient(_transport(handler), default_user_id="u_1")
-    client.add(
-        messages=[TextMessage(text="hello")],
-        skill_context=[
-            {
-                "name": "demo",
-                "content_hash": "hash-1",
-                "base_version_id": "v1",
-                "usage": "modified",
-            }
-        ],
-    )
-
-    assert captured["body"]["skill_context"] == [
-        {
-            "name": "demo",
-            "content_hash": "hash-1",
-            "base_version_id": "v1",
-            "usage": "modified",
-        }
-    ]
-
-
-def test_add_sends_score_and_task_id_when_provided():
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"code": "ok", "data": {"memories": []}})
-
-    client = MemoryClient(_transport(handler), default_user_id="u_1")
-    client.add(
-        messages=[TextMessage(text="hello")],
-        score=0.75,
-        task_id="task-1",
-    )
-
-    assert captured["body"]["score"] == 0.75
-    assert captured["body"]["task_id"] == "task-1"
-
-
 def test_dialogue_message_accepts_named_speaker_without_timestamp():
     captured = {}
 
@@ -142,68 +93,6 @@ def test_dialogue_message_accepts_named_speaker_without_timestamp():
     client.add(messages=[DialogueMessage(role="Melanie", content="hi")])
 
     assert captured["body"]["messages"] == [{"role": "Melanie", "content": "hi", "timestamp": None}]
-
-
-def test_add_auto_detects_and_ensures_registered_skill(tmp_path):
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"code": "ok", "data": {"memories": []}})
-
-    class FakeRegistry:
-        def list(self):
-            return [
-                SkillRecord(
-                    skill_id="sk_1",
-                    path=str(tmp_path / "demo"),
-                    skill_name="demo",
-                    cloud_skill_id="cloud-1",
-                    base_version_id="v1",
-                    content_hash="hash-1",
-                    hash_state=HashState.CONFIRMED,
-                )
-            ]
-
-        def get_by_path(self, _path):
-            return self.list()[0]
-
-    class FakeSkills:
-        registry = FakeRegistry()
-
-        def __init__(self):
-            self.flush_called = False
-
-        def skill_id_for_context(self, context):
-            return "sk_1" if context.name == "demo" else None
-
-        def ensure_skill_context(self, skill_id, *, usage=None):
-            assert skill_id == "sk_1"
-            return SkillContext(name="demo", content_hash="hash-confirmed", base_version_id="v1", usage=usage)
-
-        def flush_pending_uploads(self):
-            self.flush_called = True
-            return []
-
-    skills = FakeSkills()
-    client = MemoryClient(_transport(handler), default_user_id="u_1", skill_manager=skills)
-    skill_path = tmp_path / "demo" / "SKILL.md"
-    client.add(
-        messages=[
-            DialogueMessage(role="assistant", content=f'[tool_call] read({{"path":"{skill_path}"}})', timestamp=1),
-            DialogueMessage(role="tool", content="name: demo\n\nBody\n", timestamp=2),
-        ]
-    )
-
-    assert captured["body"]["skill_context"] == [
-        {
-            "name": "demo",
-            "content_hash": "hash-confirmed",
-            "base_version_id": "v1",
-            "usage": "injected",
-        }
-    ]
-    assert skills.flush_called is True
 
 
 def test_add_async_queued_empty():
@@ -309,7 +198,9 @@ def test_list_sends_page_params_and_returns_page_metadata():
                 "code": "ok",
                 "request_id": "req-list",
                 "data": {
-                    "memories": [{"id": "m1", "memory": "cat", "last_update_at": "2026-06-11 00:00:00"}],
+                    "memories": [
+                        {"id": "m1", "memory": "cat", "user_id": "u_1", "last_update_at": "2026-06-11 00:00:00"}
+                    ],
                     "page": 2,
                     "page_size": 20,
                     "total": 41,
@@ -335,6 +226,7 @@ def test_list_sends_page_params_and_returns_page_metadata():
     assert result.total == 41
     assert result.has_more is True
     assert result.memories[0].id == "m1"
+    assert result.memories[0].user_id == "u_1"
 
 
 def test_scroll_sends_cursor_and_returns_next_cursor():

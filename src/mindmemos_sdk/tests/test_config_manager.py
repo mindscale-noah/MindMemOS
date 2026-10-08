@@ -6,10 +6,11 @@ import json
 from pathlib import Path
 
 import pytest
-from mindmemos_sdk.config import ConfigManager, mask_secret
+from mindmemos_sdk.config import ConfigManager, mask_secret, paths
 from mindmemos_sdk.config.constants import CONFIG_DIR_ENV, MINDMEMOS_HOME_ENV
-from mindmemos_sdk.config.models import StorageConfig
+from mindmemos_sdk.config.models import CONFIG_SCHEMA_VERSION, DEFAULT_BASE_URL, SDKConfig
 from mindmemos_sdk.errors import ConfigNotFoundError, ConfigValidationError
+from pydantic import ValidationError
 
 
 @pytest.fixture
@@ -27,8 +28,6 @@ def test_home_fallback_and_expansion(monkeypatch, tmp_path, home):
     expected = Path(home).expanduser() if home else Path.home() / ".mindmemos"
     manager = ConfigManager()
     assert manager.config_path == expected / "settings.json"
-    assert StorageConfig().skill_cache_dir == str(expected / "skills/cache")
-    assert manager.load_or_default().storage.skill_backup_dir == str(expected / "skills/backups")
 
 
 def test_home_precedence(monkeypatch, tmp_path):
@@ -42,7 +41,33 @@ def test_home_precedence(monkeypatch, tmp_path):
     assert ConfigManager().config_dir == home
     manager = ConfigManager(config_dir=explicit)
     assert manager.config_dir == explicit
-    assert manager.load_or_default().storage.skill_cache_dir == str(explicit / "skills/cache")
+
+
+def test_saved_home_is_persistent_and_environment_can_override(monkeypatch, tmp_path):
+    preference = tmp_path / "preferences" / "home.json"
+    monkeypatch.setattr(paths, "_home_preference_path", lambda: preference)
+    monkeypatch.delenv(MINDMEMOS_HOME_ENV, raising=False)
+    monkeypatch.delenv(CONFIG_DIR_ENV, raising=False)
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    assert paths.set_default_mindmemos_home(first) == first
+    assert ConfigManager().config_dir == first
+    assert paths.set_default_mindmemos_home(second) == second
+    assert ConfigManager().config_dir == second
+
+    monkeypatch.setenv(MINDMEMOS_HOME_ENV, str(first))
+    assert ConfigManager().config_dir == first
+    assert ConfigManager(config_dir=second).config_dir == second
+
+
+def test_saved_home_rejects_relative_directory(monkeypatch, tmp_path):
+    preference = tmp_path / "preferences" / "home.json"
+    monkeypatch.setattr(paths, "_home_preference_path", lambda: preference)
+
+    with pytest.raises(ValueError, match="absolute path"):
+        paths.set_default_mindmemos_home("relative/.mindmemos")
+    assert not preference.exists()
 
 
 def test_project_homes_remain_isolated(monkeypatch, tmp_path):
@@ -56,22 +81,18 @@ def test_project_homes_remain_isolated(monkeypatch, tmp_path):
     second.update_auth(base_url="https://b", api_key="key-b", user_id="user-b")
     for manager, suffix in [(first, "a"), (second, "b")]:
         config = manager.load()
-        assert config.auth.api_key == f"key-{suffix}"
+        assert config.memory_service.auth.api_key == f"key-{suffix}"
         assert config.defaults.user_id == f"user-{suffix}"
-        assert config.storage.skill_cache_dir == str(tmp_path / suffix / "skills/cache")
-        assert config.storage.skill_backup_dir == str(tmp_path / suffix / "skills/backups")
     first.reset()
-    assert second.load().auth.api_key == "key-b"
+    assert second.load().memory_service.auth.api_key == "key-b"
 
 
-def test_partial_storage_uses_manager_home_and_preserves_explicit_paths(manager):
-    manager.config_path.write_text(json.dumps({"storage": {"skill_cache_dir": "/custom/cache"}}))
+def test_legacy_v2_storage_is_removed_when_loaded(manager):
+    manager.config_path.write_text(json.dumps({"version": 2, "storage": {"skill_cache_dir": "/custom/cache"}}))
     config = manager.load()
-    assert config.storage.skill_cache_dir == "/custom/cache"
-    assert config.storage.skill_backup_dir == str(manager.config_dir / "skills/backups")
-    config.storage.skill_backup_dir = "/custom/backups"
-    manager.save(config)
-    assert manager.load().storage.skill_backup_dir == "/custom/backups"
+    assert config.version == 2
+    assert "storage" not in json.loads(manager.config_path.read_text())
+    assert manager.load().version == 2
 
 
 def test_load_missing_raises(manager):
@@ -82,19 +103,93 @@ def test_load_missing_raises(manager):
 
 def test_update_auth_persists_and_roundtrips(manager):
     manager.update_auth(
-        base_url="https://my.example.com",
+        base_url=" https://my.example.com/ ",
         api_key="mk_secret",
         user_id="u_1",
     )
 
     assert manager.exists() is True
     loaded = manager.load()
-    assert loaded.base_url == "https://my.example.com"
-    assert loaded.auth.api_key == "mk_secret"
+    assert loaded.service_type == "custom"
+    assert loaded.memory_service.base_url == "https://my.example.com"
+    assert loaded.memory_service.auth.api_key == "mk_secret"
+    assert loaded.resolve_skill_connection() == ("https://my.example.com", "mk_secret")
     assert loaded.defaults.user_id == "u_1"
-    assert loaded.version == 1
+    assert loaded.version == CONFIG_SCHEMA_VERSION
     assert loaded.metadata.created_at is not None
     assert loaded.metadata.updated_at is not None
+
+
+def test_official_skill_connection_reuses_memory_and_runtime_overrides(manager):
+    """Existing settings use the official gateway without copied Skill secrets."""
+    manager.update_auth(base_url=DEFAULT_BASE_URL, api_key="memory-key", user_id="user")
+    loaded = manager.load()
+    assert loaded.service_type == "official"
+    assert loaded.memory_service.base_url is None
+    assert loaded.skill_service.base_url is None
+    assert loaded.skill_service.auth is None
+    assert loaded.resolve_memory_connection() == (DEFAULT_BASE_URL, "memory-key")
+    assert loaded.resolve_skill_connection() == (DEFAULT_BASE_URL, "memory-key")
+    assert loaded.resolve_skill_connection(
+        memory_base_url="https://override.example", memory_api_key="override-key"
+    ) == ("https://override.example", "override-key")
+    assert SDKConfig.model_validate({"skill_service": {"base_url": ""}}).resolve_skill_connection(
+        memory_base_url="https://override.example", memory_api_key="override-key"
+    ) == ("https://override.example", "override-key")
+    raw = json.loads(manager.config_path.read_text(encoding="utf-8"))
+    assert raw["service_type"] == "official"
+    assert "base_url" not in raw["memory_service"]
+    assert "base_url" not in raw["skill_service"]
+    assert "base_url" not in raw
+
+
+def test_self_hosted_skill_connection_has_independent_address_and_key(manager):
+    """A separate Skill deployment keeps Memory credentials out of its transport."""
+    config = SDKConfig.model_validate(
+        {
+            "service_type": "custom",
+            "memory_service": {"base_url": "https://memory.example", "auth": {"api_key": "memory-key"}},
+            "skill_service": {
+                "base_url": "https://skill.example/api/",
+                "auth": {"api_key": "skill-key"},
+            },
+        }
+    )
+    manager.save(config)
+    loaded = manager.load()
+    assert loaded.memory_service.base_url == "https://memory.example"
+    assert loaded.memory_service.auth.api_key == "memory-key"
+    assert loaded.resolve_skill_connection() == ("https://skill.example/api", "skill-key")
+    assert loaded.resolve_skill_connection(
+        memory_base_url="https://override.example", memory_api_key="override-key"
+    ) == ("https://skill.example/api", "skill-key")
+    assert "skill-key" not in repr(loaded.skill_service)
+    updated = manager.update_auth(base_url="https://new-memory.example", api_key="new-memory-key")
+    assert updated.resolve_skill_connection() == ("https://skill.example/api", "skill-key")
+    assert updated.memory_service.auth.api_key == "new-memory-key"
+
+
+@pytest.mark.parametrize(
+    "skill_service",
+    [
+        {"base_url": "https://skill.example"},
+        {"auth": {"api_key": "skill-key"}},
+        {"base_url": "", "auth": {"api_key": "skill-key"}},
+        {"base_url": "https://skill.example", "auth": {"api_key": ""}},
+        {"base_url": "https://user:pass@skill.example", "auth": {"api_key": "key"}},
+        {"mode": "official"},
+    ],
+)
+def test_skill_connection_rejects_ambiguous_or_incomplete_configuration(skill_service):
+    """Do not silently fall back to the Memory credential for a separate Skill API."""
+    with pytest.raises(ValidationError):
+        SDKConfig.model_validate(
+            {
+                "service_type": "custom",
+                "memory_service": {"base_url": "https://memory.example"},
+                "skill_service": skill_service,
+            }
+        )
 
 
 def test_update_auth_drops_legacy_actor_defaults(manager):
@@ -121,21 +216,19 @@ def test_update_auth_drops_legacy_actor_defaults(manager):
 
     assert updated.defaults.user_id == "new-user"
     assert raw["defaults"] == {"user_id": "new-user"}
+    assert raw["version"] == 2
+    assert raw["memory_service"]["base_url"] == "https://new.example.com"
+    assert "skills" not in raw
 
 
-def test_update_auth_preserves_skills_and_created_at(manager):
+def test_update_auth_preserves_created_at(manager):
     first = manager.update_auth(base_url="https://a", api_key="k1", user_id="u_1")
     created_at = first.metadata.created_at
 
-    # Inject a skill record out-of-band to prove update_auth does not clobber it.
-    raw = json.loads(manager.config_path.read_text())
-    raw["skills"] = [{"id": "skill_1", "name": "demo"}]
-    manager.config_path.write_text(json.dumps(raw))
-
     second = manager.update_auth(base_url="https://b", api_key="k2", user_id="u_2")
-    assert second.base_url == "https://b"
-    assert second.auth.api_key == "k2"
-    assert second.skills == [{"id": "skill_1", "name": "demo"}]
+    assert second.memory_service.base_url == "https://b"
+    assert second.memory_service.auth.api_key == "k2"
+    assert "skills" not in second.model_dump()
     assert second.metadata.created_at == created_at
 
 
@@ -144,6 +237,21 @@ def test_reset_removes_file(manager):
     assert manager.reset() is True
     assert manager.exists() is False
     assert manager.reset() is False
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"version": 3},
+        {"service_type": "official", "memory_service": {"base_url": "https://custom.example"}},
+        {"service_type": "custom"},
+        {"service_type": "private"},
+        {"base_url": "https://legacy.example"},
+    ],
+)
+def test_v2_rejects_inconsistent_or_legacy_fields(config):
+    with pytest.raises(ValidationError):
+        SDKConfig.model_validate(config)
 
 
 def test_load_invalid_json_raises(manager):

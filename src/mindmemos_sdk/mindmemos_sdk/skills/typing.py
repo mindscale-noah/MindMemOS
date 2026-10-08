@@ -1,0 +1,439 @@
+"""Public request and response types for the standalone Skill service."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+
+from .config import EnvironmentConfig
+
+
+class SkillRequestBody(BaseModel):
+    """Validate the fields sent to one Skill endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject unknown public fields before sending a request."""
+
+
+class StructuredSkillInfo(SkillRequestBody):
+    """Portable source document, resources, and publication metadata."""
+
+    content: str
+    """Exact SKILL.md text, including its original newlines."""
+
+    resources: dict[str, str] = Field(default_factory=dict)
+    """Canonical Base64 resource bytes keyed by relative path."""
+
+    name: str | None = None
+    """Name parsed from frontmatter, or required for nonstandard content."""
+
+    description: str | None = None
+    """Description parsed from frontmatter, or required for nonstandard content."""
+
+    standard_format: bool = True
+    """Whether the server must validate standard SKILL.md frontmatter."""
+
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    """User metadata saved with this publication."""
+
+    commit_message: str | None = None
+    """Explanation saved with the version."""
+
+    commit_version: str | None = None
+    """Explicit semantic label; None allocates it automatically."""
+
+    version_bump: Literal["patch", "minor", "major"] = "patch"
+    """Version component incremented during automatic labeling."""
+
+    commit_source: Literal["user", "algo"] = "user"
+    """Origin of this publication."""
+
+    @model_validator(mode="after")
+    def validate_resources(self):
+        """Reject invalid resource paths or Base64 before HTTP I/O."""
+        from .content import decode_resources
+
+        decode_resources(self.resources)
+        return self
+
+
+class RegisterRequest(SkillRequestBody):
+    """Register structured content as a new family."""
+
+    skill: StructuredSkillInfo
+    """Complete portable source and commit metadata."""
+
+    alias: str | None = None
+    """Optional project-unique family shortcut."""
+
+
+class ListRequest(SkillRequestBody):
+    """Page Skill families within the authenticated project."""
+
+    filters: dict[str, str] = Field(default_factory=dict)
+    """Optional name, alias, user_id, and agent_id filters."""
+
+    limit: int | None = Field(default=None, ge=1)
+    """Maximum number of families in one page."""
+
+    cursor: str | None = None
+    """Opaque continuation cursor from the preceding page."""
+
+
+class ShowRequest(SkillRequestBody):
+    """Read one family and a selected version."""
+
+    skill_id: str | None = None
+    """Exact family identity."""
+
+    skill_version_id: str | None = None
+    """Historical version identity, or None for the active version."""
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        """Require a family or an exact immutable version."""
+        if self.skill_id is None and self.skill_version_id is None:
+            raise ValueError("Supply skill_id or skill_version_id")
+        return self
+
+
+class CommitRequest(SkillRequestBody):
+    """Publish structured content as a child of an existing version."""
+
+    skill_id: str
+    """Target family identity."""
+
+    skill: StructuredSkillInfo
+    """Complete replacement source and commit metadata."""
+
+    base_version_id: str | None = None
+    """Explicit parent; omission selects the active version."""
+
+    active: bool = True
+    """Whether to activate the new version."""
+
+    inherit_resources: bool = False
+    """Inherit parent resources explicitly; replacement resources must be empty."""
+
+    @model_validator(mode="after")
+    def validate_inheritance(self):
+        """Reject conflicting inheritance and replacement instructions."""
+        if self.inherit_resources and self.skill.resources:
+            raise ValueError("Resource inheritance cannot include replacement resources")
+        return self
+
+
+class GraphSnapshotsRequest(SkillRequestBody):
+    """List immutable snapshots of one project-owned graph."""
+
+    graph_id: str
+    """Exact graph identity in the authorized project."""
+
+
+class GraphSnapshotRequest(GraphSnapshotsRequest):
+    """Read the contents of one immutable graph snapshot."""
+
+    graph_version_id: str
+    """Exact graph snapshot identity."""
+
+
+class HistoryRequest(SkillRequestBody):
+    """Page immutable versions of one family."""
+
+    skill_id: str
+    """Exact family identity."""
+
+    limit: int | None = Field(default=None, ge=1)
+    """Maximum number of versions in one page."""
+
+    offset: int = 0
+    """Number of earlier versions to skip."""
+
+    cursor: str | None = None
+    """Opaque history continuation token from the preceding response."""
+
+
+class DiffRequest(SkillRequestBody):
+    """Compare two stored versions."""
+
+    skill_id: str
+    """Source family identity."""
+
+    to_skill_version_id: str
+    """Exact target version identity."""
+
+    from_skill_version_id: str | None = None
+    """Source version identity, or None for the active version."""
+
+    to_skill_id: str | None = None
+    """Target family identity, or None for the source family."""
+
+
+class ActivateRequest(SkillRequestBody):
+    """Make an existing version current."""
+
+    skill_id: str | None = None
+    """Exact family identity."""
+
+    skill_version_id: str
+    """Exact owned version identity."""
+
+    expected_active_version_id: str | None = None
+    """Optional pointer used to reject stale activation requests."""
+
+
+class UpdateInfoRequest(SkillRequestBody):
+    """Change family fields without creating a version."""
+
+    skill_id: str
+    """Exact family identity."""
+
+    name: str | None = None
+    """New display name, or None when unchanged."""
+
+    alias: str | None = None
+    """New alias; explicit None clears it."""
+
+    metadata: dict[str, JsonValue] | None = None
+    """Replacement family metadata, or None when unchanged."""
+
+
+class DeleteRequest(SkillRequestBody):
+    """Delete an unreferenced family."""
+
+    skill_id: str
+    """Exact family identity."""
+
+
+class VersionResolveRequest(SkillRequestBody):
+    """Resolve a source hash to an exact version."""
+
+    content_hash: str | None = None
+    """Optional exact-text SHA-256 digest."""
+
+    skill_hash: str | None = None
+    """Optional complete-source SHA-256 digest."""
+
+    skill_id: str | None = None
+    """Optional family identity narrowing the lookup."""
+
+    skill_version_id: str | None = None
+    """Optional exact version identity requiring a family identity."""
+
+
+class SkillResolveRequest(SkillRequestBody):
+    """Resolve a Skill alias, family, or immutable version."""
+
+    skill_ref: str = Field(min_length=1)
+    """Project-owned alias or unique prefixed Skill identity."""
+
+
+class TrajectoryReportRequest(SkillRequestBody):
+    """Report one execution against its loaded Skill version."""
+
+    user_id: str
+    """Business user who requested the execution."""
+
+    agent_id: str
+    """Agent that performed the execution."""
+
+    messages: list[dict[str, JsonValue]]
+    """Ordered execution messages with role and content."""
+
+    skill_version_id: str
+    """Exact loaded Skill version identity."""
+
+    session_id: str | None = None
+    """Optional Harness session identity."""
+
+    started_at: datetime | None = None
+    """Actual execution start time when known."""
+
+    finished_at: datetime | None = None
+    """Actual execution finish time when known."""
+
+    status: str = "completed"
+    """Caller-declared execution status."""
+
+
+class TrajectoryShowRequest(SkillRequestBody):
+    """Read one stored execution attempt."""
+
+    trajectory_id: str
+    """Server-generated attempt identity."""
+
+
+class TrajectoryListRequest(SkillRequestBody):
+    """Page execution attempts for one Skill family."""
+
+    skill_id: str
+    """Exact family identity."""
+
+    skill_version_id: str | None = None
+    """Optional exact version filter."""
+
+    status: str | None = None
+    """Optional execution status filter."""
+
+    received_at_from: datetime | None = None
+    """Inclusive server receipt time lower bound."""
+
+    received_at_to: datetime | None = None
+    """Inclusive server receipt time upper bound."""
+
+    limit: int | None = Field(default=None, ge=1)
+    """Maximum number of attempts in one page."""
+
+    cursor: str | None = None
+    """Opaque continuation cursor from the preceding page."""
+
+
+class OrganizeRequest(SkillRequestBody):
+    """Publish an explicit Skill collection into a new or existing graph."""
+
+    skill_refs: list[str]
+    """Project-owned family or immutable version references."""
+
+    graph_id: str | None = None
+    """Existing graph identity; omission creates one."""
+
+    alias: str | None = None
+    """Optional alias for a new graph."""
+
+    commit_message: str | None = None
+    """Explanation stored with the graph publication."""
+
+
+class GraphResolveRequest(SkillRequestBody):
+    """Resolve a project-scoped graph reference."""
+
+    graph_ref: str = Field(min_length=1)
+    """Graph ID, alias, or unique ID prefix."""
+
+
+class RecommendRequest(GraphResolveRequest):
+    """Request Skill recommendations from one graph."""
+
+    graph_version_id: str | None = None
+    """Optional exact published snapshot overriding the current graph pointer."""
+
+    query: str
+    """Task instruction for graph retrieval."""
+
+    top_k: int | None = None
+    """Maximum number of recommendations when supplied."""
+
+
+class EvolveRequest(SkillRequestBody):
+    """Request evolution from one exact stored version."""
+
+    skill_version_id: str
+    """Exact baseline version identity."""
+
+    auto_accept: bool = True
+    """Whether to activate the published candidate version."""
+
+
+class TaskShowRequest(SkillRequestBody):
+    """Read one asynchronous business task."""
+
+    task_id: str
+    """Server-generated task identity."""
+
+
+class TrainingSplitRequest(SkillRequestBody):
+    """Assign each training task to exactly one data split."""
+
+    train: list[str] = Field(min_length=1)
+    """Ordered task IDs used to optimize the Skill."""
+
+    val: list[str] = Field(default_factory=list)
+    """Ordered task IDs used for candidate selection."""
+
+    test: list[str] = Field(default_factory=list)
+    """Held-out task IDs evaluated after training."""
+
+
+class TrainingRequest(SkillRequestBody):
+    """Submit a Skill training run to the authorized service project."""
+
+    init_skill_version_id: str
+    """Current stored version used as the training input and commit parent."""
+
+    work_dir: str
+    """Stable server-side run directory used for resumable training."""
+
+    tasks: list[dict[str, JsonValue]] = Field(min_length=1)
+    """Public tasks paired with private reward data for the server-side environment."""
+
+    split: TrainingSplitRequest
+    """Exact assignment of submitted task IDs to train, validation, and test."""
+
+    algo: str
+    """Configured training algorithm profile."""
+
+    env: EnvironmentConfig
+    """Environment implementation and configuration supplied for this run."""
+
+    auto_accept: bool = True
+    """Activate the trained version after successful publication."""
+
+
+class TaskProgressRequest(SkillRequestBody):
+    """Read training progress after one emitted event sequence number."""
+
+    task_id: str
+    """Server-generated training task identity."""
+
+    after: int = Field(default=0, ge=0)
+    """Return progress events with a sequence number above this value."""
+
+
+SkillData = dict[str, Any] | list[dict[str, Any]]
+"""Decoded data payload returned by a Skill service endpoint."""
+
+
+class CLISkillInfo(StructuredSkillInfo):
+    """Validate direct CLI content before uploading it to the service."""
+
+    @model_validator(mode="after")
+    def validate_content(self):
+        """Require standard frontmatter or explicit nonstandard identities."""
+        from .content import parse_frontmatter
+
+        if self.standard_format:
+            header = parse_frontmatter(self.content)
+            if self.name is not None and self.name != header["name"]:
+                raise ValueError("Skill name differs from frontmatter")
+            if self.description is not None and self.description != header["description"]:
+                raise ValueError("Skill description differs from frontmatter")
+        elif not self.name or not self.name.strip() or not self.description or not self.description.strip():
+            raise ValueError("Nonstandard Skills require nonempty name and description")
+        return self
+
+
+class CLITrainingRequest(TrainingRequest):
+    """Validate CLI task inputs and split references before submitting training."""
+
+    @model_validator(mode="after")
+    def validate_tasks(self):
+        """Reject malformed samples, duplicate identities, and overlapping splits."""
+        ids = []
+        for sample in self.tasks:
+            task = sample.get("task")
+            if not isinstance(task, dict):
+                raise ValueError("Each sample requires a task object")
+            task_id, instruction = task.get("id"), task.get("instruction")
+            if not isinstance(task_id, str) or not task_id.strip():
+                raise ValueError("Task IDs must be nonempty strings")
+            if not isinstance(instruction, str) or not instruction.strip():
+                raise ValueError("Task instructions must be nonempty strings")
+            if not isinstance(sample.get("reward_data"), dict):
+                raise ValueError("Each sample requires a reward_data object")
+            ids.append(task_id)
+        split_ids = self.split.train + self.split.val + self.split.test
+        if len(set(ids)) != len(ids) or len(set(split_ids)) != len(split_ids) or not set(split_ids) <= set(ids):
+            raise ValueError("Task IDs must be unique and splits must be disjoint subsets of supplied tasks")
+        return self

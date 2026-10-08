@@ -62,9 +62,6 @@ async def test_sync_and_async_memory_clients_share_request_contract():
             agent_id="agent-1",
             session_id="session-1",
             metadata={"source": "test"},
-            skill_context=[{"name": "demo", "content_hash": "hash-1", "usage": "injected"}],
-            score=0.5,
-            task_id="task-1",
         ),
         lambda c: c.search(
             "hello",
@@ -97,9 +94,6 @@ async def test_sync_and_async_memory_clients_share_request_contract():
             agent_id="agent-1",
             session_id="session-1",
             metadata={"source": "test"},
-            skill_context=[{"name": "demo", "content_hash": "hash-1", "usage": "injected"}],
-            score=0.5,
-            task_id="task-1",
         ),
         lambda c: c.search(
             "hello",
