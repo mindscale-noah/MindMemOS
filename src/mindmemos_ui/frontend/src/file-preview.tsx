@@ -92,7 +92,7 @@ export function FilePreview({
                 return (
                   <button
                     className="markdown-link"
-                    title={`在当前版本中打开 ${target}`}
+                    title={`在生效版本中打开 ${target}`}
                     onClick={() => onOpenFile(target)}
                   >
                     {children}
@@ -111,7 +111,7 @@ export function FilePreview({
               return (
                 <span
                   className="unavailable-link"
-                  title={`无法在当前版本中打开：${href || "无效链接"}`}
+                  title={`无法在生效版本中打开：${href || "无效链接"}`}
                 >
                   {children}（链接不可用）
                 </span>

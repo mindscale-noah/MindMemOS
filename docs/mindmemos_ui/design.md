@@ -2,6 +2,8 @@
 
 状态：设计记录，2026-09-20。首版模块已实现，实际启动方式与功能边界见 [使用说明](usage.md)。本文保留设计目标；早期交互稿为演示数据，正式模块只读取 SDK 与已连接的图谱存储。
 
+2026-09-29 更新：下文涉及旧 SDK `SkillManager`、`SkillCloudClient`、本地 registry 和同步流程的段落仅保留为历史设计记录。当前 SDK 的 Skill 接口直连 `mindmemos_skill`，配置与使用方式以 [使用说明](usage.md) 和 [SDK README](../../src/mindmemos_sdk/README.md) 为准。
+
 文案约定：不添加宣传式副标题，例如“查看、比较，并将演进版本带回你的工作流”。页面保留功能名称、字段标签和必要的操作状态说明。
 
 ## 1. 产品定位
@@ -35,8 +37,7 @@
 
 | 分组 | 字段 |
 | --- | --- |
-| 连接 | base_url、auth.api_key、defaults.user_id |
-| 存储 | storage.skill_cache_dir、storage.skill_backup_dir |
+| 连接 | service_type、memory_service、skill_service、defaults.user_id |
 | 网络（折叠） | network.timeout_seconds、network.max_retries |
 
 顶部只读显示解析后的 SDK home、来源及 settings.json 路径。遵循显式 config_dir > MINDMEMOS_HOME > MINDMEMOS_CONFIG_DIR > ~/.mindmemos。首版在启动参数中选择 home，不设计 SDK 尚未支持的多 profile 管理。

@@ -13,6 +13,19 @@ class RequestModel(BaseModel):
     """Catch accidental or misspelled input fields."""
 
 
+class MemorySearchRequest(RequestModel):
+    """Search text submitted from the read-only Memories page."""
+
+    query: str = Field(min_length=1, max_length=2000, pattern=r"\S")
+    """Non-empty natural-language query sent to the Memory service."""
+
+    top_k: int = Field(default=20, ge=1)
+    """Maximum number of memories returned by the search."""
+
+    user_id: str | None = Field(default=None, min_length=1, pattern=r"\S")
+    """Optional user filter; None uses the configured default user."""
+
+
 class DirectorySelectionRequest(RequestModel):
     """Initial location for the host's native directory chooser."""
 
@@ -50,6 +63,16 @@ class ServiceConfigUpdate(RequestModel):
         return self
 
 
+class SDKSettingsUpdate(RequestModel):
+    """Complete SDK v2 JSON document with optimistic concurrency protection."""
+
+    content: str = Field(min_length=1, max_length=1000000)
+    """JSON source for a complete SDK v2 settings document."""
+
+    revision: str | None = None
+    """Hash of the last loaded settings file; None requires a missing file."""
+
+
 class RegisterRequest(RequestModel):
     """Local registration input."""
 
@@ -58,9 +81,6 @@ class RegisterRequest(RequestModel):
 
     version_label: UserVersionLabel | None = None
     """Optional semantic label for the initial version; defaults to v1.0.0."""
-
-    name: str = Field(min_length=1)
-    """Central display name."""
 
     message: str | None = None
     """Registration explanation."""
@@ -119,8 +139,8 @@ class ConfirmRequest(RequestModel):
     """Server-owned preview identity."""
 
 
-class SwitchRequest(RequestModel):
-    """A selected version to make current without changing external files."""
+class ActiveRequest(RequestModel):
+    """A selected version to make active without changing external files."""
 
     skill_id: str
     """Local repository Skill identity."""
@@ -138,7 +158,7 @@ class CommitRequest(RequestModel):
     """Complete source directory or SKILL.md path."""
 
     base_version_id: str
-    """Expected current version for optimistic concurrency."""
+    """Explicit parent version for optimistic concurrency."""
 
     message: str | None = None
     """Explanation for the new version."""

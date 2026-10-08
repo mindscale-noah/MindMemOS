@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Selection } from "./api";
 
-export type Page = "skills" | "graphs" | "settings" | "service-settings";
+export type Page = "skills" | "memories" | "graphs" | "settings" | "service-settings";
 export type Route = { page: Page; selection?: Selection; tab?: string };
 type Entry = { index: number; parent?: number };
 
@@ -10,7 +10,7 @@ export function readRoute(): Route {
   const page = params.get("page");
   const route: Route = {
     page:
-      page === "graphs" || page === "settings" || page === "service-settings"
+      page === "memories" || page === "graphs" || page === "settings" || page === "service-settings"
         ? page
         : "skills",
   };

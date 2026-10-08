@@ -2,6 +2,7 @@
 
 from urllib.parse import urlsplit
 
+from mindmemos_sdk.config import DEFAULT_BASE_URL, SDKConfig
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -23,12 +24,6 @@ class SettingsUpdate(BaseModel):
     user_id: str | None = None
     """Default SDK user identity."""
 
-    skill_cache_dir: str
-    """SDK content cache directory."""
-
-    skill_backup_dir: str
-    """SDK backup directory."""
-
     timeout_seconds: int = Field(default=30, gt=0, le=600)
     """Network timeout in seconds."""
 
@@ -45,20 +40,34 @@ class SettingsUpdate(BaseModel):
         return value.rstrip("/")
 
 
-def apply_sdk_settings(config, body: SettingsUpdate) -> None:
+def set_memory_connection(config: SDKConfig, *, base_url: str, api_key: str | None, user_id: str | None) -> None:
+    """Update the Memory connection in a v2 SDK config.
+
+    Args:
+        config: Existing SDK configuration to update in place.
+        base_url: Effective Memory API root selected in the UI.
+        api_key: Memory credential, or None to leave credentials empty.
+        user_id: Optional default business user identity.
+    """
+    official = base_url == DEFAULT_BASE_URL and config.skill_service.base_url is None
+    config.service_type = "official" if official else "custom"
+    config.memory_service.base_url = None if official else base_url
+    config.memory_service.auth.api_key = api_key
+    config.defaults.user_id = user_id
+
+
+def apply_sdk_settings(config: SDKConfig, body: SettingsUpdate) -> None:
     """Apply editable connection fields while preserving SDK registry and metadata.
 
     Args:
         config: Existing SDK configuration to update in place.
         body: Validated editable fields; an omitted key preserves stored credentials.
     """
-    config.base_url = body.base_url
+    api_key = config.memory_service.auth.api_key
     if body.clear_api_key:
-        config.auth.api_key = None
+        api_key = None
     elif body.api_key:
-        config.auth.api_key = body.api_key
-    config.defaults.user_id = body.user_id
-    config.storage.skill_cache_dir = body.skill_cache_dir
-    config.storage.skill_backup_dir = body.skill_backup_dir
+        api_key = body.api_key
+    set_memory_connection(config, base_url=body.base_url, api_key=api_key, user_id=body.user_id)
     config.network.timeout_seconds = body.timeout_seconds
     config.network.max_retries = body.max_retries

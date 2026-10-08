@@ -18,9 +18,9 @@ from fastapi.responses import Response
 from filelock import FileLock
 from mindmemos_sdk.config import ConfigManager
 from mindmemos_sdk.config.paths import get_mindmemos_home
-from mindmemos_sdk.skills.cloud import SkillCloudClient
+from mindmemos_sdk.memory import MemoryClient
 from mindmemos_sdk.transport import HttpTransport
-from mindmemos_skill.api.factory import SERVICE_CONFIG_FILENAME, default_service_config, load_service_config
+from mindmemos_skill.config.loader import load_skill_config
 from pydantic import ValidationError
 
 from .config import SettingsUpdate, apply_sdk_settings
@@ -34,7 +34,7 @@ def _validate(content: str, kind: ConfigKind) -> None:
     """Validate without constructing resources or applying environment variables."""
     try:
         if kind == "skill":
-            config = load_service_config(content)
+            config = load_skill_config(content).service
             if config.persistence is None or config.repository_pipeline is None:
                 raise HTTPException(422, "The local workbench requires persistence and repository_pipeline")
         else:
@@ -72,20 +72,30 @@ def _read(path: Path, kind: ConfigKind) -> dict:
     if kind == "memory":
         manager = ConfigManager(path.parent if path.suffix == ".json" else path.parents[2])
         config = manager.load_or_default()
+        base_url, api_key = config.resolve_memory_connection()
         memory_content = yaml.safe_dump(
             {
-                "base_url": config.base_url,
-                "api_key": config.auth.api_key,
+                "base_url": base_url,
+                "api_key": api_key,
                 "user_id": config.defaults.user_id,
-                "skill_cache_dir": config.storage.skill_cache_dir,
-                "skill_backup_dir": config.storage.skill_backup_dir,
                 "timeout_seconds": config.network.timeout_seconds,
                 "max_retries": config.network.max_retries,
             },
             sort_keys=False,
         )
     template = (
-        yaml.safe_dump(default_service_config().model_dump(mode="json", exclude_none=True), sort_keys=False)
+        yaml.safe_dump(
+            {
+                "service": {
+                    "home": str(path.parent / "skill"),
+                    "persistence": {"database": {"class_name": "sqlite", "config": {}}},
+                    "repository_pipeline": {"class_name": "repository"},
+                    "manage_pipeline": {"class_name": "graph_manage"},
+                },
+                "fastapi": {"auth": {"mode": "none", "default_project_id": "personal"}},
+            },
+            sort_keys=False,
+        )
         if kind == "skill"
         else memory_content
     )
@@ -137,7 +147,7 @@ def service_settings_router(home: Path) -> APIRouter:
             raise HTTPException(422, "Use letters, digits, underscores or hyphens for the configuration name")
         root = root_for(selected)
         if name == "default":
-            return root / (SERVICE_CONFIG_FILENAME if kind == "skill" else "settings.json")
+            return root / ("service.yaml" if kind == "skill" else "settings.json")
         directory = root / "config" / kind
         if not directory.resolve().is_relative_to(root):
             raise HTTPException(400, "Configuration directory must stay inside HOME")
@@ -238,7 +248,7 @@ def service_settings_router(home: Path) -> APIRouter:
             timeout_seconds=config.timeout_seconds,
             max_retries=config.max_retries,
         ) as transport:
-            SkillCloudClient(transport).list_skills()
+            MemoryClient(transport).get(top_k=1)
         return {"ok": True}
 
     @router.get("/api/configurations/{kind}/{name}/export")

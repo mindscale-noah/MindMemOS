@@ -56,6 +56,11 @@ test("navigation history, retained filters, direct links and unsaved settings", 
       let data;
       if (key === "session")
         data = { token: "test", home: "/test", graphs_connected: true };
+      else if (key === "connections")
+        data = {
+          memory: { url: "http://127.0.0.1", status: "unconfigured" },
+          skill: { url: "http://127.0.0.1", status: "connected" },
+        };
       else if (key === "skills") data = [skill];
       else if (key.startsWith("skills/"))
         data = { skill, version: versions[1] };
@@ -84,32 +89,25 @@ test("navigation history, retained filters, direct links and unsaved settings", 
           edges: [],
         };
       else if (key === "configurations/default-home") data = { home: "/test" };
-      else if (key === "client-configurations")
+      else if (key === "client-configurations/sdk")
         data = {
-          home: "/test",
-          runtime_home: "/test",
-          memory: [
-            { name: "default", exists: true, path: "/test/settings.json" },
-          ],
-          skill: [],
-        };
-      else if (key === "client-configurations/memory/default")
-        data = {
-          name: "default",
-          kind: "memory",
           exists: true,
           path: "/test/settings.json",
-          env_path: "/test/settings.env",
           revision: "test",
-          env: [],
-          content: "user_id: original\n",
-          values: { base_url: "http://127.0.0.1:8000", api_key: null, user_id: "original", timeout_seconds: 21600 },
+          content: JSON.stringify({ version: 2, service_type: "official" }),
+          values: {
+            version: 2,
+            service_type: "official",
+            memory_service: { auth: { api_key: null } },
+            skill_service: {},
+            defaults: { user_id: "original" },
+            network: { timeout_seconds: 30, max_retries: 2 },
+            metadata: {},
+          },
         };
       else if (key === "config")
         data = {
           base_url: "https://example.com",
-          skill_cache_dir: "/cache",
-          skill_backup_dir: "/backup",
           timeout_seconds: 30,
           max_retries: 2,
         };
@@ -125,7 +123,7 @@ test("navigation history, retained filters, direct links and unsaved settings", 
     await waitHash("skill=");
     const detailUrl = page.url();
     await page.goBack();
-    await page.getByRole("heading", { name: "Skills 中心仓" }).waitFor();
+    await page.getByRole("heading", { name: "Skill 服务" }).waitFor();
     assert.equal(
       await page.getByRole("textbox", { name: "搜索 Skill" }).inputValue(),
       "Navigation",
@@ -140,13 +138,20 @@ test("navigation history, retained filters, direct links and unsaved settings", 
     await page.goForward();
     await waitHash("version=v1");
     await page.getByRole("button", { name: "← 返回", exact: true }).click();
-    await page.getByRole("heading", { name: "Skills 中心仓" }).waitFor();
+    await page.getByRole("heading", { name: "Skill 服务" }).waitFor();
     assert.equal(
       await page.getByRole("textbox", { name: "搜索 Skill" }).inputValue(),
       "Navigation",
     );
 
-    await page.getByRole("button", { name: "管理图谱", exact: true }).click();
+    await page.getByRole("button", { name: "SkillSets", exact: true }).click();
+    assert.equal(
+      await page.getByLabel("图谱", { exact: true }).inputValue(),
+      "__skillsets_demo__",
+    );
+    await page.locator(".react-flow__edge").first().waitFor();
+    assert.equal(await page.locator(".react-flow__edge").count(), 8);
+    await page.getByLabel("图谱", { exact: true }).selectOption("g1");
     await page.getByLabel(/图谱快照/).selectOption("s1");
     await page.getByRole("textbox", { name: "定位 Skill" }).fill("Navigation");
     await page.locator(".graph-node").click();
@@ -162,14 +167,29 @@ test("navigation history, retained filters, direct links and unsaved settings", 
 
     await page.getByRole("button", { name: "配置", exact: true }).click();
     const openSettings = async () => {
-      if (await page.getByText("请先选择配置目录", { exact: true }).count()) {
-        await page.getByRole("button", { name: "手动输入路径", exact: true }).click();
-        await page.getByLabel("HOME 路径", { exact: true }).fill("/tmp/navigation-home");
-        await page.getByRole("button", { name: "使用此路径", exact: true }).click();
-      }
-      await page.getByRole("button", { name: /M Memory 配置/ }).click();
+      await page.getByRole("textbox", { name: /^默认用户/ }).waitFor();
     };
     await openSettings();
+    assert.equal(
+      await page.getByLabel("当前 HOME 路径").textContent(),
+      "/test",
+    );
+    assert.equal(
+      await page.getByRole("button", { name: "选择目录…" }).count(),
+      0,
+    );
+    assert.equal(
+      await page.getByRole("button", { name: "手动输入路径" }).count(),
+      0,
+    );
+    await page.getByRole("button", { name: "切换配置路径" }).click();
+    const pathHelp = page.getByRole("dialog");
+    await pathHelp.getByRole("heading", { name: "切换配置路径" }).waitFor();
+    await pathHelp.getByText("执行命令", { exact: true }).waitFor();
+    assert.deepEqual(await pathHelp.locator("code").allTextContents(), [
+      'mindmemos config home set "/Users/alice/work/.mindmemos"',
+    ]);
+    await pathHelp.getByRole("button", { name: "关闭" }).click();
     await page.getByRole("textbox", { name: /^默认用户/ }).fill("unsaved");
     page.once("dialog", (dialog) => dialog.dismiss());
     await page.goBack();
@@ -187,7 +207,10 @@ test("navigation history, retained filters, direct links and unsaved settings", 
     );
     page.once("dialog", (dialog) => dialog.dismiss());
     await page.getByRole("textbox", { name: /^默认用户/ }).press("Escape");
-    assert.equal(await page.getByRole("textbox", { name: /^默认用户/ }).isVisible(), true);
+    assert.equal(
+      await page.getByRole("textbox", { name: /^默认用户/ }).isVisible(),
+      true,
+    );
     page.once("dialog", (dialog) => dialog.accept());
     await page.goBack();
     await waitHash("page=graphs");
@@ -197,11 +220,12 @@ test("navigation history, retained filters, direct links and unsaved settings", 
       await page.getByRole("textbox", { name: /^默认用户/ }).inputValue(),
       "original",
     );
-    await page.getByRole("button", { name: "关闭", exact: true }).click();
     await page.getByRole("button", { name: "Skills", exact: true }).click();
     await page.goBack();
     await openSettings();
-    await page.getByRole("textbox", { name: /^默认用户/ }).fill("forward-draft");
+    await page
+      .getByRole("textbox", { name: /^默认用户/ })
+      .fill("forward-draft");
     page.once("dialog", (dialog) => dialog.dismiss());
     await page.goForward();
     await waitHash("page=settings");
@@ -211,7 +235,7 @@ test("navigation history, retained filters, direct links and unsaved settings", 
     );
     page.once("dialog", (dialog) => dialog.accept());
     await page.goForward();
-    await page.getByRole("heading", { name: "Skills 中心仓" }).waitFor();
+    await page.getByRole("heading", { name: "Skill 服务" }).waitFor();
 
     await page.goto(detailUrl);
     await page
@@ -222,7 +246,7 @@ test("navigation history, retained filters, direct links and unsaved settings", 
       .getByRole("button", { name: "提交新版本", exact: true })
       .waitFor();
     await page.getByRole("button", { name: "← 返回", exact: true }).click();
-    await page.getByRole("heading", { name: "Skills 中心仓" }).waitFor();
+    await page.getByRole("heading", { name: "Skill 服务" }).waitFor();
     if (process.env.NAVIGATION_SCREENSHOT)
       await page.screenshot({
         path: process.env.NAVIGATION_SCREENSHOT,

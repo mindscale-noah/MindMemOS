@@ -7,7 +7,7 @@ import {
   type Skill,
   type Version,
 } from "./api";
-import { useLoad, Message, Empty } from "./components";
+import { Empty, Message, useLoad } from "./components";
 import { Register } from "./operations";
 export function Skills({
   open,
@@ -24,13 +24,13 @@ export function Skills({
       const skills = await api<Skill[]>("skills");
       return Promise.all(
         skills.map(async (skill) => {
-          if (skill.current_version_label && skill.latest_version_id)
+          if (skill.active_version_label && skill.latest_version_id)
             return skill;
           const history = await api<Version[]>(
             `versions?${query({ skill_id: skill.skill_id })}`,
           );
           const current = history.find(
-            (v) => v.version_id === skill.current_version_id,
+            (v) => v.version_id === skill.active_version_id,
           );
           const latest = history.reduce<Version | undefined>(
             (best, version) =>
@@ -42,8 +42,8 @@ export function Skills({
           );
           return {
             ...skill,
-            current_version_label:
-              current?.version_label ?? skill.current_version_label,
+            active_version_label:
+              current?.version_label ?? skill.active_version_label,
             latest_version_id: latest?.version_id,
             latest_version_label: latest?.version_label,
             implementation: current?.implementation ?? skill.implementation,
@@ -62,13 +62,13 @@ export function Skills({
   return (
     <>
       <div className="row">
-        <h1>Skills 中心仓</h1>
+        <h1>Skill 服务</h1>
         <button className="primary" onClick={() => setRegister(true)}>
           ＋ 注册 Skill
         </button>
       </div>
       <p className="muted">
-        统一管理 Skill 快照与版本。导入目录仅作为来源记录。
+        管理当前 SDK 配置的 Skill 服务中的快照与版本。
       </p>
       <div className="toolbar">
         <input
@@ -89,12 +89,9 @@ export function Skills({
               <tr>
                 <th>Skill</th>
                 <th>别名</th>
-                <th>当前版本</th>
+                <th>生效版本</th>
                 <th title="中心仓最近创建的版本">最新版本</th>
                 <th>注册时间</th>
-                <th title="基于本地保存的云端版本同步记录，非实时云端检查">
-                  云端同步
-                </th>
               </tr>
             </thead>
             <tbody>
@@ -109,7 +106,7 @@ export function Skills({
                           id: s.skill_id,
                           name: s.name,
                           local: s,
-                          version: s.current_version_id,
+                          version: s.active_version_id,
                         })
                       }
                     >
@@ -118,10 +115,10 @@ export function Skills({
                   </td>
                   <td>{s.alias || "—"}</td>
                   <td>
-                    <code title={s.current_version_id}>
+                    <code title={s.active_version_id}>
                       {versionLabel(
                         {
-                          version_label: s.current_version_label,
+                          version_label: s.active_version_label,
                           implementation: s.implementation,
                         },
                         "未设置版本号",
@@ -145,19 +142,6 @@ export function Skills({
                           hour12: false,
                         })
                       : "—"}
-                  </td>
-                  <td>
-                    <span className="badge">
-                      {
-                        {
-                          synced: "当前版本已同步",
-                          history_only: "仅历史版本已同步",
-                          not_synced: "未同步",
-                          disabled: "未启用云端同步",
-                          unknown: "状态未知",
-                        }[s.cloud_sync_status || "unknown"]
-                      }
-                    </span>
                   </td>
                 </tr>
               ))}

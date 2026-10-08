@@ -8,14 +8,14 @@ import yaml
 from fastapi.testclient import TestClient
 from mindmemos_sdk.config import ConfigManager
 from mindmemos_skill.api import create_service
-from mindmemos_skill.api.factory import resolve_local_settings
-from mindmemos_skill.pipelines.typing import ListRequest, RegisterRequest
+from mindmemos_skill.api.typing import ListRequest
 from mindmemos_ui.app import create_app
 
 
 @pytest_asyncio.fixture
 async def editor(tmp_path):
     manager = ConfigManager(tmp_path / "home")
+    manager.config_dir.mkdir(parents=True)
     with TestClient(await create_app(manager)) as client:
         client.headers["x-workbench-token"] = client.get("/api/session").json()["token"]
         yield client, manager.config_dir
@@ -24,44 +24,26 @@ async def editor(tmp_path):
 @pytest.mark.asyncio
 async def test_create_edit_reopen_and_explicit_path(editor, tmp_path, monkeypatch):
     http, home = editor
-    source = tmp_path / "skill"
-    source.mkdir()
-    (source / "SKILL.md").write_text("# Persistent Skill")
-    async with await create_service(home=home) as service:
-        item = await service.register_skill(RegisterRequest(source=str(source), name="Persistent"))
-        identity = service.local_project_id
     document = http.get("/api/service-config").json()
     assert not document["exists"]
-    assert not (home / "service.yaml").exists()
     content = "# Preserve this comment\n" + document["content"]
     response = http.put("/api/service-config", json={"content": content, "revision": None})
     assert response.status_code == 200
     saved = response.json()
-    assert saved["exists"] and saved["content"] == content
     assert (home / "service.yaml").read_text() == content
-    assert resolve_local_settings(home)[1].project_id == identity
-    config = yaml.safe_load(content)
-    config["persistence"]["database"]["config"]["timeout"] = 17
-    response = http.put(
-        "/api/service-config",
-        json={
-            "content": yaml.safe_dump(config),
-            "revision": saved["revision"],
-        },
-    )
-    assert response.status_code == 200
-    async with await create_service(home=home) as service:
-        assert service.local_project_id == identity
-        assert (await service.list_skills(ListRequest()))[0].skill_id == item.skill.skill_id
-        assert service.backends["database"].config.timeout == 17
-    monkeypatch.setenv("MINDMEMOS_HOME", str(home))
-    async with await create_service() as service:
-        assert service.backends["database"].config.timeout == 17
     async with await create_service(home / "service.yaml") as service:
-        await service.initialize_storage()
-        assert service.local_project_id is None
-        with pytest.raises(PermissionError, match="Project authorization is required"):
-            await service.list_skills(ListRequest(project_id=identity))
+        assert service.default_project_id == "personal"
+        assert await service.list_skills(ListRequest(project_id="personal")) == []
+    config = yaml.safe_load(content)
+    config["service"]["persistence"]["database"]["config"]["timeout"] = 17
+    response = http.put("/api/service-config", json={"content": yaml.safe_dump(config), "revision": saved["revision"]})
+    assert response.status_code == 200
+    monkeypatch.setenv("MINDMEMOS_HOME", str(tmp_path / "sdk-only"))
+    async with await create_service(home / "service.yaml") as service:
+        assert service.default_project_id == "personal"
+        assert service.backends["database"].config.timeout == 17
+        assert service.backends["database"].engine.url.database == str(home / "skill/data/central.db")
+    assert not (home / "workspace.json").exists()
 
 
 def test_validation_conflicts_and_no_side_effects(editor):
@@ -90,10 +72,18 @@ def test_no_connection_during_validation(editor, tmp_path):
     document = http.get("/api/service-config").json()
     config = yaml.safe_load(document["content"])
     database = tmp_path / "not-created.db"
-    config["persistence"]["database"]["config"]["url"] = f"sqlite:///{database}"
+    config["service"]["persistence"]["database"]["config"]["url"] = f"sqlite:///{database}"
     assert http.post("/api/service-config/validate", json={"content": yaml.safe_dump(config)}).status_code == 200
     assert not database.exists()
     assert not (home / "service.yaml").exists()
+
+
+def test_sdk_v2_settings_route_is_available_in_workbench(editor):
+    http, home = editor
+    document = http.get("/api/client-configurations/sdk")
+    assert document.status_code == 200
+    assert document.json()["path"] == str(home / "settings.json")
+    assert document.json()["values"]["version"] == 2
 
 
 def test_symlink_is_not_followed(editor, tmp_path):
@@ -106,7 +96,7 @@ def test_symlink_is_not_followed(editor, tmp_path):
     assert "private content" not in response.text
 
 
-def test_memory_sdk_roundtrip_preserves_registry_and_exports(editor):
+def test_memory_sdk_roundtrip_and_exports(editor):
     import base64
     import io
     import zipfile
@@ -114,8 +104,7 @@ def test_memory_sdk_roundtrip_preserves_registry_and_exports(editor):
     http, home = editor
     manager = ConfigManager(home)
     config = manager.load_or_default()
-    config.skills = [{"skill_name": "existing", "skill_id": "retained"}]
-    config.auth.api_key = "saved-key"
+    config.memory_service.auth.api_key = "saved-key"
     manager.save(config)
     document = http.get("/api/configurations/memory/default").json()
     settings = yaml.safe_load(document["content"])
@@ -131,9 +120,8 @@ def test_memory_sdk_roundtrip_preserves_registry_and_exports(editor):
     response = http.put("/api/configurations/memory/default", json=body)
     assert response.status_code == 200
     assert response.json()["env"] == body["env"]
-    assert manager.load().skills == config.skills
-    assert manager.load().auth.api_key == "saved-key"
-    assert manager.load().base_url == "https://new.example.org"
+    assert manager.load().memory_service.auth.api_key == "saved-key"
+    assert manager.load().memory_service.base_url == "https://new.example.org"
     download = http.get("/api/configurations/memory/default/export")
     assert download.status_code == 200
     assert download.headers["content-type"] == "application/zip"
@@ -188,7 +176,7 @@ async def test_companion_environment_loads_only_during_service_creation(editor, 
     assert http.put("/api/configurations/skill/default", json=body).status_code == 200
     assert env_name not in os.environ
     try:
-        async with await create_service(home=home):
+        async with await create_service(home / "service.yaml"):
             assert os.environ[env_name] == "${literal}"
         monkeypatch.setenv(env_name, "existing")
         monkeypatch.setenv("MINDMEMOS_HOME", str(home))
