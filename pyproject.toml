@@ -63,6 +63,17 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = [
+    "src/mindmemos/tests",
+    "src/mindmemos_eval/tests",
+    "src/mindmemos_sdk/tests",
+    "src/mindmemos_skill/tests",
+    "src/mindmemos_ui/tests",
+    "tests/scripts",
+    "tests/integration",
+]
+addopts = "--import-mode=importlib"
 markers = [
     "llm: tests that call a live LLM (requires LLM_API_KEY or dev.yaml config)",
 ]
