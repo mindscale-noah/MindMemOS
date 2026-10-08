@@ -10,7 +10,7 @@ from collections import Counter
 import pytest
 from mindmemos_skill.agents import AgentResult
 from mindmemos_skill.algos import Algorithm
-from mindmemos_skill.algos.train.skill_forest import SkillForestTrainer, SkillForestTrainerConfig
+from mindmemos_skill.algos.train.skill_forest import ALGORITHM_VERSION, SkillForestTrainer, SkillForestTrainerConfig
 from mindmemos_skill.algos.train.skill_forest.tree import (
     apply_patch,
     cannot_improve,
@@ -22,7 +22,7 @@ from mindmemos_skill.algos.train.skill_forest.tree import (
 from mindmemos_skill.algos.train.skill_forest.typing import Node, Patch
 from mindmemos_skill.envs.data.typing import DataSample, RewardData
 from mindmemos_skill.envs.typing import Reward, RolloutResult, Task
-from mindmemos_skill.skill import Skill, SkillBundle, SkillResources
+from mindmemos_skill.skill import Skill, SkillContent
 from pydantic import ValidationError
 
 
@@ -48,7 +48,7 @@ class FakeEnvironment:
     def rollout(self, *, task, reward_data, skill_set, work_dir, resume):
         assert resume is False
         assert isinstance(reward_data, PrivateAnswer)
-        text = skill_set.skills["candidate"].bundle.files["SKILL.md"]
+        text = skill_set.skills["candidate"].content
         with self.lock:
             self.active += 1
             self.peak = max(self.peak, self.active)
@@ -81,8 +81,8 @@ class FakeOptimizer:
         self.fail = fail
 
     def __call__(self, config):
-        assert config.max_retries == config.sdk_max_retries == 0
-        assert config.parse_max_attempts == 1
+        assert config.max_retries == 3
+        assert config.parse_max_attempts == 3
         return self
 
     def run(self, *, messages):
@@ -101,7 +101,10 @@ class FakeOptimizer:
                     self.merges += 1
                 return AgentResult(output="# Skill\nsynthesized\n")
             patch = {"edits": [{"op": "append", "content": "improved"}]}
-            if "trajectory_count" in json.loads(messages[1]["content"]):
+            if (
+                "## Failed Trajectories" in messages[1]["content"]
+                or "## Successful Trajectories" in messages[1]["content"]
+            ):
                 return AgentResult(output=json.dumps({"batch_size": 3, "patch": patch}))
             return AgentResult(output=json.dumps(patch))
         finally:
@@ -130,8 +133,13 @@ def config(**updates):
 def initial_skill():
     """Provide multiple managed files to exercise non-entrypoint preservation."""
     return Skill(
-        bundle=SkillBundle(files={"SKILL.md": "# Skill\nOriginal instructions.\n"}),
-        resources=SkillResources(files={"helper.txt": "keep"}),
+        source=SkillContent(
+            content="# Skill\nOriginal instructions.\n",
+            resources={"helper.txt": "keep"},
+            name="test-skill",
+            description="Task instructions",
+            standard_format=False,
+        )
     )
 
 
@@ -170,8 +178,10 @@ def test_registry_defaults_and_reject_unpublished_options():
     trainer = Algorithm.build("skill_forest", {"optimizer": {"model": "offline"}})
     assert isinstance(trainer, SkillForestTrainer)
     assert trainer.config.ensemble_strategy == "select"
-    assert trainer.config.optimizer.timeout_s == 21600
-    for updates in ({"bootstrap": True}, {"expansion_budget": 1}, {"optimizer": {"model": "x", "max_retries": 1}}):
+    assert trainer.config.optimizer.timeout_s == 180
+    assert trainer.config.optimizer.max_retries == 3
+    assert config(optimizer={"model": "x", "max_retries": 1}).optimizer.max_retries == 1
+    for updates in ({"bootstrap": True}, {"expansion_budget": 1}, {"optimizer": {"model": "x", "max_retries": -1}}):
         with pytest.raises(ValidationError):
             config(**updates)
 
@@ -190,7 +200,7 @@ def test_stateless_split_and_atomic_patch():
     )
     with pytest.raises(ValueError):
         apply_patch(skill, patch)
-    assert "new" not in skill.bundle.files["SKILL.md"]
+    assert "new" not in skill.content
 
 
 def test_exact_bound_preserves_full_validation_acceptance():
@@ -217,31 +227,43 @@ def test_global_priority_and_tree_winners():
     assert novelty("same words", "different vocabulary") == pytest.approx(1)
 
 
-@pytest.mark.parametrize("shared_train", [False, True])
-def test_complete_select_global_caps_and_root_sharing(tmp_path, shared_train):
-    settings = config(root_share_train_trajectory=shared_train)
+@pytest.mark.parametrize("shared_train,shared_validation", [(True, True), (False, True), (False, False)])
+def test_complete_select_global_caps_and_root_sharing(tmp_path, shared_train, shared_validation):
+    settings = config(root_share_train_trajectory=shared_train, root_share_validation=shared_validation)
     result, env, optimizer = run_training(tmp_path, settings)
-    assert "improved" in result.bundle.files["SKILL.md"]
+    assert "improved" in result.content
     assert 1 < env.peak <= settings.rollout_concurrency
     assert 1 < optimizer.peak <= settings.model_concurrency
     assert env.active == optimizer.active == 0
     assert len({path for _, _, path in env.calls}) == len(env.calls)
     assert not any(key == "held-out" for key, _, _ in env.calls)
     root_calls = [(key, path) for key, text, path in env.calls if "improved" not in text]
-    splits = json.loads((tmp_path / "splits.json").read_text())
+    splits = json.loads((tmp_path / "config.json").read_text())["splits"]
     union = set(key for split in splits for key in split["validation_ids"])
+    train_union = set(key for split in splits for key in split["train_ids"])
     if shared_train:
         assert len(root_calls) == 6
         assert set(Counter(key for key, _ in root_calls).values()) == {1}
-    else:
+    elif shared_validation:
         assert len(root_calls) == len(union) + 3 * 3
-    assert len([path for _, path in root_calls if "root_validation" in path]) == len(union)
+    else:
+        assert len(root_calls) == sum(len(split["validation_ids"]) for split in splits) + 3 * 3
+    first_root_evaluations = len([path for _, path in root_calls if "node-tree-000-root/workspaces/eval" in path])
+    if shared_train:
+        assert first_root_evaluations == len(union | train_union)
+    elif shared_validation:
+        assert first_root_evaluations == len(union)
+    else:
+        assert first_root_evaluations == len(splits[0]["validation_ids"])
     serialized = json.dumps(optimizer.messages)
     assert "PRIVATE-ANSWER" not in serialized and "PRIVATE-DETAIL" not in serialized
-    forest = json.loads((tmp_path / "forest.json").read_text())
+    result_data = json.loads((tmp_path / "result.json").read_text())
+    forest = result_data["training"]["forest"]
     assert forest["expansions"] == 3
     assert len(forest["nodes"]) == 9
-    assert json.loads((tmp_path / "status.json").read_text())["status"] == "completed"
+    assert result_data["status"] == "completed"
+    assert len(list((tmp_path / "skills").glob("skill-tree-*.md"))) == settings.num_trees
+    assert not list(tmp_path.rglob("audit/result.json"))
     assert optimizer.merges == 0
 
 
@@ -249,19 +271,20 @@ def test_merge_does_not_gate_low_scoring_synthesized_skills(tmp_path):
     result, env, optimizer = run_training(
         tmp_path, config(ensemble_strategy="hierarchical_merge"), env=FakeEnvironment(merge_pass=False)
     )
-    assert "synthesized" in result.bundle.files["SKILL.md"]
+    assert "synthesized" in result.content
     assert optimizer.merges == 2
     synthesized_calls = [call for call in env.calls if "synthesized" in call[1]]
     assert len(synthesized_calls) == 12
-    assert len(list((tmp_path / "ensemble").glob("merge-*/scores.json"))) == 2
+    assert json.loads((tmp_path / "result.json").read_text())["training"]["winners"]
 
 
 @pytest.mark.parametrize("malformed", [False, True])
 def test_no_winner_is_explicit_failure_not_root_fallback(tmp_path, malformed):
     with pytest.raises(RuntimeError, match="No positive-gain"):
         run_training(tmp_path, env=FakeEnvironment(candidate_pass=False), optimizer=FakeOptimizer(malformed=malformed))
-    assert json.loads((tmp_path / "status.json").read_text())["status"] == "failed"
-    assert not (tmp_path / "selected_skill.json").exists()
+    assert (tmp_path / "config.json").exists()
+    assert not (tmp_path / "result.json").exists()
+    assert not list((tmp_path / "skills").glob("skill-tree-*.md"))
 
 
 @pytest.mark.parametrize("source", ["env", "model"])
@@ -271,10 +294,9 @@ def test_failure_is_audited_without_retry_or_zero_score(tmp_path, source):
     with pytest.raises(RuntimeError if source == "env" else ExceptionGroup):
         run_training(tmp_path, env=env, optimizer=optimizer)
     assert env.active == optimizer.active == 0
-    assert json.loads((tmp_path / "status.json").read_text())["status"] == "failed"
-    calls = [json.loads(path.read_text()) for path in tmp_path.rglob("call.json")]
-    assert any(call["status"] == "failed" for call in calls)
-    assert not any(call["status"] == "running" for call in calls)
+    assert (tmp_path / "config.json").exists()
+    assert not (tmp_path / "result.json").exists()
+    assert not list(tmp_path.rglob("call.json"))
 
 
 def test_reject_nonempty_run_directory(tmp_path):
@@ -297,31 +319,34 @@ def test_real_environment_rollout_contract(tmp_path):
         def _run(self, *, task, reward_data, skills, workspace):
             assert len(skills) == 1
             assert workspace.is_dir()
-            passed = "improved" in skills[0].bundle.files["SKILL.md"]
+            passed = "improved" in skills[0].content
             return RolloutResult(
                 output="local", trajectory=[], reward=Reward(score=float(passed), success=passed, detail="")
             )
 
     run_training(tmp_path, config(num_trees=1, expansion_budget=1), env=LocalEnvironment(LocalConfig()))
-    results = list(tmp_path.rglob("audit/result.json"))
-    summary = json.loads((tmp_path / "summary.json").read_text())
-    assert len(results) == summary["rollout"]["calls"]
-    assert all(json.loads(path.read_text())["started_at"] for path in results)
-    assert summary["decisions"] == {"accepted": 2}
+    from mindmemos_skill.common.json import read_jsonl
+
+    result_data = json.loads((tmp_path / "result.json").read_text())
+    streams = [row for path in tmp_path.rglob("*.jsonl") for row in read_jsonl(path)]
+    assert streams
+    assert all(row["result"]["started_at"] for row in streams)
+    assert result_data["training"]["summary"]["decisions"] == {"accepted": 2}
+    assert not list(tmp_path.rglob("audit/result.json"))
 
 
 def test_multiple_depths_respect_global_expansion_budget(tmp_path):
     class ProgressiveEnvironment(FakeEnvironment):
         def rollout(self, **kwargs):
             result = super().rollout(**kwargs)
-            text = kwargs["skill_set"].skills["candidate"].bundle.files["SKILL.md"]
+            text = kwargs["skill_set"].skills["candidate"].content
             depth = text.count("improved")
             task_index = int(kwargs["task"].id.rsplit("/", 1)[1])
             passed = depth >= 2 or depth == 1 and task_index % 2 == 0
             return result.model_copy(update={"reward": Reward(score=float(passed), success=passed, detail="")})
 
     run_training(tmp_path, config(expansion_budget=4, max_depth=2), env=ProgressiveEnvironment())
-    forest = json.loads((tmp_path / "forest.json").read_text())
+    forest = json.loads((tmp_path / "result.json").read_text())["training"]["forest"]
     assert forest["expansions"] == 4
     assert max(node["depth"] for node in forest["nodes"]) == 2
     assert all(node["gain"] > 0 for node in forest["nodes"] if node["parent_id"] is not None)
@@ -336,10 +361,10 @@ def test_multiple_depths_respect_global_expansion_budget(tmp_path):
 def test_early_rejection_reduces_calls_without_changing_winner(tmp_path):
     early, early_env, _ = run_training(tmp_path / "early", config(expansion_budget=6))
     full, full_env, _ = run_training(tmp_path / "full", config(expansion_budget=6, early_rejection=False))
-    assert early.bundle == full.bundle
+    assert early.content == full.content
     assert len(early_env.calls) < len(full_env.calls)
-    decisions = [json.loads(path.read_text()) for path in (tmp_path / "early").glob("nodes/*/decision.json")]
-    assert any(decision.get("early_rejected") for decision in decisions)
+    decisions = [json.loads(path.read_text()) for path in (tmp_path / "early").glob("trees/tree-*/node-*/node.json")]
+    assert any(decision["status"] == "rejected" and len(decision["scores"]) < 3 for decision in decisions)
 
 
 @pytest.mark.parametrize("concurrency", [1, 2, 8])
@@ -407,9 +432,9 @@ def test_candidate_validation_queue(tmp_path, monkeypatch, concurrency, passed, 
     assert len({directory for _, directory in env.calls}) == expected_calls
     assert {key for key, _ in env.calls} == set(ids[1 : expected_calls + 1])
     assert (candidate is not None) == passed
-    decision = json.loads((tmp_path / "nodes/root-00/decision.json").read_text())
-    assert decision["evaluated"] == expected_calls
-    assert decision["early_rejected"] == (expected_calls < 7)
+    decision = json.loads((tmp_path / "trees/tree-0/node-root-00/node.json").read_text())
+    assert len(decision["scores"]) == expected_calls
+    assert (len(decision["scores"]) < 7) == (expected_calls < 7)
 
 
 def test_obsolete_validation_microbatch_size_is_rejected():
@@ -421,14 +446,14 @@ def test_select_breaks_score_ties_by_paper_novelty(tmp_path):
     from mindmemos_skill.algos.train.skill_forest.runtime import ForestRuntime
 
     initial = initial_skill()
-    texts = [initial.bundle.files["SKILL.md"] + "improved", "# Novel\nimproved unrelated vocabulary"]
+    texts = [initial.content + "improved", "# Novel\nimproved unrelated vocabulary"]
     winners = [
         Node(
             id=f"winner-{index}",
             tree_id=index,
             parent_id="root",
             gain=1,
-            skill=initial.with_bundle(SkillBundle(files={"SKILL.md": text})),
+            skill=initial.with_content(text),
             scores={"x": 1},
         )
         for index, text in enumerate(texts)
@@ -449,7 +474,7 @@ def test_select_breaks_score_ties_by_paper_novelty(tmp_path):
         finally:
             await runtime.close()
 
-    assert asyncio.run(evaluate()).bundle == winners[1].skill.bundle
+    assert asyncio.run(evaluate())[0].content == winners[1].skill.content
 
 
 def test_merge_filters_only_initial_winners(tmp_path):
@@ -463,7 +488,7 @@ def test_merge_filters_only_initial_winners(tmp_path):
             tree_id=index,
             parent_id="root",
             gain=1,
-            skill=initial.with_bundle(SkillBundle(files={"SKILL.md": text})),
+            skill=initial.with_content(text),
             scores={"x": 1},
         )
         for index, text in enumerate(texts)
@@ -485,10 +510,8 @@ def test_merge_filters_only_initial_winners(tmp_path):
         finally:
             await runtime.close()
 
-    assert "synthesized" in asyncio.run(evaluate()).bundle.files["SKILL.md"]
+    assert "synthesized" in asyncio.run(evaluate())[0].content
     assert optimizer.merges == 1
-    pool = json.loads((tmp_path / "ensemble/merge_pool.json").read_text())
-    assert set(pool["ids"]) == {"winner-0", "winner-1"}
 
 
 def test_cancellation_drains_started_rollouts(tmp_path):
@@ -509,8 +532,8 @@ def test_cancellation_drains_started_rollouts(tmp_path):
 
     asyncio.run(cancel())
     assert env.active == 0
-    assert json.loads((tmp_path / "status.json").read_text())["status"] == "failed"
-    assert all(json.loads(path.read_text())["status"] != "running" for path in tmp_path.rglob("call.json"))
+    assert (tmp_path / "config.json").exists()
+    assert not (tmp_path / "result.json").exists()
 
 
 def test_prompt_text_and_structured_requests():
@@ -527,12 +550,12 @@ def test_prompt_text_and_structured_requests():
     )
 
     prompt_hashes = {
-        "analyst_error": "999080aeb192068820de2e1d921a646feff00f154b48931a195fa124a26fc81d",
-        "analyst_success": "8240f5b7a21785de819863aa6676ccd0b8723b16522350af6232bb181ea18cbf",
-        "merge_failure": "c552073fee770dcd14ce4c2f9ea0c2648f5e058fb4ed26f9d8a3556a7db71d9d",
-        "merge_success": "66849c0f229aea8074c4599d973b3ff99c826e200776c8389a062b8a0cf54d50",
-        "merge_final": "5818a7c978d2a932c6fa9b6b5aa74c2d8bd2ec42c5f567c8ffc832a468d7c50a",
-        "hierarchical_merge_skills": "8872756ea14c76ef5c3ee77ec2d00c66c2d6709228a5776849576e68aa4555e9",
+        "analyst_error": "6f08c7d85d928add077f710583d1b53272cf99c45ad290e2a8588e7a6572c19b",
+        "analyst_success": "603940125a601d6a91f2e80d2bfc631ab017129b6f1f3508a8ae96e3c2025d5a",
+        "merge_failure": "c2e4c64a95065022616cceb8b46c275b07b5e6dab6375fa551d4766ebbfa7767",
+        "merge_success": "9f62da1aff25522d632a6936d71577a3d13bfa3fbd2c8ee35294ec87f2710d72",
+        "merge_final": "fabbc8adbdbfc62577d9b09108c64782ee45589a0fd0a18a3dc4fee96b28d5b3",
+        "hierarchical_merge_skills": "7ab9fd5e61c283706772e4780d05cd29e246de6dbee7483bb31d5403dfc07696",
     }
     for name, expected_hash in prompt_hashes.items():
         assert sha256(load_prompt(name).encode()).hexdigest() == expected_hash
@@ -540,14 +563,11 @@ def test_prompt_text_and_structured_requests():
     evidence = format_trajectory([{"type": "tool_call", "cmd": "inspect", "obs": "found"}])
     assert "inspect" in evidence and "found" in evidence
     for success in (False, True):
-        request = json.loads(reflection_user("# Rules", evidence, count=1, success=success, edit_budget=4))
-        assert request == {
-            "skill": "# Rules",
-            "trajectories": evidence,
-            "trajectory_count": 1,
-            "edit_limit": 4,
-            "outcome": "success" if success else "failure",
-        }
+        outcome = "Successful" if success else "Failed"
+        assert reflection_user("# Rules", evidence, count=1, success=success, edit_budget=4) == (
+            "## Current Skill\n# Rules\n\n## Edits Budget\nProduce at most L=4 edits.\n\n"
+            f"## {outcome} Trajectories (1 total)\n{evidence}"
+        )
     patch = {"edits": [{"op": "append", "content": "Verify outputs."}]}
     assert json.loads(patch_merge_user("# Rules", [patch], level=2)) == {
         "skill": "# Rules",
@@ -568,7 +588,7 @@ def test_minibatch_reflection_preserves_evidence_and_outcome_groups(tmp_path):
     from mindmemos_skill.algos.train.skill_forest.runtime import ForestRuntime
 
     optimizer = FakeOptimizer()
-    settings = config(reflection_minibatch_size=2, merge_batch_size=2, env_adapter={"class_name": "generic"})
+    settings = config(reflection_minibatch_size=2, merge_batch_size=2)
     tasks = samples()
     results = [
         RolloutResult(
@@ -606,17 +626,16 @@ def test_minibatch_reflection_preserves_evidence_and_outcome_groups(tmp_path):
     assert "needle" in json.dumps(optimizer.messages)
     assert "PRIVATE-DETAIL" not in json.dumps(optimizer.messages)
     reflected = [
-        json.loads(messages[1]["content"])
+        messages[1]["content"]
         for messages in optimizer.messages
-        if "trajectory_count" in json.loads(messages[1]["content"])
+        if messages[1]["content"].startswith("## Current Skill")
     ]
-    assert sum(request["trajectory_count"] for request in reflected) == 6
-    assert any(request["trajectory_count"] == 1 for request in reflected)
-    assert sum(len(json.loads(request["trajectories"])) for request in reflected) == 6
+    assert sum(request.count("### Trajectory ") for request in reflected) == 6
+    assert any("Trajectories (1 total)" in request for request in reflected)
     merges = [
         json.loads(messages[1]["content"])
         for messages in optimizer.messages
-        if "patches" in json.loads(messages[1]["content"])
+        if messages[1]["content"].startswith('{"skill"') and '"patches"' in messages[1]["content"]
     ]
     for request in merges:
         assert sorted(patch["edits"][0]["support_count"] for patch in request["patches"]) == [1, 2]
@@ -633,63 +652,19 @@ def test_reflection_rejects_unpaired_results_before_model_calls(tmp_path):
         )
 
 
-@pytest.mark.parametrize(
-    "name,payload",
-    [
-        ("status.json", {"status": "completed", "duration_s": 1}),
-        ("status.json", {"status": "failed", "duration_s": -1, "error": "failure"}),
-        ("decision.json", {"status": "invalid_patch"}),
-        (
-            "decision.json",
-            {"status": "accepted", "scores": {}, "gain": None, "evaluated": 0, "expected": 1, "early_rejected": True},
-        ),
-        ("call.json", {"status": "completed", "task_id": "a", "content_hash": "hash", "duration_s": 1}),
-        ("parents.json", ["one"]),
-        ("scores.json", {"scores": {}, "mean": float("nan")}),
-        ("selection.json", {"selected": "a", "typo": True}),
-        ("unknown.json", {}),
-    ],
-)
-def test_artifact_validation_preserves_existing_file(tmp_path, name, payload):
-    """Invalid artifacts must fail before replacing an existing destination."""
-    from mindmemos_skill.algos.train.skill_forest.artifacts import record
-
-    path = tmp_path / name
-    path.write_text("original", encoding="utf-8")
-    with pytest.raises(ValueError):
-        record(path, payload)
-    assert path.read_text(encoding="utf-8") == "original"
-
-
-def test_artifact_config_redacts_credentials_and_patch_preserves_omissions(tmp_path):
-    """Central storage filters credentials and retains the original patch wire shape."""
-    from mindmemos_skill.algos.train.skill_forest.artifacts import record
-
-    settings = config().model_dump(mode="json")
-    settings["optimizer"]["api_key"] = "test-secret"
-    record(tmp_path / "config.json", settings)
-    saved = json.loads((tmp_path / "config.json").read_text())
-    assert "api_key" not in saved["optimizer"]
-    patch = {"edits": [{"op": "append", "content": "new"}]}
-    record(tmp_path / "patch.json", patch)
-    assert json.loads((tmp_path / "patch.json").read_text()) == patch
-
-
-def test_artifact_rollout_preserves_environment_extensions(tmp_path):
-    """Audit validation keeps environment-specific result and reward data intact."""
-    from mindmemos_skill.algos.train.skill_forest.artifacts import record
-
-    payload = {
-        "status": "completed",
-        "task_id": "a",
-        "content_hash": "hash",
-        "duration_s": 1,
-        "result": {
-            "output": "ok",
-            "trajectory": [],
-            "reward": {"score": 1, "success": True, "detail": "", "custom_metric": 2},
-            "environment_detail": {"files": ["result.txt"]},
-        },
-    }
-    record(tmp_path / "call.json", payload)
-    assert json.loads((tmp_path / "call.json").read_text()) == payload
+def test_config_and_node_records_use_the_compact_layout(tmp_path):
+    """Run identity, Skill snapshots and trajectories use only their owners."""
+    settings = config()
+    settings.optimizer.api_key = "forest-test-key"
+    run_training(tmp_path, settings=settings)
+    configuration = json.loads((tmp_path / "config.json").read_text())
+    assert configuration["schema_version"] == ALGORITHM_VERSION
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["schema_version"] == ALGORITHM_VERSION
+    assert result["training"]["algorithm_report"]["schema_version"] == ALGORITHM_VERSION
+    assert configuration["trainer"]["optimizer"]["api_key"] == settings.optimizer.api_key
+    nodes = list(tmp_path.glob("trees/tree-*/node-*/node.json"))
+    assert nodes
+    assert all(json.loads(path.read_text())["skill"] for path in nodes)
+    assert not list(tmp_path.rglob("call.json"))
+    assert not list(tmp_path.rglob("completed.json"))

@@ -1,4 +1,4 @@
-"""Offline verification of shared candidate ranking and its audit boundary."""
+"""Offline verification of shared candidate ranking without per-call files."""
 
 import asyncio
 import json
@@ -12,7 +12,7 @@ from mindmemos_skill.algos.train.skill_forest.runtime import ForestRuntime
 from mindmemos_skill.algos.train.skill_forest.typing import Patch, SkillForestRankingContext
 from mindmemos_skill.envs.data.typing import DataSample, RewardData
 from mindmemos_skill.envs.typing import Reward, RolloutResult, Task
-from mindmemos_skill.skill import Skill, SkillBundle
+from mindmemos_skill.skill import Skill, SkillContent
 from pydantic import ValidationError
 
 
@@ -28,7 +28,7 @@ class RankingOptimizer:
 
     def run(self, *, messages):
         self.messages.append(messages)
-        if messages[1]["content"].startswith("## Current Skill"):
+        if "## Edits Pool" in messages[1]["content"]:
             if isinstance(self.response, Exception):
                 raise self.response
             return AgentResult(output=self.response)
@@ -47,7 +47,11 @@ def run_generation(directory, response, *, depth=0, trainer_entry=False, **optio
     result = RolloutResult(
         output="Failed attempt", trajectory=[], reward=Reward(score=0, success=False, detail="Incorrect")
     )
-    skill = Skill(bundle=SkillBundle(files={"SKILL.md": "# Existing rules\n"}))
+    skill = Skill(
+        source=SkillContent(
+            content="# Existing rules\n", name="test-skill", description="Task instructions", standard_format=False
+        )
+    )
 
     async def generate():
         runtime = ForestRuntime(settings, agent_factory=optimizer)
@@ -79,7 +83,7 @@ def run_generation(directory, response, *, depth=0, trainer_entry=False, **optio
 
 
 @pytest.mark.parametrize("depth,budget", [(0, 3), (1, 2), (2, 1), (5, 1)])
-def test_ranking_respects_depth_order_and_audits_original_pool(tmp_path, depth, budget):
+def test_ranking_respects_depth_order_without_stage_files(tmp_path, depth, budget):
     patch, optimizer = run_generation(
         tmp_path,
         '{"selected_indices": [3, 3, -1, 99, 2, 1, 0]}',
@@ -90,11 +94,7 @@ def test_ranking_respects_depth_order_and_audits_original_pool(tmp_path, depth, 
     assert [edit.content for edit in patch.edits] == [f"Rule {i}" for i in [3, 2, 1][:budget]]
     assert len(optimizer.messages) == 2
     assert f"budget={budget}" in optimizer.messages[1][1]["content"]
-    before = json.loads((tmp_path / "pre_ranking_patch.json").read_text())
-    assert [edit["content"] for edit in before["edits"]] == [f"Rule {i}" for i in range(4)]
-    assert all(edit["source_type"] == "failure" for edit in before["edits"])
-    assert json.loads((tmp_path / "patch.json").read_text())["edits"] == patch.model_dump(exclude_unset=True)["edits"]
-    assert json.loads((tmp_path / "ranking/call.json").read_text())["status"] == "completed"
+    assert not list(tmp_path.rglob("*.json"))
 
 
 @pytest.mark.parametrize("options", [{}, {"ranking_enabled": False, "ranking_edit_budgets": (1,)}])
@@ -102,8 +102,7 @@ def test_ranking_skips_within_budget_or_when_disabled(tmp_path, options):
     patch, optimizer = run_generation(tmp_path, RuntimeError("Ranking must not run"), **options)
     assert len(patch.edits) == 4
     assert len(optimizer.messages) == 1
-    assert not (tmp_path / "ranking").exists()
-    assert not (tmp_path / "pre_ranking_patch.json").exists()
+    assert not list(tmp_path.rglob("*.json"))
 
 
 @pytest.mark.parametrize(
@@ -119,15 +118,13 @@ def test_ranking_skips_within_budget_or_when_disabled(tmp_path, options):
 def test_invalid_ranking_fails_proposal_without_truncation(tmp_path, response):
     with pytest.raises(InvalidPatchError):
         run_generation(tmp_path, response, ranking_edit_budgets=(2,))
-    assert (tmp_path / "pre_ranking_patch.json").exists()
-    assert not (tmp_path / "patch.json").exists()
+    assert not list(tmp_path.rglob("*.json"))
 
 
 def test_ranking_provider_failure_is_not_an_invalid_patch(tmp_path):
     with pytest.raises(RuntimeError, match="provider offline"):
         run_generation(tmp_path, RuntimeError("provider offline"), ranking_edit_budgets=(2,))
-    assert json.loads((tmp_path / "ranking/call.json").read_text())["status"] == "failed"
-    assert not (tmp_path / "patch.json").exists()
+    assert not list(tmp_path.rglob("*.json"))
 
 
 @pytest.mark.parametrize(
@@ -138,7 +135,8 @@ def test_ranking_provider_failure_is_not_an_invalid_patch(tmp_path):
         "alfworld_bounded_history",
         "officeqa",
         "searchqa",
-        "spreadsheetbench",
+        "spreadsheetbench_tool_calling",
+        "spreadsheetbench_text_action",
     ],
 )
 def test_all_adapters_share_ranking_and_support_literal_overrides(environment):
@@ -185,7 +183,11 @@ def test_ranking_selects_from_final_merged_pool(tmp_path):
         runtime = ForestRuntime(settings, agent_factory=optimizer)
         try:
             return await generate_patch(
-                skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# Rules"})),
+                skill=Skill(
+                    source=SkillContent(
+                        content="# Rules", name="test-skill", description="Task instructions", standard_format=False
+                    )
+                ),
                 samples=samples,
                 results=results,
                 runtime=runtime,
@@ -199,4 +201,4 @@ def test_ranking_selects_from_final_merged_pool(tmp_path):
     assert [edit.content for edit in patch.edits] == [f"Merged {i}" for i in [5, 1, 4, 0]]
     assert len(optimizer.messages) == 4
     assert "[5] op=append" in optimizer.messages[-1][1]["content"]
-    assert len(json.loads((tmp_path / "pre_ranking_patch.json").read_text())["edits"]) == 6
+    assert not list(tmp_path.rglob("*.json"))

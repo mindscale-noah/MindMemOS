@@ -1,4 +1,4 @@
-"""Exercise interruption recovery without repeating committed physical calls."""
+"""Exercise patch-level Skill-Forest recovery and workspace retention."""
 
 import asyncio
 import json
@@ -7,179 +7,161 @@ from collections import Counter
 import pytest
 from mindmemos_skill.algos.train.skill_forest import SkillForestTrainer
 from mindmemos_skill.algos.train.skill_forest import trainer as trainer_module
-from mindmemos_skill.algos.train.skill_forest.runtime import ForestRuntime
-from test_skill_forest import FakeEnvironment, FakeOptimizer, config, initial_skill, samples
+from mindmemos_skill.common.json import read_jsonl
+
+from .test_skill_forest import FakeEnvironment, FakeOptimizer, config, initial_skill, samples
 
 
 def execute(root, trainer, env):
-    """Run the same bounded protocol before and after a simulated interruption."""
+    """Run one complete or interrupted local forest with stable inputs."""
     return asyncio.run(
         trainer.train(skill=initial_skill(), env=env, train_samples=samples(), validation_samples=[], work_dir=root)
     )
 
 
-@pytest.mark.parametrize("point", ["generated.json", "validated.json", "wave", "ensemble"])
-def test_resume_committed_boundaries_and_budget(tmp_path, monkeypatch, point):
-    """Interrupt after a durable boundary and reuse every completed physical call."""
+def small_config(**updates):
+    """Keep interruption tests focused on one root and one candidate."""
+    return config(num_trees=1, expansion_budget=1, candidates_per_node=1, rollout_concurrency=1, **updates)
+
+
+def candidate_dir(root):
+    """Locate the only patch-applied candidate in a small run."""
+    return root / "trees/tree-0/node-tree-000-root-00"
+
+
+def test_patch_applied_before_interruption_is_reused(tmp_path, monkeypatch):
+    """A committed Skill snapshot survives while its validation restarts."""
     optimizer, env = FakeOptimizer(), FakeEnvironment()
-    settings = config(expansion_budget=5)
-    trainer = SkillForestTrainer(settings, agent_factory=optimizer)
-    original = trainer_module.boundary
-    failed = False
+    trainer = SkillForestTrainer(small_config(), agent_factory=optimizer)
+    original = trainer_module.write_node
+    interrupted = False
 
-    def interrupt(path, identity, *, payload=None):
-        nonlocal failed
-        result = original(path, identity, payload=payload)
-        hit = path.name == point or (point == "wave" and path.parent.name == "waves" and path.stem == "000001")
-        if hit and payload is not None and not failed:
-            failed = True
-            raise RuntimeError("simulated process interruption")
-        return result
+    def stop_after_generation(root, checkpoint):
+        nonlocal interrupted
+        original(root, checkpoint)
+        if checkpoint.status == "generated" and not interrupted:
+            interrupted = True
+            raise RuntimeError("simulated interruption")
 
-    original_ensemble = trainer._ensemble
-
-    async def stop_ensemble(*args):
-        nonlocal failed
-        if point == "ensemble" and not failed:
-            failed = True
-            raise RuntimeError("simulated Select interruption")
-        return await original_ensemble(*args)
-
-    monkeypatch.setattr(trainer_module, "boundary", interrupt)
-    monkeypatch.setattr(trainer, "_ensemble", stop_ensemble)
-    with pytest.raises((RuntimeError, ExceptionGroup)):
-        execute(tmp_path, trainer, env)
-    assert failed
-    completed_before = {
-        str(p.parent) for p in tmp_path.rglob("completed.json") if "result" in json.loads(p.read_text())["payload"]
-    }
-    calls_before = len(env.calls)
-    restored = execute(tmp_path, trainer, env)
-    assert "improved" in restored.bundle.files["SKILL.md"]
-    assert not completed_before.intersection(path for _, _, path in env.calls[calls_before:])
-    forest = json.loads((tmp_path / "forest.json").read_text())
-    assert forest["expansions"] == 5
-    assert len({node["id"] for node in forest["nodes"]}) == len(forest["nodes"])
-    physical = len(env.calls), len(optimizer.messages)
-    assert execute(tmp_path, trainer, env).bundle.content_hash == restored.bundle.content_hash
-    assert (len(env.calls), len(optimizer.messages)) == physical
-
-
-def test_partial_validation_reuses_stable_task_directories(tmp_path):
-    """Restore a partial group without renumbering remaining tasks or rerunning completed ones."""
-    env = FakeEnvironment()
-    settings = config(rollout_concurrency=1)
-    original = env.rollout
-    failed = False
-
-    def interrupted(**kwargs):
-        nonlocal failed
-        if kwargs["task"].id == "../task/2" and not failed:
-            failed = True
-            raise RuntimeError("interrupted third task")
-        return original(**kwargs)
-
-    env.rollout = interrupted
-
-    async def collect(resume):
-        runtime = ForestRuntime(settings, work_dir=tmp_path, resume=resume)
-        try:
-            return await runtime.scheduler.collect(
-                env=env, samples=samples(), skill=initial_skill(), directory=tmp_path / "validation"
-            )
-        finally:
-            await runtime.close()
-
-    with pytest.raises(RuntimeError):
-        asyncio.run(collect(False))
-    result = asyncio.run(collect(True))
-    assert len(result) == 6
-    assert Counter(task for task, _, _ in env.calls) == Counter(sample.task.id for sample in samples())
-    assert all(path.endswith(f"{int(task.rsplit('/', 1)[1]):06d}") for task, _, path in env.calls)
-
-
-def test_restored_scores_can_reject_without_submitting_work(tmp_path):
-    """Evaluate an early-rejection predicate against restored results before allocating calls."""
-    env = FakeEnvironment()
-
-    async def collect(resume, predicate):
-        runtime = ForestRuntime(config(rollout_concurrency=1), work_dir=tmp_path, resume=resume)
-        try:
-            return await runtime.scheduler.collect(
-                env=env,
-                samples=samples(),
-                skill=initial_skill(),
-                directory=tmp_path / "validation",
-                stop_when=predicate,
-            )
-        finally:
-            await runtime.close()
-
-    asyncio.run(collect(False, lambda results: len(results) >= 2))
-    before = len(env.calls)
-    result = asyncio.run(collect(True, lambda results: len(results) >= 2))
-    assert len(result) == before == 2
-    assert len(env.calls) == before
-
-
-def test_resume_rejects_changed_inputs_and_corruption(tmp_path):
-    """Reject incompatible protocols and modified committed outputs before any new calls."""
-    env, optimizer = FakeEnvironment(), FakeOptimizer()
-    trainer = SkillForestTrainer(config(), agent_factory=optimizer)
-    execute(tmp_path, trainer, env)
-    before = len(env.calls)
-    changed = SkillForestTrainer(config(seed=99), agent_factory=optimizer)
-    with pytest.raises(ValueError, match="mismatch"):
-        execute(tmp_path, changed, env)
-    path = tmp_path / "completed.json"
-    value = json.loads(path.read_text())
-    value["digest"] = "corrupt"
-    path.write_text(json.dumps(value))
-    with pytest.raises(ValueError, match="mismatch"):
-        execute(tmp_path, trainer, env)
-    assert len(env.calls) == before
-
-
-def test_legacy_output_is_not_silently_imported(tmp_path):
-    """Old audit files alone must not be treated as validated recovery checkpoints."""
-    (tmp_path / "forest.json").write_text("{}")
-    with pytest.raises(ValueError, match="legacy"):
-        execute(tmp_path, SkillForestTrainer(config()), FakeEnvironment())
-
-
-def test_invalid_candidates_remain_terminal_on_resume(tmp_path):
-    """A rejected model format must not receive a fresh stochastic generation attempt."""
-    env, optimizer = FakeEnvironment(), FakeOptimizer(malformed=True)
-    trainer = SkillForestTrainer(config(), agent_factory=optimizer)
-    with pytest.raises(RuntimeError, match="No positive-gain"):
-        execute(tmp_path, trainer, env)
-    before = len(env.calls), len(optimizer.messages)
-    with pytest.raises(RuntimeError, match="No positive-gain"):
-        execute(tmp_path, trainer, env)
-    assert (len(env.calls), len(optimizer.messages)) == before
-
-
-def test_select_failure_only_retries_missing_scores(tmp_path):
-    """Keep the entire constructed forest and all completed Select requests on failure."""
-    env, optimizer = FakeEnvironment(), FakeOptimizer()
-    original = env.rollout
-    failed = False
-
-    def interrupted(**kwargs):
-        nonlocal failed
-        if "ensemble" in str(kwargs["work_dir"]) and not failed:
-            failed = True
-            raise RuntimeError("Select provider error")
-        return original(**kwargs)
-
-    env.rollout = interrupted
-    trainer = SkillForestTrainer(config(), agent_factory=optimizer)
+    monkeypatch.setattr(trainer_module, "write_node", stop_after_generation)
     with pytest.raises(ExceptionGroup):
         execute(tmp_path, trainer, env)
-    before = len(env.calls), len(optimizer.messages)
+    assert interrupted
+    saved = json.loads((candidate_dir(tmp_path) / "node.json").read_text())
+    assert saved["status"] == "generated"
+    model_calls = len(optimizer.messages)
+
+    selected = execute(tmp_path, trainer, env)
+    assert "improved" in selected.content
+    assert len(optimizer.messages) == model_calls
+    assert json.loads((candidate_dir(tmp_path) / "node.json").read_text())["status"] == "accepted"
+    assert (tmp_path / "result.json").exists()
+
+
+def test_partial_validation_restarts_from_first_task(tmp_path):
+    """A partial JSONL audit does not become a per-task recovery cache."""
+
+    class InterruptedEnvironment(FakeEnvironment):
+        def __init__(self):
+            super().__init__()
+            self.candidate_calls = []
+            self.failed = False
+
+        def rollout(self, **kwargs):
+            directory = str(kwargs["work_dir"])
+            if "node-tree-000-root-00/workspaces/eval" in directory and "selection-" not in directory:
+                self.candidate_calls.append(kwargs["task"].id)
+                if len(self.candidate_calls) == 2 and not self.failed:
+                    self.failed = True
+                    raise RuntimeError("interrupted candidate validation")
+            return super().rollout(**kwargs)
+
+    env = InterruptedEnvironment()
+    optimizer = FakeOptimizer()
+    trainer = SkillForestTrainer(small_config(), agent_factory=optimizer)
+    with pytest.raises(ExceptionGroup):
+        execute(tmp_path, trainer, env)
+    first_task = env.candidate_calls[0]
+    assert len(list(read_jsonl(candidate_dir(tmp_path) / "evaluation.jsonl"))) == 1
+    model_calls = len(optimizer.messages)
+
     execute(tmp_path, trainer, env)
-    assert len(optimizer.messages) == before[1]
-    assert all("ensemble" in path for _, _, path in env.calls[before[0] :])
-    summary = json.loads((tmp_path / "summary.json").read_text())
-    assert summary["rollout"]["statuses"]["failed"] == 1
-    assert len(list(tmp_path.glob("ensemble/**/attempts/*/call.json"))) == 1
+    assert Counter(env.candidate_calls)[first_task] == 2
+    assert len(optimizer.messages) == model_calls
+    rows = list(read_jsonl(candidate_dir(tmp_path) / "evaluation.jsonl"))
+    assert len(rows) == 3
+    assert all("trajectory" in row["result"] for row in rows)
+
+
+def test_resume_rejects_changed_inputs_and_corrupt_nodes(tmp_path):
+    """A matching final result is reusable; mismatched inputs fail before calls."""
+    env, optimizer = FakeEnvironment(), FakeOptimizer()
+    trainer = SkillForestTrainer(small_config(), agent_factory=optimizer)
+    selected = execute(tmp_path, trainer, env)
+    before = len(env.calls), len(optimizer.messages)
+    assert execute(tmp_path, trainer, env).source.content_hash == selected.source.content_hash
+    assert (len(env.calls), len(optimizer.messages)) == before
+
+    changed = SkillForestTrainer(small_config(seed=99), agent_factory=optimizer)
+    with pytest.raises(ValueError, match="identity mismatch"):
+        execute(tmp_path, changed, env)
+    assert (len(env.calls), len(optimizer.messages)) == before
+
+    (tmp_path / "result.json").unlink()
+    checkpoint_path = candidate_dir(tmp_path) / "node.json"
+    checkpoint = json.loads(checkpoint_path.read_text())
+    checkpoint["scores"] = {}
+    checkpoint_path.write_text(json.dumps(checkpoint))
+    with pytest.raises(ValueError, match="checkpoint mismatch"):
+        execute(tmp_path, trainer, env)
+
+
+def test_legacy_directory_is_not_silently_imported(tmp_path):
+    """An old collection of audit files cannot masquerade as a new run."""
+    (tmp_path / "forest.json").write_text("{}")
+    with pytest.raises(ValueError, match="legacy"):
+        execute(tmp_path, SkillForestTrainer(small_config()), FakeEnvironment())
+
+
+@pytest.mark.parametrize("cleanup", [True, False])
+def test_workspace_cleanup_is_configurable(tmp_path, cleanup):
+    """Completed task workspaces are removed by default and retained on request."""
+
+    class FileEnvironment(FakeEnvironment):
+        def rollout(self, **kwargs):
+            directory = kwargs["work_dir"]
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "artifact.txt").write_text("task artifact")
+            return super().rollout(**kwargs)
+
+    execute(
+        tmp_path,
+        SkillForestTrainer(small_config(cleanup_workspaces=cleanup), agent_factory=FakeOptimizer()),
+        FileEnvironment(),
+    )
+    artifacts = list(tmp_path.rglob("artifact.txt"))
+    assert bool(artifacts) is not cleanup
+
+
+def test_selection_failure_restarts_selection_without_reexpanding(tmp_path):
+    """Committed parent expansions survive a failed final selection stage."""
+    env, optimizer = FakeEnvironment(), FakeOptimizer()
+    trainer = SkillForestTrainer(small_config(), agent_factory=optimizer)
+    original = trainer._ensemble
+    interrupted = False
+
+    async def stop_once(*args):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            raise RuntimeError("selection unavailable")
+        return await original(*args)
+
+    trainer._ensemble = stop_once
+    with pytest.raises(RuntimeError, match="selection unavailable"):
+        execute(tmp_path, trainer, env)
+    before = len(optimizer.messages)
+    assert json.loads((tmp_path / "trees/tree-0/node-tree-000-root/node.json").read_text())["expanded"]
+    execute(tmp_path, trainer, env)
+    assert len(optimizer.messages) == before
+    assert (tmp_path / "result.json").exists()

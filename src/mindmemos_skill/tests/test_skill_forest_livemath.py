@@ -12,7 +12,7 @@ from mindmemos_skill.algos.train.skill_forest.typing import SkillForestReflectio
 from mindmemos_skill.envs.builtin_envs.livemath.typing import LiveMathTask
 from mindmemos_skill.envs.data.typing import DataSample, RewardData
 from mindmemos_skill.envs.typing import RolloutResult
-from mindmemos_skill.skill import Skill, SkillBundle
+from mindmemos_skill.skill import Skill, SkillContent
 
 CASES = json.loads((Path(__file__).parent / "fixtures/skill_forest/livemath_reflection.json").read_text())["cases"]
 
@@ -31,9 +31,9 @@ def test_actual_reflection_request_matches_historical_input(case, tmp_path):
     )
 
     class CaptureRuntime:
-        config = SkillForestTrainerConfig(optimizer={"model": "offline"}, env_adapter={"class_name": "livemath"})
+        config = SkillForestTrainerConfig(optimizer={"model": "offline"})
 
-        env_adapter = SkillForestEnvAdapter.build(config.env_adapter.class_name, config.env_adapter.config)
+        env_adapter = SkillForestEnvAdapter.build("livemath", {})
 
         async def chat(self, *, messages, directory):
             system, user = messages[0]["content"], messages[1]["content"]
@@ -42,7 +42,11 @@ def test_actual_reflection_request_matches_historical_input(case, tmp_path):
 
     patch = asyncio.run(
         generate_patch(
-            skill=Skill(bundle=SkillBundle(files={"SKILL.md": case["skill"]})),
+            skill=Skill(
+                source=SkillContent(
+                    content=case["skill"], name="test-skill", description="Task instructions", standard_format=False
+                )
+            ),
             samples=[sample],
             results=[result],
             runtime=CaptureRuntime(),

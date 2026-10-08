@@ -1,11 +1,18 @@
 """Run-local forest data and validated atomic patch contracts."""
 
-from typing import Annotated, Literal, Self
+from collections.abc import Callable, Coroutine, Sequence
+from pathlib import Path
+from typing import Any, Literal, Protocol, Self, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
+from ....agents.typing import AgentResult
+from ....envs.base import Environment
+from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult, Task
 from ....skill import Skill
+from ....skill.typing import SkillSnapshot
+from .config import ForestOptimizerConfig
 
 
 class RankingResponse(BaseModel):
@@ -116,300 +123,54 @@ class Node(BaseModel):
     """Strict validation improvement over the immediate parent."""
 
 
-class ArtifactRecord(BaseModel):
-    """Strict common contract for forest-owned JSON objects."""
+class NodeCheckpoint(BaseModel):
+    """Persist a patch-applied candidate and its optional completed validation."""
 
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    """Reject misspelled fields and non-finite audit values."""
+    model_config = ConfigDict(extra="forbid")
+    """Reject unknown checkpoint fields."""
 
+    id: str
+    """Stable candidate identity within one forest run."""
 
-class ExecutionStatus(ArtifactRecord):
-    """Shared lifecycle fields for runs and physical calls."""
+    tree_id: int = Field(ge=0)
+    """Tree that owns this candidate."""
 
-    status: Literal["running", "completed", "failed"]
-    """Current execution state."""
+    parent_id: str | None = None
+    """Parent node identity, or None for an initial root."""
 
-    duration_s: float | None = Field(default=None, ge=0)
-    """Elapsed wall time for a terminal state."""
+    depth: int = Field(default=0, ge=0)
+    """Number of patches between this node and its root."""
 
-    error: str | None = None
-    """Exception description when execution failed."""
+    skill: SkillSnapshot
+    """Complete Skill snapshot saved immediately after patch application."""
+
+    status: Literal["generated", "root", "accepted", "rejected"]
+    """Current node validation state."""
+
+    scores: dict[str, float] = Field(default_factory=dict)
+    """Completed validation scores; root and accepted nodes have full vectors."""
+
+    gain: float = 0.0
+    """Improvement over the parent after completed validation."""
+
+    expanded: bool = False
+    """Whether this node's child generation has fully completed."""
 
     @model_validator(mode="after")
     def validate_state(self) -> Self:
-        """Require terminal evidence and reject contradictory lifecycle fields."""
-        if self.status == "running":
-            if self.duration_s is not None or self.error is not None:
-                raise ValueError("Running records cannot contain terminal evidence")
-        elif self.duration_s is None:
-            raise ValueError("Terminal records require duration_s")
-        if (self.error is not None) != (self.status == "failed"):
-            raise ValueError("Only failed records require error")
+        """Keep root, generated and accepted node states internally consistent."""
+        if self.status == "root":
+            if self.parent_id is not None or self.depth != 0 or not self.scores:
+                raise ValueError("A root requires a full score vector and no parent")
+        elif self.parent_id is None or self.depth == 0:
+            raise ValueError("A candidate requires a parent and positive depth")
+        if self.status == "generated" and (self.scores or self.gain or self.expanded):
+            raise ValueError("An unvalidated candidate cannot have scores or expanded children")
+        if self.status == "accepted" and (not self.scores or self.gain <= 0):
+            raise ValueError("An accepted candidate requires positive gain and scores")
+        if self.status == "rejected" and self.expanded:
+            raise ValueError("A rejected candidate cannot be expanded")
         return self
-
-
-class RunStatus(ExecutionStatus):
-    """Run lifecycle saved in status.json."""
-
-    content_hash: str | None = None
-    """Selected Skill identity for a completed run."""
-
-    @model_validator(mode="after")
-    def validate_selection(self) -> Self:
-        """Require the selected identity only for completed runs."""
-        if (self.content_hash is not None) != (self.status == "completed"):
-            raise ValueError("Only completed runs require content_hash")
-        return self
-
-
-class RolloutCall(ExecutionStatus):
-    """Physical environment invocation stored in call.json."""
-
-    task_id: str
-    """Public task identity."""
-
-    content_hash: str
-    """Skill identity submitted to the environment."""
-
-    result: dict[str, JsonValue] | None = None
-    """Full environment result, including environment-specific fields."""
-
-    @model_validator(mode="after")
-    def validate_result(self) -> Self:
-        """Validate the shared result contract without discarding extensions."""
-        if (self.result is not None) != (self.status == "completed"):
-            raise ValueError("Only completed rollout calls require result")
-        if self.result is not None:
-            RolloutResult.model_validate(
-                {key: value for key, value in self.result.items() if key in RolloutResult.model_fields}
-            )
-        return self
-
-
-class ModelMessage(ArtifactRecord):
-    """One optimizer input message."""
-
-    role: Literal["system", "user"]
-    """Role in the optimizer request."""
-
-    content: str
-    """Prompt text sent to the optimizer."""
-
-
-class ModelResponse(ArtifactRecord):
-    """Text-only optimizer response using the AgentResult wire format."""
-
-    output: str = Field(min_length=1)
-    """Optimizer text returned to generation or merging."""
-
-    trajectory: list[dict[str, JsonValue]]
-    """Provider execution trace preserved verbatim."""
-
-    usage: dict[str, JsonValue]
-    """Provider usage counters and optional extensions."""
-
-
-class ModelCall(ExecutionStatus):
-    """Physical optimizer invocation stored in call.json."""
-
-    messages: list[ModelMessage] = Field(min_length=2, max_length=2)
-    """System and user prompts submitted for this call."""
-
-    response: ModelResponse | None = None
-    """Original text response for a completed call."""
-
-    @model_validator(mode="after")
-    def validate_response(self) -> Self:
-        """Require a response only after completion."""
-        if (self.response is not None) != (self.status == "completed"):
-            raise ValueError("Only completed model calls require response")
-        return self
-
-
-class ForestNodeRecord(ArtifactRecord):
-    """Node metadata in forest.json."""
-
-    id: str
-    """Run-local node identity."""
-
-    tree_id: int = Field(ge=0)
-    """Owning tree index."""
-
-    parent_id: str | None
-    """Parent identity; null for roots."""
-
-    depth: int = Field(ge=0)
-    """Distance from the shared initial Skill."""
-
-    gain: float
-    """Improvement over the parent."""
-
-    scores: dict[str, float]
-    """Observed validation rewards."""
-
-    content_hash: str
-    """Candidate Skill identity."""
-
-
-class ForestRecord(ArtifactRecord):
-    """Forest checkpoint in forest.json."""
-
-    expansions: int = Field(ge=0)
-    """Number of expanded parents."""
-
-    nodes: list[ForestNodeRecord]
-    """All roots and accepted descendants."""
-
-
-class SharedTrainRecord(ArtifactRecord):
-    """Shared evidence membership in shared_train.json."""
-
-    task_ids: list[str]
-    """Tasks whose root trajectories were reused."""
-
-
-class InvalidDecision(ArtifactRecord):
-    """Invalid candidate in decision.json."""
-
-    status: Literal["invalid_patch"]
-    """Patch parsing or application failed."""
-
-    error: str
-    """Failure description."""
-
-
-class UnchangedDecision(ArtifactRecord):
-    """Unchanged candidate in decision.json."""
-
-    status: Literal["no_change"]
-    """Patch did not change the Skill hash."""
-
-
-class ScoredDecision(ArtifactRecord):
-    """Validation gate outcome in decision.json."""
-
-    status: Literal["accepted", "rejected"]
-    """Candidate gate outcome."""
-
-    scores: dict[str, float]
-    """Observed validation rewards, possibly partial."""
-
-    gain: float | None
-    """Full validation gain; null when early rejection leaves scores incomplete."""
-
-    evaluated: int = Field(ge=0)
-    """Number of completed validation tasks."""
-
-    expected: int = Field(ge=1)
-    """Full validation task count."""
-
-    early_rejected: bool
-    """Whether validation stopped before completion."""
-
-    @model_validator(mode="after")
-    def validate_counts(self) -> Self:
-        """Keep partial validation counts and acceptance consistent."""
-        if self.evaluated != len(self.scores) or self.evaluated > self.expected:
-            raise ValueError("Validation counts must match the score vector")
-        if self.early_rejected != (self.evaluated < self.expected):
-            raise ValueError("early_rejected must describe incomplete validation")
-        if (self.gain is None) != self.early_rejected:
-            raise ValueError("Only incomplete validation requires a null gain")
-        if self.status == "accepted" and self.early_rejected:
-            raise ValueError("Accepted candidates require complete validation")
-        return self
-
-
-class ScoresRecord(ArtifactRecord):
-    """Full-pool evaluation in scores.json."""
-
-    scores: dict[str, float]
-    """Per-task evaluation rewards."""
-
-    mean: float
-    """Mean reward across tasks."""
-
-
-class WinnerRecord(ArtifactRecord):
-    """One entry in ensemble/winners.json."""
-
-    id: str
-    """Winning node identity."""
-
-    tree_id: int = Field(ge=0)
-    """Owning tree index."""
-
-    score: float
-    """Full-pool mean reward."""
-
-    novelty: float
-    """Distance from the initial Skill."""
-
-
-class SelectionRecord(ArtifactRecord):
-    """Selected winner in selection.json."""
-
-    selected: str
-    """Node returned by the select strategy."""
-
-
-class MergePoolRecord(ArtifactRecord):
-    """Eligible synthesis pool in merge_pool.json."""
-
-    threshold: float
-    """Minimum full-pool score for inclusion."""
-
-    ids: list[str]
-    """Ordered node identities admitted to merging."""
-
-
-class TokenTotals(ArtifactRecord):
-    """Aggregated normalized token counters."""
-
-    input_tokens: int = Field(ge=0)
-    """Reported input token sum."""
-
-    output_tokens: int = Field(ge=0)
-    """Reported output token sum."""
-
-    total_tokens: int = Field(ge=0)
-    """Reported total token sum."""
-
-
-class CallTotals(ArtifactRecord):
-    """Physical-call aggregate in summary.json."""
-
-    calls: int = Field(ge=0)
-    """Number of saved physical calls."""
-
-    statuses: dict[Literal["running", "completed", "failed"], int]
-    """Call counts by lifecycle state."""
-
-    summed_call_duration_s: float = Field(ge=0)
-    """Sum of durations; concurrent calls may overlap."""
-
-    usage_present_calls: int = Field(ge=0)
-    """Calls containing nonempty usage records."""
-
-    usage: TokenTotals
-    """Normalized reported token sums."""
-
-
-class RunSummary(ArtifactRecord):
-    """Audit aggregate in summary.json."""
-
-    rollout: CallTotals
-    """Physical environment calls."""
-
-    model: CallTotals
-    """Physical optimizer calls."""
-
-    decisions: dict[Literal["invalid_patch", "no_change", "accepted", "rejected"], int]
-    """Candidate counts by gate outcome."""
-
-
-DecisionRecord = Annotated[InvalidDecision | UnchangedDecision | ScoredDecision, Field(discriminator="status")]
-"""Candidate decision variants stored in decision.json."""
 
 
 class SkillForestTrajectoryContext(BaseModel):
@@ -515,3 +276,126 @@ class SkillForestSkillMergeContext(BaseModel):
 
     right_score: float
     """Second candidate's score on the same pool."""
+
+
+class OptimizerAgent(Protocol):
+    """Synchronous optimizer interface used by the bounded model transport."""
+
+    def run(self, *, messages: list[dict[str, str]]) -> AgentResult:
+        """Generate an optimizer response.
+
+        Args:
+            messages: Complete system and user request.
+
+        Returns:
+            Text response and recorded model usage.
+        """
+        ...
+
+
+AgentFactory = Callable[[ForestOptimizerConfig], OptimizerAgent]
+"""Construct one optimizer using the validated transport settings."""
+
+EvidenceBatch = Sequence[tuple[DataSample, RolloutResult]]
+"""Ordered task and result pairs sharing the same success outcome."""
+
+StopPredicate = Callable[[dict[str, RolloutResult]], bool]
+"""Return True when remaining queued evaluations should be skipped."""
+
+
+class RolloutExecutor(Protocol):
+    """Keyword-only asynchronous execution accepted by the scheduler."""
+
+    def __call__(
+        self, *, env: Environment, sample: DataSample, skill: Skill, directory: Path
+    ) -> Coroutine[Any, Any, RolloutResult]:
+        """Execute one physical rollout.
+
+        Args:
+            env: Caller-owned execution environment.
+            sample: Public task and private scoring inputs.
+            skill: Candidate to evaluate.
+            directory: Exclusive workspace for this call.
+
+        Returns:
+            Awaitable completed rollout.
+        """
+        ...
+
+
+class RolloutLoader(Protocol):
+    """Optional synchronous loader for an already completed rollout."""
+
+    def __call__(self, *, env: Environment, sample: DataSample, skill: Skill, directory: Path) -> RolloutResult | None:
+        """Load matching evidence if available.
+
+        Args:
+            env: Caller-owned execution environment.
+            sample: Public task and private scoring inputs.
+            skill: Candidate to evaluate.
+            directory: Workspace that may contain a completed call.
+
+        Returns:
+            Completed rollout, or None when execution is required.
+        """
+        ...
+
+
+class EnsembleCandidate(BaseModel):
+    """A frozen winner or synthesized Skill with its evaluation owner."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+    """Retain Skill objects while preventing candidate reassignment."""
+
+    name: str
+    """Stable label used for selection workspaces."""
+
+    skill: Skill
+    """Complete candidate evaluated over the training pool."""
+
+    score: float
+    """Mean success over the entire training pool."""
+
+    owner: Node
+    """Original tree winner that owns the evaluation workspace."""
+
+
+class NodeSummary(TypedDict):
+    """JSON metadata for one accepted forest node."""
+
+    id: str
+    """Run-local node identifier."""
+
+    tree_id: int
+    """Independent tree index."""
+
+    parent_id: str | None
+    """Parent identifier, or None for a root."""
+
+    depth: int
+    """Number of edits from the root."""
+
+    gain: float
+    """Validation improvement over the parent."""
+
+    scores: dict[str, float]
+    """Completed task-level validation scores."""
+
+    content_hash: str
+    """Digest of the candidate document."""
+
+
+class WinnerScore(TypedDict):
+    """Comparable selection metrics for a frozen tree winner."""
+
+    id: str
+    """Winner node identifier."""
+
+    tree_id: int
+    """Tree that produced the winner."""
+
+    score: float
+    """Mean success on the complete training pool."""
+
+    novelty: float
+    """TF-IDF distance from the initial Skill."""

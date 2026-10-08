@@ -1,12 +1,19 @@
 """Candidate-local reflection and evidence reduction for forest edges."""
 
 import random
+from collections.abc import Sequence
 from pathlib import Path
+from typing import TypeVar
+
+from pydantic import BaseModel
 
 from ....common.json import parse_model
-from .artifacts import record
+from ....envs.data.typing import DataSample
+from ....envs.typing import RolloutResult
+from ....skill import Skill
 from .runtime import ForestRuntime, parallel
 from .typing import (
+    EvidenceBatch,
     Patch,
     RankingResponse,
     ReflectionResponse,
@@ -17,12 +24,14 @@ from .typing import (
     SkillForestTrajectoryContext,
 )
 
+ModelT = TypeVar("ModelT", bound=BaseModel)
+
 
 class InvalidPatchError(ValueError):
     """The optimizer response violates the patch protocol, unlike transport or I/O failures."""
 
 
-def _parse(text, model_type):
+def _parse(text: str, model_type: type[ModelT]) -> ModelT:
     """Separate invalid model output from provider failures without retrying."""
     try:
         return parse_model(text, model_type)
@@ -30,7 +39,9 @@ def _parse(text, model_type):
         raise InvalidPatchError(str(exc)) from exc
 
 
-async def _reflect_batch(batch, *, success, index, text, runtime, directory):
+async def _reflect_batch(
+    batch: EvidenceBatch, *, success: bool, index: int, text: str, runtime: ForestRuntime, directory: Path
+) -> Patch:
     """Extract bounded edits from one public evidence batch."""
     config = runtime.config
     name = "success" if success else "failure"
@@ -61,7 +72,9 @@ async def _reflect_batch(batch, *, success, index, text, runtime, directory):
     return patch.model_copy(update={"edits": edits})
 
 
-async def _merge_group(patches, *, name, level, index, text, runtime, directory):
+async def _merge_group(
+    patches: Sequence[Patch], *, name: str, level: int, index: int, text: str, runtime: ForestRuntime, directory: Path
+) -> Patch:
     """Resolve overlapping edits within one bounded reduction group."""
     if len(patches) == 1:
         return patches[0]
@@ -75,7 +88,9 @@ async def _merge_group(patches, *, name, level, index, text, runtime, directory)
     return patch.model_copy(update={"edits": [edit.model_copy(update={"merge_level": level}) for edit in patch.edits]})
 
 
-async def _reduce_evidence(batches, *, success, text, runtime, directory):
+async def _reduce_evidence(
+    batches: Sequence[EvidenceBatch], *, success: bool, text: str, runtime: ForestRuntime, directory: Path
+) -> Patch:
     """Reduce a single outcome stream without owning tree or candidate state."""
     config = runtime.config
     name = "success" if success else "failure"
@@ -98,13 +113,12 @@ async def _reduce_evidence(batches, *, success, text, runtime, directory):
     return patches[0] if patches else Patch()
 
 
-async def _rank_patch(patch, *, text, depth, runtime, directory):
+async def _rank_patch(patch: Patch, *, text: str, depth: int, runtime: ForestRuntime, directory: Path) -> Patch:
     """Select a bounded edit pool through the shared optimizer transport."""
     config = runtime.config
     budget = config.ranking_edit_budgets[min(depth, len(config.ranking_edit_budgets) - 1)]
     if not config.ranking_enabled or len(patch.edits) <= budget:
         return patch
-    record(directory / "pre_ranking_patch.json", patch.model_dump(mode="json", exclude_unset=True))
     response = await runtime.chat(
         messages=runtime.env_adapter.build_ranking_messages(
             SkillForestRankingContext(skill=text, patch=patch, edit_budget=budget)
@@ -119,7 +133,14 @@ async def _rank_patch(patch, *, text, depth, runtime, directory):
 
 
 async def generate_patch(
-    *, skill, samples, results, runtime: ForestRuntime, directory: Path, seed: int, depth: int = 0
+    *,
+    skill: Skill,
+    samples: Sequence[DataSample],
+    results: Sequence[RolloutResult],
+    runtime: ForestRuntime,
+    directory: Path,
+    seed: int,
+    depth: int = 0,
 ) -> Patch:
     """Derive a candidate patch from shared parent trajectories.
 
@@ -139,7 +160,7 @@ async def generate_patch(
         raise ValueError("Parent depth must be nonnegative")
     if len(samples) != len(results):
         raise ValueError("Reflection requires one result for every sample")
-    text = skill.bundle.files["SKILL.md"]
+    text = skill.content
     config = runtime.config
     streams = []
     for success in (False, True):
@@ -171,5 +192,4 @@ async def generate_patch(
     else:
         patch = failure if failure.edits else success
     patch = await _rank_patch(patch, text=text, depth=depth, runtime=runtime, directory=directory)
-    record(directory / "patch.json", patch.model_dump(mode="json", exclude_unset=True))
     return patch

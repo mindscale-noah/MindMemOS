@@ -6,7 +6,7 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 
-from ....skill import Skill, SkillBundle
+from ....skill import Skill
 from .typing import Node, Patch, TreeSplit
 
 
@@ -44,8 +44,7 @@ def apply_patch(skill: Skill, patch: Patch) -> Skill:
     Raises:
         ValueError: A target is missing or ambiguous, or the result is empty.
     """
-    bundle = skill.bundle
-    text = bundle.files["SKILL.md"]
+    text = skill.content
     for edit in patch.edits:
         if edit.op == "append":
             text = text.rstrip() + "\n\n" + edit.content
@@ -60,9 +59,7 @@ def apply_patch(skill: Skill, patch: Patch) -> Skill:
         text = text.replace(edit.target, replacement, 1)
     if not text.strip():
         raise ValueError("A patch cannot erase the complete Skill")
-    if patch.edits:
-        bundle.files["SKILL.md"] = text.rstrip() + "\n"
-    return skill.with_bundle(SkillBundle(files=bundle.files))
+    return skill.with_content(text)
 
 
 def mean_score(scores: dict[str, float]) -> float:

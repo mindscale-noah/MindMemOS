@@ -1,152 +1,143 @@
-"""Async orchestration of paper-defined, globally bounded Skill-Forest growth."""
+"""Grow a bounded Skill forest using node-level recovery and compact outputs."""
 
-import difflib
 import hashlib
 from collections.abc import Sequence
-from contextlib import nullcontext
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
+from typing import Literal
 
 from filelock import FileLock
+from pydantic import JsonValue
 
 from ....agents import OpenAIChatAgent
-from ....common.checkpoint import boundary
-from ....common.json import read_json
+from ....common.checkpoint import fingerprint
+from ....common.json import read_json, read_jsonl, write_json
 from ....envs.base import Environment
-from ....persistence.observability import get_log_context
+from ....envs.data.typing import DataSample
+from ....envs.typing import RolloutResult
+from ....infra.task_manager.progress import ProgressReporter
 from ....skill import Skill
 from ...base import Algorithm
 from ..base import SkillTrainer
 from ..recovery import implementation_identity
-from .artifacts import ARTIFACT_SCHEMAS, record, summarize_run
-from .checkpoint import load_skill, recovery_event
-from .config import SkillForestTrainerConfig
+from .checkpoint import load_node, load_skill, node_directory, read_node, read_node_file, write_node
+from .config import ALGORITHM_VERSION, SkillForestTrainerConfig
 from .env_adapter import SkillForestEnvAdapter
+from .env_specific.selection import select_env_adapter
 from .generation import InvalidPatchError, generate_patch
 from .runtime import ForestRuntime, parallel
 from .tree import apply_patch, cannot_improve, expansion_wave, mean_score, novelty, split_tasks, tree_winners
-from .typing import Node, SkillForestSkillMergeContext, TreeSplit
+from .typing import (
+    AgentFactory,
+    EnsembleCandidate,
+    Node,
+    NodeCheckpoint,
+    NodeSummary,
+    Patch,
+    SkillForestSkillMergeContext,
+    TreeSplit,
+    WinnerScore,
+)
 
 
 @Algorithm.register("skill_forest")
 class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
-    """Arrange stateless tree operations without database or environment ownership."""
+    """Train independent Skill trees and select or synthesize their winners."""
 
     config_type = SkillForestTrainerConfig
     """Configuration model used by the shared algorithm registry."""
 
-    def __init__(self, config: SkillForestTrainerConfig, *, agent_factory=OpenAIChatAgent):
-        """Configure training without allocating resources or calling providers.
+    def __init__(self, config: SkillForestTrainerConfig, *, agent_factory: AgentFactory = OpenAIChatAgent) -> None:
+        """Bind a validated run configuration without starting physical work.
 
         Args:
-            config: Validated algorithm parameters.
+            config: Forest training controls.
             agent_factory: Optional optimizer constructor for offline tests.
         """
         super().__init__(config.model_copy(deep=True))
         self.agent_factory = agent_factory
-        self.env_adapter = SkillForestEnvAdapter.build(
-            self.config.env_adapter.class_name, self.config.env_adapter.config
-        )
 
     def create_splits(self, task_ids: Sequence[str]) -> list[TreeSplit]:
-        """Create tree-local partitions; subclasses may override the split strategy.
+        """Create one deterministic train and validation partition per tree.
 
         Args:
-            task_ids: Unique task IDs from the complete training pool.
+            task_ids: Unique IDs from the complete training pool.
 
         Returns:
-            One split per configured tree, in tree-index order. Each split must
-            contain nonempty, disjoint train and validation IDs covering the pool.
+            Splits in tree-index order.
         """
         return [
             split_tasks(task_ids, train_ratio=self.config.train_ratio, seed=self.config.seed + index)
             for index in range(self.config.num_trees)
         ]
 
-    def build_report(self, work_dir: Path) -> dict:
-        """Summarize validated forest artifacts for published version metadata.
+    def build_report(self, work_dir: Path) -> dict[str, JsonValue]:
+        """Return compact forest metadata for the published Skill version.
 
         Args:
             work_dir: Completed Skill-Forest training directory.
 
         Returns:
-            Compact, versioned JSON with per-tree winner gains and select scores.
+            Per-tree winner gains and selection scores.
         """
-        root = Path(work_dir)
-        forest = ARTIFACT_SCHEMAS["forest.json"].validate_python(read_json(root / "forest.json"))
-        winners = ARTIFACT_SCHEMAS["winners.json"].validate_python(read_json(root / "ensemble" / "winners.json"))
-        nodes = {node.id: node for node in forest.nodes}
-        scored = {winner.tree_id: winner for winner in winners}
-        trees = []
-        for tree_id in range(self.config.num_trees):
-            members = [node for node in forest.nodes if node.tree_id == tree_id]
-            winner = scored.get(tree_id)
-            selected = nodes[winner.id] if winner is not None else None
-            trees.append(
-                {
-                    "tree_id": tree_id,
-                    "node_count": len(members),
-                    "winner": {
-                        "node_id": selected.id,
-                        "gain": selected.gain,
-                        "validation_mean_score": mean_score(selected.scores),
-                        "train_top_select_score": winner.score,
-                    }
-                    if selected is not None
-                    else None,
-                }
-            )
-        selection_path = root / "ensemble" / "selection.json"
-        selection = (
-            ARTIFACT_SCHEMAS["selection.json"].validate_python(read_json(selection_path)).selected
-            if selection_path.exists()
-            else None
-        )
-        return {
-            "schema_version": 1,
-            "algorithm": "skill_forest",
-            "tree_count": self.config.num_trees,
-            "node_count": len(forest.nodes),
-            "expansion_count": forest.expansions,
-            "ensemble_strategy": self.config.ensemble_strategy,
-            "selected_node_id": selection,
-            "trees": trees,
-        }
+        result = read_json(Path(work_dir) / "result.json")
+        if result.get("status") != "completed":
+            raise ValueError("Skill-Forest result is incomplete")
+        return result["training"]["algorithm_report"]
 
-    async def train(self, *, skill, env, train_samples, validation_samples, work_dir) -> Skill:
-        """Run or resume a forest while excluding concurrent writers.
+    async def train(
+        self,
+        *,
+        skill: Skill,
+        env: Environment,
+        train_samples: Sequence[DataSample],
+        validation_samples: Sequence[DataSample],
+        work_dir: Path,
+        progress: ProgressReporter | None = None,
+    ) -> Skill:
+        """Validate, resume and train under one run-directory lock.
 
         Args:
-            skill: Original initial Skill, unchanged during recovery.
-            env: Caller-owned environment with matching configuration.
-            train_samples: Original ordered training samples.
-            validation_samples: Original external validation samples.
-            work_dir: Fresh run directory, or the original directory for resume.
+            skill: Original static Skill, unchanged by training.
+            env: Caller-owned rollout environment.
+            train_samples: Ordered training samples.
+            validation_samples: External samples excluded from optimization.
+            work_dir: New directory or a matching node-checkpoint directory.
+            progress: Optional reporter that timestamps each progress event.
 
         Returns:
             Selected or synthesized Skill.
 
         Raises:
-            ValueError: Recovery inputs differ or no compatible manifest exists.
-            filelock.Timeout: Another process owns this run.
+            ValueError: Inputs differ from the existing run or are invalid.
+            filelock.Timeout: Another writer holds the run lock.
         """
         root = Path(work_dir).expanduser().resolve()
         root.parent.mkdir(parents=True, exist_ok=True)
         with FileLock(str(root.parent / f".{root.name}.lock"), timeout=0):
-            return await self._run_train(
-                skill=skill,
-                env=env,
-                train_samples=train_samples,
-                validation_samples=validation_samples,
-                work_dir=root,
-                resume=root.exists() and any(root.iterdir()),
-            )
+            env_adapter = select_env_adapter(env)
+            samples, splits = self._prepare_run(skill, env, train_samples, validation_samples, root, env_adapter)
+            if progress is not None:
+                await progress.report(stage="training", message="Skill-Forest training started")
+            selected = await self._run_train(skill, env, samples, splits, root, env_adapter, progress=progress)
+            if progress is not None:
+                await progress.report(stage="training", message="Skill-Forest training completed")
+            return selected
 
-    async def _run_train(self, *, skill, env, train_samples, validation_samples, work_dir, resume) -> Skill:
-        """Validate run identity and execute under the caller-held directory lock."""
+    def _prepare_run(
+        self,
+        skill: Skill,
+        env: Environment,
+        train_samples: Sequence[DataSample],
+        validation_samples: Sequence[DataSample],
+        root: Path,
+        env_adapter: SkillForestEnvAdapter,
+    ) -> tuple[dict[str, DataSample], list[TreeSplit]]:
+        """Validate all inputs and bind a resumable run to their fingerprint."""
         if skill.snapshot().implementation != "static":
             raise ValueError("Skill-Forest requires a static source Skill")
-        self.env_adapter.validate_environment(env)
+        env_adapter.validate_environment(env)
         samples = {sample.task.id: sample for sample in train_samples}
         if len(samples) != len(train_samples):
             raise ValueError("Training task IDs must be unique")
@@ -154,330 +145,379 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
         if len(external_ids) != len(set(external_ids)) or samples.keys() & set(external_ids):
             raise ValueError("External validation IDs must be unique and disjoint from training")
         splits = self.create_splits(list(samples))
-        if "SKILL.md" not in skill.bundle.files:
-            raise ValueError("Skill-Forest requires a SKILL.md entrypoint")
-        root = Path(work_dir)
-        root.mkdir(parents=True, exist_ok=True)
-        if not resume and any(root.iterdir()):
-            raise ValueError("Skill-Forest requires a fresh work_dir if resume=false")
-        identity = {
-            "implementation": implementation_identity(self, env),
-            "config": self.config.model_dump(mode="json", exclude={"optimizer": {"api_key"}}),
-            "skill": skill.snapshot().model_dump(mode="json"),
-            "samples": [sample.model_dump(mode="json") for sample in train_samples],
-            "validation": [sample.model_dump(mode="json") for sample in validation_samples],
-            "splits": [split.model_dump(mode="json") for split in splits],
-            "trainer": f"{type(self).__module__}.{type(self).__qualname__}",
-            "environment": f"{type(env).__module__}.{type(env).__qualname__}",
-            "env_config": env.config.model_dump(mode="json", exclude={"agent": {"api_key"}})
-            if isinstance(env, Environment)
-            else None,
+        config = self.config.model_dump(mode="json")
+        environment = {
+            "class": f"{type(env).__module__}.{type(env).__qualname__}",
+            "config": env.config.model_dump(mode="json") if isinstance(env, Environment) else None,
         }
-        manifest = root / "recovery_manifest.json"
-        if resume and not manifest.exists():
-            raise ValueError("No compatible recovery manifest; legacy runs require explicit migration")
-        boundary(manifest, identity, payload={"protocol": 1})
-        recovery_event(root, "run_resumed" if resume else "run_started")
-        completed = boundary(root / "completed.json", identity) if resume else None
-        if completed is not None:
-            return load_skill(completed["skill"])
-        record(root / "config.json", self.config.model_dump(mode="json", exclude={"optimizer": {"api_key"}}))
-        record(root / "splits.json", [split.model_dump(mode="json") for split in splits])
-        record(root / "initial_skill.json", skill.snapshot().model_dump(mode="json"))
-        runtime = ForestRuntime(
-            self.config, agent_factory=self.agent_factory, work_dir=root, env_adapter=self.env_adapter, resume=resume
+        adapter_identity = {
+            "class": f"{type(env_adapter).__module__}.{type(env_adapter).__qualname__}",
+            "config": env_adapter.config.model_dump(mode="json"),
+        }
+        identity = fingerprint(
+            {
+                "implementation": implementation_identity(self, env),
+                "config": config,
+                "adapter": adapter_identity,
+                "skill": skill.snapshot().model_dump(mode="json"),
+                "samples": [sample.model_dump(mode="json") for sample in train_samples],
+                "validation": [sample.model_dump(mode="json") for sample in validation_samples],
+                "splits": [split.model_dump(mode="json") for split in splits],
+                "trainer": f"{type(self).__module__}.{type(self).__qualname__}",
+                "environment": environment,
+            }
         )
-        start = perf_counter()
-        record(root / "status.json", {"status": "running"})
+        path = root / "config.json"
+        if root.exists() and any(root.iterdir()):
+            if not path.exists():
+                raise ValueError("No compatible config.json; legacy runs require a new work_dir")
+            stored = read_json(path)
+            if stored.get("schema_version") != ALGORITHM_VERSION or stored.get("identity") != identity:
+                raise ValueError("Skill-Forest recovery identity mismatch")
+        else:
+            root.mkdir(parents=True, exist_ok=True)
+            write_json(
+                path,
+                {
+                    "schema_version": ALGORITHM_VERSION,
+                    "identity": identity,
+                    "trainer": config,
+                    "adapter": adapter_identity,
+                    "environment": environment,
+                    "splits": [split.model_dump(mode="json") for split in splits],
+                },
+            )
+        return samples, splits
+
+    async def _run_train(
+        self,
+        skill: Skill,
+        env: Environment,
+        samples: dict[str, DataSample],
+        splits: Sequence[TreeSplit],
+        root: Path,
+        env_adapter: SkillForestEnvAdapter,
+        *,
+        progress: ProgressReporter | None = None,
+    ) -> Skill:
+        """Grow accepted nodes, freeze tree winners and publish one final result."""
+        result_path = root / "result.json"
+        if result_path.exists():
+            result = read_json(result_path)
+            if result.get("status") != "completed":
+                raise ValueError("Skill-Forest result is incomplete")
+            return load_skill(result["selected_skill"])
+        runtime = ForestRuntime(self.config, agent_factory=self.agent_factory, work_dir=root, env_adapter=env_adapter)
+        started = perf_counter()
         try:
-            result = await self._train(skill, env, samples, splits, root, runtime)
-            record(root / "selected_skill.json", result.snapshot().model_dump(mode="json"))
-            record(root / "summary.json", summarize_run(root))
-            record(
-                root / "status.json",
+            roots, shared_evidence = await self._initialize_roots(skill, env, samples, splits, root, runtime)
+            if progress is not None:
+                await progress.report(stage="root_evaluation", message="Initial Skill evaluation completed")
+            nodes, expansions = await self._grow_forest(
+                roots, shared_evidence, env, samples, splits, root, runtime, progress=progress
+            )
+            winners = tree_winners(nodes)
+            if not winners:
+                raise RuntimeError("No positive-gain non-root winner; the paper does not substitute the shared root")
+            for winner in winners:
+                path = root / "skills" / f"skill-tree-{winner.tree_id}.md"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(winner.skill.content, encoding="utf-8")
+            if progress is not None:
+                await progress.report(stage="selection", message="Skill-Forest tree winners selected")
+            selected, selected_id, winner_scores = await self._ensemble(skill, winners, samples, env, runtime, root)
+            node_rows = [self._node_summary(node) for node in nodes]
+            report = self._algorithm_report(node_rows, expansions, winner_scores, selected_id)
+            write_json(
+                result_path,
                 {
+                    "schema_version": ALGORITHM_VERSION,
                     "status": "completed",
-                    "duration_s": perf_counter() - start,
-                    "content_hash": result.bundle.content_hash,
+                    "completed_at": datetime.now(UTC).isoformat(),
+                    "duration_s": perf_counter() - started,
+                    "selected_skill": selected.snapshot().model_dump(mode="json"),
+                    "training": {
+                        "forest": {"expansions": expansions, "nodes": node_rows},
+                        "winners": winner_scores,
+                        "summary": self._summarize(root),
+                        "algorithm_report": report,
+                    },
+                    "validation": None,
+                    "test": None,
                 },
             )
-            boundary(root / "completed.json", identity, payload={"skill": result.snapshot().model_dump(mode="json")})
-            return result
-        except BaseException as exc:
-            record(root / "summary.json", summarize_run(root))
-            record(
-                root / "status.json",
-                {
-                    "status": "failed",
-                    "duration_s": perf_counter() - start,
-                    "error": f"{type(exc).__name__}: {exc}",
-                },
-            )
-            raise
+            return selected
         finally:
             await runtime.close()
 
-    async def _collect(self, skill, ids, samples, env, runtime, directory):
-        """Collect each requested task exactly once using forest-wide rollout slots."""
+    async def _initialize_roots(
+        self,
+        skill: Skill,
+        env: Environment,
+        samples: dict[str, DataSample],
+        splits: Sequence[TreeSplit],
+        root: Path,
+        runtime: ForestRuntime,
+    ) -> tuple[list[Node], dict[str, RolloutResult]]:
+        """Load committed roots or score their shared initial Skill once."""
+        cached = [read_node(root, index, f"tree-{index:03d}-root") for index in range(len(splits))]
+        if all(item is not None and item.status == "root" for item in cached):
+            roots = [load_node(item) for item in cached]
+            if not self.config.root_share_train_trajectory or all(item.expanded for item in cached):
+                return roots, {}
+            ids = list(dict.fromkeys(key for split in splits for key in (*split.validation_ids, *split.train_ids)))
+            evidence = await self._collect(
+                skill, ids, samples, env, runtime, node_directory(root, 0, roots[0].id), "train"
+            )
+            self._record_shared_root_rollouts(skill, splits, root, runtime, evidence, set(evidence))
+            return roots, evidence
+
+        share_train = self.config.root_share_train_trajectory
+        share_validation = share_train or self.config.root_share_validation
+        validation_ids = list(dict.fromkeys(key for split in splits for key in split.validation_ids))
+        first = node_directory(root, 0, "tree-000-root")
+        shared = {}
+        if share_validation:
+            ids = (
+                list(dict.fromkeys([*validation_ids, *(key for split in splits for key in split.train_ids)]))
+                if share_train
+                else validation_ids
+            )
+            shared = await self._collect(skill, ids, samples, env, runtime, first, "eval")
+        roots = []
+        for index, split in enumerate(splits):
+            node_id = f"tree-{index:03d}-root"
+            directory = node_directory(root, index, node_id)
+            validation = (
+                shared
+                if share_validation
+                else await self._collect(skill, split.validation_ids, samples, env, runtime, directory, "eval")
+            )
+            scores = {key: float(validation[key].reward.success) for key in split.validation_ids}
+            checkpoint = NodeCheckpoint(id=node_id, tree_id=index, skill=skill.snapshot(), status="root", scores=scores)
+            write_node(root, checkpoint)
+            roots.append(load_node(checkpoint))
+            if share_validation:
+                (directory / "evaluation.jsonl").unlink(missing_ok=True)
+                for key in split.validation_ids:
+                    runtime._append_trajectory(
+                        directory / "evaluation.jsonl",
+                        {
+                            "task_id": key,
+                            "skill_hash": skill.source.skill_hash,
+                            "physical": index == 0,
+                            "result": validation[key].model_dump(mode="json"),
+                        },
+                    )
+        if share_train:
+            self._record_shared_root_rollouts(skill, splits, root, runtime, shared, set(shared))
+        return roots, shared if share_train else {}
+
+    @staticmethod
+    def _record_shared_root_rollouts(
+        skill: Skill,
+        splits: Sequence[TreeSplit],
+        root: Path,
+        runtime: ForestRuntime,
+        evidence: dict[str, RolloutResult],
+        physical_ids: set[str],
+    ) -> None:
+        """Place shared root evidence in each tree's training trajectory stream."""
+        for index, split in enumerate(splits):
+            directory = node_directory(root, index, f"tree-{index:03d}-root")
+            path = directory / "rollouts.jsonl"
+            path.unlink(missing_ok=True)
+            for key in split.train_ids:
+                runtime._append_trajectory(
+                    path,
+                    {
+                        "task_id": key,
+                        "skill_hash": skill.source.skill_hash,
+                        "physical": index == 0 and key in physical_ids,
+                        "result": evidence[key].model_dump(mode="json"),
+                    },
+                )
+
+    async def _collect(
+        self,
+        skill: Skill,
+        ids: Sequence[str],
+        samples: dict[str, DataSample],
+        env: Environment,
+        runtime: ForestRuntime,
+        node_dir: Path,
+        purpose: Literal["train", "eval"],
+    ) -> dict[str, RolloutResult]:
+        """Rebuild one complete rollout group without per-task recovery."""
+        name = "rollouts.jsonl" if purpose == "train" else "evaluation.jsonl"
+        (node_dir / name).unlink(missing_ok=True)
         results = await runtime.scheduler.collect(
-            env=env, samples=[samples[key] for key in ids], skill=skill, directory=directory
+            env=env,
+            samples=[samples[key] for key in ids],
+            skill=skill,
+            directory=node_dir / "workspaces" / purpose,
         )
         return {key: results[key] for key in ids}
 
-    async def _train(self, skill, env, samples, splits, root, runtime):
-        """Own the frontier, shared root evidence and expansion budget for one run."""
-        validation_ids = list(dict.fromkeys(key for split in splits for key in split.validation_ids))
-        root_rollout_results = await self._collect(
-            skill, validation_ids, samples, env, runtime, root / "root_validation"
-        )
-        if self.config.root_share_train_trajectory:
-            missing = [key for key in samples if key not in root_rollout_results]
-            root_rollout_results.update(await self._collect(skill, missing, samples, env, runtime, root / "root_train"))
-        roots = [
-            Node(
-                id=f"tree-{index:03d}-root",
-                tree_id=index,
-                skill=skill,
-                scores={key: float(root_rollout_results[key].reward.success) for key in split.validation_ids},
-            )
-            for index, split in enumerate(splits)
-        ]
+    async def _grow_forest(
+        self,
+        roots: Sequence[Node],
+        shared_evidence: dict[str, RolloutResult],
+        env: Environment,
+        samples: dict[str, DataSample],
+        splits: Sequence[TreeSplit],
+        root: Path,
+        runtime: ForestRuntime,
+        *,
+        progress: ProgressReporter | None,
+    ) -> tuple[list[Node], int]:
+        """Expand uncommitted nodes until the global parent budget is exhausted."""
         nodes = list(roots)
-        frontier = []
-        expansions = 0
-        pending_roots = list(roots)
-        wave_index = 0
-        # Expand pending roots first, then frontier nodes in concurrency-limited waves.
-        # Queue children below max_depth and save the forest after each wave.
-        # Stop when the expansion budget is exhausted or no eligible nodes remain.
-        while pending_roots or frontier:
-            remaining = self.config.expansion_budget - expansions
-            if remaining <= 0:
-                break
-            limit = min(remaining, self.config.expansion_concurrency)
+        for path in sorted((root / "trees").glob("tree-*/node-*/node.json")):
+            saved = read_node_file(path)
+            if saved.parent_id is not None and saved.status == "accepted":
+                nodes.append(load_node(saved))
+        expansions = sum(bool(read_node(root, node.tree_id, node.id).expanded) for node in nodes)
+        while expansions < self.config.expansion_budget:
+            pending_roots = [
+                node for node in nodes if node.parent_id is None and not read_node(root, node.tree_id, node.id).expanded
+            ]
             if pending_roots:
-                wave, pending_roots = pending_roots[:limit], pending_roots[limit:]
+                wave = pending_roots[
+                    : min(self.config.expansion_concurrency, self.config.expansion_budget - expansions)
+                ]
             else:
-                wave = expansion_wave(frontier, limit=limit, max_depth=self.config.max_depth)
-                taken = {node.id for node in wave}
-                frontier = [node for node in frontier if node.id not in taken]
+                frontier = [node for node in nodes if not read_node(root, node.tree_id, node.id).expanded]
+                wave = expansion_wave(
+                    frontier,
+                    limit=min(self.config.expansion_concurrency, self.config.expansion_budget - expansions),
+                    max_depth=self.config.max_depth,
+                )
             if not wave:
                 break
-            boundary(
-                root / "waves" / f"{wave_index:06d}.json",
-                {"wave": wave_index},
-                payload={"parents": [node.id for node in wave], "expansions_before": expansions},
-            )
-            wave_index += 1
-            expansions += len(wave)
             children = await parallel(
-                self._expand(node, splits[node.tree_id], samples, env, runtime, root, root_rollout_results)
-                for node in wave
+                self._expand(node, splits[node.tree_id], samples, env, runtime, root, shared_evidence) for node in wave
             )
-            for batch in children:
-                nodes.extend(batch)
-                frontier.extend(node for node in batch if node.depth < self.config.max_depth)
-            record(
-                root / "forest.json",
-                {
-                    "expansions": expansions,
-                    "nodes": [
-                        {
-                            "id": node.id,
-                            "tree_id": node.tree_id,
-                            "parent_id": node.parent_id,
-                            "depth": node.depth,
-                            "gain": node.gain,
-                            "scores": node.scores,
-                            "content_hash": node.skill.bundle.content_hash,
-                        }
-                        for node in nodes
-                    ],
-                },
-            )
-        winners = tree_winners(nodes)
-        if not winners:
-            raise RuntimeError("No positive-gain non-root winner; the paper does not substitute the shared root")
-        return await self._ensemble(skill, winners, samples, env, runtime, root)
+            for parent, batch in zip(wave, children, strict=True):
+                checkpoint = read_node(root, parent.tree_id, parent.id)
+                checkpoint.expanded = True
+                write_node(root, checkpoint)
+                expansions += 1
+                known = {item.id for item in nodes}
+                nodes.extend(child for child in batch if child.id not in known)
+            if progress is not None:
+                await progress.report(
+                    stage="expansion",
+                    message="Skill-Forest expansion wave completed",
+                    completed=expansions,
+                    total=self.config.expansion_budget,
+                )
+        return nodes, expansions
 
-    async def _expand(self, node, split, samples, env, runtime, root, root_rollout_results):
-        """Collect one parent batch, then generate and validate its independent children."""
-        session = get_log_context()
-        scope = (
-            session.span(
-                "algorithm.tree.expand",
-                {"algorithm.tree_id": node.tree_id, "algorithm.node_id": node.id, "algorithm.depth": node.depth},
-            )
-            if session is not None
-            else nullcontext()
-        )
-        with scope:
-            return await self._expand_untraced(node, split, samples, env, runtime, root, root_rollout_results)
-
-    async def _expand_untraced(self, node, split, samples, env, runtime, root, root_rollout_results):
-        """Execute one expansion inside its optional audit scope."""
-        directory = root / "nodes" / node.id
-        if node.parent_id is None and self.config.root_share_train_trajectory:
-            evidence = {key: root_rollout_results[key] for key in split.train_ids}
-            record(directory / "shared_train.json", {"task_ids": list(evidence)})
+    async def _expand(
+        self,
+        parent: Node,
+        split: TreeSplit,
+        samples: dict[str, DataSample],
+        env: Environment,
+        runtime: ForestRuntime,
+        root: Path,
+        shared_evidence: dict[str, RolloutResult],
+    ) -> list[Node]:
+        """Generate and validate each child of one parent node."""
+        directory = node_directory(root, parent.tree_id, parent.id)
+        if parent.parent_id is None and self.config.root_share_train_trajectory:
+            evidence = {key: shared_evidence[key] for key in split.train_ids}
         else:
-            evidence = await self._collect(node.skill, split.train_ids, samples, env, runtime, directory / "train")
+            evidence = await self._collect(parent.skill, split.train_ids, samples, env, runtime, directory, "train")
         candidates = await parallel(
-            self._candidate(node, index, split, samples, evidence, env, runtime, root)
+            self._candidate(parent, index, split, samples, evidence, env, runtime, root)
             for index in range(self.config.candidates_per_node)
         )
         return [candidate for candidate in candidates if candidate is not None]
 
-    async def _candidate(self, parent, index, split, samples, evidence, env, runtime, root):
-        """Restore a committed decision or finish only this candidate's remaining work."""
+    async def _candidate(
+        self,
+        parent: Node,
+        index: int,
+        split: TreeSplit,
+        samples: dict[str, DataSample],
+        evidence: dict[str, RolloutResult],
+        env: Environment,
+        runtime: ForestRuntime,
+        root: Path,
+    ) -> Node | None:
+        """Reuse a patch-applied Skill and redo validation when unfinished."""
         node_id = f"{parent.id}-{index:02d}"
-        session = get_log_context()
-        scope = (
-            session.span(
-                "algorithm.candidate",
-                {
-                    "algorithm.tree_id": parent.tree_id,
-                    "algorithm.node_id": node_id,
-                    "algorithm.parent_node_id": parent.id,
-                },
-            )
-            if session is not None
-            else nullcontext()
-        )
-        with scope:
-            return await self._candidate_untraced(parent, index, split, samples, evidence, env, runtime, root)
-
-    async def _candidate_untraced(self, parent, index, split, samples, evidence, env, runtime, root):
-        """Complete or restore the candidate inside its optional audit scope."""
-        node_id = f"{parent.id}-{index:02d}"
-        directory = root / "nodes" / node_id
-        identity = {
-            "parent": parent.skill.snapshot().model_dump(mode="json"),
-            "parent_scores": parent.scores,
-            "split": split.model_dump(mode="json"),
-            "id": node_id,
-        }
-        path = directory / "validated.json"
-        saved = boundary(path, identity) if runtime.resume else None
-        if saved is not None:
-            recovery_event(root, "decision_reused", node_id=node_id)
-            if not saved["accepted"]:
-                return None
-            return Node(
-                id=node_id,
-                tree_id=parent.tree_id,
-                parent_id=parent.id,
-                depth=parent.depth + 1,
-                skill=load_skill(saved["skill"]),
-                scores=saved["scores"],
-                gain=saved["gain"],
-            )
-        result = await self._evaluate_candidate(parent, index, split, samples, evidence, env, runtime, root)
-        payload = {"accepted": result is not None}
-        if result is not None:
-            payload.update(
-                skill=result.skill.snapshot().model_dump(mode="json"), scores=result.scores, gain=result.gain
-            )
-        payload["decision"] = read_json(directory / "decision.json")
-        boundary(path, identity, payload=payload)
-        recovery_event(root, "decision_committed", node_id=node_id, accepted=result is not None)
-        return result
-
-    async def _evaluate_candidate(self, parent, index, split, samples, evidence, env, runtime, root):
-        """Create one patch and gate it against its parent on the fixed validation set."""
-        node_id = f"{parent.id}-{index:02d}"
-        directory = root / "nodes" / node_id
-        generation_identity = {
-            "parent": parent.skill.bundle.content_hash,
-            "id": node_id,
-            "split": split.model_dump(mode="json"),
-        }
-        generation_path = directory / "generated.json"
-        generated = boundary(generation_path, generation_identity) if runtime.resume else None
-        if generated is not None:
-            candidate = load_skill(generated["skill"])
-            recovery_event(root, "generation_reused", node_id=node_id)
-        else:
-            invalid = None
+        checkpoint = read_node(root, parent.tree_id, node_id)
+        if checkpoint is not None and checkpoint.status == "accepted":
+            return load_node(checkpoint)
+        if checkpoint is not None and checkpoint.status == "rejected":
+            return None
+        directory = node_directory(root, parent.tree_id, node_id)
+        if checkpoint is None:
+            invalid = False
             try:
                 patch = await self._generate_patch(
                     parent, index, split, samples, evidence, runtime, directory / "generation"
                 )
-            except* InvalidPatchError as exc:
-                invalid = str(exc)
-            if invalid is not None:
-                record(directory / "decision.json", {"status": "invalid_patch", "error": invalid})
+            except* InvalidPatchError:
+                invalid = True
+            if invalid:
                 return None
             try:
                 candidate = apply_patch(parent.skill, patch)
-            except ValueError as exc:
-                record(directory / "decision.json", {"status": "invalid_patch", "error": str(exc)})
+            except ValueError:
                 return None
-            boundary(
-                generation_path,
-                generation_identity,
-                payload={"skill": candidate.snapshot().model_dump(mode="json"), "patch": patch.model_dump(mode="json")},
+            checkpoint = NodeCheckpoint(
+                id=node_id,
+                tree_id=parent.tree_id,
+                parent_id=parent.id,
+                depth=parent.depth + 1,
+                skill=candidate.snapshot(),
+                status="generated",
             )
-            recovery_event(root, "generation_committed", node_id=node_id)
-        before = parent.skill.bundle.files["SKILL.md"]
-        after = candidate.bundle.files["SKILL.md"]
-        record(directory / "skill.json", candidate.snapshot().model_dump(mode="json"))
-        (directory / "change.diff").write_text(
-            "".join(
-                difflib.unified_diff(
-                    before.splitlines(True),
-                    after.splitlines(True),
-                    fromfile="parent/SKILL.md",
-                    tofile="candidate/SKILL.md",
-                )
-            ),
-            encoding="utf-8",
-        )
-        if candidate.bundle.content_hash == parent.skill.bundle.content_hash:
-            record(directory / "decision.json", {"status": "no_change"})
+            write_node(root, checkpoint)
+        candidate = load_skill(checkpoint.skill)
+        if candidate.source.content_hash == parent.skill.source.content_hash:
+            checkpoint.status = "rejected"
+            write_node(root, checkpoint)
             return None
         ordered = sorted(split.validation_ids, key=lambda key: parent.scores[key])
 
-        def reject(results):
+        def reject(results: dict[str, RolloutResult]) -> bool:
             scores = {key: float(result.reward.success) for key, result in results.items()}
             return cannot_improve(scores, parent.scores, self.config.min_gain)
 
+        (directory / "evaluation.jsonl").unlink(missing_ok=True)
         results = await runtime.scheduler.collect(
             env=env,
             samples=[samples[key] for key in ordered],
             skill=candidate,
-            directory=directory / "validation",
+            directory=directory / "workspaces" / "eval",
             stop_when=reject if self.config.early_rejection else None,
         )
         scores = {key: float(result.reward.success) for key, result in results.items()}
         complete = len(scores) == len(parent.scores)
-        gain = mean_score(scores) - mean_score(parent.scores) if complete else None
+        gain = mean_score(scores) - mean_score(parent.scores) if complete else 0.0
         accepted = complete and gain > self.config.min_gain
-        record(
-            directory / "decision.json",
-            {
-                "status": "accepted" if accepted else "rejected",
-                "scores": scores,
-                "gain": gain,
-                "evaluated": len(scores),
-                "expected": len(parent.scores),
-                "early_rejected": not complete,
-            },
-        )
-        if not accepted:
-            return None
-        return Node(
-            id=node_id,
-            tree_id=parent.tree_id,
-            parent_id=parent.id,
-            depth=parent.depth + 1,
-            skill=candidate,
-            scores=scores,
-            gain=gain,
-        )
+        checkpoint.status = "accepted" if accepted else "rejected"
+        checkpoint.scores = scores
+        checkpoint.gain = gain
+        write_node(root, checkpoint)
+        return load_node(checkpoint) if accepted else None
 
-    async def _generate_patch(self, parent, index, split, samples, evidence, runtime, directory):
-        """Generate one proposal; subclasses may specialize a frozen experiment protocol."""
+    async def _generate_patch(
+        self,
+        parent: Node,
+        index: int,
+        split: TreeSplit,
+        samples: dict[str, DataSample],
+        evidence: dict[str, RolloutResult],
+        runtime: ForestRuntime,
+        directory: Path,
+    ) -> Patch:
+        """Generate one candidate patch from its parent's training evidence."""
         node_id = f"{parent.id}-{index:02d}"
         return await generate_patch(
             skill=parent.skill,
@@ -489,75 +529,167 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
             depth=parent.depth,
         )
 
-    async def _ensemble(self, initial, winners, samples, env, runtime, root):
-        """Score frozen winners and apply Select or unfiltered hierarchical synthesis."""
-        session = get_log_context()
-        scope = (
-            session.span("algorithm.ensemble", {"algorithm.winner_count": len(winners)})
-            if session is not None
-            else nullcontext()
+    async def _ensemble(
+        self,
+        initial: Skill,
+        winners: Sequence[Node],
+        samples: dict[str, DataSample],
+        env: Environment,
+        runtime: ForestRuntime,
+        root: Path,
+    ) -> tuple[Skill, str | None, list[WinnerScore]]:
+        """Score frozen winners and apply Select or hierarchical synthesis."""
+        values = await parallel(
+            self._score_ensemble_skill(node.skill, node, node.id, samples, env, runtime, root) for node in winners
         )
-        with scope:
-            return await self._ensemble_untraced(initial, winners, samples, env, runtime, root)
-
-    async def _ensemble_untraced(self, initial, winners, samples, env, runtime, root):
-        """Execute final selection or synthesis inside its optional audit scope."""
-
-        async def score(skill, name):
-            results = await self._collect(
-                skill, list(samples), samples, env, runtime, root / "ensemble" / name / "score"
-            )
-            scores = {key: float(result.reward.success) for key, result in results.items()}
-            record(root / "ensemble" / name / "scores.json", {"scores": scores, "mean": mean_score(scores)})
-            return mean_score(scores)
-
-        values = await parallel(score(node.skill, node.id) for node in winners)
-        distances = [novelty(initial.bundle.files["SKILL.md"], node.skill.bundle.files["SKILL.md"]) for node in winners]
-        record(
-            root / "ensemble" / "winners.json",
-            [
-                {"id": node.id, "tree_id": node.tree_id, "score": value, "novelty": distance}
-                for node, value, distance in zip(winners, values, distances)
-            ],
-        )
+        distances = [novelty(initial.content, node.skill.content) for node in winners]
+        winner_scores = [
+            {"id": node.id, "tree_id": node.tree_id, "score": value, "novelty": distance}
+            for node, value, distance in zip(winners, values, distances, strict=True)
+        ]
         if self.config.ensemble_strategy == "select":
             best = max(range(len(winners)), key=lambda index: (values[index], distances[index]))
-            record(root / "ensemble" / "selection.json", {"selected": winners[best].id})
-            return winners[best].skill
+            return winners[best].skill, winners[best].id, winner_scores
         threshold = max(values) - self.config.merge_threshold
-        items = [(node.id, node.skill, value) for node, value in zip(winners, values) if value >= threshold]
-        tree_ids = {node.id: node.tree_id for node in winners}
-        items.sort(key=lambda item: hashlib.sha256(f"42:{tree_ids[item[0]]}:{item[0]}".encode()).hexdigest())
-        record(root / "ensemble" / "merge_pool.json", {"threshold": threshold, "ids": [item[0] for item in items]})
+        items = [
+            EnsembleCandidate(name=node.id, skill=node.skill, score=value, owner=node)
+            for node, value in zip(winners, values, strict=True)
+            if value >= threshold
+        ]
+        items.sort(key=lambda item: hashlib.sha256(f"42:{item.owner.tree_id}:{item.name}".encode()).hexdigest())
         level = 0
-
-        async def merge(left, right, name):
-            left_text, right_text = left[1].bundle.files["SKILL.md"], right[1].bundle.files["SKILL.md"]
-            text = await runtime.chat(
-                messages=self.env_adapter.build_skill_merge_messages(
-                    SkillForestSkillMergeContext(
-                        left=left_text, right=right_text, left_score=left[2], right_score=right[2]
-                    )
-                ),
-                directory=root / "ensemble" / name / "model",
-            )
-            if not text.strip().startswith("#"):
-                raise ValueError("Skill synthesis requires complete Markdown starting with '#'")
-            bundle = initial.bundle
-            bundle.files["SKILL.md"] = text.strip() + "\n"
-            candidate = initial.with_bundle(bundle)
-            record(root / "ensemble" / name / "skill.json", candidate.snapshot().model_dump(mode="json"))
-            record(root / "ensemble" / name / "parents.json", [left[0], right[0]])
-            value = await score(candidate, name)
-            return name, candidate, value
-
         while len(items) > 1:
             merged = await parallel(
-                merge(items[index], items[index + 1], f"merge-{level:03d}-{index // 2:03d}")
+                self._merge_ensemble_pair(
+                    items[index],
+                    items[index + 1],
+                    f"merge-{level:03d}-{index // 2:03d}",
+                    initial,
+                    samples,
+                    env,
+                    runtime,
+                    root,
+                )
                 for index in range(0, len(items) - 1, 2)
             )
             if len(items) % 2:
                 merged.append(items[-1])
             items = merged
             level += 1
-        return items[0][1]
+        return items[0].skill, None, winner_scores
+
+    async def _score_ensemble_skill(
+        self,
+        skill: Skill,
+        owner: Node,
+        name: str,
+        samples: dict[str, DataSample],
+        env: Environment,
+        runtime: ForestRuntime,
+        root: Path,
+    ) -> float:
+        """Score one frozen Skill over the complete training pool."""
+        directory = node_directory(root, owner.tree_id, owner.id) / "workspaces" / "eval" / f"selection-{name}"
+        results = await runtime.scheduler.collect(
+            env=env, samples=list(samples.values()), skill=skill, directory=directory
+        )
+        scores = {key: float(result.reward.success) for key, result in results.items()}
+        return mean_score(scores)
+
+    async def _merge_ensemble_pair(
+        self,
+        left: EnsembleCandidate,
+        right: EnsembleCandidate,
+        name: str,
+        initial: Skill,
+        samples: dict[str, DataSample],
+        env: Environment,
+        runtime: ForestRuntime,
+        root: Path,
+    ) -> EnsembleCandidate:
+        """Synthesize and score one pair of previously ranked Skills."""
+        text = await runtime.chat(
+            messages=runtime.env_adapter.build_skill_merge_messages(
+                SkillForestSkillMergeContext(
+                    left=left.skill.content,
+                    right=right.skill.content,
+                    left_score=left.score,
+                    right_score=right.score,
+                )
+            ),
+            directory=root / "trees" / "merge",
+        )
+        if not text.strip().startswith("#"):
+            raise ValueError("Skill synthesis requires complete Markdown starting with '#'")
+        if initial.source.standard_format:
+            lines = initial.content.splitlines(keepends=True)
+            closing = next(index for index, line in enumerate(lines[1:], 1) if line.rstrip("\r\n") == "---")
+            header = "".join(lines[: closing + 1])
+            text = header + ("" if header.endswith(("\r", "\n")) else "\n") + text
+        candidate = initial.with_content(text)
+        value = await self._score_ensemble_skill(candidate, left.owner, name, samples, env, runtime, root)
+        return EnsembleCandidate(name=name, skill=candidate, score=value, owner=left.owner)
+
+    @staticmethod
+    def _node_summary(node: Node) -> NodeSummary:
+        """Keep final forest metadata independent of rollout workspaces."""
+        return {
+            "id": node.id,
+            "tree_id": node.tree_id,
+            "parent_id": node.parent_id,
+            "depth": node.depth,
+            "gain": node.gain,
+            "scores": node.scores,
+            "content_hash": node.skill.source.content_hash,
+        }
+
+    def _algorithm_report(
+        self, nodes: Sequence[NodeSummary], expansions: int, winners: Sequence[WinnerScore], selected_id: str | None
+    ) -> dict[str, JsonValue]:
+        """Build the compact version metadata already consumed by publication."""
+        by_id = {node["id"]: node for node in nodes}
+        selected = {winner["tree_id"]: winner for winner in winners}
+        trees = []
+        for tree_id in range(self.config.num_trees):
+            members = [node for node in nodes if node["tree_id"] == tree_id]
+            winner = selected.get(tree_id)
+            node = by_id[winner["id"]] if winner is not None else None
+            trees.append(
+                {
+                    "tree_id": tree_id,
+                    "node_count": len(members),
+                    "winner": {
+                        "node_id": node["id"],
+                        "gain": node["gain"],
+                        "validation_mean_score": mean_score(node["scores"]),
+                        "train_top_select_score": winner["score"],
+                    }
+                    if node is not None
+                    else None,
+                }
+            )
+        return {
+            "schema_version": ALGORITHM_VERSION,
+            "algorithm": "skill_forest",
+            "tree_count": self.config.num_trees,
+            "node_count": len(nodes),
+            "expansion_count": expansions,
+            "ensemble_strategy": self.config.ensemble_strategy,
+            "selected_node_id": selected_id,
+            "trees": trees,
+        }
+
+    @staticmethod
+    def _summarize(root: Path) -> dict[str, dict[str, int]]:
+        """Count persisted node decisions and complete trajectory records."""
+        decisions = {}
+        trajectories = {"evaluation": 0, "rollouts": 0}
+        for path in (root / "trees").glob("tree-*/node-*/node.json"):
+            state = read_node_file(path).status
+            if state != "root":
+                decisions[state] = decisions.get(state, 0) + 1
+        for name in ("evaluation", "rollouts"):
+            for path in (root / "trees").glob(f"tree-*/node-*/{name}.jsonl"):
+                for _ in read_jsonl(path):
+                    trajectories[name] += 1
+        return {"decisions": decisions, "trajectories": trajectories}

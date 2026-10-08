@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from mindmemos_skill.algos.train.skill_forest import SkillForestEnvAdapter
 from mindmemos_skill.algos.train.skill_forest.config import SkillForestTrainerConfig
-from mindmemos_skill.algos.train.skill_forest.env_specific.common import tool_conversation
 from mindmemos_skill.algos.train.skill_forest.generation import generate_patch
+from mindmemos_skill.algos.train.skill_forest.trajectory_rendering import tool_conversation
 from mindmemos_skill.algos.train.skill_forest.typing import SkillForestTrajectoryContext
 from mindmemos_skill.envs.builtin_envs.alfworld_bounded_history.typing import ALFWorldTask
 from mindmemos_skill.envs.builtin_envs.officeqa.typing import OfficeQATask
@@ -16,14 +16,14 @@ from mindmemos_skill.envs.builtin_envs.searchqa.typing import SearchQATask
 from mindmemos_skill.envs.builtin_envs.spreadsheetbench.typing import SpreadsheetBenchTask
 from mindmemos_skill.envs.data.typing import DataSample, RewardData
 from mindmemos_skill.envs.typing import RolloutResult
-from mindmemos_skill.skill import Skill, SkillBundle
+from mindmemos_skill.skill import Skill, SkillContent
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures/skill_forest/environment_reflection.json").read_text())
 CASES = FIXTURE["cases"]
 TASK_TYPES = {
     "searchqa": SearchQATask,
     "officeqa": OfficeQATask,
-    "spreadsheetbench": SpreadsheetBenchTask,
+    "spreadsheetbench_tool_calling": SpreadsheetBenchTask,
     "alfworld_bounded_history": ALFWorldTask,
 }
 
@@ -50,9 +50,9 @@ def test_reference_formatter_and_actual_optimizer_request(case, tmp_path):
     requests = []
 
     class CaptureRuntime:
-        config = SkillForestTrainerConfig(optimizer={"model": "offline"}, env_adapter={"class_name": environment})
+        config = SkillForestTrainerConfig(optimizer={"model": "offline"})
 
-        env_adapter = SkillForestEnvAdapter.build(config.env_adapter.class_name, config.env_adapter.config)
+        env_adapter = SkillForestEnvAdapter.build(environment, {})
 
         async def chat(self, *, messages, directory):
             system, user = messages[0]["content"], messages[1]["content"]
@@ -61,7 +61,11 @@ def test_reference_formatter_and_actual_optimizer_request(case, tmp_path):
 
     asyncio.run(
         generate_patch(
-            skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# Rules"})),
+            skill=Skill(
+                source=SkillContent(
+                    content="# Rules", name="test-skill", description="Task instructions", standard_format=False
+                )
+            ),
             samples=[sample],
             results=[result],
             runtime=CaptureRuntime(),
@@ -81,12 +85,11 @@ def test_outcome_reduction_uses_reference_merge_protocol(environment, tmp_path):
     class CaptureRuntime:
         config = SkillForestTrainerConfig(
             optimizer={"model": "offline"},
-            env_adapter={"class_name": environment},
             reflection_minibatch_size=1,
             merge_batch_size=2,
         )
 
-        env_adapter = SkillForestEnvAdapter.build(config.env_adapter.class_name, config.env_adapter.config)
+        env_adapter = SkillForestEnvAdapter.build(environment, {})
 
         async def chat(self, *, messages, directory):
             system, user = messages[0]["content"], messages[1]["content"]
@@ -96,7 +99,11 @@ def test_outcome_reduction_uses_reference_merge_protocol(environment, tmp_path):
 
     patch = asyncio.run(
         generate_patch(
-            skill=Skill(bundle=SkillBundle(files={"SKILL.md": "# Rules"})),
+            skill=Skill(
+                source=SkillContent(
+                    content="# Rules", name="test-skill", description="Task instructions", standard_format=False
+                )
+            ),
             samples=[sample for sample, result in pairs],
             results=[result for sample, result in pairs],
             runtime=CaptureRuntime(),
@@ -140,15 +147,15 @@ def test_tool_pairing_multiple_calls_and_malformed_evidence():
         tool_conversation(events[1:])
 
 
-def test_legacy_diagnostics_fallback_and_verification_once():
+def test_legacy_diagnostics_fallback_and_spreadsheet_verification_removed():
     for case in CASES:
         sample, result = _pair(case)
-        if case["environment"] == "spreadsheetbench":
+        if case["environment"] == "spreadsheetbench_tool_calling":
             result.reward.model_extra.pop("n_turns")
             result.trajectory.append({"role": "system", "content": result.reward.detail})
             text = render_trajectories([(sample, result)], case["environment"])
             assert "Steps: 3\n" in text
-            assert text.count("[verification] [POST-EXECUTION VERIFICATION]") == 1
+            assert "[POST-EXECUTION VERIFICATION]" not in text
             assert "[verification] [CASE 2]" in text
         elif case["environment"] == "alfworld_bounded_history":
             result.reward.model_extra.pop("task_description")
