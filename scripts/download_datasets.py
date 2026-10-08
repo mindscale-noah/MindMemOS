@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = ROOT / "config/datasets/sources.json"
+SOURCES = ROOT / "config/presets/dataset_download_sources.json"
 RECEIPT = "download_receipt.json"
 
 
