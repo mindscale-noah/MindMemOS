@@ -1,4 +1,23 @@
 services:
+  # Skill business data is separate from Memory's Qdrant/Neo4j stores.
+  skill-postgres:
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
+    container_name: mindmemos-skill-postgres
+    environment:
+      POSTGRES_DB: "${MINDMEMOS_SKILL_POSTGRES_DB:-mindmemos_skill}"
+      POSTGRES_USER: "${MINDMEMOS_SKILL_POSTGRES_USER:-mindmemos_skill}"
+      POSTGRES_PASSWORD: "${MINDMEMOS_SKILL_POSTGRES_PASSWORD:-mindmemos_dev_password}"
+    ports:
+      - "${MINDMEMOS_SKILL_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - skill_postgres_data:/var/lib/postgresql/data
+      - ./postgres/init-vector.sql:/docker-entrypoint-initdb.d/01-vector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" && psql -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -tAc \"SELECT 1 FROM pg_extension WHERE extname = 'vector'\" | grep -q 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   qdrant:
     image: qdrant/qdrant:v1.18.0
     container_name: mindmemos-qdrant
@@ -56,7 +75,7 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9092' 2>/dev/null || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 10
@@ -120,7 +139,7 @@ services:
       - "${MINDMEMOS_OTEL_GRPC_PORT:-4317}:4317"   # OTLP gRPC
       - "${MINDMEMOS_OTEL_HTTP_PORT:-4318}:4318"   # OTLP HTTP
     environment:
-      # Consumed via ${env:...} inside otel-collector-config.yaml.
+      # Consumed via ${env:...} inside otel/collector.yaml.
       OTEL_GRPC_ENDPOINT: "${MINDMEMOS_OTEL_GRPC_ENDPOINT:-0.0.0.0:4317}"
       OTEL_HTTP_ENDPOINT: "${MINDMEMOS_OTEL_HTTP_ENDPOINT:-0.0.0.0:4318}"
       KAFKA_EXPORTER_TARGET: "${MINDMEMOS_OTEL_KAFKA_EXPORTER_TARGET:-kafka-exporter:9308}"
@@ -130,7 +149,7 @@ services:
       CLICKHOUSE_PASSWORD: "${MINDMEMOS_CLICKHOUSE_PASSWORD:-mindmemos_dev_password}"
       CLICKHOUSE_TTL: "${MINDMEMOS_OTEL_TTL:-72h}"
     volumes:
-      - ./otel-collector-config.yaml:/etc/otel/config.yaml:ro
+      - ${MINDMEMOS_OTEL_CONFIG_FILE:-./otel/collector.yaml}:/etc/otel/config.yaml:ro
     # No healthcheck: the contrib image is distroless (no shell/curl/wget to probe with).
 
   grafana:
@@ -156,6 +175,7 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
 
 volumes:
+  skill_postgres_data:
   qdrant_storage:
   neo4j_data:
   neo4j_logs:

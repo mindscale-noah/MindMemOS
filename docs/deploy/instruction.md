@@ -47,18 +47,21 @@ The primary configuration entry points are:
 | `mindmemos` | `config/mindmemos/api_keys.yaml` | API keys, `project_id`, memory algorithms, and access permissions. |
 | `mindmemos` | `config/presets/*.json` | Memory algorithm presets. |
 | `mindmemos_sdk` | `~/.mindmemos/settings.json` | SDK and CLI connection information and default user. |
-| `mindmemos_eval` | `config/mindmemos_eval/*.yaml` | Evaluation models, datasets, concurrency, and algorithm configuration. |
+| `mindmemos_eval` | `config/mindmemos_eval/*/*.yaml` | Evaluation models, datasets, concurrency, and algorithm configuration. |
 
 ## 2. Minimal Startup Flow
 
 ```bash
 cp .env.example .env
 cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
+cp config/mindmemos_skill/dev.example.yaml config/mindmemos_skill/dev.yaml
 
 # Edit .env and config/mindmemos/dev.yaml, then start the service.
-make dev-setup
+make setup
 make dev
 ```
+
+`config/mindmemos_skill/dev.example.yaml` is the single Skill deployment template. `make dev` and `make dev SERVICE=skill` read the user-owned `dev.yaml`; if it is missing, startup stops before Docker dependencies and asks you to copy the example.
 
 Default addresses:
 
@@ -67,17 +70,19 @@ Default addresses:
 - Qdrant: `http://localhost:6333`
 - Neo4j Browser: `http://localhost:7474`
 
-`make dev` starts the full Docker dependency stack before starting FastAPI. To start only core dependencies:
+`make dev` starts Memory and Skill with the `full` dependency tier by default. Select another combination with:
 
 ```bash
-make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+make dev SERVICE=memory                         # Memory only
+make dev SERVICE=skill                       # Skill only
+make dev FEATURE=async   # Kafka and background workers
+make dev FEATURE=core    # Only core Docker dependencies
 ```
 
 Stop local dependencies:
 
 ```bash
-make dev-down
+make stop
 ```
 
 ## 3. Required Environment Variables
@@ -117,6 +122,7 @@ Optional dependencies:
 | `MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS` | Kafka address; the service starts consumers/producers only when `kafka.enabled=true` in the configuration. | `localhost:9092` |
 | `MINDMEMOS_TELEMETRY_ENDPOINT` | OTel HTTP endpoint; telemetry is reported only when `telemetry.enabled=true` in the configuration. | `http://localhost:4318` |
 | `MINDMEMOS_CLICKHOUSE_USER` / `MINDMEMOS_CLICKHOUSE_PASSWORD` / `MINDMEMOS_CLICKHOUSE_DB` | ClickHouse/Grafana observability data configuration. | See `.env.example` |
+| `MINDMEMOS_SKILL_POSTGRES_PORT` | Host port for Skill pgvector in Skill and combined modes. | `55432` |
 
 API bind address:
 
@@ -127,20 +133,20 @@ API bind address:
 
 ## 4. Docker
 
-Start local dependencies with:
+Start Memory dependencies for the selected tier with:
 
 ```bash
-docker compose --env-file .env -f dockers/docker-compose.memory.yml up -d --wait qdrant neo4j kafka kafka-ui kafka-exporter
+make docker SERVICE=memory
 ```
 
-`make dev-core` starts Qdrant, Neo4j, Kafka, Kafka UI, and kafka-exporter. `make dev` starts the full Docker dependency stack before starting FastAPI. `make db` remains available as a compatibility entry point for the full dependency tier and is equivalent to `make db-observability`.
+`make docker SERVICE=memory` defaults to all dependencies. Add `FEATURE=core` for core databases or `FEATURE=async` for core databases and Kafka. It does not start APIs or UI; external dependencies are not provisioned locally. See [Docker usage](../../dockers/README.md).
 
 Core services in Docker Compose:
 
 - `qdrant`: stores memory/entity/source vectors and payloads.
 - `neo4j`: stores graph relationships.
-- `kafka`: asynchronous task queue; it can run even when it is disabled in the default configuration.
-- `clickhouse` + `otel-collector` + `grafana`: observability stack; disable `telemetry.enabled` in the configuration when observability is not needed.
+- `kafka`: asynchronous task queue; selected by `FEATURE`.
+- `clickhouse` + `otel-collector` + `grafana`: observability stack; use `FEATURE=core` or `FEATURE=async` to disable it.
 
 For local deployment, the port variables in `.env` must align with the connection addresses in `config/mindmemos/dev.yaml`. At startup, environment variables also override the following configuration fields:
 
@@ -205,7 +211,7 @@ Key points:
 
 - `database.qdrant.vector_size` must equal the actual output dimension of the embedding model.
 - If the embedding model supports custom dimensions, `dimensions` and `vector_size` must also match.
-- If a Qdrant collection has already been created with an old dimension, changing `vector_size` alone will not migrate it. For local development, run `make db-clean` to clear the volume and rebuild.
+- If a Qdrant collection has already been created with an old dimension, changing `vector_size` alone will not migrate it. For local development, run `make clean` to clear the volume and rebuild.
 
 ## 7. Rerank Configuration (Optional)
 

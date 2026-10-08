@@ -45,10 +45,11 @@ mindmemos_eval ─────────────────┘
 |------------------|----------------------------------| --- |
 | `mindmemos`      | `.env`                           | Docker 依赖、服务端口和连接地址。 |
 | `mindmemos`      | `config/mindmemos/dev.yaml`      | 服务端模型、数据库、Pipeline 和运行配置。 |
+| `mindmemos_skill` | `config/mindmemos_skill/dev.yaml` | 从 `dev.example.yaml` 复制的 Skill 服务配置。 |
 | `mindmemos`      | `config/mindmemos/api_keys.yaml` | API key、`project_id`、记忆算法和访问权限。 |
 | `mindmemos`      | `config/presets/*.json`          | 记忆算法预设。 |
 | `mindmemos_sdk`  | `~/.mindmemos/settings.json`     | SDK 与 CLI 的连接信息和默认用户。 |
-| `mindmemos_eval` | `config/mindmemos_eval/*.yaml`   | 评测模型、数据集、并发和算法配置。 |
+| `mindmemos_eval` | `config/mindmemos_eval/*/*.yaml` | 评测模型、数据集、并发和算法配置。 |
 
 
 ## 2. 最小启动流程
@@ -56,11 +57,14 @@ mindmemos_eval ─────────────────┘
 ```bash
 cp .env.example .env
 cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
+cp config/mindmemos_skill/dev.example.yaml config/mindmemos_skill/dev.yaml
 
-# 编辑 .env 和 config/mindmemos/dev.yaml 后启动
-make dev-setup
+# 编辑 .env、config/mindmemos/dev.yaml 和 config/mindmemos_skill/dev.yaml 后启动
+make setup
 make dev
 ```
+
+`config/mindmemos_skill/dev.example.yaml` 是唯一的 Skill 部署示例。`make dev` 和 `make dev SERVICE=skill` 默认读取用户维护的 `dev.yaml`；缺少文件时在启动 Docker 依赖前报错；先从示例复制并填写配置。
 
 默认地址：
 
@@ -69,17 +73,21 @@ make dev
 - Qdrant: `http://localhost:6333`
 - Neo4j Browser: `http://localhost:7474`
 
-`make dev` 会先启动全量 Docker 依赖，再启动 FastAPI。只启动核心依赖时使用：
+`make dev` 默认启用 Memory、Skill、Kafka 异步任务和 OTel 监控，根据最终配置启动依赖，并用 `.env` 自动覆盖连接地址与映射端口。其他入口：
 
 ```bash
-make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+make dev FEATURE=core                        # 联合服务，仅核心功能
+make dev FEATURE=async                       # 联合服务，加异步任务
+make dev SERVICE=memory                         # 仅 Memory，全量功能
+make dev SERVICE=skill                       # 仅 Skill，全量功能
+make dev SERVICE=skill FEATURE=core                  # 仅 Skill，核心功能
+make dev PLAN=1          # 校验并预览实际依赖，不启动服务
 ```
 
 停止本地依赖：
 
 ```bash
-make dev-down
+make stop
 ```
 
 ## 3. 必配环境变量
@@ -119,6 +127,7 @@ Neo4j：
 | `MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS` | Kafka 地址；只有 config 里 `kafka.enabled=true` 时服务才会启动消费者/生产者 | `localhost:9092` |
 | `MINDMEMOS_TELEMETRY_ENDPOINT` | OTel HTTP endpoint；只有 config 里 `telemetry.enabled=true` 时会上报 | `http://localhost:4318` |
 | `MINDMEMOS_CLICKHOUSE_USER` / `MINDMEMOS_CLICKHOUSE_PASSWORD` / `MINDMEMOS_CLICKHOUSE_DB` | ClickHouse/Grafana 观测数据配置 | 见 `.env.example` |
+| `MINDMEMOS_SKILL_POSTGRES_PORT` | Skill 或联合模式下 pgvector 映射到宿主机的端口 | `55432` |
 
 API 监听地址：
 
@@ -129,20 +138,20 @@ API 监听地址：
 
 ## 4. Docker 相关
 
-本地依赖通过：
+按所选档位启动 Memory 依赖：
 
 ```bash
-docker compose --env-file .env -f dockers/docker-compose.memory.yml up -d --wait qdrant neo4j kafka kafka-ui kafka-exporter
+make docker SERVICE=memory
 ```
 
-`make dev-core` 会启动 Qdrant、Neo4j、Kafka、Kafka UI 和 kafka-exporter。`make dev` 会先启动全量 Docker 依赖，再启动 FastAPI。`make db` 仍保留为全量依赖的兼容入口，等同于 `make db-observability`。
+`make docker SERVICE=memory` 默认准备全量依赖；追加 `FEATURE=core` 只准备核心数据库，`FEATURE=async` 增加 Kafka 任务依赖。不会启动 API 或 UI。实际本地容器按最终配置推导，外部依赖不在本地重复启动。详见 [Docker 使用说明](../../dockers/README.md)。
 
 Docker Compose 内的核心服务：
 
 - `qdrant`: 存 memory/entity/source 向量和 payload。
 - `neo4j`: 存图关系。
-- `kafka`: 异步任务队列；默认 config 里未开启也可以先跑着。
-- `clickhouse` + `otel-collector` + `grafana`: 观测链路；不需要观测时可以在 config 里关掉 `telemetry.enabled`。
+- `kafka`: 异步任务队列；由 `FEATURE` 决定是否启用。
+- `clickhouse` + `otel-collector` + `grafana`: 观测链路；使用 `FEATURE=core` 或 `FEATURE=async` 关闭。
 
 本地部署时，`.env` 里的端口变量要和 `config/mindmemos/dev.yaml` 里的连接地址对齐。代码启动时还会用环境变量覆盖这些连接字段：
 
@@ -207,7 +216,7 @@ database:
 
 - `database.qdrant.vector_size` 必须等于 embedding 模型实际输出维度。
 - 如果 embedding 模型支持自定义维度，`dimensions` 和 `vector_size` 也要一致。
-- Qdrant collection 已经用旧维度创建后，单纯改 `vector_size` 不会自动迁移旧 collection；本地开发可以 `make db-clean` 清掉 volume 后重建。
+- Qdrant collection 已经用旧维度创建后，单纯改 `vector_size` 不会自动迁移旧 collection；本地开发可以 `make clean` 清掉 volume 后重建。
 
 ## 7. Rerank 配置（可选）
 
@@ -306,3 +315,5 @@ Authorization: Bearer <api_key>
 - `embed_model_router.endpoints[0].api_key` / `api_base` / `model` 可用。
 - `database.qdrant.vector_size` 等于 embedding 输出维度。
 - 不需要 rerank 时，`rerank_model_router.endpoints` 可以留空，并关闭相关 `use_reranker`。
+
+`make dev` 同时启动 UI（默认 `http://127.0.0.1:8765`，可用 `UI_PORT` 覆盖）。启动就绪后会统一列出 Memory、Skill、UI 地址及异步任务和 OTel 状态。UI 的 SDK 连接配置可用 `UI_HOME` 选择。
