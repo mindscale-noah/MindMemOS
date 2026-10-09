@@ -66,16 +66,7 @@ def extract_frontmatter(content: str, *, version_id: str) -> tuple[dict[str, Any
         raw_frontmatter = match.group(1)
         body = content[match.end() :].strip()
     else:
-        # Canonical Skill bundles strip the leading '---' delimiters. Fall back
-        # to treating the leading YAML block (up to the first blank line + body)
-        # as frontmatter so the same parser accepts both forms.
-        first_blank = re.search(r"\n\s*\n", content)
-        if first_blank is None or first_blank.start() == 0:
-            raise invalid_skill_document(version_id=version_id, reason="missing frontmatter")
-        raw_frontmatter = content[: first_blank.start()]
-        body = content[first_blank.end() :].strip()
-        if not raw_frontmatter.strip():
-            raise invalid_skill_document(version_id=version_id, reason="missing frontmatter")
+        raise invalid_skill_document(version_id=version_id, reason="missing frontmatter")
     try:
         frontmatter = yaml.load(raw_frontmatter, Loader=StrictYamlLoader) or {}
     except yaml.YAMLError as exc:

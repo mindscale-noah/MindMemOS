@@ -6,11 +6,10 @@ from .db_services.skill_management import (
     SkillGraphEdgeRecord,
     SkillGraphNodeRecord,
     SkillGraphRecord,
-    SkillGraphRevisionRecord,
     SkillGraphVersionRecord,
 )
-from .db_services.skills import SkillRecord, SkillVersionRecord
-from .db_services.trajectories import TrajectoryRecord
+from .db_services.skills import SkillRecord, SkillVersionRecord, SkillVersionSummary
+from .db_services.trajectories import TrajectoryRecord, TrajectorySummary
 from .factory import create_persistence, ensure_collection
 from .registry import ensure_registered
 from .tables import build_persistence_tables
@@ -23,12 +22,13 @@ __all__ = [
     "ensure_collection",
     "SkillPersistenceConfig",
     "SkillVersionRecord",
+    "SkillVersionSummary",
     "SkillRecord",
     "SkillGraphRecord",
     "SkillGraphVersionRecord",
     "SkillGraphNodeRecord",
     "SkillGraphEdgeRecord",
-    "SkillGraphRevisionRecord",
     "TrajectoryRecord",
+    "TrajectorySummary",
     "build_persistence_tables",
 ]

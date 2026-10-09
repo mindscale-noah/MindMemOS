@@ -31,6 +31,12 @@ def _truncate(context: str, limit: int) -> str:
 class SearchQAEnvironment(Environment[SearchQAConfig]):
     """Answer from public passages and privately score the final response."""
 
+    task_type = SearchQATask
+    """Public SearchQA task schema."""
+
+    reward_data_type = SearchQARewardData
+    """Private SearchQA scoring schema."""
+
     config_type = SearchQAConfig
     """Model and evaluation configuration."""
 

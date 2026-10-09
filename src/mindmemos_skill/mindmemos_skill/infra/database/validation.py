@@ -128,6 +128,12 @@ def filter_clause(spec: TableSpec, filters=None):
                 raise ValueError("Null checks do not accept an operand")
             expressions.append(column.is_(None) if condition.op == "is_null" else column.is_not(None))
             continue
+        if condition.op == "starts_with":
+            if column.type.python_type is not str:
+                raise ValueError("Prefix matching requires a string column")
+            prefix = TypeAdapter(str).validate_python(condition.value, strict=True)
+            expressions.append(column.startswith(prefix, autoescape=True))
+            continue
         adapter = TypeAdapter(column.type.python_type)
         value = condition.value
         if condition.op == "in":

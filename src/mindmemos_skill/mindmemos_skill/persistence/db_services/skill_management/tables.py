@@ -1,8 +1,9 @@
-"""Project-isolated graph schemas; no operations or lease tables."""
+"""Project-isolated graph snapshots with one selected version per graph."""
 
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     Double,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    false,
     func,
     text,
 )
@@ -23,7 +25,6 @@ from ....infra.database.typing import UTCDateTime
 from ...constants import (
     SKILL_GRAPH_EDGES_TABLE,
     SKILL_GRAPH_NODES_TABLE,
-    SKILL_GRAPH_REVISIONS_TABLE,
     SKILL_GRAPH_VERSIONS_TABLE,
     SKILL_GRAPHS_TABLE,
     SKILL_VERSIONS_TABLE,
@@ -32,7 +33,6 @@ from .typing import (
     SkillGraphEdgeRecord,
     SkillGraphNodeRecord,
     SkillGraphRecord,
-    SkillGraphRevisionRecord,
     SkillGraphVersionRecord,
 )
 
@@ -74,7 +74,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         metadata: Shared catalog containing the local skill_versions definition.
 
     Returns:
-        Five table registrations with insert validation; publication is not implemented.
+        Four table registrations with insert validation.
     """
     json_object = JSON().with_variant(JSONB(), "postgresql")
     text_list = JSON().with_variant(ARRAY(Text()), "postgresql")
@@ -84,9 +84,13 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         SKILL_GRAPHS_TABLE,
         metadata,
         *_scope(),
+        Column("public_id", Text, nullable=True, comment="Stable prefixed graph identity."),
+        Column("alias", Text, nullable=True, comment="Project-unique graph shortcut."),
         Column("name", Text, nullable=False, comment="Human-readable graph name."),
         Column("description", Text, nullable=True, comment="Optional purpose of the graph."),
-        Column("current_revision", BigInteger, nullable=True, comment="Current publication; null means unpublished."),
+        Column(
+            "current_version_id", Uuid, nullable=True, comment="Selected ready graph snapshot; null means unpublished."
+        ),
         Column(
             "created_at",
             UTCDateTime(),
@@ -101,16 +105,23 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             server_default=func.current_timestamp(),
             comment="Last graph metadata update time.",
         ),
-        CheckConstraint("current_revision IS NULL OR current_revision > 0"),
+        Column(
+            "is_deleted",
+            Boolean,
+            nullable=False,
+            server_default=false(),
+            comment="Hide this family after soft deletion.",
+        ),
+        Column("deleted_at", UTCDateTime(), nullable=True, comment="Soft deletion time; None while visible."),
         CheckConstraint("updated_at >= created_at"),
         ForeignKeyConstraint(
-            [*scope, "current_revision"],
+            [*scope, "current_version_id"],
             [
-                f"{SKILL_GRAPH_REVISIONS_TABLE}.project_id",
-                f"{SKILL_GRAPH_REVISIONS_TABLE}.graph_id",
-                f"{SKILL_GRAPH_REVISIONS_TABLE}.revision",
+                f"{SKILL_GRAPH_VERSIONS_TABLE}.project_id",
+                f"{SKILL_GRAPH_VERSIONS_TABLE}.graph_id",
+                f"{SKILL_GRAPH_VERSIONS_TABLE}.graph_version_id",
             ],
-            name="skill_graphs_current_revision_fk",
+            name="skill_graphs_current_version_fk",
             use_alter=True,
             ondelete="RESTRICT",
         ),
@@ -121,11 +132,15 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         metadata,
         *_scope(),
         Column("graph_version_id", Uuid, primary_key=True, comment="Immutable graph content identity."),
+        Column("public_version_id", Text, nullable=True, comment="Stable prefixed external snapshot identity."),
         Column("status", Text, nullable=False, server_default="staging", comment="Candidate lifecycle stage."),
         Column("node_count", BigInteger, nullable=True, comment="Validated node count."),
         Column("edge_count", BigInteger, nullable=True, comment="Validated directed edge count."),
         Column("vector_count", BigInteger, nullable=True, comment="Validated non-null embedding count."),
         Column("snapshot_hash", Text, nullable=True, comment="Canonical graph content SHA-256."),
+        Column("request_hash", Text, nullable=True, comment="Canonical build request SHA-256 for retry deduplication."),
+        Column("actor_id", Text, nullable=True, comment="Actor who created this snapshot, when known."),
+        Column("message", Text, nullable=True, comment="Explanation supplied when this snapshot was created."),
         Column(
             "metadata",
             json_object,
@@ -153,6 +168,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             "status != 'ready' OR (node_count IS NOT NULL AND edge_count IS NOT NULL AND vector_count IS NOT NULL AND snapshot_hash IS NOT NULL AND ready_at IS NOT NULL)"
         ),
         Index("skill_graph_versions_status_idx", *scope, "status", "created_at"),
+        Index("skill_graph_versions_request_uq", *scope, "request_hash", unique=True),
     )
     nodes = Table(
         SKILL_GRAPH_NODES_TABLE,
@@ -253,58 +269,11 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         Index("skill_graph_edges_source_idx", *snapshot, "source_node_id"),
         Index("skill_graph_edges_target_idx", *snapshot, "target_node_id"),
     )
-    revisions = Table(
-        SKILL_GRAPH_REVISIONS_TABLE,
-        metadata,
-        *_scope(),
-        Column(
-            "revision",
-            BigInteger,
-            primary_key=True,
-            autoincrement=False,
-            comment="Monotonic publication number within this graph.",
-        ),
-        Column("graph_version_id", Uuid, nullable=False, comment="Immutable graph content selected for publication."),
-        Column("idempotency_key", Text, nullable=False, comment="Caller retry identity, unique within this graph."),
-        Column("request_hash", Text, nullable=False, comment="SHA-256 of the canonical write request."),
-        Column("action", Text, nullable=False, comment="Build, upsert, remove, or restore action."),
-        Column(
-            "restored_from_revision", BigInteger, nullable=True, comment="Earlier publication selected for restore."
-        ),
-        Column("actor_id", Text, nullable=False, comment="Authenticated publishing actor; not an isolation key."),
-        Column("message", Text, nullable=True, comment="Optional publication explanation."),
-        Column(
-            "published_at",
-            UTCDateTime(),
-            nullable=False,
-            server_default=func.current_timestamp(),
-            comment="Publication recording time.",
-        ),
-        _graph_fk(),
-        _version_fk(),
-        ForeignKeyConstraint(
-            [*scope, "restored_from_revision"],
-            [
-                f"{SKILL_GRAPH_REVISIONS_TABLE}.project_id",
-                f"{SKILL_GRAPH_REVISIONS_TABLE}.graph_id",
-                f"{SKILL_GRAPH_REVISIONS_TABLE}.revision",
-            ],
-            ondelete="RESTRICT",
-        ),
-        UniqueConstraint(*scope, "idempotency_key"),
-        CheckConstraint("revision > 0"),
-        CheckConstraint("action IN ('build', 'upsert', 'remove', 'restore')"),
-        CheckConstraint(
-            "(action = 'restore' AND restored_from_revision IS NOT NULL AND restored_from_revision > 0 AND restored_from_revision < revision) OR (action != 'restore' AND restored_from_revision IS NULL)"
-        ),
-        Index("skill_graph_revisions_version_idx", *snapshot),
-    )
     records = (
         (graphs, SkillGraphRecord),
         (versions, SkillGraphVersionRecord),
         (nodes, SkillGraphNodeRecord),
         (edges, SkillGraphEdgeRecord),
-        (revisions, SkillGraphRevisionRecord),
     )
     for table, _model in records:
         for column in table.c:
@@ -317,7 +286,6 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
                 "source_node_id",
                 "target_node_id",
                 "name",
-                "idempotency_key",
                 "actor_id",
             }:
                 table.append_constraint(CheckConstraint(column.is_(None) | (func.length(column) > 0)))

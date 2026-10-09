@@ -2,9 +2,14 @@
 
 import json
 
+from pydantic import JsonValue
+
+from ....envs.base import Environment
+from ....envs.typing import RolloutResult
 from ....registry.base import Registrable
 from .config import SkillForestEnvAdapterConfig
 from .prompts import final_patch_user, load_prompt, patch_merge_user, reflection_user, skill_merge_user
+from .trajectory_rendering import render_record, tool_conversation
 from .typing import (
     SkillForestFinalPatchContext,
     SkillForestPatchMergeContext,
@@ -45,7 +50,7 @@ Respond ONLY with a valid JSON object:
     config_type = SkillForestEnvAdapterConfig
     """Default prompt overrides inherited by user adapters."""
 
-    def __init__(self, config: SkillForestEnvAdapterConfig | None = None):
+    def __init__(self, config: SkillForestEnvAdapterConfig | None = None) -> None:
         """Load all prompts before any training starts.
 
         Args:
@@ -80,7 +85,7 @@ Respond ONLY with a valid JSON object:
             return self.RANKING_PROMPT
         return load_prompt(name)
 
-    def validate_environment(self, env) -> None:
+    def validate_environment(self, env: Environment) -> None:
         """Validate environment compatibility before creating run artifacts.
 
         Args:
@@ -94,18 +99,26 @@ Respond ONLY with a valid JSON object:
             context: One completed training trajectory without RewardData.
 
         Returns:
-            A JSON record suitable for generic reflection.
+            A Markdown section with public context and paired tool exchanges.
         """
         task_fields = context.task.model_dump(mode="json")
-        return json.dumps(
-            {
-                "task_id": context.task.id,
-                "instruction": task_fields.get("task_description", context.task.instruction),
-                "task_type": task_fields.get("task_type", task_fields.get("instruction_type", "")),
-                "events": _public_conversation(context.result),
-            },
-            ensure_ascii=False,
-            indent=2,
+        events = _public_conversation(context.result)
+        system = user = ""
+        if events and events[0].get("role") == "system":
+            system = events.pop(0).get("content") or ""
+        if events and events[0].get("role") == "user":
+            user = events.pop(0).get("content") or ""
+        conversation = tool_conversation(events, assistant_role="agent", strict=False)
+        return render_record(
+            context.index,
+            context.task.id,
+            task_fields.get("task_description", context.task.instruction),
+            task_fields.get("task_type", task_fields.get("instruction_type", "")),
+            "",
+            len(conversation),
+            conversation,
+            system=system,
+            user=user,
         )
 
     def build_reflection_messages(self, context: SkillForestReflectionContext) -> list[dict[str, str]]:
@@ -118,9 +131,7 @@ Respond ONLY with a valid JSON object:
             System and user messages, without model calls.
         """
         rendered = [self.render_trajectory(item) for item in context.trajectories]
-        trajectories = (
-            "[\n" + ",\n".join("\n".join("  " + line for line in text.splitlines()) for text in rendered) + "\n]"
-        )
+        trajectories = "\n\n---\n\n".join(rendered)
         return [
             {
                 "role": "system",
@@ -238,16 +249,14 @@ class SkillForestGenericEnvAdapter(SkillForestEnvAdapter):
     """Register the inherited generic behavior without changing the shared registry contract."""
 
 
-def _public_conversation(result):
+def _public_conversation(result: RolloutResult) -> list[dict[str, JsonValue]]:
     """Adapt current event shapes without losing tool arguments or leaking score details."""
     conversation = []
     for event in result.trajectory:
         if event.get("role") == "system" and event.get("content") == result.reward.detail:
             continue
-        if "content" in event or "action" in event or event.get("type") == "tool_call":
+        if "content" in event or "action" in event or "tool_calls" in event or event.get("type") == "tool_call":
             conversation.append(event)
         else:
             conversation.append({"role": "agent", "content": json.dumps(event, ensure_ascii=False)})
-        for call in event.get("tool_calls", []):
-            conversation.append({"type": "tool_call", "cmd": json.dumps(call, ensure_ascii=False), "obs": ""})
     return conversation or [{"role": "assistant", "content": result.output}]

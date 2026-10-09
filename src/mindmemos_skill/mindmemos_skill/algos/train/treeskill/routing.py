@@ -67,11 +67,11 @@ class TreeSkillRouter:
         """
         metadata = tree_metadata
         try:
-            tree = parse_tree_with_metadata(skill.bundle.files["SKILL.md"], metadata)
+            tree = parse_tree_with_metadata(skill.content, metadata)
         except TreeMetadataError as exc:
-            return _full_result(skill.bundle.files["SKILL.md"], reason=f"metadata_validation_failed: {exc}")
+            return _full_result(skill.content, reason=f"metadata_validation_failed: {exc}")
         if not tree.nodes:
-            return _full_result(skill.bundle.files["SKILL.md"], reason="skill_tree_has_no_routable_nodes")
+            return _full_result(skill.content, reason="skill_tree_has_no_routable_nodes")
 
         known_ids = set(tree.node_by_id)
 
@@ -100,7 +100,7 @@ class TreeSkillRouter:
         try:
             payload = parse(response.content or "")
         except Exception as exc:
-            return _full_result(skill.bundle.files["SKILL.md"], reason=f"router_failed: {type(exc).__name__}: {exc}")
+            return _full_result(skill.content, reason=f"router_failed: {type(exc).__name__}: {exc}")
 
         content_ids = collapse_ancestor_descendant_selections(tree, payload.selected_subtree_ids)
         if not content_ids:

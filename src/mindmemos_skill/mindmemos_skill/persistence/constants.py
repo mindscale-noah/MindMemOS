@@ -17,20 +17,14 @@ SKILL_VERSIONS_TABLE: Final[str] = "skill_versions_v1"
 TRAJECTORIES_TABLE: Final[str] = "trajectories_v1"
 """Inputs, interactions, and results of individual rollout attempts."""
 
-REMOTE_SKILL_BINDINGS_TABLE: Final[str] = "remote_skill_bindings_v1"
-"""Associations between local Skill families and remote lineages."""
+TRAJECTORY_REPORT_CURSOR_INDEX: Final[str] = "trajectories_report_cursor_idx"
+"""Project and Skill receipt order for scrolling through reported executions."""
 
-REMOTE_VERSION_BINDINGS_TABLE: Final[str] = "remote_version_bindings_v1"
-"""Remote version metadata and its corresponding local snapshot."""
-
-REMOTE_TRAJECTORY_BINDINGS_TABLE: Final[str] = "remote_trajectory_bindings_v1"
-"""Associations between local attempts and remote memory records."""
-
-REMOTE_OPERATIONS_TABLE: Final[str] = "remote_operations_v1"
-"""Durable remote requests, deduplication keys, and execution state."""
+TRAJECTORY_REPORT_ACTOR_INDEX: Final[str] = "trajectories_report_actor_idx"
+"""Project, Skill, and actor filter order for reported executions."""
 
 SKILL_GRAPHS_TABLE: Final[str] = "skill_graphs_v1"
-"""Project-scoped graph identities and current publication pointers."""
+"""Project-scoped graph identities and selected snapshot pointers."""
 
 SKILL_GRAPH_VERSIONS_TABLE: Final[str] = "skill_graph_versions_v1"
 """Graph content snapshots and validation state."""
@@ -42,7 +36,16 @@ SKILL_GRAPH_EDGES_TABLE: Final[str] = "skill_graph_edges_v1"
 """Directed relationships between nodes in a graph snapshot."""
 
 SKILL_GRAPH_REVISIONS_TABLE: Final[str] = "skill_graph_revisions_v1"
-"""Successful graph publications and restore provenance."""
+"""Legacy publications retained only while older deployments may use them."""
+
+SKILL_TASKS_TABLE: Final[str] = "skill_tasks_v1"
+"""Durable Skill execution requests and their latest state."""
+
+SKILL_TASK_PROGRESS_TABLE: Final[str] = "skill_task_progress_v1"
+"""Ordered, project-owned algorithm progress events."""
 
 SKILL_VERSION_LABEL_INDEX: Final[str] = "skill_versions_label_uq"
 """Unique version display label within one project and Skill."""
+
+SKILL_LIST_CURSOR_INDEX: Final[str] = "skills_project_created_cursor_idx"
+"""Project and immutable creation order for scrolling through Skill families."""

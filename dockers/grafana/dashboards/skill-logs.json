@@ -1,0 +1,302 @@
+{
+  "uid": "mindmemos-skill-logs",
+  "title": "MindMemOS Skill · Run logs",
+  "description": "Training run logs exported by mindmemos_skill through OTLP to ClickHouse. Counts represent received records, not guaranteed delivery.",
+  "tags": [
+    "mindmemos",
+    "skill",
+    "logs"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "10s",
+  "timezone": "browser",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "project",
+        "label": "Project",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "mindmemos-clickhouse"
+        },
+        "query": "SELECT DISTINCT LogAttributes['algorithm.project_id'] FROM otel_logs WHERE ServiceName = 'mindmemos-skill' AND LogAttributes['algorithm.project_id'] != '' ORDER BY 1",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": "*"
+      },
+      {
+        "name": "run",
+        "label": "Run",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "mindmemos-clickhouse"
+        },
+        "query": "SELECT DISTINCT LogAttributes['algorithm.run_id'] FROM otel_logs WHERE ServiceName = 'mindmemos-skill' AND ('*' IN (${project:singlequote}) OR LogAttributes['algorithm.project_id'] IN (${project:singlequote})) AND LogAttributes['algorithm.run_id'] != '' ORDER BY 1 DESC LIMIT 100",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": "*"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Received logs",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT count() AS logs FROM otel_logs WHERE $__timeFilter(Timestamp) AND ServiceName = 'mindmemos-skill' AND ('*' IN (${project:singlequote}) OR LogAttributes['algorithm.project_id'] IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR LogAttributes['algorithm.run_id'] IN (${run:singlequote}))",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          }
+        }
+      ],
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error logs",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT count() AS errors FROM otel_logs WHERE $__timeFilter(Timestamp) AND ServiceName = 'mindmemos-skill' AND ('*' IN (${project:singlequote}) OR LogAttributes['algorithm.project_id'] IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR LogAttributes['algorithm.run_id'] IN (${run:singlequote})) AND SeverityText IN ('ERROR', 'CRITICAL')",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          }
+        }
+      ],
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Runs with logs",
+      "description": "Distinct run IDs observed in the selected time range; this is not the number currently executing.",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT uniqExact(LogAttributes['algorithm.run_id']) AS runs FROM otel_logs WHERE $__timeFilter(Timestamp) AND ServiceName = 'mindmemos-skill' AND ('*' IN (${project:singlequote}) OR LogAttributes['algorithm.project_id'] IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR LogAttributes['algorithm.run_id'] IN (${run:singlequote}))",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          }
+        }
+      ],
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Latest received log",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT toUnixTimestamp64Milli(maxOrNull(Timestamp)) AS latest FROM otel_logs WHERE $__timeFilter(Timestamp) AND ServiceName = 'mindmemos-skill' AND ('*' IN (${project:singlequote}) OR LogAttributes['algorithm.project_id'] IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR LogAttributes['algorithm.run_id'] IN (${run:singlequote}))",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          }
+        }
+      ],
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Log volume by severity",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 50,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT $__timeInterval(Timestamp) AS time, SeverityText AS severity, count() AS logs FROM otel_logs WHERE $__timeFilter(Timestamp) AND ServiceName = 'mindmemos-skill' AND ('*' IN (${project:singlequote}) OR LogAttributes['algorithm.project_id'] IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR LogAttributes['algorithm.run_id'] IN (${run:singlequote})) GROUP BY time, severity ORDER BY time",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          }
+        }
+      ],
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Runs with recent activity",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "sql",
+          "format": 1,
+          "rawSql": "SELECT LogAttributes['algorithm.project_id'] AS project_id, LogAttributes['algorithm.run_id'] AS run_id, count() AS logs, countIf(SeverityText IN ('ERROR', 'CRITICAL')) AS errors, max(Timestamp) AS last_log FROM otel_logs WHERE $__timeFilter(Timestamp) AND ServiceName = 'mindmemos-skill' AND ('*' IN (${project:singlequote}) OR LogAttributes['algorithm.project_id'] IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR LogAttributes['algorithm.run_id'] IN (${run:singlequote})) GROUP BY project_id, run_id ORDER BY last_log DESC LIMIT 100",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          }
+        }
+      ],
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Recent logs · trace correlation",
+      "description": "Body may contain task text at debug capture level. TraceId and SpanId identify the related trace.",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "sql",
+          "format": 1,
+          "rawSql": "SELECT Timestamp, SeverityText, LogAttributes['algorithm.project_id'] AS project_id, LogAttributes['algorithm.run_id'] AS run_id, Body, TraceId, SpanId FROM otel_logs WHERE $__timeFilter(Timestamp) AND ServiceName = 'mindmemos-skill' AND ('*' IN (${project:singlequote}) OR LogAttributes['algorithm.project_id'] IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR LogAttributes['algorithm.run_id'] IN (${run:singlequote})) ORDER BY Timestamp DESC LIMIT 200",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          }
+        }
+      ],
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      }
+    }
+  ]
+}

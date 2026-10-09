@@ -6,9 +6,11 @@ from typing import Annotated, Any
 
 import jwt
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from ..config.config import HttpAuthConfig
+from ..infra.database import Scope
+from .typing import LocalKeyFile, LocalKeyTable
 
 Nonempty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 """Nonempty user-supplied text after trimming surrounding whitespace."""
@@ -46,21 +48,8 @@ class SkillHttpError(Exception):
         super().__init__(message)
 
 
-class LocalKeyFile(BaseModel):
-    """Credentials for one locally deployed Skill project."""
-
-    model_config = ConfigDict(extra="forbid")
-    """Reject ambiguous or misspelled key file fields."""
-
-    project_id: str = Field(min_length=1)
-    """Project assigned to all requests carrying this key."""
-
-    api_key: SecretStr
-    """Bearer credential accepted by this local deployment."""
-
-
 class LocalKeyResolver:
-    """Resolve a single local key while allowing atomic credential rotation."""
+    """Resolve configured local project keys while allowing credential rotation."""
 
     def __init__(self, path: str | Path):
         self._path = Path(path).expanduser().resolve()
@@ -78,13 +67,28 @@ class LocalKeyResolver:
             SkillHttpError: The key file is unavailable or the credential is invalid.
         """
         try:
-            key_file = LocalKeyFile.model_validate(yaml.safe_load(self._path.read_text(encoding="utf-8")))
+            data = yaml.safe_load(self._path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and "api_keys" in data:
+                keys = LocalKeyTable.model_validate(data).api_keys
+            else:
+                keys = [LocalKeyFile.model_validate(data)]
         except (OSError, ValueError, yaml.YAMLError) as exc:
             raise SkillHttpError(503, "authentication_unavailable", "Local API key file is unavailable") from exc
-        expected = key_file.api_key.get_secret_value()
-        if not expected or not hmac.compare_digest(credential, expected):
+        key_file = next(
+            (
+                key
+                for key in keys
+                if key.api_key.get_secret_value() and hmac.compare_digest(credential, key.api_key.get_secret_value())
+            ),
+            None,
+        )
+        if key_file is None:
             raise SkillHttpError(401, "auth.invalid_api_key", "Invalid API key")
-        return SkillHttpIdentity(project_id=key_file.project_id, scopes={"skill:write"}, actor_id=key_file.project_id)
+        if not key_file.enabled:
+            raise SkillHttpError(401, "auth.api_key_disabled", "API key is disabled")
+        return SkillHttpIdentity(
+            project_id=key_file.project_id, scopes=set(key_file.scopes), actor_id=key_file.project_id
+        )
 
 
 class GatewayJwtResolver:
@@ -164,3 +168,22 @@ def build_identity_resolver(config: HttpAuthConfig) -> LocalKeyResolver | Gatewa
             audience=config.gateway_jwt_audience,
         )
     return None
+
+
+def authorize_project(principal: object, project_id: str) -> Scope:
+    """Authorize database access to the credential's project.
+
+    Args:
+        principal: Trusted identity produced after credential verification.
+        project_id: Project requested by the business operation.
+
+    Returns:
+        Database predicate restricting access to the authenticated project.
+
+    Raises:
+        PermissionError: The requested project differs from the credential's project.
+    """
+    identity = SkillHttpIdentity.model_validate(principal)
+    if identity.project_id != project_id:
+        raise PermissionError("Authenticated project differs from the requested project")
+    return Scope(fields={"project_id": project_id})

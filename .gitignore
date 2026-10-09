@@ -8,14 +8,18 @@ wheels/
 .idea/
 .DS_Store
 tmp/
+.vscode/
 
 config/*.yaml
 !config/*.example.yaml
 config/mindmemos/*.yaml
 !config/mindmemos/*.example.yaml
-!config/mindmemos/api_keys.yaml
-config/mindmemos_eval/*.yaml
-!config/mindmemos_eval/*.example.yaml
+config/mindmemos_skill/*.yaml
+!config/mindmemos_skill/*.example.yaml
+config/mindmemos_eval/memory_evaluation/*.yaml
+!config/mindmemos_eval/memory_evaluation/*.example.yaml
+config/mindmemos_eval/dreaming_evaluation/*.yaml
+!config/mindmemos_eval/dreaming_evaluation/*.example.yaml
 
 # Virtual environments
 .venv
@@ -60,10 +64,17 @@ plugins/openclaw-plugin/dist/
 /results/
 /tmp/
 /data/
-
 .tmp/
-
 .local_doc/
+.local/
+/.mindmemos/
+config/presets/*.project.yaml
+!config/presets/*.project.example.yaml
+local_doc/
+/third_party/
+
+# Agent
+AGENTS.md
 
 # MindMemOS UI frontend dependencies
 src/mindmemos_ui/frontend/node_modules/

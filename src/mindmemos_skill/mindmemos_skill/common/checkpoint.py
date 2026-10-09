@@ -3,16 +3,34 @@
 import hashlib
 import json
 from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, JsonValue
 
 from .json import read_json, write_json
-from .typing import RecoveryRecord
+
+
+class RecoveryRecord(BaseModel):
+    """Complete recovery boundary with verified inputs and payload integrity."""
+
+    version: Literal[1] = 1
+    """Supported checkpoint protocol version."""
+
+    identity: str
+    """Fingerprint of the inputs that produced this boundary."""
+
+    payload: dict[str, JsonValue]
+    """Atomically committed state or completed output."""
+
+    digest: str
+    """Fingerprint detecting accidental payload modification."""
 
 
 def fingerprint(value) -> str:
     """Hash a JSON-compatible execution identity.
 
     Args:
-        value: Canonical request inputs, excluding credentials.
+        value: Canonical request inputs and explicit configuration.
 
     Returns:
         SHA-256 digest independent of mapping insertion order.
@@ -63,21 +81,3 @@ def read_boundary(path: Path) -> RecoveryRecord:
     if saved.digest != fingerprint(saved.payload):
         raise ValueError(f"Recovery checkpoint mismatch: {path}")
     return saved
-
-
-def redact(value):
-    """Remove credentials from JSON-compatible run identity data.
-
-    Args:
-        value: Serialized configuration containing nested mappings and sequences.
-
-    Returns:
-        A new value without credential fields; the input is unchanged.
-    """
-    if isinstance(value, dict):
-        return {
-            key: redact(item) for key, item in value.items() if key not in {"api_key", "password", "token", "secret"}
-        }
-    if isinstance(value, list):
-        return [redact(item) for item in value]
-    return value

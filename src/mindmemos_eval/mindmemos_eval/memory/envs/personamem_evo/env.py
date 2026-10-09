@@ -1,4 +1,4 @@
-﻿"""PersonaMem-Evo evaluation environment.
+"""PersonaMem-Evo evaluation environment.
 
 This module adapts the PersonaMem-Evo benchmark to the MindMemOS SDK:
 - build benchmark items from CSV rows and persona chat histories
@@ -44,6 +44,7 @@ class CompletionResult:
     content: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+
 
 @dataclass
 class PersonaMemEvoAnswer:
@@ -128,6 +129,7 @@ class PersonaMemEvoRunResult:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def parse_user_query(query_raw: str) -> dict[str, Any]:
     """Parse a raw query and wrap it as a user instruction with recall directive."""
     try:
@@ -136,8 +138,7 @@ def parse_user_query(query_raw: str) -> dict[str, Any]:
         parsed = {"role": "user", "content": str(query_raw)}
     content = parsed.get("content", "")
     instruction = (
-        "Please recall the relevant information from the memories "
-        f"and answer the question.\nQuestion: {content}"
+        f"Please recall the relevant information from the memories and answer the question.\nQuestion: {content}"
     )
     return {"role": "user", "content": instruction}
 
@@ -157,6 +158,7 @@ def create_mcq_options(
     Returns (options_map, correct_letter) where options_map[letter] = text.
     """
     import random as _random
+
     rng = _random.Random(seed)
     letters = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
     candidates = [(correct_answer, True)] + [(d, False) for d in distractors]
@@ -205,9 +207,7 @@ def calculate_personamem_evo_metrics(
         else:
             chain_groups[r.chain_key].append(False)
     chain_total = len(chain_groups)
-    chain_correct = sum(
-        1 for chain_results in chain_groups.values() if all(chain_results)
-    )
+    chain_correct = sum(1 for chain_results in chain_groups.values() if all(chain_results))
     chain_accuracy = chain_correct / chain_total if chain_total > 0 else 0.0
 
     return {
@@ -220,6 +220,7 @@ def calculate_personamem_evo_metrics(
 # ---------------------------------------------------------------------------
 # Dataset loading
 # ---------------------------------------------------------------------------
+
 
 def load_benchmark_rows(csv_path: str | Path) -> tuple[list[str], list[dict[str, str]]]:
     """Load PersonaMem-Evo CSV rows.
@@ -372,6 +373,7 @@ def save_personamem_evo_csv(
 # Environment
 # ---------------------------------------------------------------------------
 
+
 class PersonaMemEvoEnv:
     """PersonaMem-Evo benchmark environment.
 
@@ -402,6 +404,7 @@ class PersonaMemEvoEnv:
         self._user_id_prefix = user_id_prefix
         self._qa_concurrency = qa_concurrency
         self._build_concurrency = build_concurrency
+
     # ------------------------------------------------------------------
     # Async overrides (PersonaMemEvoEnv uses AsyncMemoryClient)
     # ------------------------------------------------------------------
@@ -467,19 +470,19 @@ class PersonaMemEvoEnv:
             incorrect_answers = parse_incorrect_answers(incorrect_raw)
             chain_key = (row.get("chain_id", "unknown"), persona_id)
             history_rel = row.get(f"chat_history_{size}_link", "")
-            history_path = (
-                persona_root / history_rel
-                if persona_root and history_rel
-                else Path(history_rel)
-            )
-            options, correct_letter = create_mcq_options(
-                correct_answer, incorrect_answers, seed=idx
-            )
+            history_path = persona_root / history_rel if persona_root and history_rel else Path(history_rel)
+            options, correct_letter = create_mcq_options(correct_answer, incorrect_answers, seed=idx)
             item = PersonaMemEvoItem(
-                row=row, index=idx, persona_id=persona_id, user_id=user_id,
-                user_query=str(query_raw), correct_answer=correct_answer,
-                incorrect_answers=incorrect_answers, chain_key=chain_key,
-                chat_history_path=history_path, options=options,
+                row=row,
+                index=idx,
+                persona_id=persona_id,
+                user_id=user_id,
+                user_query=str(query_raw),
+                correct_answer=correct_answer,
+                incorrect_answers=incorrect_answers,
+                chain_key=chain_key,
+                chat_history_path=history_path,
+                options=options,
                 correct_letter=correct_letter,
                 ood_type=row.get("ood_type"),
                 ood_difficulty=row.get("ood_difficulty"),
@@ -534,17 +537,10 @@ class PersonaMemEvoEnv:
                 metadata = {"benchmark": "personamem-evo"}
 
                 chat_history_path = p_items[0].chat_history_path
-                messages = (
-                    load_chat_history_messages(chat_history_path)
-                    if chat_history_path.exists()
-                    else []
-                )
+                messages = load_chat_history_messages(chat_history_path) if chat_history_path.exists() else []
 
                 build_start = time.monotonic()
-                tqdm.write(
-                    f"  [Build] persona {persona_id}: "
-                    f"{len(messages)} messages, mode={mode}"
-                )
+                tqdm.write(f"  [Build] persona {persona_id}: {len(messages)} messages, mode={mode}")
                 add_calls = 0
                 added = 0
                 returned = 0
@@ -587,9 +583,7 @@ class PersonaMemEvoEnv:
                 fb_start = time.monotonic()
 
                 if mode in ("add_feedback",):
-                    tqdm.write(
-                        f"  [Feedback] persona {persona_id}: starting implicit feedback..."
-                    )
+                    tqdm.write(f"  [Feedback] persona {persona_id}: starting implicit feedback...")
                     try:
                         fb_result = await self._memory.feedback(
                             mode="sync",
@@ -637,10 +631,7 @@ class PersonaMemEvoEnv:
             persona_items.keys(),
             key=lambda x: int(x) if x.isdigit() else x,
         )
-        build_tasks = [
-            _build_one(pid, persona_items[pid])
-            for pid in persona_ids_sorted
-        ]
+        build_tasks = [_build_one(pid, persona_items[pid]) for pid in persona_ids_sorted]
         build_summaries_results = await asyncio.gather(*build_tasks, return_exceptions=True)
         build_pbar.close()
 
@@ -684,28 +675,37 @@ class PersonaMemEvoEnv:
         )
 
         async def _process_one(item: PersonaMemEvoItem) -> None:
-            nonlocal _search_elapsed, _llm_elapsed, _api_search_calls, _answer_llm_calls, _total_prompt_tokens, _total_completion_tokens
+            nonlocal \
+                _search_elapsed, \
+                _llm_elapsed, \
+                _api_search_calls, \
+                _answer_llm_calls, \
+                _total_prompt_tokens, \
+                _total_completion_tokens
             async with sem:
                 user_id = f"{self._user_id_prefix}-{mode}-{item.persona_id}"
 
                 # --- search ---
                 search_start = time.monotonic()
                 try:
-                    search = await self.retrieve(
-                        item.user_query, user_id=user_id, top_k=self._top_k
-                    )
+                    search = await self.retrieve(item.user_query, user_id=user_id, top_k=self._top_k)
                 except Exception as exc:
                     async with _metrics_lock:
                         _search_elapsed += time.monotonic() - search_start
                         _api_search_calls += 1
                     async with results_lock:
-                        results.append(PersonaMemEvoQAResult(
-                            index=item.index, persona_id=item.persona_id,
-                            user_id=user_id, question=str(item.user_query),
-                            correct_answer=item.correct_answer,
-                            chain_key=item.chain_key, answer=None,
-                            error=f"search failed: {exc}",
-                        ))
+                        results.append(
+                            PersonaMemEvoQAResult(
+                                index=item.index,
+                                persona_id=item.persona_id,
+                                user_id=user_id,
+                                question=str(item.user_query),
+                                correct_answer=item.correct_answer,
+                                chain_key=item.chain_key,
+                                answer=None,
+                                error=f"search failed: {exc}",
+                            )
+                        )
                     qa_pbar.update()
                     return
 
@@ -713,14 +713,10 @@ class PersonaMemEvoEnv:
                     _search_elapsed += time.monotonic() - search_start
                     _api_search_calls += 1
 
-                contexts = self.format_context(
-                    search.memories if hasattr(search, "memories") else []
-                )
+                contexts = self.format_context(search.memories if hasattr(search, "memories") else [])
 
                 # Build prompt with MCQ options and output format instruction
-                options_str = "\n".join(
-                    f"{letter}. {text}" for letter, text in sorted(item.options.items())
-                )
+                options_str = "\n".join(f"{letter}. {text}" for letter, text in sorted(item.options.items()))
                 mcq_instruction = (
                     "Options:\n"
                     f"{options_str}\n\n"
@@ -740,14 +736,20 @@ class PersonaMemEvoEnv:
                         _llm_elapsed += time.monotonic() - llm_start
                         _answer_llm_calls += 1
                     async with results_lock:
-                        results.append(PersonaMemEvoQAResult(
-                            index=item.index, persona_id=item.persona_id,
-                            user_id=user_id, question=str(item.user_query),
-                            correct_answer=item.correct_answer,
-                            chain_key=item.chain_key, answer=None,
-                            error=f"llm failed: {exc}",
-                            retrieved_memories=contexts, prompt=messages_prompt,
-                        ))
+                        results.append(
+                            PersonaMemEvoQAResult(
+                                index=item.index,
+                                persona_id=item.persona_id,
+                                user_id=user_id,
+                                question=str(item.user_query),
+                                correct_answer=item.correct_answer,
+                                chain_key=item.chain_key,
+                                answer=None,
+                                error=f"llm failed: {exc}",
+                                retrieved_memories=contexts,
+                                prompt=messages_prompt,
+                            )
+                        )
                     qa_pbar.update()
                     return
 
@@ -760,9 +762,7 @@ class PersonaMemEvoEnv:
                     _total_completion_tokens += ct
 
                 predicted = extract_final_answer(answer_text)
-                is_correct = check_mcq_correctness(
-                    item.correct_letter, predicted, item.options
-                )
+                is_correct = check_mcq_correctness(item.correct_letter, predicted, item.options)
                 tqdm.write(
                     f"  [QA] item {item.index:3d}/{len(items):3d} "
                     f"(persona {item.persona_id}): "
@@ -770,25 +770,33 @@ class PersonaMemEvoEnv:
                     f"tokens={pt}+{ct}"
                 )
                 answer = PersonaMemEvoAnswer(
-                    response=answer_text, predicted_answer=predicted,
-                    is_correct=is_correct, correct_letter=item.correct_letter,
+                    response=answer_text,
+                    predicted_answer=predicted,
+                    is_correct=is_correct,
+                    correct_letter=item.correct_letter,
                     option_mapping=item.options,
-                    prompt_tokens=pt, completion_tokens=ct,
+                    prompt_tokens=pt,
+                    completion_tokens=ct,
                 )
                 async with results_lock:
-                    results.append(PersonaMemEvoQAResult(
-                        index=item.index, persona_id=item.persona_id,
-                        user_id=user_id, question=str(item.user_query),
-                        correct_answer=item.correct_answer,
-                        chain_key=item.chain_key, answer=answer,
-                        retrieved_memories=contexts, prompt=messages_prompt,
-                    ))
+                    results.append(
+                        PersonaMemEvoQAResult(
+                            index=item.index,
+                            persona_id=item.persona_id,
+                            user_id=user_id,
+                            question=str(item.user_query),
+                            correct_answer=item.correct_answer,
+                            chain_key=item.chain_key,
+                            answer=answer,
+                            retrieved_memories=contexts,
+                            prompt=messages_prompt,
+                        )
+                    )
                 qa_pbar.update()
 
         tasks = [_process_one(item) for item in items]
         await asyncio.gather(*tasks, return_exceptions=True)
         qa_pbar.close()
-
 
         search_elapsed = _search_elapsed
         llm_elapsed = _llm_elapsed
@@ -835,9 +843,7 @@ class PersonaMemEvoEnv:
             chain_counts[r.chain_key] += 1
         chain_size_dist: dict[str, int] = {}
         for sz in sorted(set(chain_counts.values())):
-            chain_size_dist[str(sz)] = sum(
-                1 for v in chain_counts.values() if v == sz
-            )
+            chain_size_dist[str(sz)] = sum(1 for v in chain_counts.values() if v == sz)
 
         step_correct = sum(1 for r in results if r.answer and r.answer.is_correct)
 
@@ -856,9 +862,7 @@ class PersonaMemEvoEnv:
             "prompt_tokens": float(_total_prompt_tokens),
             "completion_tokens": float(_total_completion_tokens),
             "answer_llm_calls": float(answer_llm_calls),
-            "api_total_calls": float(
-                total_add_calls + total_feedback_calls + api_search_calls
-            ),
+            "api_total_calls": float(total_add_calls + total_feedback_calls + api_search_calls),
             "build_elapsed_seconds": total_build_elapsed,
             "qa_search_elapsed_seconds": search_elapsed,
             "qa_answer_elapsed_seconds": llm_elapsed,
@@ -867,6 +871,8 @@ class PersonaMemEvoEnv:
         }
 
         return PersonaMemEvoRunResult(
-            items=items, results=results, metrics=metrics,
+            items=items,
+            results=results,
+            metrics=metrics,
             build_summaries=build_summaries,
         )

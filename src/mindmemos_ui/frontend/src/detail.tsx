@@ -1,5 +1,5 @@
 import { DynamicSkill } from "./dynamic-skill";
-import { useState, useEffect, type ReactNode } from "react";
+import { useState, useEffect } from "react";
 import {
   api,
   query,
@@ -10,7 +10,7 @@ import {
   type Ref,
 } from "./api";
 import { useLoad, Message, Empty, Dialog, VersionOptions } from "./components";
-import { Export, SwitchVersion, Commit } from "./operations";
+import { Export, ActivateVersion, Commit } from "./operations";
 import {
   BundleBrowser,
   type BundleContent,
@@ -20,12 +20,10 @@ export function Compare({
   selection,
   versions,
   selected,
-  renderActions,
 }: {
   selection: Selection;
   versions: Version[];
   selected: string;
-  renderActions: (versionId: string) => ReactNode;
 }) {
   const [before, setBefore] = useState(versions[0]?.version_id || "");
   const [after, setAfter] = useState(selected);
@@ -86,7 +84,6 @@ export function Compare({
               <VersionOptions versions={versions} />
             </select>
           </label>
-          {renderActions(before)}
         </div>
         <div className="version-card">
           <label>
@@ -101,7 +98,6 @@ export function Compare({
               <VersionOptions versions={versions} />
             </select>
           </label>
-          {renderActions(after)}
         </div>
       </div>
       <Message text={error} error />
@@ -176,7 +172,7 @@ export function Detail({
   change: (tab: string, version?: string, replace?: boolean) => void;
 }) {
   const setTab = (next: string) => change(next, version);
-  const [switching, setSwitchVersion] = useState<Version>();
+  const [activating, setActivateVersion] = useState<Version>();
   const version = selection.version || "";
   const setVersion = (next: string) => change(tab, next);
   const [exporting, setExporting] = useState<Version>();
@@ -196,7 +192,7 @@ export function Detail({
     selection.source + selection.id + revision,
   );
   const current = useLoad<{
-    skill: { current_version_id: string };
+    skill: { active_version_id: string };
     version: Version;
   }>(
     () => api("skills/" + encodeURIComponent(selection.id)),
@@ -210,12 +206,15 @@ export function Detail({
     const target = data.value?.find((v) => v.version_id === versionId);
     if (!target) return null;
     const label = versionLabel(target, target.version_id);
-    const isCurrent = current.value?.skill.current_version_id === versionId;
+    const isActive = current.value?.skill.active_version_id === versionId;
     return (
       <div className="actions version-actions">
         {selection.source === "local" && (
-          <button disabled={isCurrent} onClick={() => setSwitchVersion(target)}>
-            {isCurrent ? `${label} · 当前版本` : `将 ${label} 设为当前版本`}
+          <button
+            disabled={isActive}
+            onClick={() => setActivateVersion(target)}
+          >
+            {isActive ? `${label} · 生效版本` : `将 ${label} 设为生效版本`}
           </button>
         )}
         <button onClick={() => setExporting(target)}>导出 {label}</button>
@@ -256,7 +255,7 @@ export function Detail({
         </div>
       </div>
       <p className="muted">
-        当前版本：{versionLabel(current.value?.version, "—")}
+        生效版本：{versionLabel(current.value?.version, "—")}
       </p>
       <Message text={current.error} error />
       <div className="tabs">
@@ -283,14 +282,14 @@ export function Detail({
         <>
           {tab === "versions" ? (
             <div className="table-wrap">
-              <table>
+              <table className="version-history-table">
                 <thead>
                   <tr>
-                    <th>版本</th>
-                    <th>状态</th>
+                    <th>版本名</th>
+                    <th>版本ID</th>
                     <th>来源</th>
                     <th>创建时间</th>
-                    <th>版本操作</th>
+                    <th>提交信息</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -305,25 +304,15 @@ export function Detail({
                         >
                           {versionLabel(v)}
                         </button>
-                        <details className="muted">
-                          <summary>审计信息</summary>
-                          <code>{v.version_id}</code>
-                          <button
-                            className="link"
-                            onClick={() =>
-                              navigator.clipboard.writeText(v.version_id)
-                            }
-                          >
-                            复制 ID
-                          </button>
-                        </details>
                       </td>
                       <td>
-                        <span className="badge">{v.status}</span>
+                        <code>{v.version_id}</code>
                       </td>
                       <td>{v.origin}</td>
                       <td>{new Date(v.created_at).toLocaleString()}</td>
-                      <td>{renderActions(v.version_id)}</td>
+                      <td className="version-commit-message">
+                        {v.commit_message || "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -350,7 +339,6 @@ export function Detail({
               selection={selection}
               versions={data.value}
               selected={version}
-              renderActions={renderActions}
             />
           )}
         </>
@@ -366,13 +354,13 @@ export function Detail({
           }}
         />
       )}
-      {switching && selection.source === "local" && (
-        <SwitchVersion
+      {activating && selection.source === "local" && (
+        <ActivateVersion
           skillId={selection.id}
-          versionId={switching.version_id}
-          versionLabel={versionLabel(switching, switching.version_id)}
+          versionId={activating.version_id}
+          versionLabel={versionLabel(activating, activating.version_id)}
           close={() => {
-            setSwitchVersion(undefined);
+            setActivateVersion(undefined);
             setRevision(revision + 1);
           }}
         />

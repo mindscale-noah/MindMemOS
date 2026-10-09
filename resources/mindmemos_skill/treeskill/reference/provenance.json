@@ -1,6 +1,0 @@
-{
-  "repository": "https://github.com/mindscale-noah/MindMemOS.git",
-  "commit": "e83aae887f08eb9fa1596384404dc7757a6a7f2f",
-  "source": "resources/mindmemos_skill/datasets/spreadsheetbench/trace2skill_200_200/splits/{train,val,test}/items.json",
-  "conversion": "Preserve ordered train/test IDs without resampling. Upstream val repeats train and is unused by its experiment script; exported val is empty under the approved no-validation-selection protocol."
-}

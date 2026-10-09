@@ -79,44 +79,104 @@ MindMemOS 有**两种部署方式**（官方云服务、本地自部署）和**�
 
 MindMemOS 使用 `uv` 管理依赖和执行本地命令。详细配置方法可以查看[docs/deploy/instruction_ZH.md](docs/deploy/instruction_ZH.md)。
 
-默认端口 8000：FastAPI `http://127.0.0.1:8000`，API 文档 `http://127.0.0.1:8000/docs`。
-
 #### 1.1 准备配置文件
+
+首次使用时，复制以下配置文件：
+
 ```bash
 cp .env.example .env
 cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
-```
-启动前，至少需要在 config/mindmemos/dev.yaml 中配置以下三类模型路由：
-
-- `chat_model_router`：支持记忆抽取、Skill演进等。
-- `embed_model_router`：语义向量 embedding，维度保证与QDrant维度配置一致。
-- `rerank_model_router`：可选，记忆检索结果重排。
-
-在 `config/mindmemos/api_keys.yaml` 中配置 API key 以及绑定的 `project_id`。
-
-#### 1.2 启动服务
-
-启动本地服务（默认端口：8000）：
-```bash
-make dev  # 会先启动全量 Docker 依赖，再启动 FastAPI。
+cp config/mindmemos_skill/dev.example.yaml config/mindmemos_skill/dev.yaml
+cp config/presets/local.project.example.yaml config/presets/local.project.yaml
 ```
 
-只启动核心依赖时使用：
+启动前，按以下清单补充配置：
 
-```bash
-make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
-```
+| 配置文件 | 需要补充的配置 |
+|---|---|
+| `config/mindmemos/dev.yaml` | chat、embedding 和可选 rerank 路由的 `model`、`api_base`、`api_key`。embedding 输出维度、`dimensions` 与 `database.qdrant.vector_size` 必须一致。 |
+| `config/mindmemos_skill/dev.yaml` | 按需填写图管理、训练、演进模型的 `model`、`base_url`、`api_key`，以及 embedding 的 `dimensions`。 |
+| `config/presets/local.project.yaml` | **自定义本地 API key**：修改 `projects.<项目名>.api_key`。`default_project` 仅选择 UI/SDK 默认使用的项目，可用 `PROJECT=<项目名>` 覆盖。服务按请求的 API key 识别项目。 |
 
-#### 1.3 停止服务
+`make dev` 自动生成本地鉴权配置和 `.mindmemos/settings.json`，无需手动填写 Skill token。模型服务的 API key 与本地 API key 分别配置。修改项目文件后需重启服务。更多项目与鉴权设置见[部署说明](docs/deploy/instruction_ZH.md)。
+
+#### 1.2 启动与管理命令
+
+先安装 `uv` 并启动 Docker 引擎；首次开发可运行 `make setup` 准备依赖。Makefile 的 Python 入口统一通过 `uv run` 执行。
 
 ```bash
-make dev-down
+make dev                                # Memory + Skill + UI，全部功能
+make dev FEATURE=core                    # 核心功能，不开启异步任务与 OTel
+make dev FEATURE=async                   # 核心 + 异步任务，不开启 OTel
+make dev SERVICE=memory                  # Memory + UI，全部功能
+make dev SERVICE=skill FEATURE=core      # Skill + UI，核心功能
+make dev PLAN=1                          # 只校验并预览启动计划
 ```
+
+| 命令 | 作用 |
+| --- | --- |
+| `make dev` | 启动选中服务所需的 Docker 依赖、API 和 UI，默认全量 |
+| `make docker` | 只启动选中服务所需的 Docker 依赖 |
+| `make api` | 只启动 API，依赖需已运行；默认不启动 UI |
+| `make ui` | 单独启动 UI，使用已有 SDK 配置 |
+| `make status` | 查看本工作区管理的应用状态、地址、功能及当前 Compose 项目的容器 |
+| `make stop` | 停止受管理的 API/UI，移除 Compose 容器和网络，保留数据卷 |
+| `make clean` | 列出数据卷，输入 `DELETE` 后停止服务并删除 Docker 数据卷 |
+| `make help` | 显示命令和参数；直接运行 `make` 也显示帮助 |
+
+`SERVICE` 和 `FEATURE` 统一使用单数，适用于 `dev`、`docker`、`api`：
+
+| 参数 | 取值与默认行为 |
+| --- | --- |
+| `SERVICE` | 默认 `all`（Memory + Skill）；可选 `memory`、`skill` |
+| `FEATURE` | 默认 `all`（核心 + 异步任务 + OTel）；`core` 仅核心；`async` 核心 + 异步任务 |
+| `UI=0` / `UI=1` | 覆盖 `dev` 或 `api` 的 UI 开关；`docker` 不支持开启 UI |
+| `PLAN=1` | 校验并预览启动计划，不启动服务或写入 SDK 配置 |
+| `API_PORT` / `SKILL_PORT` / `UI_PORT` | 覆盖端口，默认分别为 `8000` / `8001` / `8765` |
+| `API_HOST` / `SKILL_HOST` | 覆盖 API 监听地址，默认 `127.0.0.1` |
+| `MEMORY_CONFIG` / `SKILL_CONFIG` | 指定应用 YAML；未指定时沿用服务的配置路径设置 |
+| `PROJECT` / `PROJECT_CONFIG` | 选择默认客户端项目或项目配置文件，默认文件为 `config/presets/local.project.yaml` |
+| `SERVICE_AUTH=1` | 使用各服务 YAML 的鉴权配置，不应用共享本地项目配置或自动写入 UI 连接 |
+| `UI_HOME` | 指定 UI 的 SDK 配置目录；共享本地项目模式默认使用仓库 `.mindmemos/` |
+| `API_RELOAD=1` / `SKILL_RELOAD=1` | 开启对应 API 的代码热重载 |
+
+例如，分开启动依赖和 API 时使用一致的服务、功能参数：
+
+```bash
+make docker SERVICE=skill FEATURE=async
+make api SERVICE=skill FEATURE=async UI=1
+```
+
+应用功能开关和容器选择由同一份最终配置推导。本地依赖端口和凭据从 `.env` 同步覆盖，无需再手改 YAML 对应端口；原 YAML 保持不变。运行 YAML 写入私有临时目录，正常退出时清理。SQLite 或外部依赖不会额外启动对应的本地数据库容器。容器与配置细节见 [Docker 配置说明](dockers/README.md)。
+
+全部选中应用通过健康检查后，会统一显示地址以及异步任务、OTel 状态。默认地址：
+
+| 服务 | 地址 | API 文档 |
+| --- | --- | --- |
+| Memory | <http://127.0.0.1:8000> | <http://127.0.0.1:8000/docs> |
+| Skill | <http://127.0.0.1:8001> | <http://127.0.0.1:8001/docs> |
+| UI | <http://127.0.0.1:8765> | — |
+
+`Ctrl+C` 结束当前启动的 API/UI，保留容器。`make stop` 同时停止本工作区受管理的应用和当前 Compose 项目的容器；手动启动的应用需自行结束。切换到较少功能时，已有额外容器不会自动停止，需要完整切换时先运行 `make stop`。
+
+`make clean` 会删除数据库、Kafka 和监控等 Docker 持久化数据，但不会删除宿主机 SQLite、YAML、`.env` 或 SDK 配置。修改 `.env` 或源 YAML 后需重新启动。
+
+#### 1.3 开发工具
+
+| 命令 | 作用 |
+| --- | --- |
+| `make setup` | 同步依赖、安装 Git hooks、准备并检查 NLP 资源 |
+| `make hook` | 安装 Git pre-commit hooks |
+| `make lint` | 检查 Python 代码，不修改文件 |
+| `make format` | 自动修复 lint 问题并格式化 Python 代码 |
+| `make ui-build` | 安装前端依赖并构建 UI 静态文件，需要 Node.js/npm |
+| `make profile` | 采集 Memory API 的 CPU 火焰图；可用 `PID` 指定进程 |
+
+`profile` 支持 `PROFILE_SECONDS=60`、`PROFILE_RATE=100`、`PROFILE_OUT=tmp/profile.svg`，以上为默认值。可通过 `UV` 指定 uv 可执行文件。
 
 ### 2. 接入方式
 
-云服务和本地自部署使用同一套接入协议，本地 key 来自 `config/mindmemos/api_keys.yaml`，云端 key 在 [官网](https://mindmemos.cn) 申请。
+云服务和本地自部署使用同一套接入协议，本地 key 来自 `config/presets/local.project.yaml`，云端 key 在 [官网](https://mindmemos.cn) 申请。
 
 #### 2.1 HTTP 接口调用
 
@@ -167,7 +227,7 @@ mindmemos auth
 | 配置项 | 本地服务 | 云端服务 |
 | :--- | :--- | :--- |
 | `base_url` | `http://127.0.0.1:8000` | `https://mindmemos.cn` |
-| `api_key` | `config/mindmemos/api_keys.yaml` 中已启用的 API key | 从 [MindMemOS 官网](https://mindmemos.cn) 申请的 API key |
+| `api_key` | `config/presets/local.project.yaml` 中已启用项目的 API key | 从 [MindMemOS 官网](https://mindmemos.cn) 申请的 API key |
 | `user_id` | 当前终端用户的稳定标识，例如 `u_123` | 当前终端用户的稳定标识，例如 `u_123` |
 
 配置会保存到 `~/.mindmemos/settings.json`。可以通过以下命令检查当前配置：
@@ -357,7 +417,7 @@ python scripts/download_datasets.py download --benchmark skill --dataset spreads
 
 memory 包括 `locomo`、`personamem`（v1）、`memoryagentbench`（官方四个数据分区）和
 `longmemeval`（官方 cleaned 版本）。官方来源与固定 revision 集中在
-[`config/datasets/sources.json`](config/datasets/sources.json)。
+[`config/presets/dataset_download_sources.json`](config/presets/dataset_download_sources.json)。
 默认下载到 `data/mindmemos_memory/<dataset>/` 或 `data/mindmemos_skill/<dataset>/`；
 可用 `--data-root` 指定父目录，在 `download` 后加 `--verify-only` 校验已有文件。
 评测配置需指向下载后的文件。下载保留官方格式，MemoryAgentBench 为 Parquet，使用当前评测器的

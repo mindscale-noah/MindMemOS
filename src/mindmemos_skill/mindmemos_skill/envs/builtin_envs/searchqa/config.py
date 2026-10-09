@@ -10,7 +10,7 @@ from ....agents.buitin_agents.openai_chat.config import OpenAIChatConfig
 class SearchQADataConfig(BaseModel):
     """Load questions and passages from a local JSON or JSONL release."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unsupported source settings."""
 
     data_path: Path
@@ -20,7 +20,7 @@ class SearchQADataConfig(BaseModel):
 class SearchQAConfig(BaseModel):
     """Configure passage-grounded answering and self-refinement."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unsupported execution settings."""
 
     agent: OpenAIChatConfig

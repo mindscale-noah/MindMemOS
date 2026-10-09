@@ -1,27 +1,17 @@
 """Explicit controls for paper-defined Skill-Forest training."""
 
-from typing import Annotated, Literal, Self
+from typing import Annotated, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ....agents import OpenAIChatConfig
-from ..config import EnvAdapterSelection
+
+ALGORITHM_VERSION: Final[int] = 2
+"""Version of the Skill-Forest algorithm and its persisted output contract."""
 
 
 class ForestOptimizerConfig(OpenAIChatConfig):
-    """Single-attempt optimizer transport with a six-hour request timeout."""
-
-    timeout_s: float = Field(default=21600, gt=0, allow_inf_nan=False)
-    """Seconds allowed for one optimizer request."""
-
-    max_retries: Literal[0] = 0
-    """Never automatically repeat a failed provider request."""
-
-    sdk_max_retries: Literal[0] = 0
-    """Disable retries inside the provider SDK."""
-
-    parse_max_attempts: Literal[1] = 1
-    """Malformed responses fail the proposal without another model call."""
+    """Optimizer transport with bounded retries and an explicit completion budget."""
 
     max_completion_tokens: int | None = Field(default=16384, gt=0)
     """Patch-generation completion budget; caller may override provider limits."""
@@ -30,7 +20,7 @@ class ForestOptimizerConfig(OpenAIChatConfig):
 class SkillForestTrainerConfig(BaseModel):
     """Configure forest growth and final reduction independently of environments."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid", frozen=True)
     """Reject unsupported strategies and freeze the run configuration."""
 
     optimizer: ForestOptimizerConfig
@@ -66,8 +56,14 @@ class SkillForestTrainerConfig(BaseModel):
     model_concurrency: int = Field(default=40, ge=1)
     """Forest-wide cap on optimizer calls, including nested patch and Skill merges."""
 
+    cleanup_workspaces: bool = True
+    """Remove each task workspace after its rollout finishes, including failures."""
+
     root_share_train_trajectory: bool = False
     """Reuse root validation outcomes and collect missing root training tasks once."""
+
+    root_share_validation: bool = True
+    """Evaluate each distinct root validation task once across the forest."""
 
     min_gain: float = Field(default=0.0, ge=0, le=1)
     """Required strict child-minus-parent validation improvement."""
@@ -93,9 +89,6 @@ class SkillForestTrainerConfig(BaseModel):
     merge_threshold: float = Field(default=0.15, ge=0, le=1)
     """Keep initial merge winners within this absolute score distance of the best."""
 
-    env_adapter: EnvAdapterSelection = Field(default_factory=EnvAdapterSelection)
-    """Registered environment adaptation bound when the trainer is constructed."""
-
     @model_validator(mode="after")
     def validate_root_budget(self) -> Self:
         """Reserve enough global expansions to visit every root."""
@@ -107,7 +100,7 @@ class SkillForestTrainerConfig(BaseModel):
 class SkillForestEnvAdapterConfig(BaseModel):
     """Override selected system prompts with literal text; None uses bundled defaults."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid", frozen=True)
     """Keep one adapter's settings independent of run-local state."""
 
     analyst_error: str | None = None

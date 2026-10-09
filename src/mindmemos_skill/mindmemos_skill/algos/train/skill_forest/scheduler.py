@@ -8,14 +8,28 @@ from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
+from pydantic import JsonValue
+
 from ....common.json import append_jsonl
+from ....envs.base import Environment
+from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult
+from ....skill import Skill
+from .typing import RolloutExecutor, RolloutLoader, StopPredicate
 
 
 class RolloutGroup:
     """Execute one task group and stop queued work without cancelling physical calls."""
 
-    def __init__(self, *, samples, skill, env, directory, stop_when):
+    def __init__(
+        self,
+        *,
+        samples: Sequence[DataSample],
+        skill: Skill,
+        env: Environment,
+        directory: Path,
+        stop_when: StopPredicate | None,
+    ) -> None:
         """Initialize one caller-owned group and its completion signal.
 
         Args:
@@ -30,15 +44,15 @@ class RolloutGroup:
         self.env = env
         self.directory = directory
         self.stop_when = stop_when
-        self.results = {}
+        self.results: dict[str, RolloutResult] = {}
         self.active = 0
         self.stopped = False
-        self.error = None
+        self.error: Exception | None = None
         self.done = asyncio.Event()
         self.submitted_at = perf_counter()
         self.context = copy_context()
 
-    def finish_if_drained(self):
+    def finish_if_drained(self) -> None:
         """Signal completion only after all started calls have returned."""
         if not self.pending and not self.active:
             self.done.set()
@@ -47,7 +61,14 @@ class RolloutGroup:
 class RolloutScheduler:
     """Share fixed workers across groups, taking one task per group per turn."""
 
-    def __init__(self, execute, *, concurrency: int, log_path: Path | None = None, load_result=None):
+    def __init__(
+        self,
+        execute: RolloutExecutor,
+        *,
+        concurrency: int,
+        log_path: Path | None = None,
+        load_result: RolloutLoader | None = None,
+    ) -> None:
         """Configure lazy workers and an optional append-only diagnostic log.
 
         Args:
@@ -60,17 +81,17 @@ class RolloutScheduler:
         self.execute = execute
         self.concurrency = concurrency
         self.log_path = log_path
-        self.queue = deque()
-        self.groups = set()
+        self.queue: deque[RolloutGroup] = deque()
+        self.groups: set[RolloutGroup] = set()
         self.wake = asyncio.Event()
-        self.workers = []
+        self.workers: list[asyncio.Task[None]] = []
         self.active = 0
         self.closed = False
         self.started_at = perf_counter()
         self.sequence = 0
         self.session_id = uuid4().hex
 
-    def _log(self, event, group, **details):
+    def _log(self, event: str, group: RolloutGroup, **details: JsonValue) -> None:
         """Record queue occupancy and relative timestamps without task content."""
         if self.log_path is None:
             return
@@ -92,7 +113,7 @@ class RolloutScheduler:
             },
         )
 
-    def _stop(self, group, reason):
+    def _stop(self, group: RolloutGroup, reason: str) -> None:
         """Remove only unstarted work and record the remaining drain size."""
         if group.stopped:
             return
@@ -106,9 +127,9 @@ class RolloutScheduler:
     async def collect(
         self,
         *,
-        env,
-        samples: Sequence,
-        skill,
+        env: Environment,
+        samples: Sequence[DataSample],
+        skill: Skill,
         directory: Path,
         stop_when: Callable[[dict[str, RolloutResult]], bool] | None = None,
     ) -> dict[str, RolloutResult]:
@@ -167,7 +188,7 @@ class RolloutScheduler:
         finally:
             self.groups.discard(group)
 
-    async def _worker(self):
+    async def _worker(self) -> None:
         """Take one item per group, process its result, then request another item."""
         while True:
             if not self.queue:
@@ -236,7 +257,7 @@ class RolloutScheduler:
                         pass
                 group.finish_if_drained()
 
-    async def close(self):
+    async def close(self) -> None:
         """Stop queued work, drain executing calls and release idle workers."""
         self.closed = True
         error = None

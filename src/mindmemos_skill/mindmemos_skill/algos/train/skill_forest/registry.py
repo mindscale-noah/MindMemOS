@@ -2,17 +2,18 @@
 
 from importlib import import_module
 
-_BUILTIN_MODULES = (
-    ".env_specific.livemath",
-    ".env_specific.searchqa",
-    ".env_specific.officeqa",
-    ".env_specific.spreadsheetbench",
-    ".env_specific.alfworld_bounded_history",
+BUILTIN_ADAPTER_NAMES: tuple[str, ...] = (
+    "livemath",
+    "searchqa",
+    "officeqa",
+    "spreadsheetbench_tool_calling",
+    "spreadsheetbench_text_action",
+    "alfworld_bounded_history",
 )
-"""Imports execute registrations without constructing runtime resources."""
+"""Names shared by built-in adapter registration and automatic environment matching."""
 
 
 def ensure_registered() -> None:
     """Load the explicit catalog once through Python's module cache."""
-    for module in _BUILTIN_MODULES:
-        import_module(module, package=__package__)
+    for name in BUILTIN_ADAPTER_NAMES:
+        import_module(f".env_specific.{name}", package=__package__)

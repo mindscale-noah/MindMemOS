@@ -23,6 +23,12 @@ from .typing import AgentSkillOSRewardData, AgentSkillOSTask, Ranking
 class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
     """Use official task success as reward and retain retrieval only as diagnostics."""
 
+    task_type = AgentSkillOSTask
+    """Public AgentSkillOS task schema."""
+
+    reward_data_type = AgentSkillOSRewardData
+    """Private AgentSkillOS scoring schema."""
+
     config_type = AgentSkillOSConfig
     """Native agent and private official scoring settings."""
 
@@ -74,7 +80,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
             raise ValueError("Public task and private official definition must match")
         ranking = []
         for skill in skills:
-            metadata, _ = extract_frontmatter(skill.bundle.files["SKILL.md"], version_id="")
+            metadata, _ = extract_frontmatter(skill.content, version_id="")
             ranking.append(metadata.get("name"))
         ranking = Ranking(skill_ids=ranking).skill_ids
         for name in ranking:

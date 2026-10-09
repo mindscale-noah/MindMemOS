@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, model
 class SplitConfig(BaseModel):
     """Select either seeded proportions or an explicit split manifest."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown split options."""
 
     ratios: dict[str, Annotated[FiniteFloat, Field(ge=0, le=1)]] | None = None

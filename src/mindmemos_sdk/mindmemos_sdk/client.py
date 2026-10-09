@@ -1,8 +1,8 @@
 """Root SDK client facade.
 
 Assembles the SDK from local config: it reads ``settings.json`` in the selected SDK home via
-:class:`ConfigManager`, builds a shared :class:`HttpTransport`, and exposes resource
-clients (currently ``memory``). Explicit constructor arguments override config so
+:class:`ConfigManager`, builds separate HTTP transports, and exposes resource
+clients (``memory`` and ``skills``). Explicit constructor arguments override config so
 callers can run without a config file.
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 from .config import ConfigManager, SDKConfig
 from .errors import AuthRequiredError
 from .memory import MemoryClient
-from .skills import SkillCloudClient, SkillManager
+from .skills import SkillClient
 from .transport import HttpTransport
 
 
@@ -30,17 +30,17 @@ class MindMemOSClient:
         config: SDKConfig | None = None,
         config_manager: ConfigManager | None = None,
         transport: HttpTransport | None = None,
+        skill_transport: HttpTransport | None = None,
     ) -> None:
         """Handle init."""
         if config is None:
             manager = config_manager or ConfigManager()
             config = manager.load_or_default()
-        else:
-            manager = config_manager or ConfigManager()
         self._config = config
 
-        self._base_url = base_url or config.base_url
-        self._api_key = api_key or config.auth.api_key
+        configured_base_url, configured_api_key = config.resolve_memory_connection()
+        self._base_url = base_url or configured_base_url
+        self._api_key = api_key or configured_api_key
         self._user_id = user_id or config.defaults.user_id
         self._app_id = app_id
         self._agent_id = agent_id
@@ -53,14 +53,23 @@ class MindMemOSClient:
             max_retries=config.network.max_retries,
         )
 
-        self.skills = SkillManager.from_config_manager(manager, SkillCloudClient(self._transport))
+        skill_base_url, skill_api_key = config.resolve_skill_connection(
+            memory_base_url=self._base_url, memory_api_key=self._api_key
+        )
+        self._skill_transport = skill_transport or HttpTransport(
+            base_url=skill_base_url,
+            api_key=skill_api_key,
+            timeout_seconds=config.network.timeout_seconds,
+            max_retries=0,
+            require_api_key=False,
+        )
+        self.skills = SkillClient(self._skill_transport)
         self.memory = MemoryClient(
             self._transport,
             default_user_id=self._user_id,
             default_app_id=self._app_id,
             default_agent_id=self._agent_id,
             default_session_id=self._session_id,
-            skill_manager=self.skills,
         )
 
     def require_api_key(self) -> str:
@@ -72,6 +81,7 @@ class MindMemOSClient:
     def close(self) -> None:
         """Release underlying transport resources."""
         self._transport.close()
+        self._skill_transport.close()
 
     def __enter__(self) -> MindMemOSClient:
         return self

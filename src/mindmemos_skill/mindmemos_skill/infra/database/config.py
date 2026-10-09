@@ -7,7 +7,7 @@ from sqlalchemy.engine import make_url
 class SQLiteConfig(BaseModel):
     """Configure a local SQLite database."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown settings."""
 
     url: str = "sqlite+pysqlite:///./data/mindmemos.db"
@@ -28,7 +28,7 @@ class SQLiteConfig(BaseModel):
 class PostgresConfig(BaseModel):
     """Configure a PostgreSQL database with pgvector installed."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown settings."""
 
     url: str = Field(repr=False)

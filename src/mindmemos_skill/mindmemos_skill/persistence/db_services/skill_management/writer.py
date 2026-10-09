@@ -6,12 +6,12 @@ from collections.abc import Mapping
 from uuid import UUID
 
 from ....common.time_utils import utcnow
+from ....errors import GraphNotFoundError
 from ....infra.database import Database
 from ....skill import Skill
 from ...constants import (
     SKILL_GRAPH_EDGES_TABLE,
     SKILL_GRAPH_NODES_TABLE,
-    SKILL_GRAPH_REVISIONS_TABLE,
     SKILL_GRAPH_VERSIONS_TABLE,
     SKILL_GRAPHS_TABLE,
 )
@@ -20,7 +20,6 @@ from .typing import (
     SkillGraphEdgeRecord,
     SkillGraphNodeRecord,
     SkillGraphRecord,
-    SkillGraphRevisionRecord,
     SkillGraphVersionRecord,
 )
 
@@ -44,7 +43,15 @@ class SkillGraphStore:
     """
 
     def __init__(
-        self, database: Database, *, project_id: str, graph_id: str, actor_id: str, version_ids: Mapping[str, str]
+        self,
+        database: Database,
+        *,
+        project_id: str,
+        graph_id: str,
+        actor_id: str,
+        version_ids: Mapping[str, str],
+        alias: str | None = None,
+        message: str | None = None,
     ):
         """Borrow storage and freeze the scheduler's version bindings.
 
@@ -52,8 +59,10 @@ class SkillGraphStore:
             database: Initialized database containing the existing graph tables.
             project_id: Project boundary applied to every read and write.
             graph_id: Graph identity within that project.
+            alias: Project-unique shortcut for the graph.
             actor_id: Caller identity recorded for publication provenance.
             version_ids: Collection member ID to exact persisted version ID.
+            message: Optional explanation recorded with a successful publication.
         """
         if any(not value.strip() for value in (project_id, graph_id, actor_id)):
             raise ValueError("Project, graph, and actor IDs must be nonempty")
@@ -62,7 +71,9 @@ class SkillGraphStore:
         self.database = database
         self.project_id = project_id
         self.graph_id = graph_id
+        self.alias = alias or graph_id
         self.actor_id = actor_id
+        self.message = message
         self._version_ids = dict(version_ids)
 
     @property
@@ -105,15 +116,23 @@ class SkillGraphStore:
         return SkillGraphNodeRecord(**self.scope, graph_version_id=snapshot_id, **data)
 
     def find(self, request_hash: str) -> UUID | None:
-        """Find a previously committed build without selecting stored Skills.
+        """Find a committed build that is already the graph's current snapshot.
 
         Args:
             request_hash: Hash of the complete explicit source scope and settings.
+
+        Returns:
+            Current matching snapshot, or None to use transactional publication.
         """
+        graph = self.database.get(SKILL_GRAPHS_TABLE, self.scope)
+        if graph is not None and graph["is_deleted"]:
+            raise GraphNotFoundError("Graph not found")
         rows = self.database.select(
-            SKILL_GRAPH_REVISIONS_TABLE, filters={**self.scope, "idempotency_key": request_hash}, limit=1
+            SKILL_GRAPH_VERSIONS_TABLE, filters={**self.scope, "request_hash": request_hash, "status": "ready"}, limit=1
         )
-        return rows[0]["graph_version_id"] if rows else None
+        if rows and graph is not None and graph["current_version_id"] == rows[0]["graph_version_id"]:
+            return rows[0]["graph_version_id"]
+        return None
 
     def publish(
         self,
@@ -170,25 +189,48 @@ class SkillGraphStore:
             }
         )
         with self.database.transaction() as transaction:
-            transaction.upsert(SKILL_GRAPHS_TABLE, [SkillGraphRecord(**self.scope, name=self.graph_id).model_dump()])
-            # Acquire the graph row's write lock before allocating its revision.
+            transaction.upsert(
+                SKILL_GRAPHS_TABLE,
+                [
+                    SkillGraphRecord(
+                        **self.scope,
+                        public_id=self.graph_id,
+                        alias=self.alias,
+                        name=self.alias,
+                    ).model_dump(),
+                ],
+            )
+            # Start with a write to avoid upgrading a stale SQLite read snapshot.
+            existing = transaction.get(SKILL_GRAPHS_TABLE, self.scope)
+            if existing is not None and existing["is_deleted"]:
+                raise GraphNotFoundError("Graph not found")
+            # Acquire the graph row's write lock before selecting a new snapshot.
             transaction.update(SKILL_GRAPHS_TABLE, {"updated_at": utcnow()}, filters=self.scope)
             previous = transaction.select(
-                SKILL_GRAPH_REVISIONS_TABLE, filters={**self.scope, "idempotency_key": request_hash}, limit=1
+                SKILL_GRAPH_VERSIONS_TABLE,
+                filters={**self.scope, "request_hash": request_hash, "status": "ready"},
+                limit=1,
             )
             if previous:
+                transaction.update(
+                    SKILL_GRAPHS_TABLE,
+                    {"current_version_id": previous[0]["graph_version_id"], "updated_at": utcnow()},
+                    filters=self.scope,
+                )
                 return previous[0]["graph_version_id"]
-            graph = transaction.select(SKILL_GRAPHS_TABLE, filters=self.scope, limit=1)[0]
-            revision = (graph["current_revision"] or 0) + 1
             ready_at = utcnow()
             version = SkillGraphVersionRecord(
                 **self.scope,
                 graph_version_id=snapshot_id,
+                public_version_id=f"skgv-{snapshot_id.hex}",
                 status="ready",
                 node_count=len(nodes),
                 edge_count=len(edges),
                 vector_count=sum(node.embedding is not None for node in nodes),
                 snapshot_hash=digest,
+                request_hash=request_hash,
+                actor_id=self.actor_id,
+                message=self.message,
                 metadata=metadata,
                 created_at=ready_at,
                 ready_at=ready_at,
@@ -202,18 +244,8 @@ class SkillGraphStore:
                 transaction.insert(SKILL_GRAPH_NODES_TABLE, scene_nodes)
             if edges:
                 transaction.insert(SKILL_GRAPH_EDGES_TABLE, [edge.model_dump() for edge in edges])
-            publication = SkillGraphRevisionRecord(
-                **self.scope,
-                revision=revision,
-                graph_version_id=snapshot_id,
-                idempotency_key=request_hash,
-                request_hash=request_hash,
-                action="build",
-                actor_id=self.actor_id,
-            )
-            transaction.insert(SKILL_GRAPH_REVISIONS_TABLE, [publication.model_dump()])
             transaction.update(
-                SKILL_GRAPHS_TABLE, {"current_revision": revision, "updated_at": utcnow()}, filters=self.scope
+                SKILL_GRAPHS_TABLE, {"current_version_id": snapshot_id, "updated_at": utcnow()}, filters=self.scope
             )
         return snapshot_id
 
@@ -234,6 +266,9 @@ class SkillGraphStore:
         Args:
             snapshot_id: Exact committed graph identity, never the mutable head.
         """
+        graph = self.database.get(SKILL_GRAPHS_TABLE, self.scope)
+        if graph is None or graph["is_deleted"]:
+            raise GraphNotFoundError("Graph not found")
         versions = self._rows(SKILL_GRAPH_VERSIONS_TABLE, snapshot_id)
         if not versions or versions[0]["status"] != "ready":
             raise ValueError("Ready graph snapshot not found")

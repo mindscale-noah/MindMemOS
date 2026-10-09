@@ -7,6 +7,7 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "datasets>=5.0.0",
     "mindmemos-sdk>=0.1.0",
+    "mindmemos-skill",
     "nltk>=3.9.4",
     "openai>=2.37.0",
     "openpyxl>=3.1.5",

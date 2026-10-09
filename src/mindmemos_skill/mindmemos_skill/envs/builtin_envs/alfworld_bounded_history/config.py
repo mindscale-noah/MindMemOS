@@ -10,7 +10,7 @@ from ....agents.buitin_agents.openai_chat.config import OpenAIChatConfig
 class ALFWorldDataConfig(BaseModel):
     """Load fixed game IDs without importing the simulator."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown source settings."""
 
     data_path: Path
@@ -23,7 +23,7 @@ class ALFWorldDataConfig(BaseModel):
 class ALFWorldConfig(BaseModel):
     """Configure one independent simulator and its answering model."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unrecorded runtime settings."""
 
     agent: OpenAIChatConfig

@@ -52,7 +52,6 @@ class RunContext:
         }
 
 
-
 @dataclass(frozen=True)
 class BenchmarkSpec:
     """Normalized config for one benchmark."""
@@ -97,8 +96,6 @@ class RunnerConfig:
     judge_llm_model: str | None = None
     judge_llm_api_key: str | None = None
     judge_llm_base_url: str | None = None
-
-
 
 
 class BenchmarkAdapter(Protocol):

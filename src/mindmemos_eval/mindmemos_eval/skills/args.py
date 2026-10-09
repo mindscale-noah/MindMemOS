@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 
 DEFAULT_SPREADSHEETBENCH_DATA_URL = (
     "https://huggingface.co/datasets/KAKA22/SpreadsheetBench/resolve/main/spreadsheetbench_verified_400.tar.gz"
@@ -16,7 +15,7 @@ def add_common_skill_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--run-dir",
         metavar="PATH",
-        help="Directory where benchmark workdirs, summaries, trajectories, and evolution events are written.",
+        help="Directory where benchmark workdirs, summaries and trajectories are written.",
     )
     parser.add_argument(
         "--trajectory-path",
@@ -50,21 +49,21 @@ def add_openai_llm_args(parser: argparse.ArgumentParser) -> None:
     """Register OpenAI-compatible agent LLM arguments."""
     parser.add_argument(
         "--model",
-        default=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
+        default="gpt-5.4-mini",
         metavar="MODEL",
         help="OpenAI-compatible model name used by the benchmark agent.",
     )
     parser.add_argument(
         "--api-key",
-        default=os.getenv("OPENAI_API_KEY"),
+        default=None,
         metavar="KEY",
-        help="API key for the benchmark agent LLM; defaults to OPENAI_API_KEY.",
+        help="Explicit API key for the benchmark agent LLM; no environment fallback.",
     )
     parser.add_argument(
         "--base-url",
-        default=os.getenv("OPENAI_ENDPOINT"),
+        default=None,
         metavar="URL",
-        help="OpenAI-compatible base URL for the benchmark agent LLM; defaults to OPENAI_ENDPOINT.",
+        help="Explicit OpenAI-compatible base URL for the benchmark agent LLM; no environment fallback.",
     )
     parser.add_argument(
         "--temperature",
@@ -79,39 +78,6 @@ def add_openai_llm_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar="N",
         help="Maximum output tokens per benchmark agent LLM call; must be parseable as an integer.",
-    )
-
-
-def add_skill_evolution_args(parser: argparse.ArgumentParser) -> None:
-    """Register MindMemOS skill-evolution service arguments."""
-    parser.add_argument(
-        "--evolve",
-        action="store_true",
-        help="Whether to trigger skill evolution after each batch of tasks; omit for no-evolution baseline.",
-    )
-    parser.add_argument(
-        "--evolve-every",
-        type=int,
-        default=1,
-        metavar="N",
-        help="Number of tasks per evolution batch; must be parseable as an integer and is clamped to at least 1.",
-    )
-    parser.add_argument(
-        "--evolution-base-url",
-        default=os.getenv("MINDMEMOS_BASE_URL"),
-        metavar="URL",
-        help="MindMemOS FastAPI base URL hosting /v1/skills/evolve; required for real evolution.",
-    )
-    parser.add_argument(
-        "--evolution-api-key",
-        default=os.getenv("MINDMEMOS_API_KEY"),
-        metavar="KEY",
-        help="MindMemOS API key used for skill registration, memory trace recording, and evolution calls.",
-    )
-    parser.add_argument(
-        "--continue-on-evolution-error",
-        action="store_true",
-        help="Whether to log evolution failures and continue instead of failing the run.",
     )
 
 
@@ -161,4 +127,3 @@ def add_spreadsheetbench_args(parser: argparse.ArgumentParser) -> None:
         help="Python executable path used by the agent shell tool inside case workdirs.",
     )
     add_openai_llm_args(parser)
-    add_skill_evolution_args(parser)

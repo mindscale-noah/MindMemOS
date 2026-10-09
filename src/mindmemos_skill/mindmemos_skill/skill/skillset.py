@@ -1,12 +1,11 @@
 """Task-time selection and bounded parallel assembly of Skill collections."""
 
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
+from ..common.asyncio import map_sync_bounded, run_sync
 from .skill import Skill
 from .typing import SkillSetIdentity
 
@@ -17,7 +16,7 @@ if TYPE_CHECKING:
 class SkillSet:
     """Select collection members without depending on their assembly internals."""
 
-    def __init__(self, skills: Mapping[str, Skill], *, max_concurrency: int):
+    def __init__(self, skills: Mapping[str, Skill], *, max_concurrency: int = 1):
         """Retain an ordered candidate scope and an explicit assembly limit.
 
         Args:
@@ -71,7 +70,7 @@ class SkillSet:
         """
         return list(self._skills)
 
-    def assemble(self, task: "Task", *, selected_ids: list[str] | None = None) -> list[Skill]:
+    async def assemble(self, task: "Task", *, selected_ids: list[str] | None = None) -> list[Skill]:
         """Select members and assemble them concurrently in selection order.
 
         Args:
@@ -88,19 +87,14 @@ class SkillSet:
             TypeError: A member does not return a complete Skill.
             Exception: Selection or assembly fails; no partial result is returned.
         """
-        selected = list(self.select(task) if selected_ids is None else selected_ids)
+        selected = list(await run_sync(self.select, task) if selected_ids is None else selected_ids)
         if len(set(selected)) != len(selected) or any(key not in self._skills for key in selected):
             raise ValueError("Selection must contain unique IDs from the candidate scope")
         if not selected:
             return []
-        with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(selected))) as executor:
-            futures = [executor.submit(copy_context().run, self._skills[key].assemble, task) for key in selected]
-            try:
-                assembled = [future.result() for future in futures]
-                if any(not isinstance(skill, Skill) for skill in assembled):
-                    raise TypeError("Skill.assemble(task) must return a complete Skill")
-                return assembled
-            except BaseException:
-                for future in futures:
-                    future.cancel()
-                raise
+        assembled = await map_sync_bounded(
+            lambda key: self._skills[key].assemble(task), selected, concurrency=self.max_concurrency
+        )
+        if any(not isinstance(skill, Skill) for skill in assembled):
+            raise TypeError("Skill.assemble(task) must return a complete Skill")
+        return assembled

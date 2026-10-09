@@ -49,6 +49,7 @@ uv pip install --python .venv/bin/python -e 'src/mindmemos_skill[agentskillos]'
 ## Python 接入 skill_manage
 
 ```python
+import asyncio
 from pathlib import Path
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.data import Data
@@ -68,10 +69,10 @@ selection = SkillManageSkillSet(skills, algorithm=manager, limit=5, max_concurre
 results, errors = {}, {}
 for index, sample in enumerate(samples):
     try:
-        results[sample.task.id] = env.rollout(
+        results[sample.task.id] = asyncio.run(env.rollout(
             sample.task, Path("outputs/agentskillos/run-001") / f"task-{index:04d}",
             reward_data=sample.reward_data, skill_set=selection,
-        )
+        ))
     except Exception as exc:
         errors[sample.task.id] = f"{type(exc).__name__}: {exc}"
 summary = summarize_results(results, errors)
@@ -87,7 +88,7 @@ SkillSet 的选择顺序保持不变，逐个调用 `Skill.export()` 导出完�
 
 ## 批量运行入口
 
-将环境配置保存为 JSON，例如 `config/mindmemos_skill/agentskillos/local.json`：
+将环境配置保存为 JSON，例如 `/path/to/agentskillos.json`：
 
 ```json
 {
@@ -96,18 +97,18 @@ SkillSet 的选择顺序保持不变，逐个调用 `Skill.export()` 导出完�
 }
 ```
 
-凭据使用现有 `MINDMEMOS_AGENT_API_KEY` / `MINDMEMOS_AGENT_BASE_URL` 配置机制。
+凭据和地址在 Agent config 的 `api_key`、`base_url` 字段中显式提供，不读取环境变量。
 不要把真实凭据写入提交的配置文件。CLI 本身不读取 `.env`，需要在调用前导出环境变量。
 
 ```bash
 # Baseline without Skills
 PYTHONPATH=src/mindmemos_skill .venv/bin/python scripts/agentskillos/run.py \
-  --config config/mindmemos_skill/agentskillos/local.json \
+  --config /path/to/agentskillos.json \
   --selection none --output outputs/agentskillos/no-skills-001
 
 # Execute the first 5 entries of a previously generated skill_manage ranking
 PYTHONPATH=src/mindmemos_skill .venv/bin/python scripts/agentskillos/run.py \
-  --config config/mindmemos_skill/agentskillos/local.json \
+  --config /path/to/agentskillos.json \
   --selection rankings --skills data/agentskillos_eval/skill_pool_200 \
   --rankings outputs/retrieval/rankings.json --limit 5 \
   --output outputs/agentskillos/skill-manage-001

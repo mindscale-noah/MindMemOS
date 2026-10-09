@@ -17,7 +17,6 @@ from tqdm.auto import tqdm
 from ..llm import LLMClient, LLMConfig
 from .agents import ReactAgentFactory, RunResult
 from .args import add_common_skill_args, add_spreadsheetbench_args
-from .evolve import FastAPISkillEvolutionClient, NoopSkillEvolutionClient, SkillEvolutionClient
 
 SkillArgRegistrar = Callable[[argparse.ArgumentParser], None]
 
@@ -38,16 +37,13 @@ class SkillRunConfig:
     split: str = "all"
     limit: int | None = None
     seed: int | None = None
-    evolve: bool = False
-    evolve_every: int = 1
-    stop_on_evolution_error: bool = True
     show_progress: bool = False
     concurrency: int = 1
 
 
 SKILL_BENCHMARKS = {
     "spreadsheetbench": SkillBenchmark(
-        help="Run SpreadsheetBench skill self-evolution evaluation.",
+        help="Run SpreadsheetBench skill evaluation.",
         add_args=add_spreadsheetbench_args,
         env_builder="mindmemos_eval.skills.envs.spreadsheetbench.env:build_env",
     ),
@@ -78,10 +74,23 @@ def add_skill_args(parser: argparse.ArgumentParser) -> None:
         )
         benchmark.add_args(subparser)
         subparser.set_defaults(env_builder=benchmark.env_builder)
+    local = subparsers.add_parser("local", help="Run a local Skill training and test benchmark.")
+    local.add_argument("--config", required=True, metavar="YAML", help="Single-run evaluation YAML.")
+    local.add_argument("--output-dir", required=True, metavar="PATH", help="Isolated output and recovery directory.")
+    local.add_argument("--preflight-only", action="store_true", help="Validate inputs without creating a service.")
 
 
 def run_skill_benchmark(args: argparse.Namespace) -> int:
     """Run the selected skill benchmark environment."""
+    if args.benchmark == "local":
+        from .local import run_local_eval
+
+        report = asyncio.run(run_local_eval(args.config, args.output_dir, preflight_only=args.preflight_only))
+        if report is None:
+            print("Local Skill evaluation preflight passed.")
+        else:
+            print(f"Local Skill evaluation complete: {args.output_dir}/summary.json")
+        return 0
     env = _load_attr(args.env_builder)(args)
     llm_config = LLMConfig(
         model=args.model,
@@ -96,58 +105,28 @@ def run_skill_benchmark(args: argparse.Namespace) -> int:
         skill_sources=args.skill or [],
         python_path=args.python_path,
     )
-    evolver = _build_evolver(args, env.name)
     config = SkillRunConfig(
         limit=args.limit,
         seed=args.seed,
-        evolve=args.evolve,
-        evolve_every=args.evolve_every,
-        stop_on_evolution_error=not args.continue_on_evolution_error,
         show_progress=args.progress,
         concurrency=args.concurrency or getattr(env, "default_concurrency", 1),
     )
-    result = asyncio.run(_run_and_close(env, agent_factory, evolver, config))
+    result = asyncio.run(SkillEvalRunner(env, agent_factory, config).run())
     _print_result(args.benchmark, env, result, seed=args.seed)
     return 0
 
 
-async def _run_and_close(
-    env: Any,
-    agent_factory: ReactAgentFactory,
-    evolver: SkillEvolutionClient,
-    config: SkillRunConfig,
-) -> Any:
-    try:
-        return await SkillEvalRunner(env, agent_factory, evolver, config).run()
-    finally:
-        await evolver.aclose()
-
-
-def _build_evolver(args: argparse.Namespace, benchmark_name: str) -> SkillEvolutionClient:
-    if args.evolve and args.evolution_base_url:
-        return FastAPISkillEvolutionClient(
-            args.evolution_base_url,
-            api_key=args.evolution_api_key,
-            transcript_metadata={"benchmark": benchmark_name},
-        )
-    if args.evolve:
-        print(f"{benchmark_name}: --evolve set without --evolution-base-url; running with no-op evolution.")
-    return NoopSkillEvolutionClient()
-
-
 class SkillEvalRunner:
-    """Run one benchmark env with one agent factory and one evolution algorithm."""
+    """Run one benchmark environment with an agent factory."""
 
     def __init__(
         self,
         env: Any,
         agent_factory: ReactAgentFactory,
-        evolver: SkillEvolutionClient,
         config: SkillRunConfig,
     ) -> None:
         self.env = env
         self.agent_factory = agent_factory
-        self.evolver = evolver
         self.config = config
 
     async def run(self) -> Any:
@@ -156,9 +135,7 @@ class SkillEvalRunner:
             random.Random(self.config.seed).shuffle(cases)
         if self.config.limit is not None:
             cases = cases[: self.config.limit]
-        if self.config.evolve:
-            results = await self._run_with_evolution(cases)
-        elif self.config.concurrency > 1:
+        if self.config.concurrency > 1:
             results = await self._run_concurrent(cases)
         else:
             results = await self._run_online(cases)
@@ -242,90 +219,6 @@ class SkillEvalRunner:
             progress.close()
         return [result for result in results if result is not None]
 
-    async def _run_with_evolution(self, cases: list[Any]) -> list[Any]:
-        live_skills = self.agent_factory.stage_live_skills(self.env.run_dir)
-        await self.evolver.prepare(live_skills)
-
-        batch_size = max(1, self.config.evolve_every)
-        total_batches = (len(cases) + batch_size - 1) // batch_size
-        results: list[Any] = []
-        progress = tqdm(total=len(cases), desc=self.env.name, unit="task", disable=not self.config.show_progress)
-        correct = 0
-        completed_total = 0
-        try:
-            for batch_index, start in enumerate(range(0, len(cases), batch_size)):
-                batch = cases[start : start + batch_size]
-                batch_done = 0
-                batch_label = f"{batch_index + 1}/{total_batches}"
-
-                def update_progress(result: Any) -> None:
-                    nonlocal batch_done, completed_total, correct
-                    batch_done += 1
-                    completed_total += 1
-                    if result.score >= 1.0:
-                        correct += 1
-                    progress.update(1)
-                    progress.set_postfix(
-                        batch=batch_label,
-                        batch_done=f"{batch_done}/{len(batch)}",
-                        correct=correct,
-                        score=f"{correct / completed_total:.4f}",
-                        last=result.case_id,
-                    )
-
-                progress.set_postfix(
-                    batch=batch_label,
-                    batch_done=f"0/{len(batch)}",
-                    correct=correct,
-                    score=f"{correct / completed_total:.4f}" if completed_total else "0.0000",
-                )
-                progress.refresh()
-                batch_results = await self._run_cases_concurrently(batch, concurrency=len(batch), on_result=update_progress)
-                for result in batch_results:
-                    results.append(result)
-                    self.env.append_trajectory(result)
-                await self._evolve_batch(batch, batch_index, start, batch_results)
-        finally:
-            progress.close()
-        return results
-
-    async def _evolve_batch(
-        self,
-        batch: list[Any],
-        batch_index: int,
-        batch_start: int,
-        batch_results: list[Any],
-    ) -> None:
-        evolution_started_at = time.time()
-        try:
-            await asyncio.gather(*(self.evolver.record_case(result) for result in batch_results))
-            outcomes = await self.evolver.evolve()
-            self.env.append_evolution_event(
-                split=batch[0].split if batch else self.config.split,
-                batch_index=batch_index,
-                batch_start=batch_start,
-                batch_end=batch_start + len(batch),
-                batch_results=batch_results,
-                started_at=evolution_started_at,
-                ended_at=time.time(),
-                outcomes=outcomes,
-            )
-            self._log_evolution(outcomes)
-        except Exception as exc:
-            self.env.append_evolution_event(
-                split=batch[0].split if batch else self.config.split,
-                batch_index=batch_index,
-                batch_start=batch_start,
-                batch_end=batch_start + len(batch),
-                batch_results=batch_results,
-                started_at=evolution_started_at,
-                ended_at=time.time(),
-                outcomes=[],
-                error=exc,
-            )
-            if self.config.stop_on_evolution_error:
-                raise
-
     async def _run_cases_concurrently(
         self,
         cases: list[Any],
@@ -348,34 +241,9 @@ class SkillEvalRunner:
                 on_result(result)
         return [result for result in results if result is not None]
 
-    def _log_evolution(self, outcomes: list[Any]) -> None:
-        for outcome in outcomes:
-            if outcome.evolved:
-                message = (
-                    f"[evolve] {outcome.skill_name}: minted {len(outcome.new_version_ids or [])} "
-                    f"version(s) -> {outcome.new_version_id} "
-                    f"(consumed {outcome.consumed_count}/{outcome.pending_count} pending)"
-                )
-            elif outcome.pending_count >= outcome.threshold:
-                message = (
-                    f"[evolve] {outcome.skill_name}: mint failed "
-                    f"({outcome.pending_count} pending >= {outcome.threshold}, "
-                    f"summarized {outcome.summarized_count}, 0 versions minted)"
-                )
-            else:
-                message = f"[evolve] {outcome.skill_name}: below threshold ({outcome.pending_count}/{outcome.threshold})"
-            if self.config.show_progress:
-                tqdm.write(message)
-            else:
-                print(message)
-
 
 def _print_result(benchmark: str, env: Any, result: Any, *, seed: int | None) -> None:
-    print(
-        f"{benchmark} result: "
-        f"total={result.total} correct={result.correct} score={result.accuracy:.4f} "
-        f"seed={seed}"
-    )
+    print(f"{benchmark} result: total={result.total} correct={result.correct} score={result.accuracy:.4f} seed={seed}")
     print(
         json.dumps(
             {
@@ -384,7 +252,6 @@ def _print_result(benchmark: str, env: Any, result: Any, *, seed: int | None) ->
                 "run_dir": result.run_dir,
                 "summary": f"{result.split}_summary.json",
                 "trajectories": str(env.trajectory_path(result.split)),
-                "evolution_events": str(env.evolution_events_path(result.split)),
                 "score": result.accuracy,
             },
             ensure_ascii=False,

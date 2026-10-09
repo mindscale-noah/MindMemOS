@@ -2,6 +2,7 @@
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     Column,
     ForeignKeyConstraint,
@@ -11,11 +12,12 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    false,
 )
 
 from ....infra.database import TableSpec
 from ....infra.database.typing import UTCDateTime
-from ...constants import SKILL_VERSION_LABEL_INDEX, SKILL_VERSIONS_TABLE, SKILLS_TABLE
+from ...constants import SKILL_LIST_CURSOR_INDEX, SKILL_VERSION_LABEL_INDEX, SKILL_VERSIONS_TABLE, SKILLS_TABLE
 from .typing import SkillRecord, SkillVersionRecord
 
 
@@ -36,30 +38,27 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             "version_id",
             Text,
             primary_key=True,
-            comment="Local version identity; never inferred from a remote version ID.",
+            comment="Immutable Skill version identity.",
         ),
         Column("skill_id", Text, nullable=False, comment="Local Skill family shared by all of its versions."),
         Column("name", Text, nullable=False, comment="Human-readable Skill name."),
-        Column("description", Text, nullable=True, comment="Optional explanation of the Skill."),
+        Column("description", Text, nullable=False, comment="Immutable version description."),
+        Column("standard_format", Boolean, nullable=False, comment="Require standard frontmatter."),
         Column(
             "parent_version_ids",
             JSON,
             nullable=False,
-            comment="Ordered local parent IDs; remote single-parent projection is separate.",
+            comment="Ordered parent version identities.",
         ),
         Column(
-            "bundle",
+            "content",
             Text,
             nullable=False,
-            comment="Serialized Skill bundle, preserved without cloud-specific rewriting.",
+            comment="Exact SKILL.md text with original newlines.",
         ),
-        Column("resources", Text, nullable=False, comment="Serialized auxiliary files outside the Skill bundle."),
-        Column(
-            "content_hash", Text, nullable=False, comment="Hash of the local canonical bundle; not the remote hash."
-        ),
-        Column(
-            "local_snapshot_hash", Text, nullable=True, comment="Optional hash including local auxiliary resources."
-        ),
+        Column("resources", JSON, nullable=False, comment="Relative paths and Base64 resource bytes."),
+        Column("content_hash", Text, nullable=False, comment="Hash of the exact UTF-8 document."),
+        Column("skill_hash", Text, nullable=False, comment="Hash of complete content and resources."),
         Column("implementation", Text, nullable=False, comment="Registered concrete Skill implementation name."),
         Column(
             "config_schema_version", Integer, nullable=False, comment="Version of the fixed Skill configuration format."
@@ -68,9 +67,9 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             "config",
             JSON,
             nullable=False,
-            comment="Fixed Skill implementation options; mutable content belongs in bundle.",
+            comment="Fixed Skill implementation options; mutable content belongs in content.",
         ),
-        Column("status", Text, nullable=False, comment="Local lifecycle state; remote lifecycle is stored separately."),
+        Column("status", Text, nullable=False, comment="Skill version lifecycle state."),
         Column("version_revision", Integer, nullable=False, comment="Local metadata revision for conditional updates."),
         Column(
             "version_label",
@@ -88,7 +87,8 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         Index("skill_versions_owner_version_uq", "project_id", "skill_id", "version_id", unique=True),
         CheckConstraint("length(project_id) > 0"),
         Index("skill_versions_family_idx", "project_id", "skill_id", "created_at", "version_id"),
-        Index("skill_versions_content_idx", "content_hash"),
+        Index("skill_versions_content_idx", "project_id", "content_hash"),
+        Index("skill_versions_skill_hash_idx", "project_id", "skill_hash"),
         Index(SKILL_VERSION_LABEL_INDEX, "project_id", "skill_id", "version_label", unique=True),
         CheckConstraint("version_revision >= 0 AND config_schema_version >= 1"),
     )
@@ -99,16 +99,25 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         Column("skill_id", Text, primary_key=True, comment="Stable central identity independent of paths."),
         Column("name", Text, nullable=False, comment="Mutable display name; not a unique identity."),
         Column("alias", Text, nullable=True, comment="Optional exact-match shortcut unique within the project."),
+        Column("metadata", JSON, nullable=False, comment="Mutable user metadata belonging to the Skill family."),
         Column("registration_source", Text, nullable=True, comment="Initial source for provenance; never watched."),
         Column("registration_message", Text, nullable=True, comment="Initial registration explanation."),
         Column(
-            "current_version_id", Text, nullable=False, comment="Only selected version for default reads and exports."
+            "active_version_id", Text, nullable=False, comment="Only selected version for default reads and exports."
         ),
         Column("created_at", UTCDateTime(), nullable=False, comment="Central registration time."),
         Column("updated_at", UTCDateTime(), nullable=False, comment="Last metadata or selected-version change."),
+        Column(
+            "is_deleted",
+            Boolean,
+            nullable=False,
+            server_default=false(),
+            comment="Hide this family after soft deletion.",
+        ),
+        Column("deleted_at", UTCDateTime(), nullable=True, comment="Soft deletion time; None while visible."),
         UniqueConstraint("project_id", "alias"),
         ForeignKeyConstraint(
-            ["project_id", "skill_id", "current_version_id"],
+            ["project_id", "skill_id", "active_version_id"],
             [
                 f"{SKILL_VERSIONS_TABLE}.project_id",
                 f"{SKILL_VERSIONS_TABLE}.skill_id",
@@ -117,9 +126,10 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
             ondelete="RESTRICT",
         ),
         CheckConstraint("length(project_id) > 0 AND length(skill_id) > 0 AND length(name) > 0"),
-        CheckConstraint("length(current_version_id) > 0"),
+        CheckConstraint("length(active_version_id) > 0"),
         CheckConstraint("alias IS NULL OR length(alias) > 0"),
         CheckConstraint("updated_at >= created_at"),
+        Index(SKILL_LIST_CURSOR_INDEX, "project_id", "created_at", "skill_id"),
     )
     return (
         TableSpec(name=SKILL_VERSIONS_TABLE, table=table, insert_model=SkillVersionRecord),

@@ -9,10 +9,10 @@ This guide explains how to run the three standard benchmarks (LoCoMo, LongMemEva
 ### 1. Start dependency services
 
 ```bash
-make db          # starts Qdrant / Neo4j / Kafka / ClickHouse / Grafana
+make docker SERVICE=memory          # starts Qdrant / Neo4j / Kafka / ClickHouse / Grafana
 ```
 
-> **Important**: If you previously ran `make db-clean` (which deletes all volumes), you must also restart the MindMemOS server. Otherwise the server's stale connection pool will cause search requests to return HTTP 500.
+> **Important**: `make clean` stops managed applications and deletes Compose volumes after confirmation. Start the services again before evaluation. Restart any manually launched server too, so it does not reuse stale database connections.
 
 ### 2. Start the MindMemOS server
 
@@ -23,11 +23,11 @@ uv run uvicorn mindmemos.api.app:app --host 127.0.0.1 --port 8000
 ### 3. Configure LLM API keys
 
 The **add** stage LLM calls are made by the **server** using the keys in `config/mindmemos/dev.yaml`.
-The **answer** and **judge** stage LLM calls are made directly by the **eval process** using the keys in `config/mindmemos_eval/memory_evaluation_locomo.example.yaml` (or `memory_evaluation_personamem.example.yaml`).
+The **answer** and **judge** stage LLM calls are made directly by the **eval process** using the keys in `config/mindmemos_eval/memory_evaluation/locomo.example.yaml` (or `config/mindmemos_eval/memory_evaluation/personamem.example.yaml`).
 These two key sets are completely independent and must be configured separately.
 
 ```yaml
-# config/mindmemos_eval/memory_evaluation_locomo.yaml
+# config/mindmemos_eval/memory_evaluation/locomo.yaml
 runner:
   llm:
     model: gpt-4.1-mini
@@ -63,7 +63,7 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 
 Run the following commands from the repository root with Python 3.12+. Dataset payloads are not
 included in this repository. The shared downloader retrieves official releases at the revisions
-recorded in [`config/datasets/sources.json`](../../config/datasets/sources.json).
+recorded in [`config/presets/dataset_download_sources.json`](../../config/presets/dataset_download_sources.json).
 
 ```bash
 python -m pip install huggingface_hub
@@ -86,7 +86,7 @@ Downloads default to `data/mindmemos_memory/<dataset>/` and preserve the officia
 Copy the evaluation config, then update the paths and LLM keys in your local copy:
 
 ```bash
-cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+cp config/mindmemos_eval/memory_evaluation/locomo.example.yaml config/mindmemos_eval/memory_evaluation/locomo.yaml
 ```
 
 ```yaml
@@ -101,7 +101,7 @@ benchmarks:
 ```
 
 For PersonaMem, use a question file and context file with the same context size; update the same
-fields when using `memory_evaluation_personamem.yaml`. LongMemEval downloads the official cleaned
+fields when using `config/mindmemos_eval/memory_evaluation/personamem.yaml`. LongMemEval downloads the official cleaned
 release, not the local smoke fixture previously referenced by the example config.
 MemoryAgentBench remains in official Parquet format: the current evaluator's local `dataset` input
 accepts JSON/JSONL, so convert the required partition before setting that path. The downloader does
@@ -130,7 +130,7 @@ Use `--limit 2` to minimize data volume and verify the full pipeline end-to-end:
 
 ```bash
 uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation/locomo.yaml \
   --benchmark-list locomo,longmemeval,personamem \
   --manifest-output reports/smoke_vanilla.jsonl \
   --api-key-output config/mindmemos/eval_api_keys.yaml \
@@ -157,7 +157,7 @@ All three benchmarks are executed sequentially in a single command to avoid `api
 
 ```bash
 caffeinate -si uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation/locomo.yaml \
   --benchmark-list locomo,longmemeval,personamem \
   --manifest-output reports/vanilla_run.jsonl \
   --api-key-output config/mindmemos/eval_api_keys.yaml \
@@ -182,7 +182,7 @@ place). ``--reuse-api-key`` reuses exactly one project, so pass a single benchma
 
 ```bash
 caffeinate -si uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation/locomo.yaml \
   --benchmark-list locomo \
   --manifest-output reports/vanilla_run_retry.jsonl \
   --reuse-api-key config/mindmemos/eval_api_keys.yaml \

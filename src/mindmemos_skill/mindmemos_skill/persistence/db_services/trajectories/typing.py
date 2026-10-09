@@ -1,5 +1,7 @@
 """Validated records owned by this business data service."""
 
+from typing import Literal
+
 from pydantic import AwareDatetime, Field, FiniteFloat, JsonValue, model_validator
 
 from ....common.time_utils import utcnow
@@ -10,16 +12,19 @@ class TrajectoryRecord(RecordModel):
     """Complete insertable record for trajectories."""
 
     project_id: str = Field(min_length=1)
-    """Project that owns this physical rollout attempt."""
+    """Project that owns this physical trajectory attempt."""
 
     trajectory_id: str = Field(min_length=1)
     """Local identity of one physical rollout attempt."""
 
     trajectory_hash: str = Field(min_length=1)
-    """Hash of the local trajectory representation."""
+    """Hash of the ordered local events or reported messages."""
+
+    source: Literal["local", "reported"] = "local"
+    """Whether this attempt was collected locally or reported by a Harness."""
 
     task_id: str = Field(min_length=1)
-    """Task identity within its dataset."""
+    """Task identity from local data or generated for a reported attempt."""
 
     rollout_id: str = Field(min_length=1)
     """Logical rollout identity shared by retries."""
@@ -30,8 +35,8 @@ class TrajectoryRecord(RecordModel):
     rollout_type: str = "inference"
     """Purpose of the rollout, such as inference or training."""
 
-    task_instruction: str = Field(min_length=1)
-    """Instruction presented for this attempt."""
+    task_instruction: str
+    """Task instruction, or empty when the report contained no user message."""
 
     task_system_prompt: str | None = None
     """Optional task-level system prompt."""
@@ -75,8 +80,8 @@ class TrajectoryRecord(RecordModel):
     reward_metadata: dict[str, JsonValue] = Field(default_factory=dict)
     """Extra evaluation metrics, including success when available."""
 
-    started_at: AwareDatetime = Field(default_factory=utcnow)
-    """Execution start time."""
+    started_at: AwareDatetime | None = Field(default_factory=utcnow)
+    """Execution start time; None when the Harness did not report it."""
 
     finished_at: AwareDatetime | None = None
     """Execution completion time; absent while running."""
@@ -91,11 +96,69 @@ class TrajectoryRecord(RecordModel):
     """Additional local execution annotations."""
 
     created_at: AwareDatetime = Field(default_factory=utcnow)
-    """Time this local record was stored."""
+    """Time this trajectory record was stored."""
+
+    skill_id: str | None = None
+    """Exact Skill family associated with a reported attempt, if any."""
+
+    skill_version_id: str | None = None
+    """Exact loaded Skill version associated with a reported attempt, if any."""
+
+    user_id: str | None = None
+    """Business user identity supplied with a reported attempt, if any."""
+
+    agent_id: str | None = None
+    """Agent identity supplied with a reported attempt, if any."""
+
+    session_id: str | None = None
+    """Optional logical session associated with a reported attempt."""
+
+    received_at: AwareDatetime | None = None
+    """Server receipt time for a reported attempt; absent for local records."""
 
     @model_validator(mode="after")
     def validate_timing(self):
-        """Reject reversed execution timestamps."""
-        if self.finished_at is not None and self.finished_at < self.started_at:
+        """Preserve source-specific fields and reject reversed timestamps."""
+        if self.started_at is not None and self.finished_at is not None and self.finished_at < self.started_at:
             raise ValueError("finished_at must not precede started_at")
+        if self.source == "local" and (not self.task_instruction or self.started_at is None):
+            raise ValueError("Local trajectories require a task instruction and start time")
+        if self.source == "reported" and not all(
+            (self.skill_id, self.skill_version_id, self.user_id, self.agent_id, self.received_at)
+        ):
+            raise ValueError("Reported trajectories require a Skill version, actors, and receipt time")
         return self
+
+
+class TrajectorySummary(RecordModel):
+    """Projected fields returned by a reported trajectory page."""
+
+    trajectory_id: str = Field(min_length=1)
+    """Physical attempt identity and receipt-order tie breaker."""
+
+    task_id: str = Field(min_length=1)
+    """Task identity associated with the reported attempt."""
+
+    skill_id: str = Field(min_length=1)
+    """Skill family associated with the report."""
+
+    skill_version_id: str = Field(min_length=1)
+    """Exact Skill version loaded during execution."""
+
+    user_id: str = Field(min_length=1)
+    """Business user who reported the attempt."""
+
+    agent_id: str = Field(min_length=1)
+    """Agent that reported the attempt."""
+
+    status: str
+    """Caller-declared execution outcome."""
+
+    started_at: AwareDatetime | None
+    """Execution start time, if supplied."""
+
+    finished_at: AwareDatetime | None
+    """Execution finish time, if supplied."""
+
+    received_at: AwareDatetime
+    """Server receipt time used by the page cursor."""

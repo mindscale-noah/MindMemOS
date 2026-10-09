@@ -1,9 +1,11 @@
 """Task-specific reflection prompt resources for officeqa."""
 
+from .....envs.builtin_envs.officeqa.tools import format_tool_command
 from .....envs.builtin_envs.officeqa.typing import OfficeQATask
 from ..env_adapter import SkillForestEnvAdapter
+from ..trajectory_rendering import recorded_context, render_record, tool_conversation
 from ..typing import SkillForestTrajectoryContext
-from .common import SkillForestReferenceEnvAdapter, recorded_context, render_record, tool_conversation
+from .common import SkillForestReferenceEnvAdapter
 from .typing import ReflectionFeedback
 
 
@@ -107,7 +109,7 @@ Respond ONLY with a valid JSON object:
             raise TypeError("OfficeQA reflection requires OfficeQATask")
         system, user = recorded_context(result)
         feedback = ReflectionFeedback.model_validate(result.reward.model_dump())
-        events = tool_conversation(result.trajectory[1:], assistant_role="agent")
+        events = tool_conversation(result.trajectory[2:], assistant_role="agent", command_formatter=format_tool_command)
         return render_record(
             index,
             context.task.id,

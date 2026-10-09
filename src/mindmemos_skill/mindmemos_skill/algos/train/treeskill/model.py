@@ -4,7 +4,10 @@ from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
 from time import perf_counter
+from typing import Any
 from uuid import uuid4
+
+from pydantic import BaseModel, JsonValue
 
 from ....agents import AgentResult, OpenAIChatAgent, OpenAIChatConfig
 from ....common.asyncio import run_sync
@@ -16,7 +19,13 @@ from .typing import ChatResponse
 class RecordedChatModel:
     """Keep every physical model attempt, including parser-rejected responses."""
 
-    def __init__(self, config: OpenAIChatConfig, directory: Path, *, factory=OpenAIChatAgent):
+    def __init__(
+        self,
+        config: OpenAIChatConfig,
+        directory: Path,
+        *,
+        factory: Callable[[OpenAIChatConfig], OpenAIChatAgent] = OpenAIChatAgent,
+    ) -> None:
         """Configure transport and audit storage.
 
         Args:
@@ -31,8 +40,14 @@ class RecordedChatModel:
         self._requests: dict[str, int] = {}
 
     async def chat(
-        self, task, messages, format_parser: Callable | None = None, *, feedback_on_parse_error=False, **kwargs
-    ):
+        self,
+        task: str,
+        messages: list[dict[str, JsonValue]],
+        format_parser: Callable[[str], BaseModel] | None = None,
+        *,
+        feedback_on_parse_error: bool = False,
+        **kwargs: Any,
+    ) -> ChatResponse:
         """Execute the upstream chat protocol using the shared agent implementation.
 
         Args:
@@ -50,9 +65,7 @@ class RecordedChatModel:
             options["max_completion_tokens"] = options.pop("max_tokens")
         options["parse_retry_mode"] = "feedback" if feedback_on_parse_error else "direct"
         config = self.config.model_copy(update=options)
-        identity = fingerprint(
-            {"task": task, "messages": messages, "config": config.model_dump(mode="json", exclude={"api_key"})}
-        )
+        identity = fingerprint({"task": task, "messages": messages, "config": config.model_dump(mode="json")})
         with self._lock:
             occurrence = self._requests.get(identity, 0)
             self._requests[identity] = occurrence + 1
@@ -68,8 +81,8 @@ class RecordedChatModel:
 class _RecordedTransport(OpenAIChatAgent):
     """Record provider boundaries without changing request or retry behavior."""
 
-    def __init__(self, config, transport, directory, task):
-        """init  .
+    def __init__(self, config: OpenAIChatConfig, transport: OpenAIChatAgent, directory: Path, task: str) -> None:
+        """Bind a transport to one audited generation stage.
 
         Args:
             config: Validated execution and generation settings.
@@ -84,8 +97,14 @@ class _RecordedTransport(OpenAIChatAgent):
         self.attempt = 0
         self.last_result: AgentResult | None = None
 
-    def run_messages(self, *, messages, tools=None, response_format=None):
-        """Run messages.
+    def run_messages(
+        self,
+        *,
+        messages: list[dict[str, JsonValue]],
+        tools: list[dict[str, JsonValue]] | None = None,
+        response_format: dict[str, JsonValue] | None = None,
+    ) -> AgentResult:
+        """Execute or recover one recorded provider attempt.
 
         Args:
             messages: Explicit messages for this operation.
@@ -96,7 +115,7 @@ class _RecordedTransport(OpenAIChatAgent):
         path = self.directory / f"attempt-{self.attempt:02d}.json"
         payload = {
             "stage": self.task,
-            "config": self.config.model_dump(mode="json", exclude={"api_key"}),
+            "config": self.config.model_dump(mode="json"),
             "messages": messages,
             "response_format": response_format or self.config.response_format,
         }
@@ -150,7 +169,13 @@ class _RecordedTransport(OpenAIChatAgent):
 class RecordedRouter(OpenAIChatAgent):
     """Record task-time routing calls under the same experiment root."""
 
-    def __init__(self, config, directory, *, factory=OpenAIChatAgent):
+    def __init__(
+        self,
+        config: OpenAIChatConfig,
+        directory: Path,
+        *,
+        factory: Callable[[OpenAIChatConfig], OpenAIChatAgent] = OpenAIChatAgent,
+    ) -> None:
         """Configure the router without making a provider call.
 
         Args:
@@ -164,7 +189,7 @@ class RecordedRouter(OpenAIChatAgent):
         self._counter = 0
         self._lock = Lock()
 
-    def run(self, **kwargs):
+    def run(self, **kwargs: Any) -> AgentResult:
         """Run and record one routing request.
 
         Args:

@@ -2,8 +2,9 @@
 
 from .....envs.builtin_envs.alfworld_bounded_history.typing import ALFWorldTask
 from ..env_adapter import SkillForestEnvAdapter
+from ..trajectory_rendering import render_record
 from ..typing import SkillForestTrajectoryContext
-from .common import SkillForestReferenceEnvAdapter, render_record
+from .common import SkillForestReferenceEnvAdapter
 from .typing import ReflectionFeedback
 
 

@@ -10,9 +10,9 @@ from .typing import AnnotationMode
 
 
 class TreeSkillConfig(BaseModel):
-    """Configure routing without storing optimizable instructions outside bundle."""
+    """Configure routing without storing optimizable instructions outside source content."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown router settings."""
 
     env_adapter: EnvAdapterSelection = Field(default_factory=EnvAdapterSelection)
@@ -31,7 +31,7 @@ class TreeSkillConfig(BaseModel):
 class TreeSkillTrainerConfig(BaseModel):
     """Settings for one active collection, analysis and fusion round."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid", frozen=True)
     """Reject misspelled settings and freeze the experiment protocol."""
 
     optimizer: OpenAIChatConfig
@@ -42,9 +42,6 @@ class TreeSkillTrainerConfig(BaseModel):
 
     failure_optimizer: OpenAIChatConfig | None = None
     """Reference failure-analysis model; None reuses optimizer settings."""
-
-    env_adapter: EnvAdapterSelection = Field(default_factory=EnvAdapterSelection)
-    """Registered environment adaptation bound during trainer construction."""
 
     samples_per_task: int = Field(default=1, ge=1)
     """Independent training trajectories sampled from each task."""
@@ -125,14 +122,14 @@ class TreeSkillTrainerConfig(BaseModel):
 class TreeSkillExperimentConfig(BaseModel):
     """Standalone script inputs, independent of evaluation services or databases."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown experiment fields."""
 
     algorithm: TreeSkillTrainerConfig
     """Training and routing model settings."""
 
     environment: str
-    """Environment registry name, or spreadsheetbench_reference."""
+    """Environment registry name, or spreadsheetbench_text_action."""
 
     environment_options: dict = Field(default_factory=dict)
     """Options validated by the selected environment's config model."""
@@ -162,7 +159,7 @@ class TreeSkillExperimentConfig(BaseModel):
 class TreeSkillEnvAdapterConfig(BaseModel):
     """Override generic analysis and routing instructions with literal text."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid", frozen=True)
     """Reject unknown settings and avoid run-local mutable configuration."""
 
     analysis_system: str | None = None

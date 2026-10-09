@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class ExecutionConfig(BaseModel):
     """Select the local Python environment and command shell."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown execution settings."""
 
     python_command: list[str] = Field(default_factory=lambda: [sys.executable], min_length=1)
@@ -22,6 +22,9 @@ class ExecutionConfig(BaseModel):
 
     environment: dict[str, str] = Field(default_factory=dict)
     """Explicit child-process environment overrides; never mutate the parent process."""
+
+    excluded_environment: list[str] = Field(default_factory=list)
+    """Parent environment variable names to omit before applying explicit overrides."""
 
     timeout_s: float = Field(default=120, gt=0, allow_inf_nan=False)
     """Wall-clock limit in seconds for each generated command."""

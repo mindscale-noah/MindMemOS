@@ -1,28 +1,31 @@
 """One-round active TreeSkill training with immutable input and local artifacts."""
 
-from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 
 from filelock import FileLock
+from pydantic import JsonValue
 
-from ....agents import OpenAIChatAgent
-from ....common.asyncio import run_sync
+from ....agents import OpenAIChatAgent, OpenAIChatConfig
+from ....common.asyncio import map_bounded
 from ....common.checkpoint import boundary, read_boundary
-from ....common.concurrency import map_with_context
 from ....common.json import write_json
 from ....envs import Environment
 from ....envs.data import DataSample
-from ....skill import Skill, SkillBundle, SkillSet, SkillSnapshot
+from ....infra.task_manager.progress import ProgressReporter
+from ....skill import Skill, SkillSet, SkillSnapshot
 from ...base import Algorithm
 from ..base import SkillTrainer
+from ..config import EnvAdapterSelection
 from ..recovery import implementation_identity
 from .artifacts import REFERENCE_COMMIT, experiment_config, model_usage, normalize_skill_text
 from .config import TreeSkillConfig, TreeSkillTrainerConfig
 from .env_adapter import TreeSkillEnvAdapter
+from .env_specific.selection import select_env_adapter
 from .evidence import render_trajectory
 from .fusion import TreeSkillNodeFuser
 from .fusion_tree import compile_tree_metadata, parse_skill_markdown
@@ -32,7 +35,9 @@ from .skill import TreeSkill
 from .typing import AnnotationMode, TraceEvidence, TrainingRollout, TreeSkillAnalysisRuntime
 
 
-def sample_tasks(*, env, skill, samples, directory, repeats, concurrency):
+async def sample_tasks(
+    *, env: Environment, skill: Skill, samples: Sequence[DataSample], directory: Path, repeats: int, concurrency: int
+) -> tuple[list[TrainingRollout], list[dict[str, JsonValue]]]:
     """Actively sample independent rollouts, preserving every failed attempt.
 
     Args:
@@ -48,7 +53,9 @@ def sample_tasks(*, env, skill, samples, directory, repeats, concurrency):
     """
     slots = [(index, sample, repeat) for index, sample in enumerate(samples) for repeat in range(repeats)]
 
-    def execute_slot(slot):
+    async def execute_slot(
+        slot: tuple[int, DataSample, int],
+    ) -> tuple[TrainingRollout | None, dict[str, JsonValue] | None]:
         """Execute slot.
 
         Args:
@@ -61,7 +68,7 @@ def sample_tasks(*, env, skill, samples, directory, repeats, concurrency):
         identity = {
             "task": sample.model_dump(mode="json"),
             "skill": skill.snapshot().model_dump(mode="json"),
-            "environment": env.config.model_dump(mode="json", exclude={"agent": {"api_key"}}),
+            "environment": env.config.model_dump(mode="json"),
         }
         saved = boundary(checkpoint, identity)
         if saved is not None:
@@ -75,7 +82,7 @@ def sample_tasks(*, env, skill, samples, directory, repeats, concurrency):
         attempt = max(attempts, default=0) + 1
         work_dir = slot_dir / f"attempt-{attempt:02d}"
         try:
-            result = env.rollout(
+            result = await env.rollout(
                 sample.task,
                 work_dir,
                 reward_data=sample.reward_data,
@@ -95,8 +102,7 @@ def sample_tasks(*, env, skill, samples, directory, repeats, concurrency):
         boundary(checkpoint, identity, payload={"result": result.model_dump(mode="json"), "work_dir": str(work_dir)})
         return TrainingRollout(trajectory_id=identifier, sample=sample, result=result, work_dir=work_dir), None
 
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        outcomes = map_with_context(executor, execute_slot, slots)
+    outcomes = await map_bounded(execute_slot, slots, concurrency=concurrency)
     records = [record for record, _ in outcomes if record is not None]
     records.sort(key=lambda record: (record.result.finished_at, record.trajectory_id))
     failures = [failure for _, failure in outcomes if failure is not None]
@@ -117,7 +123,9 @@ def sample_tasks(*, env, skill, samples, directory, repeats, concurrency):
     return records, failures
 
 
-def score_report(records, failures, expected):
+def score_report(
+    records: Sequence[TrainingRollout], failures: Sequence[dict[str, JsonValue]], expected: int
+) -> dict[str, JsonValue]:
     """Report environment scores with explicit execution coverage.
 
     Args:
@@ -155,7 +163,12 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
     config_type = TreeSkillTrainerConfig
     """Validated model, sampling and reference algorithm settings."""
 
-    def __init__(self, config: TreeSkillTrainerConfig, *, agent_factory=OpenAIChatAgent):
+    def __init__(
+        self,
+        config: TreeSkillTrainerConfig,
+        *,
+        agent_factory: Callable[[OpenAIChatConfig], OpenAIChatAgent] = OpenAIChatAgent,
+    ) -> None:
         """Configure training without constructing models or accessing storage.
 
         Args:
@@ -164,7 +177,6 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         """
         super().__init__(config.model_copy(deep=True))
         self.agent_factory = agent_factory
-        self.env_adapter = TreeSkillEnvAdapter.build(self.config.env_adapter.class_name, self.config.env_adapter.config)
 
     async def train(
         self,
@@ -174,6 +186,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         train_samples: Sequence[DataSample],
         validation_samples: Sequence[DataSample] = (),
         work_dir: Path,
+        progress: ProgressReporter | None = None,
     ) -> Skill:
         """Run one training round and save its complete local audit.
 
@@ -183,6 +196,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             train_samples: Materialized tasks used for active sampling.
             validation_samples: Disjoint external data, excluded from one-round optimization.
             work_dir: Run directory; compatible committed work is reused automatically.
+            progress: Optional task reporter; the same algorithm runs without it.
 
         Returns:
             Final routable Skill, including an unchanged candidate when no edit applies.
@@ -193,11 +207,29 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         root = Path(work_dir).expanduser().resolve()
         root.parent.mkdir(parents=True, exist_ok=True)
         with FileLock(str(root.parent / f".{root.name}.lock"), timeout=0):
-            return await self._run_train(skill, env, train_samples, validation_samples, root)
+            if progress is not None:
+                await progress.report(stage="training", message="TreeSkill training started")
+            env_adapter = select_env_adapter(env)
+            selected = await self._run_train(
+                skill, env, train_samples, validation_samples, root, env_adapter, progress=progress
+            )
+            if progress is not None:
+                await progress.report(stage="training", message="TreeSkill training completed")
+            return selected
 
-    async def _run_train(self, skill, env, train_samples, validation_samples, root):
+    async def _run_train(
+        self,
+        skill: Skill,
+        env: Environment,
+        train_samples: Sequence[DataSample],
+        validation_samples: Sequence[DataSample],
+        root: Path,
+        env_adapter: TreeSkillEnvAdapter,
+        *,
+        progress: ProgressReporter | None = None,
+    ) -> TreeSkill:
         """Validate a run and reuse committed calls under the directory lock."""
-        self.env_adapter.validate_environment(env)
+        env_adapter.validate_environment(env)
         if not train_samples:
             raise ValueError("TreeSkill requires training tasks")
         if len({sample.task.id for sample in train_samples}) != len(train_samples):
@@ -210,10 +242,14 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         identity = {
             "implementation": implementation_identity(self, env),
             "config": experiment_config(self.config),
+            "adapter": {
+                "class_name": TreeSkillEnvAdapter.name_for(type(env_adapter)),
+                "config": env_adapter.config.model_dump(mode="json"),
+            },
             "skill": skill.snapshot().model_dump(mode="json"),
             "train": [sample.model_dump(mode="json") for sample in train_samples],
             "validation": [sample.model_dump(mode="json") for sample in validation_samples],
-            "environment": env.config.model_dump(mode="json", exclude={"agent": {"api_key"}}),
+            "environment": env.config.model_dump(mode="json"),
         }
         manifest = root / "recovery_manifest.json"
         if root.exists() and any(root.iterdir()) and not manifest.exists():
@@ -241,7 +277,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         }
         write_json(root / "summary.json", summary)
         try:
-            result = await self._train(skill, env, train_samples, root, summary)
+            result = await self._train(skill, env, train_samples, root, summary, env_adapter, progress=progress)
             write_json(root / "final_skill.json", result.snapshot().model_dump(mode="json"))
             result.export(root / "final_skill", overwrite=True)
             summary["status"] = (
@@ -258,13 +294,22 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             summary["finished_at"] = datetime.now(timezone.utc).isoformat()
             write_json(root / "summary.json", summary)
 
-    async def _train(self, source, env, samples, root, summary):
+    async def _train(
+        self,
+        source: Skill,
+        env: Environment,
+        samples: Sequence[DataSample],
+        root: Path,
+        summary: dict[str, Any],
+        env_adapter: TreeSkillEnvAdapter,
+        *,
+        progress: ProgressReporter | None = None,
+    ) -> TreeSkill:
         """Execute the upstream stage order without adding selection or extra rounds."""
         config = self.config
-        initial = Skill(bundle=source.bundle.model_copy(deep=True), resources=source.resources.model_copy(deep=True))
+        initial = Skill(source.source)
         start = perf_counter()
-        records, failures = await run_sync(
-            sample_tasks,
+        records, failures = await sample_tasks(
             env=env,
             skill=initial,
             samples=samples,
@@ -273,14 +318,16 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             concurrency=config.rollout_concurrency,
         )
         summary["stages"]["collection_s"] = perf_counter() - start
+        if progress is not None:
+            await progress.report(stage="collection", message="TreeSkill trajectories collected")
         summary["train"] = score_report(records, failures, len(samples) * config.samples_per_task)
         if config.require_skill_match:
             import json
 
-            expected = initial.snapshot().local_snapshot_hash
+            expected = initial.snapshot().skill_hash
             for record in records:
                 request = json.loads((record.work_dir / "audit/request.json").read_text(encoding="utf-8"))
-                if request["skills"][0]["local_snapshot_hash"] != expected:
+                if request["skills"][0]["skill_hash"] != expected:
                     raise ValueError("Sampled trajectory does not match the initial Skill")
         summary["train"]["skill_role"] = "initial_full_skill"
         evidence = [
@@ -299,7 +346,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             for record in records
         ]
         write_json(root / "stages/evidence.json", [item.model_dump(mode="json") for item in evidence])
-        tree = parse_skill_markdown(initial.bundle.files["SKILL.md"])
+        tree = parse_skill_markdown(initial.content)
         current = tree
         summary["training"] = {
             "input_trajectories": len(evidence),
@@ -323,7 +370,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             reason = "skill_has_no_content_bearing_markdown_headings"
         else:
             model = RecordedChatModel(config.optimizer, root / "model_calls/optimizer", factory=self.agent_factory)
-            analyzer = self.env_adapter.create_analyzer(
+            analyzer = env_adapter.create_analyzer(
                 TreeSkillAnalysisRuntime(
                     config=config,
                     chat_model=model,
@@ -340,6 +387,8 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
                 evidence, trajectories_by_id={record.trajectory_id: record for record in records}
             )
             summary["stages"]["analysis_s"] = perf_counter() - start
+            if progress is not None:
+                await progress.report(stage="analysis", message="TreeSkill evidence analyzed")
             metrics.update(analysis_records=len(analyses), analysis_failures=analysis_failures)
             write_json(
                 root / "stages/analysis.json",
@@ -357,6 +406,8 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
                     max_tokens=config.localization_max_tokens,
                 ).locate(tree, analyses)
                 summary["stages"]["localization_s"] = perf_counter() - start
+                if progress is not None:
+                    await progress.report(stage="localization", message="TreeSkill evidence localized")
                 metrics.update(
                     located_evidence=len(located),
                     localization_failures=[item.model_dump(mode="json") for item in localization_failures],
@@ -380,6 +431,8 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
                         audit_dir=root / "patches",
                     ).fuse(tree, located)
                     summary["stages"]["fusion_s"] = perf_counter() - start
+                    if progress is not None:
+                        await progress.report(stage="fusion", message="TreeSkill revisions assembled")
                     metrics.update(
                         accepted_patches=sum(item.accepted and item.operation != "reject" for item in edits),
                         rejected_patches=sum(not item.accepted or item.operation == "reject" for item in edits),
@@ -392,7 +445,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
                             "failures": metrics["fusion_failures"],
                         },
                     )
-        changed = normalize_skill_text(current.full_content) != normalize_skill_text(initial.bundle.files["SKILL.md"])
+        changed = normalize_skill_text(current.full_content) != normalize_skill_text(initial.content)
         metrics.update(
             changed=changed,
             final_node_count=len(current.nodes),
@@ -402,16 +455,18 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             metrics["analysis_failures"] or metrics["localization_failures"] or metrics["fusion_failures"]
         )
         write_json(root / "tree_metadata.json", compile_tree_metadata(current))
-        bundle = SkillBundle(files={"SKILL.md": current.full_content}) if changed else initial.bundle
+        candidate_source = initial.with_content(current.full_content).source if changed else initial.source
         candidate = TreeSkill(
             TreeSkillConfig(
                 router=config.router,
                 reference_routing=True,
                 tree_metadata=compile_tree_metadata(current),
-                env_adapter=config.env_adapter.model_copy(deep=True),
+                env_adapter=EnvAdapterSelection(
+                    class_name=TreeSkillEnvAdapter.name_for(type(env_adapter)),
+                    config=env_adapter.config.model_dump(mode="json"),
+                ),
             ),
-            bundle=bundle,
-            resources=initial.resources,
+            source=candidate_source,
             router=RecordedRouter(config.router, root / "model_calls/router", factory=self.agent_factory),
         )
         return candidate

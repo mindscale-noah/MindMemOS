@@ -6,22 +6,24 @@ from pathlib import Path
 from ...infra.execution.config import ExecutionConfig
 from ...infra.execution.executor import execute
 from .config import CLIConfig
+from .constants import NATIVE_CONNECTION_ENV
 
 
 def environment(config: CLIConfig, key_name: str, url_name: str | None = None) -> dict[str, str]:
     """Map resolved connection values to the native CLI environment.
 
     Args:
-        config: Connection values resolved from explicit settings or shared defaults.
+        config: Explicit model credentials and endpoint.
         key_name: Native credential variable to populate.
         url_name: Native endpoint variable, when supported.
 
     Returns:
         Child-only overrides; secrets never appear in command arguments.
     """
+    config.require_connection()
     values = {}
     if config.api_key is not None:
-        values[key_name] = config.api_key.get_secret_value()
+        values[key_name] = config.api_key
     if config.base_url is not None and url_name is not None:
         values[url_name] = config.base_url
     return values
@@ -46,7 +48,12 @@ def run_cli(
         RuntimeError: The executable exits unsuccessfully.
     """
     result = execute(
-        command, workspace, ExecutionConfig(timeout_s=config.timeout_s, environment=overrides), input_text=prompt
+        command,
+        workspace,
+        ExecutionConfig(
+            timeout_s=config.timeout_s, environment=overrides, excluded_environment=list(NATIVE_CONNECTION_ENV)
+        ),
+        input_text=prompt,
     )
     if result.returncode:
         raise RuntimeError(f"Harness exited with status {result.returncode}: {result.stderr.strip()}")

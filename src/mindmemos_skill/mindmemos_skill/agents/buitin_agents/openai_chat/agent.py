@@ -12,7 +12,6 @@ from ....logging import get_logger
 from ....logging.otel import debug_fields
 from ....persistence.observability import get_log_context
 from ...base import Agent
-from ...constants import AGENT_API_KEY_ENV
 from ...typing import AgentResult, ToolCall, ToolTurn
 from .config import OpenAIChatConfig
 
@@ -268,9 +267,8 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
         from openai import APIConnectionError, APIStatusError, DefaultHttpxClient, OpenAI
         from tenacity import RetryCallState, Retrying, retry_if_exception, stop_after_attempt, wait_exponential
 
-        if self.config.api_key is None:
-            raise ValueError(f"Provide api_key or set {AGENT_API_KEY_ENV}")
-        api_key = self.config.api_key.get_secret_value()
+        self.config.require_connection()
+        api_key = self.config.api_key
         options = {}
         effective_format = response_format if response_format is not None else self.config.response_format
         if effective_format is not None:
@@ -333,7 +331,8 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             api_key=api_key,
             base_url=self.config.base_url,
             timeout=self.config.timeout_s,
-            max_retries=self.config.sdk_max_retries,
+            # Tenacity owns retries so the configured limit counts physical requests.
+            max_retries=0,
             http_client=DefaultHttpxClient(trust_env=False),
         ) as client:
             response = Retrying(

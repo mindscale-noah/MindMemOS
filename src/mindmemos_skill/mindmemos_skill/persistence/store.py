@@ -3,15 +3,36 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 
+from sqlalchemy import inspect
+
 from ..infra.database import Database, Scope, TableRegistry
 from .base import Persistence
 from .config import SkillPersistenceConfig
 from .constants import OPTIONAL_SCOPE_FIELDS, REQUIRED_SCOPE_FIELDS
-from .db_services.remote.service import RemoteDataService
 from .db_services.skills import SkillDataService
-from .db_services.skills.migrations import migrate_version_labels
 from .db_services.trajectories import TrajectoryDataService
 from .tables import build_persistence_tables
+
+
+def remove_remote_tables(database: Database) -> None:
+    """Drop retired synchronization tables in foreign-key dependency order.
+
+    Args:
+        database: Skill database being upgraded.
+    """
+    with database.engine.begin() as connection:
+        existing = set(inspect(connection).get_table_names())
+        quote = connection.dialect.identifier_preparer.quote
+        for suffix in ("_v1", ""):
+            for name in (
+                "remote_operations",
+                "remote_trajectory_bindings",
+                "remote_version_bindings",
+                "remote_skill_bindings",
+            ):
+                table = f"{name}{suffix}"
+                if table in existing:
+                    connection.exec_driver_sql(f"DROP TABLE {quote(table)}")
 
 
 def validate_skill_scope(scope: Scope) -> None:
@@ -33,11 +54,10 @@ def validate_skill_scope(scope: Scope) -> None:
 class SkillPersistenceSession:
     """Expose business data services bound to one active project scope."""
 
-    def __init__(self, database, *, include_remote: bool):
+    def __init__(self, database, *, prefixed_ids: bool):
         self.database = database
-        self.skills = SkillDataService(database)
+        self.skills = SkillDataService(database, prefixed_ids=prefixed_ids)
         self.trajectories = TrajectoryDataService(database)
-        self.remote = RemoteDataService(database) if include_remote else None
 
 
 @Persistence.register("skill")
@@ -45,7 +65,7 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
     """Attach business tables without connecting or changing existing schemas.
 
     Args:
-        config: Whether remote tables are needed.
+        config: Skill repository persistence settings.
         database: Borrowed database whose lifecycle remains with its owner.
     """
 
@@ -56,7 +76,7 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
         super().__init__(config)
         if not isinstance(database, Database):
             raise TypeError("Skill persistence requires an infra Database")
-        additions = build_persistence_tables(include_remote=config.include_remote)
+        additions = build_persistence_tables()
         # Validate all collisions before mutating the borrowed registry.
         TableRegistry((*database.tables.values(), *additions.values()))
         for spec in additions.values():
@@ -66,7 +86,7 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
         self._current_session: ContextVar[SkillPersistenceSession | None] = ContextVar(
             "skill_persistence_session", default=None
         )
-        self._admin_services = SkillPersistenceSession(database, include_remote=config.include_remote)
+        self._admin_services = SkillPersistenceSession(database, prefixed_ids=config.prefixed_ids)
 
     @property
     def database(self):
@@ -82,11 +102,6 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
     def trajectories(self) -> TrajectoryDataService:
         """Return trajectory operations for the active project scope."""
         return self._session().trajectories
-
-    @property
-    def remote(self) -> RemoteDataService | None:
-        """Return remote mappings for the active project scope when enabled."""
-        return self._session().remote
 
     def _session(self) -> SkillPersistenceSession:
         """Reject normal service access outside an active session."""
@@ -123,7 +138,7 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
         if active is not None and active.database.scope != scope:
             raise RuntimeError("A nested persistence session cannot change scope")
         with self._database.scoped(scope) as database:
-            current = SkillPersistenceSession(database, include_remote=self.config.include_remote)
+            current = SkillPersistenceSession(database, prefixed_ids=self.config.prefixed_ids)
             token = self._current_session.set(current)
             try:
                 yield current
@@ -131,6 +146,6 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
                 self._current_session.reset(token)
 
     def initialize_storage(self) -> None:
-        """Create missing tables and idempotently migrate existing version labels."""
+        """Create tables for the current Skill repository schema."""
         self._database.create_tables()
-        migrate_version_labels(self._database)
+        remove_remote_tables(self._database)

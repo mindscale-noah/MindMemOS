@@ -1,0 +1,1064 @@
+{
+  "$defs": {
+    "BaseModel": {
+      "properties": {},
+      "title": "BaseModel",
+      "type": "object"
+    },
+    "EnvironmentConfig": {
+      "additionalProperties": false,
+      "description": "Select and validate one run's environment without constructing resources.",
+      "properties": {
+        "class_name": {
+          "description": "Registered implementation name in the family determined by the owning field.",
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Class Name",
+          "type": "string"
+        },
+        "config": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "$ref": "#/$defs/BaseModel"
+            }
+          ],
+          "description": "Implementation-owned model after preflight, or unparsed options before validation.",
+          "title": "Config"
+        }
+      },
+      "required": [
+        "class_name"
+      ],
+      "title": "EnvironmentConfig",
+      "type": "object"
+    },
+    "ImplementationConfig": {
+      "additionalProperties": false,
+      "description": "Select an implementation with its complete, locally nested configuration.",
+      "properties": {
+        "class_name": {
+          "description": "Registered implementation name in the family determined by the owning field.",
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "title": "Class Name",
+          "type": "string"
+        },
+        "config": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "$ref": "#/$defs/BaseModel"
+            }
+          ],
+          "description": "Implementation-owned model after preflight, or unparsed options before validation.",
+          "title": "Config"
+        }
+      },
+      "required": [
+        "class_name"
+      ],
+      "title": "ImplementationConfig",
+      "type": "object"
+    },
+    "InitialSkillConfig": {
+      "additionalProperties": false,
+      "description": "Select the Skill source registered before training.",
+      "properties": {
+        "path": {
+          "format": "path",
+          "title": "Path",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "name"
+      ],
+      "title": "InitialSkillConfig",
+      "type": "object"
+    },
+    "SplitLimits": {
+      "additionalProperties": false,
+      "description": "Optionally take an ordered prefix of each supplied split.",
+      "properties": {
+        "train": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Train"
+        },
+        "val": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Val"
+        },
+        "test": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Test"
+        }
+      },
+      "title": "SplitLimits",
+      "type": "object"
+    },
+    "ALFWorldConfig": {
+      "additionalProperties": false,
+      "description": "Configure one independent simulator and its answering model.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/OpenAIChatConfig",
+          "description": "Recorded model and transport settings."
+        },
+        "simulator": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "description": "Complete upstream ALFWorld YAML contents, recorded in resume identity.",
+          "title": "Simulator",
+          "type": "object"
+        },
+        "seed": {
+          "default": 42,
+          "description": "Simulator random seed.",
+          "title": "Seed",
+          "type": "integer"
+        },
+        "max_steps": {
+          "default": 50,
+          "description": "Maximum actions in this episode.",
+          "minimum": 1,
+          "title": "Max Steps",
+          "type": "integer"
+        },
+        "history_length": {
+          "default": 5,
+          "description": "Number of preceding observation/action pairs included in each prompt.",
+          "minimum": 0,
+          "title": "History Length",
+          "type": "integer"
+        },
+        "evaluator_version": {
+          "default": "alfworld-bounded-history-v1",
+          "description": "Identity of task success and failure-text semantics.",
+          "title": "Evaluator Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent",
+        "simulator"
+      ],
+      "title": "ALFWorldConfig",
+      "type": "object"
+    },
+    "AgentSkillOSConfig": {
+      "additionalProperties": false,
+      "description": "Execute native tool use and score actual artifacts with the official evaluator.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/CodexConfig",
+          "description": "Native Codex execution settings; model must be explicitly selected."
+        },
+        "benchmark_root": {
+          "description": "Official evaluator checkout, used only by the private scoring subprocess.",
+          "format": "path",
+          "title": "Benchmark Root",
+          "type": "string"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/ExecutionConfig",
+          "description": "Python interpreter and timeout for official deterministic scoring."
+        },
+        "evaluator_sha256": {
+          "default": "",
+          "description": "Computed fingerprint of official Python sources, persisted for resume validation.",
+          "title": "Evaluator Sha256",
+          "type": "string"
+        },
+        "evaluator_version": {
+          "const": "agentskillos-official-pass-v1",
+          "default": "agentskillos-official-pass-v1",
+          "description": "Binary official passed result; retrieval scores are diagnostic only.",
+          "title": "Evaluator Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent",
+        "benchmark_root"
+      ],
+      "title": "AgentSkillOSConfig",
+      "type": "object"
+    },
+    "CodexConfig": {
+      "additionalProperties": false,
+      "description": "Configure the installed Codex executable.",
+      "properties": {
+        "api_key": {
+          "anyOf": [
+            {
+              "format": "password",
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Model credential; required for model calls and masked in JSON output.",
+          "title": "Api Key"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Model endpoint; required for model calls, with no environment fallback.",
+          "title": "Base Url"
+        },
+        "timeout_s": {
+          "default": 300,
+          "description": "Maximum execution time in seconds, including native tool calls.",
+          "exclusiveMinimum": 0,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "extra_args": {
+          "description": "Additional native CLI arguments supplied by the caller.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Extra Args",
+          "type": "array"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Model name; None preserves the installed CLI default.",
+          "title": "Model"
+        },
+        "cli_path": {
+          "default": "codex",
+          "description": "Executable name or path.",
+          "minLength": 1,
+          "title": "Cli Path",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional model reasoning effort.",
+          "title": "Reasoning Effort"
+        }
+      },
+      "title": "CodexConfig",
+      "type": "object"
+    },
+    "Environment_agentskillos_Selection": {
+      "additionalProperties": false,
+      "properties": {
+        "class_name": {
+          "const": "agentskillos",
+          "description": "Registered implementation name.",
+          "title": "Class Name",
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/$defs/AgentSkillOSConfig"
+        }
+      },
+      "required": [
+        "class_name",
+        "config"
+      ],
+      "title": "Environment_agentskillos_Selection",
+      "type": "object"
+    },
+    "Environment_alfworld_bounded_history_Selection": {
+      "additionalProperties": false,
+      "properties": {
+        "class_name": {
+          "const": "alfworld_bounded_history",
+          "description": "Registered implementation name.",
+          "title": "Class Name",
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/$defs/ALFWorldConfig"
+        }
+      },
+      "required": [
+        "class_name",
+        "config"
+      ],
+      "title": "Environment_alfworld_bounded_history_Selection",
+      "type": "object"
+    },
+    "Environment_livemath_Selection": {
+      "additionalProperties": false,
+      "properties": {
+        "class_name": {
+          "const": "livemath",
+          "description": "Registered implementation name.",
+          "title": "Class Name",
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/$defs/LiveMathConfig"
+        }
+      },
+      "required": [
+        "class_name",
+        "config"
+      ],
+      "title": "Environment_livemath_Selection",
+      "type": "object"
+    },
+    "Environment_officeqa_Selection": {
+      "additionalProperties": false,
+      "properties": {
+        "class_name": {
+          "const": "officeqa",
+          "description": "Registered implementation name.",
+          "title": "Class Name",
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/$defs/OfficeQAConfig"
+        }
+      },
+      "required": [
+        "class_name",
+        "config"
+      ],
+      "title": "Environment_officeqa_Selection",
+      "type": "object"
+    },
+    "Environment_searchqa_Selection": {
+      "additionalProperties": false,
+      "properties": {
+        "class_name": {
+          "const": "searchqa",
+          "description": "Registered implementation name.",
+          "title": "Class Name",
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/$defs/SearchQAConfig"
+        }
+      },
+      "required": [
+        "class_name",
+        "config"
+      ],
+      "title": "Environment_searchqa_Selection",
+      "type": "object"
+    },
+    "Environment_spreadsheetbench_text_action_Selection": {
+      "additionalProperties": false,
+      "properties": {
+        "class_name": {
+          "const": "spreadsheetbench_text_action",
+          "description": "Registered implementation name.",
+          "title": "Class Name",
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/$defs/SpreadsheetBenchTextActionConfig"
+        }
+      },
+      "required": [
+        "class_name",
+        "config"
+      ],
+      "title": "Environment_spreadsheetbench_text_action_Selection",
+      "type": "object"
+    },
+    "Environment_spreadsheetbench_tool_calling_Selection": {
+      "additionalProperties": false,
+      "properties": {
+        "class_name": {
+          "const": "spreadsheetbench_tool_calling",
+          "description": "Registered implementation name.",
+          "title": "Class Name",
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/$defs/SpreadsheetBenchToolCallingConfig"
+        }
+      },
+      "required": [
+        "class_name",
+        "config"
+      ],
+      "title": "Environment_spreadsheetbench_tool_calling_Selection",
+      "type": "object"
+    },
+    "ExecutionConfig": {
+      "additionalProperties": false,
+      "description": "Select the local Python environment and command shell.",
+      "properties": {
+        "python_command": {
+          "description": "Python launcher argv, e.g. an interpreter path or uv run --project PATH python.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Python Command",
+          "type": "array"
+        },
+        "shell_command": {
+          "description": "Shell argv prefix; one complete command string is appended when executing.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Shell Command",
+          "type": "array"
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Explicit child-process environment overrides; never mutate the parent process.",
+          "title": "Environment",
+          "type": "object"
+        },
+        "excluded_environment": {
+          "description": "Parent environment variable names to omit before applying explicit overrides.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded Environment",
+          "type": "array"
+        },
+        "timeout_s": {
+          "default": 120,
+          "description": "Wall-clock limit in seconds for each generated command.",
+          "exclusiveMinimum": 0,
+          "title": "Timeout S",
+          "type": "number"
+        }
+      },
+      "title": "ExecutionConfig",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "LiveMathConfig": {
+      "additionalProperties": false,
+      "description": "Execute one tool-free math response and deterministic MCQ evaluation.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/OpenAIChatConfig",
+          "description": "Model, endpoint, and request limits included in audit identity; credentials are masked."
+        },
+        "evaluator_version": {
+          "default": "livemath-mcq-v1",
+          "description": "Evaluation protocol version included in resume identity.",
+          "title": "Evaluator Version",
+          "type": "string"
+        },
+        "prompt_version": {
+          "default": "livemath-math-v1",
+          "description": "Prompt protocol version included in resume identity.",
+          "title": "Prompt Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "title": "LiveMathConfig",
+      "type": "object"
+    },
+    "OfficeQAConfig": {
+      "additionalProperties": false,
+      "description": "Run bounded local document research with the official binary scorer.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/OpenAIChatConfig",
+          "description": "Recorded model and transport settings."
+        },
+        "max_tool_turns": {
+          "default": 12,
+          "description": "Maximum model requests in the research loop.",
+          "minimum": 1,
+          "title": "Max Tool Turns",
+          "type": "integer"
+        },
+        "max_tool_chars": {
+          "default": 16000,
+          "description": "Character limit for each public document-tool response.",
+          "minimum": 1,
+          "title": "Max Tool Chars",
+          "type": "integer"
+        },
+        "evaluator_version": {
+          "default": "309dc01ad21113d240700eecb74d2f3e59f163b6",
+          "description": "Pinned databricks/officeqa reward protocol revision, with zero tolerance.",
+          "title": "Evaluator Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "title": "OfficeQAConfig",
+      "type": "object"
+    },
+    "OpenAIChatConfig": {
+      "additionalProperties": false,
+      "description": "Configure a chat model without storing credentials in rollout snapshots.",
+      "properties": {
+        "api_key": {
+          "anyOf": [
+            {
+              "format": "password",
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Model credential; required for model calls and masked in JSON output.",
+          "title": "Api Key"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Model endpoint; required for model calls, with no environment fallback.",
+          "title": "Base Url"
+        },
+        "model": {
+          "description": "Provider model or deployment name.",
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "timeout_s": {
+          "default": 180,
+          "description": "HTTP timeout in seconds for each model request attempt.",
+          "exclusiveMinimum": 0,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "max_retries": {
+          "default": 3,
+          "description": "Additional attempts after the initial request; zero disables retries.",
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "retry_initial_wait_s": {
+          "default": 1,
+          "description": "Initial retry delay in seconds, doubled after each failed attempt.",
+          "exclusiveMinimum": 0,
+          "title": "Retry Initial Wait S",
+          "type": "number"
+        },
+        "retry_max_wait_s": {
+          "default": 60,
+          "description": "Upper bound in seconds for each exponential backoff delay.",
+          "exclusiveMinimum": 0,
+          "title": "Retry Max Wait S",
+          "type": "number"
+        },
+        "max_completion_tokens": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 4096,
+          "description": "Maximum completion tokens including reasoning; None omits the API limit.",
+          "title": "Max Completion Tokens"
+        },
+        "temperature": {
+          "anyOf": [
+            {
+              "maximum": 2,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional sampling temperature; None leaves the provider default unchanged.",
+          "title": "Temperature"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional provider reasoning budget; None omits it.",
+          "title": "Reasoning Effort"
+        },
+        "top_p": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional nucleus sampling threshold.",
+          "title": "Top P"
+        },
+        "presence_penalty": {
+          "anyOf": [
+            {
+              "maximum": 2,
+              "minimum": -2,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional penalty for tokens already present in the completion.",
+          "title": "Presence Penalty"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional provider sampling seed.",
+          "title": "Seed"
+        },
+        "stop": {
+          "description": "Stop sequences, such as Observation: for textual actions.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Stop",
+          "type": "array"
+        },
+        "extra_body": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "description": "Provider-specific body extensions, such as chat_template_kwargs.",
+          "title": "Extra Body",
+          "type": "object"
+        },
+        "response_validation": {
+          "default": "strict",
+          "description": "Require complete nonempty responses, or accept provider content as returned.",
+          "enum": [
+            "strict",
+            "content"
+          ],
+          "title": "Response Validation",
+          "type": "string"
+        },
+        "strip_thinking": {
+          "default": false,
+          "description": "Remove an embedded thinking prefix before parsing the model response.",
+          "title": "Strip Thinking",
+          "type": "boolean"
+        },
+        "retry_policy": {
+          "default": "transient",
+          "description": "Retry transient transport/status errors, or all request exceptions.",
+          "enum": [
+            "transient",
+            "all"
+          ],
+          "title": "Retry Policy",
+          "type": "string"
+        },
+        "retry_wait": {
+          "default": "exponential",
+          "description": "Select deterministic backoff, half-to-full jitter, or an explicit schedule.",
+          "enum": [
+            "exponential",
+            "equal_jitter",
+            "schedule"
+          ],
+          "title": "Retry Wait",
+          "type": "string"
+        },
+        "retry_waits_s": {
+          "description": "Wait schedule used by schedule mode; the final delay repeats if needed.",
+          "items": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "minItems": 1,
+          "title": "Retry Waits S",
+          "type": "array"
+        },
+        "invalid_tool_arguments": {
+          "default": "error",
+          "description": "Return a parsing error or execute malformed JSON tool arguments as an empty object.",
+          "enum": [
+            "error",
+            "empty"
+          ],
+          "title": "Invalid Tool Arguments",
+          "type": "string"
+        },
+        "response_format": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional OpenAI JSON object or JSON Schema response constraint.",
+          "title": "Response Format"
+        },
+        "parse_max_attempts": {
+          "default": 3,
+          "description": "Total calls allowed when an output parser rejects responses.",
+          "minimum": 1,
+          "title": "Parse Max Attempts",
+          "type": "integer"
+        },
+        "parse_retry_mode": {
+          "default": "direct",
+          "description": "Retry the unchanged request or append the rejected reply and feedback.",
+          "enum": [
+            "direct",
+            "feedback"
+          ],
+          "title": "Parse Retry Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "OpenAIChatConfig",
+      "type": "object"
+    },
+    "SearchQAConfig": {
+      "additionalProperties": false,
+      "description": "Configure passage-grounded answering and self-refinement.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/OpenAIChatConfig",
+          "description": "Audited model and transport settings."
+        },
+        "max_turns": {
+          "default": 1,
+          "description": "Maximum model calls, without private reference feedback.",
+          "minimum": 1,
+          "title": "Max Turns",
+          "type": "integer"
+        },
+        "max_context_chars": {
+          "default": 6000,
+          "description": "Passage character budget, truncated at DOC boundaries.",
+          "minimum": 1,
+          "title": "Max Context Chars",
+          "type": "integer"
+        },
+        "evaluator_version": {
+          "default": "searchqa-v1",
+          "description": "Identity of the exact-match, token F1, and feedback protocol.",
+          "title": "Evaluator Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "title": "SearchQAConfig",
+      "type": "object"
+    },
+    "SpreadsheetBenchTextActionConfig": {
+      "additionalProperties": false,
+      "description": "Configure text Action/Observation messages and bash execution.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/OpenAIChatConfig",
+          "description": "Recorded model and transport settings."
+        },
+        "max_turns": {
+          "default": 100,
+          "description": "Maximum text-action turns per task.",
+          "minimum": 1,
+          "title": "Max Turns",
+          "type": "integer"
+        },
+        "stagnation_limit": {
+          "default": 5,
+          "description": "Consecutive identical actions or format errors allowed before stopping.",
+          "minimum": 2,
+          "title": "Stagnation Limit",
+          "type": "integer"
+        },
+        "shell_timeout_seconds": {
+          "default": 120,
+          "description": "Timeout for each local bash command.",
+          "minimum": 1,
+          "title": "Shell Timeout Seconds",
+          "type": "integer"
+        },
+        "transactional_recalculation": {
+          "default": true,
+          "description": "Include the canonical recalculation command and local helper.",
+          "title": "Transactional Recalculation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "title": "SpreadsheetBenchTextActionConfig",
+      "type": "object"
+    },
+    "SpreadsheetBenchToolCallingConfig": {
+      "additionalProperties": false,
+      "description": "Configure native structured tool calls over workspace tools.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/OpenAIChatConfig",
+          "description": "Recorded model and transport settings."
+        },
+        "max_turns": {
+          "default": 30,
+          "description": "Maximum model turns per workbook case.",
+          "minimum": 1,
+          "title": "Max Turns",
+          "type": "integer"
+        },
+        "stagnation_limit": {
+          "anyOf": [
+            {
+              "minimum": 2,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Consecutive identical observations allowed; None disables the cutoff.",
+          "title": "Stagnation Limit"
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/JsonValue"
+                },
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Explicit tool schemas; None exposes the standard workspace tools.",
+          "title": "Tools"
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionConfig",
+          "description": "Local Python launcher, shell, and command timeout for workspace tools."
+        },
+        "skill_loading_mode": {
+          "default": "tool",
+          "description": "Load Skill instructions through a tool or preload them into the prompt.",
+          "enum": [
+            "tool",
+            "system_prompt"
+          ],
+          "title": "Skill Loading Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "title": "SpreadsheetBenchToolCallingConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Describe one algorithm, environment, dataset, and initial Skill run.",
+  "properties": {
+    "service_config": {
+      "description": "Local Skill service YAML containing storage and training profiles.",
+      "format": "path",
+      "title": "Service Config",
+      "type": "string"
+    },
+    "algorithm": {
+      "description": "Configured training pipeline name and expected trainer implementation.",
+      "enum": [
+        "treeskill",
+        "skill_forest"
+      ],
+      "title": "Algorithm",
+      "type": "string"
+    },
+    "environment": {
+      "discriminator": {
+        "mapping": {
+          "agentskillos": "#/$defs/Environment_agentskillos_Selection",
+          "alfworld_bounded_history": "#/$defs/Environment_alfworld_bounded_history_Selection",
+          "livemath": "#/$defs/Environment_livemath_Selection",
+          "officeqa": "#/$defs/Environment_officeqa_Selection",
+          "searchqa": "#/$defs/Environment_searchqa_Selection",
+          "spreadsheetbench_text_action": "#/$defs/Environment_spreadsheetbench_text_action_Selection",
+          "spreadsheetbench_tool_calling": "#/$defs/Environment_spreadsheetbench_tool_calling_Selection"
+        },
+        "propertyName": "class_name"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Environment_agentskillos_Selection"
+        },
+        {
+          "$ref": "#/$defs/Environment_alfworld_bounded_history_Selection"
+        },
+        {
+          "$ref": "#/$defs/Environment_livemath_Selection"
+        },
+        {
+          "$ref": "#/$defs/Environment_officeqa_Selection"
+        },
+        {
+          "$ref": "#/$defs/Environment_searchqa_Selection"
+        },
+        {
+          "$ref": "#/$defs/Environment_spreadsheetbench_text_action_Selection"
+        },
+        {
+          "$ref": "#/$defs/Environment_spreadsheetbench_tool_calling_Selection"
+        }
+      ]
+    },
+    "data": {
+      "$ref": "#/$defs/ImplementationConfig",
+      "description": "Built-in dataset loader name and its source options."
+    },
+    "initial_skill": {
+      "$ref": "#/$defs/InitialSkillConfig",
+      "description": "Source used to register an independent parent Skill version."
+    },
+    "split_file": {
+      "description": "JSON mapping train, val, and test to ordered task IDs.",
+      "format": "path",
+      "title": "Split File",
+      "type": "string"
+    },
+    "limits": {
+      "$ref": "#/$defs/SplitLimits",
+      "description": "Optional deterministic prefix lengths for each split."
+    }
+  },
+  "required": [
+    "service_config",
+    "algorithm",
+    "environment",
+    "data",
+    "initial_skill",
+    "split_file"
+  ],
+  "title": "LocalSkillEvalConfig",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

@@ -14,7 +14,7 @@ _picker_lock = Lock()
 
 _MAC_SCRIPT = """on run argv
     try
-        set chosenFolder to choose folder with prompt "Select MindMemOS HOME" default location (POSIX file (item 1 of argv))
+        set chosenFolder to choose folder with prompt "Select a folder" default location (POSIX file (item 1 of argv))
         return POSIX path of chosenFolder
     on error number -128
         return ""
@@ -26,7 +26,7 @@ _WINDOWS_SCRIPT = (
 Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = 'Select MindMemOS HOME'
+$dialog.Description = 'Select a folder'
 $dialog.SelectedPath = [Environment]::GetEnvironmentVariable('%s')
 $dialog.ShowNewFolderButton = $true
 try {
@@ -73,12 +73,12 @@ def choose_directory(initial: Path) -> Path | None:
                 "zenity",
                 "--file-selection",
                 "--directory",
-                "--title=Select MindMemOS HOME",
+                "--title=Select a folder",
                 "--filename=" + str(initial) + os.sep,
             ]
             cancelled = {1}
         elif shutil.which("kdialog"):
-            command = ["kdialog", "--getexistingdirectory", str(initial), "--title", "Select MindMemOS HOME"]
+            command = ["kdialog", "--getexistingdirectory", str(initial), "--title", "Select a folder"]
             cancelled = {1}
         else:
             command = [sys.executable, "-m", "mindmemos_ui.directory_picker", str(initial)]
@@ -111,9 +111,7 @@ def _tk_choose(initial: str) -> None:
     root.withdraw()
     try:
         root.attributes("-topmost", True)
-        selected = filedialog.askdirectory(
-            parent=root, title="Select MindMemOS HOME", initialdir=initial, mustexist=True
-        )
+        selected = filedialog.askdirectory(parent=root, title="Select a folder", initialdir=initial, mustexist=True)
         sys.stdout.buffer.write(selected.encode("utf-8"))
     finally:
         root.destroy()

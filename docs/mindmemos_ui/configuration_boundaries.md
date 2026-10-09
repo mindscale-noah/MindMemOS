@@ -2,6 +2,8 @@
 
 状态：2026-09-21 更新。连接表单、完整 YAML 模板、导入校验和独立 Skill 算法 HTTP 客户端已实现；远程 API Key 与项目映射、UI 全业务远程化及文件上传接口仍须由服务接入层补齐。
 
+2026-09-29 更新：本文的 `skill-client.yaml`、旧客户端和旧配置弹窗描述仅作历史设计参考。当前 Memory 与 Skill 连接统一保存在 SDK v2 `settings.json`；独立 Skill 地址仍要求填写非空 API Key，SDK 提供同步及异步 `/v1/skills/*` 客户端。实际配置见 [使用说明](usage.md) 和 [SDK README](../../src/mindmemos_sdk/README.md)。
+
 ## 设计结论
 
 采用 Memory 与 Skill 均通过 FastAPI 访问的方式。普通用户只配置服务连接；Skill 服务的部署者配置数据库、模型和资源；算法开发者维护算法默认参数与协议。
@@ -49,9 +51,8 @@ Memory 配置仅包含 Memory 服务连接字段。字段名参考当前 SDK；�
 | HTTP 监听地址、端口 | 部署者 | 启动参数；当前默认 `127.0.0.1:8000` | FastAPI 启动入口；不是算法参数 |
 | 服务认证、授权、项目隔离、调用限额 | 服务部署者与服务代码 | 部署级配置；按认证身份检查项目权限 | 需要补齐的 HTTP 边界能力；当前入口没有认证，凭据到项目的映射需由服务认证层完成 |
 | 数据库类型 `persistence.database.class_name` | 部署者 | 本地默认 SQLite；共享部署可显式选择 PostgreSQL | `ServiceConfig` 与数据库配置类 |
-| 数据库 URL、凭据 | 部署者 | SQLite 本地 HOME 模式可沿用 `workspace.json` 的数据库路径；PostgreSQL 显式配置连接 | 数据库 Config；不由客户端传入。显式相对 URL 的当前语义需保留 |
+| 数据库 URL、凭据 | 部署者 | 服务 YAML 必填 `service.home`；省略 SQLite URL 时使用 HOME 下默认路径；PostgreSQL 显式配置连接 | 数据库 Config；不由客户端传入。显式相对 URL 的当前语义需保留 |
 | SQLite `timeout`，PostgreSQL `pool_size`、`max_overflow`、`pool_timeout` | 部署者高级配置 | 当前默认分别 5 秒、5、10、30 秒 | 数据库连接管理，不属于算法调优 |
-| `persistence.config.include_remote` | 部署模板管理 | 按是否需要远端绑定表配置；现有类默认 true，本地工厂默认 false | 只控制相关表注册，不代表自动同步或自动连接远端 |
 | `repository_pipeline`、`training_pipelines`、`evolution_pipelines` | 服务端开发者 / 部署者 | 由可运行的服务模板声明；客户端只使用暴露的能力 | 当前默认训练和演进为空，不能因为接入 HTTP 就声称算法已可运行 |
 | Chat 模型 `model`、`base_url`、`api_key` | 部署者 | 启用相关功能才要求配置；凭据走服务进程环境或部署密钥 | `OpenAIChatConfig` / `AgentConnectionConfig`；Memory 凭据不能混用 |
 | Embedding 模型、地址、凭据、`dimensions`、`send_dimensions` | 部署者 / 模型适配层 | 启用图检索时配置；维度必须与模型和现有向量一致 | `OpenAIEmbeddingConfig`；切换模型或维度不能直接沿用不兼容索引，应另行设计重建与切换 |
@@ -85,7 +86,7 @@ Memory 配置仅包含 Memory 服务连接字段。字段名参考当前 SDK；�
 - 算法源码中的 `Config` 类：参数类型、默认值和校验规则的唯一来源。
 - 独立实验 YAML：记录具体实验模型、参数覆盖和数据划分，不要求每位普通用户创建。
 
-客户端凭据和服务端模型凭据分开保存。新增 `skill-client.yaml` 的 ENV 绑定需明确定义加载规则，不能假设现有代码已支持。当前服务 YAML 不展开 `${VAR}`；已有 Chat 连接类可以读取 `MINDMEMOS_AGENT_API_KEY` 和 `MINDMEMOS_AGENT_BASE_URL`，数据库与 Embedding 的密钥注入应由明确的服务端组装逻辑完成，不能只写占位符就认为会生效。
+客户端凭据和服务端模型凭据分开保存。新增 `skill-client.yaml` 的 ENV 绑定需明确定义加载规则，不能假设现有代码已支持。当前服务 YAML 不展开 `${VAR}`；Chat 的模型凭据和地址必须在 config 的 `api_key`、`base_url` 中显式配置，数据库与 Embedding 的密钥注入也应由明确的服务端组装逻辑完成，不能只写占位符就认为会生效。
 
 ## 代码调用与参数生效流程
 
@@ -123,10 +124,10 @@ Memory 配置仅包含 Memory 服务连接字段。字段名参考当前 SDK；�
 
 - [SDK 配置模型](../../src/mindmemos_sdk/mindmemos_sdk/config/models.py)、[SDK 客户端与共享 transport](../../src/mindmemos_sdk/mindmemos_sdk/client.py)。
 - [UI SDK 可编辑字段](../../src/mindmemos_ui/mindmemos_ui/config.py)、[UI 本地服务组装](../../src/mindmemos_ui/mindmemos_ui/app.py)。
-- [服务配置契约](../../src/mindmemos_skill/mindmemos_skill/api/config.py)、[工厂](../../src/mindmemos_skill/mindmemos_skill/api/factory.py)、[FastAPI 入口](../../src/mindmemos_skill/mindmemos_skill/api/entries/fastapi.py)。
+- [服务配置契约](../../src/mindmemos_skill/mindmemos_skill/config/config.py)、[工厂](../../src/mindmemos_skill/mindmemos_skill/api/factory.py)、[FastAPI 入口](../../src/mindmemos_skill/mindmemos_skill/api/entries/fastapi.py)。
 - [数据库配置](../../src/mindmemos_skill/mindmemos_skill/infra/database/config.py)、[Chat 配置](../../src/mindmemos_skill/mindmemos_skill/agents/buitin_agents/openai_chat/config.py)、[模型连接与 ENV](../../src/mindmemos_skill/mindmemos_skill/agents/config.py)、[Embedding 配置](../../src/mindmemos_skill/mindmemos_skill/infra/embedding/config.py)。
 - [图管理算法配置](../../src/mindmemos_skill/mindmemos_skill/algos/manage/skill_manage/config.py)、[TreeSkill 配置](../../src/mindmemos_skill/mindmemos_skill/algos/train/treeskill/config.py)、[执行环境配置](../../src/mindmemos_skill/mindmemos_skill/infra/execution/config.py)。
-- [训练请求](../../src/mindmemos_skill/mindmemos_skill/pipelines/typing.py)、[训练 Pipeline 边界](../../src/mindmemos_skill/mindmemos_skill/pipelines/train.py)。
+- [训练请求](../../src/mindmemos_skill/mindmemos_skill/api/typing.py)、[训练 Pipeline 边界](../../src/mindmemos_skill/mindmemos_skill/pipelines/train.py)。
 
 
 ## 已实现的连接页面与完整模板
@@ -156,6 +157,6 @@ experiment_dir: experiments
 
 `mode` 可选 local/remote。本地模式只允许回环服务地址；远程模式允许凭据为空以适配服务的认证方式，但不会绕过远端服务的认证要求。两种模式都没有客户端 project_id。
 
-本地 Skill FastAPI 可通过 `--home /path/to/server-home --port 8001` 启动。省略 `--project-id` 或传空字符串时，复用/生成该服务 HOME 的稳定默认项目。显式服务 YAML 与本地 HOME 组装是两个入口，不能混用。此配置页不会自动启动服务，也不会把本地工作台的既有图管理/仓库调用自动切换成远程调用。
+Skill FastAPI 通过 `MINDMEMOS_SKILL_CONFIG_PATH` 选择完整服务 YAML。YAML 中的 `service.home` 决定服务数据目录；`fastapi.auth` 决定鉴权，none 模式必填 `default_project_id`。SDK/UI HOME 只决定客户端设置及配置库的位置，不自动决定服务的数据目录。此配置页不自动启动服务。
 
 `SkillServiceClient(home)` 读取该 HOME 的 Skill 连接文件；其 `train()` / `evolve()` 使用 6 小时默认 HTTP 超时、零自动重试，并在实验目录留下单次调用日志和响应输出。HTTP 失败或超时的日志状态为 failed_or_unknown，不能据此宣称远端算法未执行或已停止。服务端内部的详细算法日志仍由服务端运行目录负责，客户端日志不冒充完整服务端日志。

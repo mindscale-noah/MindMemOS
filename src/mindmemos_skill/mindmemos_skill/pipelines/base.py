@@ -9,8 +9,8 @@ class Pipeline(Registrable[ConfigT]):
 
     Register concrete implementations with Pipeline.register. The service passes
     the single global persistence and a validated implementation configuration.
-    Each pipeline constructs its own algorithms, agents and environments from
-    nested typed configuration; it never resolves global resource names.
+    Pipelines construct owned algorithms and agents from nested typed
+    configuration; training environments are supplied to each train call.
 
     Trainers and evolvers receive detached data, never persistence. Per-call
     state belongs to the call rather than this service-owned pipeline instance.

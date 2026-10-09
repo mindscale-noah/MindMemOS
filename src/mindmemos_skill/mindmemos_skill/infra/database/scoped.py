@@ -112,15 +112,48 @@ class ScopedDatabase:
         rows = self.select(table, filters=key, limit=1)
         return rows[0] if rows else None
 
-    def select(self, table: str, *, filters=None, fields=None, order_by=None, limit: int = 100, offset: int = 0):
-        """Read a bounded page from the active scope."""
+    def select(
+        self,
+        table: str,
+        *,
+        filters=None,
+        any_filters=None,
+        fields=None,
+        order_by=None,
+        limit: int | None = 100,
+        offset: int = 0,
+    ):
+        """Read a bounded page while enforcing the active scope on all alternatives.
+
+        Args:
+            table: Registered table name.
+            filters: Conditions combined with the active scope using AND.
+            any_filters: Optional OR conditions inside the active scope.
+            fields: Columns to return; None returns all columns.
+            order_by: Columns used for deterministic ordering.
+            limit: Maximum number of returned records; None has no limit.
+            offset: Number of matching records to skip.
+
+        Returns:
+            Matching records inside the active scope.
+        """
         return self._database.select(
-            table, filters=self._filters(table, filters), fields=fields, order_by=order_by, limit=limit, offset=offset
+            table,
+            filters=self._filters(table, filters),
+            any_filters=any_filters,
+            fields=fields,
+            order_by=order_by,
+            limit=limit,
+            offset=offset,
         )
 
     def count(self, table: str, *, filters=None) -> int:
         """Count rows inside the active scope."""
         return self._database.count(table, filters=self._filters(table, filters))
+
+    def select_distinct(self, table: str, field: str, *, filters=None) -> list:
+        """Return unique field values inside the active scope."""
+        return self._database.select_distinct(table, field, filters=self._filters(table, filters))
 
     def search(self, table: str, *, vector_field: str, query_vector, filters=None, fields=None, top_k: int = 10):
         """Search vectors only inside the active scope."""

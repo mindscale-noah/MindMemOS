@@ -168,7 +168,7 @@ with db.transaction() as tx:
 ## 验证
 
 ```sh
-.venv/bin/python -m pytest tests/mindmemos_skill/test_infra.py -q
+.venv/bin/python -m pytest src/mindmemos_skill/tests/test_infra.py -q
 ```
 
 测试默认实际运行 SQLite。提供 `MINDMEMOS_TEST_POSTGRES_URL` 后，同一套行为测试

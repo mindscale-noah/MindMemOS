@@ -11,11 +11,11 @@ ALGORITHM_PATTERN = r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
 """Stable lowercase algorithm identifier used as a system-generated suffix."""
 
 VERSION_PATTERN = USER_VERSION_PATTERN[:-1] + r"(?:-([a-z][a-z0-9]*(?:-[a-z0-9]+)*))?$"
-"""User labels and generated algorithm labels accepted by storage migration."""
+"""User labels and generated algorithm labels accepted by storage."""
 
 
 def parse_label(label: str | None) -> tuple[int, int, int, str | None] | None:
-    """Parse a canonical label, returning None for historical free-form labels.
+    """Parse a canonical label, returning None for invalid labels.
 
     Args:
         label: Optional stored display label.
@@ -40,7 +40,7 @@ def next_label(
 
     Args:
         current: Input version; None indicates an initial registration.
-        used: Existing labels of this project and Skill, including historical branches.
+        used: Existing labels of this project and Skill, including existing branches.
         bump: Component to advance; lower components reset to zero.
         algorithm: Reserved suffix; None selects the human namespace.
     """
@@ -53,7 +53,7 @@ def next_label(
         return f"v1.0.0{suffix}"
     parsed = parse_label(current)
     if parsed is None:
-        raise ValueError("Initialize storage to migrate historical version labels first")
+        raise ValueError("Invalid active version label")
     major, minor, patch, _ = parsed
     prior = [value for label in used if (value := parse_label(label)) is not None and value[3] == algorithm]
     if bump == "major":

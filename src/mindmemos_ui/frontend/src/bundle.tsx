@@ -142,7 +142,7 @@ export function BundleBrowser({
         <div
           className="bundle-sidebar"
           role="navigation"
-          aria-label="Bundle 文件"
+          aria-label="Skill 文件"
         >
           <div className="code-title">文件 · {paths.length}</div>
           <FileTree

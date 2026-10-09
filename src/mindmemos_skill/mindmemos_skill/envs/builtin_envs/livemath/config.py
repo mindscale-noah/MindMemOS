@@ -11,7 +11,7 @@ from ...data.config import SplitConfig
 class LiveMathDataConfig(BaseModel):
     """Read official monthly JSON files without importing legacy split layouts."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unrecognized data options."""
 
     data_path: Path
@@ -24,7 +24,7 @@ class LiveMathDataConfig(BaseModel):
 class LiveMathConfig(BaseModel):
     """Execute one tool-free math response and deterministic MCQ evaluation."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unsupported execution options."""
 
     agent: OpenAIChatConfig
@@ -40,7 +40,7 @@ class LiveMathConfig(BaseModel):
 class LiveMathRunConfig(BaseModel):
     """Configure the reproducible local single-rollout entry point."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown entry-point settings."""
 
     data: LiveMathDataConfig

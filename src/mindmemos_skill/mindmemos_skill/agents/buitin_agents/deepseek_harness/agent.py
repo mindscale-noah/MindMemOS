@@ -31,6 +31,7 @@ class DeepSeekHarnessAgent(Agent[DeepSeekHarnessConfig]):
         Returns:
             Final answer and native events; usage stays empty when unavailable.
         """
+        self.config.require_connection()
         workspace = workspace.resolve()
         audit = Path(tempfile.mkdtemp(prefix=".mindmemos-dsh-", dir=workspace))
         rows = [

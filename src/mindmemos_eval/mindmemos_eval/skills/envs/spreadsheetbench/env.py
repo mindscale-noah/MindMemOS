@@ -5,12 +5,10 @@ from __future__ import annotations
 import json
 import shutil
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from ...agents import Message, RunResult
-from ...evolve.algo import EvolveOutcome
 from .data import prepare_data_root
 from .evaluator import compare_workbooks
 
@@ -183,45 +181,11 @@ class SpreadsheetBenchEnv:
             return self._trajectory_path
         return self.run_dir / f"{split}_trajectories.jsonl"
 
-    def evolution_events_path(self, split: str) -> Path:
-        return self.run_dir / f"{split}_evolution_events.jsonl"
-
     def append_trajectory(self, result: SpreadsheetBenchCaseResult) -> None:
         path = self.trajectory_path(result.split)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(asdict(result), ensure_ascii=False) + "\n")
-
-    def append_evolution_event(
-        self,
-        *,
-        split: str,
-        batch_index: int,
-        batch_start: int,
-        batch_end: int,
-        batch_results: list[SpreadsheetBenchCaseResult],
-        started_at: float,
-        ended_at: float,
-        outcomes: list[EvolveOutcome] | None = None,
-        error: BaseException | None = None,
-    ) -> None:
-        path = self.evolution_events_path(split)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        event = {
-            "evolved_at": _iso_utc(ended_at),
-            "started_at": _iso_utc(started_at),
-            "ended_at": _iso_utc(ended_at),
-            "duration_seconds": ended_at - started_at,
-            "split": split,
-            "batch_index": batch_index,
-            "batch_start": batch_start,
-            "batch_end": batch_end,
-            "case_ids": [result.case_id for result in batch_results],
-            "outcomes": [asdict(outcome) for outcome in (outcomes or [])],
-            "error": f"{type(error).__name__}: {error}" if error is not None else None,
-        }
-        with path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     def summarize(self, split: str, results: list[SpreadsheetBenchCaseResult]) -> SpreadsheetBenchRunResult:
         total = len(results)
@@ -285,7 +249,3 @@ def build_env(args: Any) -> SpreadsheetBenchEnv:
 
 def _record_sort_key(record_id: str) -> tuple[int, int | str]:
     return (0, int(record_id)) if record_id.isdigit() else (1, record_id)
-
-
-def _iso_utc(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, tz=UTC).isoformat()

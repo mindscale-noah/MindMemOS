@@ -5,7 +5,7 @@ import json
 from collections.abc import Mapping
 from itertools import combinations, islice
 from threading import Lock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from ....agents import OpenAIChatAgent
 from ....envs.typing import Task
@@ -96,11 +96,11 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
         self._state: OrganizedGraph | None = None
 
     def config_snapshot(self) -> dict:
-        """Return stable non-secret configuration without triggering graph construction."""
+        """Return stable explicit configuration without triggering graph construction."""
         return {
             "algorithm": "skill_manage",
             "schema_version": 1,
-            "config": self.config.model_dump(mode="json", exclude={"embedding": {"api_key"}, "chat": {"api_key"}}),
+            "config": self.config.model_dump(mode="json"),
             "scene_records": {key: value.model_dump(mode="json") for key, value in self.scene_records.items()},
             "storage": self.store.scope,
         }
@@ -121,11 +121,14 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
             if set(self.scene_records) - set(skills):
                 raise ValueError("Scene records refer to Skills outside the candidate scope")
             bindings = self.store.validate_skills(skills)
+            settings = self.config_snapshot()
+            if self.store.message is not None:
+                settings["message"] = self.store.message
             request_hash = graph_digest(
                 {
                     "skills": [[key, skill.snapshot().model_dump(mode="json")] for key, skill in skills.items()],
                     "bindings": bindings,
-                    "settings": self.config_snapshot(),
+                    "settings": settings,
                 }
             )
             if prior is not None and prior.request_hash == request_hash:
@@ -141,14 +144,42 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
                 raise ValueError("Persisted graph membership differs from the candidate scope")
             self._state = OrganizedGraph(request_hash, snapshot_id, nodes, edges, frozenset(expected))
 
+    @property
+    def snapshot_id(self) -> UUID | None:
+        """Return the pinned snapshot after a successful organization or restore."""
+        return self._state.snapshot_id if self._state is not None else None
+
+    def restore(self, snapshot_id: UUID, *, skills: Mapping[str, Skill]) -> None:
+        """Pin a persisted graph for recommendation without rebuilding it.
+
+        Args:
+            snapshot_id: Exact immutable graph version selected by the caller.
+            skills: Complete project-owned version bindings for that snapshot.
+
+        Raises:
+            ValueError: Stored membership or algorithm settings differ from the request.
+        """
+        with self._lock:
+            self._state = None
+            self.store.validate_skills(skills)
+            nodes, edges, metadata = self.store.load(snapshot_id)
+            expected_config = self.config.model_dump(mode="json")
+            if metadata.get("algorithm") != "skill_manage" or metadata.get("config") != expected_config:
+                raise ValueError("Graph algorithm settings differ from the recommendation pipeline")
+            members = {node.metadata.get("collection_skill_id"): node for node in nodes if node.node_type == "skill"}
+            if set(members) != set(skills) or len(members) != sum(node.node_type == "skill" for node in nodes):
+                raise ValueError("Stored graph membership differs from the supplied Skill versions")
+            for skill_id, node in members.items():
+                if node.node_id != node_id(skill_id):
+                    raise ValueError("Stored graph member identity is invalid")
+            self._state = OrganizedGraph("", snapshot_id, nodes, edges, frozenset(skills))
+
     def _build(self, skills, request_hash):
         """Build graph features and vectors before opening the publication transaction."""
         snapshot_id = uuid4()
         nodes = []
         for key, skill in skills.items():
-            parsed = parse_skill_document(
-                skill.bundle.files["SKILL.md"], source_path=key, max_chars=self.config.max_input_chars
-            )
+            parsed = parse_skill_document(skill.content, source_path=key, max_chars=self.config.max_input_chars)
             values = {
                 name: parsed[name]
                 for name in (

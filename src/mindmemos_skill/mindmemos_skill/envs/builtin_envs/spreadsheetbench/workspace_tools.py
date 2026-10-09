@@ -2,13 +2,17 @@
 
 import json
 
-from ....agents.typing import ToolTurn
+from pydantic import JsonValue
+
+from ....agents import OpenAIChatAgent
+from ....agents.typing import AgentResult, ToolTurn
+from .config import SpreadsheetBenchToolCallingConfig
 from .prompts.workspace_tools import SYSTEM_PROMPT
 from .tools import TOOLS, run_tool
-from .typing import SpreadsheetObservation
+from .typing import SpreadsheetContext, SpreadsheetObservation
 
 
-def available_tools(config, text):
+def available_tools(config: SpreadsheetBenchToolCallingConfig, text: str) -> list[dict[str, JsonValue]]:
     """Return tool declarations for this interaction.
 
     Args:
@@ -23,7 +27,7 @@ def available_tools(config, text):
     return TOOLS
 
 
-def system_prompt(context, config):
+def system_prompt(context: SpreadsheetContext, config: SpreadsheetBenchToolCallingConfig) -> str:
     """Render system instructions for the configured protocol.
 
     Args:
@@ -34,7 +38,6 @@ def system_prompt(context, config):
         Initial system message.
     """
     system = SYSTEM_PROMPT
-    tools = context.tools
     if config.skill_loading_mode == "system_prompt" and context.skill_text.strip():
         system += f"\n\n## Skill\n{context.skill_text.strip()}"
     elif context.skill_text.strip():
@@ -43,16 +46,10 @@ def system_prompt(context, config):
             '(e.g. skill(name="xlsx")) to load detailed guidance and the absolute '
             "path to reusable reference scripts before you start."
         )
-    if config.tool_agent == "text_action":
-        system += (
-            '\n\nCall tools using Action: followed by a JSON object with "name" and "arguments". '
-            "Wait for Observation: before continuing. To finish, output ACTION: TASK_COMPLETE.\n"
-            f"Available tools: {json.dumps(tools)}"
-        )
     return system
 
 
-def user_prompt(context, config):
+def user_prompt(context: SpreadsheetContext, config: SpreadsheetBenchToolCallingConfig) -> str:
     """Render public task instructions.
 
     Args:
@@ -76,7 +73,12 @@ def user_prompt(context, config):
     return user
 
 
-def get_observation(response, context, config, agent):
+def get_observation(
+    response: AgentResult,
+    context: SpreadsheetContext,
+    config: SpreadsheetBenchToolCallingConfig,
+    agent: OpenAIChatAgent,
+) -> SpreadsheetObservation:
     """Execute parsed tool calls and encode feedback for the shared loop.
 
     Args:

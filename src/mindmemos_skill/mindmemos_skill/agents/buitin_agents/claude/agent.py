@@ -27,6 +27,7 @@ class ClaudeAgent(Agent[ClaudeConfig]):
         Returns:
             Final answer, native event trajectory, and reported token usage.
         """
+        self.config.require_connection()
         command = [
             self.config.cli_path,
             "--print",

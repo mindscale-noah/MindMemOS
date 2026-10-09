@@ -9,10 +9,10 @@
 ### 1. 启动依赖服务
 
 ```bash
-make db          # 启动 Qdrant / Neo4j / Kafka / ClickHouse / Grafana 等
+make docker SERVICE=memory          # 启动 Qdrant / Neo4j / Kafka / ClickHouse / Grafana 等
 ```
 
-> **注意**：若之前执行过 `make db-clean`（会删除所有 volume），务必同时重启 MindMemOS server，否则 server 的旧连接池会导致 search 返回 500。
+> **注意**：`make clean` 会在确认后停止受管理的应用并删除 Compose 数据卷。评估前请重新启动服务；手动启动的服务也需要重启，避免复用失效的数据库连接。
 
 ### 2. 启动 MindMemOS server
 
@@ -22,10 +22,10 @@ uv run uvicorn mindmemos.api.app:app --host 127.0.0.1 --port 8000
 
 ### 3. 配置 LLM API Key
 
-评测时，`add` 阶段的 LLM 调用由 **server** 自己完成，使用 `config/mindmemos/dev.yaml` 里的 key；`answer` 和 `judge` 阶段由 **eval 进程**直接调用，使用 `config/mindmemos_eval/memory_evaluation_locomo.example.yaml`（或 `memory_evaluation_personamem.example.yaml`） 里的 key。两套 key 相互独立，需要分别配置。
+评测时，`add` 阶段的 LLM 调用由 **server** 自己完成，使用 `config/mindmemos/dev.yaml` 里的 key；`answer` 和 `judge` 阶段由 **eval 进程**直接调用，使用 `config/mindmemos_eval/memory_evaluation/locomo.example.yaml`（或 `config/mindmemos_eval/memory_evaluation/personamem.example.yaml`） 里的 key。两套 key 相互独立，需要分别配置。
 
 ```yaml
-# config/mindmemos_eval/memory_evaluation_locomo.yaml
+# config/mindmemos_eval/memory_evaluation/locomo.yaml
 runner:
   llm:
     model: gpt-4.1-mini
@@ -60,7 +60,7 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 ## Memory 数据集下载
 
 使用 Python 3.12+，从仓库根目录执行以下命令。数据本体不随仓库分发；统一下载脚本从官方来源
-获取数据，版本固定在 [`config/datasets/sources.json`](../../config/datasets/sources.json)。
+获取数据，版本固定在 [`config/presets/dataset_download_sources.json`](../../config/presets/dataset_download_sources.json)。
 
 ```bash
 python -m pip install huggingface_hub
@@ -83,7 +83,7 @@ python scripts/download_datasets.py download --benchmark memory --dataset memory
 复制评测配置，然后在本地副本中更新数据路径和 LLM API key：
 
 ```bash
-cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
+cp config/mindmemos_eval/memory_evaluation/locomo.example.yaml config/mindmemos_eval/memory_evaluation/locomo.yaml
 ```
 
 ```yaml
@@ -97,7 +97,7 @@ benchmarks:
     context_dataset: data/mindmemos_memory/personamem/shared_contexts_32k.jsonl
 ```
 
-PersonaMem 的问题文件和上下文文件需使用相同的上下文长度；使用 `memory_evaluation_personamem.yaml`
+PersonaMem 的问题文件和上下文文件需使用相同的上下文长度；使用 `config/mindmemos_eval/memory_evaluation/personamem.yaml`
 时也需更新这两个字段。LongMemEval 下载的是官方 cleaned 版本，不是示例配置原先引用的本地 smoke 样本。
 MemoryAgentBench 保留官方 Parquet 格式，当前评测器的本地 `dataset` 入口接受 JSON/JSONL，
 需要先转换所需分区再配置该路径。下载脚本不执行格式转换，也不筛选 FactConsolidation 子集。
@@ -134,15 +134,15 @@ LoCoMo 首次通过直接链接下载需要联网。已有目录只校验，不�
 2. 复制配置并填入 eval 进程使用的 LLM API key：
 
    ```bash
-   cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml \
-     config/mindmemos_eval/memory_evaluation_locomo.yaml
+   cp config/mindmemos_eval/memory_evaluation/locomo.example.yaml \
+     config/mindmemos_eval/memory_evaluation/locomo.yaml
    ```
 
 3. 启动服务后运行：
 
    ```bash
    uv run python -m mindmemos_eval.cli memory \
-     --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+     --benchmark-config config/mindmemos_eval/memory_evaluation/locomo.yaml \
      --benchmark-list locomo \
      --algorithm schema \
      --manifest-output reports/locomo_schema.jsonl \
@@ -151,7 +151,7 @@ LoCoMo 首次通过直接链接下载需要联网。已有目录只校验，不�
 
 ### LongMemEval
 
-LongMemEval 与 LoCoMo 共用 `memory_evaluation_locomo.example.yaml`。将数据集路径写入复制后的配置，例如：
+LongMemEval 与 LoCoMo 共用 `config/mindmemos_eval/memory_evaluation/locomo.example.yaml`。将数据集路径写入复制后的配置，例如：
 
 ```yaml
 benchmarks:
@@ -163,7 +163,7 @@ benchmarks:
 
 ```bash
 uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation/locomo.yaml \
   --benchmark-list longmemeval \
   --algorithm vanilla \
   --manifest-output reports/longmemeval_vanilla.jsonl \
@@ -184,15 +184,15 @@ uv run python -m mindmemos_eval.cli memory \
 2. 复制配置并填入 eval 进程使用的 LLM API key：
 
    ```bash
-   cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml \
-     config/mindmemos_eval/memory_evaluation_personamem.yaml
+   cp config/mindmemos_eval/memory_evaluation/personamem.example.yaml \
+     config/mindmemos_eval/memory_evaluation/personamem.yaml
    ```
 
 3. 启动服务后运行：
 
    ```bash
    uv run python -m mindmemos_eval.cli memory \
-     --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
+     --benchmark-config config/mindmemos_eval/memory_evaluation/personamem.yaml \
      --benchmark-list personamem \
      --algorithm schema \
      --manifest-output reports/personamem_schema.jsonl \
@@ -204,8 +204,8 @@ uv run python -m mindmemos_eval.cli memory \
 1. 复制 MemoryAgentBench 配置：
 
    ```bash
-   cp config/mindmemos_eval/dreaming_evaluation_mab.example.yaml \
-     config/mindmemos_eval/dreaming_evaluation_mab.yaml
+   cp config/mindmemos_eval/dreaming_evaluation/memoryagentbench.example.yaml \
+     config/mindmemos_eval/dreaming_evaluation/memoryagentbench.yaml
    ```
 
 2. 按配置中的 `benchmarks.memoryagentbench.dataset` 准备数据文件，并确认 `sub_dataset`、`chunk_size` 与目标实验一致。
@@ -214,7 +214,7 @@ uv run python -m mindmemos_eval.cli memory \
 
    ```bash
    uv run python -m mindmemos_eval.cli memory \
-     --benchmark-config config/mindmemos_eval/dreaming_evaluation_mab.yaml \
+     --benchmark-config config/mindmemos_eval/dreaming_evaluation/memoryagentbench.yaml \
      --benchmark-list memoryagentbench \
      --algorithm vanilla \
      --manifest-output reports/memoryagentbench_vanilla.jsonl \
@@ -273,7 +273,7 @@ No-skill 基线不传 `--skill`；Init-skill 传入初始 Skill，但不传 `--e
 
 ```bash
 uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation/locomo.yaml \
   --benchmark-list locomo,longmemeval,personamem \
   --manifest-output reports/smoke_vanilla.jsonl \
   --api-key-output config/mindmemos/eval_api_keys.yaml \
@@ -299,7 +299,7 @@ uv run python -m mindmemos_eval.cli memory \
 
 ```bash
 caffeinate -si uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation/locomo.yaml \
   --benchmark-list locomo,longmemeval,personamem \
   --manifest-output reports/vanilla_run.jsonl \
   --api-key-output config/mindmemos/eval_api_keys.yaml \
@@ -329,7 +329,7 @@ api_key/project_id）和 ``--no-add``（跳过 add 阶段**以及** add 前的�
 
 ```bash
 caffeinate -si uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
+  --benchmark-config config/mindmemos_eval/memory_evaluation/locomo.yaml \
   --benchmark-list locomo \
   --manifest-output reports/vanilla_run_retry.jsonl \
   --reuse-api-key config/mindmemos/eval_api_keys.yaml \

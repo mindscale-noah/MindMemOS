@@ -1,0 +1,353 @@
+# Complete built-in Skill service configuration; copy to dev.yaml before starting.
+# All fields of the selected implementations are explicit, including optional defaults.
+# Within each config: connections/behavior/concurrency first, advanced tuning/audit last.
+# Fill api_key and base_url in every enabled chat block before model calls.
+# Replace the embedding model, endpoint and dimensions with values from your provider.
+# Each pipeline block is independent: comment out the whole block when not needed.
+# Keep training_pipelines: {} / evolution_pipelines: {} if removing all their children;
+# alternatively comment out the parent mapping as well. A bare key means null and is invalid.
+# When removing simple evolution, also set fastapi.evolution_pipelines: [].
+# Environment, tasks, split and initial Skill version are per-request inputs, not service config.
+# Optional implementation alternatives are shown at the end; do not enable both alternatives.
+service:
+  home: ../../data/mindmemos_skill
+  disabled_services: []
+  persistence:
+    config:
+      prefixed_ids: true
+    database:
+      class_name: postgres
+      config:
+        url: postgresql+psycopg://mindmemos_skill:mindmemos_dev_password@localhost:55432/mindmemos_skill
+        pool_size: 5
+        max_overflow: 10
+        pool_timeout: 30.0
+
+  # Repository operations; this implementation has no additional config fields.
+  repository_pipeline:
+    class_name: repository
+    config: {}
+
+  # Graph queries, organization and recommendation. Comment out this block to disable all.
+  # Set algorithm: null for queries only; organization/recommendation require algorithm.
+  manage_pipeline:
+    class_name: graph_manage
+    config:
+      algorithm:
+        embedding:
+          model: YOUR_EMBEDDING_MODEL
+          base_url: https://YOUR_EMBEDDING_ENDPOINT/v1
+          api_key: null
+          dimensions: 1536
+          send_dimensions: false
+          batch_size: 64
+          timeout_s: 180.0
+          max_retries: 3
+        chat:
+          model: gpt-5.4-mini
+          api_key: null
+          base_url: null
+          max_completion_tokens: 4096
+          temperature: null
+          reasoning_effort: null
+          timeout_s: 180.0
+          max_retries: 3
+          retry_initial_wait_s: 1.0
+          retry_max_wait_s: 60.0
+          top_p: null
+          presence_penalty: null
+          seed: null
+          stop: []
+          response_format: null
+          extra_body: {}
+          response_validation: strict
+          strip_thinking: false
+          retry_policy: transient
+          retry_wait: exponential
+          retry_waits_s:
+          - 5.0
+          - 10.0
+          - 30.0
+          invalid_tool_arguments: error
+          parse_max_attempts: 3
+          parse_retry_mode: direct
+        llm_linking: true
+        query_rewrite: true
+        build_scene: true
+        mode: unified_ppr
+        seed_top_k: 20
+        score_threshold: -1.0
+        dependency_match_threshold: 0.5
+        damping: 0.2
+        max_iter: 50
+        tolerance: 1.0e-06
+        max_input_chars: 1000000
+        llm_batch_size: 32
+      prefixed_graph_ids: true
+
+  # Select a named trainer through TrainingRequest.algo; comment out either child independently.
+  training_pipelines:
+
+    # Skill-Forest: expansion_budget is global and must be at least num_trees.
+    skill_forest:
+      class_name: training
+      config:
+        trainer:
+          class_name: skill_forest
+          config:
+            optimizer:
+              model: gpt-5.4-mini
+              api_key: null
+              base_url: null
+              max_completion_tokens: 16384
+              temperature: null
+              reasoning_effort: null
+              timeout_s: 180.0
+              max_retries: 3
+              retry_initial_wait_s: 1.0
+              retry_max_wait_s: 60.0
+
+            ensemble_strategy: select
+            num_trees: 7
+            train_ratio: 0.5
+            seed: 42
+            candidates_per_node: 3
+            max_depth: 3
+            expansion_budget: 7
+            expansion_concurrency: 12
+            rollout_concurrency: 12
+            model_concurrency: 12
+            min_gain: 0.0
+            early_rejection: true
+            reflection_minibatch_size: 8
+            reflection_edit_budget: 4
+            ranking_enabled: true
+            ranking_edit_budgets:
+            - 4
+            - 3
+            - 2
+            merge_batch_size: 8
+            merge_threshold: 0.15
+            root_share_train_trajectory: false
+            root_share_validation: true
+            cleanup_workspaces: true
+        evaluation_concurrency: 12
+
+    # TreeSkill: optimizer analyzes/fuses; router selects task-specific subtrees.
+    # failure_optimizer is explicit here; set it to null to reuse optimizer settings.
+    treeskill:
+      class_name: training
+      config:
+        trainer:
+          class_name: treeskill
+          config:
+            optimizer:
+              model: gpt-5.4-mini
+              api_key: null
+              base_url: null
+              max_completion_tokens: 4096
+              temperature: null
+              reasoning_effort: null
+              timeout_s: 180.0
+              max_retries: 3
+              retry_initial_wait_s: 1.0
+              retry_max_wait_s: 60.0
+              top_p: null
+              presence_penalty: null
+              seed: null
+              stop: []
+              response_format: null
+              extra_body: {}
+              response_validation: strict
+              strip_thinking: false
+              retry_policy: transient
+              retry_wait: exponential
+              retry_waits_s:
+              - 5.0
+              - 10.0
+              - 30.0
+              invalid_tool_arguments: error
+              parse_max_attempts: 3
+              parse_retry_mode: direct
+            router:
+              model: gpt-5.4-mini
+              api_key: null
+              base_url: null
+              max_completion_tokens: 4096
+              temperature: null
+              reasoning_effort: null
+              timeout_s: 180.0
+              max_retries: 3
+              retry_initial_wait_s: 1.0
+              retry_max_wait_s: 60.0
+              top_p: null
+              presence_penalty: null
+              seed: null
+              stop: []
+              response_format: null
+              extra_body: {}
+              response_validation: strict
+              strip_thinking: false
+              retry_policy: transient
+              retry_wait: exponential
+              retry_waits_s:
+              - 5.0
+              - 10.0
+              - 30.0
+              invalid_tool_arguments: error
+              parse_max_attempts: 3
+              parse_retry_mode: direct
+            failure_optimizer:
+              model: gpt-5.4-mini
+              api_key: null
+              base_url: null
+              max_completion_tokens: 4096
+              temperature: null
+              reasoning_effort: null
+              timeout_s: 180.0
+              max_retries: 3
+              retry_initial_wait_s: 1.0
+              retry_max_wait_s: 60.0
+              top_p: null
+              presence_penalty: null
+              seed: null
+              stop: []
+              response_format: null
+              extra_body: {}
+              response_validation: strict
+              strip_thinking: false
+              retry_policy: transient
+              retry_wait: exponential
+              retry_waits_s:
+              - 5.0
+              - 10.0
+              - 30.0
+              invalid_tool_arguments: error
+              parse_max_attempts: 3
+              parse_retry_mode: direct
+            samples_per_task: 1
+            rollout_concurrency: 12
+            analysis_concurrency: 12
+            localization_concurrency: 12
+            min_trajectories: 1
+            max_trajectories: 1000
+            success_score_threshold: 1.0
+            annotation_mode: required
+            require_skill_match: true
+            analysis_max_turns: 20
+            shell_timeout_seconds: 120
+            analysis_max_tokens: 4096
+            localization_max_tokens: 2048
+            fusion_max_tokens: 4096
+            analysis_temperature: 1.0
+            localization_temperature: 0.0
+            fusion_temperature: 0.0
+            transcript_max_chars: 20000
+            algorithm_version: '1'
+            prompt_version: treeskill-v1
+            analysis_task: treeskill_trajectory_analysis
+            localization_task: treeskill_evidence_localization
+            fusion_task: treeskill_node_fusion
+        evaluation_concurrency: 12
+
+  # Historical trajectory evolution; comment out simple to remove this implementation.
+  # The default evidence requirement is 8 distinct eligible attempts.
+  evolution_pipelines:
+    simple:
+      class_name: simple_evolution
+      config:
+        evolver:
+          class_name: simple_evolve
+          config:
+            optimizer:
+              model: gpt-5.4-mini
+              api_key: null
+              base_url: null
+              max_completion_tokens: 4096
+              temperature: null
+              reasoning_effort: null
+              timeout_s: 180.0
+              max_retries: 3
+              retry_initial_wait_s: 1.0
+              retry_max_wait_s: 60.0
+              top_p: null
+              presence_penalty: null
+              seed: null
+              stop: []
+              response_format: null
+              extra_body: {}
+              response_validation: strict
+              strip_thinking: false
+              retry_policy: transient
+              retry_wait: exponential
+              retry_waits_s:
+              - 5.0
+              - 10.0
+              - 30.0
+              invalid_tool_arguments: error
+              parse_max_attempts: 3
+              parse_retry_mode: direct
+            max_trajectory_chars: 12000
+            max_skill_chars: 100000
+            max_edits: 5
+        work_dir: ./output/skill_evolution
+        sample_size: 8
+        trajectory_limit: 100
+        scan_limit: 1000
+        status: null
+        source: null
+        created_from: null
+        created_to: null
+        seed: null
+        max_record_bytes: 262144
+        max_total_bytes: 8388608
+
+  # Background execution. Use mode: local for in-process tasks, or comment out to disable.
+  task_manager:
+    mode: kafka
+    bootstrap_servers: localhost:9092
+    topic: skill.train.jobs
+    group_id: mindmemos-skill-workers
+    worker: true
+    max_concurrency: 2
+    max_buffered: 1000
+    scan_interval_seconds: 5.0
+
+  # SQL run state and OTLP export. Either sink can be null; at least one must remain.
+  observability:
+    backend:
+      class_name: postgres
+      config:
+        url: postgresql+psycopg://mindmemos_skill:mindmemos_dev_password@localhost:55432/mindmemos_skill
+        pool_size: 5
+        max_overflow: 10
+        pool_timeout: 30.0
+    otlp:
+      endpoint: http://localhost:4318/
+      timeout: 5.0
+    capture_level: info
+    service_name: mindmemos-skill
+
+# HTTP access policy. The default unauthenticated mode permits loopback listening only.
+fastapi:
+  auth:
+    mode: none
+    # For local/gateway_jwt modes, set default_project_id: null.
+    default_project_id: personal
+    # For mode: local, supply the project/API-key YAML path.
+    api_key_file: null
+    # For mode: gateway_jwt, supply the shared secret; otherwise leave null.
+    gateway_jwt_secret: null
+    gateway_jwt_issuer: mindmemos-gateway
+    gateway_jwt_audience: memory-data-plane
+
+  # Allow HTTP evolution only for these configured names; use [] after removing simple.
+  evolution_pipelines:
+  - simple
+
+# Alternative database (replace persistence.database; also supported by observability.backend):
+# class_name: sqlite
+# config:
+#   url: sqlite+pysqlite:///./data/mindmemos_skill/central.db
+#   timeout: 5.0
+# PostgreSQL fields pool_size/max_overflow/pool_timeout do not apply to SQLite.

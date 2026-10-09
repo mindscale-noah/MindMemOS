@@ -7,6 +7,8 @@
     "build": "tsc --noEmit && vite build"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.1.1",
+    "@xyflow/react": "^12.12.0",
     "diff": "^8.0.4",
     "highlight.js": "11.12.0",
     "react": "18.3.1",
@@ -15,6 +17,7 @@
     "remark-gfm": "4.0.1"
   },
   "devDependencies": {
+    "@types/dagre": "^0.7.54",
     "@types/react": "18.3.28",
     "@types/react-dom": "18.3.7",
     "prettier": "3.6.2",

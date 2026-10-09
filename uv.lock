@@ -1593,6 +1593,7 @@ source = { editable = "src/mindmemos_eval" }
 dependencies = [
     { name = "datasets" },
     { name = "mindmemos-sdk" },
+    { name = "mindmemos-skill" },
     { name = "neo4j" },
     { name = "nltk" },
     { name = "openai" },
@@ -1610,6 +1611,7 @@ dependencies = [
 requires-dist = [
     { name = "datasets", specifier = ">=5.0.0" },
     { name = "mindmemos-sdk", editable = "src/mindmemos_sdk" },
+    { name = "mindmemos-skill", editable = "src/mindmemos_skill" },
     { name = "neo4j", specifier = ">=6.2.0" },
     { name = "nltk", specifier = ">=3.9.4" },
     { name = "openai", specifier = ">=2.37.0" },
@@ -1647,11 +1649,11 @@ source = { editable = "src/mindmemos_skill" }
 dependencies = [
     { name = "filelock" },
     { name = "json-repair" },
-    { name = "mindmemos-sdk" },
     { name = "openai" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
     { name = "pydantic" },
+    { name = "pyjwt" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "sqlalchemy" },
@@ -1673,7 +1675,11 @@ alfworld = [
 ]
 fastapi = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "uvicorn" },
+]
+kafka = [
+    { name = "aiokafka" },
 ]
 postgres = [
     { name = "pgvector" },
@@ -1686,12 +1692,13 @@ spreadsheetbench = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiokafka", marker = "extra == 'kafka'", specifier = ">=0.14,<1" },
     { name = "alfworld", marker = "extra == 'alfworld'", specifier = ">=0.4,<0.5" },
     { name = "fastapi", marker = "extra == 'fastapi'", specifier = ">=0.136.1" },
     { name = "filelock", specifier = ">=3.20,<4" },
+    { name = "httpx", marker = "extra == 'fastapi'", specifier = ">=0.28.1" },
     { name = "json-repair", specifier = ">=0.63.4,<1" },
     { name = "jsonschema", marker = "extra == 'agentskillos'", specifier = ">=4,<5" },
-    { name = "mindmemos-sdk", editable = "src/mindmemos_sdk" },
     { name = "openai", specifier = ">=2,<3" },
     { name = "openpyxl", marker = "extra == 'agentskillos'", specifier = ">=3.1,<4" },
     { name = "openpyxl", marker = "extra == 'spreadsheetbench'", specifier = ">=3.1,<4" },
@@ -1701,7 +1708,8 @@ requires-dist = [
     { name = "pdfplumber", marker = "extra == 'agentskillos'", specifier = ">=0.11,<1" },
     { name = "pgvector", marker = "extra == 'postgres'", specifier = ">=0.3,<1" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2,<4" },
-    { name = "pydantic", specifier = ">=2,<3" },
+    { name = "pydantic", specifier = ">=2.7,<3" },
+    { name = "pyjwt", specifier = ">=2.10,<3" },
     { name = "pymupdf", marker = "extra == 'agentskillos'", specifier = ">=1.24,<2" },
     { name = "python-docx", marker = "extra == 'agentskillos'", specifier = ">=1,<2" },
     { name = "python-dotenv", specifier = ">=1,<2" },
@@ -1712,7 +1720,7 @@ requires-dist = [
     { name = "tenacity", specifier = ">=9,<10" },
     { name = "uvicorn", marker = "extra == 'fastapi'", specifier = ">=0.47.0" },
 ]
-provides-extras = ["agentskillos", "spreadsheetbench", "alfworld", "postgres", "fastapi"]
+provides-extras = ["agentskillos", "spreadsheetbench", "alfworld", "postgres", "kafka", "fastapi"]
 
 [[package]]
 name = "mindmemos-ui"
@@ -2639,6 +2647,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c3/b2/bc9c9196916376152d655522fdcebac55e66de6603a76a02bca1b6414f6c/pygments-2.20.0.tar.gz", hash = "sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f", size = 4955991, upload-time = "2026-03-29T13:29:33.898Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
+]
+
+[[package]]
+name = "pyjwt"
+version = "2.15.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/ea/5194e52748b0da83d71e082d75496eaec6e58f419f5e184786ded517e6a9/pyjwt-2.15.1.tar.gz", hash = "sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8", size = 121252, upload-time = "2026-09-28T18:40:42.598Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/50/ca/44de4e75f8aadc457f0634be3b542815078ded46dca30efb960edeecad6e/pyjwt-2.15.1-py3-none-any.whl", hash = "sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193", size = 33860, upload-time = "2026-09-28T18:40:41.429Z" },
 ]
 
 [[package]]

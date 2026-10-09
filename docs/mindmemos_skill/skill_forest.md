@@ -10,10 +10,12 @@
    训练部分为 `floor(train_ratio * N)`，其余作为该树固定 validation；两部分必须非空。
    不额外 bootstrap，不做重复训练采样。`validation_samples` 保留为外部评估数据，
    不参与反思、树内评分、最终选择或合并；其 ID 必须与训练池分离。test 不进入 trainer。
-2. 对所有树 validation 的任务并集执行一次 Root rollout，按任务分发结果，每棵树仍
-   根据自己的 validation 计算分数。`root_share_train_trajectory: true` 时，同一 Root
-   已有的 validation 轨迹也复用于树内训练，仅补采缺失任务；默认 false，各树独立采集
-   Root 训练轨迹。该开关是用户要求的扩展，论文只规定共享 Root validation。
+2. Root 的采集范围由两个开关决定。`root_share_train_trajectory: true` 时，对所有树的
+   train 和 validation 任务并集执行一次 rollout，结果同时用于各树根节点评分与训练反思；
+   该开关优先于 `root_share_validation`。否则，`root_share_validation: true`（默认）时，
+   对所有树 validation 的任务并集执行一次 rollout，根节点训练轨迹仍由各树独立采集。
+   两个开关都关闭时，每棵树分别对自己的 validation 执行 rollout。每棵树始终只根据
+   自己的 validation 计算分数。论文只规定共享 Root validation。
 3. Trainer 分波调度多个父节点。每个父节点在固定树内 train 上采样一次，全部子候选
    复用此批轨迹。每个候选独立重新反思：按执行结果分为成功/失败组，
    用候选 seed 和 seed+1 分别打乱，再按 `reflection_minibatch_size`（默认 8）分批，
@@ -60,38 +62,35 @@
 因此提高利用率可能增加拒绝前已启动的调用。原 `validation_microbatch_size` 配置已删除，不再按批次等待。
 父节点扩展仍保留原来的波次与选择规则。
 
-每次训练在输出目录追加 `scheduler.jsonl`，记录组提交/停止/完成、单次 rollout 启动/完成/失败/释放。
-日志包含事件序号、相对运行时间、组目录、任务 ID、全局及组内排队/执行数量、排队时间与执行耗时。
-`group_stopped` 的 `removed` 是撤销的未启动任务数，`group_active` 是还需收尾的调用数；
-`rollout_completed.after_stop` 标记停止后返回的结果。日志不写任务正文和私有评分数据。
-结合 `rollout_released` 与下一次 `rollout_started` 可定位有无排队工作时的资源空闲，
-具体调用输入输出仍查看各任务目录的 `call.json`。日志写入失败会终止相关任务组，不静默丢弃。
-训练采样与完整训练评分可按任务并行。共享线程池大小由上述上限决定，不受默认
-`asyncio.to_thread` 线程数限制。发生异常或取消时排空已启动的同步调用再释放资源，
-不会在后台留下尚未记录的训练调用。
+节点的 `rollouts.jsonl` 保存用于分裂节点的完整训练轨迹，`evaluation.jsonl` 保存验证节点增益的完整轨迹。
+每行包含任务 ID、Skill 内容哈希和环境返回的 `RolloutResult`；Root 共享的轨迹会标记为非重复物理调用。
+训练采样与完整训练评分可按任务并行。发生异常或取消时排空已启动的同步调用再释放资源。
 
-模型调用禁止自动重试，默认超时 21600 秒。无效 JSON/补丁记为候选无效；
-真实模型、环境或落盘异常终止训练并留存失败，不填充零分、不悄悄改变评分分母。
+优化器模型请求遇到连接错误或暂时性状态码时默认最多重试 3 次（初次请求加重试共最多 4 次），
+每次请求默认超时 21600 秒；可通过 `optimizer.max_retries` 调整重试次数。
+无效 JSON/补丁不重试，记为候选无效；
+重试耗尽或不可重试的模型异常，以及环境或落盘异常，会终止训练并留存失败，
+不填充零分、不悄悄改变评分分母。
 算法不更改调用方环境/Agent 自身的配置。
 
 ## 反思与补丁协议
 
 公共提示词定义于 `prompts.py`，请求也由该模块按结构化字段组织。
-数据集专用反思指令位于 `env_specific/`，通过 `env_adapter.class_name` 显式选择
-`generic`、`livemath`、`alfworld_bounded_history`、`searchqa`、`officeqa` 或 `spreadsheetbench`。
-环境执行由调用方传入的 Environment 负责。
+数据集专用反思指令位于 `env_specific/`。每次 `train(env=...)` 开始时，算法读取
+`Environment` 的注册名；名称与内置 adapter 的 `livemath`、`alfworld_bounded_history`、
+`searchqa`、`officeqa`、`spreadsheetbench_tool_calling` 或 `spreadsheetbench_text_action` 重合时，自动加载同名 adapter，否则使用 `generic`。
+未注册的自定义环境也使用 `generic`。匹配使用注册名，不根据 Python 类名或父类猜测。
 
-`SkillForestTrainer` 在初始化时通过 `SkillForestEnvAdapter.build()` 绑定适配器，省略 `env_adapter` 时使用 `generic`。`train()` 不再接收或切换适配器。配置格式为：
+用户无需传入 `env_adapter`，训练配置也不再接受该字段；请求中的环境配置无需为 Skill-Forest
+提供 `adapters`。环境执行、反思、补丁合并、编辑排序和最终 Skill 合成都使用本次训练的环境及适配。
+同一个 trainer 可用于不同环境，每次调用创建独立 adapter，并输出 INFO 日志，例如：
 
-```yaml
-env_adapter:
-  class_name: livemath
-  config: {}
+```text
+Skill-Forest environment=livemath adapter=livemath (automatic selection)
 ```
 
-用户通过 `@SkillForestEnvAdapter.register("my_env")` 注册子类，并在加载配置前显式导入自己的模块。只需覆盖变化的方法：`render_trajectory()` 调整单条证据文本，`build_reflection_messages()` 调整完整反思请求；`build_patch_merge_messages()`、`build_final_patch_messages()`、`build_ranking_messages()` 和 `build_skill_merge_messages()` 分别负责同类补丁合并、最终补丁合并、编辑排序与完整 Skill 的合并消息。通用类提供所有默认行为。
-
-Adapter 的 `config` 可用完整文本覆盖 `analyst_error`、`analyst_success`、`merge_failure`、`merge_success`、`merge_final`、`ranking`、`hierarchical_merge_skills`，未配置时保留原始资源。Adapter 不持有本次运行的模型、目录或中间任务状态，评分与并发规则仍由算法负责。
+实际选用的 adapter 类型及配置写入训练目录的 `config.json`，参与恢复一致性校验。
+底层 `SkillForestEnvAdapter` 保留独立构造及提示词渲染接口，供离线验证使用；训练入口的选择由环境名决定。
 
 
 每个候选在成功、失败两类训练轨迹上独立反思，提取可泛化的文本编辑；同类编辑分层
@@ -102,21 +101,21 @@ Adapter 的 `config` 可用完整文本覆盖 `analyst_error`、`analyst_success
 共享 `RANKING_PROMPT` 在公共 `SkillForestEnvAdapter` 中以三引号多行常量定义，所有环境继承。
 Ranking 保持模型给出的优先顺序，去重并过滤越界索引，最多保留当前预算个编辑；没有有效索引
 或响应格式无效时标记候选无效，不回退到直接截断。模型传输错误仍终止训练。
-调用前保存 `pre_ranking_patch.json`，完整请求与响应保存到 `ranking/call.json`，筛选结果
-写入 `patch.json`。LiveMath pilot 复用同一流程，只定制数据、随机种子与最终选优规则。
+候选 patch 应用成功后，将完整候选 Skill 原子写入节点的 `node.json`；反思、排序和模型调用
+不再各自创建恢复文件。LiveMath pilot 复用同一流程，只定制数据、随机种子与最终选优规则。
 
-`generic` 保持公开轨迹 JSON 请求，并排除评分事件。五个专用环境使用原 Skill-Forest
+`generic` 使用与 OfficeQA 相同的 Markdown 任务头、初始提示词区和 `[agent]` / `[action]` / `[obs]` 消息结构，并排除评分事件及私有失败原因；自定义工具保留参数，不套用 OfficeQA 的工具默认值。缺少初始提示词或只有部分工具调用时保留现有证据。专用环境使用原 Skill-Forest
 项目的 Markdown 反思与补丁合并协议，通过统一 `RolloutResult` 读取已记录的执行证据：
 
 - LiveMath：实际 system/user 输入、模型回答与选项评分。
 - SearchQA：实际上下文、逐轮回答、EM/F1 及训练参考答案反馈。
-- OfficeQA：任务类型、文档工具名称/参数/对应返回与原始失败原因。
-- SpreadsheetBench：完整多 case 对话、工具交换、case 分界及一次逐格校验报告。
+- OfficeQA：任务类型、原版工具命令/对应返回与原始失败原因；正文从模型回复开始，Steps 按回复与工具交换计数。`read` 默认 80 行、最多 4000 字符且不加行号；`grep` 最多 20 个匹配，`glob` 最多 50 个结果。工具仍限定在任务的公开文档白名单内。
+- SpreadsheetBench：按原始原生工具分支格式保留多 case 对话与 case 分界；工具返回显示为 `[tool]`，不展开 assistant 的 `tool_calls`，不追加逐格校验报告。任务头部保留失败原因。文本动作环境共用此渲染规则。
 - ALFWorld：实际 simulator 任务描述、任务类型、逐步 reasoning/action/observation 及终止原因。
 
 专用反思可读取训练结果里的评分反馈（可能含正确答案）；不直接读取 `reward_data`、
 私有 workbook 或重新构造当前版本的执行提示词。此反馈只用于训练反思，不追加到执行 agent 的输入。
-文本不截断；缺少必需执行上下文或工具配对不完整时明确报错。旧 ALFWorld 结果未保存
+文本不截断；缺少必需执行上下文时明确报错，OfficeQA 还校验工具配对。旧 ALFWorld 结果未保存
 simulator 描述时使用数据任务描述；旧 SpreadsheetBench 结果未保存轮数时按 assistant 消息计数。
 输入任务与结果数量不一致时直接报错。
 
@@ -130,17 +129,18 @@ simulator 描述时使用数据任务描述；旧 SpreadsheetBench 结果未保�
 
 ## 使用
 
-配置示例为 `config/mindmemos_skill/skill_forest/default.yaml`，是算法配置而非 Service YAML。
-调用方需自行配置真实模型连接和 Environment，示例模型名称仅作占位，不在导入或构造时调用。
+独立调用时传入算法配置，而非 Service YAML。调用方需自行配置真实模型连接和
+Environment；下面的模型名称仅作占位，不在导入或构造时调用。
 
 ```python
 from pathlib import Path
 
-import yaml
-
 from mindmemos_skill.algos import Algorithm
 
-options = yaml.safe_load(Path("config/mindmemos_skill/skill_forest/default.yaml").read_text())
+options = {
+    "optimizer": {"model": "replace-with-optimizer-model"},
+    "num_trees": 3,
+}
 trainer = Algorithm.build("skill_forest", options)
 selected = await trainer.train(
     skill=initial_skill,
@@ -152,20 +152,37 @@ selected = await trainer.train(
 selected.export("output/skill_forest/selected")
 ```
 
-首次运行使用全新工作目录；恢复时传入相同输入和相同目录，Trainer 自动复用兼容检查点。输出包括脱敏 `config.json`、树内
-`splits.json`、初始/最终 Skill 快照、`forest.json`、逐候选 patch/diff/决策、逐调用
-请求/结果、最终赢家/合并谱系和 `summary.json` 的实际调用数与用量。
-`status.json` 只有在选定结果写入后才标为 completed。usage 字段存在不代表提供方
-确认了用量，默认零值不能解读为无消耗。
+首次运行使用全新工作目录；恢复时传入相同输入和相同目录。训练目录为：
+
+```text
+<work_dir>/
+├── config.json                  # 脱敏训练与环境配置、树内划分、输入指纹
+├── result.json                  # 完成后的训练结果、选中 Skill、验证与测试汇总
+├── skills/
+│   └── skill-tree-<id>.md       # 有正增益 winner 的树才生成
+└── trees/
+    └── tree-<id>/
+        └── node-<id>/
+            ├── node.json       # patch 应用后的完整 Skill 与节点状态
+            ├── evaluation.jsonl # 节点增益验证的轨迹，一行一条
+            ├── rollouts.jsonl   # 节点分裂所用的轨迹，一行一条
+            └── workspaces/
+                ├── train/      # 每个任务独立的临时工作空间
+                └── eval/
+```
+
+文件按实际发生的阶段创建，未扩展的节点不一定有 `rollouts.jsonl`。`cleanup_workspaces: true`
+是默认值：每次 rollout 完成或失败后删除其任务工作空间；设为 `false` 时保留，便于调试。
+当通用训练 Pipeline 完成外部验证和测试时，将两项汇总写入 `train/result.json` 的
+`validation` 与 `test` 字段；直接调用 Trainer 时这两项为 `null`。
 
 恢复行为：
 
-- `generated.json` 在单个候选的反思、合并、排序及 patch 应用全部完成后原子提交；恢复直接加载最终 Skill。
-- `validated.json` 提交接受、拒绝、提前拒绝、无效 patch 或无变化的终态。正常拒绝不会在恢复时获得额外生成机会。
-- 每条 rollout 和 optimizer 响应完成后保存带输入指纹的 `completed.json`。恢复先加载完整结果，只有缺失任务进入共享队列；验证从已有分数计算提前拒绝，剩余题目保持原编号。
-- 每波父节点列表在执行前保存在 `waves/`。恢复按固定波次重建森林，加载候选与决策，不重复扣除扩展预算。最终 Select 和合并复用相同的调用缓存。
-- `recovery_manifest.json` 校验原始 Skill、数据及顺序、划分、配置、环境和源码指纹；协议或源码变化时拒绝恢复。运行锁防止两个 trainer 同时写入同一目录。
-- `recovery.jsonl` 单独记录恢复和缓存命中；调度日志包含运行 session ID。重做未完成调用前，将旧 `call.json` 移入 `attempts/`，统计仍计入历史物理调用，缓存命中不计作新调用。
+- `config.json` 的指纹校验原始 Skill、数据及顺序、划分、配置、环境和实现；运行锁阻止两个训练器同时写入。
+- `node.json` 在 patch 应用后原子提交完整候选 Skill。若验证尚未完成，恢复复用此 Skill，整组验证从第一题重新执行；`evaluation.jsonl` 重新写入，不复用单题结果。
+- 已完成验证的接受或拒绝状态保存在同一 `node.json`。父节点所有候选处理完毕后，才把父节点标记为已扩展；恢复据此重建 frontier 和剩余扩展预算。
+- Root 评分未提交时重新执行；最终选择中断时重新评分赢家。单次模型调用和 rollout 不设恢复检查点，硬中断可能重跑已发送的请求。
+- 旧格式目录不能直接恢复到新格式；需为旧的未完成运行选择新目录。完成的 `result.json` 可直接复用。
 
 ```python
 selected = await trainer.train(
@@ -179,12 +196,12 @@ selected = await trainer.train(
 
 LiveMath 试点入口支持 `--mode run --resume`，覆盖训练、Select 和三轮测试；仅适用于本版本创建的兼容运行。旧试点只有审计产物，缺少恢复提交记录，必须显式迁移并校验，不能直接传 `--resume`。
 
-Trainer 根据目录自动判断恢复，无需传入恢复开关。硬中断时，已发送但尚未提交结果的请求可能重跑；不保证远端计费请求的 exactly-once。环境未完成的内部步骤也不恢复，只恢复完整单题结果。
+Trainer 根据目录自动判断恢复，无需传入恢复开关。硬中断时已发送但尚未提交结果的请求可能重跑；不保证远端计费请求的 exactly-once。环境内部步骤和单题结果均不单独恢复。
 
 离线验证命令：
 
 ```shell
-.venv/bin/pytest -q tests/mindmemos_skill/test_skill_forest*.py
+.venv/bin/pytest -q src/mindmemos_skill/tests/test_skill_forest*.py
 ```
 
 离线测试覆盖执行协议与数学条件，不代表真实模型效果或各数据集已完成端到端实验。

@@ -8,7 +8,8 @@
 | --- | --- | --- |
 | `searchqa` | context QA；EM、token F1、substring EM | 基准协议的 `[EVALUATION RESULT]` 文本 |
 | `officeqa` | 本地文档工具；官方固定版本的二元评分 | 基准协议的失败原因；成功为空字符串 |
-| `spreadsheetbench` | `workspace_tools` 或 `bash_only`；分别使用独立交互函数 | 统一 `[POST-EXECUTION VERIFICATION]` 逐格报告 |
+| `spreadsheetbench_tool_calling` | 原生 `tool_calls`，工具结果使用 `role=tool` | 统一 `[POST-EXECUTION VERIFICATION]` 逐格报告 |
+| `spreadsheetbench_text_action` | 文本 `Action:` / `Observation:`，仅 bash | 同上 |
 | `alfworld_bounded_history` | 单个独立 game，保留有限数量的历史 observation/action | 基准协议的 episode 失败原因；成功为空字符串 |
 
 SpreadsheetBench 数据入口加载 Verified 400：每题必须恰好匹配一个 `*init*.xlsx` 和一个 `*golden*.xlsx`，不要求文件名前缀一致；缺失或匹配到多个文件时明确报错。当前数据加载器不支持原始 912 题多用例版本。
@@ -20,6 +21,8 @@ SpreadsheetBench 两种交互模式的 `score` 是通过 case 的比例，`succe
 ## 使用
 
 ```python
+import asyncio
+
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.data import Data
 
@@ -29,18 +32,18 @@ splits = data.split(samples, split_file="/path/to/splits.json")
 sample = splits["test"][0]
 
 env = Environment.build("searchqa", {"agent": {"model": "your-model"}})
-result = env.rollout(
+result = asyncio.run(env.rollout(
     sample.task,
     "/path/to/output/one-rollout",
     reward_data=sample.reward_data,
-)
+))
 print(result.reward.score)
 print(result.reward.detail)
 ```
 
 不同并发 rollout 必须使用不同 `work_dir`。恢复时需要相同的 task、私有 reward data、skills 和配置。数据加载器将输入文件和评分文件的内容 hash 纳入 task 或 reward data；文件变化后应重新加载数据。
 
-环境的 `rollout` 和 `_run` 均接收 `list[Skill]`；公共流程按 task 调用一次 `Skill.assemble`，直接把返回的完整 Skill 交给环境；Skill 自己替换任务副本的 bundle，保留 references 等资源和导出能力。环境不区分静态或动态 Skill。TreeSkill 环境负责其 workbook policy 协议，不在 env 内复制 tree routing、skill synthesis 或训练调度逻辑；这些仍属于算法层。
+环境的 `rollout` 接收 `skill_set: SkillSet | None`，`_run` 接收组装后的 `list[Skill]`；公共流程通过 SkillSet 按 task 调用成员的 `Skill.assemble`，直接把返回的完整 Skill 交给环境；Skill 自己替换任务副本的 content，保留 references 等资源和导出能力。环境不区分静态或动态 Skill。TreeSkill 环境负责其 workbook policy 协议，不在 env 内复制 tree routing、skill synthesis 或训练调度逻辑；这些仍属于算法层。
 
 ## SpreadsheetBench 执行依赖
 
@@ -81,7 +84,7 @@ execution = {
 ## 验证
 
 ```sh
-.venv/bin/python -m pytest tests/mindmemos_skill/test_benchmark_envs.py -q
+.venv/bin/python -m pytest src/mindmemos_skill/tests/test_benchmark_envs.py -q
 .venv/bin/python scripts/skill/verify_env_parity.py \
   --reference-envs /path/to/reference/envs \
   --treeskill-env /path/to/legacy/mindmemos_skill/envs/registered_envs/spreadsheetbench
@@ -90,36 +93,34 @@ execution = {
 差分脚本直接读取指定 checkout 的参考 scorer 和反馈生成函数，比较分数以及 UTF-8 文本，并输出参考文件 SHA-256。它不导入旧项目的模型客户端，也不请求模型。测试包括本地 workbook 的真实读取与评分；rollout 测试用确定性 agent 和执行替身覆盖交互、恢复和异常边界，另有本地 Python/uv 启动与超时的真实进程测试；Windows 分支使用模拟测试，尚未在 Windows 实机验证，ALFWorld 集成也需单独验证。
 
 
-## SpreadsheetBench 模式配置
+## SpreadsheetBench 协议与配置
 
-唯一环境和数据注册名均为 `spreadsheetbench`；旧的独立 bash 环境入口已移除。分支由行为命名，交互函数不读取私有评分数据；统一入口负责工作簿准备、分派与评分。
+两个环境按工具协议独立注册，数据加载器仍使用 `Data.build("spreadsheetbench", ...)`。环境配置不再接受 `interaction_mode`、`tool_agent` 或旧的 `reference_stagnation_limit` 字段；选择环境名称即确定协议。
 
-```yaml
-# Workspace file/shell tools (defaults)
-interaction_mode: workspace_tools
-tool_agent: openai_tool
-skill_loading_mode: tool
-max_turns: 30
+```python
+tool_env = Environment.build("spreadsheetbench_tool_calling", {
+    "agent": {"model": "your-model"},
+    "skill_loading_mode": "tool",
+    "max_turns": 30,
+})
+text_env = Environment.build("spreadsheetbench_text_action", {
+    "agent": {"model": "your-model"},
+    "max_turns": 100,
+    "stagnation_limit": 5,
+    "shell_timeout_seconds": 120,
+    "transactional_recalculation": True,
+})
 ```
 
-```yaml
-# Single-workbook bash action loop
-interaction_mode: bash_only
-tool_agent: text_action
-skill_loading_mode: system_prompt
-max_turns: 100
-stagnation_limit: null
-```
+`SpreadsheetBenchToolCallingEnvironment` 固定使用模型 API 原生 `tool_calls`，提供 read/write/edit/shell/skill 工具，支持通过 skill 工具或 system prompt 加载技能。没有工具调用的响应结束任务。
 
-以上为 env options 片段，仍需提供 `agent.model`。统一配置的 `max_turns` 默认是 30；bash 示例按原始实验 pipeline 显式设为 100。`stagnation_limit` 只在 `bash_only` 中使用，默认 null 禁用，与原始循环一致；设置整数属于额外的提前停止策略。新配置包含交互模式，已有 rollout 请使用新的 `work_dir`。
+`SpreadsheetBenchTextActionEnvironment` 固定解析文本 `Action:` JSON，仅提供 bash；结果以用户消息 `Observation:` 返回，不发送原生工具声明。技能预加载到 system prompt。该环境要求单工作簿，展示前 5 行预览，以 `ACTION: TASK_COMPLETE` 结束，并在输出文件缺失时提醒一次。默认连续 5 次相同动作结果或格式错误会停止。
 
-## SpreadsheetBench react 对齐
-
-`spreadsheetbench` 对齐 Skill-Forest T5/T7 实验中的 workspace react，模型通过工具修改 workbook。`tool_agent` 可选 `openai_tool`（默认）或 `text_action`，二者复用 `OpenAIChatAgent` 的解析和 observation 回调。`interaction_mode="bash_only"` 保留单 workbook、前 5 行预览、仅 bash action、输出缺失时提醒一次及可选的重复动作停止行为（默认关闭），必须设置 `tool_agent="text_action"` 和 `skill_loading_mode="system_prompt"`。`workspace_tools` 支持两种 tool agent 和两种 Skill 加载方式。两种模式共用环境内部 `_interact()` 循环，模式模块只提供消息渲染与单轮工具处理。
+两个类互不继承，共同继承 `SpreadsheetExecutionEnvironment`。公共基类负责工作区准备、case 遍历、交互循环、usage 汇总和评分；具体协议由各子类提供。旧环境注册名 `spreadsheetbench` 和 `spreadsheetbench_reference` 已移除，旧配置需迁移到上述新名称，rollout 使用新的工作目录。
 
 ### 算法通过继承定制交互
 
-继承 `SpreadsheetBenchEnvironment`，按需覆盖三个同步方法：
+选择与目标协议一致的具体环境作为父类，按需覆盖三个同步方法：
 
 - `_system_prompt(context) -> str`：初始 system message。
 - `_user_prompt(context) -> str`：公开任务说明。
@@ -127,15 +128,14 @@ stagnation_limit: null
 
 `SpreadsheetContext` 包含公开 Task、本 case 工作区、已组装 Skill 的内容和目录、工具声明，不含 RewardData。消息历史和循环计数由每次调用持有，不存入共享环境实例。`SpreadsheetObservation` 返回 assistant 历史消息、后续反馈消息列表、结束信号、工具加载状态，以及可选的重复动作签名。原生工具协议必须保留 assistant 中的 tool_calls 和反馈中的 tool_call_id。
 
-构造时传入 `agent`，默认环境将其作为底层传输并包装工具解析；需要自行解析原始文本的子类可在构造函数中设置自己的 `self.agent`，TreeSkill 子类即采用这种方式。环境配置中的 `tools` 可传自定义工具声明；`None` 选择模式默认工具，空列表不发送工具声明。执行逻辑由对应 observation 方法负责。
+构造时可传入 `agent` 进行离线测试。原生工具环境将其包装为工具解析 Agent，文本动作环境直接读取原始文本。仅原生工具配置支持 `tools`：`None` 使用默认工具，空列表不发送工具声明；执行逻辑由对应 observation 方法负责。
 
-子类继承工作区校验、case 遍历、交互循环、usage 汇总和统一评分，不覆盖 `_run()` 或复制完整 rollout。提示词快照保存在 `workspace/<case-number>/system.md` 和 `task.md`。评分报告仅在执行结束后追加。
+子类继承工作区校验、case 遍历、交互循环、usage 汇总和统一评分，不覆盖 `_run()` 或复制完整 rollout。提示词快照保存在 `workspace/<case-number>/system.md` 和 `task.md`。评分报告在执行结束后写入 `reward.detail`；`trajectory` 仅保存交互消息。
 
 
 ```python
-env = Environment.build("spreadsheetbench", {
+env = Environment.build("spreadsheetbench_tool_calling", {
     "agent": {"model": "your-model", "max_completion_tokens": 16384},
-    "tool_agent": "openai_tool",
     "max_turns": 30,
     "skill_loading_mode": "tool",
     "execution": {"python_command": ["/path/to/.venv/bin/python"], "timeout_s": 120},
@@ -147,16 +147,16 @@ env = Environment.build("spreadsheetbench", {
 | 模型轮数 | 默认 30 | 默认 30 |
 | 工具集合 | read/write/edit/shell/skill | 相同 |
 | Skill 加载 | 默认 skill 工具，可 system_prompt | 相同；tool 结果先确认，再以 user 消息传入 Skill |
-| 完成条件 | 无 tool calls 时结束 | openai_tool 相同；text_action 使用文本完成标记 |
+| 完成条件 | 无 tool calls 时结束 | 原生工具环境相同；文本动作环境使用完成标记 |
 | completion tokens | 实验配置 16384 | 共用模型配置默认 4096，以上示例显式设为 16384 |
-| reasoning effort | 实验配置 medium | workspace_tools.yaml 显式设为 medium |
+| reasoning effort | 实验配置 medium | 调用方可显式设为 medium |
 | 模型重试 | actor 最多 6 次，2–30 秒带抖动，含 HTTP 425；底层另有重试 | workspace 预设 6 次外层尝试、equal jitter、SDK 2 次重试；完整错误包装行为仍有差异，见下文 |
 | 命令超时 | shell 默认 120 秒，可由 timeout_ms 覆盖 | 相同；显式 timeout_ms 不再受默认值上限截断 |
 | 整题超时/并发 | 实验调度层配置 | 不放入单题环境，由调用层负责 |
 | 执行位置 | 宿主机 case 工作目录 | 本地 case 工作目录；Python/uv 和 shell 可配置，文件持续保留 |
-| 最终详细反馈 | react 原分支不追加完整 verification report | 两种模式共用逐格报告格式，结束后写入 reward.detail 和 trajectory，不送入本轮 actor |
+| 最终详细反馈 | react 原分支不追加完整 verification report | 两种模式共用逐格报告格式，结束后仅写入 reward.detail，不追加到 trajectory |
 
-数据仅支持 Verified 400 单用例，含官方编号不一致的兼容；公开模型消息不含 golden。未要求加载的 Skill 内容不会提前注入 tool 模式的初始提示词。Skill 文本按公共 skill_text 规则组装，暂不支持随 Skill 携带额外脚本文件。
+数据仅支持 Verified 400 单用例，含官方编号不一致的兼容；公开模型消息不含 golden。未要求加载的 Skill 内容不会提前注入 tool 模式的初始提示词。Skill 文本按公共 skill_text 规则组装，Skill 资源随技能导出到工作区。
 
 
 ## 在其他环境中复用执行能力
@@ -176,9 +176,13 @@ result = execute([*config.shell_command, "python solution.py"], workspace, confi
 
 ## 固定实验数据与划分
 
-实验划分位于 `resources/mindmemos_skill/<algo>/<benchmark>/splits.json`，作为本地资源随代码
-提交到 GitHub，不通过下载脚本获取。官方数据统一下载到 `data/mindmemos_skill/<benchmark>/`，
-不按算法复制。下表描述已有实验资源及其历史输入格式，不代表官方下载结果已经转换为这些格式。
+本地 Skill 评测使用的划分和初始 Skill 分别位于
+`resources/skill_evaluation/<算法>-<数据集>/data_splits/splits.json` 和
+`resources/skill_evaluation/<算法>-<数据集>/initial_skill/SKILL.md`，随代码提交到 GitHub，
+不通过下载脚本获取。`<算法>` 为 `skill_forest` 或 `treeskill`。其他尚未纳入本地评测的历史划分仍位于
+`resources/mindmemos_skill/<algo>/<benchmark>/splits.json`。数据文件仍由本地 `data/mindmemos_skill/`
+下的历史实验目录提供，本次资源整理不移动数据集。下表描述已有实验资源及其历史输入格式，
+不代表官方下载结果已经转换为这些格式。
 划分保留原实验 ID 和顺序，不重新随机抽样；`val` 是验证集，空数组表示原协议没有独立验证集。
 
 | 算法 | benchmark | train / val / test | 数据入口 |
@@ -196,6 +200,16 @@ result = execute([*config.shell_command, "python solution.py"], workspace, confi
 
 Skill-Forest 使用原实验仓库发布的 ID/path manifests。TreeSkill 主实验按 Verified 400
 前 200 条演化、后 200 条测试；迁移评测单独存放，不能与主实验视为同一个互斥任务集合。
+其余四组 Skill-Forest 划分分别来自原实验仓库的 `data/searchqa_id_split`、
+`data/officeqa_id_split`、`data/spreadsheetbench_id_split` 和 `data/alfworld_path_split`；
+初始 Skill 来自对应环境的 `skillopt/envs/<环境>/skills/initial.md`。
+本地评测配置中，TreeSkill 只保留 SpreadsheetBench。LiveMath 使用历史运行
+`livemath_skill_forest_t7_repeats/gpt-54-mini_split42_20260902_152252/seed_42` 的
+`forest/_generated_splits/livemathematicianbench_2-1-7_seed42/{train,val,test}/items.json`
+提取 ID；35/18/124 个 ID 及顺序均已与保存的划分逐项核对。该运行使用 `seed=42`
+生成划分，未从预先提供的 train/val split 文件读取。初始 Skill 与该运行的根节点 Skill 内容一致。
+TreeSkill SpreadsheetBench 的本地初始 Skill 取自已有的
+`resources/skill_evolve/spreadsheetbench_init_skill/xlsx/SKILL.md`。
 Soft/Hard 从完整 2,729 个用例中排除演化所用的 200 个 case-1 输入与答案，排除规则保存在
 `excluded_cases.json`，并按原实验规则规范化三个含多余空格的输入文件名。
 HiTab 和 WikiTQ 的历史清单对应转换后的 XLSX；官方下载保留原始格式，不能直接套用历史
@@ -203,7 +217,7 @@ HiTab 和 WikiTQ 的历史清单对应转换后的 XLSX；官方下载保留原�
 
 ### 官方数据下载
 
-来源集中在 `config/datasets/sources.json`。下载入口按 skill / memory 分组及 dataset 选择，不接受算法参数。
+来源集中在 `config/presets/dataset_download_sources.json`。下载入口按 skill / memory 分组及 dataset 选择，不接受算法参数。
 使用 Python 3.12+；Hugging Face 来源需要安装 `huggingface_hub`：
 
 ```bash
@@ -257,13 +271,13 @@ Skill-Forest 参考本地 workspace actor 快照，HEAD 为
 `5d041ffe6e63409d7f05135e7c705cf85357900e`，但 `react_agent.py`、`azure_openai.py` 有未提交修改，
 因此此次对齐的是当前文件快照，不能将其表述为纯 HEAD 版本或历史实验运行时的确定版本。
 
-配置文件均为 Environment options，不含数据路径或算法调度：
+以下是历史 actor 参数记录。对应的 Environment options YAML 已从 `config/mindmemos_skill/` 移除，不含数据路径或算法调度：
 
-| 文件（config/mindmemos_skill/spreadsheetbench/） | 实际适用范围 |
+| 历史 actor 模式 | 实际适用范围 |
 | --- | --- |
-| workspace_tools.yaml | Skill-Forest workspace actor，gpt-5.4-mini，30 轮，16384 completion tokens，medium reasoning |
-| bash_only_instruct.yaml | TreeSkill CLI/preloaded actor 的 instruct 请求设置，Qwen3.5-35B-A3B，seed 41，100 轮 |
-| bash_only_thinking.yaml | 同一 actor 的 thinking 请求设置，seed 41，100 轮 |
+| workspace tools | Skill-Forest workspace actor，gpt-5.4-mini，30 轮，16384 completion tokens，medium reasoning |
+| bash only instruct | TreeSkill CLI/preloaded actor 的 instruct 请求设置，Qwen3.5-35B-A3B，seed 41，100 轮 |
+| bash only thinking | 同一 actor 的 thinking 请求设置，seed 41，100 轮 |
 
 TreeSkill pipeline 的 MAX_TURNS 是 100；类构造默认的 20 不是实验生效值。
 原始 generation JSON 写 temperature=1.0，但每次调用的 ModelSettings 默认值覆盖成 0.7；这里记录生效值。
@@ -280,11 +294,11 @@ endpoint、API key、实际部署别名和 Python 依赖环境仍须由运行方
   --bash-source /path/to/TreeSkill-colleague-share
 ```
 
-脚本直接执行参考 actor，逐轮比较同一模型回复下的 messages，而非只比较复制后的常量。
+脚本直接执行参考 actor，逐轮比较同一模型回复下的 messages。原生工具消息直接比较；文本动作消息只规范化已有的行末空格与工作目录提醒措辞差异。完成状态与上游核对，返回的 output 保留模型原始完成文本。
 覆盖 4 项提示词/工具 schema、7 组 workspace 对话、7 组 bash 对话、6 项 workspace 工具观察。
 workspace 对话包含多个 Skill 导出后的 tool/system_prompt 两种加载方式：正文仅以空行连接，
 不添加标题或路径说明；reference 保留原相对路径，同路径不同内容在写入前报错。
-bash 场景包括 baseline/preloaded、缺失输出后的恢复、格式错误、预算耗尽和连续重复动作。
+文本动作场景包括 baseline/preloaded、缺失输出后的恢复、格式错误、预算耗尽和连续重复动作。连续重复场景对照前 5 轮；新环境默认第 5 次重复后提前停止，超过此阈值的停止行为另由单元测试验证。
 测试输入使用共同绝对工作目录和 input.xlsx/output.xlsx；bash 命令在对话对照中使用确定性替身。
 SDK 请求测试另外验证三个 YAML 的实际请求体、thinking 去除、token 上限省略和 retry waits。
 这些是有范围的确定性验证，不是对全部输入/故障路径的等价证明。
@@ -297,9 +311,9 @@ SDK 请求测试另外验证三个 YAML 的实际请求体、thinking 去除、t
 
 ### 不能宣称完整实验完全一致的边界
 
-1. 默认两种模式共享 cached-value reward 和 TreeSkill 范围解析，均不主动进行公式重算。算法子类可以像 TreeSkill 一样提供重算辅助程序和指令。
+1. 默认两种模式共享 cached-value reward 和 TreeSkill 范围解析，均不主动进行公式重算。文本动作环境默认提供事务式重算辅助程序和指令，由执行 Agent 调用。
    TreeSkill 的其他 evaluator/recalc 变体、原始成功状态与评分关联、Skill-Forest 旧解析不是复刻目标。
-2. TreeSkill 完整实验包含 tree routing、retrieval、fusion 和具体 Skill 选择。本 env 只接收已经组装的 SkillBundle，
+2. TreeSkill 完整实验包含 tree routing、retrieval、fusion 和具体 Skill 选择。本 env 只接收已经组装的 Skill，
    bash 分支对应 CLI/preloaded 执行协议，不实现 `cli_skill_tree_only_routed` 的算法行为或额外资源文件。
 3. 原始 TreeSkill 保留 workbook 文件名；统一 env 使用 input.xlsx/output.xlsx，并使用受控 Python launcher。
    绝对路径、可用依赖、shell 环境和资源布局可能影响模型输出，消息对照只在共同路径下成立。

@@ -2,8 +2,9 @@
 
 from .....envs.builtin_envs.searchqa.typing import SearchQAReward, SearchQATask
 from ..env_adapter import SkillForestEnvAdapter
+from ..trajectory_rendering import recorded_context, render_record
 from ..typing import SkillForestTrajectoryContext
-from .common import SkillForestReferenceEnvAdapter, recorded_context, render_record
+from .common import SkillForestReferenceEnvAdapter
 
 
 @SkillForestEnvAdapter.register("searchqa")

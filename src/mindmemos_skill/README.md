@@ -18,12 +18,14 @@ not download data automatically. Source formats and configurations belong to
 concrete adapters, including adapters for already downloaded datasets.
 
 ```python
+import asyncio
+
 samples = data.load()
 splits = data.split(samples, ratios={"train": 0.8, "val": 0.1, "test": 0.1}, seed=42)
 data.save_splits(splits, "output/splits.json")
 splits = data.split(samples, split_file="output/splits.json")
 sample = splits["train"][0]
-result = env.rollout(sample.task, "output/rollout-001", reward_data=sample.reward_data)
+result = asyncio.run(env.rollout(sample.task, "output/rollout-001", reward_data=sample.reward_data))
 ```
 
 Random splitting requires an explicit integer seed and nonnegative ratios
@@ -41,16 +43,16 @@ membership. Use the exported manifest to freeze a selection.
 
 ## Minimal environment contract
 
-`Environment.rollout(task, work_dir, *, reward_data, skill_set=None, resume=True)` executes one
+`await Environment.rollout(task, work_dir, *, reward_data, skill_set=None, resume=True)` executes one
 sample and returns a `RolloutResult` with `output`, ordered `trajectory` records,
 and a structured `reward`. The task is a `Task` object with required stable `id` and `instruction` fields; subclasses may add fields.
 Supply `skill_set=SkillSet({"skill-id": skill}, max_concurrency=4)`; omitting it runs a baseline.
 `SkillSet` selects all members by default. Dynamic collections override `select(task)`
-and record non-secret selection settings through `config_snapshot()`. The collection calls
+and record explicit selection settings through `config_snapshot()`. The collection calls
 each selected member's `assemble(task)` concurrently, bounded by `max_concurrency` per call,
 and preserves selection order. `_run` receives the resulting `list[Skill]` without reassembly.
 The removed `skills=` rollout argument is not accepted.
-Assembly owns creation of the task-local copy and replacement of its bundle.
+Assembly owns creation of the task-local copy and replacement of its content.
 Concrete classes, auxiliary resources, and export methods remain available.
 Environments never check whether a Skill is static or dynamic or assemble it again.
 Agent dependencies can be injected through the existing service factory.
@@ -74,8 +76,7 @@ The base class fills UTC `started_at`, `finished_at`, and monotonic
 `duration_s` around assembly and `_run`, including preparation, agent execution, and scoring.
 Cache reads and result persistence are excluded. Resume preserves the original
 timing and usage. Saved selection and assembly are reused without selecting or assembling again;
-changed candidates or collection settings require a new work directory. Legacy ordered-list
-records remain readable with a static SkillSet when their source inputs match. Subclass fields on Reward and Usage survive serialization.
+changed candidates or collection settings require a new work directory. Subclass fields on Reward and Usage survive serialization.
 To restore their concrete Python types and validators, declare a RolloutResult
 subclass with those field types and set the environment's `result_type` to it.
 Otherwise, base Reward and Usage objects retain the extension data.
@@ -110,9 +111,9 @@ directory is unsupported. Include agent/model, data, and evaluator versions and
 execution settings in the environment config for resume checking. Code and
 dependency state outside config are not automatically fingerprinted.
 Task and private reward-data fields (including subclass fields), source Skill snapshots,
-and assembled bundles are serialized for resume checking. `_run` receives the original
+and assembled Skill snapshots are serialized for resume checking. `_run` receives the original
 task/reward objects and complete task-local Skill copies. Config is persisted in
-plain text and must not contain credentials. See [中文说明](README_ZH.md) for usage.
+plain text and preserve explicitly configured model credentials. See [中文说明](README_ZH.md) for usage.
 
 [中文说明](README_ZH.md)
 
@@ -167,10 +168,11 @@ src/mindmemos_skill/
 
 Package metadata and the version are maintained in `pyproject.toml`.
 
-The central repository API supports registration, listing, inspection, commit, export,
-history, diff, version selection, metadata changes, and reference-safe deletion.
-See the [API guide](../../docs/mindmemos_skill/central_repository_api.md) for request types,
-configuration, and Python examples. Automatic training and evolution remain unimplemented.
+The local Python repository API supports registration, listing, inspection, commit,
+export, history, diff, version selection, metadata changes, and reference-safe deletion.
+The public HTTP contract is defined in the [target API](../../docs/mindmemos_skill/target_architecture_and_api.md).
+The [Python API guide](../../docs/mindmemos_skill/central_repository_api.md) describes
+the local service methods. Automatic training and evolution remain unimplemented.
 
 ## Logging
 
@@ -209,20 +211,22 @@ Install this package, then run from the repository root:
 
 ```python
 from mindmemos_skill import create_service
-service = await create_service("config/mindmemos_skill/default.yaml")
+service = await create_service("config/mindmemos_skill/dev.yaml")
 ```
 
 Alternatively, pass a configuration object directly:
 
 ```python
-from mindmemos_skill import ServiceConfig, create_service
+from mindmemos_skill import create_service
+from mindmemos_skill.config.loader import read_skill_config
 
-service = await create_service(ServiceConfig())
+config = read_skill_config("config/mindmemos_skill/dev.yaml")
+service = await create_service(config)
 ```
 
-Both inputs produce the same `SkillService` implementing `MindMemOSSkill`. An explicit empty config creates no storage or pipelines; omitting the config argument uses the local workspace repository.
+Both inputs produce the same `SkillService` implementing `MindMemOSSkill`. The configuration argument is required. Complete deployments require `service.home` and `fastapi.auth`. None mode requires `default_project_id`; authenticated modes use the project resolved from credentials. A resource-only `ServiceConfig(home=...)` has no implicit project and requires a trusted host authorizer for business access.
 
-Configuration contains one `persistence` with an inline `database`, an optional `repository_pipeline`, and named `training_pipelines` / `evolution_pipelines` mappings containing complete definitions. See the [default configuration](../../config/mindmemos_skill/default.yaml) and [assembly contract](../../docs/mindmemos_skill/central_repository_api.md).
+Configuration contains one `persistence` with an inline `database`, an optional `repository_pipeline`, and named `training_pipelines` / `evolution_pipelines` mappings containing complete definitions. See the [default configuration](../../config/mindmemos_skill/dev.example.yaml) and [assembly contract](../../docs/mindmemos_skill/central_repository_api.md).
 
 Each pipeline owns its nested algorithm, environment and agent settings. Repeated configuration creates independent components; there are no global resource references. The factory constructs one `SkillPersistence` and passes it to every pipeline through the fixed `persistence` keyword. Pipeline constructors accept `config` and `persistence`; their `config_type` models validate nested settings, and the implementation constructs local components through their existing registries.
 
@@ -230,7 +234,7 @@ Import extensions explicitly before assembly. The factory validates pipeline cap
 
 `service.backends` is diagnostic only. Its keys are `database`, `persistence`, `repository_pipeline`, `training_pipelines.<name>` and `evolution_pipelines.<name>`, not YAML references. Service shutdown closes pipelines in reverse construction order before closing the database. Pipelines release their owned components and clean up partial constructor failures, without closing global persistence.
 
-Run `.venv/bin/python -m pytest tests/mindmemos_skill -q` from the repository root.
+Run `.venv/bin/python -m pytest src/mindmemos_skill/tests -q` from the repository root.
 
 ## FastAPI access
 
@@ -238,46 +242,52 @@ Install the optional HTTP dependencies and start the server from the repository 
 
 ```bash
 uv pip install -e './src/mindmemos_skill[fastapi]'
-make dev-skill
+cp config/mindmemos_skill/dev.example.yaml config/mindmemos_skill/dev.yaml
+make dev SERVICE=skill
 ```
 
-Python and HTTP access share `config/mindmemos_skill/default.yaml`, without mode selection.
+Copy `config/mindmemos_skill/dev.example.yaml` to `config/mindmemos_skill/dev.yaml` before deployment. Python and HTTP access share the user-owned `dev.yaml`. Its `service.disabled_services` setting controls business capabilities,
+while `fastapi.auth` selects authentication and, in none mode, the default project. Relative home and API key file paths resolve against the YAML directory. Omitted SQLite URLs resolve under home; explicit database URLs retain their existing semantics. For a local Python setup, see the [Skill user guide](../../docs/skill/user-guide.md); the available HTTP settings are shown in [the example configuration](../../config/mindmemos_skill/dev.example.yaml).
 The HTTP adapter accepts an existing service and calls its methods without rebuilding backends:
 
 ```python
-from mindmemos_skill import ServiceConfig, create_service
+from mindmemos_skill import create_service
 from mindmemos_skill.api.entries.fastapi import create_app
 
-service = await create_service(ServiceConfig())
+service = await create_service("config/mindmemos_skill/dev.yaml")
 app = create_app(service)
 assert app.state.service is service
 ```
 
-`api/service.py` implements business operations; `api/factory.py` assembles the
-service, while `entries/fastapi.py` wraps it with routes and launches the HTTP server.
-Open `http://127.0.0.1:8000/docs` for API documentation.
+`config/loader.py` resolves configuration, `api/factory.py` assembles the
+service, and `api/service.py` implements business operations. `entries/fastapi.py` contains HTTP routes, request models, and the ASGI application;
+`api/auth.py` resolves local keys and verifies Gateway JWTs.
+Open `http://127.0.0.1:8001/docs` for API documentation.
 
-| HTTP route | Local method |
-| --- | --- |
-| `POST /skills/register` | `register_skill()` |
-| `POST /skills/delete` | `delete_skill()` |
-| `POST /skills/auto-evolve` | `auto_evolve_skill()` |
+The HTTP entry uses `POST /v1/skills/*`. Repository operations available now are
+`register`, `list`, `show`, `commit`, `history`, `diff`, `activate`, `update-info`,
+`delete`, `version-resolve`, and `trajectories/report`, `show`, `list`. Request bodies do not accept `project_id`; the
+deployment binds a local project or resolves a Bearer credential to one project.
 
 `GET /health` returns `{"status":"ok"}` for application availability only.
-Central operations accept typed JSON bodies. All routes and request types are listed in the
-[API guide](../../docs/mindmemos_skill/central_repository_api.md). Unconfigured auto-evolve returns 501.
-Training remains available through the local Python `auto_train_skill()` method; there is no HTTP training route.
+All target routes and request types are listed in the
+[target API](../../docs/mindmemos_skill/target_architecture_and_api.md). Graph,
+some algorithm routes currently return explicit unavailable errors.
+`Idempotency-Key` is ignored in this phase; write requests do not have a
+duplicate-free retry guarantee.
+Python callers can use `run_training()` to await a result or `submit_training()` to submit a task.
+The HTTP training route submits a background task when a task manager is configured.
 The HTTP entry point initializes missing tables; create_app(service) itself does not.
 
 Use the repository Makefile to override the HTTP configuration or address:
 
 ```bash
-make dev-skill SKILL_CONFIG=config/mindmemos_skill/default.yaml SKILL_HOST=127.0.0.1 SKILL_PORT=8001
+make dev SERVICE=skill SKILL_CONFIG=config/mindmemos_skill/dev.yaml SKILL_HOST=127.0.0.1 SKILL_PORT=8001
 ```
 
-`make dev-skill` runs the HTTP server until Ctrl-C. The default interpreter is
-`.venv/bin/python`; override it with `SKILL_PYTHON`. The Makefile adds this checkout's
-Skill source directory to the import path.
+`make dev SERVICE=skill` runs Uvicorn until Ctrl-C, following the main service's startup
+pattern. Set `MINDMEMOS_SKILL_CONFIG_PATH`, `MINDMEMOS_SKILL_API_HOST`, and
+`MINDMEMOS_SKILL_API_PORT` in the root `.env` for persistent overrides.
 
 HTTP startup logic lives in `mindmemos_skill/api/entries/fastapi.py`.
 Service assembly does not import FastAPI or Uvicorn.
@@ -297,26 +307,30 @@ operation semantics, configuration, and integration tests.
 
 ## Skill content
 
-`SkillBundle` reads a directory or `SKILL.md`, serializes canonical SDK-compatible
-JSON, computes its SHA-256 hash, and exports managed files to a directory. Only
-`SKILL.md` belongs to the mutable bundle. `Skill.from_path()` also preserves
-auxiliary files such as references and scripts, and `Skill.export()` exports the
-complete directory. Nonempty destinations require `overwrite=True`, which replaces
-the directory and removes stale files. Resources remain unchanged by assembly and optimization.
-`Skill.assemble(task)` defaults to a complete independent Skill copy with unchanged content.
-`Skill(bundle=..., resources=...)` is a data object with no configuration or registry.
-Algorithms can subclass it and override `assemble(task)` for task-dependent behavior.
-All optimizable content belongs in the bundle; implementation config is fixed.
+`Skill(SkillContent(content=..., resources=...))` represents one source document and
+auxiliary files. `content` is the exact SKILL.md text; runtime resources map safe
+relative paths to bytes. Standard content requires YAML frontmatter with name and
+description. Nonstandard content requires explicit name and description without
+rewriting the text. `Skill.from_path()` reads standard local content as UTF-8 bytes
+and preserves all auxiliary files.
 
-`Skill.snapshot()` captures source content and auxiliary bytes;
-`Skill.from_snapshot()` restores data and preserves existing implementation metadata without loading code. `with_bundle()` creates a new candidate.
-`persistence.skills.add_skill(skill, record)` preserves record metadata while
-replacing bundle/resource/config fields, and `get_skill(version_id)` restores the
-complete Skill. Bundle hashes exclude auxiliary files; the local snapshot hash
-includes them. Resource changes also invalidate rollout resume.
-Rollout requests retain both source and assembled content with hashes. Retries
-reuse saved assembly; `resume=False` assembles again. Old rollout request formats
-require a new work directory. See [the Chinese guide](README_ZH.md) for examples.
+`Skill.export()` exports the complete directory. A nonempty destination requires
+`overwrite=True`, which replaces that directory and removes stale files.
+`with_content()` creates a candidate while preserving resources and subclass
+dependencies; `with_resources()` explicitly replaces resources. `assemble(task)`
+returns a separate task-specific Skill. `SkillSet` selects and assembles members.
+
+`Skill.snapshot()` records content, Base64 resources, source metadata, and runtime
+configuration. `content_hash` is SHA-256 of the exact UTF-8 document;
+`skill_hash` covers that document and all resource paths and bytes using the shared
+canonical encoding. Snapshot restoration revalidates both hashes.
+`Skill.from_snapshot()` restores portable data without loading runtime code;
+`common.skill_runtime.load_runtime_skill()` restores supported dynamic implementations.
+
+Rollout requests retain source and assembled snapshots. Interrupted retries reuse
+the saved selection and assembly without invoking the router again. Incompatible
+or corrupt inputs require a new work directory. See the
+[content contract](../../docs/mindmemos_skill/central_repository_api.md).
 
 TreeSkill's implementation lives in `algos/train/treeskill/`. Import `TreeSkill`
 and `TreeSkillConfig` from that module and construct it explicitly.
@@ -358,17 +372,16 @@ tools. Environments requiring per-turn tool callbacks retain their corresponding
 Agent interface.
 
 Shared settings are `cli_path`, `model`, `timeout_s`, and `extra_args`.
-`api_key` and `base_url` accept direct values. Missing fields resolve from
-`MINDMEMOS_AGENT_API_KEY` and `MINDMEMOS_AGENT_BASE_URL` when config is constructed.
-Credentials are masked in JSON snapshots. Without either source, CLIs preserve
-their native authentication and configuration. Codex and Claude support
-`reasoning_effort`; Claude also supports `max_turns` and `max_completion_tokens`.
-DeepSeek supports `profile` and `provider` (default `deepseek-official`), retains a fresh
-session directory per run, and validates v0 (dsh 0.1.0-rc.6) and v2 session formats.
-Unsupported formats raise explicitly. When Claude resolves a credential or
-endpoint from config or the shared environment, it disables user/project/local settings sources so their
-`env` values cannot override those choices. Other settings from those sources are
-also disabled for that run.
+`api_key` and `base_url` must be supplied directly in configuration for model calls.
+Omitted values remain unset; model calls fail before transport starts. Credentials
+are masked in JSON snapshots. Native CLI model variables are filtered from the
+inherited process environment before config values are injected into the child.
+Codex and Claude support `reasoning_effort`; Claude also supports `max_turns` and
+`max_completion_tokens`. DeepSeek supports `profile` and `provider` (default
+`deepseek-official`), retains a fresh session directory per run, and validates v0
+(dsh 0.1.0-rc.6) and v2 session formats. Unsupported formats raise explicitly.
+Claude disables user/project/local settings sources so their `env` values cannot
+override the model connection; other settings from those sources are also disabled.
 
 Custom gateways must support the native protocol: Responses for Codex, Anthropic
 Messages for Claude, and Chat Completions for DeepSeek. For a gateway exposing

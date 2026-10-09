@@ -1,4 +1,0 @@
-# HTTP deployment allowlist. Names must match evolution_pipelines
-# in the service configuration. An empty list denies execution.
-# Add only pipelines whose execution environment exists in this deployment.
-evolution_pipelines: []

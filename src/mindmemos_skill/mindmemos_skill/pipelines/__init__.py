@@ -1,17 +1,38 @@
-"""Repository operations and composable Skill optimization contracts."""
+"""Shared pipeline contracts and explicit built-in registrations."""
 
+from ..api.typing import (
+    AlgoSkillEvolveResult,
+    OrganizeRequest,
+    OrganizeResult,
+    RecommendRequest,
+    RecommendResult,
+    SkillPipelineRequest,
+    TrainingRequest,
+    TrainingSplit,
+)
 from .base import Pipeline
+from .builtin_pipelines.evolve.simple_evolution import SimpleEvolutionPipeline
+from .builtin_pipelines.manage.graph_manage import GraphManagePipeline
+from .builtin_pipelines.repository.repository import RepositoryPipeline
+from .builtin_pipelines.training.training import ConfiguredTrainingPipeline
 from .evolve import EvolutionPipeline
-from .repository import RepositoryPipeline
+from .manage import ManagePipeline
 from .train import TrainingPipeline
-from .typing import SkillPipelineRequest, SkillPipelineResult, TrainingRequest, TrainingSplit
 
 __all__ = [
     "Pipeline",
     "EvolutionPipeline",
+    "SimpleEvolutionPipeline",
+    "ConfiguredTrainingPipeline",
+    "ManagePipeline",
+    "GraphManagePipeline",
+    "OrganizeRequest",
+    "OrganizeResult",
+    "RecommendRequest",
+    "RecommendResult",
     "TrainingPipeline",
     "SkillPipelineRequest",
-    "SkillPipelineResult",
+    "AlgoSkillEvolveResult",
     "TrainingRequest",
     "TrainingSplit",
     "RepositoryPipeline",

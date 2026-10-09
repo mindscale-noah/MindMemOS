@@ -2,21 +2,25 @@
 
 from .manager import ConfigManager, mask_secret
 from .models import (
+    CONFIG_SCHEMA_VERSION,
     DEFAULT_BASE_URL,
     AuthConfig,
     DefaultsConfig,
+    MemoryServiceConfig,
     NetworkConfig,
     SDKConfig,
-    StorageConfig,
+    SkillServiceConfig,
 )
 
 __all__ = [
     "ConfigManager",
     "mask_secret",
     "SDKConfig",
+    "MemoryServiceConfig",
+    "SkillServiceConfig",
     "AuthConfig",
     "DefaultsConfig",
-    "StorageConfig",
     "NetworkConfig",
+    "CONFIG_SCHEMA_VERSION",
     "DEFAULT_BASE_URL",
 ]
