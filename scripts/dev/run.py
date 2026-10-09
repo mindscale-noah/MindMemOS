@@ -13,6 +13,7 @@ from urllib.request import ProxyHandler, build_opener
 
 import yaml
 from dotenv import load_dotenv
+from mindmemos_sdk.config.constants import MINDMEMOS_HOME_ENV
 
 from . import constants as env
 from .config import finish_plan, memory_document, prepare_environment, skill_document
@@ -219,6 +220,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.action in {"status", "stop", "clean"}:
         return manage(ROOT, args.action)
+    os.environ[MINDMEMOS_HOME_ENV] = str(
+        (args.ui_home or Path(os.environ.get(MINDMEMOS_HOME_ENV) or DEFAULT_UI_HOME)).expanduser().absolute()
+    )
     if args.action == "docker" and args.ui == "1":
         raise RuntimeError("Docker-only startup does not start UI; use make dev or make ui")
     args.ui = args.action == "ui" or (
@@ -298,9 +302,8 @@ def main(argv: list[str] | None = None) -> int:
             if not 1 <= args.ui_port <= 65535:
                 raise ValueError("UI port must be between 1 and 65535")
             command = [sys.executable, "-m", "mindmemos_ui.cli", "--port", str(args.ui_port)]
-            ui_home = args.ui_home or (DEFAULT_UI_HOME if project is not None else None)
-            if ui_home:
-                command.extend(["--home", str(ui_home.expanduser().resolve())])
+            ui_home = Path(os.environ[MINDMEMOS_HOME_ENV])
+            command.extend(["--home", str(ui_home.resolve())])
             commands.append(command)
             urls["UI"] = _service_url(command)
             ready_urls["UI"] = urls["UI"] + "/"
