@@ -56,28 +56,44 @@ TreeSkill 使用 `SpreadsheetBenchTextActionEnvironment`，与原生工具环境
 
 传输层内部重试和已批准的模型输出解析重试不受上述数据跳过规则影响。配置错误、无效输入划分、已有实验目录、文件写入失败以及人工中断不会伪装为成功完成。正常完成执行但评分不通过的任务仍是有效零分训练样本。
 
-## 独立脚本
+## 本地服务对照脚本
 
 在仓库根目录运行。可安装 `mindmemos-skill[spreadsheetbench]` 后运行；下面的 `PYTHONPATH` 用于直接检查当前工作区源码。
 
-离线端到端测试不访问模型或下载数据：
+对照脚本的离线测试不访问模型或下载数据：
 
 ```bash
-PYTHONPATH=src/mindmemos_skill .venv/bin/python scripts/treeskill/smoke.py \
-  --output-dir .local_doc/treeskill/my-smoke-run
+PYTHONPATH=.:src/mindmemos_skill:src/mindmemos_sdk .venv/bin/pytest \
+  tests/scripts/test_treeskill_comparison.py -q
 ```
 
-正式实验脚本接受用户准备的 YAML 配置和一个全新的总实验目录。仓库不再附带实验配置预设：
+`scripts/treeskill/run.py` 通过已运行的本地 Skill 服务训练，并在当前进程完成两次测试。默认取训练划分前 30 题，每题采样 1 条轨迹；初始完整 Skill 和演进后的动态 TreeSkill 分别执行同一测试划分的 200 题，各执行一次。阶段顺序为初始 Skill 测试、服务训练、演进后 Skill 测试；两次测试的结果均不进入训练请求，也不用于选优。
 
 ```bash
-PYTHONPATH=src/mindmemos_skill .venv/bin/python scripts/treeskill/run.py \
-  --config /path/to/your/treeskill.yaml \
-  --output-dir outputs/treeskill/generic-run
+PYTHONPATH=.:src/mindmemos_skill:src/mindmemos_sdk .venv/bin/python scripts/treeskill/run.py \
+  --service-config config/mindmemos_skill/dev.yaml \
+  --sdk-home .mindmemos \
+  --data-root /path/to/spreadsheetbench_verified_400 \
+  --train-count 30 --test-count 200 --concurrency 32 --max-turns 30 \
+  --output output/treeskill_30_200
 ```
 
-该命令会调用配置的模型。凭据和地址在对应模型 config 的 `api_key`、`base_url` 字段中显式提供；模型名必须使用对应服务实际接受的名称。
+服务地址和鉴权取自 SDK home 的设置；执行模型取自服务 YAML 的 TreeSkill `optimizer`。采样、分析、定位并发由运行中的服务配置决定，`--concurrency` 仅设置当前进程的测试并发。服务必须与所传 YAML 使用相同的 TreeSkill 配置，并与当前进程共享输出目录和数据集的绝对路径。服务重载配置后，应使用新的输出目录。
 
-加 `--preflight-only` 只检查数据、初始 Skill 和本地重算运行时，不调用模型；结果仍写入指定目录，状态为 `preflight`。随后正式实验须使用另一个新目录。reference 配置需要自行提供授权的原始 xlsx Skill，脚本会校验 `SKILL.md`、`recalc.py`、`LICENSE.txt` 三个文件的 SHA-256，不下载或替换它们。
+加 `--preflight-only` 只检查本地输入、Python 工具环境和真实公式重算，不调用模型；加 `--probe-only` 还验证服务鉴权和真实模型响应。预检成功后可在相同输入和目录运行正式实验。正常完成的 rollout 会复用；已记录的执行失败不会在同一目录自动重跑。改变输入要求新目录。首题执行异常会阻止该阶段的批量调用，普通评分失败仍计入有效零分样本。
+
+显式添加 `--no-recalculation` 时，训练和两次测试都关闭 `transactional_recalculation`，跳过 LibreOffice/UNO 预检，并且不向任务工作区写入重算助手或追加重算指令。实验协议记录该选项；必须使用新的输出目录。评分仍比较工作簿中保存的单元格缓存值，新增公式没有缓存值时可能被判为错误，因此应将这组结果标为未重算公式的实验。
+
+根目录保存 `events.jsonl`、`service_progress.jsonl`、`comparison.json`、`patch_diagnostics.json`、`patches.csv` 和逐题配对的 `paired_results.csv`。两次测试分别位于 `baseline/` 和 `evolved/`；训练算法的审计位于 `training/train/`。每条测试结果保留源请求、任务实际组装的 Skill、模型轨迹、评分、usage 和耗时。演进后的测试从服务版本快照恢复动态 TreeSkill，保留任务时路由，不仅加载导出的 Markdown。
+
+可在实验期间重新汇总已落盘的中间结果：
+
+```bash
+PYTHONPATH=.:src/mindmemos_skill:src/mindmemos_sdk .venv/bin/python scripts/treeskill/report.py \
+  --output output/treeskill_30_200
+```
+
+patch 统计区分实际修改 `applied`、模型主动不修改 `model_declined`、内容或结构校验拒绝 `validation_rejected`、被接受但全文未改变 `accepted_no_change`。融合模型调用或 JSON 解析异常可能没有 `patch.json`，因此同时统计 analysis/localization/fusion 的失败记录和模型失败尝试。`result.accepted=true` 本身不足以证明 patch 生效；原因、全文前后对比和 diff 均保留在算法原始审计目录。
 
 参考公式重算需要可运行的 LibreOffice 和包含 pyuno 的 Python，可通过 `SPREADSHEETBENCH_SOFFICE_PATH`、`SPREADSHEETBENCH_LIBREOFFICE_PYTHON` 指定。重算运行时的环境变量和工作区辅助文件统一使用 SpreadsheetBench 命名；旧环境变量不再读取。预检会真实验证公式缓存值；缺少运行时会明确失败，不静默禁用公式重算。
 
@@ -85,7 +101,7 @@ PYTHONPATH=src/mindmemos_skill .venv/bin/python scripts/treeskill/run.py \
 
 历史参考实验使用 Qwen instruct/thinking 参数、seed=41、200/200 划分、采样并发 16、分析并发 128、定位并发 16；失败分析使用独立 instruct 参数，融合顺序执行。仓库已移除对应 YAML 预设，复现实验时需自行提供等价配置。
 
-`resources/mindmemos_skill/treeskill/reference/splits.json` 保存参考分支有序的 train/test ID，没有重新抽样。参考资源中的 val 是 train 的副本，且原实验脚本不使用 val；迁移文件按已确认协议将 val 置空，这一转换写在 `provenance.json`。`train_limit`、`test_limit` 只取各有序列表的前缀。若不需要 test，可复制划分文件并将 test 改为空列表。
+当前对照脚本读取 `resources/mindmemos_skill_eval/treeskill-spreadsheetbench/data_splits/splits.json` 的固定有序 train/test ID，没有重新抽样；val 必须为空。`--train-count`、`--test-count` 取对应列表前缀，并严格检查请求数量和划分互斥。
 
 脚本先通过现有 Data 后端加载任务和私有评分数据，校验划分互斥，再构建环境。没有新增数据集下载动作；数据下载沿用仓库现有环境脚本。
 
