@@ -31,7 +31,9 @@ async with await create_service("/path/to/your/service.yaml") as service:
 ```
 
 `tasks` 使用公共 `DataSample`，包含公开任务和独立私有评分输入。所有任务必须且只能分配到
-train/val/test 的一个集合。请求必须提供工作目录；相对路径以服务进程工作目录为基准。
+train/val/test 的一个集合。Task、RewardData 和环境配置只提供业务数据与文件路径，
+无需传入 `sha256`、`source_sha256`、文件 hash 字典或 `evaluator_sha256`。系统自动计算外部
+输入指纹并保存到私有恢复记录；文件内容变化后需使用新的工作目录。请求必须提供工作目录；相对路径以服务进程工作目录为基准。
 Python 调用会等待训练及发布完成。调用方须准备完整 `DataSample` 与 train/val/test 划分。
 `auto_accept` 默认是 `True`，发布后把训练结果设为当前生效版本；传入
 `auto_accept=False` 时仍保存并返回新版本 ID，但当前生效版本保持不变，可稍后显式切换。
@@ -131,7 +133,7 @@ CLI 不传 `--auto-accept` 时保存新版本但保持当前版本；传入时�
 - `task show`、单次 `task progress`、`task progress --follow`，以及 `--after` 排除已读事件；事件序号连续、follow 不重复且终态退出。
 - 空轨迹和只有 2 条轨迹时，evolve 在 `sample_size=3` 下失败且不增加版本。
 - 上报 10 条轨迹：目标 Skill 有 7 条 completed、1 条 failed，另一 Skill 有 2 条 completed；状态和家族过滤正确。
-- 演进按 `status=completed`、`source=reported` 收集，`trajectory_limit=5` 限定收集数量，再以 `seed=42` 无放回采样 3 条；两次采样一致，排除 failed 和其他 Skill 的轨迹。
+- 演进按选定版本收集，`traj_collect.trajectory_limit=5` 限定收集数量，再以 `traj_collect.seed=42` 无放回采样 3 条；两次采样一致，排除其他版本的轨迹。
 - 图发布、列表、解析、历史、精确快照读取、推荐和重复发布；2 个 Skill 节点、1 条边，相同图成员的重复发布复用快照。
 
 `summary.json` 保存验收结果；`commands.jsonl` 保存每次命令的参数、输入、输出和退出码；
@@ -197,7 +199,7 @@ done
 
 每次 evolve 提交后先跟踪对应 task 到终态，再开始下一次演进。进度 `evidence` 显示收集和合格数量，
 `sampled` 显示交给算法的轨迹数量，之后为 `evolved`、`published`。
-目标 Skill 的轨迹跨历史版本收集；CLI 的 `trajectory list SKILL_REF` 则只列出引用选定版本的轨迹。
+演进与 CLI 的 `trajectory list SKILL_REF` 均只收集选定版本的轨迹，不混入同一 Skill 其他版本的轨迹。
 
 图流程可直接使用同一个 Skill，或再注册另一个 Skill 后增加第二个 `--skill`：
 
@@ -209,8 +211,8 @@ done
 ```
 
 当前 graph HTTP 入口同步返回快照 ID，没有异步 task ID；`task progress` 用于 train/evolve。
-修改 `sample_size`、`trajectory_limit`、`scan_limit`、`status`、`source` 或 `seed` 后，
-重启演示服务即可测试其他收集策略。`scan_limit` 是检查数据库行数的上限，不是最终采样数量。
+修改 `traj_collect` 中的 `sample_size`、`trajectory_limit`、`max_page_size` 或 `seed` 后，
+重启演示服务即可测试其他收集策略。收集按页进行，直到达到 `trajectory_limit` 或没有更多数据库记录。
 
 ## 配置字段与可选编辑器提示
 
@@ -307,3 +309,18 @@ Kafka 模式的任务请求保存在服务数据库中；本地模式仍只保�
 local 提交在缓冲区满时等待容量；调用方取消等待时，该次未接纳的提交会清理。Kafka 消费与过期任务扫描共用同一个 dispatcher，相同 task ID 在排队或运行期间合并通知。Kafka 缓冲区满时不阻塞消费循环：数据库任务仍由后续通知或恢复扫描再次调度。只有获得执行名额后才 claim 数据库任务，名额持续持有至执行、结果写入和清理完成。
 
 关闭 manager 会停止接收、唤醒等待提交的调用方并取消排队和运行中的工作。local 将已接纳但未完成的任务标记为 cancelled；Kafka 未领取的任务保持原状态，已领取而中断的任务等待 lease 过期后接管。local 仍使用内存状态，Kafka 仍使用数据库状态。
+
+
+## 无监督历史轨迹演进
+
+具体实现、配置、提示词和裁剪逻辑位于 `algos/evolve/simple_evolve/`；`algos/evolve/` 仅保留公共基类、轨迹类型和包入口，其他演进算法使用独立子目录。
+
+内置 `simple_evolution` / `simple_evolve` 先在 pipeline 中将 Skill 家族引用解析为 active 版本；指定 `base_version_id` 时使用该版本。轨迹查询只接受 `skill_version_id`，直接在数据库 filters 中按该版本筛选，不按家族或绑定 JSON 扫描。再从合格池无放回随机采样。采集和采样配置集中于 `TrajCollectConfig`，通过 `traj_collect` 设置。默认 `sample_size=40`；不足 40 条时任务失败，可显式降低采样量。默认候选池最多保留最近 100 条匹配轨迹，`max_page_size=200` 限制每页读取数量；实际每页最多读取剩余所需数量，持续查询直到收集满或没有更多记录；时间范围、状态和来源不在调用时传入，使用 `collect_skill_trajectories` 的默认值，均不限制。采集不设置单条或总字节上限，也不按记录大小跳过轨迹；消息裁剪仅在模型输入阶段执行。随机采样针对该受限池，不是整个数据库。
+
+采样轨迹按 `batch_size=8` 分组，最多 `concurrency=5` 个模型调用并行提取 patch。最后不足 8 条也独立成组。每组直接输出 `reasoning + edits`，不按成功、失败分组，不向模型提供 reward、status 或数值评分。目标优先级为避免重复错误，其次减少无效操作。
+
+消息文本按角色保留头尾、从中间裁剪，并标记省略：user/system 默认 60000 字符，assistant 默认 12000 字符，tool/其他观察默认 6000 字符。结构化消息的文本字段共享该消息预算；JSON 结构和顶层角色、消息标识保留。任务说明和系统提示使用 user 的预算；历史 Skill 原文不裁剪，超过 `max_skill_chars` 时失败。裁剪只影响模型输入，不修改数据库轨迹。没有额外整条轨迹截断，避免删除用户要求或尾部反馈。
+
+各批 patch 两两并行合并，奇数个时最后一个直接进入下一层，直到剩下一个 patch。40 条默认形成 5 个批次，合并层为 5 → 3 → 2 → 1。所有提取与合并均基于同一份原始 Skill；每次模型返回都检查修改数量和精确文本目标，最终仅应用一次。默认每个 patch 最多 5 项修改。
+
+没有证据支持修改时允许空 patch：返回原版本，报告 `unchanged`，不发布新版本、不改变当前选择。采样证据和最终候选继续按 run ID 保存，中断恢复复用原样本；最终候选生成前的中断会重新执行提取和合并。旧 `max_trajectory_chars` 配置已替换为上述三个角色预算。

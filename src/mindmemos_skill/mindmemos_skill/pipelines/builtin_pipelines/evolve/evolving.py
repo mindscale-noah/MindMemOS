@@ -14,7 +14,6 @@ from ....common.checkpoint import boundary, fingerprint
 from ....common.json import read_json, write_json
 from ....common.skill_runtime import load_runtime_skill
 from ....common.skill_versions import snapshot_from_version
-from ....common.time_utils import utcnow
 from ....common.trajectories import collect_skill_trajectories
 from ....envs.typing import Reward, Task
 from ....infra.task_manager.progress import ProgressReporter
@@ -49,17 +48,17 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
     async def evolve(
         self, request: SkillPipelineRequest, *, reporter: ProgressReporter | None = None
     ) -> AlgoSkillEvolveResult:
-        """Collect, randomly sample, reflect and publish an exact child version.
+        """Collect, sample, merge batch patches and publish a changed child version.
 
         Args:
             request: Authorized project, Skill reference and optional expected parent.
             reporter: Optional progress sink for evidence, evolution, and publication.
 
         Returns:
-            Identity of the version durably published by this run.
+            Identity of the published child, or the original version when unchanged.
 
         Raises:
-            ValueError: No usable evidence or no changed candidate exists.
+            ValueError: Evidence is insufficient or the candidate patch is invalid.
             SkillConflictError: The current selection changed before publication.
         """
         request = SkillPipelineRequest.model_validate(request)
@@ -99,6 +98,28 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                 write_json(candidate_path, snapshot)
                 if reporter is not None:
                     await reporter.report(stage="evolved", message="Skill candidate created")
+            evidence = boundary(directory / "evidence.json", input_hash)
+            if evidence is None:
+                raise ValueError("Evolution candidate requires its sampled evidence checkpoint")
+            await run_sync(
+                self.persistence.trajectories.mark_consumed,
+                base.version_id,
+                [item["record"]["trajectory_id"] for item in evidence["samples"]],
+                run_id,
+            )
+            if snapshot.skill_hash == base.skill_hash:
+                if reporter is not None:
+                    await reporter.report(stage="unchanged", message="No supported Skill changes")
+                return AlgoSkillEvolveResult(
+                    skill_id=base.skill_id,
+                    base_version_id=base.version_id,
+                    version_id=base.version_id,
+                    run_id=run_id,
+                    content=base.content,
+                    resources=base.resources,
+                    content_hash=base.content_hash,
+                    skill_hash=base.skill_hash,
+                )
             version = await run_sync(
                 store.commit_algorithm,
                 owner,
@@ -131,7 +152,6 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
 
     async def _evidence(self, request, owner, base, directory, input_hash, reporter):
         """Reuse the exact sampled records after an interrupted model call."""
-        store = self.persistence.skills
         evidence_path = directory / "evidence.json"
         saved = boundary(evidence_path, input_hash)
         if saved is not None:
@@ -142,33 +162,15 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
             records = await run_sync(
                 collect_skill_trajectories,
                 self.persistence,
-                skill_id=owner.skill_id,
-                limit=self.config.trajectory_limit,
-                scan_limit=self.config.scan_limit,
-                created_from=self.config.created_from,
-                created_to=self.config.created_to or utcnow(),
-                status=self.config.status,
-                source=self.config.source,
-                max_record_bytes=self.config.max_record_bytes,
-                max_total_bytes=self.config.max_total_bytes,
+                skill_version_id=base.version_id,
+                limit=self.config.traj_collect.trajectory_limit,
+                max_page_size=self.config.traj_collect.max_page_size,
             )
-            eligible = []
-            for record in records:
-                if not record.task_instruction.strip():
-                    continue
-                version_id = record.skill_version_id or _bound_version(record.skill_bindings, owner.skill_id, store)
-                if version_id is None:
-                    version_id = _bound_version(record.injected_skills, owner.skill_id, store)
-                if version_id is None:
-                    continue
-                historical = await run_sync(store.get, version_id)
-                if (
-                    historical is None
-                    or historical.project_id != request.project_id
-                    or historical.skill_id != owner.skill_id
-                ):
-                    continue
-                eligible.append((record, version_id))
+            eligible = [
+                (record, base.version_id)
+                for record in records
+                if record.task_instruction.strip() and record.skill_version_id == base.version_id
+            ]
             if reporter is not None:
                 await reporter.report(
                     stage="evidence",
@@ -177,13 +179,13 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                     total=len(records) if records else None,
                 )
             if not eligible:
-                raise ValueError("No eligible historical trajectories for this Skill")
-            if len(eligible) < self.config.sample_size:
+                raise ValueError("No eligible historical trajectories for this Skill version")
+            if len(eligible) < self.config.traj_collect.sample_size:
                 raise ValueError("Fewer eligible trajectories than sample_size")
             sample = (
-                random.SystemRandom().sample(eligible, self.config.sample_size)
-                if self.config.seed is None
-                else random.Random(self.config.seed).sample(eligible, self.config.sample_size)
+                random.SystemRandom().sample(eligible, self.config.traj_collect.sample_size)
+                if self.config.traj_collect.seed is None
+                else random.Random(self.config.traj_collect.seed).sample(eligible, self.config.traj_collect.sample_size)
             )
             boundary(
                 evidence_path,
@@ -218,17 +220,19 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
             )
         trajectories = []
         for record, version_id in sample:
-            historical = await run_sync(store.version_by_id, request.project_id, version_id)
+            if version_id != base.version_id or record.skill_version_id != base.version_id:
+                raise ValueError("Sampled trajectory does not match the selected Skill version")
             success = record.reward_metadata.get("success")
             reward = None
             if record.reward_score is not None and isinstance(success, bool):
                 reward = Reward(score=record.reward_score, success=success, detail=record.reward_detail or "")
             trajectories.append(
                 SkillTrajectory(
+                    trajectory_id=record.trajectory_id,
                     task=Task(id=record.task_id, instruction=record.task_instruction),
                     task_system_prompt=record.task_system_prompt,
                     task_metadata=record.task_metadata,
-                    skills={owner.skill_id: Skill.from_snapshot(snapshot_from_version(historical))},
+                    skills={owner.skill_id: Skill.from_snapshot(snapshot_from_version(base))},
                     trajectory=[event for event in record.trajectory if isinstance(event, dict)],
                     reward=reward,
                     status=record.status,
@@ -237,16 +241,3 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                 )
             )
         return trajectories
-
-
-def _bound_version(bindings: list, skill_id: str, store) -> str | None:
-    """Find a historical exact version in a local execution binding."""
-    for binding in bindings:
-        if not isinstance(binding, dict):
-            continue
-        value = binding.get("version_id")
-        if isinstance(value, str) and value:
-            version = store.get(value)
-            if version is not None and version.skill_id == skill_id:
-                return value
-    return None

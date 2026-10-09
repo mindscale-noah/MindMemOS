@@ -9,6 +9,9 @@
 # When removing simple evolution, also set fastapi.evolution_pipelines: [].
 # Environment, tasks, split and initial Skill version are per-request inputs, not service config.
 # Optional implementation alternatives are shown at the end; do not enable both alternatives.
+# SpreadsheetBench creates its Python environments under MindMemOS home/envs on initialization.
+# make dev uses the project .mindmemos directory; no per-environment Python path is configured.
+# Task data and environment settings contain no caller-supplied hashes; runtime fingerprints are automatic.
 service:
   home: ../../data/mindmemos_skill
   disabled_services: []
@@ -287,20 +290,19 @@ service:
               invalid_tool_arguments: error
               parse_max_attempts: 3
               parse_retry_mode: direct
-            max_trajectory_chars: 12000
+            batch_size: 8
+            concurrency: 5
+            user_message_chars: 60000
+            assistant_message_chars: 12000
+            tool_message_chars: 6000
             max_skill_chars: 100000
             max_edits: 5
         work_dir: ./output/skill_evolution
-        sample_size: 8
-        trajectory_limit: 100
-        scan_limit: 1000
-        status: null
-        source: null
-        created_from: null
-        created_to: null
-        seed: null
-        max_record_bytes: 262144
-        max_total_bytes: 8388608
+        traj_collect:
+          sample_size: 40
+          trajectory_limit: 100
+          max_page_size: 200
+          seed: null
 
   # Background execution. Use mode: local for in-process tasks, or comment out to disable.
   task_manager:

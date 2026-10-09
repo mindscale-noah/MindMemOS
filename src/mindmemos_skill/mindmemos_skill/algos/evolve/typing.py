@@ -17,6 +17,9 @@ class SkillTrajectory(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
     """Reject unknown fields and accept the project's runtime Skill objects."""
 
+    trajectory_id: str | None = None
+    """Stored execution identity used to trace patch evidence; None uses a local index."""
+
     task: SerializeAsAny[Task]
     """Task that produced this historical execution, including subtype fields."""
 
