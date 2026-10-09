@@ -1,10 +1,36 @@
 import React, { useEffect, useRef, useState } from "react";
-import { versionLabel, type Version } from "./api";
-export function useLoad<T>(load: () => Promise<T>, key: string) {
+import { api, versionLabel, type Version } from "./api";
+export function useRefresh(action: () => void) {
+  const [error, setError] = useState("");
+  const pending = useRef(false);
+  async function refresh() {
+    if (pending.current) {
+      setError("操作频繁，请稍后重试。");
+      return;
+    }
+    pending.current = true;
+    setError("");
+    try {
+      await api("refresh", "POST");
+      action();
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      pending.current = false;
+    }
+  }
+  return { refresh, error };
+}
+export function useLoad<T>(
+  load: () => Promise<T>,
+  key: string,
+  enabled = true,
+) {
   const [value, setValue] = useState<T>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
     setLoading(true);
     setError("");
@@ -22,7 +48,7 @@ export function useLoad<T>(load: () => Promise<T>, key: string) {
     return () => {
       active = false;
     };
-  }, [key]);
+  }, [key, enabled]);
   return { value, error, loading };
 }
 export function Message({
@@ -78,7 +104,7 @@ export function Dialog({
     >
       <div className="row">
         <h2>{title}</h2>
-        <button onClick={close} aria-label="关闭">
+        <button type="button" onClick={close} aria-label="Close">
           ×
         </button>
       </div>
@@ -105,7 +131,7 @@ export function Changes({ text }: { text: string }) {
               <br />
             </span>
           ))
-        : "无差异"}
+        : "Unchanged"}
     </pre>
   );
 }

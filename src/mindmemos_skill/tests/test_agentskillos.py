@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -66,14 +65,11 @@ def sample(tmp_path):
         instruction=record["prompt"],
         outputs=record["outputs"],
         files={"input.txt": source},
-        file_sha256={"input.txt": sha256(source.read_bytes()).hexdigest()},
     )
     private = AgentSkillOSRewardData(
         task_config=record,
-        task_sha256="fixture",
         core_gt_ids=["alpha"],
         relevance_source="official_task_skills",
-        relevance_sha256="fixture",
     )
     return task, private
 
@@ -155,7 +151,7 @@ def test_resume_fresh_attempt_and_input_change(config, tmp_path):
     (directory / "audit/result.json").unlink()
     assert asyncio.run(env.rollout(task, directory, reward_data=private)).reward.score == 0
     task.files["input.txt"].write_text("MUTATED")
-    with pytest.raises(ValueError, match="Public input changed"):
+    with pytest.raises(ValueError, match="inputs changed"):
         asyncio.run(env.rollout(task, directory, reward_data=private, resume=False))
     assert not (directory / "audit/result.json").exists()
 
@@ -192,8 +188,8 @@ def test_official_release_data_and_registration(config):
         assert sample.reward_data.relevance_source == "official_task_skills"
 
 
-def test_wrong_source_hash_and_legacy_config_rejected(config):
-    with pytest.raises(ValueError, match="fingerprint"):
+def test_removed_source_hash_and_legacy_config_rejected(config):
+    with pytest.raises(ValueError, match="Extra inputs"):
         AgentSkillOSConfig(agent=config.agent, benchmark_root=SOURCE, evaluator_sha256="wrong")
     with pytest.raises(ValueError):
         AgentSkillOSConfig(agent=config.agent, benchmark_root=SOURCE, top_n=50)

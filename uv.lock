@@ -1649,6 +1649,7 @@ source = { editable = "src/mindmemos_skill" }
 dependencies = [
     { name = "filelock" },
     { name = "json-repair" },
+    { name = "mindmemos-sdk" },
     { name = "openai" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
@@ -1699,6 +1700,7 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'fastapi'", specifier = ">=0.28.1" },
     { name = "json-repair", specifier = ">=0.63.4,<1" },
     { name = "jsonschema", marker = "extra == 'agentskillos'", specifier = ">=4,<5" },
+    { name = "mindmemos-sdk", editable = "src/mindmemos_sdk" },
     { name = "openai", specifier = ">=2,<3" },
     { name = "openpyxl", marker = "extra == 'agentskillos'", specifier = ">=3.1,<4" },
     { name = "openpyxl", marker = "extra == 'spreadsheetbench'", specifier = ">=3.1,<4" },

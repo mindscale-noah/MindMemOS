@@ -1,4 +1,4 @@
-"""Typed game identity and private simulator provenance."""
+"""Typed game selection and private simulator scoring inputs."""
 
 from pathlib import Path
 
@@ -14,10 +14,4 @@ class ALFWorldTask(Task):
 
 
 class ALFWorldRewardData(RewardData):
-    """Content identities of the selected game and supporting files."""
-
-    source_sha256: str
-    """Items-file content identity."""
-
-    game_sha256: dict[str, str]
-    """Game-directory filenames mapped to content hashes."""
+    """No additional private inputs are needed for simulator scoring."""

@@ -36,7 +36,7 @@ class RolloutRequest(BaseModel):
     """Task class identity and serialized fields used for resume checking."""
 
     reward_data: dict[str, JsonValue]
-    """Private scoring input class and fields, including reference versions or hashes."""
+    """Private scoring input class and business fields, including reference paths."""
 
     skills: list[SkillSnapshot]
     """Ordered candidate Skill snapshots; empty for a baseline run."""
@@ -58,6 +58,9 @@ class RolloutRequest(BaseModel):
 
     config: dict[str, JsonValue]
     """Execution and scoring settings, including dependency versions or identities."""
+
+    input_identity: dict[str, str] = Field(default_factory=dict)
+    """Internally computed external file and evaluator fingerprints for recovery."""
 
     @model_validator(mode="after")
     def validate_assembly(self) -> Self:

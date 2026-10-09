@@ -7,6 +7,7 @@ export type BundleContent = {
   files: Record<string, string>;
   resources: string[];
   binary_files?: string[];
+  raw_resources?: Record<string, string>;
 };
 export type FileChange = {
   path: string;
@@ -21,9 +22,9 @@ export type BundleComparison = {
   implementation_changed: boolean;
 };
 const labels: Record<string, string> = {
-  added: "新增",
-  deleted: "删除",
-  modified: "修改",
+  added: "Added",
+  deleted: "Deleted",
+  modified: "Modified",
 };
 
 function FileTree({
@@ -82,7 +83,7 @@ function FileTree({
           >
             <span>{path.slice(prefix.length)}</span>
             {changes.has(path) && (
-              <small>{labels[changes.get(path)!.change] || "变化"}</small>
+              <small>{labels[changes.get(path)!.change] || "Changed"}</small>
             )}
           </button>
         </li>
@@ -94,8 +95,8 @@ function FileTree({
 export function BundleBrowser({
   content,
   comparison,
-  beforeLabel = "基准",
-  afterLabel = "目标",
+  beforeLabel = "Base",
+  afterLabel = "Target",
 }: {
   content: BundleContent;
   comparison?: BundleComparison;
@@ -111,6 +112,7 @@ export function BundleBrowser({
       ...(comparison?.files.map((file) => file.path) || []),
     ]),
   ].sort();
+  const [showFiles, setShowFiles] = useState(true);
   const changes = new Map(comparison?.files.map((file) => [file.path, file]));
   const [chosen, setChosen] = useState("");
   const selected = paths.includes(chosen)
@@ -120,31 +122,59 @@ export function BundleBrowser({
   const change = changes.get(selected);
   function notice(bundle: BundleContent) {
     const text = bundle.files[selected];
-    if (text === "") return "空文件";
+    if (text === "") return "Empty file";
     if (text !== undefined) return undefined;
     return bundle.resources.includes(selected) ||
       bundle.binary_files?.includes(selected)
-      ? "二进制文件，暂不支持文本预览"
-      : "此版本中不存在该文件";
+      ? "Text previews are unavailable for binary files"
+      : "This file does not exist in this version";
   }
-  if (!paths.length) return <Empty>暂无文件</Empty>;
+  const sidebarToggle = (
+    <button
+      className="sidebar-toggle"
+      aria-label={showFiles ? "Hide file sidebar" : "Show file sidebar"}
+      title={showFiles ? "Hide file sidebar" : "Show file sidebar"}
+      aria-expanded={showFiles}
+      onClick={() => setShowFiles(!showFiles)}
+    >
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        aria-hidden="true"
+      >
+        <rect x="3" y="4" width="18" height="16" rx="3" />
+        <path d="M9 4v16" />
+      </svg>
+    </button>
+  );
+  if (!paths.length) return <Empty>No files</Empty>;
   return (
     <>
       {comparison && (
-        <p className="muted">
-          {changes.size
-            ? `${changes.size} 个文件有差异，蓝色标记`
-            : "所有文件均无差异"}
-          {comparison.implementation_changed && "；实现配置有变化"}
-        </p>
+        <div className="bundle-toolbar">
+          <p className="muted">
+            {changes.size
+              ? `${changes.size} changed ${changes.size === 1 ? "file" : "files"}, marked in blue`
+              : "All files are identical"}
+            {comparison.implementation_changed && "; implementation configuration has changed"}
+          </p>
+        </div>
       )}
-      <div className="bundle-browser">
+      <div className={`bundle-browser ${showFiles ? "" : "files-collapsed"}`}>
         <div
           className="bundle-sidebar"
+          hidden={!showFiles}
           role="navigation"
-          aria-label="Skill 文件"
+          aria-label="Skill files"
         >
-          <div className="code-title">文件 · {paths.length}</div>
+          <div className="code-title file-tree-title">
+            {sidebarToggle}
+            <span>Files · {paths.length}</span>
+          </div>
           <FileTree
             paths={paths}
             selected={selected}
@@ -154,10 +184,16 @@ export function BundleBrowser({
         </div>
         <div className="bundle-content">
           <div className="code-title">
-            {selected}
+            {!showFiles && sidebarToggle}
+            <span>{selected}</span>
+            {comparison && (
+              <span className="comparison-labels">
+                {beforeLabel} → {afterLabel}
+              </span>
+            )}
             {comparison && (
               <span className="badge">
-                {change ? labels[change.change] || "变化" : "无差异"}
+                {change ? labels[change.change] || "Changed" : "Unchanged"}
               </span>
             )}
           </div>
@@ -173,7 +209,7 @@ export function BundleBrowser({
             />
           ) : content.files[selected] !== undefined ? (
             content.files[selected] === "" ? (
-              <Empty>空文件</Empty>
+              <Empty>Empty file</Empty>
             ) : (
               <FilePreview
                 key={selected}
@@ -184,7 +220,7 @@ export function BundleBrowser({
               />
             )
           ) : (
-            <Empty>二进制文件，暂不支持文本预览</Empty>
+            <Empty>Text previews are unavailable for binary files</Empty>
           )}
         </div>
       </div>

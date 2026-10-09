@@ -1,7 +1,7 @@
 """Registered schemas, query conditions, and portable search results."""
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -95,6 +95,19 @@ class Filter(BaseModel):
 
     value: Any = None
     """Comparison operand; omitted for null checks."""
+
+
+class DailyCount(BaseModel):
+    """Database-side daily counts with optional related-row membership."""
+
+    day: date
+    """Calendar day after applying the requested UTC offset."""
+
+    total: int
+    """Number of primary rows created on this day."""
+
+    matched: int
+    """Number of primary rows with a unique matching related row."""
 
 
 class SearchHit(BaseModel):

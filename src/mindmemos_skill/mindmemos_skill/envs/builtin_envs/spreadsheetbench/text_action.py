@@ -62,7 +62,7 @@ class SpreadsheetBenchTextActionEnvironment(SpreadsheetExecutionEnvironment[Spre
             config: TreeSkill prompt, execution, and interaction settings.
             agent: Optional raw-text agent for injection and offline testing.
         """
-        super().__init__(config)
+        super().__init__(config, protocol="text_action")
         self.agent = agent if agent is not None else OpenAIChatAgent(config.agent)
 
     def _system_prompt(self, context: SpreadsheetContext) -> str:
@@ -116,7 +116,10 @@ class SpreadsheetBenchTextActionEnvironment(SpreadsheetExecutionEnvironment[Spre
                 command = action.arguments.get("command")
                 observation = (
                     run_reference_bash(
-                        command, working_dir=context.directory, timeout_seconds=self.config.shell_timeout_seconds
+                        command,
+                        working_dir=context.directory,
+                        timeout_seconds=self.config.shell_timeout_seconds,
+                        execution=self.execution,
                     )
                     if isinstance(command, str) and command.strip()
                     else "Error: bash arguments.command must be a non-empty string"

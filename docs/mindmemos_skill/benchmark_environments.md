@@ -41,7 +41,7 @@ print(result.reward.score)
 print(result.reward.detail)
 ```
 
-不同并发 rollout 必须使用不同 `work_dir`。恢复时需要相同的 task、私有 reward data、skills 和配置。数据加载器将输入文件和评分文件的内容 hash 纳入 task 或 reward data；文件变化后应重新加载数据。
+不同并发 rollout 必须使用不同 `work_dir`。恢复时需要相同的 task、私有 reward data、skills 和配置。Task、RewardData 和环境配置只接收业务数据与文件路径，不接收用户填写的 hash。环境在执行时自动计算输入文件、参考文件和外部评分器的指纹，并写入私有审计记录；文件变化后不能复用旧结果，应使用新的运行目录。
 
 环境的 `rollout` 接收 `skill_set: SkillSet | None`，`_run` 接收组装后的 `list[Skill]`；公共流程通过 SkillSet 按 task 调用成员的 `Skill.assemble`，直接把返回的完整 Skill 交给环境；Skill 自己替换任务副本的 content，保留 references 等资源和导出能力。环境不区分静态或动态 Skill。TreeSkill 环境负责其 workbook policy 协议，不在 env 内复制 tree routing、skill synthesis 或训练调度逻辑；这些仍属于算法层。
 
@@ -49,25 +49,34 @@ print(result.reward.detail)
 
 安装 `mindmemos-skill[spreadsheetbench]`。本地运行能力统一放在 `mindmemos_skill.infra.execution`，两个表格环境直接复用，其他 env 也可使用，不依赖 Docker。
 
-```python
-# Existing virtual environment (macOS/Linux).
-execution = {"python_command": ["/path/to/.venv/bin/python"], "timeout_s": 120}
+`Environment.build(...)` 初始化环境时，自动准备对应协议的 Python 3.13 虚拟环境并预装依赖。首次准备需要系统中有 `uv`。环境放在 MindMemOS home 下，目录名与解释器路径由 Python 代码固定选择，无需在文本 Action 或环境配置中传入 `execution`：
 
-# Existing uv project; use an absolute project path.
-execution = {"python_command": ["uv", "run", "--project", "/path/to/project", "python"]}
-
-# Windows interpreter with optional PowerShell.
-execution = {
-    "python_command": ["C:/project/.venv/Scripts/python.exe"],
-    "shell_command": ["powershell.exe", "-NoProfile", "-Command"],
-}
+```text
+<MINDMEMOS_HOME>/envs/
+├── spreadsheetbench_text_action/bin/python
+└── spreadsheetbench_tool_calling/bin/python
 ```
 
-`python_command` 是 argv 列表，默认当前服务的 Python 解释器。模型在 shell 中调用 `python` 或 `python3` 时，也通过临时启动脚本使用该配置，不需要改写生成的 Python 源码。uv 项目应提前安装所需依赖（openpyxl、pandas）；路径参数使用绝对路径。
+Windows 使用对应环境下的 `Scripts/python.exe`。`make dev` 默认将项目 `.mindmemos/` 作为 MindMemOS home，并传给 API、UI 等子进程；也可以通过 `MINDMEMOS_HOME` 或开发启动器的 `--ui-home` 指定 home。其他启动方式沿用 SDK 的 home 解析规则，默认 `~/.mindmemos/`。
 
-`shell_command` 默认在 macOS/Linux 使用 `/bin/sh -c`，Windows 使用 `cmd.exe /d /s /c`。也可显式指定 PowerShell 或已安装的其他 shell。命令需要符合所选 shell 的语法；不会将 Bash 脚本自动翻译为 PowerShell。每条命令启动新进程，工作目录文件跨轮保留，内存、cd 和 export 不跨命令保留。
+安装成功后写入完成标记。后续初始化直接复用已安装环境，不重复安装；并发初始化通过文件锁避免重复准备。安装中断时不写完成标记，下次初始化可以重试。若锁定依赖清单变化，则报错提示重建该环境，避免在任务运行时修改现有依赖。模型在 shell 中使用 `python` 或 `python3` 时，自动运行对应协议的解释器。
 
-`execution.timeout_s` 是命令默认超时；workspace shell 的显式 `timeout_ms` 可覆盖它；超时后 POSIX 清理进程组，Windows 使用 taskkill 清理进程树。read/write/edit 工具保留工作目录边界检查；shell 是本地进程，不提供容器级文件系统或网络隔离。golden 不会写入提示词或复制到公开工作目录，但本地进程的操作系统权限不因此受到限制。
+依赖清单随 Python 包分发，位于 `mindmemos_skill/envs/builtin_envs/spreadsheetbench/runtime/requirements/`：
+
+| 协议 | 对齐来源 | 依赖清单 | 表格执行库 |
+| --- | --- | --- | --- |
+| `text_action` | [Trace2Skill 官方 xlsx Skill](https://github.com/Qwen-Applications/Trace2Skill/blob/main/spreadsheet_agent/skills/xlsx/SKILL.md) | `text_action/requirements.in` | openpyxl、pandas；NumPy 是间接依赖 |
+| `tool_calling` | [SkillOpt 官方表格协议](https://github.com/microsoft/SkillOpt/blob/main/skillopt/envs/spreadsheetbench/prompts/react_system.md)、[项目依赖](https://github.com/microsoft/SkillOpt/blob/main/pyproject.toml) | `tool_calling/requirements.in` | openpyxl、pandas、NumPy |
+
+每套清单对应一个 `requirements.txt`，锁定全部直接和间接依赖版本。上游没有锁定 openpyxl/pandas 的具体版本；这里固定本地验证的 openpyxl 3.1.5 和 pandas 2.3.3。模型客户端、训练、缓存等主程序依赖由 MindMemOS 服务环境提供，不复制到任务环境。
+
+两个 SpreadsheetBench 协议都在初始化时检查管理的解释器、依赖导入和工作簿读写；检查成功后直接返回，失败抛出环境异常，不记录成任务得分 0。解释器路径统一保存在内部 `execution.python_command` 中；rollout 的 `audit/execution.json`、采样和重测的 manifest 直接从该字段读取路径。依赖版本由锁定的 requirements 清单确定，不额外采集或确认版本号。工具执行时将工作目录设为当前任务的 workspace。
+
+Python 工具依赖与公式重算依赖分开准备：LibreOffice/匹配的 pyuno 仍由现有重算配置提供，安装上述 Python 清单不能替代 LibreOffice。任务中的重算助手使用服务的 Python（保留虚拟环境路径），以加载服务侧重算模块。
+
+公共执行层在 macOS/Linux 使用 `/bin/sh -c`，Windows 使用 `cmd.exe /d /s /c`。命令需要符合当前系统 shell 的语法；不会将 Bash 脚本自动翻译为 PowerShell。每条命令启动新进程，工作目录文件跨轮保留，内存、cd 和 export 不跨命令保留。
+
+工具调用协议的命令默认超时为 120 秒；workspace shell 的显式 `timeout_ms` 可覆盖它。文本 Action 协议保留 `shell_timeout_seconds` 控制每条命令超时。超时后 POSIX 清理进程组，Windows 使用 taskkill 清理进程树。read/write/edit 工具保留工作目录边界检查；shell 是本地进程，不提供容器级文件系统或网络隔离。golden 不会写入提示词或复制到公开工作目录，但本地进程的操作系统权限不因此受到限制。
 
 `max_turns` 控制 react 模型轮数。评分仍读取公式缓存值；如需公式重算工具，由指定运行环境提供。
 
@@ -138,7 +147,6 @@ env = Environment.build("spreadsheetbench_tool_calling", {
     "agent": {"model": "your-model", "max_completion_tokens": 16384},
     "max_turns": 30,
     "skill_loading_mode": "tool",
-    "execution": {"python_command": ["/path/to/.venv/bin/python"], "timeout_s": 120},
 })
 ```
 
@@ -153,7 +161,7 @@ env = Environment.build("spreadsheetbench_tool_calling", {
 | 模型重试 | actor 最多 6 次，2–30 秒带抖动，含 HTTP 425；底层另有重试 | workspace 预设 6 次外层尝试、equal jitter、SDK 2 次重试；完整错误包装行为仍有差异，见下文 |
 | 命令超时 | shell 默认 120 秒，可由 timeout_ms 覆盖 | 相同；显式 timeout_ms 不再受默认值上限截断 |
 | 整题超时/并发 | 实验调度层配置 | 不放入单题环境，由调用层负责 |
-| 执行位置 | 宿主机 case 工作目录 | 本地 case 工作目录；Python/uv 和 shell 可配置，文件持续保留 |
+| 执行位置 | 宿主机 case 工作目录 | 本地 case 工作目录；自动使用协议对应的 Python 环境，文件持续保留 |
 | 最终详细反馈 | react 原分支不追加完整 verification report | 两种模式共用逐格报告格式，结束后仅写入 reward.detail，不追加到 trajectory |
 
 数据仅支持 Verified 400 单用例，含官方编号不一致的兼容；公开模型消息不含 golden。未要求加载的 Skill 内容不会提前注入 tool 模式的初始提示词。Skill 文本按公共 skill_text 规则组装，Skill 资源随技能导出到工作区。
@@ -172,7 +180,7 @@ result = execute(["python", "solution.py"], workspace, config)
 result = execute([*config.shell_command, "python solution.py"], workspace, config)
 ```
 
-公共层只负责 Python/uv 启动、shell 进程执行、输出捕获和超时清理，不依赖任何 env、Agent 或 workbook 类型。环境负责准备工作目录、定义工具、解释执行结果及计算 reward。已有 `execution` 配置结构保持不变，原 SpreadsheetBench 内的 executor/constants 文件已移除。
+公共层负责管理 home 下的 Python 环境，以及 Python/uv 启动、shell 进程执行、输出捕获和超时清理，不依赖任何 env、Agent 或 workbook 类型。环境负责选择锁定依赖清单、准备工作目录、定义工具、解释执行结果及计算 reward。其他环境仍可使用公共 `ExecutionConfig`；SpreadsheetBench 的解释器由内部初始化逻辑确定，不接受外部 `execution` 配置。
 
 ## 固定实验数据与划分
 
@@ -202,7 +210,7 @@ Skill-Forest 使用原实验仓库发布的 ID/path manifests。TreeSkill 主实
 前 200 条演化、后 200 条测试；迁移评测单独存放，不能与主实验视为同一个互斥任务集合。
 其余四组 Skill-Forest 划分分别来自原实验仓库的 `data/searchqa_id_split`、
 `data/officeqa_id_split`、`data/spreadsheetbench_id_split` 和 `data/alfworld_path_split`；
-初始 Skill 来自对应环境的 `skillopt/envs/<环境>/skills/initial.md`。
+本项目的初始 Skill 保存在 `resources/mindmemos_skill_eval/skill_forest-<环境>/initial_skill/SKILL.md`。
 本地评测配置中，TreeSkill 只保留 SpreadsheetBench。LiveMath 使用历史运行
 `livemath_skill_forest_t7_repeats/gpt-54-mini_split42_20260902_152252/seed_42` 的
 `forest/_generated_splits/livemathematicianbench_2-1-7_seed42/{train,val,test}/items.json`

@@ -11,7 +11,7 @@ from ..api.typing import (
     TrainingSplit,
 )
 from .base import Pipeline
-from .builtin_pipelines.evolve.simple_evolution import SimpleEvolutionPipeline
+from .builtin_pipelines.evolve.evolving import SimpleEvolutionPipeline
 from .builtin_pipelines.manage.graph_manage import GraphManagePipeline
 from .builtin_pipelines.repository.repository import RepositoryPipeline
 from .builtin_pipelines.training.training import ConfiguredTrainingPipeline

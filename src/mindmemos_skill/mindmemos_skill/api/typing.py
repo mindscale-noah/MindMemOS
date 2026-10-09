@@ -686,6 +686,16 @@ class SetMetaRequest(RequestAuth):
         return self
 
 
+class TrajectoryStatisticsRequest(RequestAuth):
+    """Query bounded aggregates for one owned Skill version."""
+
+    skill_id: Nonempty
+    """Owning Skill family or alias."""
+
+    version_id: Nonempty
+    """Exact Skill version whose stored trajectories are counted."""
+
+
 class SkillDetail(BaseModel):
     """A central identity and the inspected version, which may be historical."""
 

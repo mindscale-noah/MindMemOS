@@ -142,7 +142,7 @@ async def main() -> None:
     samples = [
         DataSample(
             task=SearchQATask(id=identifier, instruction=question, context=context),
-            reward_data=SearchQARewardData(answers=[answer], source_sha256="guide-v1"),
+            reward_data=SearchQARewardData(answers=[answer]),
         )
         for identifier, question, context, answer in questions
     ]

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useMemo } from "react";
 import { api, type Selection } from "./api";
-import { useLoad, Message, Empty } from "./components";
+import { useLoad, useRefresh, Message, Empty } from "./components";
 import type { GraphNode, GraphEdge } from "./graph-flow";
 
 const GraphCanvas = lazy(() =>
@@ -21,6 +21,7 @@ export function Graphs({
   const [search, setSearch] = useState("");
   const [edgeType, setEdgeType] = useState("");
   const [reload, setReload] = useState(0);
+  const refresh = useRefresh(() => setReload((current) => current + 1));
   const [downloadUrl, setDownloadUrl] = useState("");
   const graphs = useLoad<any[]>(
     () => (connected ? api("graphs") : Promise.resolve([])),
@@ -99,8 +100,46 @@ export function Graphs({
   }, [data.value, graph, snapshot, connected, graphs.value]);
   return (
     <>
-      <div className="row">
-        <h1>SkillSets</h1>
+      <div className="graph-selection-toolbar">
+        <div className="fields">
+          <label>
+            Graph
+            <select
+              value={graph}
+              onChange={(e) => {
+                setGraph(e.target.value);
+                setSnapshot("");
+                setSelection(null);
+                setSearch("");
+                setEdgeType("");
+              }}
+            >
+              <option value="">Select a graph</option>
+              {graphs.value?.map((g) => (
+                <option key={g.graph_id} value={g.graph_id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Graph snapshot
+            <select
+              value={snapshot}
+              onChange={(e) => {
+                setSnapshot(e.target.value);
+                setSelection(null);
+              }}
+            >
+              <option value="">Select a snapshot</option>
+              {snapshots.value?.map((s) => (
+                <option key={s.graph_version_id} value={s.graph_version_id}>
+                  {s.status} · {s.graph_version_id.slice(0, 8)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <div className="graph-page-actions">
           <a
             className={`graph-export${!downloadUrl || data.loading ? " disabled" : ""}`}
@@ -111,70 +150,34 @@ export function Graphs({
               if (!downloadUrl || data.loading) event.preventDefault();
             }}
           >
-            导出 JSON
+            Export JSON
           </a>
-          <button onClick={() => setReload(reload + 1)}>刷新</button>
+          <button onClick={refresh.refresh}>Refresh</button>
         </div>
       </div>
-      <div className="fields">
-        <label>
-          图谱
-          <select
-            value={graph}
-            onChange={(e) => {
-              setGraph(e.target.value);
-              setSnapshot("");
-              setSelection(null);
-              setSearch("");
-              setEdgeType("");
-            }}
-          >
-            <option value="">选择图谱</option>
-            {graphs.value?.map((g) => (
-              <option key={g.graph_id} value={g.graph_id}>
-                {g.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          图谱快照
-          <select
-            value={snapshot}
-            onChange={(e) => {
-              setSnapshot(e.target.value);
-              setSelection(null);
-            }}
-          >
-            <option value="">选择快照</option>
-            {snapshots.value?.map((s) => (
-              <option key={s.graph_version_id} value={s.graph_version_id}>
-                {s.status} · {s.graph_version_id.slice(0, 8)}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      {!connected && <Message text="Skill 服务尚未连接。" />}
-      <Message text={graphs.error || snapshots.error || data.error} error />
+      {!connected && <Message text="The Skill service is not connected." />}
+      <Message
+        text={refresh.error || graphs.error || snapshots.error || data.error}
+        error
+      />
       {nodes.length ? (
         <>
           <div className="toolbar">
             <input
-              placeholder="定位 Skill"
-              aria-label="定位 Skill"
+              placeholder="Find Skill"
+              aria-label="Find Skill"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
             <select
-              aria-label="关系类型"
+              aria-label="Relationship type"
               value={edgeType}
               onChange={(e) => {
                 setEdgeType(e.target.value);
                 setSelection(null);
               }}
             >
-              <option value="">全部关系</option>
+              <option value="">All relationships</option>
               {relationTypes.map((t) => (
                 <option key={t}>{t}</option>
               ))}
@@ -182,7 +185,7 @@ export function Graphs({
           </div>
           <Suspense
             fallback={
-              <div className="graph-canvas graph-loading">图谱加载中…</div>
+              <div className="graph-canvas graph-loading">Loading graph…</div>
             }
           >
             <GraphCanvas
@@ -211,12 +214,12 @@ export function Graphs({
       ) : (
         <Empty>
           {data.loading || graphs.loading || snapshots.loading
-            ? "加载中…"
+            ? "Loading…"
             : !graphs.value?.length
-              ? "暂无 SkillSet"
+              ? "No SkillSets"
               : !graph
-                ? "请选择图谱"
-                : "当前图谱暂无节点"}
+                ? "Select a graph"
+                : "This graph has no nodes"}
         </Empty>
       )}
     </>

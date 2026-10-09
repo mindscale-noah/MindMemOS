@@ -7,6 +7,7 @@ from time import perf_counter
 from typing import ClassVar
 
 from ..common.asyncio import run_sync
+from ..common.input_files import model_file_fingerprints
 from ..common.skill_runtime import restore_assembled_skill
 from ..registry.base import ConfigT, Registrable
 from ..skill import Skill, SkillSet
@@ -28,6 +29,22 @@ class Environment(Registrable[ConfigT], ABC):
 
     supports_resume: ClassVar[bool] = True
     """Whether saved rollout results and assembly can be reused; subclasses may disable this capability."""
+
+    def input_identity(self, task: Task, reward_data: RewardData) -> dict[str, str]:
+        """Compute external input identities without requiring caller-supplied hashes.
+
+        Args:
+            task: Public task containing typed input file paths.
+            reward_data: Private scoring inputs containing typed reference paths.
+
+        Returns:
+            File paths mapped to content fingerprints. Subclasses include supporting
+            files or external evaluator sources when those also affect execution.
+
+        Raises:
+            OSError: An input file cannot be read.
+        """
+        return model_file_fingerprints(task, reward_data)
 
     async def rollout(
         self,
@@ -81,6 +98,7 @@ class Environment(Registrable[ConfigT], ABC):
             skill_set=skill_set.identity(),
             environment=f"{type(self).__module__}.{type(self).__qualname__}",
             config=self.config.model_dump(mode="json"),
+            input_identity=await run_sync(self.input_identity, task, reward_data),
         )
         work_dir = Path(work_dir).expanduser().resolve()
         audit_dir = work_dir / "audit"
@@ -140,9 +158,13 @@ class Environment(Registrable[ConfigT], ABC):
         request = RolloutRequest.model_validate_json(request.model_dump_json())
         temporary_request.write_text(request.model_dump_json(indent=2), encoding="utf-8")
         temporary_request.replace(request_path)
+        if await run_sync(self.input_identity, task, reward_data) != request.input_identity:
+            raise ValueError("Rollout input files changed during assembly; use a new work_dir")
         result = await run_sync(
             self._run, task=task, reward_data=reward_data, skills=prepared_skills, workspace=workspace
         )
+        if await run_sync(self.input_identity, task, reward_data) != request.input_identity:
+            raise ValueError("Rollout input files changed during execution; use a new work_dir")
         duration_s = perf_counter() - start
         finished_at = datetime.now(timezone.utc)
         result.started_at = started_at

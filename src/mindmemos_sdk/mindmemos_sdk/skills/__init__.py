@@ -28,6 +28,7 @@ from .typing import (
     TrajectoryListRequest,
     TrajectoryReportRequest,
     TrajectoryShowRequest,
+    TrajectoryStatisticsRequest,
     UpdateInfoRequest,
     VersionResolveRequest,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "TrajectoryListRequest",
     "TrajectoryReportRequest",
     "TrajectoryShowRequest",
+    "TrajectoryStatisticsRequest",
     "UpdateInfoRequest",
     "VersionResolveRequest",
     "StructuredSkillInfo",

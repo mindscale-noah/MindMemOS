@@ -5,6 +5,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     Float,
+    ForeignKeyConstraint,
     Index,
     Integer,
     MetaData,
@@ -16,8 +17,13 @@ from sqlalchemy import (
 
 from ....infra.database import TableSpec
 from ....infra.database.typing import UTCDateTime
-from ...constants import TRAJECTORIES_TABLE, TRAJECTORY_REPORT_ACTOR_INDEX, TRAJECTORY_REPORT_CURSOR_INDEX
-from .typing import TrajectoryRecord
+from ...constants import (
+    TRAJECTORIES_TABLE,
+    TRAJECTORY_CONSUMPTIONS_TABLE,
+    TRAJECTORY_REPORT_ACTOR_INDEX,
+    TRAJECTORY_REPORT_CURSOR_INDEX,
+)
+from .typing import TrajectoryConsumption, TrajectoryRecord
 
 
 def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
@@ -87,5 +93,24 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         Index("trajectories_task_idx", "task_id"),
         Index(TRAJECTORY_REPORT_CURSOR_INDEX, "project_id", "skill_id", "received_at", "trajectory_id"),
         Index(TRAJECTORY_REPORT_ACTOR_INDEX, "project_id", "skill_id", "user_id", "agent_id"),
+        Index("trajectories_version_created_idx", "project_id", "skill_version_id", "created_at", "trajectory_id"),
     )
-    return (TableSpec(name=TRAJECTORIES_TABLE, table=table, insert_model=TrajectoryRecord),)
+    consumption = Table(
+        TRAJECTORY_CONSUMPTIONS_TABLE,
+        metadata,
+        Column("project_id", Text, primary_key=True, comment="Project owning the consumed trajectory."),
+        Column("trajectory_id", Text, primary_key=True, comment="Distinct trajectory successfully processed."),
+        Column("skill_version_id", Text, nullable=False, comment="Exact input Skill version."),
+        Column("run_id", Text, nullable=False, comment="First successful evolution run."),
+        Column("consumed_at", UTCDateTime(), nullable=False, comment="Time successful use was recorded."),
+        ForeignKeyConstraint(
+            ["project_id", "trajectory_id"],
+            [f"{TRAJECTORIES_TABLE}.project_id", f"{TRAJECTORIES_TABLE}.trajectory_id"],
+            ondelete="CASCADE",
+        ),
+        Index("trajectory_consumptions_version_idx", "project_id", "skill_version_id"),
+    )
+    return (
+        TableSpec(name=TRAJECTORIES_TABLE, table=table, insert_model=TrajectoryRecord),
+        TableSpec(name=TRAJECTORY_CONSUMPTIONS_TABLE, table=consumption, insert_model=TrajectoryConsumption),
+    )

@@ -143,8 +143,6 @@ async def test_collection_failures_are_not_zero_score_evidence(tmp_path):
 
 
 def spreadsheet_sample(tmp_path, identifier="sheet"):
-    import hashlib
-
     import openpyxl
 
     paths = []
@@ -159,12 +157,11 @@ def spreadsheet_sample(tmp_path, identifier="sheet"):
         id=identifier,
         instruction="Preserve A1.",
         answer_position="Sheet!A1",
-        cases=[WorkbookInput(number="1", path=paths[0], sha256=hashlib.sha256(paths[0].read_bytes()).hexdigest())],
+        cases=[WorkbookInput(number="1", path=paths[0])],
     )
     reward = SpreadsheetBenchRewardData(
-        cases=[WorkbookReference(number="1", path=paths[1], sha256=hashlib.sha256(paths[1].read_bytes()).hexdigest())],
+        cases=[WorkbookReference(number="1", path=paths[1])],
         answer_position="Sheet!A1",
-        source_sha256="fixture",
     )
     return DataSample(task=task, reward_data=reward)
 
@@ -456,9 +453,9 @@ def test_treeskill_environment_inherits_scoring_and_rejects_changed_workbooks(tm
     assert type(env)._run is SpreadsheetBenchToolCallingEnvironment._run
     assert type(env)._interact is SpreadsheetBenchToolCallingEnvironment._interact
     assert env.config.stagnation_limit == 5
+    identity = env.input_identity(sample.task, sample.reward_data)
     sample.task.cases[0].path.write_bytes(b"changed after loading")
-    with pytest.raises(ValueError, match="workbook changed"):
-        asyncio.run(env.rollout(sample.task, tmp_path / "run", reward_data=sample.reward_data))
+    assert env.input_identity(sample.task, sample.reward_data) != identity
 
 
 def test_text_action_config_uses_explicit_stagnation_option():

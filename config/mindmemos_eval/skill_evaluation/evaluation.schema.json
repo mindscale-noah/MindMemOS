@@ -204,12 +204,6 @@
           "$ref": "#/$defs/ExecutionConfig",
           "description": "Python interpreter and timeout for official deterministic scoring."
         },
-        "evaluator_sha256": {
-          "default": "",
-          "description": "Computed fingerprint of official Python sources, persisted for resume validation.",
-          "title": "Evaluator Sha256",
-          "type": "string"
-        },
         "evaluator_version": {
           "const": "agentskillos-official-pass-v1",
           "default": "agentskillos-official-pass-v1",

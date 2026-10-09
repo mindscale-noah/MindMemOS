@@ -536,6 +536,9 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
             "persistence": {
                 "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'skill.db'}"}}
             },
+            "observability": {
+                "backend": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'audit.db'}"}}
+            },
             "repository_pipeline": {"class_name": "repository"},
             "evolution_pipelines": {
                 "probe": {
@@ -584,6 +587,12 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
         result = await restored.execute_task(record.spec(), NullProgressReporter())
         assert received == [("submitted-test-key", result["run_id"])]
         assert result["run_id"].startswith("evolve_")
+        audit = restored.backends["observability"]
+        run = audit.get_run("p1", result["run_id"])
+        assert run.status == "completed"
+        assert run.base_version_id == registered.skill_version_id
+        assert run.published_version_id == "version"
+        assert any(span.name == "algorithm.evolve" for span in audit.spans("p1", result["run_id"]))
         assert closed == ["submitted-test-key", "submitted-test-key"]
     finally:
         await restored.close()

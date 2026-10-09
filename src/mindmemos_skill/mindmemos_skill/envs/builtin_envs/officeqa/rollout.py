@@ -2,7 +2,6 @@
 
 import json
 import re
-from hashlib import sha256
 from pathlib import Path
 
 from ....agents import OpenAIChatAgent
@@ -47,11 +46,6 @@ class OfficeQAEnvironment(Environment[OfficeQAConfig]):
         """Expose only allowlisted public documents through explicit tools."""
         if not isinstance(task, OfficeQATask) or not isinstance(reward_data, OfficeQARewardData):
             raise TypeError("OfficeQA requires OfficeQATask and OfficeQARewardData")
-        if set(task.documents) != set(reward_data.document_sha256):
-            raise ValueError("OfficeQA document identities do not match the public corpus")
-        for name, path in task.documents.items():
-            if sha256(path.read_bytes()).hexdigest() != reward_data.document_sha256[name]:
-                raise ValueError("OfficeQA corpus changed; reload the dataset")
         text = skill_text(skills)
         system = SYSTEM_PROMPT.format(skill_section=f"## Skill\n{text.strip()}\n\n" if text.strip() else "")
         candidates = [

@@ -20,9 +20,6 @@ class WorkbookInput(BaseModel):
     path: Path
     """Public initial workbook path."""
 
-    sha256: str
-    """Initial workbook content identity."""
-
 
 class WorkbookReference(BaseModel):
     """One private expected workbook."""
@@ -32,9 +29,6 @@ class WorkbookReference(BaseModel):
 
     path: Path
     """Private reference workbook path, never mounted into the agent runtime."""
-
-    sha256: str
-    """Expected workbook content identity."""
 
 
 class SpreadsheetBenchTask(Task):
@@ -61,9 +55,6 @@ class SpreadsheetBenchRewardData(RewardData):
 
     answer_sheet: str | None = None
     """Optional default sheet used by the shared scorer."""
-
-    source_sha256: str
-    """Dataset metadata content hash."""
 
 
 class SpreadsheetInteractionResult(BaseModel):

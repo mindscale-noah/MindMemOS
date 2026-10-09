@@ -51,20 +51,14 @@ class AgentSkillOSConfig(BaseModel):
     evaluator: ExecutionConfig = Field(default_factory=ExecutionConfig)
     """Python interpreter and timeout for official deterministic scoring."""
 
-    evaluator_sha256: str = ""
-    """Computed fingerprint of official Python sources, persisted for resume validation."""
-
     evaluator_version: Literal["agentskillos-official-pass-v1"] = "agentskillos-official-pass-v1"
     """Binary official passed result; retrieval scores are diagnostic only."""
 
     @model_validator(mode="after")
     def bind_sources(self) -> Self:
-        """Bind scoring implementation and require an explicit execution model."""
+        """Validate scoring sources and require an explicit execution model."""
         if not self.agent.model:
             raise ValueError("AgentSkillOS requires an explicit agent model")
         self.benchmark_root = self.benchmark_root.expanduser().resolve()
-        digest = evaluator_digest(self.benchmark_root)
-        if self.evaluator_sha256 and self.evaluator_sha256 != digest:
-            raise ValueError("Official evaluator source fingerprint changed")
-        self.evaluator_sha256 = digest
+        evaluator_digest(self.benchmark_root)
         return self

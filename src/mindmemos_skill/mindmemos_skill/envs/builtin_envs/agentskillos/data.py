@@ -1,7 +1,6 @@
 """Adapt original AgentSkillOS tasks and assets to the shared environment API."""
 
 import json
-from hashlib import sha256
 
 from pydantic import TypeAdapter
 
@@ -19,17 +18,15 @@ class AgentSkillOSData(Data[AgentSkillOSDataConfig]):
     """Original task definitions and optional retrieval ground truth."""
 
     def _load(self) -> list[DataSample]:
-        """Read original JSON definitions and bind all task material to hashes."""
+        """Read original JSON definitions and locate public task material."""
         root = self.config.benchmark_root.expanduser().resolve() / "benchmark" / "AgentSkillOS_bench"
         paths = sorted((root / "tasks").glob("*.json"))
         if not paths:
             raise ValueError("No official AgentSkillOS tasks found")
         labels = None
-        label_digest = ""
         if self.config.relevance_path is not None:
             raw_labels = self.config.relevance_path.expanduser().read_bytes()
             labels = TypeAdapter(dict[str, RelevanceRecord]).validate_json(raw_labels)
-            label_digest = sha256(raw_labels).hexdigest()
         samples = []
         for path in paths:
             raw = path.read_bytes()
@@ -77,15 +74,12 @@ class AgentSkillOSData(Data[AgentSkillOSDataConfig]):
                         id=task_id,
                         instruction=record["prompt"],
                         files=files,
-                        file_sha256={name: sha256(source.read_bytes()).hexdigest() for name, source in files.items()},
                         outputs=[relative_path(name) for name in record["outputs"]],
                     ),
                     reward_data=AgentSkillOSRewardData(
                         task_config=record,
-                        task_sha256=sha256(raw).hexdigest(),
                         core_gt_ids=core_ids,
                         relevance_source="legacy_core_gt_ids" if labels is not None else "official_task_skills",
-                        relevance_sha256=label_digest or sha256(raw).hexdigest(),
                     ),
                 )
             )

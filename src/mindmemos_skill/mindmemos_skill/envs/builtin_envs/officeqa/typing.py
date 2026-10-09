@@ -28,13 +28,7 @@ class OfficeQATask(Task):
 
 
 class OfficeQARewardData(RewardData):
-    """Private expected answer and source identities."""
+    """Private expected answer used after public document research."""
 
     ground_truth: str
     """Expected direct answer; never passed to the research agent."""
-
-    source_sha256: str
-    """Question-file content identity."""
-
-    document_sha256: dict[str, str]
-    """Content hashes of all allowed public documents."""

@@ -1,5 +1,6 @@
 """Shared workbook lifecycle and interaction scheduling for spreadsheet environments."""
 
+import json
 from abc import abstractmethod
 from pathlib import Path
 from typing import TypeVar
@@ -8,12 +9,14 @@ from pydantic import JsonValue
 
 from ....agents import OpenAIChatAgent
 from ....agents.typing import AgentResult
+from ....infra.execution import ExecutionConfig
 from ....skill import Skill
 from ...base import Environment
 from ...data import RewardData
 from ...typing import RolloutResult, Task, Usage
 from ..common import total_usage
 from .config import SpreadsheetBenchExecutionConfig
+from .execution import check_execution, prepare_execution
 from .reward import evaluate
 from .typing import (
     SpreadsheetBenchRewardData,
@@ -38,6 +41,20 @@ class SpreadsheetExecutionEnvironment(Environment[ConfigT]):
 
     agent: OpenAIChatAgent
     """Protocol-specific model transport owned by the concrete environment."""
+
+    execution: ExecutionConfig
+    """Internal execution settings bound to the managed Python installation."""
+
+    def __init__(self, config: ConfigT, *, protocol: str) -> None:
+        """Prepare the shared managed runtime before any task or model call.
+
+        Args:
+            config: Protocol-specific model and interaction settings.
+            protocol: Fixed dependency profile selected by the concrete environment.
+        """
+        super().__init__(config)
+        self.execution = prepare_execution(protocol)
+        check_execution(self.execution, Path(self.execution.python_command[0]).parent)
 
     @abstractmethod
     def _prepare_context(self, task: SpreadsheetBenchTask, directory: Path, skills: list[Skill]) -> SpreadsheetContext:
@@ -92,6 +109,9 @@ class SpreadsheetExecutionEnvironment(Environment[ConfigT]):
             raise TypeError("SpreadsheetBench requires SpreadsheetBenchTask and SpreadsheetBenchRewardData")
         self._validate_task(task)
         directories = prepare_cases(task, reward_data, workspace)
+        (workspace.parent / "audit" / "execution.json").write_text(
+            json.dumps({"python": self.execution.python_command[0]}, indent=2) + "\n", encoding="utf-8"
+        )
         interactions: list[SpreadsheetInteractionResult] = []
         trajectory: list[dict[str, JsonValue]] = []
         for case, directory in zip(task.cases, directories, strict=True):

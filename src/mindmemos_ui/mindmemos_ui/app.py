@@ -3,6 +3,7 @@
 import secrets
 from collections.abc import Callable
 from pathlib import Path
+from time import monotonic
 
 import anyio
 from fastapi import FastAPI, Query, Request
@@ -23,7 +24,7 @@ from .config import SettingsUpdate, apply_sdk_settings
 from .sdk_settings import sdk_settings_router
 from .sdk_workbench import sdk_workbench_router
 from .service_settings import service_settings_router
-from .typing import MemorySearchRequest
+from .typing import MemorySearchRequest, MemoryUpdateRequest
 
 
 async def create_app(
@@ -48,6 +49,8 @@ async def create_app(
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"])
     token = secrets.token_urlsafe(32)
     lock = anyio.Lock()
+    last_refresh: dict[str, float] = {}
+    """Admission timestamps shared by all tabs for each local refresh scope."""
 
     @app.middleware("http")
     async def protect(request: Request, call_next):
@@ -61,6 +64,20 @@ async def create_app(
                 request.headers.get("x-workbench-token", ""), token
             ):
                 return JSONResponse({"detail": "Invalid workbench session"}, status_code=403)
+            refresh_scope = None
+            if request.method == "GET" and request.url.path in {"/api/memories", "/api/skills", "/api/connections"}:
+                refresh_scope = request.url.path
+            elif request.method == "POST" and request.url.path == "/api/refresh":
+                refresh_scope = "manual"
+            if refresh_scope is not None:
+                now = monotonic()
+                if now - last_refresh.get(refresh_scope, float("-inf")) < 1:
+                    return JSONResponse(
+                        {"detail": "Too many refreshes. Please try again later."},
+                        status_code=429,
+                        headers={"Retry-After": "1", "Cache-Control": "no-store"},
+                    )
+                last_refresh[refresh_scope] = now
             if request.method in {"GET", "HEAD"} or request.url.path in {
                 "/api/configurations/choose-directory",
                 "/api/skills/choose-directory",
@@ -114,6 +131,11 @@ async def create_app(
             "home": str(manager.config_dir),
             "graphs_connected": bool(skill_key),
         }
+
+    @app.post("/api/refresh")
+    def refresh():
+        """Admit one manual refresh per second across browser tabs."""
+        return {"ok": True}
 
     @app.get("/api/config")
     def settings():
@@ -181,6 +203,21 @@ async def create_app(
         config = manager.load_or_default()
         with MindMemOSClient(config=config) as client:
             result = client.memory.list(page=page, page_size=page_size, user_id=config.defaults.user_id)
+        return result.model_dump(mode="json")
+
+    @app.put("/api/memories/{memory_id}")
+    def update_memory(memory_id: str, body: MemoryUpdateRequest):
+        """Update existing memory content through the configured SDK.
+
+        Args:
+            memory_id: Identity of the existing memory to update.
+            body: Validated replacement text; metadata remains unchanged.
+
+        Returns:
+            The Memory service's acknowledged operation status.
+        """
+        with MindMemOSClient(config=manager.load_or_default()) as client:
+            result = client.memory.update(memory_id, body.content)
         return result.model_dump(mode="json")
 
     @app.post("/api/memories/search")

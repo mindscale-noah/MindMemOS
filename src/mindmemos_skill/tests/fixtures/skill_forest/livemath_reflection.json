@@ -1,6 +1,6 @@
 {
   "provenance": {
-    "reference_run": "/Users/cuiyuqi/hw-project/skill-grpo-opensource/skillopt-self-validate/outputs/livemath_skill_forest_t7_repeats/gpt-54-mini_split42_20260902_152252/seed_42",
+    "reference_run": "livemath_skill_forest_t7_repeats/gpt-54-mini_split42_20260902_152252/seed_42",
     "legacy_reflect_sha256": "a98d20bd506854b4431434fd523a2b4118ccf60158c8b68324e52f2f52ca4d96",
     "mode": "legacy source reconstruction from stored responses, no provider calls"
   },

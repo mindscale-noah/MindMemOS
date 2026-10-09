@@ -1,0 +1,6 @@
+# Trace2Skill's official xlsx Skill requires LibreOffice for formula recalculation.
+# https://github.com/Qwen-Applications/Trace2Skill/blob/main/spreadsheet_agent/skills/xlsx/SKILL.md
+LibreOffice (soffice)
+# MindMemOS's transactional recalculation adapter also needs matching LibreOffice pyuno.
+# Configure SPREADSHEETBENCH_LIBREOFFICE_PYTHON; this is not a pip/uv requirement.
+LibreOffice Python with matching pyuno

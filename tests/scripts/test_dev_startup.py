@@ -225,6 +225,7 @@ def test_runner_passes_same_effective_config_and_env_to_children(tmp_path, monke
     monkeypatch.setattr(run, "_wait_connections", lambda plan: None)
 
     def check_children(commands, **kwargs):
+        assert Path(os.environ[run.MINDMEMOS_HOME_ENV]) == run.DEFAULT_UI_HOME.absolute()
         config = read_skill_config(os.environ[SKILL_CONFIG_PATH_ENV])
         assert config.service.task_manager.bootstrap_servers == "localhost:19092"
         assert make_url(config.service.persistence.database.config.url).port == 55433

@@ -13,7 +13,7 @@ from opentelemetry.sdk._logs import ReadWriteLogRecord
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import Link, SpanContext, Status, StatusCode, TraceFlags
 
-from ...infra.database import Database, TableRegistry
+from ...infra.database import Database, Filter, TableRegistry
 from ...infra.observability import OpenTelemetryRecorder, serialize_log, serialize_span
 from ...logging import get_logger
 from ...logging.otel import attach_run_logs, detach_run_logs
@@ -121,15 +121,16 @@ class AlgorithmAuditPersistence:
 
     @contextmanager
     def trace_run(
-        self, *, project_id: str, run_id: str, algorithm: str, base_version_id: str
+        self, *, project_id: str, run_id: str, algorithm: str, base_version_id: str, operation: str = "train"
     ) -> Iterator[AuditSession]:
-        """Record one training attempt with a root span and durable run status.
+        """Record one algorithm attempt with a root span and durable run status.
 
         Args:
             project_id: Repository scope of the input Skill.
             run_id: Stable identity shared across recovery attempts.
             algorithm: Configured training pipeline or trainer name.
             base_version_id: Input Skill version.
+            operation: Operation suffix for the root span, such as train or evolve.
 
         Yields:
             Active session used by nested Agent calls.
@@ -140,7 +141,7 @@ class AlgorithmAuditPersistence:
         prior_roots = (
             self.database.select(
                 OBSERVABILITY_SPANS_TABLE,
-                filters={"project_id": project_id, "run_id": run_id, "name": "algorithm.train"},
+                filters={"project_id": project_id, "run_id": run_id, "name": f"algorithm.{operation}"},
                 order_by=["-started_at"],
                 limit=1,
             )
@@ -167,7 +168,7 @@ class AlgorithmAuditPersistence:
         error_type = None
         try:
             with self.telemetry.tracer.start_as_current_span(
-                "algorithm.train", context=otel_context.Context(), links=links, record_exception=False
+                f"algorithm.{operation}", context=otel_context.Context(), links=links, record_exception=False
             ) as span:
                 context = span.get_span_context()
                 trace_id = trace.format_trace_id(context.trace_id)
@@ -297,6 +298,32 @@ class AlgorithmAuditPersistence:
             return None
         row = self.database.get(OBSERVABILITY_RUNS_TABLE, {"project_id": project_id, "run_id": run_id})
         return AuditRun.model_validate(row) if row is not None else None
+
+    def latest_evolution(self, project_id: str, version_id: str, algorithms: list[str]) -> datetime | None:
+        """Read the latest indexed evolution start without loading audit payloads.
+
+        Args:
+            project_id: Authorized project identity.
+            version_id: Exact evolution input version.
+            algorithms: Configured evolution aliases and implementation names.
+
+        Returns:
+            Latest start time, or None without a matching run.
+        """
+        if self.database is None or not algorithms:
+            return None
+        rows = self.database.select(
+            OBSERVABILITY_RUNS_TABLE,
+            filters=[
+                Filter(field="project_id", value=project_id),
+                Filter(field="base_version_id", value=version_id),
+                Filter(field="algorithm", op="in", value=algorithms),
+            ],
+            fields=["started_at"],
+            order_by=["-started_at"],
+            limit=1,
+        )
+        return rows[0]["started_at"] if rows else None
 
     def spans(self, project_id: str, run_id: str, *, limit: int = 500, offset: int = 0) -> list[AuditSpan]:
         """Read one stable page of a run's completed trace tree.

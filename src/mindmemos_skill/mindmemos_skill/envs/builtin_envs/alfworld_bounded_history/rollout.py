@@ -2,10 +2,10 @@
 
 import re
 from copy import deepcopy
-from hashlib import sha256
 from pathlib import Path
 
 from ....agents import OpenAIChatAgent
+from ....common.input_files import file_fingerprints
 from ....skill import Skill
 from ...base import Environment
 from ...data import RewardData
@@ -68,13 +68,25 @@ class ALFWorldEnvironment(Environment[ALFWorldConfig]):
             raise ValueError("Injected agent config must match the environment's agent config")
         self.agent = agent if agent is not None else OpenAIChatAgent(config.agent)
 
+    def input_identity(self, task: Task, reward_data: RewardData) -> dict[str, str]:
+        """Include supporting simulator files alongside the selected game.
+
+        Args:
+            task: Public game selection.
+            reward_data: Private scoring inputs.
+
+        Returns:
+            Game-directory files mapped to their current content fingerprints.
+        """
+        identity = super().input_identity(task, reward_data)
+        if isinstance(task, ALFWorldTask):
+            identity.update(file_fingerprints(path for path in task.gamefile.parent.iterdir() if path.is_file()))
+        return identity
+
     def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Keep simulator state local and close it even if model execution fails."""
         if not isinstance(task, ALFWorldTask) or not isinstance(reward_data, ALFWorldRewardData):
             raise TypeError("ALFWorld requires ALFWorldTask and ALFWorldRewardData")
-        for filename, digest in reward_data.game_sha256.items():
-            if sha256((task.gamefile.parent / filename).read_bytes()).hexdigest() != digest:
-                raise ValueError("ALFWorld game files changed; reload the dataset")
         text = skill_text(skills)
         history, responses, trajectory = [], [], []
         system = "You are an expert agent operating in the ALFRED Embodied Environment."

@@ -523,6 +523,37 @@ def test_report_show_list_cursor_and_same_execution_actor_filter(service):
 
         older = report("user-a", "agent-a")
         newer = report("user-b", "agent-b")
+        with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
+            store.trajectories.mark_consumed(version_id, [older], "evolution-a")
+            store.trajectories.mark_consumed(version_id, [older], "evolution-b")
+        counts = {"total": 2, "consumed": 1, "unconsumed": 1}
+        detail = client.post("/v1/skills/show", json={"skill_id": skill_id}).json()["data"]
+        assert "trajectory_counts" not in detail["version"]
+        history = client.post("/v1/skills/history", json={"skill_id": skill_id}).json()["data"]
+        assert "trajectory_counts" not in history["items"][0]
+        statistics = client.post(
+            "/v1/skills/trajectories/statistics", json={"skill_id": skill_id, "skill_version_id": version_id}
+        )
+        assert statistics.status_code == 200, statistics.text
+        aggregate = statistics.json()["data"]
+        assert aggregate["totals"] == counts
+        assert len(aggregate["days"]) == 30
+        assert sum(day["total"] for day in aggregate["days"]) == 2
+        assert aggregate["last_evolved_at"] is None
+        assert "trajectory_id" not in statistics.text
+        assert (
+            client.post(
+                "/v1/skills/trajectories/statistics", json={"skill_id": skill_id, "skill_version_id": "missing"}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.post(
+                "/v1/skills/trajectories/statistics",
+                json={"skill_id": skill_id, "skill_version_id": version_id, "days": 90},
+            ).status_code
+            == 422
+        )
         shown = client.post("/v1/skills/trajectories/show", json={"trajectory_id": older})
         assert shown.status_code == 200
         assert shown.json()["data"]["trajectory"][0]["content"] == "user-a"

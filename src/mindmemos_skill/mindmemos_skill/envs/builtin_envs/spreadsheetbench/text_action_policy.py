@@ -8,6 +8,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from ....common.json import extract_json_object
+from ....infra.execution import ExecutionConfig, execute
 from .recalculation import append_recalculation_instructions
 from .typing import PolicyAction, PolicyResponse, PolicyResponseType
 from .typing import SpreadsheetBenchTask as Task
@@ -123,25 +124,21 @@ def parse_policy_response(response: str) -> PolicyResponse:
     return PolicyResponse(PolicyResponseType.ACTION, action=action)
 
 
-def run_reference_bash(command: str, *, working_dir: Path, timeout_seconds: int) -> str:
+def run_reference_bash(
+    command: str, *, working_dir: Path, timeout_seconds: int, execution: ExecutionConfig | None = None
+) -> str:
     """Execute bash with the released policy tool's observable result contract.
 
     Args:
         command: Model-proposed shell command executed in the task workspace.
         working_dir: Agent-visible task workspace where tools execute.
         timeout_seconds: Explicit timeout seconds for this operation.
+        execution: Preinstalled Python/uv launcher; None uses the current interpreter.
     """
 
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            cwd=working_dir,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        config = (execution or ExecutionConfig()).model_copy(update={"timeout_s": timeout_seconds})
+        result = execute([*config.shell_command, command], working_dir, config)
         output = result.stdout or ""
         if result.stderr:
             output += f"\n[STDERR]\n{result.stderr}" if output else result.stderr

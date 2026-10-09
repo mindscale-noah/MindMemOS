@@ -26,6 +26,7 @@ class SkillRoute(StrEnum):
     TRAJECTORY_REPORT = "trajectories/report"
     TRAJECTORY_SHOW = "trajectories/show"
     TRAJECTORY_LIST = "trajectories/list"
+    TRAJECTORY_STATISTICS = "trajectories/statistics"
     ORGANIZE = "algos/organize"
     GRAPH_RESOLVE = "graph-resolve"
     GRAPH_DELETE = "graphs/delete"

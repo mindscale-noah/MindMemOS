@@ -27,7 +27,6 @@ class LiveMathData(Data[LiveMathDataConfig]):
         samples = []
         for path in files:
             content = path.read_bytes()
-            source_hash = sha256(content).hexdigest()
             records = TypeAdapter(list[SourceRecord]).validate_json(content)
             for record in records:
                 identifier = f"{record.month}:{record.no}"
@@ -61,8 +60,7 @@ class LiveMathData(Data[LiveMathDataConfig]):
                         ),
                         reward_data=LiveMathRewardData(
                             correct_choice=correct,
-                            source_file=str(path),
-                            source_sha256=source_hash,
+                            source_file=path,
                             choice_seed=self.config.choice_seed,
                         ),
                     )

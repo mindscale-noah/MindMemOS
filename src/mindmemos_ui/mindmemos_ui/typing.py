@@ -3,7 +3,8 @@
 from typing import Literal
 
 from mindmemos_skill.persistence.db_services.skills.typing import UserVersionLabel
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from mindmemos_skill.skill import decode_resources
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 
 class RequestModel(BaseModel):
@@ -11,6 +12,29 @@ class RequestModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     """Catch accidental or misspelled input fields."""
+
+
+class SkillListPage(BaseModel):
+    """One browser-visible page with portable Skill metadata."""
+
+    items: list[dict[str, JsonValue]]
+    """SDK family JSON rows extended with active_version_id, active_version_label,
+    implementation, latest_version_id, latest_version_label, latest_implementation;
+    optional metadata retains the service's arbitrary JSON keys.
+    """
+
+    next_cursor: str | None
+    """Opaque service cursor for the next page; None marks the final page."""
+
+    has_more: bool
+    """Whether the service supplied a continuation cursor."""
+
+
+class MemoryUpdateRequest(RequestModel):
+    """Edit the body of one existing memory without changing its metadata."""
+
+    content: str = Field(min_length=1, pattern=r"\S")
+    """Non-blank replacement text, preserving its whitespace and line breaks."""
 
 
 class MemorySearchRequest(RequestModel):
@@ -148,14 +172,14 @@ class ActiveRequest(RequestModel):
     """Local version to select without modifying imported files."""
 
 
-class CommitRequest(RequestModel):
-    """Create a child version from a local source directory."""
+class CommitVersionRequest(RequestModel):
+    """Shared version identity and publication options."""
 
     skill_id: str
     """Central Skill identity."""
 
-    path: str = Field(min_length=1)
-    """Complete source directory or SKILL.md path."""
+    active: bool = True
+    """Whether to make the committed version active; preserves existing callers' behavior."""
 
     base_version_id: str
     """Explicit parent version for optimistic concurrency."""
@@ -168,6 +192,29 @@ class CommitRequest(RequestModel):
 
     version_bump: Literal["patch", "minor", "major"] = "patch"
     """Numeric component to increment when a label is not supplied."""
+
+
+class CommitRequest(CommitVersionRequest):
+    """Create a child version from a local source directory."""
+
+    path: str = Field(min_length=1)
+    """Complete source directory or SKILL.md path."""
+
+
+class EditCommitRequest(CommitVersionRequest):
+    """Publish the complete source snapshot edited in the browser."""
+
+    content: str = Field(min_length=1)
+    """Full replacement SKILL.md text, preserving whitespace."""
+
+    resources: dict[str, str]
+    """All retained auxiliary files, mapping relative paths to canonical Base64 bytes."""
+
+    @model_validator(mode="after")
+    def validate_resources(self):
+        """Reject unsafe paths and invalid encodings before publication."""
+        decode_resources(self.resources)
+        return self
 
 
 class ConfigImportRequest(RequestModel):

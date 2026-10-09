@@ -27,7 +27,7 @@ def search_request():
         "tasks": [
             {
                 "task": {"id": "a", "instruction": "Who?", "context": "A passage"},
-                "reward_data": {"answers": ["Someone"], "source_sha256": "a" * 64},
+                "reward_data": {"answers": ["Someone"]},
             }
         ],
         "split": {"train": ["a"]},

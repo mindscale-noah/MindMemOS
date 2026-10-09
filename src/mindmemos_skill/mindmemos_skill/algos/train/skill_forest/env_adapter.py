@@ -24,7 +24,7 @@ class SkillForestEnvAdapter(Registrable[SkillForestEnvAdapterConfig]):
     """Provide usable generic behavior; override only environment-specific methods."""
 
     RANKING_PROMPT = """\
-You are an expert skill-optimization optimizer. You receive a skill document and a pool
+You are an expert in optimizing skills. You receive a skill document and a pool
 of proposed edits. Your job is to RANK the edits by importance and select the top ones.
 
 Ranking criteria (in order of priority):

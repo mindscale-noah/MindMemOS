@@ -2,7 +2,6 @@
 
 import csv
 import json
-from hashlib import sha256
 
 from ...data import Data, DataSample
 from ..common import load_records
@@ -42,7 +41,7 @@ class OfficeQAData(Data[OfficeQADataConfig]):
     """Question and document locations."""
 
     def _load(self) -> list[DataSample]:
-        """Load questions, references, and hashed public text documents."""
+        """Load questions, references, and public text document paths."""
         source = self.config.data_path.expanduser().resolve()
         root = self.config.docs_root.expanduser().resolve()
         documents = {
@@ -52,8 +51,6 @@ class OfficeQAData(Data[OfficeQADataConfig]):
         }
         if not root.is_dir():
             raise FileNotFoundError(root)
-        hashes = {name: sha256(path.read_bytes()).hexdigest() for name, path in documents.items()}
-        digest = sha256(source.read_bytes()).hexdigest()
         if source.suffix.lower() == ".csv":
             with source.open(encoding="utf-8", newline="") as handle:
                 records = list(csv.DictReader(handle))
@@ -79,8 +76,6 @@ class OfficeQAData(Data[OfficeQADataConfig]):
                     ),
                     reward_data=OfficeQARewardData(
                         ground_truth=str(row.get("ground_truth") or row.get("answer") or "").strip(),
-                        source_sha256=digest,
-                        document_sha256=hashes,
                     ),
                 )
             )

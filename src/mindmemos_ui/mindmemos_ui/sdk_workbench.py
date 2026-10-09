@@ -10,7 +10,7 @@ from difflib import unified_diff
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from mindmemos_sdk.config import ConfigManager
 from mindmemos_sdk.skills import (
     ActivateRequest,
@@ -21,6 +21,7 @@ from mindmemos_sdk.skills import (
     ListRequest,
     ShowRequest,
     StructuredSkillInfo,
+    TrajectoryStatisticsRequest,
 )
 from mindmemos_sdk.skills import (
     CommitRequest as SkillCommitRequest,
@@ -43,8 +44,10 @@ from .typing import (
     CommitRequest,
     ConfirmRequest,
     DiffRequest,
+    EditCommitRequest,
     ExportRequest,
     RegisterRequest,
+    SkillListPage,
     VersionRef,
 )
 
@@ -93,7 +96,12 @@ def _content(version: dict) -> dict:
             files[path] = raw.decode("utf-8")
         except UnicodeDecodeError:
             binary_files.append(path)
-    return {"files": files, "resources": list(resources), "binary_files": binary_files}
+    return {
+        "files": files,
+        "resources": list(resources),
+        "binary_files": binary_files,
+        "raw_resources": version["resources"],
+    }
 
 
 def _directory_hash(directory: Path) -> str:
@@ -227,16 +235,19 @@ def sdk_workbench_router(
         return {"path": str(selected) if selected else None, "unavailable": False}
 
     @router.get("/skills")
-    async def skills():
-        rows = []
+    async def skills(page_size: int = Query(default=20, ge=1, le=100), cursor: str | None = None) -> SkillListPage:
+        """Read one family page and enrich only its displayed rows.
+
+        Args:
+            page_size: Maximum number of families to display, between 1 and 100.
+            cursor: Service continuation token; None reads the first page.
+
+        Returns:
+            Current-page families with version metadata and the next-page cursor.
+        """
         async with skill_client(manager) as client:
-            cursor = None
-            while True:
-                page = await client.list(ListRequest(limit=100, cursor=cursor))
-                rows.extend(_family(item) for item in page["items"])
-                cursor = page.get("next_cursor")
-                if not cursor:
-                    break
+            page = await client.list(ListRequest(limit=page_size, cursor=cursor))
+            rows = [_family(item) for item in page["items"]]
             for row in rows:
                 versions = await history(client, row["skill_id"])
                 current = next((item for item in versions if item["version_id"] == row["active_version_id"]), None)
@@ -246,7 +257,8 @@ def sdk_workbench_router(
                 row["latest_version_id"] = latest["version_id"] if latest else None
                 row["latest_version_label"] = latest["version_label"] if latest else None
                 row["latest_implementation"] = latest["implementation"] if latest else None
-        return rows
+        next_cursor = page.get("next_cursor")
+        return SkillListPage(items=rows, next_cursor=next_cursor, has_more=bool(next_cursor))
 
     @router.get("/skills/{skill_id}")
     async def show(skill_id: str):
@@ -259,6 +271,22 @@ def sdk_workbench_router(
         VersionRef(source=source, skill_id=skill_id, version_id="active")
         async with skill_client(manager) as client:
             return await history(client, skill_id)
+
+    @router.get("/trajectory-statistics")
+    async def trajectory_statistics(skill_id: str, version_id: str):
+        """Read one bounded aggregate response through the Skill SDK.
+
+        Args:
+            skill_id: Owning Skill family identity.
+            version_id: Exact Skill version to count.
+
+        Returns:
+            Global totals and thirty daily buckets without individual trajectories.
+        """
+        async with skill_client(manager) as client:
+            return await client.trajectory_statistics(
+                TrajectoryStatisticsRequest(skill_id=skill_id, skill_version_id=version_id)
+            )
 
     @router.get("/content")
     async def content(source: str, skill_id: str, version_id: str):
@@ -340,7 +368,34 @@ def sdk_workbench_router(
                         version_bump=body.version_bump,
                     ),
                     base_version_id=body.base_version_id,
-                    active=True,
+                    active=body.active,
+                )
+            )
+        return {"version": {"version_id": result["skill_version_id"]}}
+
+    @router.post("/commit/edited")
+    async def commit_edited(body: EditCommitRequest):
+        """Publish a full browser-edited snapshot through the configured SDK.
+
+        Args:
+            body: Complete source files and explicit parent and publication options.
+
+        Returns:
+            The immutable identity of the newly created version.
+        """
+        async with skill_client(manager) as client:
+            result = await client.commit(
+                SkillCommitRequest(
+                    skill_id=body.skill_id,
+                    skill=StructuredSkillInfo(
+                        content=body.content,
+                        resources=body.resources,
+                        commit_message=body.message,
+                        commit_version=body.version_label,
+                        version_bump=body.version_bump,
+                    ),
+                    base_version_id=body.base_version_id,
+                    active=body.active,
                 )
             )
         return {"version": {"version_id": result["skill_version_id"]}}

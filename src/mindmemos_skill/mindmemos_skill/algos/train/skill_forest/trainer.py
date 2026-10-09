@@ -20,7 +20,7 @@ from ....infra.task_manager.progress import ProgressReporter
 from ....skill import Skill
 from ...base import Algorithm
 from ..base import SkillTrainer
-from ..recovery import implementation_identity
+from ..recovery import implementation_identity, sample_identity
 from .checkpoint import load_node, load_skill, node_directory, read_node, read_node_file, write_node
 from .config import ALGORITHM_VERSION, SkillForestTrainerConfig
 from .env_adapter import SkillForestEnvAdapter
@@ -160,8 +160,8 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
                 "config": config,
                 "adapter": adapter_identity,
                 "skill": skill.snapshot().model_dump(mode="json"),
-                "samples": [sample.model_dump(mode="json") for sample in train_samples],
-                "validation": [sample.model_dump(mode="json") for sample in validation_samples],
+                "samples": [sample_identity(sample, env) for sample in train_samples],
+                "validation": [sample_identity(sample, env) for sample in validation_samples],
                 "splits": [split.model_dump(mode="json") for split in splits],
                 "trainer": f"{type(self).__module__}.{type(self).__qualname__}",
                 "environment": environment,

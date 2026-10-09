@@ -27,7 +27,6 @@ env = Environment.build("spreadsheetbench_tool_calling", {
     "agent": {"model": "your-model", "max_completion_tokens": 16384},
     "max_turns": 30,
     "skill_loading_mode": "tool",
-    "execution": {"python_command": ["/path/to/venv/bin/python"]},
 })
 
 text_env = Environment.build("spreadsheetbench_text_action", {
@@ -38,3 +37,20 @@ text_env = Environment.build("spreadsheetbench_text_action", {
     "transactional_recalculation": True,
 })
 ```
+
+Environment initialization automatically creates a dedicated Python 3.13
+virtual environment and installs its locked requirements through uv. The fixed
+paths are `<MindMemOS home>/envs/spreadsheetbench_text_action/bin/python` and
+`<MindMemOS home>/envs/spreadsheetbench_tool_calling/bin/python` (Windows uses
+`Scripts/python.exe`). `make dev` defaults to the repository's `.mindmemos/` home.
+No interpreter setting is needed in the environment or text Action configuration.
+
+Dependencies are packaged under `runtime/requirements/text_action/` (Trace2Skill)
+and `runtime/requirements/tool_calling/` (SkillOpt). A completed installation is
+reused without reinstalling; a file lock prevents duplicate concurrent setup.
+Interrupted installations can retry on the next initialization. Shell `python`
+and `python3` use the managed interpreter. Dependencies and workbook read/write
+support are checked during initialization. The interpreter path is stored in the
+internal `execution.python_command` and read directly when writing
+`audit/execution.json`. Package versions are pinned by the requirements files.
+LibreOffice/pyuno for formula recalculation remains a separate host dependency.
