@@ -258,6 +258,16 @@ class TrajectoryReportRequest(SkillRequestBody):
     """Caller-declared execution status."""
 
 
+class TrajectoryStatisticsRequest(SkillRequestBody):
+    """Query all-time totals and fixed thirty-day counts without record content."""
+
+    skill_id: str = Field(min_length=1)
+    """Owning Skill family identity or alias."""
+
+    skill_version_id: str = Field(min_length=1)
+    """Exact Skill version to aggregate."""
+
+
 class TrajectoryShowRequest(SkillRequestBody):
     """Read one stored execution attempt."""
 

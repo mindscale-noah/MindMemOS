@@ -34,6 +34,7 @@ from mindmemos_sdk.skills import (
     TrajectoryListRequest,
     TrajectoryReportRequest,
     TrajectoryShowRequest,
+    TrajectoryStatisticsRequest,
     UpdateInfoRequest,
     VersionResolveRequest,
 )
@@ -41,6 +42,12 @@ from mindmemos_sdk.skills.core import SkillRoute
 from mindmemos_sdk.transport import AsyncHttpTransport, HttpTransport
 
 REQUESTS = [
+    (
+        SkillClient.trajectory_statistics,
+        AsyncSkillClient.trajectory_statistics,
+        TrajectoryStatisticsRequest(skill_id="skill-1", skill_version_id="version-1"),
+        "trajectories/statistics",
+    ),
     (SkillClient.delete_graph, AsyncSkillClient.delete_graph, GraphResolveRequest(graph_ref="graph"), "graphs/delete"),
     (
         SkillClient.register,

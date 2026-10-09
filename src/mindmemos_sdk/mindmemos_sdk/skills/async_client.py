@@ -28,6 +28,7 @@ from .typing import (
     TrajectoryListRequest,
     TrajectoryReportRequest,
     TrajectoryShowRequest,
+    TrajectoryStatisticsRequest,
     UpdateInfoRequest,
     VersionResolveRequest,
 )
@@ -180,6 +181,17 @@ class AsyncSkillClient:
             Stored trajectory identity.
         """
         return await self._post(SkillRoute.TRAJECTORY_REPORT, request)
+
+    async def trajectory_statistics(self, request: TrajectoryStatisticsRequest) -> SkillData:
+        """Read bounded aggregate counts for one Skill version.
+
+        Args:
+            request: Owning family and exact version identity.
+
+        Returns:
+            Global totals, thirty calendar buckets and latest evolution time.
+        """
+        return await self._post(SkillRoute.TRAJECTORY_STATISTICS, request)
 
     async def show_trajectory(self, request: TrajectoryShowRequest) -> SkillData:
         """Read one stored trajectory.
