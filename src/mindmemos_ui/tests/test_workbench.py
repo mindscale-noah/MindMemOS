@@ -88,6 +88,8 @@ def test_sdk_http_error_preserves_status_and_message(client, monkeypatch, status
 def test_connections_check_memory_and_skill_independently(client, monkeypatch):
     http, manager = client
     calls = []
+    clock = [0.0]
+    monkeypatch.setattr("mindmemos_ui.app.monotonic", lambda: clock[0])
 
     class MemoryProbe:
         def get(self, *, top_k):
@@ -124,6 +126,7 @@ def test_connections_check_memory_and_skill_independently(client, monkeypatch):
     config.memory_service.auth.api_key = None
     manager.save(config)
     calls.clear()
+    clock[0] = 1.0
     response = http.get("/api/connections")
     assert response.json()["memory"]["status"] == "unconfigured"
     assert response.json()["skill"]["status"] == "unconfigured"
@@ -134,12 +137,20 @@ def test_memories_page_uses_read_only_sdk_list_and_search(client, monkeypatch):
     """Keep browser memory requests scoped to the configured SDK client."""
     http, manager = client
     calls = []
+    clock = [0.0]
+    monkeypatch.setattr("mindmemos_ui.app.monotonic", lambda: clock[0])
     memory = MemorySearchHit(id="m-1", memory="Example memory", user_id="cyq", memory_type="fact")
     config = manager.load()
     config.defaults.user_id = "cyq"
     manager.save(config)
 
     class MemoryClient:
+        def update(self, memory_id, content):
+            from mindmemos_sdk.memory.models import StatusResult
+
+            calls.append(("update", memory_id, content))
+            return StatusResult()
+
         def list(self, *, page, page_size, user_id):
             calls.append(("list", page, page_size, user_id))
             return MemoryPageResult(memories=[memory], page=page, page_size=page_size, total=1)
@@ -172,10 +183,23 @@ def test_memories_page_uses_read_only_sdk_list_and_search(client, monkeypatch):
     assert filtered.status_code == 200
     assert calls == [("list", 2, 5, "cyq"), ("search", "Example", 20, "cyq"), ("search", "Example", 5, "other")]
     assert "private-secret-value" not in listed.text + searched.text + filtered.text
+    clock[0] = 1.0
     assert http.get("/api/memories?page=0").status_code == 422
     assert http.post("/api/memories/search", json={"query": "   "}).status_code == 422
     assert http.post("/api/memories/search", json={"query": "Example", "top_k": 0}).status_code == 422
     assert http.post("/api/memories/search", json={"query": "Example", "user_id": "   "}).status_code == 422
+    edited = http.put("/api/memories/m-1", json={"content": "  Updated\ntext  "})
+    assert edited.status_code == 200
+    assert edited.json()["code"] == "ok"
+    assert calls[-1] == ("update", "m-1", "  Updated\ntext  ")
+    assert http.put("/api/memories/m-1", json={"content": "   "}).status_code == 422
+    assert http.put("/api/memories/m-1", json={"content": "Updated", "user_id": "other"}).status_code == 422
+    assert (
+        http.put(
+            "/api/memories/m-1", json={"content": "Updated"}, headers={"origin": "https://example.org"}
+        ).status_code
+        == 403
+    )
 
 
 def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
@@ -265,6 +289,55 @@ def test_static_entrypoint(client):
     response = http.get("/")
     assert response.status_code == 200
     assert "/assets/" in response.text
+
+
+def test_manual_refresh_is_shared_and_rejections_do_not_extend_cooldown(client, monkeypatch):
+    """Reject repeated manual refreshes across tabs before admitting another action."""
+    http, _ = client
+    clock = [10.0]
+    monkeypatch.setattr("mindmemos_ui.app.monotonic", lambda: clock[0])
+    assert http.post("/api/refresh", headers={"x-workbench-token": "bad"}).status_code == 403
+    assert http.post("/api/refresh").status_code == 200
+    clock[0] = 10.5
+    rejected = http.post("/api/refresh", headers={"User-Agent": "Another browser tab"})
+    assert rejected.status_code == 429
+    assert rejected.headers["retry-after"] == "1"
+    assert rejected.json()["detail"] == "Too many refreshes. Please try again later."
+    clock[0] = 11.0
+    assert http.post("/api/refresh").status_code == 200
+
+
+def test_memory_refresh_limit_covers_page_changes_without_calling_cloud(client, monkeypatch):
+    """Share the one-second read limit across pages and browser reloads."""
+    http, _ = client
+    clock = [0.0]
+    calls = []
+    monkeypatch.setattr("mindmemos_ui.app.monotonic", lambda: clock[0])
+
+    class MemoryClient:
+        def list(self, *, page, page_size, user_id):
+            calls.append((page, page_size))
+            return MemoryPageResult(memories=[], page=page, page_size=page_size, total=None, has_more=False)
+
+    class SDKClient:
+        def __init__(self, *, config):
+            self.memory = MemoryClient()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    monkeypatch.setattr("mindmemos_ui.app.MindMemOSClient", SDKClient)
+    assert http.get("/api/memories?page=2&page_size=20").status_code == 200
+    clock[0] = 0.999
+    assert http.get("/api/memories?page=2&page_size=20").status_code == 429
+    assert http.get("/api/memories?page=3&page_size=20").status_code == 429
+    assert calls == [(2, 20)]
+    clock[0] = 1.0
+    assert http.get("/api/memories?page=2&page_size=20").status_code == 200
+    assert calls == [(2, 20), (2, 20)]
 
 
 def test_cli_starts_without_a_local_skill_database(tmp_path, monkeypatch):
