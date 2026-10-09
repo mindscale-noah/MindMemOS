@@ -1,14 +1,13 @@
 """Public workbook staging and previews shared by both rollout protocols."""
 
 import shutil
-from hashlib import sha256
 from pathlib import Path
 
 from .typing import SpreadsheetBenchRewardData, SpreadsheetBenchTask
 
 
 def prepare_cases(task: SpreadsheetBenchTask, reward_data: SpreadsheetBenchRewardData, workspace: Path) -> list[Path]:
-    """Verify data identities and stage only public inputs in isolated case folders.
+    """Match case numbers and stage only public inputs in isolated case folders.
 
     Args:
         task: Public instruction and input workbook identities.
@@ -23,9 +22,6 @@ def prepare_cases(task: SpreadsheetBenchTask, reward_data: SpreadsheetBenchRewar
         raise ValueError("Public workbook cases must match private reference case numbers")
     directories = []
     for source, reference in zip(task.cases, reward_data.cases):
-        for case in (source, reference):
-            if sha256(case.path.read_bytes()).hexdigest() != case.sha256:
-                raise ValueError("Spreadsheet workbook changed; reload the dataset")
         directory = workspace / source.number
         if directory.is_symlink():
             raise ValueError("Case workspace must not be a symbolic link")

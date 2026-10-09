@@ -46,7 +46,7 @@ def test_raw_loading_completes_choices_and_separates_reference(data):
     assert {choice.text for choice in sample.task.choices} == {"1", "2", "3"}
     assert sample.reward_data.correct_choice in sample.task.choices
     assert sample.reward_data.correct_choice.text == "2"
-    assert len(sample.reward_data.source_sha256) == 64
+    assert "source_sha256" not in sample.reward_data.model_dump()
     public = sample.task.model_dump_json()
     assert "correct_choice" not in public and "PRIVATE_" not in public
     assert data.load() == [sample]
@@ -56,13 +56,15 @@ def test_raw_loading_completes_choices_and_separates_reference(data):
 def test_source_changes_invalidate_provenance(data):
     """Track even private source edits through the source content hash."""
     first = data.load()[0]
+    env = LiveMathEnvironment(LiveMathConfig(agent=OpenAIChatConfig(model="test")))
+    identity = env.input_identity(first.task, first.reward_data)
     path = data.config.data_path
     rows = json.loads(path.read_text())
     rows[0]["sketch"] = "changed reference material"
     path.write_text(json.dumps(rows))
     second = data.load()[0]
     assert first.task == second.task
-    assert first.reward_data.source_sha256 != second.reward_data.source_sha256
+    assert identity != env.input_identity(second.task, second.reward_data)
 
 
 @pytest.mark.parametrize(

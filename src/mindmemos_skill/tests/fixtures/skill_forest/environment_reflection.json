@@ -1,7 +1,7 @@
 {
   "provenance": {
     "kind": "Synthetic unified-result cases rendered by original Skill-Forest formatter; not historical model runs",
-    "source": "skillopt/gradient/reflect.py",
+    "source": "Original Skill-Forest reflection formatter",
     "source_sha256": "a98d20bd506854b4431434fd523a2b4118ccf60158c8b68324e52f2f52ca4d96",
     "source_commit": "5d041ffe6e63409d7f05135e7c705cf85357900e"
   },

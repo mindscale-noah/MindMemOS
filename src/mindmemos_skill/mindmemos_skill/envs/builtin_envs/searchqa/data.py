@@ -1,7 +1,5 @@
 """Adapt SearchQA records to the shared split API."""
 
-from hashlib import sha256
-
 from ...data import Data, DataSample
 from ..common import load_records
 from .config import SearchQADataConfig
@@ -18,11 +16,10 @@ class SearchQAData(Data[SearchQADataConfig]):
     def _load(self) -> list[DataSample]:
         """Load original IDs, passages, and private answer lists."""
         path = self.config.data_path.expanduser().resolve()
-        digest = sha256(path.read_bytes()).hexdigest()
         return [
             DataSample(
                 task=SearchQATask(id=str(row["id"]), instruction=row["question"], context=row.get("context", "")),
-                reward_data=SearchQARewardData(answers=row.get("answers", []), source_sha256=digest),
+                reward_data=SearchQARewardData(answers=row.get("answers", [])),
             )
             for row in load_records(path)
         ]

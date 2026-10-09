@@ -30,7 +30,7 @@ class SpreadsheetBenchToolCallingEnvironment(SpreadsheetExecutionEnvironment[Spr
             config: Validated native-tool execution settings.
             agent: Optional model transport for offline tests or caller injection.
         """
-        super().__init__(config)
+        super().__init__(config, protocol="tool_calling")
         self.agent = OpenAIChatAgent(
             config.agent,
             model=agent,
@@ -60,11 +60,11 @@ class SpreadsheetBenchToolCallingEnvironment(SpreadsheetExecutionEnvironment[Spr
 
     def _user_prompt(self, context: SpreadsheetContext) -> str:
         """Render public workbook instructions."""
-        return workspace_tools.user_prompt(context, self.config)
+        return workspace_tools.user_prompt(context, self.execution)
 
     def _get_observation(self, response: AgentResult, context: SpreadsheetContext) -> SpreadsheetObservation:
         """Execute native tool calls and return tool-role messages."""
-        return workspace_tools.get_observation(response, context, self.config, self.agent)
+        return workspace_tools.get_observation(response, context, self.execution, self.agent)
 
     def _initial_skill_loaded(self, context: SpreadsheetContext) -> bool:
         """Detect preloaded instructions."""

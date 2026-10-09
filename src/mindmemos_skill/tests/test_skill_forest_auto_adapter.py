@@ -75,6 +75,7 @@ async def test_same_trainer_uses_run_adapter_for_reflection_and_synthesis(tmp_pa
 
     for name in ("livemath", "agentskillos"):
         monkeypatch.setattr(Environment.resolve(name), "rollout", rollout)
+        monkeypatch.setattr(Environment.resolve(name), "input_identity", Environment.input_identity)
     original_merge = SkillForestEnvAdapter.build_skill_merge_messages
 
     def capture_merge(self, context):

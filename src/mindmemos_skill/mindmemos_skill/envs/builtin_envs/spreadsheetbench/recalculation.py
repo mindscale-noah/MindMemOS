@@ -65,7 +65,7 @@ def append_recalculation_instructions(
     )
     command = shlex.join(
         [
-            str(Path(sys.executable).resolve()),
+            str(Path(sys.executable).absolute()),
             f"./{helper_path.name}",
             output_argument,
             "--status-path",

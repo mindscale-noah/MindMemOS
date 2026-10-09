@@ -12,13 +12,10 @@ class SearchQATask(Task):
 
 
 class SearchQARewardData(RewardData):
-    """Private accepted answers and source provenance."""
+    """Private accepted answers used for answer scoring."""
 
     answers: list[str]
     """Accepted reference strings in their original order."""
-
-    source_sha256: str
-    """Content hash of the source dataset."""
 
 
 class SearchQAReward(Reward):

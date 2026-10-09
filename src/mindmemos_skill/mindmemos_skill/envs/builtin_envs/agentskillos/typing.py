@@ -18,9 +18,6 @@ class AgentSkillOSTask(Task):
     files: dict[str, Path] = Field(default_factory=dict)
     """Public destination names mapped to original input files."""
 
-    file_sha256: dict[str, str] = Field(default_factory=dict)
-    """Fingerprints of every public input file."""
-
     outputs: list[str] = Field(default_factory=list)
     """Expected deliverable names supplied to the execution agent."""
 
@@ -55,13 +52,7 @@ class RelevanceRecord(BaseModel):
 
 
 class RetrievalRewardData(RewardData, RelevanceRecord):
-    """Keep ground truth and source fingerprints out of the public task."""
-
-    tasks_sha256: str
-    """Digest of the complete source task file."""
-
-    relevance_sha256: str
-    """Digest of the complete private relevance file."""
+    """Keep relevance ground truth out of the public task."""
 
 
 class Ranking(BaseModel):
@@ -92,14 +83,8 @@ class AgentSkillOSRewardData(RewardData):
     task_config: dict[str, JsonValue]
     """Complete original task JSON consumed by the official evaluator."""
 
-    task_sha256: str
-    """Digest of the original task JSON bytes."""
-
     core_gt_ids: list[SkillID] | None = None
     """Relevant Skill identities for optional retrieval diagnostics only."""
 
     relevance_source: str
     """Explicit label origin: legacy_core_gt_ids or official_task_skills."""
-
-    relevance_sha256: str
-    """Digest of the label source file."""

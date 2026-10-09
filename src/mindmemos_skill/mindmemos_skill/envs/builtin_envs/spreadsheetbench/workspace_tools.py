@@ -6,6 +6,7 @@ from pydantic import JsonValue
 
 from ....agents import OpenAIChatAgent
 from ....agents.typing import AgentResult, ToolTurn
+from ....infra.execution import ExecutionConfig
 from .config import SpreadsheetBenchToolCallingConfig
 from .prompts.workspace_tools import SYSTEM_PROMPT
 from .tools import TOOLS, run_tool
@@ -49,12 +50,12 @@ def system_prompt(context: SpreadsheetContext, config: SpreadsheetBenchToolCalli
     return system
 
 
-def user_prompt(context: SpreadsheetContext, config: SpreadsheetBenchToolCallingConfig) -> str:
+def user_prompt(context: SpreadsheetContext, execution: ExecutionConfig) -> str:
     """Render public task instructions.
 
     Args:
         context: Public task, prepared paths, Skill text, and tools for one case.
-        config: Environment execution and protocol settings.
+        execution: Managed interpreter and shell settings.
 
     Returns:
         Initial user message.
@@ -68,15 +69,15 @@ def user_prompt(context: SpreadsheetContext, config: SpreadsheetBenchToolCalling
         )
     parts.append("Complete the task and save the result as 'output.xlsx' (do not modify 'input.xlsx').")
     user = "\n\n".join(parts)
-    if config.execution.shell_command[0].lower().endswith(("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh")):
-        user += "\n\nShell command prefix: " + json.dumps(config.execution.shell_command)
+    if execution.shell_command[0].lower().endswith(("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh")):
+        user += "\n\nShell command prefix: " + json.dumps(execution.shell_command)
     return user
 
 
 def get_observation(
     response: AgentResult,
     context: SpreadsheetContext,
-    config: SpreadsheetBenchToolCallingConfig,
+    execution: ExecutionConfig,
     agent: OpenAIChatAgent,
 ) -> SpreadsheetObservation:
     """Execute parsed tool calls and encode feedback for the shared loop.
@@ -84,7 +85,7 @@ def get_observation(
     Args:
         response: Agent result containing a parsed tool turn.
         context: Public workspace and tool definitions for this case.
-        config: Execution limits and protocol settings.
+        execution: Managed interpreter and shell settings.
         agent: Agent providing the observation encoding callback.
 
     Returns:
@@ -105,7 +106,7 @@ def get_observation(
         if call.name not in {tool["function"]["name"] for tool in context.tools}:
             observation = f"Error: unknown tool {call.name}"
         else:
-            observation = call.error or run_tool(call.name, call.arguments, context.directory, config.execution)
+            observation = call.error or run_tool(call.name, call.arguments, context.directory, execution)
         if call.name == "skill" and not call.error and not observation.startswith("Error:"):
             loaded = True
             feedback.extend(

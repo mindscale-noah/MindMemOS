@@ -110,6 +110,9 @@ class ConfiguredTrainingPipeline(TrainingPipeline[TrainingPipelineConfig]):
             "config": env.config.model_dump(mode="json"),
             "trainer_config": trainer.config.model_dump(mode="json"),
         }
+        identity["input_identity"] = {
+            sample.task.id: env.input_identity(sample.task, sample.reward_data) for sample in request.tasks
+        }
         input_hash = fingerprint(identity)
         async with AsyncFileLock(str(root.parent / f".{root.name}.pipeline.lock"), timeout=0):
             store = self.persistence.skills

@@ -21,7 +21,7 @@ from ....skill import Skill, SkillSet, SkillSnapshot
 from ...base import Algorithm
 from ..base import SkillTrainer
 from ..config import EnvAdapterSelection
-from ..recovery import implementation_identity
+from ..recovery import implementation_identity, sample_identity
 from .artifacts import REFERENCE_COMMIT, experiment_config, model_usage, normalize_skill_text
 from .config import TreeSkillConfig, TreeSkillTrainerConfig
 from .env_adapter import TreeSkillEnvAdapter
@@ -66,7 +66,7 @@ async def sample_tasks(
         slot_dir = directory / identifier
         checkpoint = slot_dir / "completed.json"
         identity = {
-            "task": sample.model_dump(mode="json"),
+            "task": sample_identity(sample, env),
             "skill": skill.snapshot().model_dump(mode="json"),
             "environment": env.config.model_dump(mode="json"),
         }
@@ -247,8 +247,8 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
                 "config": env_adapter.config.model_dump(mode="json"),
             },
             "skill": skill.snapshot().model_dump(mode="json"),
-            "train": [sample.model_dump(mode="json") for sample in train_samples],
-            "validation": [sample.model_dump(mode="json") for sample in validation_samples],
+            "train": [sample_identity(sample, env) for sample in train_samples],
+            "validation": [sample_identity(sample, env) for sample in validation_samples],
             "environment": env.config.model_dump(mode="json"),
         }
         manifest = root / "recovery_manifest.json"

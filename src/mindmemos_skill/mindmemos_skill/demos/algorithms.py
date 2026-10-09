@@ -54,6 +54,10 @@ class DemoTrainer(SkillTrainer[DemoAlgorithmConfig]):
             "config": self.config.model_dump(mode="json"),
             "environment": f"{type(env).__module__}.{type(env).__qualname__}",
             "environment_config": env.config.model_dump(mode="json"),
+            "input_identity": {
+                sample.task.id: env.input_identity(sample.task, sample.reward_data)
+                for sample in [*train_samples, *validation_samples]
+            },
             "train": [sample.model_dump(mode="json") for sample in train_samples],
             "val": [sample.model_dump(mode="json") for sample in validation_samples],
         }

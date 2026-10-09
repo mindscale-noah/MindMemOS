@@ -3,6 +3,7 @@
 import asyncio
 import json
 import subprocess
+import sys
 
 import openpyxl
 import pytest
@@ -25,6 +26,29 @@ from mindmemos_skill.envs.builtin_envs.spreadsheetbench import (
 )
 from mindmemos_skill.envs.builtin_envs.spreadsheetbench.reward import compare_workbooks, verification_report
 from mindmemos_skill.envs.data import Data
+from mindmemos_skill.infra.execution import ExecutionConfig
+
+
+@pytest.mark.parametrize(
+    ("environment_type", "config_type"),
+    [
+        (SpreadsheetBenchTextActionEnvironment, SpreadsheetBenchTextActionConfig),
+        (SpreadsheetBenchToolCallingEnvironment, SpreadsheetBenchToolCallingConfig),
+    ],
+)
+def test_spreadsheet_dependency_failure_stops_before_model(spreadsheet, tmp_path, environment_type, config_type):
+    agent = ScriptedAgent([])
+    from unittest.mock import patch
+
+    with (
+        patch(
+            "mindmemos_skill.envs.builtin_envs.spreadsheetbench.base.prepare_execution",
+            return_value=ExecutionConfig(python_command=[sys.executable, "-S"]),
+        ),
+        pytest.raises(RuntimeError, match="before model execution"),
+    ):
+        environment_type(config_type(agent=agent.config), agent=agent)
+    assert agent.requests == []
 
 
 class ScriptedAgent(OpenAIChatAgent):
@@ -142,7 +166,7 @@ def test_search_feedback_is_exact_and_private(tmp_path):
 
 def test_search_normalization_empty_semantics_and_last_tag():
     task = SearchQATask(id="q", instruction="Who?")
-    data = SearchQARewardData(answers=["The red fox"], source_sha256="hash")
+    data = SearchQARewardData(answers=["The red fox"])
     reward = search_reward("<answer>wrong</answer><ANSWER>RED, FOX!</ANSWER>", task, data)
     assert (reward.em, reward.f1, reward.sub_em) == (1, 1, 1)
     assert search_reward("", task, data).sub_em == 1
@@ -213,6 +237,20 @@ def test_shared_case_discovery(spreadsheet, input_name, reference_name):
     assert "golden" not in forest.task.model_dump_json()
 
 
+def test_spreadsheet_sheet_list_preserves_unqualified_scoring_range(spreadsheet):
+    rows = json.loads(spreadsheet.read_text())
+    rows[0]["answer_sheet"] = "Sheet,Existing Task,Additions,Retired"
+    rows[0]["answer_position"] = "A1:A2"
+    spreadsheet.write_text(json.dumps(rows))
+    sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
+    assert sample.task.answer_position == "A1:A2"
+    assert sample.reward_data.answer_position == "A1:A2"
+    reference = sample.reward_data.cases[0].path
+    assert compare_workbooks(
+        reference, reference, sample.reward_data.answer_position, answer_sheet=sample.reward_data.answer_sheet
+    ) == (True, "")
+
+
 @pytest.mark.parametrize("name", ["spreadsheetbench"])
 @pytest.mark.parametrize("kind", ["init", "golden"])
 @pytest.mark.parametrize("count", [0, 2])
@@ -259,7 +297,8 @@ def test_shared_ranges_and_missing_sheet(tmp_path):
     assert compare_workbooks(gold, output, "Missing!A1") == (False, "worksheet not found: Missing")
 
 
-def test_spreadsheet_full_rollout_feedback_and_resume(spreadsheet, tmp_path, monkeypatch):
+@pytest.mark.parametrize("changed_case", ["input", "reference"])
+def test_spreadsheet_full_rollout_feedback_and_resume(spreadsheet, tmp_path, monkeypatch, changed_case):
     sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
     agent = ScriptedAgent(
         [
@@ -302,6 +341,11 @@ def test_spreadsheet_full_rollout_feedback_and_resume(spreadsheet, tmp_path, mon
     assert len(executed) == 1
     assert asyncio.run(env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data)) == result
     assert len(executed) == 1
+    case = sample.task.cases[0] if changed_case == "input" else sample.reward_data.cases[0]
+    workbook(case.path, {"A1": 99})
+    with pytest.raises(ValueError, match="inputs changed"):
+        asyncio.run(env.rollout(sample.task, tmp_path / "rollout", reward_data=sample.reward_data))
+    assert len(executed) == 1
 
 
 def test_text_action_rollout(spreadsheet, tmp_path, monkeypatch):
@@ -309,7 +353,7 @@ def test_text_action_rollout(spreadsheet, tmp_path, monkeypatch):
     action = 'Action:\n{"name":"bash","arguments":{"command":"edit workbook"}}'
     agent = ScriptedAgent([action, "ACTION: TASK_COMPLETE"])
 
-    def controlled_action(command, *, working_dir, timeout_seconds):
+    def controlled_action(command, *, working_dir, timeout_seconds, execution):
         workbook(working_dir / "output.xlsx", {"A1": 2})
         return "done"
 
@@ -604,7 +648,7 @@ def test_spreadsheet_environments_share_reward(spreadsheet, tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         "mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action.run_reference_bash",
-        lambda command, *, working_dir, timeout_seconds: produce(working_dir),
+        lambda command, *, working_dir, timeout_seconds, execution: produce(working_dir),
     )
     forest_agent = ScriptedAgent(
         [
@@ -698,6 +742,7 @@ def test_spreadsheet_shared_reward_aggregates_cases(spreadsheet, tmp_path):
         ({"interaction_mode": "bash_only"}, "interaction_mode"),
         ({"tool_agent": "text_action"}, "tool_agent"),
         ({"interaction_mode": "unknown"}, "interaction_mode"),
+        ({"execution": {"python_command": ["/external/python"]}}, "execution"),
     ],
 )
 @pytest.mark.parametrize("config_type", [SpreadsheetBenchToolCallingConfig, SpreadsheetBenchTextActionConfig])
@@ -712,7 +757,7 @@ def test_text_action_stagnation(spreadsheet, tmp_path, monkeypatch, response):
     agent = ScriptedAgent([response] * 3)
     monkeypatch.setattr(
         "mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action.run_reference_bash",
-        lambda command, *, working_dir, timeout_seconds: "same output",
+        lambda command, *, working_dir, timeout_seconds, execution: "same output",
     )
     env = SpreadsheetBenchTextActionEnvironment(
         SpreadsheetBenchTextActionConfig(
@@ -733,7 +778,7 @@ def test_text_action_scores_output_at_turn_limit(spreadsheet, tmp_path, monkeypa
     sample = Data.build("spreadsheetbench", {"data_path": spreadsheet}).load()[0]
     agent = ScriptedAgent(['Action: {"name":"bash","arguments":{"command":"edit"}}'])
 
-    def edit(command, *, working_dir, timeout_seconds):
+    def edit(command, *, working_dir, timeout_seconds, execution):
         workbook(working_dir / "output.xlsx", {"A1": 2})
         return "done"
 

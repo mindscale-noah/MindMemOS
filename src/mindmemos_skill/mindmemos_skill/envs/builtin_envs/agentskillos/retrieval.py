@@ -1,7 +1,6 @@
 """Load the prepared AgentSkillOS retrieval dataset without label leakage."""
 
 import json
-from hashlib import sha256
 
 from pydantic import TypeAdapter
 
@@ -18,7 +17,7 @@ class AgentSkillOSRetrievalData(Data[AgentSkillOSRetrievalDataConfig]):
     """Explicit prepared source file locations."""
 
     def _load(self) -> list[DataSample]:
-        """Read both files once, fingerprint them, and separate private labels."""
+        """Read both files once and separate private relevance labels."""
         tasks_bytes = self.config.tasks_path.expanduser().read_bytes()
         relevance_bytes = self.config.relevance_path.expanduser().read_bytes()
         tasks = [TaskRecord.model_validate_json(line) for line in tasks_bytes.splitlines() if line.strip()]
@@ -30,8 +29,6 @@ class AgentSkillOSRetrievalData(Data[AgentSkillOSRetrievalDataConfig]):
                 task=Task(id=task.task_id, instruction=task.instruction_text),
                 reward_data=RetrievalRewardData(
                     core_gt_ids=relevance[task.task_id].core_gt_ids,
-                    tasks_sha256=sha256(tasks_bytes).hexdigest(),
-                    relevance_sha256=sha256(relevance_bytes).hexdigest(),
                 ),
             )
             for task in tasks

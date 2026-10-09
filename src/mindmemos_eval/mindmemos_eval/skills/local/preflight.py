@@ -1,5 +1,6 @@
 """Validate one local Skill benchmark without constructing a service."""
 
+import json
 from hashlib import sha256
 from importlib.util import find_spec
 from pathlib import Path
@@ -129,6 +130,10 @@ class LocalSkillEvalPreflight:
             *(sample.model_dump_json() for sample in samples),
         ):
             digest.update(content.encode("utf-8"))
+        for sample in samples:
+            digest.update(
+                json.dumps(environment.input_identity(sample.task, sample.reward_data), sort_keys=True).encode("utf-8")
+            )
         skill_root = skill_path if skill_path.is_dir() else skill_path.parent
         for path in sorted(skill_root.rglob("*")):
             if path.is_file():

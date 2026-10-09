@@ -6,7 +6,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from ....agents.buitin_agents.openai_chat.config import OpenAIChatConfig
-from ....infra.execution import ExecutionConfig
 
 
 class SpreadsheetBenchDataConfig(BaseModel):
@@ -43,9 +42,6 @@ class SpreadsheetBenchToolCallingConfig(SpreadsheetBenchExecutionConfig):
 
     tools: list[dict[str, JsonValue]] | None = None
     """Explicit tool schemas; None exposes the standard workspace tools."""
-
-    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
-    """Local Python launcher, shell, and command timeout for workspace tools."""
 
     skill_loading_mode: Literal["tool", "system_prompt"] = "tool"
     """Load Skill instructions through a tool or preload them into the prompt."""

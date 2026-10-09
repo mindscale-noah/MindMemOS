@@ -1,6 +1,5 @@
 """Discover official workbook cases without importing legacy split layouts."""
 
-from hashlib import sha256
 from pathlib import Path
 
 from ...data import Data, DataSample
@@ -22,7 +21,7 @@ def _case_paths(directory: Path) -> list[tuple[str, Path, Path]]:
 
 
 def load_samples(config: SpreadsheetBenchDataConfig) -> list[DataSample]:
-    """Load public workbook inputs and private hashed evaluation references.
+    """Load public workbook inputs and private evaluation references.
 
     Args:
         config: Metadata file and workbook root.
@@ -32,7 +31,6 @@ def load_samples(config: SpreadsheetBenchDataConfig) -> list[DataSample]:
     """
     source = config.data_path.expanduser().resolve()
     root = (config.data_root or source.parent).expanduser().resolve()
-    digest = sha256(source.read_bytes()).hexdigest()
     samples = []
     for row in load_records(source):
         identifier = str(row["id"])
@@ -41,7 +39,7 @@ def load_samples(config: SpreadsheetBenchDataConfig) -> list[DataSample]:
         ).resolve()
         cases = _case_paths(directory)
         position = str(row.get("answer_position") or "")
-        if position and row.get("answer_sheet") and "!" not in position:
+        if position and row.get("answer_sheet") and "," not in row["answer_sheet"] and "!" not in position:
             position = f"{row['answer_sheet']}!{position}"
         samples.append(
             DataSample(
@@ -50,19 +48,12 @@ def load_samples(config: SpreadsheetBenchDataConfig) -> list[DataSample]:
                     instruction=row["instruction"],
                     instruction_type=str(row.get("instruction_type") or ""),
                     answer_position=position,
-                    cases=[
-                        WorkbookInput(number=number, path=path, sha256=sha256(path.read_bytes()).hexdigest())
-                        for number, path, _ in cases
-                    ],
+                    cases=[WorkbookInput(number=number, path=path) for number, path, _ in cases],
                 ),
                 reward_data=SpreadsheetBenchRewardData(
                     answer_position=position,
                     answer_sheet=row.get("answer_sheet"),
-                    source_sha256=digest,
-                    cases=[
-                        WorkbookReference(number=number, path=path, sha256=sha256(path.read_bytes()).hexdigest())
-                        for number, _, path in cases
-                    ],
+                    cases=[WorkbookReference(number=number, path=path) for number, _, path in cases],
                 ),
             )
         )

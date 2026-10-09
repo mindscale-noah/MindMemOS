@@ -24,7 +24,7 @@ class DataSample(BaseModel):
     """Public task with an ID unique within the loaded dataset."""
 
     reward_data: SerializeAsAny[RewardData]
-    """Private scoring inputs, including versions or hashes of reference files."""
+    """Private scoring inputs, such as accepted answers or reference file paths."""
 
 
 class SplitManifest(RootModel[dict[str, list[str]]]):

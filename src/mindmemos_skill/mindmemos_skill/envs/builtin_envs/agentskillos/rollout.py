@@ -1,7 +1,6 @@
 """Execute an artifact-producing task and score official pass/fail outcomes."""
 
 import json
-from hashlib import sha256
 from pathlib import Path
 from tempfile import mkdtemp
 from uuid import uuid4
@@ -40,13 +39,31 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
             agent: Optional matching executor for testing or dependency injection.
         """
         super().__init__(config)
+        self._evaluator_digest = evaluator_digest(config.benchmark_root)
         if agent is not None and agent.config != config.agent:
             raise ValueError("Injected agent config must match environment agent config")
         self.agent = agent if agent is not None else CodexAgent(config.agent)
 
+    def input_identity(self, task: Task, reward_data: RewardData) -> dict[str, str]:
+        """Bind public files and official evaluator sources to recovery records.
+
+        Args:
+            task: Public task and input files.
+            reward_data: Private official evaluation definition.
+
+        Returns:
+            File and evaluator identities computed from the current sources.
+        """
+        identity = super().input_identity(task, reward_data)
+        digest = evaluator_digest(self.config.benchmark_root)
+        if digest != self._evaluator_digest:
+            raise ValueError("Official evaluator sources changed; construct a new environment")
+        identity[f"evaluator:{self.config.benchmark_root}"] = digest
+        return identity
+
     def _score(self, task_path: Path, output_dir: Path, report_path: Path, *, preflight: bool = False) -> None:
         """Run the isolated official scorer and fail on process or setup errors."""
-        if evaluator_digest(self.config.benchmark_root) != self.config.evaluator_sha256:
+        if evaluator_digest(self.config.benchmark_root) != self._evaluator_digest:
             raise ValueError("Official evaluator sources changed; construct a new environment")
         command = [
             *self.config.evaluator.python_command,
@@ -86,8 +103,6 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
         for name in ranking:
             if "/" in relative_path(name):
                 raise ValueError("Skill names must be single path components")
-        if task.files.keys() != task.file_sha256.keys():
-            raise ValueError("Every public input must have a fingerprint")
         # Fresh execution roots preserve failed attempts and prevent stale artifact passes.
         attempt = Path(mkdtemp(prefix="attempt-", dir=workspace))
         outputs = attempt / "workspace"
@@ -97,8 +112,6 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
             if name.split("/")[0] == "workspace":
                 raise ValueError("Public inputs must not prepopulate the output directory")
             content = source.read_bytes()
-            if sha256(content).hexdigest() != task.file_sha256[name]:
-                raise ValueError(f"Public input changed: {name}")
             destination = attempt / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(content)

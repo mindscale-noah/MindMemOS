@@ -1,5 +1,6 @@
 """Typed official records and public/private LiveMath task data."""
 
+from pathlib import Path
 from typing import Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -117,11 +118,8 @@ class LiveMathRewardData(RewardData):
     correct_choice: Choice
     """Correct option under the displayed labels."""
 
-    source_file: str
+    source_file: Path
     """Path to the source monthly JSON file."""
-
-    source_sha256: str
-    """Source file content hash, preventing stale resume after dataset edits."""
 
     choice_seed: int | None
     """Choice-shuffle seed used when building the task."""
