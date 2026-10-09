@@ -1,3 +1,5 @@
+import { Trajectories } from "./trajectories";
+import { SkillEditor } from "./skill-editor";
 import { DynamicSkill } from "./dynamic-skill";
 import { useState, useEffect } from "react";
 import {
@@ -73,7 +75,7 @@ export function Compare({
       <div className="comparison-versions">
         <div className="version-card">
           <label>
-            基准版本
+            Base version
             <select
               value={before}
               onChange={(e) => {
@@ -87,7 +89,7 @@ export function Compare({
         </div>
         <div className="version-card">
           <label>
-            目标版本
+            Target version
             <select
               value={after}
               onChange={(e) => {
@@ -101,7 +103,7 @@ export function Compare({
         </div>
       </div>
       <Message text={error} error />
-      {busy && <Empty>正在对比…</Empty>}
+      {busy && <Empty>Comparing…</Empty>}
       {before && after && (
         <DynamicSkill
           key={source + id + before + after}
@@ -149,11 +151,11 @@ export function Content({ version }: { version: Ref }) {
     <DynamicSkill
       key={JSON.stringify(version)}
       versions={[version]}
-      labels={["当前查看版本"]}
+      labels={["Selected version"]}
     >
       <Message text={data.error} error />
       {data.loading ? (
-        <Empty>加载中…</Empty>
+        <Empty>Loading…</Empty>
       ) : (
         data.value && <BundleBrowser content={data.value} />
       )}
@@ -162,11 +164,13 @@ export function Content({ version }: { version: Ref }) {
 }
 export function Detail({
   selection,
+  dirty,
   back,
   tab,
   change,
 }: {
   selection: Selection;
+  dirty: (value: boolean) => void;
   back: () => void;
   tab: string;
   change: (tab: string, version?: string, replace?: boolean) => void;
@@ -179,6 +183,10 @@ export function Detail({
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    setEditing(false);
+  }, [selection.version, tab]);
   const [committing, setCommitting] = useState(false);
   const [revision, setRevision] = useState(0);
   const data = useLoad<Version[]>(
@@ -214,10 +222,10 @@ export function Detail({
             disabled={isActive}
             onClick={() => setActivateVersion(target)}
           >
-            {isActive ? `${label} · 生效版本` : `将 ${label} 设为生效版本`}
+            {isActive ? `${label} · Active` : `Activate ${label}`}
           </button>
         )}
-        <button onClick={() => setExporting(target)}>导出 {label}</button>
+        <button onClick={() => setExporting(target)}>Export {label}</button>
       </div>
     );
   }
@@ -240,29 +248,45 @@ export function Detail({
   }
   return (
     <>
-      <button className="link breadcrumb" onClick={back}>
-        ← 返回
-      </button>
-      <div className="row">
-        <h1>{selection.name}</h1>
-        <div className="actions">
-          {selection.source !== "graph" && (
-            <button onClick={() => setRemoving(true)}>删除 Skill</button>
-          )}
-          {selection.source === "local" && (
-            <button onClick={() => setCommitting(true)}>提交新版本</button>
-          )}
+      <div className="skill-heading">
+        <button className="link breadcrumb" onClick={back}>
+          ← Back
+        </button>
+        <div className="row skill-heading-main">
+          <div className="skill-identity">
+            <h1>{selection.name}</h1>
+            <span className="muted">
+              Active version: {versionLabel(current.value?.version, "—")}
+            </span>
+          </div>
+          <div className="actions">
+            {selection.source !== "graph" && !editing && (
+              <details className="skill-more">
+                <summary>More</summary>
+                <div className="skill-more-menu">
+                  <button onClick={() => setRemoving(true)}>
+                    Delete Skill
+                  </button>
+                </div>
+              </details>
+            )}
+            {selection.source === "local" && !editing && (
+              <button onClick={() => setCommitting(true)}>
+                Commit new version
+              </button>
+            )}
+          </div>
         </div>
       </div>
-      <p className="muted">
-        生效版本：{versionLabel(current.value?.version, "—")}
-      </p>
       <Message text={current.error} error />
       <div className="tabs">
         {[
-          ["content", "内容"],
-          ["versions", "版本历史"],
-          ["diff", "对比"],
+          ["content", "Content"],
+          ["versions", "Version history"],
+          ["diff", "Compare"],
+          ...(selection.source === "local"
+            ? [["trajectories", "Trajectories"]]
+            : []),
         ].map(([key, label]) => (
           <button
             key={key}
@@ -275,21 +299,30 @@ export function Detail({
       </div>
       <Message text={data.error} error />
       {data.loading ? (
-        <Empty>加载中…</Empty>
+        <Empty>Loading…</Empty>
       ) : !data.value?.length ? (
-        <Empty>暂无可读取的版本</Empty>
+        <Empty>No readable versions</Empty>
       ) : (
         <>
+          {selection.source === "local" && (
+            <Trajectories
+              active={tab === "trajectories"}
+              skillId={selection.id}
+              version={version}
+              versions={data.value}
+              setVersion={setVersion}
+            />
+          )}
           {tab === "versions" ? (
             <div className="table-wrap">
               <table className="version-history-table">
                 <thead>
                   <tr>
-                    <th>版本名</th>
-                    <th>版本ID</th>
-                    <th>来源</th>
-                    <th>创建时间</th>
-                    <th>提交信息</th>
+                    <th>Version label</th>
+                    <th>Version ID</th>
+                    <th>Source</th>
+                    <th>Created</th>
+                    <th>Commit message</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -309,7 +342,11 @@ export function Detail({
                         <code>{v.version_id}</code>
                       </td>
                       <td>{v.origin}</td>
-                      <td>{new Date(v.created_at).toLocaleString()}</td>
+                      <td>
+                        {new Date(v.created_at).toLocaleString("en-US", {
+                          hour12: false,
+                        })}
+                      </td>
                       <td className="version-commit-message">
                         {v.commit_message || "—"}
                       </td>
@@ -320,21 +357,50 @@ export function Detail({
             </div>
           ) : tab === "content" ? (
             <>
-              <div className="version-toolbar">
-                <label className="version-picker">
-                  版本
-                  <select
-                    value={version}
-                    onChange={(e) => setVersion(e.target.value)}
-                  >
-                    <VersionOptions versions={data.value} />
-                  </select>
-                </label>
-                {renderActions(version)}
-              </div>
-              {version && <Content version={ref(selection, version)} />}
+              {editing ? (
+                <SkillEditor
+                  version={ref(selection, version)}
+                  label={versionLabel(
+                    data.value.find((item) => item.version_id === version),
+                    version,
+                  )}
+                  dirty={dirty}
+                  close={() => setEditing(false)}
+                  done={(id) => {
+                    setEditing(false);
+                    setRevision((value) => value + 1);
+                    change("content", id);
+                  }}
+                />
+              ) : (
+                <>
+                  <div className="version-toolbar">
+                    <label className="version-picker">
+                      Version
+                      <select
+                        value={version}
+                        onChange={(e) => setVersion(e.target.value)}
+                      >
+                        <VersionOptions versions={data.value} />
+                      </select>
+                    </label>
+                    <div className="actions">
+                      {selection.source === "local" && version && (
+                        <button
+                          className="primary"
+                          onClick={() => setEditing(true)}
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {renderActions(version)}
+                    </div>
+                  </div>
+                  {version && <Content version={ref(selection, version)} />}
+                </>
+              )}
             </>
-          ) : (
+          ) : tab === "trajectories" ? null : (
             <Compare
               selection={selection}
               versions={data.value}
@@ -373,16 +439,17 @@ export function Detail({
         />
       )}{" "}
       {removing && (
-        <Dialog title="删除 Skill" close={() => setRemoving(false)}>
+        <Dialog title="Delete Skill" close={() => setRemoving(false)}>
           <p>
-            <strong>{selection.name}</strong>{" "}
-            的中心仓记录及版本历史将被删除，原导入和导出文件保留。有引用的 Skill
-            无法删除。
+            <strong>{selection.name}</strong> will be removed from the central
+            repository along with its version history. Imported and exported
+            files will be preserved. Skills that are still referenced cannot be
+            deleted.
           </p>
           <div className="actions">
-            <button onClick={() => setRemoving(false)}>取消</button>
+            <button onClick={() => setRemoving(false)}>Cancel</button>
             <button disabled={busy} onClick={remove}>
-              确认删除
+              Confirm deletion
             </button>
           </div>
           <Message text={error} error />

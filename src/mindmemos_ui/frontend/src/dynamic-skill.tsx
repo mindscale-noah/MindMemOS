@@ -72,10 +72,10 @@ export function DynamicSkill({
           }}
         >
           <label>
-            任务
+            Task
             <textarea
-              aria-label="组装任务"
-              placeholder="输入任务，现场组装 Skill"
+              aria-label="Assembly task"
+              placeholder="Enter a task to assemble the Skill"
               value={instruction}
               disabled={busy}
               onChange={(event) => {
@@ -92,24 +92,24 @@ export function DynamicSkill({
               type="submit"
             >
               {busy
-                ? "正在组装…"
+                ? "Assembling…"
                 : versions.length === 2
-                  ? "按同一任务组装并对比"
-                  : "按任务组装"}
+                  ? "Assemble and compare for the same task"
+                  : "Assemble for task"}
             </button>
             {assembled && (
               <button type="button" onClick={() => setAssembled(undefined)}>
-                查看原始内容
+                View original contents
               </button>
             )}
           </div>
           <Message text={error} error />
         </form>
       )}
-      {busy && <Empty>正在为任务组装 Skill…</Empty>}
+      {busy && <Empty>Assembling Skill for the task…</Empty>}
       {assembled ? (
         <>
-          <p className="muted">任务组装结果：{assembled.task.instruction}</p>
+          <p className="muted">Assembly result: {assembled.task.instruction}</p>
           <BundleBrowser
             key={assembled.task.id}
             content={assembled.contents[assembled.contents.length - 1]}

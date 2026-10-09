@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, session, type Connections, type Selection } from "./api";
-import { useLoad, Message, Empty } from "./components";
+import { useLoad, useRefresh, Message, Empty } from "./components";
 import { ServiceSettings } from "./service-settings";
 import { Skills } from "./skills";
 import { Memories } from "./memories";
@@ -16,6 +16,9 @@ function App() {
   const [connections, setConnections] = useState<Connections | null>(null);
   const [connectionError, setConnectionError] = useState(false);
   const [connectionRevision, setConnectionRevision] = useState(0);
+  const connectionRefresh = useRefresh(() =>
+    setConnectionRevision((value) => value + 1),
+  );
   useEffect(() => {
     if (!start.value) return;
     let active = true;
@@ -56,7 +59,7 @@ function App() {
             ["memories", "Memories"],
             ["skills", "Skills"],
             ["graphs", "SkillSets"],
-            ["settings", "Configs"],
+            ["settings", "Settings"],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -68,28 +71,38 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="connection-status" aria-label="服务连接状态">
+          <div
+            className="connection-status"
+            aria-label="Service connection status"
+          >
             <div className="connection-status-heading">
-              <span>服务连接</span>
-              <button type="button" onClick={() => setConnectionRevision((value) => value + 1)}>
-                刷新
+              <span>Service connections</span>
+              <button type="button" onClick={connectionRefresh.refresh}>
+                Refresh
               </button>
             </div>
+            <Message text={connectionRefresh.error} error />
             {(["memory", "skill"] as const).map((name) => {
               const connection = connections?.[name];
               const label = connectionError
-                ? "检查失败"
+                ? "Check failed"
                 : !connection
-                  ? "检查中…"
+                  ? "Checking…"
                   : {
-                      connected: "已连接",
-                      unconfigured: "未配置",
-                      unauthorized: "认证失败",
-                      unavailable: "无法连接",
+                      connected: "Connected",
+                      unconfigured: "Not configured",
+                      unauthorized: "Authentication failed",
+                      unavailable: "Unavailable",
                     }[connection.status];
               return (
-                <div className="connection-status-row" key={name} title={connection?.url}>
-                  <span className={`connection-indicator ${connection?.status || "pending"}`} />
+                <div
+                  className="connection-status-row"
+                  key={name}
+                  title={connection?.url}
+                >
+                  <span
+                    className={`connection-indicator ${connection?.status || "pending"}`}
+                  />
                   <span>{name === "memory" ? "Memory" : "Skill"}</span>
                   <span>{label}</span>
                 </div>
@@ -97,29 +110,35 @@ function App() {
             })}
           </div>
           <div className="home">
-            <span>SDK 配置目录</span>
+            <span>SDK configuration folder</span>
             <code>{start.value?.home || "—"}</code>
           </div>
         </div>
       </aside>
       <div className="workspace">
         <header>
-          <span>
-            工作区 /{" "}
-            {page === "memories"
-              ? "Memories"
-              : page === "skills"
-              ? "Skills"
-              : page === "graphs"
-                ? "SkillSets"
-                : "配置"}
-          </span>
-          <span className="local-dot">本机</span>
+          <div className="page-heading">
+            <span>Workspace /</span>
+            {selection ? (
+              <span>Skills</span>
+            ) : (
+              <h1>
+                {page === "memories"
+                  ? "Memories"
+                  : page === "skills"
+                    ? "Skills"
+                    : page === "graphs"
+                      ? "SkillSets"
+                      : "Settings"}
+              </h1>
+            )}
+          </div>
+          <span className="local-dot">Local</span>
         </header>
         <main className={selection ? "detail-layout" : undefined}>
           <Message text={start.error} error />
           {start.loading ? (
-            <Empty>加载中…</Empty>
+            <Empty>Loading…</Empty>
           ) : (
             start.value && (
               <>
@@ -133,7 +152,10 @@ function App() {
                 )}
                 {visited.has("memories") && (
                   <div hidden={!!selection || page !== "memories"}>
-                    <Memories active={!selection && page === "memories"} />
+                    <Memories
+                      dirty={setDirty}
+                      active={!selection && page === "memories"}
+                    />
                   </div>
                 )}
                 {visited.has("graphs") && (
@@ -146,6 +168,7 @@ function App() {
                 )}
                 {selection ? (
                   <Detail
+                    dirty={setDirty}
                     key={selection.source + selection.id}
                     selection={selection}
                     tab={
@@ -164,9 +187,19 @@ function App() {
                     back={back}
                   />
                 ) : page === "service-settings" ? (
-                  <ServiceSettings dirty={setDirty} home={start.value.home} onSaved={() => setConnectionRevision((value) => value + 1)} />
+                  <ServiceSettings
+                    connections={connections}
+                    dirty={setDirty}
+                    home={start.value.home}
+                    onSaved={() => setConnectionRevision((value) => value + 1)}
+                  />
                 ) : page === "settings" ? (
-                  <ServiceSettings dirty={setDirty} home={start.value.home} onSaved={() => setConnectionRevision((value) => value + 1)} />
+                  <ServiceSettings
+                    connections={connections}
+                    dirty={setDirty}
+                    home={start.value.home}
+                    onSaved={() => setConnectionRevision((value) => value + 1)}
+                  />
                 ) : null}
               </>
             )

@@ -1,4 +1,16 @@
 let token = "";
+export type TrajectoryCounts = {
+  total: number;
+  consumed: number;
+  unconsumed: number;
+};
+export type TrajectoryStatistics = {
+  skill_version_id: string;
+  timezone: string;
+  totals: TrajectoryCounts;
+  days: (TrajectoryCounts & { day: string })[];
+  last_evolved_at: string | null;
+};
 export type Version = {
   implementation?: string;
   version_id: string;
@@ -54,23 +66,23 @@ export async function api<T>(
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     const messages: Record<number, string> = {
-      401: "认证失败，请检查 API Key。",
-      403: "没有权限或会话已失效，请刷新页面。",
+      401: "Authentication failed. Check your API key.",
+      403: "Access denied or session expired. Refresh the page.",
       409:
         path.startsWith("service-config") ||
         path.startsWith("configurations") ||
         path.startsWith("client-configurations")
-          ? "配置文件已被修改。请先复制草稿，再重新读取后保存。"
-          : "操作冲突：版本号已被占用、内容已变化，或 Skill 仍被引用。",
-      429: "请求过于频繁，请稍后重试。",
+          ? "The configuration file has changed. Copy your draft, then reload before saving."
+          : "Conflict: the version label is already in use, the contents have changed, or the Skill is still referenced.",
+      429: "操作频繁，请稍后重试。",
       503: path.startsWith("memories")
-        ? "Memory 服务未配置或暂时不可用，请检查连接设置。"
-        : "Skill 服务未配置或暂时不可用，请检查连接设置。",
+        ? "The Memory service is not configured or is temporarily unavailable. Check the connection settings."
+        : "The Skill service is not configured or is temporarily unavailable. Check the connection settings.",
     };
     throw new Error(
-      data.detail ||
+      (response.status === 429 ? messages[429] : data.detail) ||
         messages[response.status] ||
-        `请求失败 (${response.status})`,
+        `Request failed (${response.status})`,
     );
   }
   return response.json();
@@ -100,7 +112,7 @@ export const versionPattern =
 
 export function versionLabel(
   version?: { version_label?: string | null; implementation?: string },
-  fallback = "未命名版本",
+  fallback = "Unnamed version",
 ) {
   const label = version?.version_label || fallback;
   const implementation = version?.implementation;

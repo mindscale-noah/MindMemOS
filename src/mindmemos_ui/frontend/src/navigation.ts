@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { Selection } from "./api";
 
-export type Page = "skills" | "memories" | "graphs" | "settings" | "service-settings";
+export type Page =
+  | "skills"
+  | "memories"
+  | "graphs"
+  | "settings"
+  | "service-settings";
 export type Route = { page: Page; selection?: Selection; tab?: string };
 type Entry = { index: number; parent?: number };
 
@@ -10,7 +15,10 @@ export function readRoute(): Route {
   const page = params.get("page");
   const route: Route = {
     page:
-      page === "memories" || page === "graphs" || page === "settings" || page === "service-settings"
+      page === "memories" ||
+      page === "graphs" ||
+      page === "settings" ||
+      page === "service-settings"
         ? page
         : "skills",
   };
@@ -24,7 +32,10 @@ export function readRoute(): Route {
     };
     const tab = params.get("tab");
     route.tab =
-      tab === "diff" || tab === "versions" || tab === "content"
+      tab === "diff" ||
+      tab === "versions" ||
+      tab === "content" ||
+      tab === "trajectories"
         ? tab
         : route.selection.version
           ? "content"
@@ -69,7 +80,7 @@ export function useNavigation() {
       const target: Entry = history.state?.mindmemosNavigation || {
         index: current.current.index + 1,
       };
-      if (dirty.current && !window.confirm("配置尚未保存，放弃修改？")) {
+      if (dirty.current && !window.confirm("Discard unsaved changes?")) {
         const delta = current.current.index - target.index;
         // popstate arrives after the browser has moved. Restore the original
         // entry on cancel so both the draft and the forward stack survive.
@@ -107,7 +118,7 @@ export function useNavigation() {
   function navigate(next: Route, replace = false) {
     const hash = routeHash(next);
     if (restoring.current || hash === currentHash.current) return;
-    if (dirty.current && !window.confirm("配置尚未保存，放弃修改？")) return;
+    if (dirty.current && !window.confirm("Discard unsaved changes?")) return;
     dirty.current = false;
     const parent = next.selection
       ? route.selection

@@ -61,7 +61,7 @@ type SkillNode = Node<
 >;
 
 function SkillCard({ data, selected }: NodeProps<SkillNode>) {
-  const version = data.record.version_label || "未命名版本";
+  const version = data.record.version_label || "Unnamed version";
   return (
     <>
       {selected && (
@@ -72,36 +72,36 @@ function SkillCard({ data, selected }: NodeProps<SkillNode>) {
           offset={12}
           className="graph-popover nodrag nopan"
           role="dialog"
-          aria-label={`${data.record.name} 详情`}
+          aria-label={`${data.record.name} Details`}
           onClick={(event) => event.stopPropagation()}
         >
           <div className="graph-popover-heading">
             <div>
-              <span className="graph-popover-kicker">SKILL 详情</span>
+              <span className="graph-popover-kicker">SKILL DETAILS</span>
               <strong>{data.record.name}</strong>
             </div>
             <button
               type="button"
               className="graph-popover-close"
-              aria-label="关闭 Skill 详情"
+              aria-label="Close Skill details"
               onClick={data.onClose}
             >
               ×
             </button>
           </div>
           <dl className="graph-popover-fields">
-            <dt>版本</dt>
+            <dt>Version</dt>
             <dd>
               <code>{version}</code>
             </dd>
-            <dt>关系</dt>
-            <dd>{data.relationCount} 条</dd>
+            <dt>Relationships</dt>
+            <dd>{data.relationCount} relationships</dd>
             <>
               <dt>Skill ID</dt>
               <dd>
                 <code>{data.record.skill_id}</code>
               </dd>
-              <dt>版本 ID</dt>
+              <dt>Version ID</dt>
               <dd>
                 <code>{data.record.skill_version_id}</code>
               </dd>
@@ -112,7 +112,7 @@ function SkillCard({ data, selected }: NodeProps<SkillNode>) {
             className="primary graph-popover-action"
             onClick={data.onOpenVersion}
           >
-            打开此版本
+            Open this version
           </button>
         </NodeToolbar>
       )}
@@ -124,7 +124,7 @@ function SkillCard({ data, selected }: NodeProps<SkillNode>) {
         title={`${data.record.name} · ${version}`}
       >
         <span className="graph-node-kicker">
-          SKILL <span>· {data.relationCount} 条关系</span>
+          SKILL <span>· {data.relationCount} relationships</span>
         </span>
         <strong>{data.record.name}</strong>
         <code>{version}</code>
@@ -179,18 +179,18 @@ function SkillRelation(props: EdgeProps<SkillEdge>) {
           isVisible
           className="graph-popover nodrag nopan"
           role="dialog"
-          aria-label={`${data.record.edge_type} 关系详情`}
+          aria-label={`${data.record.edge_type} Relationship details`}
           onClick={(event) => event.stopPropagation()}
         >
           <div className="graph-popover-heading">
             <div>
-              <span className="graph-popover-kicker">关系详情</span>
+              <span className="graph-popover-kicker">Relationship details</span>
               <strong>{data.record.edge_type}</strong>
             </div>
             <button
               type="button"
               className="graph-popover-close"
-              aria-label="关闭关系详情"
+              aria-label="Close relationship details"
               onClick={data.onClose}
             >
               ×
@@ -198,17 +198,17 @@ function SkillRelation(props: EdgeProps<SkillEdge>) {
           </div>
           <div className="graph-relation-endpoints">
             <div>
-              <span>来源 Skill</span>
+              <span>Source Skill</span>
               <strong>{data.sourceName}</strong>
             </div>
             <span aria-hidden="true">→</span>
             <div>
-              <span>目标 Skill</span>
+              <span>Target Skill</span>
               <strong>{data.targetName}</strong>
             </div>
           </div>
           <p className="graph-popover-id">
-            关系 ID <code>{data.record.edge_id}</code>
+            Relationship ID <code>{data.record.edge_id}</code>
           </p>
         </EdgeToolbar>
       )}
@@ -451,9 +451,9 @@ function Flow({
       ref={canvas}
       className="graph-canvas"
       role="region"
-      aria-label="Skill 组织关系图"
+      aria-label="Skill relationship graph"
     >
-      <div className="graph-legend" aria-label="关系颜色图例">
+      <div className="graph-legend" aria-label="Relationship color legend">
         {visibleTypes.map((type) => (
           <span key={type}>
             <i style={{ background: colors.get(type) }} />

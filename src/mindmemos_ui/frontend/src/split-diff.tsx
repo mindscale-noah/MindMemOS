@@ -57,7 +57,7 @@ export function SplitDiff({
     <div
       className="split-diff"
       role="region"
-      aria-label={`${path} 左侧基准版本 ${beforeLabel}，右侧目标版本 ${afterLabel}`}
+      aria-label={`${path}; base version ${beforeLabel} on the left, target version ${afterLabel} on the right`}
     >
       {(beforeNotice || afterNotice) && (
         <>
@@ -85,10 +85,10 @@ export function SplitDiff({
         </Fragment>
       ))}
       <div className="split-notice">
-        {before && !before.endsWith("\n") ? "文件末尾无换行" : ""}
+        {before && !before.endsWith("\n") ? "No newline at end of file" : ""}
       </div>
       <div className="split-notice">
-        {after && !after.endsWith("\n") ? "文件末尾无换行" : ""}
+        {after && !after.endsWith("\n") ? "No newline at end of file" : ""}
       </div>
     </div>
   );

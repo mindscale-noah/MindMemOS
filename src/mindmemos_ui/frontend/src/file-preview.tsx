@@ -77,7 +77,7 @@ export function FilePreview({
       <article className="markdown-preview">
         {metadata !== undefined && (
           <details className="frontmatter">
-            <summary>文件元信息</summary>
+            <summary>File metadata</summary>
             <pre>
               <code>{metadata}</code>
             </pre>
@@ -92,7 +92,7 @@ export function FilePreview({
                 return (
                   <button
                     className="markdown-link"
-                    title={`在生效版本中打开 ${target}`}
+                    title={`Open ${target} in the active version`}
                     onClick={() => onOpenFile(target)}
                   >
                     {children}
@@ -102,7 +102,7 @@ export function FilePreview({
                 return (
                   <button
                     className="markdown-link"
-                    title={`查看外部链接：${href}`}
+                    title={`View external link: ${href}`}
                     onClick={() => setExternal(href)}
                   >
                     {children} ↗
@@ -111,16 +111,16 @@ export function FilePreview({
               return (
                 <span
                   className="unavailable-link"
-                  title={`无法在生效版本中打开：${href || "无效链接"}`}
+                  title={`Cannot open in the active version: ${href || "Invalid link"}`}
                 >
-                  {children}（链接不可用）
+                  {children} (link unavailable)
                 </span>
               );
             },
             img({ alt }) {
               return (
                 <span className="muted">
-                  [图片：{alt || "未命名"}，暂不加载]
+                  [Image: {alt || "Untitled"}; not loaded]
                 </span>
               );
             },
@@ -139,18 +139,18 @@ export function FilePreview({
           {body}
         </Markdown>
         {external && (
-          <Dialog title="外部链接" close={() => setExternal(undefined)}>
-            <p>将在新标签页打开以下地址：</p>
+          <Dialog title="External link" close={() => setExternal(undefined)}>
+            <p>The following URL will open in a new tab:</p>
             <p className="external-url">{external}</p>
             <div className="actions">
-              <button onClick={() => setExternal(undefined)}>取消</button>
+              <button onClick={() => setExternal(undefined)}>Cancel</button>
               <a
                 href={external}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={() => setExternal(undefined)}
               >
-                打开链接 ↗
+                Open link ↗
               </a>
             </div>
           </Dialog>
