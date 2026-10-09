@@ -16,7 +16,9 @@ from ..envs import Environment
 from ..errors import SkillNotFoundError, SkillVersionNotFoundError
 from ..infra.database import Database, Scope
 from ..infra.task_manager import ProgressEvent, ProgressReporter, TaskManager, TaskSnapshot, TaskSpec
+from ..infra.task_manager.progress import EventProgressReporter
 from ..persistence import SkillRecord, SkillVersionRecord, SkillVersionSummary, TrajectoryRecord, TrajectorySummary
+from ..persistence.db_services.trajectories.typing import TrajectoryStatistics
 from ..persistence.observability import AlgorithmAuditPersistence, AuditLog, AuditRun, AuditSpan
 from ..persistence.store import SkillPersistence, validate_skill_scope
 from ..pipelines import EvolutionPipeline, ManagePipeline, Pipeline, TrainingPipeline
@@ -53,6 +55,7 @@ from .typing import (
     SkillPipelineRequest,
     SkillRequest,
     TrainingRequest,
+    TrajectoryStatisticsRequest,
     VersionResolution,
     VersionResolveRequest,
 )
@@ -440,7 +443,7 @@ class SkillService(MindMemOSSkill):
                 try:
                     if not isinstance(pipeline, EvolutionPipeline):
                         raise ValueError("Task pipeline must implement EvolutionPipeline")
-                    result = await pipeline.evolve(request, reporter=progress)
+                    result = await self._run_evolution(request, pipeline=pipeline, reporter=progress)
                 finally:
                     await pipeline.close()
         return result.model_dump(mode="json")
@@ -736,6 +739,26 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(ListTrajectoriesRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.list_trajectories, request)
 
+    async def trajectory_statistics(self, request: TrajectoryStatisticsRequest) -> TrajectoryStatistics:
+        """Query bounded aggregates in the authorized project.
+
+        Args:
+            request: Family and exact version, with service-owned project scope.
+
+        Returns:
+            Counts and thirty daily buckets without trajectory content.
+        """
+        request = self._scoped(TrajectoryStatisticsRequest.model_validate(request))
+        result = await self._execute(request.project_id, self.repository.trajectory_statistics, request)
+        algorithms = list(self._evolution_pipelines)
+        algorithms.extend(Pipeline.name_for(type(pipeline)) for pipeline in self._evolution_pipelines.values())
+        latest = await run_sync(
+            self._observability.latest_evolution, request.project_id, request.version_id, algorithms
+        )
+        if latest is not None:
+            result = result.model_copy(update={"last_evolved_at": latest})
+        return result
+
     async def skill_has_reported_trajectory(
         self,
         project_id: str,
@@ -873,9 +896,45 @@ class SkillService(MindMemOSSkill):
         request = SkillPipelineRequest.model_validate(request)
         scoped = request.model_copy(update={"project_id": self._project_id(request.project_id)})
         pipeline = _select_pipeline(self._evolution_pipelines, request.pipeline)
-        if reporter is None:
-            return await self._execute(scoped.project_id, pipeline.evolve, scoped)
-        return await self._execute(scoped.project_id, pipeline.evolve, scoped, reporter=reporter)
+        return await self._execute(scoped.project_id, self._run_evolution, scoped, pipeline=pipeline, reporter=reporter)
+
+    async def _run_evolution(
+        self, request: SkillPipelineRequest, *, pipeline: EvolutionPipeline, reporter: ProgressReporter | None = None
+    ) -> AlgoSkillEvolveResult:
+        """Record direct and worker evolution attempts through the shared audit sink."""
+        if self._persistence is None:
+            if reporter is None:
+                return await pipeline.evolve(request)
+            return await pipeline.evolve(request, reporter=reporter)
+        request = request.model_copy(update={"run_id": request.run_id or "evolve_" + uuid4().hex})
+        previous = (
+            self._observability.get_run(request.project_id, request.run_id)
+            if self._observability.database is not None
+            else None
+        )
+        if previous is not None:
+            base_version_id = previous.base_version_id
+        else:
+            owner = await run_sync(self._persistence.skills.resolve_family, request.project_id, request.skill_ref)
+            base = await run_sync(self._persistence.skills.version, owner, request.base_version_id)
+            base_version_id = base.version_id
+
+        async def log_progress(event: ProgressEvent) -> str:
+            """Provide event identities for direct-call progress logs."""
+            return uuid4().hex
+
+        with self._observability.trace_run(
+            project_id=request.project_id,
+            run_id=request.run_id,
+            algorithm=request.pipeline or Pipeline.name_for(type(pipeline)),
+            base_version_id=base_version_id,
+            operation="evolve",
+        ) as audit:
+            result = await pipeline.evolve(
+                request, reporter=reporter or EventProgressReporter(log_progress, task_id=request.run_id)
+            )
+            audit.published_version_id = result.version_id
+            return result
 
     async def run_training(
         self, request: TrainingRequest | None = None, *, reporter: ProgressReporter | None = None

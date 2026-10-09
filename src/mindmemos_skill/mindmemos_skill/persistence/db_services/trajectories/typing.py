@@ -1,11 +1,57 @@
 """Validated records owned by this business data service."""
 
+from datetime import date
 from typing import Literal
 
 from pydantic import AwareDatetime, Field, FiniteFloat, JsonValue, model_validator
 
 from ....common.time_utils import utcnow
-from ...typing import RecordModel
+from ...typing import RecordModel, TrajectoryCounts
+
+
+class TrajectoryDayCounts(TrajectoryCounts):
+    """Stored trajectory counts grouped by creation day."""
+
+    day: date
+    """Trajectory creation day in the statistics timezone."""
+
+
+class TrajectoryStatistics(RecordModel):
+    """Bounded aggregation for one version without trajectory payloads."""
+
+    skill_version_id: str
+    """Exact queried Skill version."""
+
+    timezone: str = "Asia/Shanghai"
+    """Calendar timezone used by the fixed 30-day window."""
+
+    totals: TrajectoryCounts
+    """All-time counts for the selected version, independent of chart selection."""
+
+    days: list[TrajectoryDayCounts] = Field(min_length=30, max_length=30)
+    """Thirty consecutive calendar days, including zero-count days."""
+
+    last_evolved_at: AwareDatetime | None = None
+    """Latest recorded evolution start time; None when no matching audit run exists."""
+
+
+class TrajectoryConsumption(RecordModel):
+    """First successful evolution use of a stored trajectory."""
+
+    project_id: str = Field(min_length=1)
+    """Project owning the trajectory and evolution run."""
+
+    trajectory_id: str = Field(min_length=1)
+    """Stored trajectory processed by the evolver."""
+
+    skill_version_id: str = Field(min_length=1)
+    """Exact input Skill version associated with the trajectory."""
+
+    run_id: str = Field(min_length=1)
+    """First evolution run that successfully processed this trajectory."""
+
+    consumed_at: AwareDatetime = Field(default_factory=utcnow)
+    """Time the successful use was recorded."""
 
 
 class TrajectoryRecord(RecordModel):

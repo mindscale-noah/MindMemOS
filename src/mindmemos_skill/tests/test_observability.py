@@ -310,7 +310,8 @@ def test_invalid_observability_configuration_is_rejected():
 
 
 @pytest.mark.parametrize("with_database", [False, True])
-def test_otlp_exports_logs_and_spans_with_optional_sql_audit(tmp_path, with_database):
+@pytest.mark.parametrize("operation", ["train", "evolve"])
+def test_otlp_exports_logs_and_spans_with_optional_sql_audit(tmp_path, with_database, operation):
     """Send real OTLP/HTTP payloads while preserving optional local audit writes."""
     received = []
 
@@ -342,7 +343,9 @@ def test_otlp_exports_logs_and_spans_with_optional_sql_audit(tmp_path, with_data
         )
         try:
             store.initialize_storage()
-            with store.trace_run(project_id="project", run_id="otlp", algorithm="forest", base_version_id="v0"):
+            with store.trace_run(
+                project_id="project", run_id="otlp", algorithm="forest", base_version_id="v0", operation=operation
+            ):
                 get_logger("otlp_probe").info("probe ready")
             if database is not None:
                 assert store.get_run("project", "otlp").status == "completed"
@@ -370,7 +373,7 @@ def test_otlp_exports_logs_and_spans_with_optional_sql_audit(tmp_path, with_data
         span for resource in trace_request.resource_spans for scope in resource.scope_spans for span in scope.spans
     ]
     assert any(record.body.string_value == "probe ready" or "probe ready" in str(record.body) for record in logs)
-    assert any(span.name == "algorithm.train" for span in spans)
+    assert any(span.name == f"algorithm.{operation}" for span in spans)
     assert any(
         attr.key == "service.name" and attr.value.string_value == "mindmemos-skill-test"
         for attr in log_request.resource_logs[0].resource.attributes
@@ -550,3 +553,41 @@ async def test_service_uses_one_global_observability_backend(tmp_path, monkeypat
         assert service.backends["observability"].database is service.backends["observability_database"]
     finally:
         await service.close()
+
+
+def test_latest_evolution_is_scoped_and_excludes_training(audit):
+    """Project, exact input version, and configured evolution names bound the timestamp."""
+    from datetime import UTC, datetime, timedelta
+
+    from mindmemos_skill.persistence.observability.constants import OBSERVABILITY_RUNS_TABLE
+    from mindmemos_skill.persistence.observability.typing import AuditRun
+
+    start = datetime(2026, 10, 9, tzinfo=UTC)
+    for index, (project, version, algorithm) in enumerate(
+        [
+            ("project", "v1", "simple"),
+            ("project", "v1", "simple_evolve"),
+            ("project", "v1", "training"),
+            ("other", "v1", "simple"),
+            ("project", "v2", "simple"),
+        ]
+    ):
+        audit.database.insert(
+            OBSERVABILITY_RUNS_TABLE,
+            [
+                AuditRun(
+                    project_id=project,
+                    run_id=f"run-{index}",
+                    algorithm=algorithm,
+                    base_version_id=version,
+                    status="completed",
+                    audit_status="complete",
+                    capture_level="info",
+                    trace_id="0" * 32,
+                    started_at=start + timedelta(hours=index),
+                ).model_dump()
+            ],
+        )
+    assert audit.latest_evolution("project", "v1", ["simple", "simple_evolve"]) == start + timedelta(hours=1)
+    assert audit.latest_evolution("project", "missing", ["simple"]) is None
+    assert audit.latest_evolution("project", "v1", []) is None

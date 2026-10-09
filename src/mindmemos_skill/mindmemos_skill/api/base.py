@@ -7,6 +7,7 @@ from uuid import UUID
 
 from ..infra.task_manager import ProgressEvent, ProgressReporter, TaskSnapshot
 from ..persistence import SkillRecord, SkillVersionRecord, SkillVersionSummary, TrajectoryRecord, TrajectorySummary
+from ..persistence.db_services.trajectories.typing import TrajectoryStatistics
 from ..registry import Registrable
 from ..skill.typing import DiffResult
 from .typing import (
@@ -36,6 +37,7 @@ from .typing import (
     SkillPipelineRequest,
     SkillRequest,
     TrainingRequest,
+    TrajectoryStatisticsRequest,
     VersionResolution,
     VersionResolveRequest,
 )
@@ -304,6 +306,18 @@ class MindMemOSSkill(ABC):
 
         Args:
             request: Authorized project and validated execution details.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def trajectory_statistics(self, request: TrajectoryStatisticsRequest) -> TrajectoryStatistics:
+        """Read aggregates without exposing individual trajectories.
+
+        Args:
+            request: Authorized project, owning family and exact version.
+
+        Returns:
+            Global counts, fixed thirty-day series and latest evolution time.
         """
         raise NotImplementedError
 

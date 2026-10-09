@@ -24,6 +24,7 @@ from ....api.typing import (
     SkillDetail,
     SkillRequest,
     StructuredSkillInfo,
+    TrajectoryStatisticsRequest,
     VersionResolution,
     VersionResolveRequest,
 )
@@ -33,6 +34,7 @@ from ....errors import SkillNotFoundError, SkillVersionNotFoundError
 from ....persistence import SkillRecord, SkillVersionRecord, SkillVersionSummary, TrajectoryRecord, TrajectorySummary
 from ....persistence.constants import SKILL_VERSIONS_TABLE, SKILLS_TABLE
 from ....persistence.db_services.skills.typing import VersionNaming
+from ....persistence.db_services.trajectories.typing import TrajectoryStatistics
 from ....persistence.store import SkillPersistence
 from ....skill import Skill, SkillContent, SkillSnapshot, decode_resources, encode_resources
 from ....skill.io import read_skill
@@ -468,6 +470,30 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             after_created_at=request.cursor.after_created_at,
             after_version_id=request.cursor.after_version_id,
         )
+
+    async def trajectory_statistics(self, request: TrajectoryStatisticsRequest) -> TrajectoryStatistics:
+        """Validate ownership without loading version or trajectory content.
+
+        Args:
+            request: Authorized project, family and exact version identity.
+
+        Returns:
+            Bounded aggregate counts for the owned version.
+
+        Raises:
+            SkillVersionNotFoundError: Version does not belong to the requested family.
+        """
+        owner = await asyncio.to_thread(self.persistence.skills.resolve_family, request.project_id, request.skill_id)
+        rows = await asyncio.to_thread(
+            self.persistence.database.select,
+            SKILL_VERSIONS_TABLE,
+            filters={"skill_id": owner.skill_id, "version_id": request.version_id},
+            fields=["version_id"],
+            limit=1,
+        )
+        if not rows:
+            raise SkillVersionNotFoundError("Skill version does not belong to this family")
+        return await asyncio.to_thread(self.persistence.trajectories.statistics, request.version_id)
 
     async def diff_skill(self, request: DiffRequest) -> DiffResult:
         """Compare complete snapshots from the same Skill.

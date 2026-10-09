@@ -4,14 +4,15 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from contextlib import contextmanager
 from copy import copy
+from datetime import timedelta
 from itertools import groupby
 from typing import Any
 
-from sqlalchemy import UniqueConstraint, func, or_, select
+from sqlalchemy import Date, UniqueConstraint, and_, case, cast, func, or_, select
 
 from ..base import Infrastructure
 from .tables import TableRegistry
-from .typing import Scope, SearchHit
+from .typing import DailyCount, Scope, SearchHit
 from .validation import column_for, filter_clause, validate_batch
 from .vector import Vector
 
@@ -110,6 +111,9 @@ class Database(Infrastructure, ABC):
             for metadata, tables in catalogs.items():
                 # create_all adds named cycle-breaking foreign keys after their tables.
                 metadata.create_all(connection, tables=tables, checkfirst=True)
+                for table in tables:
+                    for index in table.indexes:
+                        index.create(connection, checkfirst=True)
 
     def close(self):
         """Release this database's pool; active transactions must finish first."""
@@ -340,6 +344,68 @@ class Database(Infrastructure, ABC):
         statement = select(func.count()).select_from(spec.table).where(filter_clause(spec, filters))
         with self._connect() as connection:
             return connection.execute(statement).scalar_one()
+
+    def count_by_day(
+        self,
+        table: str,
+        *,
+        time_field: str,
+        filters,
+        matching_table: str,
+        join_fields: list[str],
+        matching_filters=None,
+        utc_offset_minutes: int = 0,
+    ) -> list[DailyCount]:
+        """Aggregate primary rows and unique related-row membership in SQL.
+
+        Args:
+            table: Registered primary table.
+            time_field: UTC timestamp used for calendar grouping.
+            filters: Primary conditions, including the caller's time bounds.
+            matching_table: Registered related table marking matching rows.
+            join_fields: Shared columns forming the entire related primary key.
+            matching_filters: Related conditions, including ownership scope.
+            utc_offset_minutes: Fixed offset from UTC, in minutes.
+
+        Returns:
+            Daily counts without loading primary or related record payloads.
+
+        Raises:
+            ValueError: Join fields do not identify unique related rows.
+        """
+        primary = self.tables.get(table)
+        related = self.tables.get(matching_table)
+        if not join_fields or set(join_fields) != set(related.table.primary_key.columns.keys()):
+            raise ValueError("Daily-count joins must use the complete related primary key")
+        for field in join_fields:
+            column_for(primary, field)
+            column_for(related, field)
+        timestamp = column_for(primary, time_field)
+        if self.engine.dialect.name == "sqlite":
+            day = func.date(timestamp, f"{utc_offset_minutes:+d} minutes")
+        else:
+            day = cast(func.timezone("UTC", timestamp) + timedelta(minutes=utc_offset_minutes), Date)
+        matches = (
+            select(*(related.table.c[field] for field in join_fields))
+            .where(filter_clause(related, matching_filters))
+            .subquery()
+        )
+        membership = matches.c[join_fields[0]].is_not(None)
+        statement = (
+            select(
+                day.label("day"), func.count().label("total"), func.sum(case((membership, 1), else_=0)).label("matched")
+            )
+            .select_from(
+                primary.table.outerjoin(
+                    matches, and_(*(primary.table.c[field] == matches.c[field] for field in join_fields))
+                )
+            )
+            .where(filter_clause(primary, filters))
+            .group_by(day)
+            .order_by(day)
+        )
+        with self._connect() as connection:
+            return [DailyCount.model_validate(dict(row)) for row in connection.execute(statement).mappings()]
 
     def search(self, table: str, *, vector_field: str, query_vector, filters=None, fields=None, top_k: int = 10):
         """Return exact cosine neighbors among rows matching the filters.

@@ -59,6 +59,7 @@ from ..typing import (
     SkillRequest,
     StructuredSkillInfo,
     TrainingSplit,
+    TrajectoryStatisticsRequest,
     VersionResolveRequest,
 )
 from ..typing import (
@@ -359,6 +360,16 @@ class TrajectoryListHttpRequest(HttpRequest):
 
     cursor: Nonempty | None = None
     """Opaque server pagination cursor."""
+
+
+class TrajectoryStatisticsHttpRequest(HttpRequest):
+    """Read fixed-size aggregates for an exact owned Skill version."""
+
+    skill_id: Nonempty
+    """Owning Skill family or alias."""
+
+    skill_version_id: Nonempty
+    """Exact version to count; date windows are server-owned."""
 
 
 class TrajectoryListCursor(BaseModel):
@@ -1076,6 +1087,22 @@ def create_app(
                 "version_label": detail.version.version_label,
             },
         )
+
+    @app.post("/v1/skills/trajectories/statistics")
+    async def trajectory_statistics(
+        request: Request,
+        body: TrajectoryStatisticsHttpRequest,
+        identity: SkillHttpIdentity = Depends(require("skill:read")),
+    ):
+        """Return global and daily aggregate counts, never trajectory content."""
+        result = await service.trajectory_statistics(
+            TrajectoryStatisticsRequest(
+                project_id=identity.project_id,
+                skill_id=body.skill_id,
+                version_id=body.skill_version_id,
+            )
+        )
+        return envelope(request, result)
 
     @app.post("/v1/skills/trajectories/report", status_code=201)
     async def report_trajectory(

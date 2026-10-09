@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 
-from .typing import Filter, Scope
+from .typing import DailyCount, Filter, Scope
 
 
 class ScopedDatabase:
@@ -150,6 +150,41 @@ class ScopedDatabase:
     def count(self, table: str, *, filters=None) -> int:
         """Count rows inside the active scope."""
         return self._database.count(table, filters=self._filters(table, filters))
+
+    def count_by_day(
+        self,
+        table: str,
+        *,
+        time_field: str,
+        filters,
+        matching_table: str,
+        join_fields: list[str],
+        matching_filters=None,
+        utc_offset_minutes: int = 0,
+    ) -> list[DailyCount]:
+        """Aggregate daily counts with ownership enforced on both tables.
+
+        Args:
+            table: Registered primary table.
+            time_field: UTC timestamp used for daily grouping.
+            filters: Primary conditions including the bounded time window.
+            matching_table: Registered table marking matching rows.
+            join_fields: Shared fields forming the related primary key.
+            matching_filters: Optional related conditions.
+            utc_offset_minutes: Calendar offset from UTC in minutes.
+
+        Returns:
+            Daily primary and matched counts in the active scope.
+        """
+        return self._database.count_by_day(
+            table,
+            time_field=time_field,
+            filters=self._filters(table, filters),
+            matching_table=matching_table,
+            join_fields=join_fields,
+            matching_filters=self._filters(matching_table, matching_filters),
+            utc_offset_minutes=utc_offset_minutes,
+        )
 
     def select_distinct(self, table: str, field: str, *, filters=None) -> list:
         """Return unique field values inside the active scope."""

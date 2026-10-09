@@ -23,6 +23,7 @@ from mindmemos_skill.persistence.constants import (
     SKILL_VERSIONS_TABLE,
     SKILLS_TABLE,
     TRAJECTORIES_TABLE,
+    TRAJECTORY_CONSUMPTIONS_TABLE,
 )
 from mindmemos_skill.skill import SkillContent, SkillSnapshot
 from sqlalchemy import event
@@ -114,7 +115,7 @@ def test_registration_is_lazy_and_all_columns_are_documented(tmp_path):
     try:
         persistence = create_persistence(database)
         assert not path.exists()
-        assert len(database.tables.values()) == 9
+        assert len(database.tables.values()) == 10
         for spec in database.tables.values():
             assert all(column.comment for column in spec.table.columns)
             assert set(spec.insert_model.model_fields) == set(spec.table.c.keys())
@@ -142,6 +143,44 @@ def test_core_records_round_trip_with_distinct_labels(store):
     assert store.trajectories.get("t2") is None
 
 
+def test_trajectory_consumption_counts_exact_versions_and_projects(store):
+    """Count both origins once, preserve first use, and reject foreign evidence."""
+    for identity, project, version_id, source in [
+        ("one", "local-project", "v1", "local"),
+        ("two", "local-project", "v1", "reported"),
+        ("three", "local-project", "v2", "local"),
+        ("foreign", "other-project", "v1", "local"),
+    ]:
+        store.trajectories.add(
+            trajectory(identity, identity).model_copy(
+                update={
+                    "project_id": project,
+                    "skill_version_id": version_id,
+                    "source": source,
+                    "skill_id": "family",
+                    "user_id": "user",
+                    "agent_id": "agent",
+                    "received_at": trajectory().created_at,
+                }
+            )
+        )
+    with store.session(Scope(fields={"project_id": "local-project"})) as scoped:
+        assert scoped.trajectories.counts("v1").model_dump() == {"total": 2, "consumed": 0, "unconsumed": 2}
+        scoped.trajectories.mark_consumed("v1", ["one", "one"], "first")
+        scoped.trajectories.mark_consumed("v1", ["one"], "repeat")
+        assert scoped.trajectories.counts("v1").model_dump() == {"total": 2, "consumed": 1, "unconsumed": 1}
+        assert scoped.database.select(TRAJECTORY_CONSUMPTIONS_TABLE)[0]["run_id"] == "first"
+        for identities in [["two", "foreign"], ["three"], ["missing"]]:
+            with pytest.raises(ValueError, match="exact Skill version and project"):
+                scoped.trajectories.mark_consumed("v1", identities, "invalid")
+        assert scoped.trajectories.counts("v1").consumed == 1
+        assert scoped.trajectories.counts("v2").model_dump() == {"total": 1, "consumed": 0, "unconsumed": 1}
+    with store.session(Scope(fields={"project_id": "other-project"})) as scoped:
+        assert scoped.trajectories.counts("v1").model_dump() == {"total": 1, "consumed": 0, "unconsumed": 1}
+    with store.session(Scope(fields={"project_id": "local-project"})) as scoped:
+        assert scoped.trajectories.counts("v1").consumed == 1
+
+
 def test_transaction_rolls_back_across_services(store):
     with pytest.raises(IntegrityError):
         with store.database.transaction() as database:
@@ -156,6 +195,7 @@ def test_core_only_and_no_global_registry_state(tmp_path):
     try:
         persistence = create_persistence(database)
         assert {s.name for s in database.tables.values()} == {
+            TRAJECTORY_CONSUMPTIONS_TABLE,
             SKILLS_TABLE,
             SKILL_VERSIONS_TABLE,
             TRAJECTORIES_TABLE,
@@ -166,7 +206,7 @@ def test_core_only_and_no_global_registry_state(tmp_path):
             SKILL_TASKS_TABLE,
             SKILL_TASK_PROGRESS_TABLE,
         }
-        assert len(build_persistence_tables().values()) == 9
+        assert len(build_persistence_tables().values()) == 10
         ensure_collection(persistence)
         persistence.skills.add(version())
     finally:
@@ -377,3 +417,59 @@ def test_central_alias_scope_and_registration_rollback(store):
     key = {"project_id": record.project_id, "skill_id": record.skill_id}
     store.database.update(SKILLS_TABLE, {"alias": None}, filters=key)
     assert store.database.get(SKILLS_TABLE, key)["alias"] is None
+
+
+def test_trajectory_statistics_calendar_scope_and_bounded_projection(store):
+    """Aggregate Shanghai days in SQL, including zero days and exact project ownership."""
+    from datetime import UTC, date, datetime
+
+    for identity, created, project, version_id in [
+        ("before", "2026-09-09T15:59:59+00:00", "local-project", "v1"),
+        ("first", "2026-09-09T16:00:00+00:00", "local-project", "v1"),
+        ("today", "2026-10-08T16:00:00+00:00", "local-project", "v1"),
+        ("last", "2026-10-09T15:59:59+00:00", "local-project", "v1"),
+        ("future", "2026-10-09T16:00:00+00:00", "local-project", "v1"),
+        ("foreign", "2026-10-09T00:00:00+00:00", "foreign", "v1"),
+        ("other-version", "2026-10-09T00:00:00+00:00", "local-project", "v2"),
+    ]:
+        store.trajectories.add(
+            trajectory(identity, identity).model_copy(
+                update={
+                    "project_id": project,
+                    "skill_version_id": version_id,
+                    "created_at": datetime.fromisoformat(created),
+                }
+            )
+        )
+    engine = store.database.engine
+    statements = []
+
+    def capture(_conn, _cursor, statement, parameters, _context, _many):
+        statements.append((statement, parameters))
+
+    with store.session(Scope(fields={"project_id": "local-project"})) as scoped:
+        scoped.trajectories.mark_consumed("v1", ["before", "first", "today"], "run")
+        event.listen(engine, "before_cursor_execute", capture)
+        try:
+            result = scoped.trajectories.statistics("v1", now=datetime(2026, 10, 9, 3, tzinfo=UTC))
+        finally:
+            event.remove(engine, "before_cursor_execute", capture)
+        assert result.totals.model_dump() == {"total": 5, "consumed": 3, "unconsumed": 2}
+        assert len(result.days) == 30
+        assert result.days[0].day == date(2026, 9, 10)
+        assert result.days[0].model_dump(exclude={"day"}) == {"total": 1, "consumed": 1, "unconsumed": 0}
+        assert result.days[-1].day == date(2026, 10, 9)
+        assert result.days[-1].model_dump(exclude={"day"}) == {"total": 2, "consumed": 1, "unconsumed": 1}
+        assert all(day.total == 0 for day in result.days[1:-1])
+        assert result.last_evolved_at is None
+        empty = scoped.trajectories.statistics("missing", now=datetime(2026, 10, 9, 3, tzinfo=UTC))
+        assert len(empty.days) == 30 and not any(day.total for day in empty.days)
+    selects = [item for item in statements if item[0].startswith("SELECT")]
+    assert len(selects) == 3
+    daily_sql, parameters = selects[-1]
+    assert "GROUP BY" in daily_sql
+    assert "task_instruction" not in daily_sql and "reward_score" not in daily_sql
+    assert "trajectory_hash" not in daily_sql and "SELECT *" not in daily_sql
+    with store.database.engine.connect() as connection:
+        plan = connection.exec_driver_sql("EXPLAIN QUERY PLAN " + daily_sql, parameters).fetchall()
+    assert any("trajectories_version_created_idx" in row[-1] for row in plan)

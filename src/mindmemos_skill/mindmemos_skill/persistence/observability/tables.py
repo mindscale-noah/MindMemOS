@@ -33,6 +33,7 @@ def build_tables() -> TableRegistry:
         Column("finished_at", UTCDateTime()),
         Column("error_type", Text),
         Index("observability_runs_recent_idx", "project_id", "started_at"),
+        Index("observability_runs_version_idx", "project_id", "base_version_id", "started_at", "algorithm"),
     )
     spans = Table(
         OBSERVABILITY_SPANS_TABLE,
