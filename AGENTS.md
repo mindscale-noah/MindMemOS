@@ -5,6 +5,10 @@
 - 编写、修改、重构或审查 Python 代码时，使用仓库内的 [python-coding](.agents/skills/python-coding/SKILL.md)；涉及注册机制时，按该 Skill 的引用读取补充规范。
 - 项目 Skill 位于根目录 `.agents/skills/`，随仓库提交，供 Codex 在本项目及其子目录中发现；无需安装到个人目录，也可通过 `$python-coding` 显式调用。
 
+## 配置同步
+
+- 修改配置模型、字段、默认值或配置文件时，必须在同一次变更中同步更新 `config/` 下对应模块或服务的 `dev.example.yaml` 和 `dev.yaml`，不得只更新其中一个。两者的字段结构保持一致；保留 `dev.yaml` 中的本地连接和敏感配置，`dev.example.yaml` 中的敏感值使用公开示例或占位值。
+
 ## 测试目录
 
 - 只有模块在自身目录维护 `tests/`，例如 `src/<package>/tests/`。
