@@ -889,7 +889,7 @@
         },
         "transactional_recalculation": {
           "default": true,
-          "description": "Include the canonical recalculation command and local helper.",
+          "description": "Provide the task-local Python recalculation command for the agent to run before completion; scoring never recalculates.",
           "title": "Transactional Recalculation",
           "type": "boolean"
         }
@@ -961,6 +961,12 @@
           ],
           "title": "Skill Loading Mode",
           "type": "string"
+        },
+        "transactional_recalculation": {
+          "default": false,
+          "description": "Recalculate formula outputs before scoring only when explicitly enabled.",
+          "title": "Transactional Recalculation",
+          "type": "boolean"
         }
       },
       "required": [

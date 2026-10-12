@@ -1,3 +1,4 @@
+# Skill execution uses async model, database, and subprocess APIs end to end.
 # Complete built-in Skill service configuration; copy to dev.yaml before starting.
 # All fields of the selected implementations are explicit, including optional defaults.
 # Within each config: connections/behavior/concurrency first, advanced tuning/audit last.
@@ -8,8 +9,12 @@
 # alternatively comment out the parent mapping as well. A bare key means null and is invalid.
 # When removing simple evolution, also set fastapi.evolution_pipelines: [].
 # Environment, tasks, split and initial Skill version are per-request inputs, not service config.
+# SpreadsheetBench text-action requires soffice on the system PATH.
+# Its managed Python helper calls LibreOffice directly; no UNO or executable-path config is needed.
 # Optional implementation alternatives are shown at the end; do not enable both alternatives.
 # SpreadsheetBench creates its Python environments under MindMemOS home/envs on initialization.
+# SpreadsheetBench text-action supplies an agent-run Python recalculation helper; scoring reads output.xlsx.
+# Tool-calling defaults to scoring output.xlsx directly; request environment settings can override either default.
 # make dev uses the project .mindmemos directory; no per-environment Python path is configured.
 # Task data and environment settings contain no caller-supplied hashes; runtime fingerprints are automatic.
 service:
@@ -138,6 +143,7 @@ service:
 
     # TreeSkill: optimizer analyzes/fuses; router selects task-specific subtrees.
     # failure_optimizer is explicit here; set it to null to reuse optimizer settings.
+    # spreadsheetbench_text_action supplies the agent-run Python recalculation helper; scoring reads output.xlsx.
     treeskill:
       class_name: training
       config:
@@ -145,51 +151,28 @@ service:
           class_name: treeskill
           config:
             optimizer:
-              model: gpt-5.4-mini
+              model: qwen3.5-9b
               api_key: null
               base_url: null
-              max_completion_tokens: 4096
-              temperature: null
+              max_completion_tokens: 16384
+              temperature: 1.0
               reasoning_effort: null
-              timeout_s: 180.0
+              timeout_s: 1800.0
               max_retries: 3
               retry_initial_wait_s: 1.0
               retry_max_wait_s: 60.0
-              top_p: null
-              presence_penalty: null
-              seed: null
+              top_p: 0.95
+              presence_penalty: 1.5
+              seed: 41
               stop: []
               response_format: null
-              extra_body: {}
-              response_validation: strict
-              strip_thinking: false
-              retry_policy: transient
-              retry_wait: exponential
-              retry_waits_s:
-              - 5.0
-              - 10.0
-              - 30.0
-              invalid_tool_arguments: error
-              parse_max_attempts: 3
-              parse_retry_mode: direct
-            router:
-              model: gpt-5.4-mini
-              api_key: null
-              base_url: null
-              max_completion_tokens: 4096
-              temperature: null
-              reasoning_effort: null
-              timeout_s: 180.0
-              max_retries: 3
-              retry_initial_wait_s: 1.0
-              retry_max_wait_s: 60.0
-              top_p: null
-              presence_penalty: null
-              seed: null
-              stop: []
-              response_format: null
-              extra_body: {}
-              response_validation: strict
+              extra_body: &id001
+                top_k: 20
+                min_p: 0.0
+                repetition_penalty: 1.0
+                chat_template_kwargs:
+                  enable_thinking: true
+              response_validation: content
               strip_thinking: false
               retry_policy: transient
               retry_wait: exponential
@@ -201,23 +184,28 @@ service:
               parse_max_attempts: 3
               parse_retry_mode: direct
             failure_optimizer:
-              model: gpt-5.4-mini
+              model: qwen3.5-9b
               api_key: null
               base_url: null
-              max_completion_tokens: 4096
-              temperature: null
+              max_completion_tokens: 16384
+              temperature: 1.0
               reasoning_effort: null
-              timeout_s: 180.0
+              timeout_s: 600.0
               max_retries: 3
               retry_initial_wait_s: 1.0
               retry_max_wait_s: 60.0
-              top_p: null
-              presence_penalty: null
-              seed: null
+              top_p: 1.0
+              presence_penalty: 2.0
+              seed: 41
               stop: []
               response_format: null
-              extra_body: {}
-              response_validation: strict
+              extra_body:
+                top_k: 40
+                min_p: 0.0
+                repetition_penalty: 1.0
+                chat_template_kwargs:
+                  enable_thinking: false
+              response_validation: content
               strip_thinking: false
               retry_policy: transient
               retry_wait: exponential
@@ -229,32 +217,61 @@ service:
               parse_max_attempts: 3
               parse_retry_mode: direct
             samples_per_task: 1
-            rollout_concurrency: 12
-            analysis_concurrency: 12
-            localization_concurrency: 12
+            rollout_concurrency: 32
             min_trajectories: 1
-            max_trajectories: 1000
-            success_score_threshold: 1.0
+            max_trajectories: 200
             annotation_mode: required
             require_skill_match: true
-            analysis_max_turns: 20
-            shell_timeout_seconds: 120
-            analysis_max_tokens: 4096
-            localization_max_tokens: 2048
-            fusion_max_tokens: 4096
+            success_score_threshold: 1.0
+            analysis_concurrency: 32
             analysis_temperature: 1.0
-            localization_temperature: 0.0
-            fusion_temperature: 0.0
+            analysis_max_tokens: 16384
+            analysis_max_turns: 100
+            shell_timeout_seconds: 120
             transcript_max_chars: 20000
+            localization_concurrency: 32
+            localization_temperature: 0.0
+            localization_max_tokens: 16384
+            fusion_temperature: 0.0
+            fusion_max_tokens: 16384
+            router:
+              model: qwen3.5-9b
+              api_key: null
+              base_url: null
+              max_completion_tokens: 16384
+              temperature: 1.0
+              reasoning_effort: null
+              timeout_s: 600.0
+              max_retries: 3
+              retry_initial_wait_s: 1.0
+              retry_max_wait_s: 60.0
+              top_p: 1.0
+              presence_penalty: 2.0
+              seed: 41
+              stop: []
+              response_format: null
+              extra_body:
+                top_k: 40
+                min_p: 0.0
+                repetition_penalty: 1.0
+                chat_template_kwargs:
+                  enable_thinking: false
+              response_validation: content
+              strip_thinking: false
+              retry_policy: transient
+              retry_wait: exponential
+              retry_waits_s:
+              - 5.0
+              - 10.0
+              - 30.0
+              invalid_tool_arguments: error
+              parse_max_attempts: 3
+              parse_retry_mode: direct
+            routing_temperature: 0.0
+            routing_max_tokens: 16384
             algorithm_version: '1'
             prompt_version: treeskill-v1
-            analysis_task: treeskill_trajectory_analysis
-            localization_task: treeskill_evidence_localization
-            fusion_task: treeskill_node_fusion
-        evaluation_concurrency: 12
-
-  # Historical trajectory evolution; comment out simple to remove this implementation.
-  # The default evidence requirement is 8 distinct eligible attempts.
+        evaluation_concurrency: 32
   evolution_pipelines:
     simple:
       class_name: simple_evolution
@@ -350,6 +367,6 @@ fastapi:
 # Alternative database (replace persistence.database; also supported by observability.backend):
 # class_name: sqlite
 # config:
-#   url: sqlite+pysqlite:///./data/mindmemos_skill/central.db
+#   url: sqlite+aiosqlite:///./data/mindmemos_skill/central.db
 #   timeout: 5.0
 # PostgreSQL fields pool_size/max_overflow/pool_timeout do not apply to SQLite.

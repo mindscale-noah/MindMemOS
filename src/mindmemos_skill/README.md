@@ -201,11 +201,23 @@ reconfiguration, log rotation, and multiprocess shared-file management are not s
 ## Service assembly
 
 Service assembly, pipeline business operations (including repository and graph reads),
+Agent calls, environment execution, Skill assembly, database operations,
 and service/pipeline cleanup are asynchronous. Use `await` inside an async function.
 Use `async with await create_service(...) as service:` to close owned resources
 automatically, or call `await service.close()` explicitly. Only process entry points
 should own an event loop with `asyncio.run(...)`. Constructors and configuration
-validation remain synchronous.
+validation remain synchronous. Extension implementations must expose async `run`,
+`_run`, `assemble`, and `embed` methods where applicable; callers await them directly.
+Synchronous implementations are not adapted with `to_thread` or executors.
+Model requests use asynchronous HTTP clients, SQL operations use SQLAlchemy async
+engines, and command execution uses asyncio subprocesses with timeout and cancellation
+cleanup. SQLite uses aiosqlite; PostgreSQL uses psycopg's async dialect. Pure computation
+and local snapshot/file transformations remain ordinary functions. ALFWorld's upstream
+simulator runs in an isolated process controlled through asynchronous pipes.
+
+SpreadsheetBench defers interpreter preparation to `await env.initialize()` (also
+called by its first rollout). Call it before inspecting `env.execution`.
+Borrowed database and model clients remain owned by their callers.
 
 Install this package, then run from the repository root:
 
@@ -317,7 +329,7 @@ and preserves all auxiliary files.
 `Skill.export()` exports the complete directory. A nonempty destination requires
 `overwrite=True`, which replaces that directory and removes stale files.
 `with_content()` creates a candidate while preserving resources and subclass
-dependencies; `with_resources()` explicitly replaces resources. `assemble(task)`
+dependencies; `with_resources()` explicitly replaces resources. `await assemble(task)`
 returns a separate task-specific Skill. `SkillSet` selects and assembles members.
 
 `Skill.snapshot()` records content, Base64 resources, source metadata, and runtime
@@ -349,7 +361,7 @@ See the Chinese guide for configuration and reference-revision details.
 
 The `agents/` catalog includes `codex`, `claude`, and `deepseek_harness`, invoking
 separately installed `codex`, `claude`, and `dsh` executables. Importing or building
-an agent does not launch its CLI. All three expose synchronous
+an agent does not launch its CLI. All three expose asynchronous
 `run(system=..., user=..., workspace=...) -> AgentResult`. Native events are retained
 in `trajectory`; reported usage is preserved in `usage`. DeepSeek usage is currently
 unavailable and remains an empty dictionary. Failed, incomplete, or empty runs raise.
@@ -359,7 +371,7 @@ from pathlib import Path
 from mindmemos_skill.agents import Agent
 
 agent = Agent.build("codex", {"timeout_s": 300})
-result = agent.run(system="Solve the task using the workspace files.",
+result = await agent.run(system="Solve the task using the workspace files.",
                    user="Summarize report.txt.", workspace=Path("/absolute/task/workspace"))
 print(result.output)
 ```

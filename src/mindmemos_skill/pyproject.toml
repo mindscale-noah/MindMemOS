@@ -10,6 +10,7 @@ dependencies = [
     "filelock>=3.20,<4",
     "json-repair>=0.63.4,<1",
     "openai>=2,<3",
+    "httpx>=0.28.1,<1",
     "PyJWT>=2.10,<3",
     "opentelemetry-exporter-otlp-proto-http>=1.38,<2",
     "opentelemetry-sdk>=1.38,<2",
@@ -17,7 +18,8 @@ dependencies = [
     "tenacity>=9,<10",
     "pydantic>=2.7,<3",
     "pyyaml>=6,<7",
-    "sqlalchemy>=2.0,<2.1",
+    "sqlalchemy[asyncio]>=2.0,<2.1",
+    "aiosqlite>=0.21,<1",
     "sqlite-vec>=0.1.6,<0.2",
 ]
 

@@ -127,22 +127,34 @@ def _run_apis(commands: list[list[str]], *, ready_urls: dict[str, str] | None = 
     except KeyboardInterrupt:
         return 130
     finally:
-        for child in children:
+        # Repeated interrupts must not abandon children during bounded shutdown.
+        previous_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        previous_sigterm = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        try:
+            _stop_children(children)
+        finally:
+            control.close()
+            signal.signal(signal.SIGINT, previous_sigint)
+            signal.signal(signal.SIGTERM, previous_sigterm)
+
+
+def _stop_children(children: list[subprocess.Popen]) -> None:
+    """Terminate owned process groups and reap children after a bounded grace period."""
+    for child in children:
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 10
+    for child in children:
+        try:
+            child.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
             try:
-                os.killpg(child.pid, signal.SIGTERM)
+                os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        deadline = time.monotonic() + 10
-        for child in children:
-            try:
-                child.wait(timeout=max(0, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                child.wait()
-        control.close()
+            child.wait()
 
 
 def _check_ports(commands: list[list[str]]) -> None:
