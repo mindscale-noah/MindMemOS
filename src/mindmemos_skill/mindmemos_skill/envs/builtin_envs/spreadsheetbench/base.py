@@ -1,5 +1,6 @@
 """Shared workbook lifecycle and interaction scheduling for spreadsheet environments."""
 
+import asyncio
 import json
 from abc import abstractmethod
 from pathlib import Path
@@ -13,7 +14,7 @@ from ....infra.execution import ExecutionConfig
 from ....skill import Skill
 from ...base import Environment
 from ...data import RewardData
-from ...typing import RolloutResult, Task, Usage
+from ...typing import Reward, RolloutResult, Task, Usage
 from ..common import total_usage
 from .config import SpreadsheetBenchExecutionConfig
 from .execution import check_execution, prepare_execution
@@ -53,8 +54,18 @@ class SpreadsheetExecutionEnvironment(Environment[ConfigT]):
             protocol: Fixed dependency profile selected by the concrete environment.
         """
         super().__init__(config)
-        self.execution = prepare_execution(protocol)
-        check_execution(self.execution, Path(self.execution.python_command[0]).parent)
+        self._protocol = protocol
+        self._runtime_ready = False
+        self._runtime_lock = asyncio.Lock()
+
+    async def initialize(self) -> None:
+        """Prepare and validate the managed interpreter once per environment."""
+        async with self._runtime_lock:
+            if self._runtime_ready:
+                return
+            self.execution = await prepare_execution(self._protocol)
+            await check_execution(self.execution, Path(self.execution.python_command[0]).parent)
+            self._runtime_ready = True
 
     @abstractmethod
     def _prepare_context(self, task: SpreadsheetBenchTask, directory: Path, skills: list[Skill]) -> SpreadsheetContext:
@@ -72,7 +83,7 @@ class SpreadsheetExecutionEnvironment(Environment[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_observation(self, response: AgentResult, context: SpreadsheetContext) -> SpreadsheetObservation:
+    async def _get_observation(self, response: AgentResult, context: SpreadsheetContext) -> SpreadsheetObservation:
         """Execute the protocol's actions and encode their feedback."""
         raise NotImplementedError
 
@@ -103,10 +114,11 @@ class SpreadsheetExecutionEnvironment(Environment[ConfigT]):
         """Retain the final model output when the turn budget expires."""
         return output
 
-    def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+    async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Prepare public inputs, run the shared loop, and score private references."""
         if not isinstance(task, SpreadsheetBenchTask) or not isinstance(reward_data, SpreadsheetBenchRewardData):
             raise TypeError("SpreadsheetBench requires SpreadsheetBenchTask and SpreadsheetBenchRewardData")
+        await self.initialize()
         self._validate_task(task)
         directories = prepare_cases(task, reward_data, workspace)
         (workspace.parent / "audit" / "execution.json").write_text(
@@ -116,7 +128,7 @@ class SpreadsheetExecutionEnvironment(Environment[ConfigT]):
         trajectory: list[dict[str, JsonValue]] = []
         for case, directory in zip(task.cases, directories, strict=True):
             context = self._prepare_context(task, directory, skills)
-            interaction = self._interact(context)
+            interaction = await self._interact(context)
             interactions.append(interaction)
             if trajectory:
                 trajectory.append({"role": "system", "content": f"[CASE {case.number}]"})
@@ -125,7 +137,7 @@ class SpreadsheetExecutionEnvironment(Environment[ConfigT]):
         diagnostics["n_turns"] = sum(item.diagnostics["n_turns"] for item in interactions)
         if "skill_loaded" in diagnostics:
             diagnostics["skill_loaded"] = all(item.diagnostics["skill_loaded"] for item in interactions)
-        reward = evaluate(reward_data, directories).model_copy(update=diagnostics)
+        reward = (await self._evaluate(reward_data, directories)).model_copy(update=diagnostics)
         return RolloutResult(
             output=interactions[-1].output,
             trajectory=trajectory,
@@ -139,7 +151,13 @@ class SpreadsheetExecutionEnvironment(Environment[ConfigT]):
             ),
         )
 
-    def _interact(self, context: SpreadsheetContext) -> SpreadsheetInteractionResult:
+    async def _evaluate(self, reward_data: SpreadsheetBenchRewardData, directories: list[Path]) -> Reward:
+        """Apply the shared native-tool scoring and optional automatic recalculation."""
+        return await evaluate(
+            reward_data, directories, transactional_recalculation=self.config.transactional_recalculation
+        )
+
+    async def _interact(self, context: SpreadsheetContext) -> SpreadsheetInteractionResult:
         """Drive one case using subclass hooks and rollout-local conversation state."""
         directory = context.directory
         responses: list[AgentResult] = []
@@ -155,12 +173,12 @@ class SpreadsheetExecutionEnvironment(Environment[ConfigT]):
         finished, failure = False, ""
         for _ in range(self.config.max_turns):
             response = (
-                self.agent.run(messages=messages, tools=context.tools)
+                (await self.agent.run(messages=messages, tools=context.tools))
                 if context.tools
-                else self.agent.run(messages=messages)
+                else (await self.agent.run(messages=messages))
             )
             responses.append(response)
-            observation = self._get_observation(response, context)
+            observation = await self._get_observation(response, context)
             messages.append(observation.assistant)
             trajectory.append(response.trajectory[-1] if response.trajectory else observation.assistant)
             output = observation.output

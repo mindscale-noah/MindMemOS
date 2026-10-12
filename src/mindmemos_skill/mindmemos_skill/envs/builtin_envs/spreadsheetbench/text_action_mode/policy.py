@@ -7,11 +7,10 @@ import subprocess
 from importlib.resources import files
 from pathlib import Path
 
-from ....common.json import extract_json_object
-from ....infra.execution import ExecutionConfig, execute
-from .recalculation import append_recalculation_instructions
+from .....common.json import extract_json_object
+from .....infra.execution import ExecutionConfig, execute
+from ..typing import SpreadsheetBenchTask as Task
 from .typing import PolicyAction, PolicyResponse, PolicyResponseType
-from .typing import SpreadsheetBenchTask as Task
 
 TASK_COMPLETE_SIGNAL = "ACTION: TASK_COMPLETE"
 _MAX_OBSERVATION_LENGTH = 6000
@@ -43,7 +42,6 @@ def build_reference_messages(
     spreadsheet_content: str,
     skill_content: str,
     skill_dir: Path | None,
-    transactional_recalculation: bool,
 ) -> list[dict[str, str]]:
     """Render the released preloaded-Skill policy prompt and task contract.
 
@@ -55,13 +53,12 @@ def build_reference_messages(
         spreadsheet_content: Public first-sheet preview inserted into the prompt.
         skill_content: Prepared full or routed Skill Markdown.
         skill_dir: Exported Skill resource directory, or None without a Skill.
-        transactional_recalculation: Explicit transactional recalculation for this operation.
     """
 
     prompt_name = (
         "trace2skill_preloaded_system_prompt.txt" if skill_content.strip() else "trace2skill_no_skill_system_prompt.txt"
     )
-    template = files(f"{__package__}.text_action_prompts").joinpath(prompt_name).read_text(encoding="utf-8")
+    template = files(f"{__package__}.prompts").joinpath(prompt_name).read_text(encoding="utf-8")
     system = template.replace("{skill_content}", _strip_frontmatter(skill_content))
     system = system.replace("{skill_dir}", str(skill_dir.resolve()) if skill_dir is not None else "")
     user = f"""Task: Below is the spreadsheet manipulation question you need to solve:
@@ -92,12 +89,6 @@ def build_reference_messages(
 ---
 
 Solve the question and save the modified spreadsheet to the exact output_path shown above."""
-    if transactional_recalculation:
-        user = append_recalculation_instructions(
-            user,
-            working_dir=working_dir,
-            output_file=output_file,
-        )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -124,7 +115,7 @@ def parse_policy_response(response: str) -> PolicyResponse:
     return PolicyResponse(PolicyResponseType.ACTION, action=action)
 
 
-def run_reference_bash(
+async def run_reference_bash(
     command: str, *, working_dir: Path, timeout_seconds: int, execution: ExecutionConfig | None = None
 ) -> str:
     """Execute bash with the released policy tool's observable result contract.
@@ -138,7 +129,7 @@ def run_reference_bash(
 
     try:
         config = (execution or ExecutionConfig()).model_copy(update={"timeout_s": timeout_seconds})
-        result = execute([*config.shell_command, command], working_dir, config)
+        result = await execute([*config.shell_command, command], working_dir, config)
         output = result.stdout or ""
         if result.stderr:
             output += f"\n[STDERR]\n{result.stderr}" if output else result.stderr

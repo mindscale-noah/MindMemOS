@@ -1,25 +1,31 @@
 """SpreadsheetBench execution through text Action/Observation messages."""
 
+import asyncio
 import json
+import subprocess
 from pathlib import Path
 
 from pydantic import JsonValue
 
-from ....agents import OpenAIChatAgent
-from ....agents.typing import AgentResult
-from ....skill import Skill
-from ...base import Environment
-from ..common import export_skills
-from .base import SpreadsheetExecutionEnvironment
-from .config import SpreadsheetBenchTextActionConfig
-from .text_action_policy import (
+from .....agents import OpenAIChatAgent
+from .....agents.typing import AgentResult
+from .....infra.execution import execute
+from .....skill import Skill
+from ....base import Environment
+from ....typing import Reward
+from ...common import export_skills
+from ..base import SpreadsheetExecutionEnvironment
+from ..config import SpreadsheetBenchTextActionConfig
+from ..recalculation_cli import append_recalculation_instructions
+from ..typing import SpreadsheetBenchRewardData, SpreadsheetBenchTask, SpreadsheetContext, SpreadsheetObservation
+from .policy import (
     PolicyResponseType,
     build_reference_messages,
     format_reference_observation,
     parse_policy_response,
     run_reference_bash,
 )
-from .typing import SpreadsheetBenchTask, SpreadsheetContext, SpreadsheetObservation
+from .reward import evaluate
 
 
 def spreadsheet_preview(file_path: Path, max_rows: int = 5) -> str:
@@ -63,7 +69,33 @@ class SpreadsheetBenchTextActionEnvironment(SpreadsheetExecutionEnvironment[Spre
             agent: Optional raw-text agent for injection and offline testing.
         """
         super().__init__(config, protocol="text_action")
+        self._office_ready = False
+        self._office_lock = asyncio.Lock()
         self.agent = agent if agent is not None else OpenAIChatAgent(config.agent)
+
+    async def initialize(self) -> None:
+        """Check soffice on the task process PATH before model execution."""
+        await super().initialize()
+        async with self._office_lock:
+            if self._office_ready:
+                return
+            if self.config.transactional_recalculation:
+                probe = (
+                    "import os, shutil; "
+                    "office = (shutil.which('soffice.com') if os.name == 'nt' else None) or shutil.which('soffice'); "
+                    "assert office, 'LibreOffice soffice was not found on PATH; add its program directory to the system PATH'"
+                )
+                try:
+                    result = await execute(
+                        ["python", "-c", probe],
+                        Path(self.execution.python_command[0]).parent,
+                        self.execution.model_copy(update={"timeout_s": 5}),
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError("LibreOffice PATH check timed out before model execution") from exc
+                if result.returncode:
+                    raise RuntimeError(f"LibreOffice PATH check failed before model execution.\n{result.stderr}")
+            self._office_ready = True
 
     def _system_prompt(self, context: SpreadsheetContext) -> str:
         """Render the pinned system message from prepared Skill content."""
@@ -75,12 +107,11 @@ class SpreadsheetBenchTextActionEnvironment(SpreadsheetExecutionEnvironment[Spre
             spreadsheet_content="",
             skill_content=context.skill_text,
             skill_dir=context.skill_directory,
-            transactional_recalculation=False,
         )[0]["content"]
 
     def _user_prompt(self, context: SpreadsheetContext) -> str:
-        """Render the pinned task prompt and optional recalculation instructions."""
-        return build_reference_messages(
+        """Render the public task prompt and optional agent-run Python recalculation command."""
+        prompt = build_reference_messages(
             task=context.task,
             working_dir=context.directory,
             input_file=context.directory / "input.xlsx",
@@ -88,10 +119,21 @@ class SpreadsheetBenchTextActionEnvironment(SpreadsheetExecutionEnvironment[Spre
             spreadsheet_content=spreadsheet_preview(context.directory / "input.xlsx"),
             skill_content=context.skill_text,
             skill_dir=context.skill_directory,
-            transactional_recalculation=self.config.transactional_recalculation,
         )[1]["content"]
+        if self.config.transactional_recalculation:
+            prompt = append_recalculation_instructions(
+                prompt,
+                working_dir=context.directory,
+                output_file=context.directory / "output.xlsx",
+                python_executable=Path(self.execution.python_command[0]),
+            )
+        return prompt
 
-    def _get_observation(self, response: AgentResult, context: SpreadsheetContext) -> SpreadsheetObservation:
+    async def _evaluate(self, reward_data: SpreadsheetBenchRewardData, directories: list[Path]) -> Reward:
+        """Score the agent-saved caches without performing hidden recalculation."""
+        return evaluate(reward_data, directories)
+
+    async def _get_observation(self, response: AgentResult, context: SpreadsheetContext) -> SpreadsheetObservation:
         """Parse TreeSkill actions, execute bash, and encode its text feedback."""
         if not isinstance(response.output, str):
             raise TypeError("Text-action protocol requires text output")
@@ -115,11 +157,13 @@ class SpreadsheetBenchTextActionEnvironment(SpreadsheetExecutionEnvironment[Spre
             else:
                 command = action.arguments.get("command")
                 observation = (
-                    run_reference_bash(
-                        command,
-                        working_dir=context.directory,
-                        timeout_seconds=self.config.shell_timeout_seconds,
-                        execution=self.execution,
+                    (
+                        await run_reference_bash(
+                            command,
+                            working_dir=context.directory,
+                            timeout_seconds=self.config.shell_timeout_seconds,
+                            execution=self.execution,
+                        )
                     )
                     if isinstance(command, str) and command.strip()
                     else "Error: bash arguments.command must be a non-empty string"

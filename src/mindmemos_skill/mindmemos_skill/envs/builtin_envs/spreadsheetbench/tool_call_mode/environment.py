@@ -4,16 +4,16 @@ from pathlib import Path
 
 from pydantic import JsonValue
 
-from ....agents import OpenAIChatAgent
-from ....agents.buitin_agents.openai_chat.callbacks import native_observation, parse_native_tools
-from ....agents.typing import AgentResult
-from ....skill import Skill
-from ...base import Environment
-from ..common import export_skills
+from .....agents import OpenAIChatAgent
+from .....agents.buitin_agents.openai_chat.callbacks import native_observation, parse_native_tools
+from .....agents.typing import AgentResult
+from .....skill import Skill
+from ....base import Environment
+from ...common import export_skills
+from ..base import SpreadsheetExecutionEnvironment
+from ..config import SpreadsheetBenchToolCallingConfig
+from ..typing import SpreadsheetBenchTask, SpreadsheetContext, SpreadsheetObservation
 from . import workspace_tools
-from .base import SpreadsheetExecutionEnvironment
-from .config import SpreadsheetBenchToolCallingConfig
-from .typing import SpreadsheetBenchTask, SpreadsheetContext, SpreadsheetObservation
 
 
 @Environment.register("spreadsheetbench_tool_calling")
@@ -62,9 +62,9 @@ class SpreadsheetBenchToolCallingEnvironment(SpreadsheetExecutionEnvironment[Spr
         """Render public workbook instructions."""
         return workspace_tools.user_prompt(context, self.execution)
 
-    def _get_observation(self, response: AgentResult, context: SpreadsheetContext) -> SpreadsheetObservation:
+    async def _get_observation(self, response: AgentResult, context: SpreadsheetContext) -> SpreadsheetObservation:
         """Execute native tool calls and return tool-role messages."""
-        return workspace_tools.get_observation(response, context, self.execution, self.agent)
+        return await workspace_tools.get_observation(response, context, self.execution, self.agent)
 
     def _initial_skill_loaded(self, context: SpreadsheetContext) -> bool:
         """Detect preloaded instructions."""

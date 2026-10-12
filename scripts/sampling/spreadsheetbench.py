@@ -57,6 +57,7 @@ async def main() -> None:
         },
         agent=agent,
     )
+    await env.initialize()
     data = Data.build(
         "spreadsheetbench",
         {

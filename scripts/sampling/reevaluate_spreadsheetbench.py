@@ -122,6 +122,7 @@ async def main() -> None:
     connection.require_connection()
     agent = OpenAIChatAgent(connection)
     env = Environment.build("spreadsheetbench_text_action", recorded, agent=agent)
+    await env.initialize()
     input_identity = {sample.task.id: env.input_identity(sample.task, sample.reward_data) for sample in samples}
     manifest = {
         "input_identity": input_identity,
@@ -170,9 +171,7 @@ async def main() -> None:
         return
     if args.phase == "probe":
         probe_config = connection.model_copy(update={"timeout_s": 45, "max_retries": 0, "max_completion_tokens": 64})
-        result = await asyncio.to_thread(
-            OpenAIChatAgent(probe_config).run, messages=[{"role": "user", "content": "Reply with OK only."}]
-        )
+        result = await OpenAIChatAgent(probe_config).run(messages=[{"role": "user", "content": "Reply with OK only."}])
         if not isinstance(result.output, str) or not result.output.strip():
             raise ValueError("Model probe returned no text")
         write_json(

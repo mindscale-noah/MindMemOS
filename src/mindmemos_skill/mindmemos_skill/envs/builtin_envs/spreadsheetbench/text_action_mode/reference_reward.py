@@ -6,6 +6,8 @@ import datetime
 from pathlib import Path
 from typing import Any
 
+from ..ranges import default_sheet, split_region, split_targets
+
 
 def _openpyxl():
     try:
@@ -66,6 +68,8 @@ def compare_workbooks(
     golden_path: str | Path,
     output_path: str | Path,
     answer_position: str,
+    *,
+    answer_sheet: str | None = None,
 ) -> tuple[bool, str]:
     """Compare workbooks.
 
@@ -73,6 +77,7 @@ def compare_workbooks(
         golden_path: Private reference workbook used only by scoring or authorized training analysis.
         output_path: Model-produced workbook to compare with the private reference.
         answer_position: Released scoring ranges; reference analysis fills empty ranges from used cells.
+        answer_sheet: Released worksheet or worksheet list for unqualified ranges.
     """
     output_path = Path(output_path)
     if not output_path.exists():
@@ -84,13 +89,9 @@ def compare_workbooks(
     except Exception as exc:
         return False, f"load error: {exc}"
     try:
-        for target in filter(None, (part.strip() for part in answer_position.split(","))):
-            if "!" in target:
-                sheet, cell_range = target.split("!", 1)
-                sheet = sheet.strip().strip("'\"")
-            else:
-                sheet, cell_range = golden.sheetnames[0], target
-            cell_range = cell_range.strip().strip("'\"")
+        fallback_sheet = default_sheet(golden.sheetnames, answer_sheet)
+        for target in split_targets(answer_position):
+            sheet, cell_range = split_region(target, fallback_sheet)
             if sheet not in output.sheetnames:
                 return False, f"worksheet not found: {sheet}"
             golden_sheet = golden[sheet]

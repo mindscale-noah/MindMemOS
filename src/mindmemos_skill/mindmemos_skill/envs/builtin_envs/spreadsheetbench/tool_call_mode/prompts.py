@@ -6,8 +6,5 @@ SYSTEM_PROMPT = (
     "the user's request (start from a copy of 'input.xlsx' and apply your changes).\n"
     "Work by writing and running Python (openpyxl is available) through the shell tool — do not answer from memory. "
     "Inspect the sheets first, apply the changes, save to 'output.xlsx', and verify.\n"
-    "IMPORTANT: 'output.xlsx' is graded by reading cached cell VALUES, with no formula recalculation. "
-    "Write the final computed values into the target cells (not bare formulas), "
-    "since an unevaluated formula reads back as empty.\n"
     "When you are done, stop without calling any tool."
 )

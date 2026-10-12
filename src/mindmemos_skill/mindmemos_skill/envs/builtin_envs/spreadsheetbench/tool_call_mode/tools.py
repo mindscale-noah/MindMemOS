@@ -4,8 +4,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from ....infra.execution import ExecutionConfig, execute
-from ....infra.execution.constants import PIP_NO_INDEX_ENV, UV_OFFLINE_ENV
+from .....infra.execution import ExecutionConfig, execute
+from .....infra.execution.constants import PIP_NO_INDEX_ENV, UV_OFFLINE_ENV
 
 
 def _tool(name, description, properties, required):
@@ -67,7 +67,7 @@ def _resolve(workspace: Path, value: str) -> Path:
     return path
 
 
-def run_tool(name: str, args: dict, workspace: Path, config: ExecutionConfig) -> str:
+async def run_tool(name: str, args: dict, workspace: Path, config: ExecutionConfig) -> str:
     """Execute one public tool without exposing private reference workbooks.
 
     Args:
@@ -136,7 +136,7 @@ def run_tool(name: str, args: dict, workspace: Path, config: ExecutionConfig) ->
                 if any(_INSTALL_RE.search(part.strip()) for part in re.split(r"&&|\|\||[;\n|]", command)):
                     blocks.append(f"Command: {command}\nError: installing packages is disabled")
                     continue
-                result = execute([*config.shell_command, command], workspace, runtime)
+                result = await execute([*config.shell_command, command], workspace, runtime)
                 block = [f"Command: {command}"]
                 if result.stdout:
                     block.append(f"stdout:\n{result.stdout}")

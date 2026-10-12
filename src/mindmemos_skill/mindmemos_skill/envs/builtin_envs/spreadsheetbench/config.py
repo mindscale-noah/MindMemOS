@@ -36,9 +36,15 @@ class SpreadsheetBenchExecutionConfig(BaseModel):
     stagnation_limit: int | None = Field(default=None, ge=2)
     """Consecutive identical observations allowed; None disables the cutoff."""
 
+    transactional_recalculation: bool = True
+    """Recalculate formula outputs into output.recalc.xlsx before shared evaluation."""
+
 
 class SpreadsheetBenchToolCallingConfig(SpreadsheetBenchExecutionConfig):
     """Configure native structured tool calls over workspace tools."""
+
+    transactional_recalculation: bool = False
+    """Recalculate formula outputs before scoring only when explicitly enabled."""
 
     tools: list[dict[str, JsonValue]] | None = None
     """Explicit tool schemas; None exposes the standard workspace tools."""
@@ -50,6 +56,9 @@ class SpreadsheetBenchToolCallingConfig(SpreadsheetBenchExecutionConfig):
 class SpreadsheetBenchTextActionConfig(SpreadsheetBenchExecutionConfig):
     """Configure text Action/Observation messages and bash execution."""
 
+    transactional_recalculation: bool = True
+    """Provide the task-local Python recalculation command for the agent to run before completion; scoring never recalculates."""
+
     max_turns: int = Field(default=100, ge=1)
     """Maximum text-action turns per task."""
 
@@ -58,6 +67,3 @@ class SpreadsheetBenchTextActionConfig(SpreadsheetBenchExecutionConfig):
 
     stagnation_limit: int = Field(default=5, ge=2)
     """Consecutive identical actions or format errors allowed before stopping."""
-
-    transactional_recalculation: bool = True
-    """Include the canonical recalculation command and local helper."""

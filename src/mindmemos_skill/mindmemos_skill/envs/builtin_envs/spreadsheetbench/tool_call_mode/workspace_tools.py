@@ -4,13 +4,13 @@ import json
 
 from pydantic import JsonValue
 
-from ....agents import OpenAIChatAgent
-from ....agents.typing import AgentResult, ToolTurn
-from ....infra.execution import ExecutionConfig
-from .config import SpreadsheetBenchToolCallingConfig
-from .prompts.workspace_tools import SYSTEM_PROMPT
+from .....agents import OpenAIChatAgent
+from .....agents.typing import AgentResult, ToolTurn
+from .....infra.execution import ExecutionConfig
+from ..config import SpreadsheetBenchToolCallingConfig
+from ..typing import SpreadsheetContext, SpreadsheetObservation
+from .prompts import SYSTEM_PROMPT
 from .tools import TOOLS, run_tool
-from .typing import SpreadsheetContext, SpreadsheetObservation
 
 
 def available_tools(config: SpreadsheetBenchToolCallingConfig, text: str) -> list[dict[str, JsonValue]]:
@@ -74,7 +74,7 @@ def user_prompt(context: SpreadsheetContext, execution: ExecutionConfig) -> str:
     return user
 
 
-def get_observation(
+async def get_observation(
     response: AgentResult,
     context: SpreadsheetContext,
     execution: ExecutionConfig,
@@ -106,7 +106,7 @@ def get_observation(
         if call.name not in {tool["function"]["name"] for tool in context.tools}:
             observation = f"Error: unknown tool {call.name}"
         else:
-            observation = call.error or run_tool(call.name, call.arguments, context.directory, execution)
+            observation = call.error or (await run_tool(call.name, call.arguments, context.directory, execution))
         if call.name == "skill" and not call.error and not observation.startswith("Error:"):
             loaded = True
             feedback.extend(
