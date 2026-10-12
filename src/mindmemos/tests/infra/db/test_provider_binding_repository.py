@@ -16,16 +16,16 @@ class FakeQdrantEngine:
         return payload
 
     async def upsert(self, collection: str, points: list) -> None:
-        del collection
+        # Match the Qdrant engine upsert interface.
         self.upsert_point_ids = [str(point.id) for point in points]
 
     async def retrieve(self, collection: str, point_ids: list[str], *, with_vectors: bool = False) -> list:
-        del collection, with_vectors
+        # Match the Qdrant engine retrieval interface.
         self.retrieve_point_ids = point_ids
         return []
 
     def first_project_match(self, records: list, project_id: str):
-        del records, project_id
+        # Match the Qdrant engine project-match interface.
         return None
 
 

@@ -53,7 +53,7 @@ async def test_project_collection_namespace_is_disabled_by_default() -> None:
 
         collections = {item.name for item in (await client.get_collections()).collections}
         assert "default_memos" in collections
-        assert store.memory.collection_for_project("proj-a") == "default_memos"
+        assert store.memory.collection_for_project() == "default_memos"
         assert not any(name.startswith("default_memos__d_") for name in collections)
     finally:
         await client.close()
@@ -267,7 +267,7 @@ async def test_project_collection_namespace_disabled_keeps_payload_records_in_ba
             ]
         )
 
-        assert store.schema_add_buffer.collection_for_project("proj-a") == store.schema_add_buffer_collection
+        assert store.schema_add_buffer.collection_for_project() == store.schema_add_buffer_collection
 
         base_records, _ = await store.engine.scroll(
             store.schema_add_buffer_collection,

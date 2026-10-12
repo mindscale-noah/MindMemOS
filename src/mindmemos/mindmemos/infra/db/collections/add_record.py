@@ -6,7 +6,6 @@ from typing import Any
 
 from qdrant_client import models as qmodels
 
-from ..filters import ADD_RECORD_PAYLOAD_INDEX_SCHEMA
 from ..models import AddRecordPoint, QdrantRecord
 from .base import CollectionRepository
 
@@ -23,7 +22,6 @@ class AddRecordRepository(CollectionRepository):
 
         await self._upsert_payload_points_by_project(
             [(point.add_record_id, point.payload) for point in points],
-            payload_indexes=list(ADD_RECORD_PAYLOAD_INDEX_SCHEMA),
         )
 
     async def get(self, project_id: str, add_record_id: str) -> QdrantRecord | None:
@@ -67,4 +65,4 @@ class AddRecordRepository(CollectionRepository):
         record = await self.get(project_id, add_record_id)
         if record is None:
             return
-        await self._engine.set_payload(self.collection_for_project(project_id), add_record_id, payload)
+        await self._engine.set_payload(self.collection_for_project(), add_record_id, payload)
