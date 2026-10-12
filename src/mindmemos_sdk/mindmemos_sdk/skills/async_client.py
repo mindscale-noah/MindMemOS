@@ -323,10 +323,10 @@ class AsyncSkillClient:
         return await self._post(SkillRoute.TRAIN, request)
 
     async def task_progress(self, request: TaskProgressRequest) -> SkillData:
-        """Read progress events after a sequence number.
+        """Read task logs after a sequence number.
 
         Args:
-            request: Task identity and exclusive event sequence cursor.
+            request: Task identity and exclusive log sequence cursor.
 
         Returns:
             Ordered progress event records, including an empty list when no new events exist.

@@ -32,6 +32,7 @@ class LocalSkillEvalRunner:
             ValueError: Existing run artifacts conflict with current inputs.
         """
         prepared = LocalSkillEvalPreflight().prepare(config_path)
+        await LocalSkillEvalPreflight().check_runtime(prepared)
         root = Path(output_dir).expanduser().resolve()
         skill_path = prepared.config.initial_skill.path
         skill_root = skill_path if skill_path.is_dir() else skill_path.parent
@@ -151,6 +152,7 @@ async def run_local_eval(
         Completed report, or None after successful preflight.
     """
     if preflight_only:
-        LocalSkillEvalPreflight().prepare(config_path)
+        prepared = LocalSkillEvalPreflight().prepare(config_path)
+        await LocalSkillEvalPreflight().check_runtime(prepared)
         return None
     return await LocalSkillEvalRunner().run(config_path, output_dir)

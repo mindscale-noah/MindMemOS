@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 import json
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
@@ -19,7 +17,7 @@ class Tool:
 
     name: str
     description: str
-    func: Callable[..., Any]
+    func: Callable[..., Awaitable[Any]]
     parameters: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
     deliver_result_as_user: bool = False
 
@@ -33,8 +31,8 @@ class Tool:
             },
         }
 
-    def __call__(self, **kwargs: Any) -> Any:
-        return self.func(**kwargs)
+    async def __call__(self, **kwargs: Any) -> Any:
+        return await self.func(**kwargs)
 
 
 @dataclass
@@ -132,10 +130,7 @@ class ReactAgent:
             content = f"Error: unknown tool '{call.name}'"
         else:
             try:
-                if inspect.iscoroutinefunction(tool.func):
-                    result = await tool(**call.arguments)
-                else:
-                    result = await asyncio.to_thread(tool, **call.arguments)
+                result = await tool(**call.arguments)
                 content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
             except Exception as exc:  # noqa: BLE001 - tool errors are surfaced to the model
                 content = f"Error: {type(exc).__name__}: {exc}"

@@ -19,7 +19,7 @@ class SkillSet:
     def names(self) -> list[str]:
         return list(self.skill_dirs)
 
-    def load(self, name: str) -> str:
+    async def load(self, name: str) -> str:
         skill_dir = self.skill_dirs.get(name)
         if skill_dir is None:
             available = ", ".join(self.names) or "(none)"

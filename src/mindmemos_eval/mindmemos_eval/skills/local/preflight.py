@@ -4,7 +4,6 @@ import json
 from hashlib import sha256
 from importlib.util import find_spec
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import yaml
 from mindmemos_skill.algos.train.skill_forest.env_specific.selection import select_env_adapter
@@ -12,7 +11,9 @@ from mindmemos_skill.algos.train.treeskill.env_specific.selection import select_
 from mindmemos_skill.api.typing import TrainingSplit
 from mindmemos_skill.config.loader import read_skill_config
 from mindmemos_skill.envs import Environment
-from mindmemos_skill.envs.builtin_envs.spreadsheetbench.recalculation import preflight_recalculation_runtime
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_mode.environment import (
+    SpreadsheetBenchTextActionEnvironment,
+)
 from mindmemos_skill.envs.data import Data
 from mindmemos_skill.pipelines.builtin_pipelines.training.config import TrainingPipelineConfig
 
@@ -31,6 +32,22 @@ _DATASET_BY_ENVIRONMENT = {
 
 class LocalSkillEvalPreflight:
     """Load all local inputs and reject incompatible experiment definitions."""
+
+    async def check_runtime(self, prepared: PreparedInputs) -> None:
+        """Validate text-action UNO in its actual task interpreter before training.
+
+        Args:
+            prepared: Validated inputs carrying the environment selection.
+
+        Raises:
+            RuntimeError: The task interpreter cannot import UNO.
+        """
+        spec = prepared.config.environment
+        if spec.class_name == "spreadsheetbench_text_action":
+            environment = Environment.build(spec.class_name, spec.config)
+            if not isinstance(environment, SpreadsheetBenchTextActionEnvironment):
+                raise TypeError("Expected SpreadsheetBench text-action environment")
+            await environment.initialize()
 
     def prepare(self, config_path: str | Path) -> PreparedInputs:
         """Validate config, training profile, split, and local files without model calls.
@@ -87,9 +104,6 @@ class LocalSkillEvalPreflight:
             )
             if spec.class_name != expected_environment:
                 raise ValueError(f"SpreadsheetBench requires environment {expected_environment!r}")
-            if config.algorithm == "treeskill" and spec.config.transactional_recalculation:
-                with TemporaryDirectory(prefix="skill-eval-recalculation-") as temporary:
-                    preflight_recalculation_runtime(Path(temporary))
 
         environment = Environment.build(spec.class_name, spec.config)
         if config.algorithm == "skill_forest":

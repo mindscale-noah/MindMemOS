@@ -53,7 +53,17 @@ def remote(monkeypatch):
         elif route == "tasks/show":
             data = {"status": "succeeded", "task_id": "task-a"}
         elif route == "tasks/progress":
-            data = [] if request.url.params["after"] == "1" else [{"sequence": 1, "stage": "done", "message": "Done"}]
+            data = (
+                []
+                if request.url.params["after"] == "1"
+                else [
+                    {
+                        "sequence": 1,
+                        "occurred_at": "2026-10-10T10:00:00+08:00",
+                        "payload": {"name": "train", "body": {"stage": "done"}, "message": "Done"},
+                    }
+                ]
+            )
         return httpx.Response(
             202 if route in ("algos/train", "algos/evolve") else 200,
             json={"code": "accepted" if route in ("algos/train", "algos/evolve") else "ok", "data": data},
@@ -119,7 +129,10 @@ def remote(monkeypatch):
 def test_remote_commands(remote, capsys, arguments, route):
     assert cli.main(["skill", *arguments]) == 0
     output = capsys.readouterr()
-    json.loads(output.out)
+    if route == "tasks/progress":
+        assert output.out == "[2026-10-10T02:00:00.000000Z] [INFO] [train] | Done\n"
+    else:
+        json.loads(output.out)
     assert not output.err
     assert remote[-1][0] == route
     assert all("cursor" not in body for _, body, _ in remote)
@@ -199,13 +212,44 @@ def test_duplicate_filter_wrong_family_and_cancellation(remote, capsys, monkeypa
     capsys.readouterr()
 
 
-def test_progress_preserves_arrays_and_follow_uses_event_sequence(remote, capsys):
+def test_progress_prints_text_and_follow_uses_event_sequence(remote, capsys):
     assert cli.main(["skill", "task", "progress", "task-a", "--after", "1"]) == 0
-    assert json.loads(capsys.readouterr().out) == []
+    assert capsys.readouterr().out == ""
     assert cli.main(["skill", "task", "progress", "task-a", "--follow"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert [json.loads(line)["sequence"] for line in lines] == [1]
+    assert lines == ["[2026-10-10T02:00:00.000000Z] [INFO] [train] | Done"]
     assert remote[-1][2] == {"after": "1"}
+
+
+@pytest.mark.parametrize("follow", [False, True])
+@pytest.mark.parametrize(
+    "traceback", [None, "", 'Traceback (most recent call last):\n  File "train.py", line 3\nValueError: Failed\n']
+)
+def test_progress_prints_optional_traceback(remote, monkeypatch, capsys, follow, traceback):
+    from mindmemos_sdk.skills import SkillClient
+
+    def progress(self, request):
+        if request.after >= 1:
+            return []
+        return [
+            {
+                "sequence": 1,
+                "occurred_at": "2026-10-10T10:00:00+08:00",
+                "payload": {"name": "train", "message": "Training failed", "traceback": traceback},
+            }
+        ]
+
+    monkeypatch.setattr(SkillClient, "task_progress", progress)
+    arguments = ["skill", "task", "progress", "task-a"]
+    if follow:
+        arguments.append("--follow")
+    assert cli.main(arguments) == 0
+    output = capsys.readouterr()
+    expected = "[2026-10-10T02:00:00.000000Z] [INFO] [train] | Training failed\n"
+    if traceback:
+        expected += traceback
+    assert output.out == expected
+    assert not output.err
 
 
 def test_symlink_resource_and_export_traversal_are_rejected(remote, tmp_path):
@@ -377,3 +421,26 @@ def test_api_errors_preserve_code_and_request_id(remote, monkeypatch, capsys):
     output = capsys.readouterr()
     assert not output.out
     assert json.loads(output.err) == {"code": "skill_not_found", "message": "Missing Skill", "request_id": "req-cli"}
+
+
+def test_follow_drains_all_terminal_log_pages(capsys):
+    from argparse import Namespace
+
+    class Client:
+        def __init__(self):
+            self.observed = False
+
+        def task_progress(self, request):
+            if request.after == 0 and not self.observed:
+                self.observed = True
+                return []
+            return [
+                {"sequence": index, "payload": {"message": f"log {index}"}}
+                for index in range(request.after + 1, min(request.after + 100, 205) + 1)
+            ]
+
+        def show_task(self, request):
+            return {"status": "succeeded"}
+
+    assert skill_cli._task_progress(Client(), Namespace(task_id="t", after=0, follow=True)) is None
+    assert capsys.readouterr().out.splitlines() == [f"[-] [INFO] [-] | log {index}" for index in range(1, 206)]

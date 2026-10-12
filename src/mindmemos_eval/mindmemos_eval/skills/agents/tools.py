@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from mindmemos_skill.infra.execution import ExecutionConfig, execute
+
 from .react import Tool
 
 _INSTALL_RE = re.compile(
@@ -77,7 +79,7 @@ class ReactAgentTools:
             return None
         return resolved
 
-    def read(self, path: str) -> str:
+    async def read(self, path: str) -> str:
         resolved = self._resolve_in_cwd(path)
         if resolved is None:
             return f"Error: access denied, {path} is outside the working directory"
@@ -90,7 +92,7 @@ class ReactAgentTools:
         except OSError as exc:
             return f"Error: File {resolved} read error: {exc}"
 
-    def write(self, path: str, content: str) -> str:
+    async def write(self, path: str, content: str) -> str:
         resolved = self._resolve_in_cwd(path)
         if resolved is None:
             return f"Error: access denied, {path} is outside the working directory"
@@ -101,7 +103,7 @@ class ReactAgentTools:
             return f"Error writing file: {exc}"
         return f"Successfully wrote {len(content)} characters to {resolved}"
 
-    def edit(self, path: str, original_text: str, replacement_text: str) -> str:
+    async def edit(self, path: str, original_text: str, replacement_text: str) -> str:
         resolved = self._resolve_in_cwd(path)
         if resolved is None:
             return f"Error: access denied, {path} is outside the working directory"
@@ -123,7 +125,7 @@ class ReactAgentTools:
             return f"Error writing file: {exc}"
         return f"Successfully edited {resolved}"
 
-    def shell(self, commands: list[str], timeout_ms: int | None = None) -> str:
+    async def shell(self, commands: list[str], timeout_ms: int | None = None) -> str:
         timeout_sec = (timeout_ms / 1000.0) if timeout_ms else 120
         env = {**os.environ}
         if self._shim_dir:
@@ -143,14 +145,14 @@ class ReactAgentTools:
                 outputs.append("\n".join(block))
                 continue
             try:
-                proc = subprocess.run(
-                    command,
-                    shell=True,
-                    cwd=str(self.cwd),
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_sec,
+                proc = await execute(
+                    ["/bin/sh", "-c", command],
+                    self.cwd,
+                    ExecutionConfig(
+                        timeout_s=timeout_sec,
+                        environment=env,
+                        python_command=[str(self.python_path)] if self.python_path else ["python"],
+                    ),
                 )
             except subprocess.TimeoutExpired:
                 block.append(f"Error: timed out after {int(timeout_sec)}s")
