@@ -7,8 +7,8 @@ from dataclasses import replace
 from hashlib import sha256
 from typing import Any
 
-from .artifacts import compute_skill_content_hash, normalize_skill_text
-from .typing import MarkdownSkillTree, MarkdownTreeNode, NewTreeNode, NodeKey
+from .....skill import content_hash
+from ..typing import MarkdownSkillTree, MarkdownTreeNode, NewTreeNode, NodeKey
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n?", re.DOTALL)
@@ -112,12 +112,17 @@ def update_node_content(tree: MarkdownSkillTree, node_id: str, content: str) -> 
     if node is None:
         raise ValueError(f"unknown TreeSkill node: {node_id!r}")
     replacement = content.strip("\n")
+    if not replacement and not node.child_ids:
+        raise ValueError("a leaf node cannot be updated to empty content")
     _validate_local_content(replacement)
 
     lines = tree.markdown_content.splitlines()
     updated_lines = lines[: node.section_start + 1] + replacement.splitlines() + lines[node.intro_end :]
     updated = _join_skill(tree.frontmatter, updated_lines)
     reparsed = parse_skill_markdown(updated, previous_ids_by_key=tree.ids_by_key)
+    refreshed = reparsed.node_by_key.get(node.node_key)
+    if refreshed is None or refreshed.node_id != node_id:
+        raise ValueError("updated node lost its stable identity after reparsing")
     return reparsed
 
 
@@ -287,7 +292,7 @@ def compile_tree_metadata(tree: MarkdownSkillTree, *, router: str = "llm_subtree
         "enabled": True,
         "schema_version": 1,
         "router": router,
-        "skill_content_hash": compute_skill_content_hash(tree.full_content),
+        "skill_content_hash": content_hash(tree.full_content),
         "root_ids": [node.node_id for node in tree.root_nodes],
         "nodes": [
             {
@@ -317,7 +322,7 @@ def parse_tree_with_metadata(content: str, metadata: Any) -> MarkdownSkillTree:
     if metadata.get("schema_version") != 1:
         raise TreeMetadataError("unsupported TreeSkill metadata schema")
     normalized = normalize_skill_text(content)
-    expected_hash = compute_skill_content_hash(normalized)
+    expected_hash = content_hash(normalized)
     if metadata.get("skill_content_hash") != expected_hash:
         raise TreeMetadataError("TreeSkill metadata content hash does not match SKILL.md")
 
@@ -539,3 +544,15 @@ __all__ = [
     "tree_prompt_payload",
     "update_node_content",
 ]
+
+
+def normalize_skill_text(content: str) -> str:
+    """Apply the reference algorithm's text normalization.
+
+    Args:
+        content: Source or candidate Markdown.
+
+    Returns:
+        LF-delimited text with exactly one final newline.
+    """
+    return content.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"

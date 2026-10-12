@@ -1,19 +1,25 @@
 """Pinned upstream regression cases adapted only to current package interfaces."""
 
+import copy
 import hashlib
 import json
 from importlib.resources import files
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
-from mindmemos_skill.algos.train.treeskill import TreeSkillEnvAdapter
-from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
-from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_text_action import (
-    SpreadsheetBenchReferenceAnalyzer,
+from mindmemos_skill.agents import AgentResult, OpenAIChatAgent, OpenAIChatConfig
+from mindmemos_skill.algos.train.treeskill import TreeSkillEnvAdapter, TreeSkillTrainer, TreeSkillTrainerConfig
+from mindmemos_skill.algos.train.treeskill.construction.fusion import (
+    NODE_FUSION_SYSTEM_PROMPT,
+    fusion_user_prompt,
 )
-from mindmemos_skill.algos.train.treeskill.fusion import TreeSkillNodeFuser
-from mindmemos_skill.algos.train.treeskill.fusion_tree import (
+from mindmemos_skill.algos.train.treeskill.construction.localization import (
+    LOCALIZATION_SYSTEM_PROMPT,
+    localization_user_prompt,
+)
+from mindmemos_skill.algos.train.treeskill.construction.markdown import (
     TreeMetadataError,
     compile_tree_metadata,
     create_child_subtree,
@@ -23,57 +29,85 @@ from mindmemos_skill.algos.train.treeskill.fusion_tree import (
     tree_prompt_payload,
     update_node_content,
 )
-from mindmemos_skill.algos.train.treeskill.localization import TreeSkillEvidenceLocator
-from mindmemos_skill.algos.train.treeskill.prompts import (
-    LOCALIZATION_SYSTEM_PROMPT,
-    NODE_FUSION_SYSTEM_PROMPT,
-    fusion_user_prompt,
-    localization_user_prompt,
+from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
+from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_text_action import (
+    SpreadsheetBenchReferenceAnalyzer,
 )
 from mindmemos_skill.algos.train.treeskill.typing import (
     AnalysisItem,
-    ChatResponse,
     LocatedEvidence,
     NewTreeNode,
     TrajectoryAnalysisRecord,
     TreeSkillRoutingContext,
 )
 from mindmemos_skill.envs import Task
-from mindmemos_skill.envs.builtin_envs.spreadsheetbench.reference_reward import compare_workbooks
-from mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_policy import (
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_mode.policy import (
     FORMAT_ERROR_MESSAGE,
     PolicyResponseType,
     format_reference_observation,
     parse_policy_response,
 )
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_mode.reference_reward import compare_workbooks
 
 
-class ScriptedChatModel:
+class ScriptedAgent(OpenAIChatAgent):
     def __init__(self, responses: list[str]) -> None:
+        super().__init__(OpenAIChatConfig(model="offline"))
         self.responses = list(responses)
         self.calls: list[dict[str, Any]] = []
 
-    async def chat(self, task: str, messages: list[dict[str, Any]], **kwargs: Any) -> ChatResponse:
-        self.calls.append({"task": task, "messages": messages, **kwargs})
+    async def run_messages(self, *, messages, tools=None, response_format=None) -> AgentResult:
+        self.calls.append(
+            {"messages": messages, "max_tokens": self.config.max_completion_tokens, "response_format": response_format}
+        )
         content = self.responses.pop(0)
-        parser = kwargs.get("format_parser")
-        parsed = parser(content) if parser is not None else None
-        return ChatResponse(content=content, parsed=parsed)
+        return AgentResult(output=content)
 
 
-class FailingChatModel:
+class FailingAgent(OpenAIChatAgent):
     def __init__(self, message: str = "endpoint unavailable") -> None:
+        super().__init__(OpenAIChatConfig(model="offline"))
         self.message = message
-        self.calls = 0
+        self.calls = []
 
-    async def chat(self, task: str, messages: list[dict[str, Any]], **kwargs: Any) -> ChatResponse:
-        del task, messages, kwargs
-        self.calls += 1
+    async def run_messages(self, *, messages, tools=None, response_format=None) -> AgentResult:
+        # Match the chat model interface while simulating an endpoint failure.
+        self.calls.append(messages)
         raise RuntimeError(self.message)
 
 
+def make_stage_trainer(agent, **options):
+    def factory(config):
+        configured = copy.copy(agent)
+        configured.config = config
+        return configured
+
+    return TreeSkillTrainer(
+        TreeSkillTrainerConfig(optimizer=agent.config, router=agent.config, **options), agent_factory=factory
+    )
+
+
+async def run_localization(tree, records, *, agent, concurrency, temperature, max_tokens):
+    trainer = make_stage_trainer(
+        agent,
+        localization_concurrency=concurrency,
+        localization_temperature=temperature,
+        localization_max_tokens=max_tokens,
+    )
+    with TemporaryDirectory() as directory:
+        return await trainer._localize(tree, records, Path(directory))
+
+
+async def run_fusion(tree, evidence, *, agent, temperature, max_tokens, audit_dir=None):
+    trainer = make_stage_trainer(agent, fusion_temperature=temperature, fusion_max_tokens=max_tokens)
+    if audit_dir is not None:
+        return await trainer._fuse(tree, evidence, audit_dir)
+    with TemporaryDirectory() as directory:
+        return await trainer._fuse(tree, evidence, Path(directory))
+
+
 def test_treeskill_prompt_resources_match_reference_files() -> None:
-    prompt_package = "mindmemos_skill.algos.train.treeskill.prompt_templates"
+    prompt_package = "mindmemos_skill.algos.train.treeskill.construction.prompts"
     expected_hashes = {
         "locating_system_prompt.txt": "40433e54931be334a84fc5366bac7432d93cd0a719e41f058cca7b389384ac6a",
         "node_fusion_system_prompt.txt": "bbecdd8e368cb4d92c96e64b2409ccb37d876ac3af892ed4fb832bf75dbeb246",
@@ -108,7 +142,7 @@ def test_spreadsheetbench_text_action_prompt_resources_are_pinned() -> None:
     }
     for name, expected in expected_hashes.items():
         resources = files(
-            "mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_prompts"
+            "mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_mode.prompts"
             if name.startswith("trace2skill_")
             else prompt_package
         )
@@ -279,7 +313,8 @@ Write formulas carefully.
 
 
 @pytest.mark.asyncio
-async def test_treeskill_locator_retries_with_larger_budget_and_keeps_valid_items() -> None:
+@pytest.mark.parametrize(("max_tokens", "retry_tokens"), [(2048, 4096), (16384, 16384)])
+async def test_treeskill_locator_retries_with_bounded_budget_and_keeps_valid_items(max_tokens, retry_tokens) -> None:
     tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
     record = TrajectoryAnalysisRecord(
         instance_id="trajectory-1",
@@ -295,7 +330,7 @@ async def test_treeskill_locator_retries_with_larger_budget_and_keeps_valid_item
             ),
         ),
     )
-    model = ScriptedChatModel(
+    model = ScriptedAgent(
         [
             "not json",
             json.dumps(
@@ -326,19 +361,15 @@ async def test_treeskill_locator_retries_with_larger_budget_and_keeps_valid_item
         ]
     )
 
-    located, failures = await TreeSkillEvidenceLocator(
-        chat_model=model,
-        task="locate",
-        concurrency=1,
-        temperature=0.0,
-        max_tokens=2048,
-    ).locate(tree, [record])
+    located, failures = await run_localization(
+        tree, [record], agent=model, concurrency=1, temperature=0.0, max_tokens=max_tokens
+    )
 
     assert [item.evidence_id for item in located] == ["e1"]
     assert len(failures) == 1
     assert "unknown target_node_id" in failures[0].error
     assert "ground-truth or gold-answer reference" in failures[0].error
-    assert [call["max_tokens"] for call in model.calls] == [2048, 4096]
+    assert [call["max_tokens"] for call in model.calls] == [max_tokens, retry_tokens]
     assert all(call["response_format"]["type"] == "json_schema" for call in model.calls)
     assert model.calls[0]["messages"] == model.calls[1]["messages"]
 
@@ -352,17 +383,15 @@ async def test_treeskill_locator_and_fuser_record_failed_items_without_aborting(
         record_source="success",
         items=(AnalysisItem(item_id="i1", kind="success_memory", content="Inspect the workbook."),),
     )
-    locator_model = FailingChatModel()
-    located, failures = await TreeSkillEvidenceLocator(
-        chat_model=locator_model, task="locate", concurrency=16, temperature=0.0, max_tokens=2048
-    ).locate(tree, [record])
+    locator_model = FailingAgent()
+    located, failures = await run_localization(
+        tree, [record], agent=locator_model, concurrency=16, temperature=0.0, max_tokens=2048
+    )
     assert not located and len(failures) == 1
     assert "endpoint unavailable" in failures[0].error
-    assert locator_model.calls == 2
-    model = FailingChatModel()
-    final, edits, failures = await TreeSkillNodeFuser(
-        chat_model=model, task="fuse", temperature=0.0, max_tokens=4096
-    ).fuse(
+    assert len(locator_model.calls) == 2
+    model = FailingAgent()
+    final, edits, failures = await run_fusion(
         tree,
         [
             LocatedEvidence(
@@ -374,12 +403,15 @@ async def test_treeskill_locator_and_fuser_record_failed_items_without_aborting(
                 rationale="Workbook guidance.",
             )
         ],
+        agent=model,
+        temperature=0.0,
+        max_tokens=4096,
     )
     assert final == tree and not edits and len(failures) == 1
     assert "endpoint unavailable" in failures[0].error
 
 
-def test_spreadsheetbench_text_action_evaluator_uses_full_workbook_when_position_is_empty(
+async def test_spreadsheetbench_text_action_evaluator_uses_full_workbook_when_position_is_empty(
     tmp_path: Path,
 ) -> None:
     openpyxl = pytest.importorskip("openpyxl")
@@ -391,7 +423,7 @@ def test_spreadsheetbench_text_action_evaluator_uses_full_workbook_when_position
         workbook.save(analysis_dir / name)
         workbook.close()
 
-    observation, passed = SpreadsheetBenchReferenceAnalyzer._evaluate_output(
+    observation, passed = await SpreadsheetBenchReferenceAnalyzer._evaluate_output(
         analysis_dir,
         {"output_file": "output.xlsx", "ground_truth": "gold.xlsx"},
         "",
@@ -426,7 +458,7 @@ def test_spreadsheetbench_text_action_evaluator_supports_whole_column_ranges(tmp
 @pytest.mark.asyncio
 async def test_node_fusion_rejects_analysis_artifacts_in_updates_and_new_subtrees() -> None:
     tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
-    model = ScriptedChatModel(
+    model = ScriptedAgent(
         [
             json.dumps(
                 {
@@ -468,12 +500,7 @@ async def test_node_fusion_rejects_analysis_artifacts_in_updates_and_new_subtree
         )
     ]
 
-    final_tree, edits, failures = await TreeSkillNodeFuser(
-        chat_model=model,
-        task="fuse",
-        temperature=0.0,
-        max_tokens=4096,
-    ).fuse(tree, evidence)
+    final_tree, edits, failures = await run_fusion(tree, evidence, agent=model, temperature=0.0, max_tokens=4096)
 
     assert final_tree.full_content == tree.full_content
     assert failures == []
@@ -482,62 +509,72 @@ async def test_node_fusion_rejects_analysis_artifacts_in_updates_and_new_subtree
 
 
 @pytest.mark.parametrize(
-    ("payload", "reason"),
+    "edits",
     [
-        ({}, "node fusion returned no edits"),
-        ({"edits": [{}, {}, {}]}, "node fusion returned more than two edits"),
-        ({"edits": [None]}, "node fusion edit is not an object"),
-        ({"edits": [{"operation": "delete"}]}, "unsupported node fusion operation: delete"),
-        ({"edits": [{}, {"operation": "update", "content": "x"}]}, "reject cannot be mixed with other edits"),
-        ({"edits": [{"operation": "update", "content": "x"}] * 2}, "duplicate update_node edit"),
-        ({"edits": [{"operation": "update", "content": 1}]}, "update_node requires string content"),
-        (
-            {"edits": [{"operation": "update", "content": "x", "new_child": None}]},
-            "update_node must not include new_child",
-        ),
-        ({"edits": [{"operation": "create_child", "new_child": []}]}, "create_child requires new_child"),
-        (
-            {"edits": [{"operation": "create_child", "new_child": {}, "content": None}]},
-            "create_child must not include top-level content",
-        ),
+        [],
+        [{"operation": "reject", "rationale": "No lesson"}] * 3,
+        [None],
+        [{"operation": "delete", "rationale": "Invalid operation"}],
+        [
+            {"operation": "reject", "rationale": "No lesson"},
+            {"operation": "update_node", "content": "x", "rationale": "Update"},
+        ],
+        [{"operation": "update_node", "content": "x", "rationale": "Update"}] * 2,
+        [{"operation": "update_node", "content": 1, "rationale": "Update"}],
+        [
+            {
+                "operation": "create_child",
+                "new_child": {"heading": "Child", "extra": "Not in contract"},
+                "rationale": "Add child",
+            }
+        ],
+        [{"operation": " UPDATE ", "content": "x", "rationale": "Update"}],
     ],
 )
-def test_fusion_operation_rejections_match_reference(payload, reason):
-    from mindmemos_skill.algos.train.treeskill.fusion import normalize_node_fusion_edits
-
-    assert normalize_node_fusion_edits(payload, "001") == [
-        {"operation": "reject", "target_node_id": "001", "rationale": reason}
+async def test_invalid_fusion_response_is_a_failure_without_applying_edits(edits):
+    tree = parse_skill_markdown("# Workbook\nInspect first.\n")
+    model = ScriptedAgent([json.dumps({"rationale": "Proposed change", "edits": edits})] * 2)
+    evidence = [
+        LocatedEvidence(
+            instance_id="t1",
+            evidence_id="e1",
+            record_source="success",
+            reusable_lesson="Verify saved workbooks.",
+            target_node_id="001",
+            rationale="Relevant",
+        )
     ]
+    final, applied, failures = await run_fusion(tree, evidence, agent=model, temperature=0, max_tokens=4096)
+    assert final == tree and applied == [] and len(failures) == 1
+    assert len(model.calls) == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_child", [False, True])
-async def test_fusion_preserves_valid_update_and_audits_extra_child_fields(tmp_path, invalid_child):
+async def test_fusion_applies_update_before_child_and_preserves_partial_success(tmp_path, invalid_child):
     tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
     child = {
         "heading": "## Verification",
         "content": "",
-        "rationale": "Audit-only explanation.",
         "children": [
             {
                 "heading": "Reload",
                 "content": "   " if invalid_child else "Reload after saving.",
-                "rationale": "Keep this explanation out of the skill.",
                 "children": [],
             }
         ],
     }
-    model = ScriptedChatModel(
+    model = ScriptedAgent(
         [
             json.dumps(
                 {
-                    "extra_note": "Allowed by upstream",
+                    "rationale": "Add verification",
                     "edits": [
-                        {"operation": "create_child", "new_child": child},
+                        {"operation": "create_child", "new_child": child, "rationale": "Add verification"},
                         {
-                            "operation": " UPDATE ",
+                            "operation": "update_node",
                             "content": "Inspect sheet names before editing.",
-                            "target_node_id": "999",
+                            "rationale": "Inspect first",
                         },
                     ],
                 }
@@ -554,28 +591,24 @@ async def test_fusion_preserves_valid_update_and_audits_extra_child_fields(tmp_p
             rationale="Relevant.",
         )
     ]
-    final, edits, failures = await TreeSkillNodeFuser(
-        chat_model=model,
-        task="fuse",
-        temperature=0.0,
-        max_tokens=4096,
-        audit_dir=tmp_path,
-    ).fuse(tree, evidence)
+    final, edits, failures = await run_fusion(
+        tree, evidence, agent=model, temperature=0.0, max_tokens=4096, audit_dir=tmp_path
+    )
     assert failures == []
     assert [edit.operation for edit in edits] == ["update_node", "create_child"]
     assert [edit.accepted for edit in edits] == [True, not invalid_child]
     assert "Inspect sheet names before editing." in final.full_content
     assert "Audit-only explanation" not in final.full_content
     assert len(final.nodes) == (1 if invalid_child else 3)
-    assert "Audit-only explanation" in "\n".join(path.read_text() for path in tmp_path.rglob("*.json"))
+    assert "Add verification" in "\n".join(path.read_text() for path in tmp_path.rglob("*.json"))
     assert len(model.calls) == 1
     assert model.calls[0]["max_tokens"] == 4096
 
 
 @pytest.mark.asyncio
-async def test_truncated_fusion_response_remains_a_failure_without_retry():
+async def test_truncated_fusion_response_remains_a_failure_after_one_retry():
     tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
-    model = ScriptedChatModel(['{"edits": [{"operation": "update_node", "content": "unfinished'])
+    model = ScriptedAgent(['{"edits": [{"operation": "update_node", "content": "unfinished'] * 2)
     evidence = [
         LocatedEvidence(
             instance_id="t1",
@@ -586,20 +619,68 @@ async def test_truncated_fusion_response_remains_a_failure_without_retry():
             rationale="Relevant.",
         )
     ]
-    final, edits, failures = await TreeSkillNodeFuser(
-        chat_model=model,
-        task="fuse",
-        temperature=0.0,
-        max_tokens=4096,
-    ).fuse(tree, evidence)
+    final, edits, failures = await run_fusion(tree, evidence, agent=model, temperature=0.0, max_tokens=4096)
     assert final == tree
     assert edits == []
-    assert len(failures) == len(model.calls) == 1
+    assert len(failures) == 1
+    assert len(model.calls) == 2
 
 
-def test_reference_tree_checks_allow_empty_update_but_reject_invalid_new_leaf():
+def test_reference_tree_checks_reject_empty_leaf_update_and_invalid_new_leaf():
     tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
-    assert update_node_content(tree, "001", "").nodes == ()
+    with pytest.raises(ValueError, match="leaf node cannot be updated to empty"):
+        update_node_content(tree, "001", "")
+    with pytest.raises(ValueError, match="lost its stable identity"):
+        update_node_content(tree, "001", "   ")
+    assert tree.node_by_id["001"].local_content == "Inspect first."
     for heading, content in [("###", "Valid content"), ("Valid heading", "   ")]:
         with pytest.raises(ValueError):
             create_child_subtree(tree, "001", NewTreeNode(heading=heading, content=content))
+
+
+def test_empty_parent_update_preserves_identity_and_allows_new_children():
+    tree = parse_skill_markdown("# Workbook\nInspect first.\n\n## Existing\nExisting instructions.\n")
+    updated = update_node_content(tree, "001", "")
+    assert list(updated.node_by_id) == ["001", "002"]
+    assert updated.node_by_id["001"].local_content == ""
+    expanded = create_child_subtree(updated, "001", NewTreeNode(heading="New child", content="New instructions."))
+    assert list(expanded.node_by_id) == ["001", "002", "003"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_output",
+    [
+        '{"edits": [',
+        json.dumps(
+            {
+                "rationale": "Invalid",
+                "edits": [
+                    {
+                        "operation": "create_child",
+                        "rationale": "Add",
+                        "new_child": {"heading": "Check", "content": "Verify.", "children": [], "rationale": "Extra"},
+                    }
+                ],
+            }
+        ),
+    ],
+)
+async def test_fusion_parse_retry_keeps_inputs_responses_and_applies_only_valid_output(first_output):
+    from mindmemos_skill.algos.train.treeskill.construction.fusion import fuse_node
+
+    tree = parse_skill_markdown("# Workbook\nInspect first.\n")
+    valid = json.dumps(
+        {
+            "rationale": "Improve",
+            "edits": [{"operation": "update_node", "content": "Verify saved workbook.", "rationale": "Useful"}],
+        }
+    )
+    agent = ScriptedAgent([first_output, valid])
+    outcome = await fuse_node(tree, "001", [], agent=agent)
+    assert agent.calls[0] == agent.calls[1]
+    assert [response.output for response in outcome.responses] == [first_output, valid]
+    assert not outcome.error
+    assert len(outcome.edits) == len(outcome.patches) == 1
+    assert outcome.edits[0].accepted
+    assert "Verify saved workbook." in outcome.content

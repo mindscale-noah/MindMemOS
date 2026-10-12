@@ -6,7 +6,7 @@ from pathlib import Path
 
 from mindmemos_skill.agents import AgentResult, OpenAIChatAgent, OpenAIChatConfig
 from mindmemos_skill.algos.train.treeskill import TreeSkillTrainer, TreeSkillTrainerConfig
-from mindmemos_skill.algos.train.treeskill.experiment import run_experiment
+from mindmemos_skill.algos.train.treeskill.trainer import run_experiment
 from mindmemos_skill.envs import Environment, Reward, RolloutResult, Task
 from mindmemos_skill.envs.data import DataSample, RewardData
 from mindmemos_skill.skill import Skill, SkillContent
@@ -22,7 +22,7 @@ class SmokeEnvironment(Environment[SmokeConfig]):
 
     config_type = SmokeConfig
 
-    def _run(self, *, task, reward_data, skills, workspace):
+    async def _run(self, *, task, reward_data, skills, workspace):
         text = skills[0].content
         passed = "Verify the saved output." in text
         return RolloutResult(
@@ -38,7 +38,7 @@ class SmokeEnvironment(Environment[SmokeConfig]):
 class SmokeAgent(OpenAIChatAgent):
     """Return stage-specific deterministic responses instead of contacting a provider."""
 
-    def run_messages(self, *, messages, tools=None, response_format=None):
+    async def run_messages(self, *, messages, tools=None, response_format=None):
         user = messages[-1]["content"]
         payload = {} if user.startswith("Route") else json.loads(user.split("\n\n", 1)[1])
         if user.startswith("Analyze"):

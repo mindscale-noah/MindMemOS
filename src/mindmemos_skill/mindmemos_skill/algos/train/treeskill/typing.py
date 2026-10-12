@@ -2,73 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-from ....agents.typing import AgentResult
+from ....agents import AgentResult, OpenAIChatAgent
 from ....envs.data import DataSample
 from ....envs.typing import RolloutResult, Task
-
-
-class SkillNode(BaseModel):
-    """Describe one nonempty Markdown heading section."""
-
-    model_config = ConfigDict(extra="forbid")
-    """Reject undeclared parser fields."""
-
-    id: str
-    """One-based, zero-padded node identifier in document order."""
-
-    level: int
-    """Markdown heading depth from one through six."""
-
-    heading: str
-    """Heading title without Markdown markers."""
-
-    local_content: str
-    """Content immediately below the heading, excluding child sections."""
-
-    intro: str
-    """Heading and local content retained when this node is an ancestor."""
-
-    body: str
-    """Entire original subtree, including all descendant sections."""
-
-    children: list["SkillNode"] = Field(default_factory=list)
-    """Direct children in source order."""
-
-
-class SkillTree(BaseModel):
-    """Represent a heading tree parsed from one source SKILL.md."""
-
-    preamble: str
-    """Text preceding the first heading, excluding YAML frontmatter."""
-
-    roots: list[SkillNode]
-    """Top-level heading nodes in source order."""
-
-    def nodes(self) -> list[SkillNode]:
-        """Return all nodes in document order."""
-        nodes = []
-
-        def visit(node: SkillNode) -> None:
-            """Visit.
-
-            Args:
-                node: Parsed heading node or proposed subtree.
-            """
-            nodes.append(node)
-            for child in node.children:
-                visit(child)
-
-        for root in self.roots:
-            visit(root)
-        return nodes
 
 
 class RoutingResult(BaseModel):
@@ -163,16 +106,6 @@ class LocatedEvidence(_StrictModel):
     """Model-provided justification for placement or editing."""
 
 
-class LocalizationResult(_StrictModel):
-    """Validated localization result for one trajectory analysis record."""
-
-    instance_id: str = Field(min_length=1)
-    """Identifier of the physical trajectory that supplied this evidence."""
-
-    evidence: tuple[LocatedEvidence, ...] = ()
-    """Validated localized lessons in their original response order."""
-
-
 class AppliedEditRecord(_StrictModel):
     """Auditable result of validating and applying one fusion edit."""
 
@@ -205,86 +138,6 @@ class FusionFailure(_StrictModel):
     """Exception type and message for this failed item."""
 
 
-class TreeSkillReport(_StrictModel):
-    """Compact audit report for one TreeSkill evolution transaction."""
-
-    algorithm_name: str = "treeskill"
-    """Stable algorithm identifier used in experiment reports."""
-
-    run_id: str = Field(min_length=1)
-    """Identifier of the isolated experiment producing this report."""
-
-    algorithm_version: str
-    """Recorded implementation behavior revision."""
-
-    prompt_version: str
-    """Recorded prompt protocol revision."""
-
-    input_trajectory_ids: tuple[str, ...]
-    """Ordered IDs of successfully collected evidence trajectories."""
-
-    duplicate_trajectory_ids: tuple[str, ...] = ()
-    """Repeated input IDs excluded from the evidence set."""
-
-    failed_analysis_trajectory_ids: tuple[str, ...] = ()
-    """IDs whose analyses failed validation or execution."""
-
-    localization_failures: tuple[LocalizationFailure, ...] = ()
-    """Rejected or failed localization items with explanations."""
-
-    fusion_failures: tuple[FusionFailure, ...] = ()
-    """Node fusion requests that failed before producing a usable edit."""
-
-    analysis_records: tuple[TrajectoryAnalysisRecord, ...] = ()
-    """Structured reusable evidence before localization."""
-
-    located_evidence: tuple[LocatedEvidence, ...] = ()
-    """Atomic lessons assigned to initial-tree nodes."""
-
-    applied_edits: tuple[AppliedEditRecord, ...] = ()
-    """Ordered results of proposed node edits."""
-
-    initial_node_count: int = Field(ge=0)
-    """Number of content-bearing headings before training."""
-
-    final_node_count: int = Field(ge=0)
-    """Number of content-bearing headings in the resulting Skill."""
-
-    changed: bool = False
-    """Whether normalized final Markdown differs from the initial Skill."""
-
-    reason: str | None = None
-    """Explanation for an unchanged outcome, or None for effective updates."""
-
-
-class TreeRoutingResult(_StrictModel):
-    """One ephemeral routing decision used by a Skill runtime."""
-
-    selected_node_ids: tuple[str, ...]
-    """Chosen subtree roots plus ancestor context nodes in source order."""
-
-    content_node_ids: tuple[str, ...]
-    """Nonredundant subtree roots containing task-relevant content."""
-
-    ancestor_node_ids: tuple[str, ...]
-    """Ancestor nodes retained only as path and local context."""
-
-    skill_content: str
-    """Task-specific rendered Markdown after routing."""
-
-    fallback_used: bool = False
-    """Whether invalid routing metadata or output required the full Skill."""
-
-    fallback_reason: str = ""
-    """Explanation for fallback or an explicit empty selection."""
-
-    full_char_count: int = Field(ge=0)
-    """Character count of the full source Markdown."""
-
-    routed_char_count: int = Field(ge=0)
-    """Character count of the rendered task-specific Markdown."""
-
-
 class AnnotationMode(StrEnum):
     """How an algorithm consumes trajectory reward annotations."""
 
@@ -315,16 +168,6 @@ class TraceEvidence(_StrictModel):
     """Additional recorded reward annotations for this execution."""
 
 
-class EvidenceSelection(_StrictModel):
-    """Deterministic evidence selection plus audit information."""
-
-    evidence: list[TraceEvidence]
-    """Validated localized lessons in their original response order."""
-
-    duplicate_trajectory_ids: list[str] = Field(default_factory=list)
-    """Repeated input IDs excluded from the evidence set."""
-
-
 class TrainingRollout(BaseModel):
     """Physical environment execution and its explicitly supplied private sample."""
 
@@ -339,16 +182,6 @@ class TrainingRollout(BaseModel):
 
     work_dir: Path
     """Directory containing this rollout's audit and workspace."""
-
-
-class ChatResponse(BaseModel):
-    """Recorded raw response and optional validated algorithm output."""
-
-    content: str
-    """Original provider response, before parsing."""
-
-    parsed: BaseModel | str | None = None
-    """Validated parser result, if a parser was supplied."""
 
 
 NodeKey: TypeAlias = tuple[tuple[str, ...], int]
@@ -485,17 +318,21 @@ class _RoutePayload(BaseModel):
         return self
 
 
-class ChatModel(Protocol):
-    async def chat(self, task: str, messages: list[dict[str, Any]], **kwargs: Any) -> ChatResponse: ...
+class AnalysisInput(BaseModel):
+    """One trainer-scheduled analysis and its optional tool inputs."""
+
+    evidence: TraceEvidence
+    """Normalized trajectory evidence and allowed outcome feedback."""
+
+    trajectory: TrainingRollout
+    """Completed training execution, including permitted private analysis references."""
+
+    workspace: Path
+    """Fresh trainer-owned directory for tool execution; not an artifact destination."""
 
 
 class TrajectoryAnalyzer(Protocol):
-    async def analyze(
-        self,
-        evidence: list[TraceEvidence],
-        *,
-        trajectories_by_id: Mapping[str, TrainingRollout],
-    ) -> tuple[list[TrajectoryAnalysisRecord], list[str]]: ...
+    async def __call__(self, inputs: AnalysisInput) -> AnalysisOutcome: ...
 
 
 if TYPE_CHECKING:
@@ -516,7 +353,7 @@ class TreeSkillAnalysisContext(BaseModel):
 
 
 class TreeSkillRoutingContext(BaseModel):
-    """Public inputs for either stable-ID or legacy subtree routing."""
+    """Public inputs for stable-ID subtree routing."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     """Prevent reassignment of routing inputs."""
@@ -538,11 +375,144 @@ class TreeSkillAnalysisRuntime:
     config: TreeSkillTrainerConfig
     """Fixed training-stage settings shared with the trainer."""
 
-    chat_model: ChatModel
-    """Recorded optimizer model transport."""
+    agent: OpenAIChatAgent
+    """Direct agent for success or generic analysis."""
 
-    failure_chat_model: ChatModel
-    """Recorded transport for optional tool-using failure analysis."""
+    failure_agent: OpenAIChatAgent
+    """Direct agent for tool-using failure analysis."""
 
-    output_root: Path
-    """Run-local directory for analyzer artifacts."""
+
+class NodeFusionEdit(_StrictModel):
+    """One strictly validated model-proposed node-local edit."""
+
+    operation: Literal["update_node", "create_child", "reject"]
+    """Node edit requested by the model."""
+
+    rationale: str = Field(min_length=1)
+    """Explanation for this edit or explicit rejection."""
+
+    content: str | None = None
+    """Replacement local text for update_node; None for other operations."""
+
+    new_child: NewChildSpec | None = None
+    """Recursive new subtree for create_child; None for other operations."""
+
+    @model_validator(mode="after")
+    def validate_operation_payload(self) -> NodeFusionEdit:
+        if self.operation == "update_node":
+            if self.content is None or self.new_child is not None:
+                raise ValueError("update_node requires content and must not include new_child")
+        elif self.operation == "create_child":
+            if self.new_child is None or self.content is not None:
+                raise ValueError("create_child requires new_child and must not include content")
+        elif self.content is not None or self.new_child is not None:
+            raise ValueError("reject must not include content or new_child")
+        return self
+
+
+class NewChildSpec(_StrictModel):
+    """Strict recursive subtree payload returned by the fusion model."""
+
+    heading: str = Field(min_length=1)
+    """New heading title, validated before Markdown insertion."""
+
+    content: str = ""
+    """Local instruction text; empty only when nonempty descendants exist."""
+
+    children: tuple[NewChildSpec, ...] = ()
+    """Ordered direct child subtrees."""
+
+
+NodeFusionEdit.model_rebuild()
+
+
+class NodeFusionDecision(_StrictModel):
+    """Complete validated response for one target-node fusion request."""
+
+    rationale: str = Field(min_length=1)
+    """Overall justification for this node's proposed edits."""
+
+    edits: tuple[NodeFusionEdit, ...] = Field(min_length=1, max_length=2)
+    """One rejection or at most one update and one child insertion."""
+
+    @model_validator(mode="after")
+    def validate_edit_set(self) -> NodeFusionDecision:
+        operations = [edit.operation for edit in self.edits]
+        if "reject" in operations and len(operations) != 1:
+            raise ValueError("reject cannot be mixed with another operation")
+        if len(operations) != len(set(operations)):
+            raise ValueError("node fusion may return each operation at most once")
+        return self
+
+
+class StageOutcome(BaseModel):
+    """In-memory execution evidence returned to the trainer for persistence."""
+
+    responses: list[AgentResult] = Field(default_factory=list)
+    """Completed logical calls, including their trajectories and reported usage."""
+
+    failed_calls: int = 0
+    """Calls that raised without a result; their token consumption is unknown."""
+
+    interrupted: bool = False
+    """Execution ended before returning an outcome; usage coverage is incomplete."""
+
+    error: str | None = None
+    """Item failure or partial-result rejection; None means complete success."""
+
+    artifacts: dict[str, str] = Field(default_factory=dict)
+    """Relative report filenames mapped to UTF-8 contents for trainer-owned writes."""
+
+
+class AnalysisOutcome(StageOutcome):
+    """One trajectory analysis and its execution evidence."""
+
+    record: TrajectoryAnalysisRecord | None = None
+    """Validated analysis; None when the item failed."""
+
+    @field_validator("responses", mode="before")
+    @classmethod
+    def restore_analysis_responses(cls, value):
+        """Restore the concrete parser output when reading analysis checkpoints."""
+        return [
+            {**item, "output": TrajectoryAnalysisRecord.model_validate(item["output"])}
+            if isinstance(item, dict) and isinstance(item.get("output"), dict)
+            else item
+            for item in value
+        ]
+
+
+class LocalizationOutcome(StageOutcome):
+    """One analysis record's localized lessons and rejected-item details."""
+
+    evidence: list[LocatedEvidence] = Field(default_factory=list)
+    """Valid lessons, including valid entries from a partially rejected response."""
+
+
+class PatchRecord(BaseModel):
+    """One proposed edit and the exact source snapshots surrounding it."""
+
+    before: str
+    """Complete source before attempting this edit."""
+
+    after: str
+    """Complete source after accepting or rejecting this edit."""
+
+    payload: dict[str, JsonValue]
+    """Proposal, decision rationale, result and supporting evidence."""
+
+
+class FusionOutcome(StageOutcome):
+    """One node's edits and a recoverable stable-ID tree snapshot."""
+
+    content: str
+    """Complete resulting Markdown source."""
+
+    tree_metadata: dict[str, Any]
+    """Stable node identity metadata required to restore the resulting tree."""
+
+    edits: list[AppliedEditRecord] = Field(default_factory=list)
+    """Ordered accepted and rejected edits."""
+
+    patches: list[PatchRecord] = Field(default_factory=list)
+    """Exact per-edit snapshots and proposals, saved by the trainer."""

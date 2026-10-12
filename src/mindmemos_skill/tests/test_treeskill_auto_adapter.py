@@ -79,10 +79,18 @@ async def test_concurrent_training_preserves_selected_analysis_and_routing(tmp_p
         name = TreeSkillEnvAdapter.name_for(type(self))
 
         class Analyzer:
-            async def analyze(self, evidence, *, trajectories_by_id):
+            async def __call__(self, inputs):
                 await asyncio.sleep(0)
-                analyzed[runtime.output_root.parents[1].name] = name
-                return [], []
+                analyzed[inputs.workspace.parents[4].name] = name
+                from mindmemos_skill.algos.train.treeskill.typing import AnalysisOutcome, TrajectoryAnalysisRecord
+
+                return AnalysisOutcome(
+                    record=TrajectoryAnalysisRecord(
+                        instance_id=inputs.evidence.trajectory_id,
+                        task_id=inputs.evidence.task_id,
+                        record_source="success",
+                    )
+                )
 
         return Analyzer()
 

@@ -2,29 +2,37 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import shutil
-from collections.abc import Mapping
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+from .....agents import OpenAIChatAgent
 from .....envs.base import Environment
-from .....envs.builtin_envs.spreadsheetbench.reference_reward import compare_workbooks, workbook_used_ranges
+from .....envs.builtin_envs.spreadsheetbench.execution import prepare_execution
+from .....envs.builtin_envs.spreadsheetbench.ranges import split_targets
+from .....envs.builtin_envs.spreadsheetbench.recalculation_cli import (
+    TASK_LOCAL_HELPER_FILENAME,
+    append_recalculation_instructions,
+)
 
 # The task-execution environment never receives training-analysis gold files.
-from .....envs.builtin_envs.spreadsheetbench.text_action import (
+from .....envs.builtin_envs.spreadsheetbench.text_action_mode.environment import (
     SpreadsheetBenchTextActionEnvironment,
     spreadsheet_preview,
 )
-from .....envs.builtin_envs.spreadsheetbench.text_action_policy import (
+from .....envs.builtin_envs.spreadsheetbench.text_action_mode.policy import (
     TASK_COMPLETE_SIGNAL,
     PolicyResponseType,
     format_reference_observation,
     parse_policy_response,
     run_reference_bash,
+)
+from .....envs.builtin_envs.spreadsheetbench.text_action_mode.reference_reward import (
+    compare_workbooks,
+    workbook_used_ranges,
 )
 from .....envs.builtin_envs.spreadsheetbench.typing import (
     SpreadsheetBenchRewardData,
@@ -33,10 +41,10 @@ from .....envs.builtin_envs.spreadsheetbench.typing import (
 from .....envs.typing import Task
 from .....skill import Skill
 from ..env_adapter import TreeSkillEnvAdapter
-from ..errors import TreeSkillModelRequestError
 from ..typing import (
+    AnalysisInput,
     AnalysisItem,
-    ChatModel,
+    AnalysisOutcome,
     TraceEvidence,
     TrajectoryAnalysisRecord,
     TrajectoryAnalyzer,
@@ -72,150 +80,75 @@ class SpreadsheetBenchReferenceAnalyzer:
     def __init__(
         self,
         *,
-        chat_model: ChatModel,
-        failure_chat_model: ChatModel | None = None,
-        task: str,
-        output_root: Path,
-        concurrency: int,
+        agent: OpenAIChatAgent,
+        failure_agent: OpenAIChatAgent,
         success_score_threshold: float,
-        temperature: float,
-        max_tokens: int,
         max_turns: int = 20,
         shell_timeout_seconds: int = 120,
     ) -> None:
-        """init  .
+        """Bind direct agents and the reference execution limits.
 
         Args:
-            chat_model: Model client implementing the recorded chat request protocol.
-            failure_chat_model: Optional separate transport for reference failure analysis.
-            task: Stage audit label or public task supplied by the caller.
-            output_root: Fresh root for reference analysis workspaces and reports.
-            concurrency: Maximum simultaneous requests in this stage.
-            success_score_threshold: Minimum recorded reward classified as successful.
-            temperature: Sampling temperature passed unchanged to the model.
-            max_tokens: Completion-token budget passed to the model.
-            max_turns: Maximum tool-use turns allowed for one failure analysis.
-            shell_timeout_seconds: Timeout in seconds for each analysis shell command.
+            agent: Direct agent for one-call success analysis.
+            failure_agent: Direct agent for tool-using failure analysis.
+            success_score_threshold: Minimum reward classified as successful.
+            max_turns: Maximum failure-analysis tool turns.
+            shell_timeout_seconds: Timeout per shell command.
         """
-        self._success_chat_model = chat_model
-        self._failure_chat_model = failure_chat_model or chat_model
-        self._task = task
-        self._output_root = output_root
-        self._concurrency = concurrency
+        self._agent = agent
+        self._failure_agent = failure_agent
         self._success_score_threshold = success_score_threshold
-        self._temperature = temperature
-        self._max_tokens = max_tokens
         self._max_turns = max_turns
         self._shell_timeout_seconds = shell_timeout_seconds
 
-    async def analyze(
-        self,
-        evidence: list[TraceEvidence],
-        *,
-        trajectories_by_id: Mapping[str, Trajectory],
-    ) -> tuple[list[TrajectoryAnalysisRecord], list[str]]:
-        """Analyze.
+    async def __call__(self, inputs: AnalysisInput) -> AnalysisOutcome:
+        """Analyze one item and return reports for the trainer to save.
 
         Args:
-            evidence: Ordered trajectory-derived evidence available to this stage.
-            trajectories_by_id: Completed training executions indexed by physical trajectory ID.
+            inputs: Labeled training evidence and a trainer-prepared tool workspace.
+
+        Returns:
+            Analysis, reports and completed model responses, including failures.
         """
-        self._output_root.mkdir(parents=True, exist_ok=False)
-        semaphore = asyncio.Semaphore(self._concurrency)
-
-        async def run(item: TraceEvidence) -> tuple[TrajectoryAnalysisRecord | None, str | None]:
-            """Run.
-
-            Args:
-                item: Explicit item for this operation.
-            """
-            trajectory = trajectories_by_id.get(item.trajectory_id)
-            if trajectory is None:
-                return None, item.trajectory_id
-            try:
-                async with semaphore:
-                    if item.score is not None and item.score >= self._success_score_threshold:
-                        record = await self._analyze_success(item, trajectory)
-                    elif item.score is not None:
-                        record = await self._analyze_failure(item, trajectory)
-                    else:
-                        raise ValueError("SpreadsheetBench reference analysis requires outcome labels")
-                return record, None
-            except Exception as exc:
-                failure_dir = self._output_root / "failures"
-                failure_dir.mkdir(parents=True, exist_ok=True)
-                (failure_dir / f"{_safe_name(item.trajectory_id)}.txt").write_text(
-                    f"{type(exc).__name__}: {exc}\n",
-                    encoding="utf-8",
-                )
-                return None, item.trajectory_id
-
-        async def run_phase(items: list[TraceEvidence]) -> list[tuple[TrajectoryAnalysisRecord | None, str | None]]:
-            """Run phase.
-
-            Args:
-                items: Explicit items for this operation.
-            """
-            tasks = [asyncio.create_task(run(item)) for item in items]
-            try:
-                return await asyncio.gather(*tasks)
-            except BaseException:
-                for task in tasks:
-                    task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
-
-        error_evidence = [
-            item for item in evidence if item.score is not None and item.score < self._success_score_threshold
-        ]
-        success_evidence = [
-            item for item in evidence if item.score is not None and item.score >= self._success_score_threshold
-        ]
-        unlabeled_evidence = [item for item in evidence if item.score is None]
-        results: list[tuple[TrajectoryAnalysisRecord | None, str | None]] = []
-        # Match the Spreadsheet pipeline: finish error analysis before starting
-        # the independent one-call success-analysis stage.
-        for phase in (error_evidence, success_evidence, unlabeled_evidence):
-            results.extend(await run_phase(phase))
-        records = [record for record, _ in results if record is not None]
-        failures = [trajectory_id for _, trajectory_id in results if trajectory_id is not None]
-        return records, failures
+        evidence, trajectory, workspace = inputs.evidence, inputs.trajectory, inputs.workspace
+        outcome = AnalysisOutcome()
+        try:
+            if evidence.score is not None and evidence.score >= self._success_score_threshold:
+                outcome.record = await self._analyze_success(evidence, trajectory, outcome)
+            elif evidence.score is not None:
+                outcome.record = await self._analyze_failure(evidence, trajectory, workspace, outcome)
+            else:
+                raise ValueError("SpreadsheetBench reference analysis requires outcome labels")
+        except Exception as exc:
+            outcome.error = f"{type(exc).__name__}: {exc}"
+        return outcome
 
     async def _analyze_success(
         self,
         evidence: TraceEvidence,
         trajectory: Trajectory,
+        outcome: AnalysisOutcome,
     ) -> TrajectoryAnalysisRecord:
-        output_dir = self._output_root / "success" / _safe_name(evidence.trajectory_id)
-        output_dir.mkdir(parents=True)
         system = _prompt("success_analysis_system_llm.txt")
         user = _prompt("success_analysis_user_llm.txt").replace(
             "{agent_log}",
             _render_agent_log(trajectory),
         )
-        (output_dir / "prompt.json").write_text(
-            json.dumps(
-                [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+        outcome.artifacts["prompt.json"] = json.dumps(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            ensure_ascii=False,
+            indent=2,
         )
         try:
-            response = await self._success_chat_model.chat(
-                task=f"{self._task}:success",
+            response = await self._agent.run(
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
             )
-        except Exception as exc:
-            raise TreeSkillModelRequestError(
-                stage="success analysis",
-                item_id=evidence.trajectory_id,
-                cause=exc,
-            ) from exc
-        report = response.content or ""
-        (output_dir / "success_analysis.md").write_text(report, encoding="utf-8")
+        except Exception:
+            outcome.failed_calls += 1
+            raise
+        outcome.responses.append(response)
+        report = response.output or ""
+        outcome.artifacts["success_analysis.md"] = report
         items = _parse_success_items(report)
         if not items:
             raise ValueError("success analysis returned no parseable Success Memory Items")
@@ -231,12 +164,13 @@ class SpreadsheetBenchReferenceAnalyzer:
         self,
         evidence: TraceEvidence,
         trajectory: Trajectory,
+        output_dir: Path,
+        outcome: AnalysisOutcome,
     ) -> TrajectoryAnalysisRecord:
-        output_dir = self._output_root / "error" / _safe_name(evidence.trajectory_id)
+        execution = await prepare_execution("text_action")
         work_dir = output_dir / "agent_work"
-        self._stage_failure_workspace(trajectory, work_dir)
         agent_log = _render_agent_log(trajectory)
-        (output_dir / "agent_log.md").write_text(agent_log, encoding="utf-8")
+        outcome.artifacts["agent_log.md"] = agent_log
 
         answer_position = _answer_position(trajectory)
         system = _prompt("error_analysis_system.txt").format(working_directory=str(output_dir.resolve()))
@@ -244,95 +178,90 @@ class SpreadsheetBenchReferenceAnalyzer:
         user = user.replace("{agent_log}", agent_log)
         user = user.replace("{working_dir}", str(output_dir.resolve()))
         user = user.replace("{evaluate_usage}", _evaluate_usage(output_dir, answer_position))
+        if (work_dir / TASK_LOCAL_HELPER_FILENAME).is_file():
+            user = append_recalculation_instructions(
+                user,
+                working_dir=output_dir,
+                output_file=work_dir / "output.xlsx",
+                python_executable=Path(execution.python_command[0]),
+            )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
-        (output_dir / "prompt.json").write_text(
-            json.dumps(messages, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        outcome.artifacts["prompt.json"] = json.dumps(messages, ensure_ascii=False, indent=2)
 
         passed = False
         report = ""
         completion_reminded = False
-        for _turn in range(1, self._max_turns + 1):
-            try:
-                response = await self._failure_chat_model.chat(
-                    task=f"{self._task}:error",
-                    messages=list(messages),
-                    temperature=self._temperature,
-                    max_tokens=self._max_tokens,
-                )
-            except Exception as exc:
-                raise TreeSkillModelRequestError(
-                    stage="error analysis",
-                    item_id=evidence.trajectory_id,
-                    cause=exc,
-                ) from exc
-            content = response.content or ""
-            messages.append({"role": "assistant", "content": content})
-            parsed = parse_policy_response(content)
-            if parsed.response_type is PolicyResponseType.TASK_COMPLETE:
-                candidate = content.split(TASK_COMPLETE_SIGNAL, 1)[0].strip()
-                if passed and _parse_error_items(candidate):
-                    report = candidate
-                    break
-                if completion_reminded:
-                    break
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "[System Check] You have not yet produced both a PASS evaluation and a parseable final "
-                            "analysis report. Continue the required workflow, then return Failure Cause Items and "
-                            "Failure Memory Items before signaling ACTION: TASK_COMPLETE."
-                        ),
-                    }
-                )
-                completion_reminded = True
-                continue
-            if parsed.response_type is PolicyResponseType.FORMAT_ERROR:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": format_reference_observation(parsed.error_message or "Invalid action format."),
-                    }
-                )
-                continue
-
-            assert parsed.action is not None
-            if parsed.action.name == "bash":
-                command = parsed.action.arguments.get("command")
-                if not isinstance(command, str) or not command.strip():
-                    observation = "Error: bash arguments.command must be a non-empty string"
-                else:
-                    observation = await asyncio.to_thread(
-                        run_reference_bash,
-                        command,
-                        working_dir=output_dir,
-                        timeout_seconds=self._shell_timeout_seconds,
+        try:
+            for _turn in range(1, self._max_turns + 1):
+                try:
+                    response = await self._failure_agent.run(
+                        messages=list(messages),
                     )
-            elif parsed.action.name == "evaluate_output":
-                observation, passed_now = await asyncio.to_thread(
-                    self._evaluate_output,
-                    output_dir,
-                    parsed.action.arguments,
-                    answer_position,
-                )
-                passed = passed or passed_now
-            else:
-                observation = f"Error: unknown tool {parsed.action.name!r}"
-            messages.append({"role": "user", "content": format_reference_observation(observation)})
+                except Exception:
+                    outcome.failed_calls += 1
+                    raise
+                outcome.responses.append(response)
+                content = response.output or ""
+                messages.append({"role": "assistant", "content": content})
+                parsed = parse_policy_response(content)
+                if parsed.response_type is PolicyResponseType.TASK_COMPLETE:
+                    candidate = content.split(TASK_COMPLETE_SIGNAL, 1)[0].strip()
+                    if passed and _parse_error_items(candidate):
+                        report = candidate
+                        break
+                    if completion_reminded:
+                        break
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[System Check] You have not yet produced both a PASS evaluation and a parseable final "
+                                "analysis report. Continue the required workflow, then return Failure Cause Items and "
+                                "Failure Memory Items before signaling ACTION: TASK_COMPLETE."
+                            ),
+                        }
+                    )
+                    completion_reminded = True
+                    continue
+                if parsed.response_type is PolicyResponseType.FORMAT_ERROR:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": format_reference_observation(parsed.error_message or "Invalid action format."),
+                        }
+                    )
+                    continue
 
-        (output_dir / "error_analysis_chat.json").write_text(
-            json.dumps(messages, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+                assert parsed.action is not None
+                if parsed.action.name == "bash":
+                    command = parsed.action.arguments.get("command")
+                    if not isinstance(command, str) or not command.strip():
+                        observation = "Error: bash arguments.command must be a non-empty string"
+                    else:
+                        observation = await run_reference_bash(
+                            command,
+                            working_dir=output_dir,
+                            timeout_seconds=self._shell_timeout_seconds,
+                            execution=execution,
+                        )
+                elif parsed.action.name == "evaluate_output":
+                    observation, passed_now = await self._evaluate_output(
+                        output_dir, parsed.action.arguments, answer_position
+                    )
+                    passed = passed or passed_now
+                else:
+                    observation = f"Error: unknown tool {parsed.action.name!r}"
+                messages.append({"role": "user", "content": format_reference_observation(observation)})
+
+        finally:
+            outcome.artifacts["error_analysis_chat.json"] = json.dumps(messages, ensure_ascii=False, indent=2)
         if not report:
             raise ValueError("failure analysis did not complete a pass-gated, parseable report")
-        (output_dir / "analysis_report.md").write_text(report, encoding="utf-8")
-        (output_dir / "evaluate_passed.flag").write_text("PASS\n", encoding="utf-8")
+        outcome.artifacts["analysis_report.md"] = report
+        outcome.artifacts["evaluate_passed.flag"] = "PASS\n"
         return TrajectoryAnalysisRecord(
             instance_id=evidence.trajectory_id,
             task_id=evidence.task_id,
@@ -360,7 +289,7 @@ class SpreadsheetBenchReferenceAnalyzer:
             shutil.copyfile(golden, destination / "gold.xlsx")
 
     @staticmethod
-    def _evaluate_output(
+    async def _evaluate_output(
         analysis_dir: Path,
         arguments: dict[str, Any],
         default_answer_position: str,
@@ -398,7 +327,8 @@ def _answer_position(trajectory: Trajectory) -> str:
         raise TypeError("Reference analysis requires SpreadsheetBenchRewardData")
     position = reward.answer_position
     if position and reward.answer_sheet and "!" not in position:
-        return f"{reward.answer_sheet}!{position}"
+        sheet = split_targets(reward.answer_sheet)[0].strip("'\"")
+        return f"{sheet}!{position}"
     return position
 
 
@@ -509,10 +439,6 @@ def _safe_analysis_path(root: Path, raw: str) -> Path:
     return resolved
 
 
-def _safe_name(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)[:160] or "trajectory"
-
-
 __all__ = ["SpreadsheetBenchReferenceAnalyzer"]
 
 
@@ -617,25 +543,45 @@ class TreeSkillSpreadsheetBenchReferenceEnvAdapter(TreeSkillEnvAdapter):
             },
         ]
 
+    def prepare_analysis_workspace(self, trajectory: Trajectory, workspace: Path) -> None:
+        """Stage private training workbooks only for a trainer-owned analysis.
+
+        Args:
+            trajectory: Failed training execution and its permitted gold workbook.
+            workspace: Fresh directory allocated by the trainer.
+        """
+        SpreadsheetBenchReferenceAnalyzer._stage_failure_workspace(trajectory, workspace / "agent_work")
+
+    def analysis_phases(self, evidence: list[TraceEvidence], threshold: float) -> list[list[TraceEvidence]]:
+        """Finish failure analysis before independent success analysis.
+
+        Args:
+            evidence: Labeled training evidence.
+            threshold: Minimum score classified as successful.
+
+        Returns:
+            Error, success and unlabeled groups in reference order.
+        """
+        return [
+            [item for item in evidence if item.score is not None and item.score < threshold],
+            [item for item in evidence if item.score is not None and item.score >= threshold],
+            [item for item in evidence if item.score is None],
+        ]
+
     def create_analyzer(self, runtime: TreeSkillAnalysisRuntime) -> TrajectoryAnalyzer:
         """Create the released success and tool-using failure analyzer.
 
         Args:
-            runtime: Borrowed recorded models, stage settings and run-local directory.
+            runtime: Direct agents and fixed stage settings.
 
         Returns:
             Reference analyzer; no model or tool call occurs until analyze().
         """
         config = runtime.config
         return SpreadsheetBenchReferenceAnalyzer(
-            chat_model=runtime.chat_model,
-            failure_chat_model=runtime.failure_chat_model,
-            task=config.analysis_task,
-            output_root=runtime.output_root,
-            concurrency=config.analysis_concurrency,
+            agent=runtime.agent,
+            failure_agent=runtime.failure_agent,
             success_score_threshold=config.success_score_threshold,
-            temperature=config.analysis_temperature,
-            max_tokens=config.analysis_max_tokens,
             max_turns=config.analysis_max_turns,
             shell_timeout_seconds=config.shell_timeout_seconds,
         )
