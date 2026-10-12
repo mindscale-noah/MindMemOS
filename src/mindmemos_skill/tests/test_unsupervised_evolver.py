@@ -1,8 +1,7 @@
 """Verify unlabeled batching, bounded concurrency, merging, and evidence clipping."""
 
+import asyncio
 import json
-import threading
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -31,7 +30,7 @@ async def test_parallel_batches_and_pairwise_merge():
     """Forty traces produce five extraction calls and four merges against one base."""
     skill = make_skill()
     calls = []
-    lock = threading.Lock()
+    lock = asyncio.Lock()
     active = 0
     peak = 0
 
@@ -39,15 +38,15 @@ async def test_parallel_batches_and_pairwise_merge():
         def __init__(self, config):
             pass
 
-        def run(self, *, messages):
+        async def run(self, *, messages):
             nonlocal active, peak
             payload = json.loads(messages[1]["content"])
-            with lock:
+            async with lock:
                 calls.append(payload)
                 active += 1
                 peak = max(peak, active)
-            time.sleep(0.03)
-            with lock:
+            await asyncio.sleep(0.03)
+            async with lock:
                 active -= 1
             return SimpleNamespace(
                 output=json.dumps(
@@ -143,7 +142,7 @@ async def test_invalid_patch_is_rejected(response, match):
         def __init__(self, config):
             pass
 
-        def run(self, *, messages):
+        async def run(self, *, messages):
             return SimpleNamespace(output=json.dumps(response))
 
     evolver = SimpleSkillEvolver(SimpleEvolverConfig(optimizer={"model": "offline"}), agent_factory=Agent)

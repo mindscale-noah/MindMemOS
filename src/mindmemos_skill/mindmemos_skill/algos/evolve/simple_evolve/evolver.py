@@ -5,7 +5,6 @@ import json
 from collections.abc import Sequence
 
 from ....agents import OpenAIChatAgent
-from ....common.asyncio import run_sync
 from ....common.json import parse_model
 from ....skill import Skill
 from ...base import Algorithm
@@ -74,8 +73,7 @@ class SimpleSkillEvolver(SkillEvolver[SimpleEvolverConfig]):
         async def propose(prompt, payload):
             async with semaphore:
                 agent = self.agent_factory(self.config.optimizer)
-                response = await run_sync(
-                    agent.run,
+                response = await agent.run(
                     messages=[
                         {"role": "system", "content": prompt},
                         {
@@ -84,7 +82,7 @@ class SimpleSkillEvolver(SkillEvolver[SimpleEvolverConfig]):
                                 {"skill": source, "L": self.config.max_edits, **payload}, ensure_ascii=False
                             ),
                         },
-                    ],
+                    ]
                 )
             patch = parse_model(response.output, Patch)
             if len(patch.edits) > self.config.max_edits:

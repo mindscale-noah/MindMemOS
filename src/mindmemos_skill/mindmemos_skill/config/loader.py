@@ -138,5 +138,5 @@ def _fill_sqlite_url(database: ImplementationConfig, path: Path) -> None:
         options = database.config
     else:
         raise TypeError("SQLite selection requires SQLiteConfig")
-    url = URL.create("sqlite+pysqlite", database=str(path)).render_as_string(hide_password=False)
+    url = URL.create("sqlite+aiosqlite", database=str(path)).render_as_string(hide_password=False)
     database.config = SQLiteConfig.model_validate({**options, "url": url})

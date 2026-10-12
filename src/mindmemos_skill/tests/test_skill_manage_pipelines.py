@@ -1,8 +1,5 @@
 """Service-level organization and recommendation over pinned Skill versions."""
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
-
 import pytest
 from mindmemos_skill.api.typing import CommitRequest, OrganizeRequest, RecommendRequest, RegisterRequest
 from mindmemos_skill.errors import GraphNotFoundError
@@ -58,13 +55,13 @@ async def test_skill_set_queries_without_algorithm(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_manage_pipelines_publish_reuse_and_restore_pinned_scope(tmp_path, monkeypatch):
+async def test_manage_pipelines_publish_reuse_and_restore_pinned_scope(tmp_path, monkeypatch, caplog):
     """Persist explicit versions and keep old recommendations pinned after republishing."""
-    monkeypatch.setattr(
-        OpenAIEmbeddingClient,
-        "embed",
-        lambda self, texts: [[1.0, 0.0, 0.0] if "csv" in text.lower() else [0.0, 1.0, 0.0] for text in texts],
-    )
+
+    async def embed(self, texts):
+        return [[1.0, 0.0, 0.0] if "csv" in text.lower() else [0.0, 1.0, 0.0] for text in texts]
+
+    monkeypatch.setattr(OpenAIEmbeddingClient, "embed", embed)
     config = service_config(tmp_path / "manage.db")
     async with await create_service(config) as service:
         assert isinstance(service.backends["manage_pipeline"], GraphManagePipeline)
@@ -102,9 +99,12 @@ async def test_manage_pipelines_publish_reuse_and_restore_pinned_scope(tmp_path,
         )
         assert newer.skill.active_version_id != versions[0]
         request = OrganizeRequest(project_id="project", alias="collection", skill_refs=versions)
-        reporter = SimpleNamespace(report=AsyncMock())
-        first = await service.organize_skills(request, reporter=reporter)
-        assert [call.kwargs["stage"] for call in reporter.report.await_args_list] == ["organize", "organized"]
+        caplog.set_level("INFO", logger="mindmemos_skill")
+        caplog.clear()
+        first = await service.organize_skills(request)
+        assert [
+            record.event_body["stage"] for record in caplog.records if record.getMessage() == "algorithm.progress"
+        ] == ["organize", "organized"]
         request = request.model_copy(update={"graph_id": first.graph_id, "alias": None})
         assert (await service.organize_skills(request)).graph_version_id == first.graph_version_id
         skill_sets = await service.list_skill_sets()

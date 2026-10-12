@@ -1,6 +1,7 @@
 """Verify retry policy, exponential waits, and observable retry reasons."""
 
 import logging
+from unittest.mock import AsyncMock
 
 import httpx
 import openai
@@ -21,12 +22,14 @@ from mindmemos_skill.agents import OpenAIChatAgent, OpenAIChatConfig
         ([401], 3, [], 1),
     ],
 )
-def test_retry_policy_and_logging(monkeypatch, caplog, failures, max_retries, expected_waits, expected_calls):
+async def test_retry_policy_and_logging(monkeypatch, caplog, failures, max_retries, expected_waits, expected_calls):
     """Exercise the real SDK and Tenacity without networking or actual sleeps."""
     calls = []
     sleeps = []
-    retrying = tenacity.Retrying
-    monkeypatch.setattr(tenacity, "Retrying", lambda **kwargs: retrying(sleep=sleeps.append, **kwargs))
+    retrying = tenacity.AsyncRetrying
+    monkeypatch.setattr(
+        tenacity, "AsyncRetrying", lambda **kwargs: retrying(sleep=AsyncMock(side_effect=sleeps.append), **kwargs)
+    )
 
     def respond(request):
         calls.append(request)
@@ -47,7 +50,9 @@ def test_retry_policy_and_logging(monkeypatch, caplog, failures, max_retries, ex
         )
 
     monkeypatch.setattr(
-        openai, "DefaultHttpxClient", lambda **kwargs: httpx.Client(transport=httpx.MockTransport(respond), **kwargs)
+        openai,
+        "DefaultAsyncHttpxClient",
+        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs),
     )
     agent = OpenAIChatAgent(
         OpenAIChatConfig(
@@ -60,27 +65,27 @@ def test_retry_policy_and_logging(monkeypatch, caplog, failures, max_retries, ex
     )
     with caplog.at_level(logging.WARNING):
         if expected_calls > len(failures):
-            assert agent.run(system="system", user="question").output == "OK"
+            assert (await agent.run(system="system", user="question")).output == "OK"
         else:
             with pytest.raises(openai.APIStatusError) as caught:
-                agent.run(system="system", user="question")
+                (await agent.run(system="system", user="question"))
             assert caught.value.status_code == failures[-1]
 
     assert len(calls) == expected_calls
     assert sleeps == expected_waits
-    messages = [record.getMessage() for record in caplog.records if "OpenAI chat retry" in record.getMessage()]
+    messages = [record.getMessage() for record in caplog.records if record.getMessage().startswith("agent.retry | ")]
     assert len(messages) == len(expected_waits)
     for retry_number, (message, wait) in enumerate(zip(messages, expected_waits), start=1):
-        assert f"retry {retry_number}/{max_retries}" in message
-        assert f"sleep {wait:.3f} seconds" in message
+        assert f"attempt={retry_number}/{max_retries}" in message
+        assert f"sleep={wait:.3f}s" in message
         if failures[retry_number - 1] == "timeout":
-            assert "reason: APITimeoutError:" in message
+            assert "error=APITimeoutError:" in message
         else:
-            assert "reason:" in message and "Temporary test failure" in message
+            assert "error=" in message and "Temporary test failure" in message
 
 
 @pytest.mark.parametrize("mode", ["workspace_tools", "bash_only_instruct", "bash_only_thinking"])
-def test_agent_request_modes(monkeypatch, mode):
+async def test_agent_request_modes(monkeypatch, mode):
     """Verify SDK payloads for workspace and bash actor request modes."""
     import json
 
@@ -135,9 +140,11 @@ def test_agent_request_modes(monkeypatch, mode):
         )
 
     monkeypatch.setattr(
-        openai, "DefaultHttpxClient", lambda **kwargs: httpx.Client(transport=httpx.MockTransport(respond), **kwargs)
+        openai,
+        "DefaultAsyncHttpxClient",
+        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs),
     )
-    assert OpenAIChatAgent(config).run(system="system", user="task").output == "Done"
+    assert (await OpenAIChatAgent(config).run(system="system", user="task")).output == "Done"
     payload = requests[0]
     if mode == "workspace_tools":
         assert payload["max_completion_tokens"] == 16384
@@ -155,13 +162,15 @@ def test_agent_request_modes(monkeypatch, mode):
 
 
 @pytest.mark.parametrize("wait_mode,waits", [("schedule", [5, 10, 30]), ("equal_jitter", [1.5, 3, 6])])
-def test_experiment_retry_waits(monkeypatch, wait_mode, waits):
+async def test_experiment_retry_waits(monkeypatch, wait_mode, waits):
     """Check explicit retry schedules and equal jitter without real waiting."""
     import random
 
     sleeps, calls = [], []
-    retrying = tenacity.Retrying
-    monkeypatch.setattr(tenacity, "Retrying", lambda **kwargs: retrying(sleep=sleeps.append, **kwargs))
+    retrying = tenacity.AsyncRetrying
+    monkeypatch.setattr(
+        tenacity, "AsyncRetrying", lambda **kwargs: retrying(sleep=AsyncMock(side_effect=sleeps.append), **kwargs)
+    )
     monkeypatch.setattr(random, "random", lambda: 0.5)
 
     def respond(request):
@@ -169,7 +178,9 @@ def test_experiment_retry_waits(monkeypatch, wait_mode, waits):
         return httpx.Response(400, json={"error": {"message": "fixture"}})
 
     monkeypatch.setattr(
-        openai, "DefaultHttpxClient", lambda **kwargs: httpx.Client(transport=httpx.MockTransport(respond), **kwargs)
+        openai,
+        "DefaultAsyncHttpxClient",
+        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs),
     )
     config = OpenAIChatConfig(
         model="fixture",
@@ -180,6 +191,6 @@ def test_experiment_retry_waits(monkeypatch, wait_mode, waits):
         retry_initial_wait_s=2,
     )
     with pytest.raises(openai.BadRequestError):
-        OpenAIChatAgent(config).run(system="system", user="task")
+        (await OpenAIChatAgent(config).run(system="system", user="task"))
     assert len(calls) == 4
     assert sleeps == waits

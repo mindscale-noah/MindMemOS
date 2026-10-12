@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from mindmemos_skill.agents import AgentResult, OpenAIChatAgent, OpenAIChatConfig
@@ -19,7 +19,7 @@ class Transport(OpenAIChatAgent):
         self.outputs = iter(outputs)
         self.requests = []
 
-    def run_messages(self, **kwargs):
+    async def run_messages(self, **kwargs):
         self.requests.append(deepcopy(kwargs))
         output = next(self.outputs)
         if isinstance(output, Exception):
@@ -32,12 +32,12 @@ class Transport(OpenAIChatAgent):
 
 
 @pytest.mark.parametrize("mode", ["direct", "feedback"])
-def test_parser_retries_are_bounded_preserve_inputs_and_sum_usage(mode):
+async def test_parser_retries_are_bounded_preserve_inputs_and_sum_usage(mode):
     config = OpenAIChatConfig(model="test", parse_retry_mode=mode, parse_max_attempts=2)
     transport = Transport(config, ["bad", '{"value": 42}'])
     agent = OpenAIChatAgent(config, model=transport, output_parser=Answer.model_validate_json)
     messages = [{"role": "user", "content": "Return an integer"}]
-    result = agent.run(messages=messages, response_format={"type": "json_object"})
+    result = await agent.run(messages=messages, response_format={"type": "json_object"})
     assert result.output == Answer(value=42)
     assert result.usage["total_tokens"] == 14
     assert result.usage["parse_attempts"] == 2
@@ -50,19 +50,27 @@ def test_parser_retries_are_bounded_preserve_inputs_and_sum_usage(mode):
         )
 
 
-def test_parse_exhaustion_and_provider_errors_propagate():
+async def test_parse_exhaustion_and_provider_errors_propagate():
     config = OpenAIChatConfig(model="test", parse_max_attempts=2)
     transport = Transport(config, ["bad", "bad", '{"value": 1}'])
     with pytest.raises(ValueError):
-        OpenAIChatAgent(config, model=transport, output_parser=Answer.model_validate_json).run(system="s", user="u")
+        (
+            await OpenAIChatAgent(config, model=transport, output_parser=Answer.model_validate_json).run(
+                system="s", user="u"
+            )
+        )
     assert len(transport.requests) == 2
     transport = Transport(config, [RuntimeError("offline")])
     with pytest.raises(RuntimeError, match="offline"):
-        OpenAIChatAgent(config, model=transport, output_parser=Answer.model_validate_json).run(system="s", user="u")
+        (
+            await OpenAIChatAgent(config, model=transport, output_parser=Answer.model_validate_json).run(
+                system="s", user="u"
+            )
+        )
     assert len(transport.requests) == 1
 
 
-def test_custom_feedback_and_single_attempt():
+async def test_custom_feedback_and_single_attempt():
     config = OpenAIChatConfig(model="test", parse_max_attempts=2, parse_retry_mode="feedback")
     transport = Transport(config, ["bad", '{"value": 1}'])
     agent = OpenAIChatAgent(
@@ -71,11 +79,11 @@ def test_custom_feedback_and_single_attempt():
         output_parser=Answer.model_validate_json,
         parse_feedback=lambda error: "Exact correction",
     )
-    agent.run(system="s", user="u")
+    (await agent.run(system="s", user="u"))
     assert transport.requests[1]["messages"][-1]["content"] == "Exact correction"
 
 
-def test_response_format_reaches_openai_request():
+async def test_response_format_reaches_openai_request():
     config = OpenAIChatConfig(
         model="test", api_key="test-secret", base_url="https://test.invalid/v1", response_format={"type": "json_object"}
     )
@@ -90,17 +98,17 @@ def test_response_format_reaches_openai_request():
         id="r1",
     )
     client = MagicMock()
-    client.__enter__.return_value = client
-    client.chat.completions.create.return_value = response
-    with patch("openai.OpenAI", return_value=client):
-        OpenAIChatAgent(config).run(system="s", user="u")
+    client.__aenter__.return_value = client
+    client.chat.completions.create = AsyncMock(return_value=response)
+    with patch("openai.AsyncOpenAI", return_value=client):
+        (await OpenAIChatAgent(config).run(system="s", user="u"))
     assert client.chat.completions.create.call_args.kwargs["response_format"] == {"type": "json_object"}
 
 
-def test_output_model_uses_shared_extraction_and_retries_schema_errors():
+async def test_output_model_uses_shared_extraction_and_retries_schema_errors():
     config = OpenAIChatConfig(model="test", parse_max_attempts=2, parse_retry_mode="feedback")
     transport = Transport(config, ['{"wrong":1}', 'Answer: ```json\n{"value":42,}\n```'])
-    result = OpenAIChatAgent(config, model=transport, output_model=Answer).run(system="s", user="u")
+    result = await OpenAIChatAgent(config, model=transport, output_model=Answer).run(system="s", user="u")
     assert result.output == Answer(value=42)
     assert result.usage["parse_attempts"] == 2
     assert result.usage["total_tokens"] == 14

@@ -6,7 +6,6 @@ from pathlib import Path
 from time import perf_counter
 from typing import ClassVar
 
-from ..common.asyncio import run_sync
 from ..common.input_files import model_file_fingerprints
 from ..common.skill_runtime import restore_assembled_skill
 from ..registry.base import ConfigT, Registrable
@@ -98,7 +97,7 @@ class Environment(Registrable[ConfigT], ABC):
             skill_set=skill_set.identity(),
             environment=f"{type(self).__module__}.{type(self).__qualname__}",
             config=self.config.model_dump(mode="json"),
-            input_identity=await run_sync(self.input_identity, task, reward_data),
+            input_identity=self.input_identity(task, reward_data),
         )
         work_dir = Path(work_dir).expanduser().resolve()
         audit_dir = work_dir / "audit"
@@ -149,7 +148,7 @@ class Environment(Registrable[ConfigT], ABC):
             # Clear prior assembly before a forced rerun that may fail to assemble.
             temporary_request.write_text(request.model_dump_json(indent=2), encoding="utf-8")
             temporary_request.replace(request_path)
-            selected_ids = list(await run_sync(skill_set.select, task))
+            selected_ids = list(await skill_set.select(task))
             prepared_skills = await skill_set.assemble(task, selected_ids=selected_ids)
         snapshots = [skill.snapshot() for skill in prepared_skills]
         request.assembled_skills = snapshots
@@ -158,12 +157,10 @@ class Environment(Registrable[ConfigT], ABC):
         request = RolloutRequest.model_validate_json(request.model_dump_json())
         temporary_request.write_text(request.model_dump_json(indent=2), encoding="utf-8")
         temporary_request.replace(request_path)
-        if await run_sync(self.input_identity, task, reward_data) != request.input_identity:
+        if self.input_identity(task, reward_data) != request.input_identity:
             raise ValueError("Rollout input files changed during assembly; use a new work_dir")
-        result = await run_sync(
-            self._run, task=task, reward_data=reward_data, skills=prepared_skills, workspace=workspace
-        )
-        if await run_sync(self.input_identity, task, reward_data) != request.input_identity:
+        result = await self._run(task=task, reward_data=reward_data, skills=prepared_skills, workspace=workspace)
+        if self.input_identity(task, reward_data) != request.input_identity:
             raise ValueError("Rollout input files changed during execution; use a new work_dir")
         duration_s = perf_counter() - start
         finished_at = datetime.now(timezone.utc)
@@ -178,7 +175,7 @@ class Environment(Registrable[ConfigT], ABC):
         return result
 
     @abstractmethod
-    def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+    async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Run the agent with skills in workspace and score its actual trajectory.
 
         Skills retain their concrete classes, auxiliary files, and export methods.

@@ -45,15 +45,15 @@ class TrajectoryDataService:
     def __init__(self, database: Database):
         self.database = database
 
-    def add(self, record: TrajectoryRecord) -> None:
+    async def add(self, record: TrajectoryRecord) -> None:
         """Insert a rollout attempt without overwriting existing evidence.
 
         Args:
             record: Complete trajectory to store.
         """
-        self.database.insert(TRAJECTORIES_TABLE, [record.model_dump(mode="python")])
+        (await self.database.insert(TRAJECTORIES_TABLE, [record.model_dump(mode="python")]))
 
-    def get(self, trajectory_id: str) -> TrajectoryRecord | None:
+    async def get(self, trajectory_id: str) -> TrajectoryRecord | None:
         """Read a stored attempt.
 
         Args:
@@ -62,10 +62,10 @@ class TrajectoryDataService:
         Returns:
             The stored attempt, or None.
         """
-        row = self.database.get(TRAJECTORIES_TABLE, trajectory_id)
+        row = await self.database.get(TRAJECTORIES_TABLE, trajectory_id)
         return TrajectoryRecord.model_validate(row) if row is not None else None
 
-    def counts(self, skill_version_id: str) -> TrajectoryCounts:
+    async def counts(self, skill_version_id: str) -> TrajectoryCounts:
         """Count stored trajectories and their distinct successful evolution uses.
 
         Args:
@@ -75,12 +75,12 @@ class TrajectoryDataService:
             Total, consumed and unconsumed counts across local and reported sources.
         """
         filters = {"skill_version_id": skill_version_id}
-        with self.database.transaction() as transaction:
-            total = transaction.count(TRAJECTORIES_TABLE, filters=filters)
-            consumed = transaction.count(TRAJECTORY_CONSUMPTIONS_TABLE, filters=filters)
+        async with self.database.transaction() as transaction:
+            total = await transaction.count(TRAJECTORIES_TABLE, filters=filters)
+            consumed = await transaction.count(TRAJECTORY_CONSUMPTIONS_TABLE, filters=filters)
         return TrajectoryCounts(total=total, consumed=consumed, unconsumed=total - consumed)
 
-    def mark_consumed(self, skill_version_id: str, trajectory_ids: list[str], run_id: str) -> None:
+    async def mark_consumed(self, skill_version_id: str, trajectory_ids: list[str], run_id: str) -> None:
         """Record first successful use without counting repeated evolution twice.
 
         Args:
@@ -94,8 +94,8 @@ class TrajectoryDataService:
         if not trajectory_ids:
             return
         identities = set(trajectory_ids)
-        with self.database.transaction() as transaction:
-            rows = transaction.select(
+        async with self.database.transaction() as transaction:
+            rows = await transaction.select(
                 TRAJECTORIES_TABLE,
                 filters=[
                     Filter(field="skill_version_id", value=skill_version_id),
@@ -106,20 +106,22 @@ class TrajectoryDataService:
             )
             if {row["trajectory_id"] for row in rows} != identities:
                 raise ValueError("Consumed trajectories must belong to the exact Skill version and project")
-            transaction.upsert(
-                TRAJECTORY_CONSUMPTIONS_TABLE,
-                [
-                    TrajectoryConsumption(
-                        project_id=row["project_id"],
-                        trajectory_id=row["trajectory_id"],
-                        skill_version_id=skill_version_id,
-                        run_id=run_id,
-                    ).model_dump(mode="python")
-                    for row in rows
-                ],
+            (
+                await transaction.upsert(
+                    TRAJECTORY_CONSUMPTIONS_TABLE,
+                    [
+                        TrajectoryConsumption(
+                            project_id=row["project_id"],
+                            trajectory_id=row["trajectory_id"],
+                            skill_version_id=skill_version_id,
+                            run_id=run_id,
+                        ).model_dump(mode="python")
+                        for row in rows
+                    ],
+                )
             )
 
-    def statistics(self, skill_version_id: str, *, now: datetime | None = None) -> TrajectoryStatistics:
+    async def statistics(self, skill_version_id: str, *, now: datetime | None = None) -> TrajectoryStatistics:
         """Read indexed all-time counts and a fixed thirty-day SQL aggregation.
 
         Args:
@@ -135,8 +137,8 @@ class TrajectoryDataService:
         start = datetime.combine(first_day, time.min, timezone).astimezone(UTC)
         end = datetime.combine(today + timedelta(days=1), time.min, timezone).astimezone(UTC)
         filters = {"skill_version_id": skill_version_id}
-        totals = self.counts(skill_version_id)
-        groups = self.database.count_by_day(
+        totals = await self.counts(skill_version_id)
+        groups = await self.database.count_by_day(
             TRAJECTORIES_TABLE,
             time_field="created_at",
             filters=[
@@ -159,7 +161,9 @@ class TrajectoryDataService:
             days.append(TrajectoryDayCounts(day=day, total=total, consumed=consumed, unconsumed=total - consumed))
         return TrajectoryStatistics(skill_version_id=skill_version_id, totals=totals, days=days)
 
-    def has_reported(self, skill_id: str, *, user_id: str | None, agent_id: str | None, snapshot_at: datetime) -> bool:
+    async def has_reported(
+        self, skill_id: str, *, user_id: str | None, agent_id: str | None, snapshot_at: datetime
+    ) -> bool:
         """Check whether one family has a report matching both actor filters.
 
         Args:
@@ -180,9 +184,11 @@ class TrajectoryDataService:
             filters.append(Filter(field="user_id", value=user_id))
         if agent_id is not None:
             filters.append(Filter(field="agent_id", value=agent_id))
-        return bool(self.database.select(TRAJECTORIES_TABLE, filters=filters, fields=["trajectory_id"], limit=1))
+        return bool(
+            (await self.database.select(TRAJECTORIES_TABLE, filters=filters, fields=["trajectory_id"], limit=1))
+        )
 
-    def reported_skill_ids(
+    async def reported_skill_ids(
         self, skill_ids: list[str], *, user_id: str | None, agent_id: str | None, snapshot_at: datetime
     ) -> set[str]:
         """Find candidate families with a matching report in the active project.
@@ -207,7 +213,7 @@ class TrajectoryDataService:
             filters.append(Filter(field="user_id", value=user_id))
         if agent_id is not None:
             filters.append(Filter(field="agent_id", value=agent_id))
-        return set(self.database.select_distinct(TRAJECTORIES_TABLE, "skill_id", filters=filters))
+        return set((await self.database.select_distinct(TRAJECTORIES_TABLE, "skill_id", filters=filters)))
 
     @overload
     def list_reported(
@@ -241,7 +247,7 @@ class TrajectoryDataService:
         fields: list[str],
     ) -> list[dict]: ...
 
-    def list_reported(
+    async def list_reported(
         self,
         skill_id: str,
         *,
@@ -293,32 +299,36 @@ class TrajectoryDataService:
                 Filter(field="trajectory_id", op="lt", value=after_trajectory_id),
             ]
             rows.extend(
-                self.database.select(
-                    TRAJECTORIES_TABLE, filters=ties, fields=selected_fields, order_by=order, limit=limit
+                (
+                    await self.database.select(
+                        TRAJECTORIES_TABLE, filters=ties, fields=selected_fields, order_by=order, limit=limit
+                    )
                 )
             )
             filters.append(Filter(field="received_at", op="lt", value=after_received_at))
         if limit is None or len(rows) < limit:
             rows.extend(
-                self.database.select(
-                    TRAJECTORIES_TABLE,
-                    filters=filters,
-                    fields=selected_fields,
-                    order_by=order,
-                    limit=None if limit is None else limit - len(rows),
+                (
+                    await self.database.select(
+                        TRAJECTORIES_TABLE,
+                        filters=filters,
+                        fields=selected_fields,
+                        order_by=order,
+                        limit=None if limit is None else limit - len(rows),
+                    )
                 )
             )
         if fields is not None:
             return rows
         return [TrajectorySummary.model_validate(row) for row in rows]
 
-    def report(
+    async def report(
         self,
         *,
         project_id: str,
         skill_version_id: str,
-        user_id: str,
-        agent_id: str,
+        user_id: str | None,
+        agent_id: str | None,
         messages: list[dict],
         session_id: str | None,
         status: str,
@@ -330,8 +340,8 @@ class TrajectoryDataService:
         Args:
             project_id: Authorized project owning the report.
             skill_version_id: Exact version loaded during execution.
-            user_id: Business user supplied by the Harness.
-            agent_id: Agent supplied by the Harness.
+            user_id: Business user supplied by the Harness, or None when omitted.
+            agent_id: Agent supplied by the Harness, or None when omitted.
             messages: Ordered interaction messages.
             session_id: Optional logical Agent session.
             status: Caller-declared execution outcome.
@@ -341,9 +351,9 @@ class TrajectoryDataService:
         Returns:
             Persisted physical attempt with generated task and trajectory IDs.
         """
-        with self.database.transaction() as transaction:
+        async with self.database.transaction() as transaction:
             try:
-                version = SkillDataService(transaction).version_by_id(project_id, skill_version_id)
+                version = await SkillDataService(transaction).version_by_id(project_id, skill_version_id)
             except SkillNotFoundError as exc:
                 raise SkillVersionNotFoundError("Skill version not found in this project") from exc
             received_at = utcnow()
@@ -386,7 +396,7 @@ class TrajectoryDataService:
                 session_id=session_id,
                 received_at=received_at,
             )
-            transaction.insert(TRAJECTORIES_TABLE, [record.model_dump(mode="python")])
+            (await transaction.insert(TRAJECTORIES_TABLE, [record.model_dump(mode="python")]))
         return record
 
 

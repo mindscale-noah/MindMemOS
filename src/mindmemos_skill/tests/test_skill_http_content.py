@@ -1,6 +1,5 @@
 """Pin structured HTTP content, SDK hashes, and scoped history cursors."""
 
-import asyncio
 import base64
 
 import pytest
@@ -14,8 +13,8 @@ from .service_config import repository_config
 
 
 @pytest.fixture
-def client(tmp_path):
-    service = asyncio.run(create_service(repository_config(tmp_path, "test")))
+async def client(tmp_path):
+    service = await create_service(repository_config(tmp_path, "test"))
     with TestClient(create_app(service)) as client:
         yield client
 

@@ -1,6 +1,5 @@
 """Verify complete content and resource preservation during environment execution."""
 
-import asyncio
 import json
 
 import pytest
@@ -20,7 +19,7 @@ class TaskSkill(Skill):
     calls = 0
     fail = False
 
-    def assemble(self, task):
+    async def assemble(self, task):
         self.calls += 1
         if self.fail:
             raise RuntimeError("Assembly failed")
@@ -34,7 +33,7 @@ class ContentEnvironment(Environment[EnvironmentOptions]):
     fail = False
     calls = 0
 
-    def _run(self, *, task, reward_data, skills, workspace):
+    async def _run(self, *, task, reward_data, skills, workspace):
         self.calls += 1
         skill = skills[0]
         assert isinstance(skill, Skill)
@@ -46,7 +45,7 @@ class ContentEnvironment(Environment[EnvironmentOptions]):
         return RolloutResult(output=text, trajectory=[], reward=Reward(score=1, success=True, detail="Matched"))
 
 
-def test_assembly_is_saved_once_reused_on_retry_and_checked_on_resume(tmp_path):
+async def test_assembly_is_saved_once_reused_on_retry_and_checked_on_resume(tmp_path):
     task = Task(id="one", instruction="public task")
     skill = TaskSkill(
         source=SkillContent(content="Use: ", name="test-skill", description="Task instructions", standard_format=False)
@@ -54,8 +53,10 @@ def test_assembly_is_saved_once_reused_on_retry_and_checked_on_resume(tmp_path):
     env = ContentEnvironment(EnvironmentOptions())
     env.fail = True
     with pytest.raises(RuntimeError, match="Execution failed"):
-        asyncio.run(
-            env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
+        (
+            await env.rollout(
+                task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)
+            )
         )
     assert skill.calls == 1
     request_path = tmp_path / "audit/request.json"
@@ -64,40 +65,37 @@ def test_assembly_is_saved_once_reused_on_retry_and_checked_on_resume(tmp_path):
     assert request["assembled_hashes"][0] != skill.source.skill_hash
     skill.fail = True
     env.fail = False
-    result = asyncio.run(
-        env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
+    result = await env.rollout(
+        task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)
     )
     assert result.output == "Use: public task"
     assert skill.calls == 1
     assert (
-        asyncio.run(
-            env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
-        )
-        == result
-    )
+        await env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
+    ) == result
     assert env.calls == 2
     request["assembled_skills"][0]["content"] = "corrupt"
     request_path.write_text(json.dumps(request))
     with pytest.raises(ValidationError, match="hash"):
-        asyncio.run(
-            env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
+        (
+            await env.rollout(
+                task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)
+            )
         )
     assert skill.calls == 1
 
 
-def test_forced_rerun_invalidates_previous_assembly_before_failure(tmp_path):
+async def test_forced_rerun_invalidates_previous_assembly_before_failure(tmp_path):
     task = Task(id="one", instruction="task")
     skill = TaskSkill(
         source=SkillContent(content="Use: ", name="test-skill", description="Task instructions", standard_format=False)
     )
     env = ContentEnvironment(EnvironmentOptions())
-    asyncio.run(
-        env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
-    )
+    (await env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)))
     skill.fail = True
     with pytest.raises(RuntimeError, match="Assembly failed"):
-        asyncio.run(
-            env.rollout(
+        (
+            await env.rollout(
                 task,
                 tmp_path,
                 reward_data=RewardData(),
@@ -108,14 +106,12 @@ def test_forced_rerun_invalidates_previous_assembly_before_failure(tmp_path):
     assert not (tmp_path / "audit/result.json").exists()
     assert json.loads((tmp_path / "audit/request.json").read_text())["assembled_skills"] is None
     skill.fail = False
-    asyncio.run(
-        env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
-    )
+    (await env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)))
     assert skill.calls == 3
 
 
 @pytest.mark.parametrize("implementation", [Skill, TaskSkill])
-def test_environment_receives_complete_skill_and_unchanged_references(tmp_path, implementation):
+async def test_environment_receives_complete_skill_and_unchanged_references(tmp_path, implementation):
     root = tmp_path / "source"
     (root / "references").mkdir(parents=True)
     (root / "SKILL.md").write_text("---\nname: test\ndescription: Rules\n---\nRead references/guide.md. Task: ")
@@ -129,30 +125,28 @@ def test_environment_receives_complete_skill_and_unchanged_references(tmp_path, 
     task = Task(id="one", instruction="public task")
 
     class ReferenceEnvironment(ContentEnvironment):
-        def _run(self, *, task, reward_data, skills, workspace):
+        async def _run(self, *, task, reward_data, skills, workspace):
             prepared = skills[0]
             assert isinstance(prepared, Skill)
             assert type(prepared) is implementation
             assert prepared is not skill
             assert prepared.resources == skill.resources
-            result = super()._run(task=task, reward_data=reward_data, skills=skills, workspace=workspace)
+            result = await super()._run(task=task, reward_data=reward_data, skills=skills, workspace=workspace)
             assert (workspace / "skill/references/guide.md").read_bytes() == b"Use the reference.\r\n"
             assert (workspace / "skill/asset.bin").read_bytes() == b"\x00\xff\x01"
             return result
 
     env = ReferenceEnvironment(EnvironmentOptions())
     work_dir = tmp_path / "rollout"
-    asyncio.run(
-        env.rollout(task, work_dir, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
-    )
+    (await env.rollout(task, work_dir, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)))
     assert skill.snapshot() == snapshot
     assert (
         root / "SKILL.md"
     ).read_text() == "---\nname: test\ndescription: Rules\n---\nRead references/guide.md. Task: "
     (root / "references/guide.md").write_text("Changed reference")
     with pytest.raises(ValueError, match="inputs changed"):
-        asyncio.run(
-            env.rollout(
+        (
+            await env.rollout(
                 task,
                 work_dir,
                 reward_data=RewardData(),

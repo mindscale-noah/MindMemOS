@@ -65,7 +65,7 @@ def test_reject_invalid_implementations():
         config_type = Options
 
         @abstractmethod
-        def run(self):
+        async def run(self):
             pass
 
     class MissingConfig(Family):

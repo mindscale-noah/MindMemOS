@@ -1,6 +1,7 @@
 """Verify explicit connection settings, secret handling, and transport forwarding."""
 
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import openai
@@ -62,7 +63,7 @@ def test_connection_missing_and_invalid(name):
 
 
 @pytest.mark.parametrize("name", ["openai_chat", "codex", "claude", "deepseek_harness"])
-def test_connection_reaches_transport(monkeypatch, tmp_path, name):
+async def test_connection_reaches_transport(monkeypatch, tmp_path, name):
     """Send the selected values to the SDK or CLI without modifying native process env."""
     for variable, value in CONNECTION_ENV.items():
         monkeypatch.setenv(variable, value)
@@ -87,7 +88,7 @@ def test_connection_reaches_transport(monkeypatch, tmp_path, name):
             },
         )
 
-    def run_cli(command, workspace, config, overrides, prompt=None):
+    async def run_cli(command, workspace, config, overrides, prompt=None):
         calls.append(command)
         assert all(key not in arg for arg in command)
         if name == "codex":
@@ -114,22 +115,22 @@ def test_connection_reaches_transport(monkeypatch, tmp_path, name):
     if name == "openai_chat":
         monkeypatch.setattr(
             openai,
-            "DefaultHttpxClient",
-            lambda **kwargs: httpx.Client(transport=httpx.MockTransport(respond), **kwargs),
+            "DefaultAsyncHttpxClient",
+            lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs),
         )
-        result = agent.run(system="test", user="test")
+        result = await agent.run(system="test", user="test")
     else:
         module = {"codex": codex_module, "claude": claude_module, "deepseek_harness": dsh_module}[name]
-        monkeypatch.setattr(module, "run_cli", run_cli)
+        monkeypatch.setattr(module, "run_cli", AsyncMock(side_effect=run_cli))
         if name == "deepseek_harness":
             monkeypatch.setattr(dsh_module, "read_session_events", lambda root: (root, []))
-        result = agent.run(system="test", user="test", workspace=tmp_path)
+        result = await agent.run(system="test", user="test", workspace=tmp_path)
     assert result.output == "OK" and len(calls) == 1
 
 
 @pytest.mark.parametrize("name", ["openai_chat", "codex", "claude", "deepseek_harness"])
 @pytest.mark.parametrize("missing", ["api_key", "base_url"])
-def test_model_call_requires_explicit_connection(monkeypatch, tmp_path, name, missing):
+async def test_model_call_requires_explicit_connection(monkeypatch, tmp_path, name, missing):
     """Fail before network or process execution even when ambient credentials exist."""
     for variable, value in CONNECTION_ENV.items():
         monkeypatch.setenv(variable, value)
@@ -138,9 +139,9 @@ def test_model_call_requires_explicit_connection(monkeypatch, tmp_path, name, mi
     agent = Agent.build(name, options)
     with pytest.raises(ValueError, match=f"Provide {missing} in the agent config"):
         if name == "openai_chat":
-            agent.run(system="", user="task")
+            (await agent.run(system="", user="task"))
         else:
-            agent.run(system="", user="task", workspace=tmp_path)
+            (await agent.run(system="", user="task", workspace=tmp_path))
     assert not list(tmp_path.iterdir())
 
 

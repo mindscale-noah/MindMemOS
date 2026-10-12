@@ -20,11 +20,11 @@ manage_pipeline:
       query_rewrite: false
 ```
 
-`service.organize_skills(OrganizeRequest(...), reporter=...)` 接收 `graph_id`、`actor_id`、完整的 `skill_version_ids` 列表、可选的 `message` 和按 Skill 家族 ID 映射的可选 `scene_records`。服务先确认项目授权，再按精确版本读取已保存 Skill；同一图内每个家族只允许一个版本。`message` 保存于新建图版本。同一输入、说明和配置的重试复用已保存快照；说明变化会形成新快照并将其设为当前生效版本。
+`service.organize_skills(OrganizeRequest(...))` 接收 `graph_id`、`actor_id`、完整的 `skill_version_ids` 列表、可选的 `message` 和按 Skill 家族 ID 映射的可选 `scene_records`。服务先确认项目授权，再按精确版本读取已保存 Skill；同一图内每个家族只允许一个版本。`message` 保存于新建图版本。同一输入、说明和配置的重试复用已保存快照；说明变化会形成新快照并将其设为当前生效版本。
 
-`service.recommend_skills(RecommendRequest(...))` 接收 `graph_id`、可选的不可变 `graph_version_id`、公开 `Task` 和正整数 `limit`。省略快照 ID 时，在请求开始读取并固定当前图头。它从该快照恢复 `skill_manage` 的成员范围，校验版本所属项目、Skill 内容与算法配置，再调用推荐算法，按排名返回精确 `skill_version_ids`。显式指定旧快照的请求不随图头变化。Pipeline 调用通过工作线程执行同步存储和模型操作，调用者使用 `await`。
+`service.recommend_skills(RecommendRequest(...))` 接收 `graph_id`、可选的不可变 `graph_version_id`、公开 `Task` 和正整数 `limit`。省略快照 ID 时，在请求开始读取并固定当前图头。它从该快照恢复 `skill_manage` 的成员范围，校验版本所属项目、Skill 内容与算法配置，再调用推荐算法，按排名返回精确 `skill_version_ids`。显式指定旧快照的请求不随图头变化。Pipeline、存储、Embedding 和模型操作均采用原生异步接口，调用者逐层使用 `await`。
 
-HTTP 入口也已接通这两条同步 Pipeline：
+HTTP 入口也已接通这两条异步 Pipeline：
 
 | 接口 | 请求字段 | 成功结果 | 权限 |
 | --- | --- | --- | --- |
@@ -97,7 +97,7 @@ result = asyncio.run(env.rollout(
 
 构造算法、集合和客户端不发起模型调用，也不读写数据库。首次 `select(task)` 校验外围版本绑定，然后构建或复用图；`assemble(task)` 在选择后调用选中成员自己的组装方法。每个集合使用独立的管理算法实例。省略 `skill_set` 仍为 baseline。
 
-数据库由外围创建、初始化和关闭。算法不关闭借用的数据库或注入客户端。`embedding_model=` 接受带有匹配 `config` 和同步 `embed(texts)` 的实现；`chat_model=` 接受带有匹配配置及 `run(...)` 的聊天实现，可复用现有 OpenAIChatAgent。SDK 传输测试可通过 `OpenAIEmbeddingClient(config, client=...)` 注入客户端。
+数据库由外围创建、初始化和关闭。算法不关闭借用的数据库或注入客户端。`embedding_model=` 接受带有匹配 `config` 和异步 `embed(texts)` 的实现；`chat_model=` 接受带有匹配配置及异步 `run(...)` 的聊天实现，可复用现有 OpenAIChatAgent。SDK 传输测试可通过 `OpenAIEmbeddingClient(config, client=...)` 注入客户端。
 
 ## 构图与检索
 

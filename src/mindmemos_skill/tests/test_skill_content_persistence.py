@@ -114,8 +114,8 @@ async def test_invalid_file_inputs_leave_no_orphan_versions(service, tmp_path):
     with pytest.raises(ValidationError):
         await service.register_from_local(RegisterFromLocalRequest(project_id="p", skill=FileSkillInfo(path=str(path))))
     with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as session:
-        assert session.database.count(SKILLS_TABLE) == 0
-        assert session.database.count(SKILL_VERSIONS_TABLE) == 0
+        assert (await session.database.count(SKILLS_TABLE)) == 0
+        assert (await session.database.count(SKILL_VERSIONS_TABLE)) == 0
 
 
 @pytest.mark.asyncio
@@ -129,7 +129,7 @@ async def test_cross_project_parent_is_rejected_without_inserting(service):
             )
         )
     with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as session:
-        assert session.database.count(SKILL_VERSIONS_TABLE) == 1
+        assert (await session.database.count(SKILL_VERSIONS_TABLE)) == 1
 
 
 @pytest.mark.asyncio
@@ -139,8 +139,8 @@ async def test_commit_failure_rolls_back_version_pointer_and_metadata(service, m
     registered = await service.register_skill(RegisterRequest(project_id="p", skill=plain(metadata={"keep": True})))
     insert_child = SkillDataService._insert_child
 
-    def fail_after_insert(self, *args, **kwargs):
-        insert_child(self, *args, **kwargs)
+    async def fail_after_insert(self, *args, **kwargs):
+        await insert_child(self, *args, **kwargs)
         raise RuntimeError("write interrupted")
 
     monkeypatch.setattr(SkillDataService, "_insert_child", fail_after_insert)
@@ -154,7 +154,7 @@ async def test_commit_failure_rolls_back_version_pointer_and_metadata(service, m
     assert detail.version.version_id == registered.skill_version_id
     assert detail.skill.metadata == {"keep": True}
     with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as session:
-        assert session.database.count(SKILL_VERSIONS_TABLE) == 1
+        assert (await session.database.count(SKILL_VERSIONS_TABLE)) == 1
 
 
 @pytest.mark.asyncio
@@ -166,8 +166,8 @@ async def test_stale_store_commit_leaves_no_orphan_version(service):
     await service.commit_skill(CommitRequest(project_id="p", skill_id=registered.skill_id, skill=plain("second")))
     with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as session:
         with pytest.raises(SkillConflictError):
-            session.skills.commit(first.skill, snapshot_from_version(first.version), message="stale")
-        assert session.database.count(SKILL_VERSIONS_TABLE) == 2
+            (await session.skills.commit(first.skill, snapshot_from_version(first.version), message="stale"))
+        assert (await session.database.count(SKILL_VERSIONS_TABLE)) == 2
 
 
 @pytest.mark.asyncio
@@ -197,14 +197,17 @@ async def test_committed_name_metadata_and_source_are_explicit(service):
 
 @pytest.mark.asyncio
 async def test_corrupted_persisted_content_is_rejected_on_read(service, tmp_path):
-    import sqlite3
+    import aiosqlite
 
     registered = await service.register_skill(RegisterRequest(project_id="p", skill=plain()))
-    with sqlite3.connect(tmp_path / "store.db") as connection:
-        connection.execute(
-            f"UPDATE {SKILL_VERSIONS_TABLE} SET content = ? WHERE version_id = ?",
-            ("tampered", registered.skill_version_id),
+    async with aiosqlite.connect(tmp_path / "store.db") as connection:
+        (
+            await connection.execute(
+                f"UPDATE {SKILL_VERSIONS_TABLE} SET content = ? WHERE version_id = ?",
+                ("tampered", registered.skill_version_id),
+            )
         )
+        await connection.commit()
     with pytest.raises(ValidationError, match="hash mismatch"):
         await service.show_skill(ShowRequest(project_id="p", version_id=registered.skill_version_id))
 
@@ -237,8 +240,8 @@ async def test_invalid_local_commit_preserves_version_count_and_default(service,
             CommitFromLocalRequest(project_id="p", skill_id=registered.skill_id, skill=FileSkillInfo(path=str(path)))
         )
     with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as session:
-        assert session.database.count(SKILL_VERSIONS_TABLE) == 1
-        family = session.skills.resolve_family("p", registered.skill_id)
+        assert (await session.database.count(SKILL_VERSIONS_TABLE)) == 1
+        family = await session.skills.resolve_family("p", registered.skill_id)
         assert family.active_version_id == registered.skill_version_id
-        history = session.skills.history(family, limit=None, offset=0)
+        history = await session.skills.history(family, limit=None, offset=0)
         assert history[0].skill_hash == registered.skill_hash

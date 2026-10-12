@@ -32,7 +32,7 @@ async def service(tmp_path):
 
 async def register(service, **options):
     with service.repository.persistence.session(Scope(fields={"project_id": service.default_project_id})) as scoped:
-        family = scoped.skills.register(
+        family = await scoped.skills.register(
             project_id=service.default_project_id,
             name="Example",
             alias=None,
@@ -46,8 +46,8 @@ async def register(service, **options):
 
 async def commit(service, first, **options):
     with service.repository.persistence.session(Scope(fields={"project_id": service.default_project_id})) as scoped:
-        owner = scoped.skills.resolve_family(service.default_project_id, first.skill.skill_id)
-        scoped.skills.commit(owner, snapshot("new"), message="Version test", naming=VersionNaming(**options))
+        owner = await scoped.skills.resolve_family(service.default_project_id, first.skill.skill_id)
+        (await scoped.skills.commit(owner, snapshot("new"), message="Version test", naming=VersionNaming(**options)))
     return await service.show_skill(ShowRequest(project_id=service.default_project_id, skill_id=first.skill.skill_id))
 
 
@@ -117,16 +117,16 @@ async def test_concurrent_commit_does_not_duplicate_or_leave_orphans(service, tm
             with writer.repository.persistence.session(
                 Scope(fields={"project_id": writer.default_project_id})
             ) as scoped:
-                owner = scoped.skills.resolve_family(writer.default_project_id, first.skill.skill_id)
+                owner = await scoped.skills.resolve_family(writer.default_project_id, first.skill.skill_id)
             await asyncio.wait_for(barrier.wait(), timeout=10)
             try:
                 with writer.repository.persistence.session(
                     Scope(fields={"project_id": writer.default_project_id})
                 ) as scoped:
-                    family = scoped.skills.commit(
+                    family = await scoped.skills.commit(
                         owner, snapshot(), message="Concurrent version", naming=VersionNaming(algorithm=algorithm)
                     )
-                    return scoped.skills.version(family).version_label
+                    return (await scoped.skills.version(family)).version_label
             except SkillConflictError:
                 return "conflict"
 
@@ -145,4 +145,4 @@ async def test_database_uniqueness(service):
     database = service.backends["database"]
     duplicate = first.version.model_copy(update={"version_id": "another-id"})
     with pytest.raises(IntegrityError):
-        database.insert(SKILL_VERSIONS_TABLE, [duplicate.model_dump()])
+        (await database.insert(SKILL_VERSIONS_TABLE, [duplicate.model_dump()]))

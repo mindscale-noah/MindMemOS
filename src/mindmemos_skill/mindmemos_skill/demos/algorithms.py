@@ -12,7 +12,7 @@ from ..common.checkpoint import boundary
 from ..common.json import read_json, write_json
 from ..envs import Environment
 from ..envs.data import DataSample
-from ..infra.task_manager.progress import NullProgressReporter, ProgressReporter
+from ..logging import get_logger
 from ..skill import Skill, SkillSet, SkillSnapshot
 from .config import DemoAlgorithmConfig
 
@@ -32,7 +32,6 @@ class DemoTrainer(SkillTrainer[DemoAlgorithmConfig]):
         train_samples: Sequence[DataSample],
         validation_samples: Sequence[DataSample],
         work_dir: Path,
-        progress: ProgressReporter | None = None,
     ) -> Skill:
         """Run synthetic training tasks and save a reusable candidate.
 
@@ -42,7 +41,6 @@ class DemoTrainer(SkillTrainer[DemoAlgorithmConfig]):
             train_samples: Samples to execute in their supplied order.
             validation_samples: Held-out inputs recorded for recovery identity.
             work_dir: Trainer directory containing the input boundary and candidate.
-            progress: Optional task event reporter.
 
         Returns:
             New Skill preserving all original resources and runtime metadata.
@@ -67,9 +65,17 @@ class DemoTrainer(SkillTrainer[DemoAlgorithmConfig]):
         saved = boundary(work_dir / "candidate.json", identity)
         if saved is not None:
             return Skill.from_snapshot(SkillSnapshot.model_validate(saved["skill"]))
-        reporter = progress or NullProgressReporter()
-        await reporter.report(
-            stage="train", message="Starting offline demo training", completed=0, total=len(train_samples)
+
+        get_logger(__name__).info(
+            "algorithm.progress",
+            extra={
+                "event_body": {
+                    "stage": "train",
+                    "message": "Starting offline demo training",
+                    "completed": 0,
+                    "total": len(train_samples),
+                }
+            },
         )
         for index, sample in enumerate(train_samples, start=1):
             await asyncio.sleep(self.config.delay_seconds)
@@ -79,8 +85,16 @@ class DemoTrainer(SkillTrainer[DemoAlgorithmConfig]):
                 skill_set=SkillSet({"initial": skill}),
                 work_dir=work_dir / "rollouts" / f"sample-{index:04d}",
             )
-            await reporter.report(
-                stage="train", message=f"Processed {sample.task.id}", completed=index, total=len(train_samples)
+            get_logger(__name__).info(
+                "algorithm.progress",
+                extra={
+                    "event_body": {
+                        "stage": "train",
+                        "message": f"Processed {sample.task.id}",
+                        "completed": index,
+                        "total": len(train_samples),
+                    }
+                },
             )
         candidate = skill.with_content(
             skill.content + f"\n## Demo training\n{self.config.note}\nTraining samples: {len(train_samples)}.\n"

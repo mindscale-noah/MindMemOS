@@ -1,6 +1,5 @@
 """Verify rollout execution, durable completion, and resume boundaries."""
 
-import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
@@ -37,7 +36,7 @@ class ExampleEnvironment(Environment[Options]):
     fail: bool = False
     """Whether execution should raise before completion."""
 
-    def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+    async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Write a workspace artifact and return an evaluated trajectory."""
         self.calls += 1
         assert workspace.is_absolute()
@@ -62,7 +61,7 @@ class ExampleEnvironment(Environment[Options]):
 
 
 @pytest.mark.parametrize("completed", [False, True])
-def test_unsupported_resume_has_no_side_effects(tmp_path, completed):
+async def test_unsupported_resume_has_no_side_effects(tmp_path, completed):
     """Reject resume before assembly or writes, including when a result exists."""
 
     class NonResumableEnvironment(ExampleEnvironment):
@@ -73,8 +72,8 @@ def test_unsupported_resume_has_no_side_effects(tmp_path, completed):
     skill = make_skill("Check the answer")
     work_dir = tmp_path / "rollout"
     if completed:
-        asyncio.run(
-            env.rollout(
+        (
+            await env.rollout(
                 task,
                 work_dir,
                 reward_data=RewardData(),
@@ -85,8 +84,8 @@ def test_unsupported_resume_has_no_side_effects(tmp_path, completed):
     before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     with patch.object(skill, "assemble", side_effect=AssertionError("Unexpected assembly")):
         with pytest.raises(NotImplementedError, match="does not support resume; pass resume=False"):
-            asyncio.run(
-                env.rollout(
+            (
+                await env.rollout(
                     task,
                     work_dir,
                     reward_data=RewardData(),
@@ -95,8 +94,8 @@ def test_unsupported_resume_has_no_side_effects(tmp_path, completed):
                 )
             )
         with pytest.raises(NotImplementedError, match="does not support resume"):
-            asyncio.run(
-                env.rollout(
+            (
+                await env.rollout(
                     task, work_dir, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)
                 )
             )
@@ -105,7 +104,7 @@ def test_unsupported_resume_has_no_side_effects(tmp_path, completed):
     assert {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
 
 
-def test_non_resumable_environment_executes_each_explicit_run(tmp_path):
+async def test_non_resumable_environment_executes_each_explicit_run(tmp_path):
     """Disabling resume retains audit persistence and executes matching reruns."""
 
     class NonResumableEnvironment(ExampleEnvironment):
@@ -114,22 +113,20 @@ def test_non_resumable_environment_executes_each_explicit_run(tmp_path):
     env = NonResumableEnvironment(Options())
     task = Task(id="task-001", instruction="Solve this")
     for _ in range(2):
-        result = asyncio.run(env.rollout(task, tmp_path, reward_data=RewardData(), resume=False))
+        result = await env.rollout(task, tmp_path, reward_data=RewardData(), resume=False)
         assert result.output == task.instruction
         assert (tmp_path / "audit/result.json").exists()
     assert env.calls == 2
 
 
-def test_resume_from_new_instance_without_execution(tmp_path):
+async def test_resume_from_new_instance_without_execution(tmp_path):
     """A complete zero-reward run survives process-local state loss."""
     env = ExampleEnvironment(Options())
-    result = asyncio.run(
-        env.rollout(
-            Task(id="task-001", instruction="Solve this"),
-            tmp_path,
-            reward_data=RewardData(),
-            skill_set=SkillSet({"0": make_skill("Check the answer")}, max_concurrency=1),
-        )
+    result = await env.rollout(
+        Task(id="task-001", instruction="Solve this"),
+        tmp_path,
+        reward_data=RewardData(),
+        skill_set=SkillSet({"0": make_skill("Check the answer")}, max_concurrency=1),
     )
     assert env.calls == 1
     assert (tmp_path / "workspace/answer.txt").read_text() == "Solve this"
@@ -140,25 +137,22 @@ def test_resume_from_new_instance_without_execution(tmp_path):
     restored = ExampleEnvironment(Options())
     restored.fail = True
     assert (
-        asyncio.run(
-            restored.rollout(
-                Task(id="task-001", instruction="Solve this"),
-                tmp_path,
-                reward_data=RewardData(),
-                skill_set=SkillSet({"0": make_skill("Check the answer")}, max_concurrency=1),
-            )
+        await restored.rollout(
+            Task(id="task-001", instruction="Solve this"),
+            tmp_path,
+            reward_data=RewardData(),
+            skill_set=SkillSet({"0": make_skill("Check the answer")}, max_concurrency=1),
         )
-        == result
-    )
+    ) == result
     assert restored.calls == 0
 
 
 @pytest.mark.parametrize("change", ["task", "skills", "config"])
-def test_reject_changed_inputs(tmp_path, change):
+async def test_reject_changed_inputs(tmp_path, change):
     """Different candidates or execution settings cannot reuse one sample."""
     env = ExampleEnvironment(Options())
-    asyncio.run(
-        env.rollout(
+    (
+        await env.rollout(
             Task(id="task-001", instruction="task"),
             tmp_path,
             reward_data=RewardData(),
@@ -168,8 +162,8 @@ def test_reject_changed_inputs(tmp_path, change):
     if change == "config":
         env.config = Options(model="another-model")
     with pytest.raises(ValueError, match="inputs changed"):
-        asyncio.run(
-            env.rollout(
+        (
+            await env.rollout(
                 Task(id="task-001", instruction="different" if change == "task" else "task"),
                 tmp_path,
                 reward_data=RewardData(),
@@ -181,63 +175,61 @@ def test_reject_changed_inputs(tmp_path, change):
     assert env.calls == 1
 
 
-def test_failure_is_retryable_and_forced_rerun_invalidates_completion(tmp_path):
+async def test_failure_is_retryable_and_forced_rerun_invalidates_completion(tmp_path):
     """A failed forced rerun must not resurrect an older completion."""
     env = ExampleEnvironment(Options())
-    asyncio.run(env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
+    (await env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
     env.fail = True
     with pytest.raises(RuntimeError, match="Agent failed"):
-        asyncio.run(
-            env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData(), resume=False)
-        )
+        (await env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData(), resume=False))
     assert not (tmp_path / "audit/result.json").exists()
     env.fail = False
-    asyncio.run(env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
+    (await env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
     assert env.calls == 3
 
 
-def test_partial_result_is_not_completion(tmp_path):
+async def test_partial_result_is_not_completion(tmp_path):
     """An interrupted temporary result does not skip execution."""
     record_dir = tmp_path / "audit"
     record_dir.mkdir()
     (record_dir / "result.json.tmp").write_text('{"output":')
     env = ExampleEnvironment(Options())
-    asyncio.run(env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
+    (await env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
     assert env.calls == 1
 
 
-def test_resume_does_not_recreate_agent_workspace(tmp_path):
+async def test_resume_does_not_recreate_agent_workspace(tmp_path):
     """Reading a complete audit result does not prepare an execution directory."""
     env = ExampleEnvironment(Options())
     task = Task(id="task-001", instruction="task")
-    result = asyncio.run(env.rollout(task, tmp_path, reward_data=RewardData()))
+    result = await env.rollout(task, tmp_path, reward_data=RewardData())
     (tmp_path / "workspace/answer.txt").unlink()
     (tmp_path / "workspace").rmdir()
-    assert asyncio.run(env.rollout(task, tmp_path, reward_data=RewardData())) == result
+    assert (await env.rollout(task, tmp_path, reward_data=RewardData())) == result
     assert not (tmp_path / "workspace").exists()
     assert env.calls == 1
 
 
 @pytest.mark.parametrize("linked_dir", ["audit", "workspace"])
-def test_reject_linked_rollout_directories(tmp_path, linked_dir):
+async def test_reject_linked_rollout_directories(tmp_path, linked_dir):
     """Do not allow directory aliases to collapse audit and agent storage."""
     target = tmp_path / ("workspace" if linked_dir == "audit" else "audit")
     target.mkdir()
     (tmp_path / linked_dir).symlink_to(target, target_is_directory=True)
     env = ExampleEnvironment(Options())
     with pytest.raises(ValueError, match="symbolic links"):
-        asyncio.run(env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
+        (await env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
     assert env.calls == 0
     assert list(target.iterdir()) == []
 
 
-def test_corrupt_completed_result_is_reported(tmp_path):
+async def test_corrupt_completed_result_is_reported(tmp_path):
     """Corrupted completion data does not trigger silent paid execution."""
     env = ExampleEnvironment(Options())
-    asyncio.run(env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
+    (await env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
     (tmp_path / "audit/result.json").write_text("{}")
     with pytest.raises(ValidationError):
-        asyncio.run(env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
+        (await env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
     assert env.calls == 1
 
 
@@ -249,7 +241,7 @@ def test_environment_is_abstract_and_reward_must_be_finite():
         Reward(score=float("nan"), success=False, detail="Invalid score")
 
 
-def test_task_subclass_fields_and_original_objects_are_preserved(tmp_path):
+async def test_task_subclass_fields_and_original_objects_are_preserved(tmp_path):
     """Pass live objects to execution and include extended task fields in resume."""
 
     class FileTask(Task):
@@ -260,23 +252,25 @@ def test_task_subclass_fields_and_original_objects_are_preserved(tmp_path):
     skill = make_skill("Check columns")
 
     class ObjectEnvironment(ExampleEnvironment):
-        def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+        async def _run(
+            self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path
+        ) -> RolloutResult:
             """Confirm execution receives the task and complete prepared Skill objects."""
             assert task is original_task
             assert type(skills[0]) is type(skill)
             assert skills[0].content == skill.content
             assert skills[0] is not skill
-            return super()._run(task=task, reward_data=reward_data, skills=skills, workspace=workspace)
+            return await super()._run(task=task, reward_data=reward_data, skills=skills, workspace=workspace)
 
     original_task = task
     env = ObjectEnvironment(Options())
-    result = asyncio.run(
-        env.rollout(task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1))
+    result = await env.rollout(
+        task, tmp_path, reward_data=RewardData(), skill_set=SkillSet({"0": skill}, max_concurrency=1)
     )
     assert result.trajectory[0]["task"]["input_file"] == "first.csv"
     with pytest.raises(ValueError, match="inputs changed"):
-        asyncio.run(
-            env.rollout(
+        (
+            await env.rollout(
                 task.model_copy(update={"input_file": "second.csv"}),
                 tmp_path,
                 reward_data=RewardData(),
@@ -285,22 +279,22 @@ def test_task_subclass_fields_and_original_objects_are_preserved(tmp_path):
         )
 
 
-def test_timing_is_measured_and_preserved_on_resume(tmp_path):
+async def test_timing_is_measured_and_preserved_on_resume(tmp_path):
     """Audit actual execution once and retain its timestamps on cache reads."""
     env = ExampleEnvironment(Options())
     with patch("mindmemos_skill.envs.base.perf_counter", side_effect=[10.0, 12.5]):
-        result = asyncio.run(env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
+        result = await env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData())
     assert result.duration_s == 2.5
     assert result.started_at.utcoffset().total_seconds() == 0
     assert result.finished_at >= result.started_at
     with patch("mindmemos_skill.envs.base.perf_counter", side_effect=AssertionError("Unexpected execution")):
-        cached = asyncio.run(env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
+        cached = await env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData())
     assert cached == result
     assert env.calls == 1
 
 
 @pytest.mark.parametrize("typed", [False, True])
-def test_reward_and_usage_extensions_survive_resume(tmp_path, typed):
+async def test_reward_and_usage_extensions_survive_resume(tmp_path, typed):
     """Keep nested extension data and optionally restore concrete model types."""
 
     class DetailedReward(Reward):
@@ -321,9 +315,11 @@ def test_reward_and_usage_extensions_survive_resume(tmp_path, typed):
     class AuditedEnvironment(ExampleEnvironment):
         result_type = DetailedResult if typed else RolloutResult
 
-        def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+        async def _run(
+            self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path
+        ) -> RolloutResult:
             """Add typed and untyped audit extensions to a local execution."""
-            result = super()._run(task=task, reward_data=reward_data, skills=skills, workspace=workspace)
+            result = await super()._run(task=task, reward_data=reward_data, skills=skills, workspace=workspace)
             result.reward = DetailedReward(
                 score=0.75,
                 success=False,
@@ -341,9 +337,9 @@ def test_reward_and_usage_extensions_survive_resume(tmp_path, typed):
             return result
 
     env = AuditedEnvironment(Options())
-    result = asyncio.run(env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
+    result = await env.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData())
     restored = AuditedEnvironment(Options())
-    cached = asyncio.run(restored.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData()))
+    cached = await restored.rollout(Task(id="task-001", instruction="task"), tmp_path, reward_data=RewardData())
     assert restored.calls == 0
     assert cached == result
     assert cached.reward.model_dump()["passed_cases"] == 3
@@ -376,7 +372,7 @@ def test_audit_validation_and_defaults():
         )
 
 
-def test_private_reward_data_is_audited_and_invalidates_resume(tmp_path):
+async def test_private_reward_data_is_audited_and_invalidates_resume(tmp_path):
     """Persist private scoring inputs outside the workspace and check them on resume."""
     import json
 
@@ -387,18 +383,20 @@ def test_private_reward_data_is_audited_and_invalidates_resume(tmp_path):
     private = AnswerData(answer="private-reference")
 
     class ScoringEnvironment(ExampleEnvironment):
-        def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+        async def _run(
+            self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path
+        ) -> RolloutResult:
             """Receive the original private scoring object without copying it to workspace."""
             assert reward_data is private
-            return super()._run(task=task, reward_data=reward_data, skills=skills, workspace=workspace)
+            return await super()._run(task=task, reward_data=reward_data, skills=skills, workspace=workspace)
 
     env = ScoringEnvironment(Options())
     task = Task(id="private-test", instruction="Solve this task")
-    result = asyncio.run(env.rollout(task, tmp_path, reward_data=private))
+    result = await env.rollout(task, tmp_path, reward_data=private)
     request = json.loads((tmp_path / "audit/request.json").read_text())
     assert request["reward_data"]["data"] == {"answer": "private-reference"}
     assert "private-reference" not in (tmp_path / "workspace/answer.txt").read_text()
-    assert asyncio.run(env.rollout(task, tmp_path, reward_data=AnswerData(answer="private-reference"))) == result
+    assert (await env.rollout(task, tmp_path, reward_data=AnswerData(answer="private-reference"))) == result
     with pytest.raises(ValueError, match="inputs changed"):
-        asyncio.run(env.rollout(task, tmp_path, reward_data=AnswerData(answer="changed-reference")))
+        (await env.rollout(task, tmp_path, reward_data=AnswerData(answer="changed-reference")))
     assert env.calls == 1

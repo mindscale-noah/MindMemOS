@@ -7,6 +7,7 @@ from mindmemos_skill.api.typing import (
     CommitFromLocalRequest,
     CommitRequest,
     FileSkillInfo,
+    ListTrajectoriesRequest,
     RegisterFromLocalRequest,
     RegisterRequest,
     ReportTrajectoryRequest,
@@ -128,7 +129,7 @@ async def test_inactive_commit_keeps_captured_parent_after_active_moves(service)
     current = await service.commit_skill(CommitRequest(**ref(first), skill=info("new active")))
     with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as store:
         version_id = store.skills.new_version_id()
-        family = store.skills.commit(
+        family = await store.skills.commit(
             first.skill,
             Skill(
                 SkillContent(
@@ -142,7 +143,7 @@ async def test_inactive_commit_keeps_captured_parent_after_active_moves(service)
             active=False,
             version_id=version_id,
         )
-        child = store.skills.version_by_id("p", version_id)
+        child = await store.skills.version_by_id("p", version_id)
     assert family.active_version_id == current.version.version_id
     assert child.parent_version_ids == [first.version.version_id]
 
@@ -180,7 +181,7 @@ async def test_directory_commit_keeps_implementation_configuration(service, tmp_
     source.config = {"routing": "fixed"}
     source.config_schema_version = 2
     with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as store:
-        store.skills.commit(first.skill, source, message="Runtime settings")
+        (await store.skills.commit(first.skill, source, message="Runtime settings"))
     directory = tmp_path / "edited"
     directory.mkdir()
     (directory / "SKILL.md").write_text("---\nname: Example\ndescription: Instructions\n---\nnew content")
@@ -191,6 +192,30 @@ async def test_directory_commit_keeps_implementation_configuration(service, tmp_
     assert committed.version.config == {"routing": "fixed"}
     assert committed.version.config_schema_version == 2
     assert committed.version.content_hash != first.version.content_hash
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id,agent_id", [(None, None), ("user", None), (None, "agent"), ("user", "agent")])
+async def test_reported_trajectory_roundtrip_allows_optional_actors(service, user_id, agent_id):
+    """Persist, read and list reports without requiring either actor identity."""
+    first = await register(service)
+    report = await service.report_trajectory(
+        ReportTrajectoryRequest(
+            project_id="p",
+            skill_version_id=first.version.version_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            messages=[{"role": "user", "content": "Question"}],
+        )
+    )
+    restored = await service.show_trajectory(ShowTrajectoryRequest(project_id="p", trajectory_id=report.trajectory_id))
+    summaries = await service.list_trajectories(ListTrajectoriesRequest(project_id="p", skill_id=first.skill.skill_id))
+    assert restored == report
+    assert len(summaries) == 1
+    assert report.user_id == summaries[0].user_id == user_id
+    assert report.agent_id == summaries[0].agent_id == agent_id
+    assert summaries[0].skill_version_id == first.version.version_id
+    assert summaries[0].received_at == report.received_at
 
 
 @pytest.mark.asyncio

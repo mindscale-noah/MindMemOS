@@ -1,13 +1,26 @@
 """PostgreSQL connections and pgvector-specific SQL adaptation."""
 
-from sqlalchemy import Float, create_engine, event, literal
+from sqlalchemy import Float, event, literal
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.types import TypeDecorator
 
 from ...base import Infrastructure
 from ..base import Database
 from ..config import PostgresConfig
 from ..vector import Vector
+
+
+async def _check_extension(connection) -> None:
+    """Check pgvector through the native driver and leave no open transaction."""
+    try:
+        async with connection.cursor() as cursor:
+            await cursor.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+            installed = await cursor.fetchone() is not None
+    finally:
+        await connection.rollback()
+    if not installed:
+        raise RuntimeError("PostgreSQL requires the vector extension; install it during deployment")
 
 
 class PostgresVector(TypeDecorator):
@@ -50,7 +63,7 @@ class PostgresDatabase(Database):
     """Validated remote connection and pool settings."""
 
     def _create_engine(self, config):
-        engine = create_engine(
+        engine = create_async_engine(
             config.url,
             pool_size=config.pool_size,
             max_overflow=config.max_overflow,
@@ -59,14 +72,9 @@ class PostgresDatabase(Database):
         )
         engine.dialect.colspecs = {**engine.dialect.colspecs, Vector: PostgresVector}
 
-        @event.listens_for(engine, "connect")
+        @event.listens_for(engine.sync_engine, "connect")
         def check_extension(connection, record):
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
-                installed = cursor.fetchone() is not None
-            connection.rollback()
-            if not installed:
-                raise RuntimeError("PostgreSQL requires the vector extension; install it during deployment")
+            connection.run_async(_check_extension)
 
         return engine
 

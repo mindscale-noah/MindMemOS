@@ -29,7 +29,7 @@ def environment(config: CLIConfig, key_name: str, url_name: str | None = None) -
     return values
 
 
-def run_cli(
+async def run_cli(
     command: list[str], workspace: Path, config: CLIConfig, overrides: dict[str, str], prompt: str | None = None
 ) -> str:
     """Execute one native harness and require a successful exit.
@@ -47,7 +47,7 @@ def run_cli(
     Raises:
         RuntimeError: The executable exits unsuccessfully.
     """
-    result = execute(
+    result = await execute(
         command,
         workspace,
         ExecutionConfig(

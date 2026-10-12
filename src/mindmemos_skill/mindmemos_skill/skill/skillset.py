@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
-from ..common.asyncio import map_sync_bounded, run_sync
+from ..common.asyncio import map_bounded
 from .skill import Skill
 from .typing import SkillSetIdentity
 
@@ -59,7 +59,7 @@ class SkillSet:
             config=self.config_snapshot(),
         )
 
-    def select(self, task: "Task") -> list[str]:
+    async def select(self, task: "Task") -> list[str]:
         """Select all candidates in order; subclasses may recommend a subset.
 
         Args:
@@ -87,12 +87,12 @@ class SkillSet:
             TypeError: A member does not return a complete Skill.
             Exception: Selection or assembly fails; no partial result is returned.
         """
-        selected = list(await run_sync(self.select, task) if selected_ids is None else selected_ids)
+        selected = list(await self.select(task) if selected_ids is None else selected_ids)
         if len(set(selected)) != len(selected) or any(key not in self._skills for key in selected):
             raise ValueError("Selection must contain unique IDs from the candidate scope")
         if not selected:
             return []
-        assembled = await map_sync_bounded(
+        assembled = await map_bounded(
             lambda key: self._skills[key].assemble(task), selected, concurrency=self.max_concurrency
         )
         if any(not isinstance(skill, Skill) for skill in assembled):

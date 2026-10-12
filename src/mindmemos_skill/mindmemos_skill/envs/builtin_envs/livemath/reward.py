@@ -6,7 +6,7 @@ import re
 from .typing import LiveMathReward, LiveMathRewardData, LiveMathTask
 
 
-def evaluate(response: str, task: LiveMathTask, reward_data: LiveMathRewardData) -> LiveMathReward:
+async def evaluate(response: str, task: LiveMathTask, reward_data: LiveMathRewardData) -> LiveMathReward:
     """Compare the extracted choice with the private reference.
 
     Args:

@@ -21,7 +21,6 @@ from mindmemos_skill.api.typing import (
 )
 from mindmemos_skill.envs import Environment, Reward, RolloutResult, Task, Usage
 from mindmemos_skill.envs.data import DataSample, RewardData
-from mindmemos_skill.infra.task_manager.progress import ProgressReporter
 from mindmemos_skill.skill import Skill, SkillContent, SkillSet
 from pydantic import BaseModel, ConfigDict
 
@@ -118,7 +117,6 @@ class LookupTrainer(SkillTrainer[LookupTrainerConfig]):
         train_samples: Sequence[DataSample],
         validation_samples: Sequence[DataSample],
         work_dir: Path,
-        progress: ProgressReporter | None = None,
     ) -> Skill:
         """Train mappings from the supplied samples and environment feedback.
 
@@ -128,7 +126,6 @@ class LookupTrainer(SkillTrainer[LookupTrainerConfig]):
             train_samples: Public tasks and private reference answers for training.
             validation_samples: Reserved samples; this toy trainer does not select on them.
             work_dir: Directory containing independent baseline rollouts.
-            progress: Optional pipeline progress reporter.
 
         Returns:
             A Skill with mappings learned from failed training samples.

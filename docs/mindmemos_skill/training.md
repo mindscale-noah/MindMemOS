@@ -130,7 +130,7 @@ CLI 不传 `--auto-accept` 时保存新版本但保持当前版本；传入时�
 
 - train、evolve 分别启用和不启用 `--auto-accept`，核对当前版本、正文和资源。
 - 训练 3 个样本，外部 val/test 各评估 1 个样本；相同目录和精确初始版本的重试复用原发布。
-- `task show`、单次 `task progress`、`task progress --follow`，以及 `--after` 排除已读事件；事件序号连续、follow 不重复且终态退出。
+- `task show`、单次 `task progress`、`task progress --follow`，以及 `--after` 排除已读任务日志；日志序号递增但允许间隔，follow 不重复且终态时排空剩余日志后退出。
 - 空轨迹和只有 2 条轨迹时，evolve 在 `sample_size=3` 下失败且不增加版本。
 - 上报 10 条轨迹：目标 Skill 有 7 条 completed、1 条 failed，另一 Skill 有 2 条 completed；状态和家族过滤正确。
 - 演进按选定版本收集，`traj_collect.trajectory_limit=5` 限定收集数量，再以 `traj_collect.seed=42` 无放回采样 3 条；两次采样一致，排除其他版本的轨迹。

@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from uuid import UUID
 
 from ..api.typing import OrganizeRequest, OrganizeResult, RecommendRequest, RecommendResult
-from ..infra.task_manager.progress import ProgressReporter
 from ..registry.base import ConfigT
 from .base import Pipeline
 
@@ -25,12 +24,11 @@ class ManagePipeline(Pipeline[ConfigT], ABC):
         """
 
     @abstractmethod
-    async def organize(self, request: OrganizeRequest, *, reporter: ProgressReporter | None = None) -> OrganizeResult:
+    async def organize(self, request: OrganizeRequest) -> OrganizeResult:
         """Publish one Skill Set snapshot.
 
         Args:
             request: Authorized graph identity and exact Skill versions.
-            reporter: Optional progress sink for graph publication.
 
         Returns:
             Published snapshot identity.

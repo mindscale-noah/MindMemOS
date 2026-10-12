@@ -1,6 +1,5 @@
 """Exercise raw LiveMath adaptation, private scoring, and the real SDK boundary."""
 
-import asyncio
 import json
 
 import httpx
@@ -70,7 +69,7 @@ def test_source_changes_invalidate_provenance(data):
 @pytest.mark.parametrize(
     "prediction", ["tag", "label", "text", "punctuation", "last_tag", "first_token", "wrong", "empty"]
 )
-def test_exact_choice_scoring_formats(data, prediction):
+async def test_exact_choice_scoring_formats(data, prediction):
     """Keep tag, text, and final-line label parsing consistent with the benchmark contract."""
     sample = data.load()[0]
     correct = sample.reward_data.correct_choice
@@ -85,13 +84,13 @@ def test_exact_choice_scoring_formats(data, prediction):
         "wrong": f"<answer>{wrong}</answer>",
         "empty": "",
     }
-    reward = evaluate(outputs[prediction], sample.task, sample.reward_data)
+    reward = await evaluate(outputs[prediction], sample.task, sample.reward_data)
     assert reward.success is (prediction not in {"wrong", "empty"})
     assert reward.score == float(reward.success)
     assert json.loads(reward.detail)["correct_label"] == correct.label
 
 
-def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
+async def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
     """Exercise environment integration with a deterministic local agent double."""
     sample = data.load()[0]
     config = LiveMathConfig(agent=OpenAIChatConfig(model="test-model"))
@@ -99,7 +98,7 @@ def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
     class CapturingAgent(OpenAIChatAgent):
         calls = 0
 
-        def run(self, *, system: str, user: str) -> AgentResult:
+        async def run(self, *, system: str, user: str) -> AgentResult:
             """Assert only public material is sent and return a scored response."""
             self.calls += 1
             assert "Check quantifiers" in system
@@ -128,10 +127,8 @@ def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
         )
     )
     root = tmp_path / "rollout"
-    result = asyncio.run(
-        env.rollout(
-            sample.task, root, reward_data=sample.reward_data, skill_set=SkillSet({"0": skill}, max_concurrency=1)
-        )
+    result = await env.rollout(
+        sample.task, root, reward_data=sample.reward_data, skill_set=SkillSet({"0": skill}, max_concurrency=1)
     )
     assert result.reward.success and result.usage.total_tokens == 120
     assert result.usage.input_tokens == 100 and result.usage.output_tokens == 20
@@ -144,22 +141,19 @@ def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
     audit = json.loads((root / "audit/request.json").read_text())
     assert audit["reward_data"]["data"]["correct_choice"]["label"] == sample.reward_data.correct_choice.label
     assert (
-        asyncio.run(
-            env.rollout(
-                sample.task, root, reward_data=sample.reward_data, skill_set=SkillSet({"0": skill}, max_concurrency=1)
-            )
+        await env.rollout(
+            sample.task, root, reward_data=sample.reward_data, skill_set=SkillSet({"0": skill}, max_concurrency=1)
         )
-        == result
-    )
+    ) == result
     assert agent.calls == 1
 
     class TaskSkill(Skill):
-        def assemble(self, task):
+        async def assemble(self, task):
             return self.with_content(self.content + task.instruction)
 
     dynamic = TaskSkill(skill.source)
-    asyncio.run(
-        env.rollout(
+    (
+        await env.rollout(
             sample.task,
             tmp_path / "dynamic",
             reward_data=sample.reward_data,
@@ -170,7 +164,7 @@ def test_full_rollout_skill_usage_audit_and_resume(data, tmp_path):
 
 
 @pytest.mark.parametrize("finish_reason", ["stop", "length"])
-def test_sdk_payload_usage_and_incomplete_output(monkeypatch, finish_reason):
+async def test_sdk_payload_usage_and_incomplete_output(monkeypatch, finish_reason):
     """Test the real SDK request format with an in-memory HTTP transport."""
     import openai
 
@@ -197,16 +191,18 @@ def test_sdk_payload_usage_and_incomplete_output(monkeypatch, finish_reason):
         )
 
     monkeypatch.setattr(
-        openai, "DefaultHttpxClient", lambda **kwargs: httpx.Client(transport=httpx.MockTransport(respond), **kwargs)
+        openai,
+        "DefaultAsyncHttpxClient",
+        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs),
     )
     agent = OpenAIChatAgent(
         OpenAIChatConfig(model="test-model", api_key="test-key", base_url="https://unit-test.invalid/v1")
     )
     if finish_reason == "length":
         with pytest.raises(RuntimeError, match="complete text response"):
-            agent.run(system="system", user="question")
+            (await agent.run(system="system", user="question"))
     else:
-        result = agent.run(system="system", user="question")
+        result = await agent.run(system="system", user="question")
         assert result.usage["total_tokens"] == 14
         assert result.usage["input_tokens"] == 10
         assert result.usage["output_tokens"] == 4

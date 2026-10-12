@@ -130,7 +130,7 @@ class ChatModel(Protocol):
     config: OpenAIChatConfig
     """Recorded model settings; injected clients must match configured settings."""
 
-    def run(self, *, system: str, user: str, response_format: dict) -> AgentResult:
+    async def run(self, *, system: str, user: str, response_format: dict) -> AgentResult:
         """Return structured JSON text for a graph operation.
 
         Args:

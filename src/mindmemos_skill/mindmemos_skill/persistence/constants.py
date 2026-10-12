@@ -44,11 +44,11 @@ SKILL_GRAPH_REVISIONS_TABLE: Final[str] = "skill_graph_revisions_v1"
 SKILL_TASKS_TABLE: Final[str] = "skill_tasks_v1"
 """Durable Skill execution requests and their latest state."""
 
-SKILL_TASK_PROGRESS_TABLE: Final[str] = "skill_task_progress_v1"
-"""Ordered, project-owned algorithm progress events."""
-
 SKILL_VERSION_LABEL_INDEX: Final[str] = "skill_versions_label_uq"
 """Unique version display label within one project and Skill."""
 
 SKILL_LIST_CURSOR_INDEX: Final[str] = "skills_project_created_cursor_idx"
 """Project and immutable creation order for scrolling through Skill families."""
+
+SKILL_TASK_LOGS_TABLE: Final[str] = "skill_task_logs_v1"
+"""Append-only correlated Python logs for every physical task attempt."""

@@ -169,10 +169,8 @@ class TrajectoryRecord(RecordModel):
             raise ValueError("finished_at must not precede started_at")
         if self.source == "local" and (not self.task_instruction or self.started_at is None):
             raise ValueError("Local trajectories require a task instruction and start time")
-        if self.source == "reported" and not all(
-            (self.skill_id, self.skill_version_id, self.user_id, self.agent_id, self.received_at)
-        ):
-            raise ValueError("Reported trajectories require a Skill version, actors, and receipt time")
+        if self.source == "reported" and not all((self.skill_id, self.skill_version_id, self.received_at)):
+            raise ValueError("Reported trajectories require a Skill version and receipt time")
         return self
 
 
@@ -191,11 +189,11 @@ class TrajectorySummary(RecordModel):
     skill_version_id: str = Field(min_length=1)
     """Exact Skill version loaded during execution."""
 
-    user_id: str = Field(min_length=1)
-    """Business user who reported the attempt."""
+    user_id: str | None = Field(default=None, min_length=1)
+    """Business user who reported the attempt, if supplied."""
 
-    agent_id: str = Field(min_length=1)
-    """Agent that reported the attempt."""
+    agent_id: str | None = Field(default=None, min_length=1)
+    """Agent that reported the attempt, if supplied."""
 
     status: str
     """Caller-declared execution outcome."""

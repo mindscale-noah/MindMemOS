@@ -1,6 +1,5 @@
 """Verify hash-free user inputs and internally checked external dependencies."""
 
-import asyncio
 import json
 
 import pytest
@@ -61,7 +60,7 @@ class FileEnvironment(Environment[Options]):
     calls = 0
     change_reference = False
 
-    def _run(self, *, task, reward_data, skills, workspace):
+    async def _run(self, *, task, reward_data, skills, workspace):
         self.calls += 1
         if self.change_reference:
             reward_data.cases[0].path.write_text("changed during execution")
@@ -78,29 +77,29 @@ def file_sample(tmp_path):
     )
 
 
-def test_json_inputs_resume_without_hashes_and_detect_reference_changes(tmp_path):
+async def test_json_inputs_resume_without_hashes_and_detect_reference_changes(tmp_path):
     task, private = file_sample(tmp_path)
     task = SpreadsheetBenchTask.model_validate_json(task.model_dump_json())
     private = SpreadsheetBenchRewardData.model_validate_json(private.model_dump_json())
     env = FileEnvironment(Options())
     directory = tmp_path / "run"
-    result = asyncio.run(env.rollout(task, directory, reward_data=private))
-    assert asyncio.run(env.rollout(task, directory, reward_data=private)) == result
+    result = await env.rollout(task, directory, reward_data=private)
+    assert (await env.rollout(task, directory, reward_data=private)) == result
     assert env.calls == 1
     request = json.loads((directory / "audit/request.json").read_text())
     assert set(request["input_identity"]) == {str(task.cases[0].path), str(private.cases[0].path)}
     private.cases[0].path.write_bytes(b"new reference")
     with pytest.raises(ValueError, match="inputs changed"):
-        asyncio.run(env.rollout(task, directory, reward_data=private))
+        (await env.rollout(task, directory, reward_data=private))
     assert env.calls == 1
 
 
-def test_changed_reference_during_execution_is_never_cached(tmp_path):
+async def test_changed_reference_during_execution_is_never_cached(tmp_path):
     task, private = file_sample(tmp_path)
     env = FileEnvironment(Options())
     env.change_reference = True
     with pytest.raises(ValueError, match="files changed during execution"):
-        asyncio.run(env.rollout(task, tmp_path / "run", reward_data=private))
+        (await env.rollout(task, tmp_path / "run", reward_data=private))
     assert not (tmp_path / "run/audit/result.json").exists()
 
 

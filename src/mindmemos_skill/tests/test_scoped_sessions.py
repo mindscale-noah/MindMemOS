@@ -38,7 +38,7 @@ class UnscopedRow(BaseModel):
 
 
 @pytest.fixture
-def database(tmp_path):
+async def database(tmp_path):
     """Build an isolated SQLite resource with project and agent dimensions."""
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'scoped.db'}"))
     table = Table(
@@ -52,84 +52,86 @@ def database(tmp_path):
     database.tables.register(TableSpec(name="scope_test_rows", table=table, insert_model=Row))
     unscoped = Table("unscoped_test_rows", MetaData(), Column("item_id", Text, primary_key=True))
     database.tables.register(TableSpec(name="unscoped_test_rows", table=unscoped, insert_model=UnscopedRow))
-    database.create_tables()
+    (await database.create_tables())
     try:
         yield database
     finally:
-        database.close()
+        (await database.close())
 
 
-def test_scoped_database_guards_reads_writes_and_search(database):
+async def test_scoped_database_guards_reads_writes_and_search(database):
     """No operation can read or alter a second project's row."""
     table = "scope_test_rows"
-    database.insert(table, [{"project_id": "other", "item_id": "same", "embedding": [1.0, 0.0]}])
+    (await database.insert(table, [{"project_id": "other", "item_id": "same", "embedding": [1.0, 0.0]}]))
     with database.scoped(Scope(fields={"project_id": "mine"})) as scoped:
-        scoped.insert(table, [{"item_id": "same", "embedding": [0.0, 1.0]}])
-        assert scoped.count(table) == 1
-        assert scoped.select_distinct(table, "item_id") == ["same"]
-        assert scoped.select_distinct(table, "project_id") == ["mine"]
-        assert scoped.get(table, {"project_id": "mine", "item_id": "same"})["project_id"] == "mine"
-        assert scoped.search(table, vector_field="embedding", query_vector=[0.0, 1.0])[0].record["project_id"] == "mine"
-        assert scoped.update(table, {"agent_id": "a"}, filters={}) == 1
-        assert scoped.update_many(table, [{"project_id": "mine", "item_id": "same", "agent_id": "b"}]) == 1
-        with scoped.transaction() as transaction:
-            assert transaction.count(table) == 1
-            assert transaction.upsert(table, [{"item_id": "new"}]) == 1
+        (await scoped.insert(table, [{"item_id": "same", "embedding": [0.0, 1.0]}]))
+        assert (await scoped.count(table)) == 1
+        assert (await scoped.select_distinct(table, "item_id")) == ["same"]
+        assert (await scoped.select_distinct(table, "project_id")) == ["mine"]
+        assert (await scoped.get(table, {"project_id": "mine", "item_id": "same"}))["project_id"] == "mine"
+        assert (await scoped.search(table, vector_field="embedding", query_vector=[0.0, 1.0]))[0].record[
+            "project_id"
+        ] == "mine"
+        assert (await scoped.update(table, {"agent_id": "a"}, filters={})) == 1
+        assert (await scoped.update_many(table, [{"project_id": "mine", "item_id": "same", "agent_id": "b"}])) == 1
+        async with scoped.transaction() as transaction:
+            assert (await transaction.count(table)) == 1
+            assert (await transaction.upsert(table, [{"item_id": "new"}])) == 1
         with pytest.raises(ValueError, match="conflicts"):
-            scoped.select(table, filters={"project_id": "other"})
+            (await scoped.select(table, filters={"project_id": "other"}))
         with pytest.raises(ValueError, match="conflicts"):
-            scoped.insert(table, [{"project_id": "other", "item_id": "wrong"}])
+            (await scoped.insert(table, [{"project_id": "other", "item_id": "wrong"}]))
         with pytest.raises(ValueError, match="Scope fields cannot be updated"):
-            scoped.update(table, {"project_id": "other"}, filters={})
-        assert scoped.delete(table, filters={}) == 2
-    assert database.count(table, filters={"project_id": "other"}) == 1
+            (await scoped.update(table, {"project_id": "other"}, filters={}))
+        assert (await scoped.delete(table, filters={})) == 2
+    assert (await database.count(table, filters={"project_id": "other"})) == 1
     with pytest.raises(RuntimeError, match="closed"):
-        scoped.count(table)
+        (await scoped.count(table))
 
 
-def test_missing_scope_dimension_fails_closed(database):
+async def test_missing_scope_dimension_fails_closed(database):
     """A requested field cannot be silently dropped from a resource."""
     table = "scope_test_rows"
     with database.scoped(Scope(fields={"project_id": "mine", "user_id": "u"})) as scoped:
         with pytest.raises(ValueError, match="user_id"):
-            scoped.count(table)
+            (await scoped.count(table))
     with database.scoped(Scope(fields={"project_id": "mine", "dataset_id": "d"})) as scoped:
         with pytest.raises(ValueError, match="dataset_id"):
-            scoped.count(table)
+            (await scoped.count(table))
     with database.scoped(Scope(fields={"project_id": "mine"})) as scoped:
         with pytest.raises(ValueError, match="project_id"):
-            scoped.count("unscoped_test_rows")
+            (await scoped.count("unscoped_test_rows"))
 
 
-def test_agent_scope_narrows_rows_within_a_project(database):
+async def test_agent_scope_narrows_rows_within_a_project(database):
     """Optional agent ownership is applied when explicitly requested."""
     table = "scope_test_rows"
     with database.scoped(Scope(fields={"project_id": "mine", "agent_id": "a"})) as scoped:
-        scoped.insert(table, [{"item_id": "a"}])
-        assert scoped.get(table, {"project_id": "mine", "item_id": "a"})["agent_id"] == "a"
+        (await scoped.insert(table, [{"item_id": "a"}]))
+        assert (await scoped.get(table, {"project_id": "mine", "item_id": "a"}))["agent_id"] == "a"
     with database.scoped(Scope(fields={"project_id": "mine", "agent_id": "b"})) as scoped:
-        scoped.insert(table, [{"item_id": "b"}])
-        assert scoped.count(table) == 1
-        assert scoped.get(table, {"project_id": "mine", "item_id": "a"}) is None
-        assert scoped.delete(table, filters={}) == 1
-    assert database.count(table, filters={"project_id": "mine"}) == 1
+        (await scoped.insert(table, [{"item_id": "b"}]))
+        assert (await scoped.count(table)) == 1
+        assert (await scoped.get(table, {"project_id": "mine", "item_id": "a"})) is None
+        assert (await scoped.delete(table, filters={})) == 1
+    assert (await database.count(table, filters={"project_id": "mine"})) == 1
 
 
-def test_infra_accepts_any_registered_scope_field(database):
+async def test_infra_accepts_any_registered_scope_field(database):
     """Infra can isolate a table without assigning meaning to its column names."""
-    database.insert("unscoped_test_rows", [{"item_id": "one"}, {"item_id": "two"}])
+    (await database.insert("unscoped_test_rows", [{"item_id": "one"}, {"item_id": "two"}]))
     supplied = {"item_id": "one"}
     scope = Scope(fields=supplied)
     supplied["item_id"] = "two"
     with database.scoped(scope) as scoped:
-        assert scoped.count("unscoped_test_rows") == 1
-        assert scoped.get("unscoped_test_rows", "one") == {"item_id": "one"}
+        assert (await scoped.count("unscoped_test_rows")) == 1
+        assert (await scoped.get("unscoped_test_rows", "one")) == {"item_id": "one"}
         with pytest.raises(ValueError, match="conflicts"):
-            scoped.get("unscoped_test_rows", "two")
+            (await scoped.get("unscoped_test_rows", "two"))
         with pytest.raises(ValueError, match="conflicts"):
-            scoped.delete("unscoped_test_rows", filters={"item_id": "two"})
+            (await scoped.delete("unscoped_test_rows", filters={"item_id": "two"}))
     with database.scoped({"item_id": "two"}) as scoped:
-        assert scoped.count("unscoped_test_rows") == 1
+        assert (await scoped.count("unscoped_test_rows")) == 1
     with pytest.raises(ValueError, match="unique"):
         Scope(fields=(("item_id", "one"), ("item_id", "two")))
 

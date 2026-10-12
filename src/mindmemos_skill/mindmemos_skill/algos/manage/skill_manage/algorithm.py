@@ -2,9 +2,9 @@
 
 import hashlib
 import json
+from asyncio import Lock
 from collections.abc import Mapping
 from itertools import combinations, islice
-from threading import Lock
 from uuid import UUID, uuid4
 
 from ....agents import OpenAIChatAgent
@@ -105,7 +105,7 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
             "storage": self.store.scope,
         }
 
-    def organize(self, *, skills: Mapping[str, Skill]) -> None:
+    async def organize(self, *, skills: Mapping[str, Skill]) -> None:
         """Validate the explicit scope and reuse or atomically publish its graph.
 
         Args:
@@ -115,12 +115,12 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
             Exception: A source, model, or storage failure invalidates this manager
                 until a later organize call succeeds; committed history is retained.
         """
-        with self._lock:
+        async with self._lock:
             prior = self._state
             self._state = None
             if set(self.scene_records) - set(skills):
                 raise ValueError("Scene records refer to Skills outside the candidate scope")
-            bindings = self.store.validate_skills(skills)
+            bindings = await self.store.validate_skills(skills)
             settings = self.config_snapshot()
             if self.store.message is not None:
                 settings["message"] = self.store.message
@@ -134,10 +134,10 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
             if prior is not None and prior.request_hash == request_hash:
                 self._state = prior
                 return
-            snapshot_id = self.store.find(request_hash)
+            snapshot_id = await self.store.find(request_hash)
             if snapshot_id is None:
-                snapshot_id = self._build(skills, request_hash)
-            nodes, edges, _ = self.store.load(snapshot_id)
+                snapshot_id = await self._build(skills, request_hash)
+            nodes, edges, _ = await self.store.load(snapshot_id)
             expected = set(skills)
             actual = {str(node.metadata["collection_skill_id"]) for node in nodes if node.node_type == "skill"}
             if actual != expected:
@@ -149,7 +149,7 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
         """Return the pinned snapshot after a successful organization or restore."""
         return self._state.snapshot_id if self._state is not None else None
 
-    def restore(self, snapshot_id: UUID, *, skills: Mapping[str, Skill]) -> None:
+    async def restore(self, snapshot_id: UUID, *, skills: Mapping[str, Skill]) -> None:
         """Pin a persisted graph for recommendation without rebuilding it.
 
         Args:
@@ -159,10 +159,10 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
         Raises:
             ValueError: Stored membership or algorithm settings differ from the request.
         """
-        with self._lock:
+        async with self._lock:
             self._state = None
-            self.store.validate_skills(skills)
-            nodes, edges, metadata = self.store.load(snapshot_id)
+            await self.store.validate_skills(skills)
+            nodes, edges, metadata = await self.store.load(snapshot_id)
             expected_config = self.config.model_dump(mode="json")
             if metadata.get("algorithm") != "skill_manage" or metadata.get("config") != expected_config:
                 raise ValueError("Graph algorithm settings differ from the recommendation pipeline")
@@ -174,7 +174,7 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
                     raise ValueError("Stored graph member identity is invalid")
             self._state = OrganizedGraph("", snapshot_id, nodes, edges, frozenset(skills))
 
-    def _build(self, skills, request_hash):
+    async def _build(self, skills, request_hash):
         """Build graph features and vectors before opening the publication transaction."""
         snapshot_id = uuid4()
         nodes = []
@@ -199,7 +199,7 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
             [node.model_dump() for node in nodes], dependency_match_threshold=self.config.dependency_match_threshold
         )
         if self.config.llm_linking:
-            edge_data.extend(self._infer_relations(nodes))
+            edge_data.extend((await self._infer_relations(nodes)))
         if self.config.build_scene:
             for key, record in self.scene_records.items():
                 for scene in record.scenes:
@@ -227,7 +227,7 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
                         for target in scene.next_scene_rules
                     )
         texts = [embedding_text(node) for node in nodes]
-        vectors = self._embed(texts)
+        vectors = await self._embed(texts)
         nodes = [
             type(node).model_validate(
                 {
@@ -250,7 +250,7 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
                 weight=edge["weight"],
                 metadata={"evidence": edge.get("description", "")},
             )
-        return self.store.publish(
+        return await self.store.publish(
             snapshot_id,
             request_hash=request_hash,
             nodes=nodes,
@@ -258,7 +258,7 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
             metadata=self.config_snapshot(),
         )
 
-    def _infer_relations(self, nodes):
+    async def _infer_relations(self, nodes):
         """Infer additional relations in bounded batches without merging same-name nodes."""
         pairs = combinations(nodes, 2)
         result = []
@@ -276,7 +276,7 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
                 ]
                 for pair in batch
             ]
-            response = self._chat(RELATION_SYSTEM, {"pairs": payload})
+            response = await self._chat(RELATION_SYSTEM, {"pairs": payload})
             relations = Relations.model_validate_json(response)
             allowed = {frozenset((left.node_id, right.node_id)) for left, right in batch}
             for relation in relations.relations:
@@ -296,28 +296,28 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
                 )
         return result
 
-    def _chat(self, system, payload):
+    async def _chat(self, system, payload):
         """Require structured JSON from the configured chat dependency."""
         if self.chat_model is None:
             raise RuntimeError("Chat model is not configured")
-        result = self.chat_model.run(
+        result = await self.chat_model.run(
             system=system, user=json.dumps(payload, ensure_ascii=False), response_format={"type": "json_object"}
         )
         if not isinstance(result.output, str):
             raise TypeError("Graph chat model must return JSON text")
         return result.output
 
-    def _embed(self, texts):
+    async def _embed(self, texts):
         """Validate injected models as strictly as the built-in transport."""
         if not texts:
             return []
-        vectors = self.embedding_model.embed(texts)
+        vectors = await self.embedding_model.embed(texts)
         if len(vectors) != len(texts):
             raise ValueError("Embedding count differs from input count")
         validator = Vector(self.config.embedding.dimensions)
         return [validator.validate(vector) for vector in vectors]
 
-    def recommend(self, *, task: Task, limit: int = 5) -> list[str]:
+    async def recommend(self, *, task: Task, limit: int = 5) -> list[str]:
         """Rewrite and embed the public task, then rank only this manager's scope.
 
         Args:
@@ -333,14 +333,14 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
             return []
         if self.config.query_rewrite:
             schema = QuerySchema.model_validate_json(
-                self._chat(QUERY_SYSTEM, task.model_dump(mode="json"))
+                (await self._chat(QUERY_SYSTEM, task.model_dump(mode="json")))
             ).model_dump()
             query = "\n".join(query_schema_values(schema))
         else:
             query = task.instruction
             schema = fallback_query_schema(query)
-        vector = self._embed([query])[0]
-        hits = self.store.search(
+        vector = (await self._embed([query]))[0]
+        hits = await self.store.search(
             state.snapshot_id,
             vector,
             top_k=self.config.seed_top_k,

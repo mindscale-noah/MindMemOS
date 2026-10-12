@@ -9,14 +9,13 @@ from filelock import AsyncFileLock
 from ....algos import Algorithm
 from ....algos.evolve.typing import SkillTrajectory
 from ....api.typing import AlgoSkillEvolveResult, SkillPipelineRequest
-from ....common.asyncio import run_sync
 from ....common.checkpoint import boundary, fingerprint
 from ....common.json import read_json, write_json
 from ....common.skill_runtime import load_runtime_skill
 from ....common.skill_versions import snapshot_from_version
 from ....common.trajectories import collect_skill_trajectories
 from ....envs.typing import Reward, Task
-from ....infra.task_manager.progress import ProgressReporter
+from ....logging import get_logger, stage
 from ....persistence import SkillRecord, TrajectoryRecord
 from ....persistence.store import SkillPersistence
 from ....skill import Skill
@@ -45,14 +44,11 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
         super().__init__(config, persistence=persistence)
         self.evolver = Algorithm.build(config.evolver.class_name, config.evolver.config)
 
-    async def evolve(
-        self, request: SkillPipelineRequest, *, reporter: ProgressReporter | None = None
-    ) -> AlgoSkillEvolveResult:
+    async def evolve(self, request: SkillPipelineRequest) -> AlgoSkillEvolveResult:
         """Collect, sample, merge batch patches and publish a changed child version.
 
         Args:
             request: Authorized project, Skill reference and optional expected parent.
-            reporter: Optional progress sink for evidence, evolution, and publication.
 
         Returns:
             Identity of the published child, or the original version when unchanged.
@@ -69,47 +65,48 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
         identity = {"request": request.model_dump(mode="json"), "config": self.config.model_dump(mode="json")}
         input_hash = fingerprint(identity)
         store = self.persistence.skills
-        async with AsyncFileLock(str(root / f".{run_id}.lock")):
-            published = await run_sync(
-                store.algorithm_publication, request.project_id, run_id, input_hash, operation="evolution"
-            )
+        async with AsyncFileLock(str(root / f".{run_id}.lock"), run_in_executor=False):
+            published = await store.algorithm_publication(request.project_id, run_id, input_hash, operation="evolution")
             if published is not None:
                 return self._result(published, run_id)
             saved = boundary(directory / "request.json", identity)
             if saved is None:
-                owner = await run_sync(store.resolve_family, request.project_id, request.skill_ref)
-                base = await run_sync(store.version, owner, request.base_version_id)
+                owner = await store.resolve_family(request.project_id, request.skill_ref)
+                base = await store.version(owner, request.base_version_id)
                 saved = boundary(
                     directory / "request.json",
                     identity,
                     payload={"owner": owner.model_dump(mode="json"), "base_version_id": base.version_id},
                 )
             owner = SkillRecord.model_validate(saved["owner"])
-            base = await run_sync(store.version_by_id, request.project_id, saved["base_version_id"])
+            base = await store.version_by_id(request.project_id, saved["base_version_id"])
             candidate_path = directory / "candidate.json"
             if candidate_path.exists():
                 snapshot = SkillSnapshot.model_validate(read_json(candidate_path))
             else:
-                trajectories = await self._evidence(request, owner, base, directory, input_hash, reporter)
-                candidate = await self.evolver.evolve(
-                    skill=load_runtime_skill(snapshot_from_version(base)), trajectories=trajectories
-                )
+                with stage("evolve.prepare"):
+                    trajectories = await self._evidence(request, owner, base, directory, input_hash)
+                with stage("evolve.evolving"):
+                    candidate = await self.evolver.evolve(
+                        skill=load_runtime_skill(snapshot_from_version(base)), trajectories=trajectories
+                    )
                 snapshot = candidate.snapshot()
                 write_json(candidate_path, snapshot)
-                if reporter is not None:
-                    await reporter.report(stage="evolved", message="Skill candidate created")
+                get_logger(__name__).info(
+                    "algorithm.progress",
+                    extra={"event_body": {"stage": "evolved", "message": "Skill candidate created"}},
+                )
             evidence = boundary(directory / "evidence.json", input_hash)
             if evidence is None:
                 raise ValueError("Evolution candidate requires its sampled evidence checkpoint")
-            await run_sync(
-                self.persistence.trajectories.mark_consumed,
-                base.version_id,
-                [item["record"]["trajectory_id"] for item in evidence["samples"]],
-                run_id,
+            await self.persistence.trajectories.mark_consumed(
+                base.version_id, [item["record"]["trajectory_id"] for item in evidence["samples"]], run_id
             )
             if snapshot.skill_hash == base.skill_hash:
-                if reporter is not None:
-                    await reporter.report(stage="unchanged", message="No supported Skill changes")
+                get_logger(__name__).info(
+                    "algorithm.progress",
+                    extra={"event_body": {"stage": "unchanged", "message": "No supported Skill changes"}},
+                )
                 return AlgoSkillEvolveResult(
                     skill_id=base.skill_id,
                     base_version_id=base.version_id,
@@ -120,20 +117,22 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                     content_hash=base.content_hash,
                     skill_hash=base.skill_hash,
                 )
-            version = await run_sync(
-                store.commit_algorithm,
-                owner,
-                snapshot,
-                run_id=run_id,
-                input_hash=input_hash,
-                operation="evolution",
-                algorithm=self.config.evolver.class_name.replace("_", "-"),
-                commit_source=self.config.evolver.class_name,
-                base_version_id=base.version_id,
-                active=request.auto_accept,
+            with stage("evolve.publish"):
+                version = await store.commit_algorithm(
+                    owner,
+                    snapshot,
+                    run_id=run_id,
+                    input_hash=input_hash,
+                    operation="evolution",
+                    algorithm=self.config.evolver.class_name.replace("_", "-"),
+                    commit_source=self.config.evolver.class_name,
+                    base_version_id=base.version_id,
+                    active=request.auto_accept,
+                )
+            get_logger(__name__).info(
+                "algorithm.progress",
+                extra={"event_body": {"stage": "published", "message": "Evolved Skill version published"}},
             )
-            if reporter is not None:
-                await reporter.report(stage="published", message="Evolved Skill version published")
             return self._result(version, run_id)
 
     @staticmethod
@@ -150,7 +149,7 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
             skill_hash=version.skill_hash,
         )
 
-    async def _evidence(self, request, owner, base, directory, input_hash, reporter):
+    async def _evidence(self, request, owner, base, directory, input_hash):
         """Reuse the exact sampled records after an interrupted model call."""
         evidence_path = directory / "evidence.json"
         saved = boundary(evidence_path, input_hash)
@@ -159,8 +158,7 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                 (TrajectoryRecord.model_validate(item["record"]), item["version_id"]) for item in saved["samples"]
             ]
         else:
-            records = await run_sync(
-                collect_skill_trajectories,
+            records = await collect_skill_trajectories(
                 self.persistence,
                 skill_version_id=base.version_id,
                 limit=self.config.traj_collect.trajectory_limit,
@@ -171,13 +169,17 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                 for record in records
                 if record.task_instruction.strip() and record.skill_version_id == base.version_id
             ]
-            if reporter is not None:
-                await reporter.report(
-                    stage="evidence",
-                    message=f"Collected {len(records)} trajectories; {len(eligible)} eligible",
-                    completed=len(eligible) if records else None,
-                    total=len(records) if records else None,
-                )
+            get_logger(__name__).info(
+                "algorithm.progress",
+                extra={
+                    "event_body": {
+                        "stage": "evidence",
+                        "message": f"Collected {len(records)} trajectories; {len(eligible)} eligible",
+                        "completed": len(eligible) if records else None,
+                        "total": len(records) if records else None,
+                    }
+                },
+            )
             if not eligible:
                 raise ValueError("No eligible historical trajectories for this Skill version")
             if len(eligible) < self.config.traj_collect.sample_size:
@@ -211,13 +213,17 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                     "config": self.config.model_dump(mode="json"),
                 },
             )
-        if reporter is not None:
-            await reporter.report(
-                stage="sampled",
-                message=f"Selected {len(sample)} historical trajectories",
-                completed=len(sample),
-                total=len(sample),
-            )
+        get_logger(__name__).info(
+            "algorithm.progress",
+            extra={
+                "event_body": {
+                    "stage": "sampled",
+                    "message": f"Selected {len(sample)} historical trajectories",
+                    "completed": len(sample),
+                    "total": len(sample),
+                }
+            },
+        )
         trajectories = []
         for record, version_id in sample:
             if version_id != base.version_id or record.skill_version_id != base.version_id:

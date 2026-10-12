@@ -1,7 +1,6 @@
 """Complete source ownership, task assembly, diff, and export rollback contracts."""
 
-from threading import Lock
-from time import sleep
+import asyncio
 
 import pytest
 from mindmemos_skill.skill import Skill, SkillContent, SkillSet, compare_snapshots, io
@@ -21,7 +20,7 @@ class DynamicSkill(Skill):
         super().__init__(content)
         self.dependency = dependency
 
-    def assemble(self, task):
+    async def assemble(self, task):
         return self.with_content(self.content + task)
 
 
@@ -93,19 +92,19 @@ def test_resource_paths_reject_invalid_roots(path):
 @pytest.mark.asyncio
 async def test_skillset_assembly_preserves_selection_order_and_concurrency():
     active = peak = 0
-    lock = Lock()
+    lock = asyncio.Lock()
 
     class MeasuredSkill(Skill):
-        def assemble(self, task):
+        async def assemble(self, task):
             nonlocal active, peak
-            with lock:
+            async with lock:
                 active += 1
                 peak = max(peak, active)
             try:
-                sleep(0.03)
+                await asyncio.sleep(0.03)
                 return self.with_content(self.content + task)
             finally:
-                with lock:
+                async with lock:
                     active -= 1
 
     skills = SkillSet({str(i): MeasuredSkill(source(str(i))) for i in range(5)}, max_concurrency=2)

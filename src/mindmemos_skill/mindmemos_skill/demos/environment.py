@@ -17,7 +17,7 @@ class DemoEnvironment(Environment[DemoEnvironmentConfig]):
     config_type = DemoEnvironmentConfig
     """Local timing settings with no external service configuration."""
 
-    def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+    async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Create synthetic messages and a fixed demo reward."""
         sleep(self.config.delay_seconds)
         return RolloutResult(

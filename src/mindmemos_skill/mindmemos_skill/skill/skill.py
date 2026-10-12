@@ -78,7 +78,7 @@ class Skill:
         candidate._source = SkillContent.model_validate(values)
         return candidate
 
-    def assemble(self, task: "Task") -> Self:
+    async def assemble(self, task: "Task") -> Self:
         """Return an isolated task-local copy while retaining runtime dependencies.
 
         Args:

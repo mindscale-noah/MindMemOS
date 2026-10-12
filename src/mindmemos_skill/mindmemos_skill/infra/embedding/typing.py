@@ -1,4 +1,4 @@
-"""Structural interface for injectable synchronous embedding models."""
+"""Structural interface for injectable asynchronous embedding models."""
 
 from collections.abc import Sequence
 from typing import Protocol
@@ -12,7 +12,7 @@ class EmbeddingModel(Protocol):
     config: OpenAIEmbeddingConfig
     """Recorded provider and vector settings for this model."""
 
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Return one vector per input text in the same order.
 
         Args:

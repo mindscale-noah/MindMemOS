@@ -38,7 +38,7 @@ class OfflineEnvironment(Environment[OfflineConfig]):
         self.calls = []
         self.instances.append(self)
 
-    def _run(self, *, task, reward_data, skills, workspace):
+    async def _run(self, *, task, reward_data, skills, workspace):
         self.calls.append(task.id)
         text = skills[0].content
         success = "improved" in text or "Verify" in text
@@ -199,7 +199,7 @@ async def test_service_selects_trainer_and_publishes_once(setup_service, tmp_pat
     finally:
         await reopened.close()
     with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
-        assert len(store.skills.list_versions(result.skill_id)) == 2
+        assert len((await store.skills.list_versions(result.skill_id))) == 2
     assert "must-not-be-recorded" not in "\n".join(path.read_text() for path in (tmp_path / algorithm).rglob("*.json"))
 
 
@@ -246,8 +246,8 @@ async def test_commit_acknowledgement_loss_and_concurrent_parent(setup_service, 
     request = request_for(tmp_path, initial, "treeskill")
     original = SkillDataService.commit_algorithm
 
-    def lose_ack(self, *args, **kwargs):
-        original(self, *args, **kwargs)
+    async def lose_ack(self, *args, **kwargs):
+        await original(self, *args, **kwargs)
         raise OSError("lost acknowledgement")
 
     monkeypatch.setattr(SkillDataService, "commit_algorithm", lose_ack)
@@ -308,7 +308,10 @@ async def test_treeskill_automatically_recovers_without_repeating_calls(tmp_path
             stopped = True
             raise RuntimeError("interrupted")
 
+    from mindmemos_skill.algos.train.treeskill import artifacts
+
     monkeypatch.setattr(module, "write_json", interrupt)
+    monkeypatch.setattr(artifacts, "write_json", interrupt)
 
     async def run():
         return await trainer.train(
@@ -323,7 +326,7 @@ async def test_treeskill_automatically_recovers_without_repeating_calls(tmp_path
     assert len(env.calls) == 1
     assert all(path.read_bytes() == value for path, value in calls.items())
     assert isinstance(await run(), TreeSkill)
-    assert (await asyncio.to_thread((await run()).assemble, Task(id="use", instruction="Save it"))).content
+    assert (await (await run()).assemble(Task(id="use", instruction="Save it"))).content
     assert read_json(tmp_path / "summary.json")["status"] == "completed"
     with pytest.raises(ValueError, match="mismatch"):
         await trainer.train(
@@ -370,7 +373,7 @@ async def test_parent_changed_during_training_preserves_result(setup_service, tm
         await service.run_training(request)
     assert (tmp_path / "treeskill/selected_skill.json").exists()
     with pipeline.persistence.session(Scope(fields={"project_id": "project"})) as store:
-        assert len(store.skills.list_versions(initial.skill_id)) == 2
+        assert len((await store.skills.list_versions(initial.skill_id))) == 2
 
 
 def test_service_example_config_is_valid():
@@ -387,25 +390,23 @@ def test_service_example_config_is_valid():
 
 
 @pytest.mark.asyncio
-async def test_cancelled_worker_finishes_before_lock_owner_exits():
-    from threading import Event
+async def test_cancelled_async_workers_finish_cleanup_before_return():
+    from mindmemos_skill.common.asyncio import map_bounded
 
-    from mindmemos_skill.common.asyncio import run_sync
-
-    started, finish = Event(), Event()
+    started = asyncio.Event()
     finished = []
 
-    def worker():
+    async def worker(item):
         started.set()
-        assert finish.wait(3)
-        finished.append(True)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)
+            finished.append(item)
 
-    task = asyncio.create_task(run_sync(worker))
-    assert await asyncio.to_thread(started.wait, 3)
+    task = asyncio.create_task(map_bounded(worker, [1], concurrency=1))
+    await started.wait()
     task.cancel()
-    await asyncio.sleep(0)
-    assert not task.done()
-    finish.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert finished == [True]
+    assert finished == [1]

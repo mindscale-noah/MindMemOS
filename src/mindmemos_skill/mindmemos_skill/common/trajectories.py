@@ -9,7 +9,7 @@ from ..persistence.db_services.trajectories.typing import TrajectoryRecord
 from ..persistence.store import SkillPersistence
 
 
-def collect_skill_trajectories(
+async def collect_skill_trajectories(
     persistence: SkillPersistence,
     *,
     skill_version_id: str,
@@ -54,7 +54,7 @@ def collect_skill_trajectories(
     selected: list[TrajectoryRecord] = []
     offset = 0
     while len(selected) < limit:
-        rows = persistence.database.select(
+        rows = await persistence.database.select(
             TRAJECTORIES_TABLE,
             filters=filters,
             fields=None,

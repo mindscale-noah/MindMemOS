@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from ..infra.task_manager import ProgressEvent, ProgressReporter, TaskSnapshot
+from ..infra.task_manager import TaskSnapshot
+from ..logging.typing import TaskLog
 from ..persistence import SkillRecord, SkillVersionRecord, SkillVersionSummary, TrajectoryRecord, TrajectorySummary
 from ..persistence.db_services.trajectories.typing import TrajectoryStatistics
 from ..registry import Registrable
@@ -141,14 +142,11 @@ class MindMemOSSkill(ABC):
         """
         raise NotImplementedError
 
-    async def organize_skills(
-        self, request: OrganizeRequest, *, reporter: ProgressReporter | None = None
-    ) -> OrganizeResult:
+    async def organize_skills(self, request: OrganizeRequest) -> OrganizeResult:
         """Publish a graph from exact project-owned Skill versions.
 
         Args:
             request: Authorized graph identity, actor, version scope, and scenes.
-            reporter: Optional progress sink for graph publication.
 
         Returns:
             Immutable graph snapshot identity.
@@ -208,16 +206,16 @@ class MindMemOSSkill(ABC):
         """
         raise NotImplementedError
 
-    async def task_progress(self, project_id: str | None, task_id: str, *, after: int = 0) -> list[ProgressEvent]:
-        """Read algorithm-reported progress for a task.
+    async def task_progress(self, project_id: str | None, task_id: str, *, after: int = 0) -> list[TaskLog]:
+        """Read task logs used for progress and failure diagnostics.
 
         Args:
             project_id: Authorized project or local bound scope.
             task_id: Server-generated task identity.
-            after: Last observed event sequence.
+            after: Last observed committed log sequence; gaps are allowed.
 
         Returns:
-            Later progress events.
+            Later task logs, including structured body and traceback.
         """
         raise NotImplementedError
 
@@ -442,14 +440,11 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def run_evolution(
-        self, request: SkillPipelineRequest | None = None, *, reporter: ProgressReporter | None = None
-    ) -> AlgoSkillEvolveResult:
+    async def run_evolution(self, request: SkillPipelineRequest | None = None) -> AlgoSkillEvolveResult:
         """Run the configured evolution pipeline and return its result.
 
         Args:
             request: Evolution selection; required when a pipeline is configured.
-            reporter: Optional progress sink for the selected pipeline.
 
         Returns:
             Completed evolution result.
@@ -457,14 +452,11 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def run_training(
-        self, request: TrainingRequest | None = None, *, reporter: ProgressReporter | None = None
-    ) -> AlgoSkillEvolveResult:
+    async def run_training(self, request: TrainingRequest | None = None) -> AlgoSkillEvolveResult:
         """Run the configured training pipeline and return its result.
 
         Args:
             request: Tasks, split membership, and an exact input Skill version.
-            reporter: Optional progress sink for the selected pipeline.
 
         Returns:
             Completed training result.

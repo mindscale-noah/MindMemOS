@@ -20,7 +20,7 @@ def load_runtime_skill(snapshot: SkillSnapshot) -> Skill:
     if snapshot.implementation == "static":
         return Skill.from_snapshot(snapshot)
     if snapshot.implementation == "treeskill":
-        from ..algos.train.treeskill.skill import TreeSkill
+        from ..algos.train.treeskill.treeskill import TreeSkill
 
         return TreeSkill.from_snapshot(snapshot)
     raise NotImplementedError(f"No runtime loader for Skill implementation {snapshot.implementation!r}")

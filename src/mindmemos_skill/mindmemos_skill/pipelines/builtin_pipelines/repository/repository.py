@@ -1,6 +1,5 @@
 """Repository business operations over one injected persistence backend."""
 
-import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -63,7 +62,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
 
     async def initialize_storage(self) -> None:
         """Create missing tables and migrate historical version display labels."""
-        await asyncio.to_thread(self.persistence.initialize_storage)
+        await self.persistence.initialize_storage()
 
     @staticmethod
     def _scope(project_id: str | None) -> str:
@@ -83,8 +82,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = RegisterRequest.model_validate(request)
         snapshot = self._snapshot(request.skill)
-        record = await asyncio.to_thread(
-            self.persistence.skills.register,
+        record = await self.persistence.skills.register(
             project_id=self._scope(request.project_id),
             name=snapshot.name,
             alias=request.alias,
@@ -112,7 +110,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             Persisted registration identity and source hashes.
         """
         request = RegisterFromLocalRequest.model_validate(request)
-        source = await asyncio.to_thread(self._local_source, request.skill)
+        source = self._local_source(request.skill)
         return await self.register_skill(
             RegisterRequest(
                 project_id=request.project_id,
@@ -130,8 +128,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             request: Project and pagination settings.
         """
         request = ListRequest.model_validate(request)
-        return await asyncio.to_thread(
-            self.persistence.skills.list_skills,
+        return await self.persistence.skills.list_skills(
             self._scope(request.project_id),
             limit=request.limit,
             offset=request.cursor.offset,
@@ -150,8 +147,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             Stored physical attempt with server receipt time.
         """
         request = ReportTrajectoryRequest.model_validate(request)
-        return await asyncio.to_thread(
-            self.persistence.trajectories.report,
+        return await self.persistence.trajectories.report(
             project_id=self._scope(request.project_id),
             skill_version_id=request.skill_version_id,
             user_id=request.user_id,
@@ -173,7 +169,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             Stored local or reported trajectory.
         """
         request = ShowTrajectoryRequest.model_validate(request)
-        record = await asyncio.to_thread(self.persistence.trajectories.get, request.trajectory_id)
+        record = await self.persistence.trajectories.get(request.trajectory_id)
         if record is None or record.project_id != self._scope(request.project_id):
             raise SkillNotFoundError("Trajectory not found in this project")
         return record
@@ -189,18 +185,13 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = ListTrajectoriesRequest.model_validate(request)
         project_id = self._scope(request.project_id)
-        family = await asyncio.to_thread(
-            self.persistence.database.select,
-            SKILLS_TABLE,
-            filters={"project_id": project_id, "skill_id": request.skill_id},
-            fields=["skill_id"],
-            limit=1,
+        family = await self.persistence.database.select(
+            SKILLS_TABLE, filters={"project_id": project_id, "skill_id": request.skill_id}, fields=["skill_id"], limit=1
         )
         if not family:
             raise SkillNotFoundError("Skill not found in this project")
         if request.skill_version_id is not None:
-            version = await asyncio.to_thread(
-                self.persistence.database.select,
+            version = await self.persistence.database.select(
                 SKILL_VERSIONS_TABLE,
                 filters={"project_id": project_id, "version_id": request.skill_version_id},
                 fields=["skill_id"],
@@ -210,8 +201,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
                 raise SkillVersionNotFoundError("Skill version not found in this project")
             if version[0]["skill_id"] != request.skill_id:
                 raise SkillVersionNotFoundError("Skill version does not belong to this Skill")
-        return await asyncio.to_thread(
-            self.persistence.trajectories.list_reported,
+        return await self.persistence.trajectories.list_reported(
             request.skill_id,
             skill_version_id=request.skill_version_id,
             status=request.status,
@@ -244,12 +234,8 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         Returns:
             Whether one report satisfies all supplied filters.
         """
-        return await asyncio.to_thread(
-            self.persistence.trajectories.has_reported,
-            skill_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            snapshot_at=snapshot_at,
+        return await self.persistence.trajectories.has_reported(
+            skill_id, user_id=user_id, agent_id=agent_id, snapshot_at=snapshot_at
         )
 
     async def reported_skill_ids(
@@ -271,12 +257,8 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         Returns:
             Candidate IDs with same-report actor evidence.
         """
-        return await asyncio.to_thread(
-            self.persistence.trajectories.reported_skill_ids,
-            skill_ids,
-            user_id=user_id,
-            agent_id=agent_id,
-            snapshot_at=snapshot_at,
+        return await self.persistence.trajectories.reported_skill_ids(
+            skill_ids, user_id=user_id, agent_id=agent_id, snapshot_at=snapshot_at
         )
 
     async def show_skill(self, request: ShowRequest) -> SkillDetail:
@@ -288,11 +270,11 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         request = ShowRequest.model_validate(request)
         store = self.persistence.skills
         if request.skill_id is None:
-            version = await asyncio.to_thread(store.version_by_id, self._scope(request.project_id), request.version_id)
-            record = await asyncio.to_thread(store.resolve_family, self._scope(request.project_id), version.skill_id)
+            version = await store.version_by_id(self._scope(request.project_id), request.version_id)
+            record = await store.resolve_family(self._scope(request.project_id), version.skill_id)
         else:
-            record = await asyncio.to_thread(store.resolve_family, self._scope(request.project_id), request.skill_id)
-            version = await asyncio.to_thread(store.version, record, request.version_id)
+            record = await store.resolve_family(self._scope(request.project_id), request.skill_id)
+            version = await store.version(record, request.version_id)
         return SkillDetail(skill=record, version=version)
 
     async def resolve_skill_reference(self, project_id: str, reference: str) -> SkillDetail:
@@ -305,7 +287,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         Returns:
             Owning family and selected version.
         """
-        skill, version = await asyncio.to_thread(self.persistence.skills.resolve, self._scope(project_id), reference)
+        skill, version = await self.persistence.skills.resolve(self._scope(project_id), reference)
         return SkillDetail(skill=skill, version=version)
 
     async def resolve_skill_version(self, request: VersionResolveRequest) -> VersionResolution:
@@ -319,15 +301,14 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = VersionResolveRequest.model_validate(request)
         store = self.persistence.skills
-        version = await asyncio.to_thread(
-            store.resolve_version_hash,
+        version = await store.resolve_version_hash(
             request.project_id,
             request.content_hash,
             skill_hash=request.skill_hash,
             skill_id=request.skill_id,
             version_id=request.skill_version_id,
         )
-        family = await asyncio.to_thread(store.resolve_family, request.project_id, version.skill_id)
+        family = await store.resolve_family(request.project_id, version.skill_id)
         return VersionResolution(
             skill_id=version.skill_id,
             skill_version_id=version.version_id,
@@ -349,7 +330,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         Returns:
             The project-owned version record.
         """
-        return await asyncio.to_thread(self.persistence.skills.version_by_id, self._scope(project_id), version_id)
+        return await self.persistence.skills.version_by_id(self._scope(project_id), version_id)
 
     async def list_skill_versions(self, project_id: str, skill_id: str) -> list[SkillVersionRecord]:
         """Read the complete history of an exact project-owned Skill family.
@@ -365,9 +346,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             raise PermissionError("Skill version project differs from the active scope")
         versions = []
         while True:
-            page = await asyncio.to_thread(
-                self.persistence.skills.list_versions, skill_id, limit=100, offset=len(versions)
-            )
+            page = await self.persistence.skills.list_versions(skill_id, limit=100, offset=len(versions))
             versions.extend(page)
             if len(page) < 100:
                 return sorted(versions, key=lambda version: (version.created_at, version.version_id))
@@ -392,7 +371,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         )
         snapshot = snapshot_from_version(detail.version)
         skill = Skill.from_snapshot(snapshot)
-        return str(await asyncio.to_thread(skill.export, request.directory, overwrite=request.overwrite))
+        return str(skill.export(request.directory, overwrite=request.overwrite))
 
     async def commit_skill(self, request: CommitRequest) -> SkillDetail:
         """Publish a child snapshot and optionally activate it atomically.
@@ -405,16 +384,15 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = CommitRequest.model_validate(request)
         store = self.persistence.skills
-        record = await asyncio.to_thread(store.resolve_family, self._scope(request.project_id), request.skill_id)
-        parent = await asyncio.to_thread(store.version, record, request.base_version_id)
+        record = await store.resolve_family(self._scope(request.project_id), request.skill_id)
+        parent = await store.version(record, request.base_version_id)
         snapshot = self._snapshot(
             request.skill,
             template=snapshot_from_version(parent),
             inherited_resources=parent.resources if request.inherit_resources else None,
         )
         version_id = store.new_version_id()
-        updated = await asyncio.to_thread(
-            store.commit,
+        updated = await store.commit(
             record,
             snapshot,
             message=request.skill.commit_message,
@@ -426,7 +404,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             metadata=request.skill.metadata,
             commit_source=request.skill.commit_source,
         )
-        version = await asyncio.to_thread(store.version_by_id, request.project_id, version_id)
+        version = await store.version_by_id(request.project_id, version_id)
         return SkillDetail(skill=updated, version=version)
 
     async def commit_from_local(self, request: CommitFromLocalRequest) -> SkillDetail:
@@ -439,7 +417,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             Family metadata and the exact newly persisted version.
         """
         request = CommitFromLocalRequest.model_validate(request)
-        source = await asyncio.to_thread(self._local_source, request.skill)
+        source = self._local_source(request.skill)
         return await self.commit_skill(
             CommitRequest(
                 project_id=request.project_id,
@@ -461,9 +439,8 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = HistoryRequest.model_validate(request)
         store = self.persistence.skills
-        return await asyncio.to_thread(
-            store.history,
-            await asyncio.to_thread(store.resolve_family, self._scope(request.project_id), request.skill_id),
+        return await store.history(
+            await store.resolve_family(self._scope(request.project_id), request.skill_id),
             limit=request.limit,
             offset=request.cursor.offset,
             snapshot_at=request.cursor.snapshot_at,
@@ -483,9 +460,8 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         Raises:
             SkillVersionNotFoundError: Version does not belong to the requested family.
         """
-        owner = await asyncio.to_thread(self.persistence.skills.resolve_family, request.project_id, request.skill_id)
-        rows = await asyncio.to_thread(
-            self.persistence.database.select,
+        owner = await self.persistence.skills.resolve_family(request.project_id, request.skill_id)
+        rows = await self.persistence.database.select(
             SKILL_VERSIONS_TABLE,
             filters={"skill_id": owner.skill_id, "version_id": request.version_id},
             fields=["version_id"],
@@ -493,7 +469,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         )
         if not rows:
             raise SkillVersionNotFoundError("Skill version does not belong to this family")
-        return await asyncio.to_thread(self.persistence.trajectories.statistics, request.version_id)
+        return await self.persistence.trajectories.statistics(request.version_id)
 
     async def diff_skill(self, request: DiffRequest) -> DiffResult:
         """Compare complete snapshots from the same Skill.
@@ -503,12 +479,12 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = DiffRequest.model_validate(request)
         store = self.persistence.skills
-        target = await asyncio.to_thread(store.version_by_id, request.project_id, request.to_version_id)
+        target = await store.version_by_id(request.project_id, request.to_version_id)
         if request.from_version_id is None:
-            family = await asyncio.to_thread(store.resolve_family, request.project_id, target.skill_id)
-            source = await asyncio.to_thread(store.version, family)
+            family = await store.resolve_family(request.project_id, target.skill_id)
+            source = await store.version(family)
         else:
-            source = await asyncio.to_thread(store.version_by_id, request.project_id, request.from_version_id)
+            source = await store.version_by_id(request.project_id, request.from_version_id)
         return compare_versions(source, target)
 
     async def active_skill(self, request: ActiveRequest) -> SkillRecord:
@@ -519,11 +495,11 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = ActiveRequest.model_validate(request)
         store = self.persistence.skills
-        version = await asyncio.to_thread(store.version_by_id, request.project_id, request.version_id)
-        family = await asyncio.to_thread(store.resolve_family, request.project_id, version.skill_id)
+        version = await store.version_by_id(request.project_id, request.version_id)
+        family = await store.resolve_family(request.project_id, version.skill_id)
         if request.expected_active_version_id is not None:
             family = family.model_copy(update={"active_version_id": request.expected_active_version_id})
-        return await asyncio.to_thread(store.activate, family, version.version_id)
+        return await store.activate(family, version.version_id)
 
     async def set_skill_meta(self, request: SetMetaRequest) -> SkillRecord:
         """Update name or alias without creating a version.
@@ -533,9 +509,8 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = SetMetaRequest.model_validate(request)
         store = self.persistence.skills
-        return await asyncio.to_thread(
-            store.set_meta,
-            await asyncio.to_thread(store.resolve_family, self._scope(request.project_id), request.skill_id),
+        return await store.set_meta(
+            await store.resolve_family(self._scope(request.project_id), request.skill_id),
             name=request.name,
             alias=request.alias,
             clear_alias=request.clear_alias,
@@ -550,10 +525,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = SkillRequest.model_validate(request)
         store = self.persistence.skills
-        await asyncio.to_thread(
-            store.delete,
-            await asyncio.to_thread(store.resolve_family, self._scope(request.project_id), request.skill_ref),
-        )
+        await store.delete(await store.resolve_family(self._scope(request.project_id), request.skill_ref))
 
     @staticmethod
     def _local_source(info: FileSkillInfo) -> StructuredSkillInfo:

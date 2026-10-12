@@ -2,7 +2,6 @@
 
 import subprocess
 import sys
-from unittest.mock import AsyncMock
 
 import pytest
 from mindmemos_skill.algos.evolve.typing import SkillTrajectory
@@ -48,7 +47,7 @@ for family, name in [(Algorithm, 'demo_train'), (Algorithm, 'demo_evolve'),
 
 
 @pytest.mark.asyncio
-async def test_demo_training_preserves_source_and_resumes(tmp_path):
+async def test_demo_training_preserves_source_and_resumes(tmp_path, caplog):
     """Resume the same candidate without rerunning already audited samples."""
     from mindmemos_skill.demos.config import DemoAlgorithmConfig, DemoEnvironmentConfig
 
@@ -57,19 +56,20 @@ async def test_demo_training_preserves_source_and_resumes(tmp_path):
     trainer = demos.algorithms.DemoTrainer(DemoAlgorithmConfig(delay_seconds=0))
     env = demos.environment.DemoEnvironment(DemoEnvironmentConfig(delay_seconds=0))
     samples = [DataSample(task=Task(id="t1", instruction="Save output"), reward_data=RewardData())]
-    reporter = AsyncMock()
+    caplog.set_level("INFO", logger="mindmemos_skill")
     result = await trainer.train(
         skill=skill,
         env=env,
         train_samples=samples,
         validation_samples=[],
         work_dir=tmp_path,
-        progress=reporter,
     )
     assert skill.snapshot() == before
     assert result.resources == skill.resources
     assert result.content != skill.content
-    assert [call.kwargs["completed"] for call in reporter.report.await_args_list] == [0, 1]
+    assert [
+        record.event_body["completed"] for record in caplog.records if record.getMessage() == "algorithm.progress"
+    ] == [0, 1]
     audit = tmp_path / "rollouts/sample-0001/audit/result.json"
     original_audit = audit.read_bytes()
     recovered = await trainer.train(
@@ -78,11 +78,10 @@ async def test_demo_training_preserves_source_and_resumes(tmp_path):
         train_samples=samples,
         validation_samples=[],
         work_dir=tmp_path,
-        progress=reporter,
     )
     assert recovered.snapshot() == result.snapshot()
     assert audit.read_bytes() == original_audit
-    assert reporter.report.await_count == 2
+    assert len([record for record in caplog.records if record.getMessage() == "algorithm.progress"]) == 2
     assert trainer.build_report(tmp_path)["llm_calls"] == 0
     with pytest.raises(ValueError, match="mismatch"):
         await trainer.train(

@@ -1,6 +1,5 @@
 """Registered adapter extension, live call paths and snapshot compatibility."""
 
-import asyncio
 import json
 import subprocess
 import sys
@@ -22,12 +21,19 @@ from mindmemos_skill.algos.train.treeskill import (
     TreeSkillTrainer,
     TreeSkillTrainerConfig,
 )
+from mindmemos_skill.algos.train.treeskill.construction.markdown import compile_tree_metadata, parse_skill_markdown
 from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_prompts import ROUTING_SYSTEM_PROMPT
 from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_text_action import (
     SpreadsheetBenchReferenceAnalyzer,
 )
-from mindmemos_skill.algos.train.treeskill.fusion_tree import compile_tree_metadata, parse_skill_markdown
-from mindmemos_skill.algos.train.treeskill.typing import ChatResponse, TraceEvidence, TreeSkillAnalysisRuntime
+from mindmemos_skill.algos.train.treeskill.typing import (
+    AnalysisInput,
+    AnalysisOutcome,
+    TraceEvidence,
+    TrainingRollout,
+    TrajectoryAnalysisRecord,
+    TreeSkillAnalysisRuntime,
+)
 from mindmemos_skill.envs import Environment, Reward, RolloutResult, Task
 from mindmemos_skill.envs.data import DataSample, RewardData
 from mindmemos_skill.skill import Skill, SkillContent
@@ -130,7 +136,7 @@ async def test_forest_custom_renderer_reaches_actual_model_transport(tmp_path):
         def __init__(self, config):
             pass
 
-        def run(self, *, messages):
+        async def run(self, *, messages):
             calls.append(messages)
             return AgentResult(output='{"patch": {"edits": []}}', trajectory=[], usage={})
 
@@ -176,12 +182,15 @@ def test_forest_context_does_not_expose_private_sample_and_preserves_generic_pro
     assert "reward_data" not in SkillForestTrajectoryContext.model_fields
 
 
-class CaptureModel:
-    async def chat(self, task, messages, **kwargs):
+class CaptureModel(OpenAIChatAgent):
+    def __init__(self):
+        super().__init__(OpenAIChatConfig(model="offline"))
+
+    async def run_messages(self, *, messages, tools=None, response_format=None):
         self.messages = messages
         payload = json.loads(messages[1]["content"].split("\n\n", 1)[1])
-        return ChatResponse(
-            content=json.dumps(
+        return AgentResult(
+            output=json.dumps(
                 {
                     "instance_id": payload["instance_id"],
                     "task_id": payload["task_id"],
@@ -197,10 +206,16 @@ async def test_tree_default_analyzer_calls_custom_rendering_hook(tmp_path):
     adapter = TreeSkillEnvAdapter.build("adapter_contract_test", {})
     model = CaptureModel()
     config = TreeSkillTrainerConfig(optimizer={"model": "offline"}, router={"model": "offline"})
-    analyzer = adapter.create_analyzer(TreeSkillAnalysisRuntime(config, model, model, tmp_path))
+    analyzer = adapter.create_analyzer(TreeSkillAnalysisRuntime(config, model, model))
     evidence = TraceEvidence(trajectory_id="physical", task_id="task", transcript="observed", score=1)
-    records, failures = await analyzer.analyze([evidence], trajectories_by_id={})
-    assert len(records) == 1 and not failures
+    outcome = await analyzer(
+        AnalysisInput(
+            evidence=evidence,
+            trajectory=TrainingRollout(trajectory_id="physical", sample=sample(), result=result(), work_dir=tmp_path),
+            workspace=tmp_path,
+        )
+    )
+    assert outcome.record is not None and outcome.error is None
     assert "CUSTOM TRACE: observed" in model.messages[1]["content"]
     assert evidence.transcript == "observed"
 
@@ -210,7 +225,7 @@ def test_reference_adapter_builds_special_analyzer_and_rejects_inapplicable_over
     config = TreeSkillTrainerConfig(optimizer={"model": "offline"}, router={"model": "offline"})
     model = CaptureModel()
     assert isinstance(
-        adapter.create_analyzer(TreeSkillAnalysisRuntime(config, model, model, tmp_path)),
+        adapter.create_analyzer(TreeSkillAnalysisRuntime(config, model, model)),
         SpreadsheetBenchReferenceAnalyzer,
     )
     with pytest.raises(ValidationError):
@@ -232,20 +247,19 @@ class RoutingAgent(OpenAIChatAgent):
         super().__init__(OpenAIChatConfig(model="offline", api_key=None))
         self.calls = []
 
-    def run(self, *, messages):
+    async def run(self, *, messages):
         self.calls.append(messages)
         return AgentResult(output='{"selected_subtree_ids": ["001"], "rationale": "relevant"}', trajectory=[], usage={})
 
 
 @pytest.mark.parametrize("stable_ids", [False, True])
-def test_custom_tree_routing_survives_snapshot_and_content_replacement(stable_ids):
+async def test_custom_tree_routing_survives_snapshot_and_content_replacement(stable_ids):
     agent = RoutingAgent()
     text = "# Rules\nInspect output.\n"
     tree = parse_skill_markdown(text)
     skill = TreeSkill(
         TreeSkillConfig(
             router=agent.config,
-            reference_routing=stable_ids,
             tree_metadata=compile_tree_metadata(tree) if stable_ids else {},
             env_adapter={"class_name": "adapter_contract_test", "config": {"routing_system": "CUSTOM ROUTER"}},
         ),
@@ -253,11 +267,11 @@ def test_custom_tree_routing_survives_snapshot_and_content_replacement(stable_id
         router=agent,
     )
     snapshot = skill.snapshot()
-    assert snapshot.config_schema_version == 2
+    assert snapshot.config_schema_version == 3
     assert snapshot.config["env_adapter"]["class_name"] == "adapter_contract_test"
     restored = TreeSkill.from_snapshot(snapshot, router=agent)
     for candidate in (skill, restored, restored.with_content(restored.content)):
-        assert candidate.assemble(sample().task).content == text
+        assert (await candidate.assemble(sample().task)).content == text
         assert agent.calls[-1][0]["content"] == "CUSTOM ROUTER"
         assert "CUSTOM PUBLIC TASK: Inspect output" in agent.calls[-1][1]["content"]
         assert "PRIVATE" not in json.dumps(agent.calls[-1])
@@ -265,13 +279,12 @@ def test_custom_tree_routing_survives_snapshot_and_content_replacement(stable_id
 
 
 @pytest.mark.parametrize("stable_ids", [False, True])
-def test_version_one_snapshot_restores_historical_routing_repeatedly(stable_ids):
+async def test_version_one_snapshot_restores_historical_routing_repeatedly(stable_ids):
     agent = RoutingAgent()
     text = "# Rules\nInspect output.\n"
     skill = TreeSkill(
         TreeSkillConfig(
             router=agent.config,
-            reference_routing=stable_ids,
             tree_metadata=compile_tree_metadata(parse_skill_markdown(text)) if stable_ids else {},
         ),
         source=SkillContent(content=text, name="test-skill", description="Task instructions", standard_format=False),
@@ -280,15 +293,16 @@ def test_version_one_snapshot_restores_historical_routing_repeatedly(stable_ids)
     old = skill.snapshot()
     old.config_schema_version = 1
     old.config.pop("env_adapter")
+    old.config["reference_routing"] = stable_ids
     before = old.model_dump_json()
     for _ in range(2):
         restored = TreeSkill.from_snapshot(old, router=agent)
-        restored.assemble(sample().task)
+        (await restored.assemble(sample().task))
         assert agent.calls[-1][0]["content"] == ROUTING_SYSTEM_PROMPT
         payload = json.loads(agent.calls[-1][1]["content"].split("\n\n", 1)[1])
         assert payload["task"]["instance_id" if stable_ids else "id"] == "task"
         upgraded = TreeSkill.from_snapshot(restored.snapshot(), router=agent)
-        upgraded.assemble(sample().task)
+        (await upgraded.assemble(sample().task))
         assert agent.calls[-1] == agent.calls[-2]
     assert old.model_dump_json() == before
 
@@ -330,14 +344,14 @@ async def test_trainer_propagates_automatic_generic_adapter_to_final_skill(tmp_p
     assert type(final.env_adapter) is TreeSkillEnvAdapter.resolve("generic")
     analysis_call = next(
         path
-        for path in (tmp_path / "run/model_calls/optimizer").glob("**/attempt-*.json")
-        if json.loads(path.read_text())["stage"] == "treeskill_trajectory_analysis"
+        for path in (tmp_path / "run/items/analysis").glob("**/outcome.json")
+        if json.loads(path.read_text())["task"] == "treeskill_trajectory_analysis"
     )
     assert "CUSTOM TRACE" not in analysis_call.read_text()
     restored = TreeSkill.from_snapshot(final.snapshot())
     agent = RoutingAgent()
     restored.router = agent
-    await asyncio.to_thread(restored.assemble, sample().task)
+    await restored.assemble(sample().task)
     assert "Inspect output" in agent.calls[0][1]["content"]
 
 
@@ -351,16 +365,26 @@ async def test_one_rendering_failure_does_not_discard_other_tree_evidence(tmp_pa
 
     model = CaptureModel()
     config = TreeSkillTrainerConfig(optimizer={"model": "offline"}, router={"model": "offline"})
-    analyzer = SelectiveAdapter().create_analyzer(TreeSkillAnalysisRuntime(config, model, model, tmp_path))
-    records, failures = await analyzer.analyze(
-        [
-            TraceEvidence(trajectory_id="bad-run", task_id="bad", transcript="", score=0),
-            TraceEvidence(trajectory_id="good-run", task_id="good", transcript="observed", score=1),
-        ],
-        trajectories_by_id={},
-    )
-    assert failures == ["bad-run"]
-    assert [record.instance_id for record in records] == ["good-run"]
+    analyzer = SelectiveAdapter().create_analyzer(TreeSkillAnalysisRuntime(config, model, model))
+    evidence = [
+        TraceEvidence(trajectory_id="bad-run", task_id="bad", transcript="", score=0),
+        TraceEvidence(trajectory_id="good-run", task_id="good", transcript="observed", score=1),
+    ]
+    outcomes = [
+        await analyzer(
+            AnalysisInput(
+                evidence=item,
+                trajectory=TrainingRollout(
+                    trajectory_id=item.trajectory_id, sample=sample(), result=result(), work_dir=tmp_path
+                ),
+                workspace=tmp_path,
+            )
+        )
+        for item in evidence
+    ]
+    assert outcomes[0].error == "ValueError: Missing required evidence"
+    assert outcomes[0].failed_calls == 0
+    assert outcomes[1].record.instance_id == "good-run"
 
 
 @pytest.mark.asyncio
@@ -368,12 +392,16 @@ async def test_automatically_selected_analyzer_factory_is_used_by_trainer(tmp_pa
     calls = []
 
     class Analyzer:
-        async def analyze(self, evidence, *, trajectories_by_id):
-            calls.append((evidence, trajectories_by_id))
-            return [], []
+        async def __call__(self, inputs):
+            calls.append(inputs)
+            return AnalysisOutcome(
+                record=TrajectoryAnalysisRecord(
+                    instance_id=inputs.evidence.trajectory_id, task_id=inputs.evidence.task_id, record_source="success"
+                )
+            )
 
     def create_analyzer(self, runtime):
-        assert runtime.output_root == tmp_path / "run/stages/reference_analysis"
+        assert isinstance(runtime.agent, OpenAIChatAgent)
         return Analyzer()
 
     monkeypatch.setattr(TreeSkillEnvAdapter.resolve("generic"), "create_analyzer", create_analyzer)
@@ -381,18 +409,19 @@ async def test_automatically_selected_analyzer_factory_is_used_by_trainer(tmp_pa
     class Env(Environment):
         config_type = SkillForestEnvAdapterConfig
 
-        def _run(self, *, task, reward_data, skills, workspace):
+        async def _run(self, *, task, reward_data, skills, workspace):
             return result()
 
-    def no_model(config):
-        raise AssertionError("The custom analyzer must not invoke the default model")
+    class NoCallAgent(OpenAIChatAgent):
+        async def run_messages(self, **kwargs):
+            raise AssertionError("The custom analyzer must not invoke the default model")
 
     trainer = TreeSkillTrainer(
         TreeSkillTrainerConfig(
             optimizer={"model": "offline"},
             router={"model": "offline"},
         ),
-        agent_factory=no_model,
+        agent_factory=NoCallAgent,
     )
     final = await trainer.train(
         skill=Skill(
@@ -408,11 +437,11 @@ async def test_automatically_selected_analyzer_factory_is_used_by_trainer(tmp_pa
         work_dir=tmp_path / "run",
     )
     assert len(calls) == 1
-    assert calls[0][0][0].task_id == "task"
+    assert calls[0].evidence.task_id == "task"
     assert final.config.env_adapter.class_name == "generic"
 
 
-def test_version_two_snapshot_restores_renamed_spreadsheet_adapter_without_mutation():
+async def test_version_two_snapshot_restores_renamed_spreadsheet_adapter_without_mutation():
     agent = RoutingAgent()
     skill = TreeSkill(
         TreeSkillConfig(router=agent.config, env_adapter={"class_name": "spreadsheetbench_text_action"}),
@@ -430,8 +459,8 @@ def test_version_two_snapshot_restores_renamed_spreadsheet_adapter_without_mutat
     for _ in range(2):
         restored = TreeSkill.from_snapshot(old, router=agent)
         assert restored.config.env_adapter.class_name == "spreadsheetbench_text_action"
-        restored.assemble(sample().task)
+        (await restored.assemble(sample().task))
         upgraded = TreeSkill.from_snapshot(restored.snapshot(), router=agent)
-        upgraded.assemble(sample().task)
+        (await upgraded.assemble(sample().task))
         assert agent.calls[-1] == agent.calls[-2]
     assert old.model_dump_json() == before

@@ -81,7 +81,7 @@ class SkillGraphStore:
         """Return the project and graph isolation keys."""
         return {"project_id": self.project_id, "graph_id": self.graph_id}
 
-    def validate_skills(self, skills: Mapping[str, Skill]) -> dict[str, str]:
+    async def validate_skills(self, skills: Mapping[str, Skill]) -> dict[str, str]:
         """Verify that supplied objects exactly match scheduler-bound versions.
 
         Args:
@@ -94,8 +94,8 @@ class SkillGraphStore:
             raise ValueError("Skill candidates require scheduler-provided version bindings")
         service = SkillDataService(self.database)
         for skill_id, skill in skills.items():
-            record = service.version_by_id(self.project_id, self._version_ids[skill_id])
-            stored = service.get_skill(record.version_id)
+            record = await service.version_by_id(self.project_id, self._version_ids[skill_id])
+            stored = await service.get_skill(record.version_id)
             if stored is None or stored.snapshot() != skill.snapshot():
                 raise ValueError(f"Skill content differs from the bound stored version: {skill_id!r}")
         return {key: self._version_ids[key] for key in skills}
@@ -115,7 +115,7 @@ class SkillGraphStore:
         data["skill_version_id"] = self._version_ids[skill_id] if data.get("node_type", "skill") == "skill" else None
         return SkillGraphNodeRecord(**self.scope, graph_version_id=snapshot_id, **data)
 
-    def find(self, request_hash: str) -> UUID | None:
+    async def find(self, request_hash: str) -> UUID | None:
         """Find a committed build that is already the graph's current snapshot.
 
         Args:
@@ -124,17 +124,17 @@ class SkillGraphStore:
         Returns:
             Current matching snapshot, or None to use transactional publication.
         """
-        graph = self.database.get(SKILL_GRAPHS_TABLE, self.scope)
+        graph = await self.database.get(SKILL_GRAPHS_TABLE, self.scope)
         if graph is not None and graph["is_deleted"]:
             raise GraphNotFoundError("Graph not found")
-        rows = self.database.select(
+        rows = await self.database.select(
             SKILL_GRAPH_VERSIONS_TABLE, filters={**self.scope, "request_hash": request_hash, "status": "ready"}, limit=1
         )
         if rows and graph is not None and graph["current_version_id"] == rows[0]["graph_version_id"]:
             return rows[0]["graph_version_id"]
         return None
 
-    def publish(
+    async def publish(
         self,
         snapshot_id: UUID,
         *,
@@ -188,34 +188,38 @@ class SkillGraphStore:
                 "metadata": metadata,
             }
         )
-        with self.database.transaction() as transaction:
-            transaction.upsert(
-                SKILL_GRAPHS_TABLE,
-                [
-                    SkillGraphRecord(
-                        **self.scope,
-                        public_id=self.graph_id,
-                        alias=self.alias,
-                        name=self.alias,
-                    ).model_dump(),
-                ],
+        async with self.database.transaction() as transaction:
+            (
+                await transaction.upsert(
+                    SKILL_GRAPHS_TABLE,
+                    [
+                        SkillGraphRecord(
+                            **self.scope,
+                            public_id=self.graph_id,
+                            alias=self.alias,
+                            name=self.alias,
+                        ).model_dump(),
+                    ],
+                )
             )
             # Start with a write to avoid upgrading a stale SQLite read snapshot.
-            existing = transaction.get(SKILL_GRAPHS_TABLE, self.scope)
+            existing = await transaction.get(SKILL_GRAPHS_TABLE, self.scope)
             if existing is not None and existing["is_deleted"]:
                 raise GraphNotFoundError("Graph not found")
             # Acquire the graph row's write lock before selecting a new snapshot.
-            transaction.update(SKILL_GRAPHS_TABLE, {"updated_at": utcnow()}, filters=self.scope)
-            previous = transaction.select(
+            (await transaction.update(SKILL_GRAPHS_TABLE, {"updated_at": utcnow()}, filters=self.scope))
+            previous = await transaction.select(
                 SKILL_GRAPH_VERSIONS_TABLE,
                 filters={**self.scope, "request_hash": request_hash, "status": "ready"},
                 limit=1,
             )
             if previous:
-                transaction.update(
-                    SKILL_GRAPHS_TABLE,
-                    {"current_version_id": previous[0]["graph_version_id"], "updated_at": utcnow()},
-                    filters=self.scope,
+                (
+                    await transaction.update(
+                        SKILL_GRAPHS_TABLE,
+                        {"current_version_id": previous[0]["graph_version_id"], "updated_at": utcnow()},
+                        filters=self.scope,
+                    )
                 )
                 return previous[0]["graph_version_id"]
             ready_at = utcnow()
@@ -235,46 +239,52 @@ class SkillGraphStore:
                 created_at=ready_at,
                 ready_at=ready_at,
             )
-            transaction.insert(SKILL_GRAPH_VERSIONS_TABLE, [version.model_dump()])
+            (await transaction.insert(SKILL_GRAPH_VERSIONS_TABLE, [version.model_dump()]))
             skill_nodes = [node.model_dump() for node in nodes if node.node_type == "skill"]
             scene_nodes = [node.model_dump() for node in nodes if node.node_type == "scene"]
             if skill_nodes:
-                transaction.insert(SKILL_GRAPH_NODES_TABLE, skill_nodes)
+                (await transaction.insert(SKILL_GRAPH_NODES_TABLE, skill_nodes))
             if scene_nodes:
-                transaction.insert(SKILL_GRAPH_NODES_TABLE, scene_nodes)
+                (await transaction.insert(SKILL_GRAPH_NODES_TABLE, scene_nodes))
             if edges:
-                transaction.insert(SKILL_GRAPH_EDGES_TABLE, [edge.model_dump() for edge in edges])
-            transaction.update(
-                SKILL_GRAPHS_TABLE, {"current_version_id": snapshot_id, "updated_at": utcnow()}, filters=self.scope
+                (await transaction.insert(SKILL_GRAPH_EDGES_TABLE, [edge.model_dump() for edge in edges]))
+            (
+                await transaction.update(
+                    SKILL_GRAPHS_TABLE, {"current_version_id": snapshot_id, "updated_at": utcnow()}, filters=self.scope
+                )
             )
         return snapshot_id
 
-    def _rows(self, table: str, snapshot_id: UUID) -> list[dict]:
+    async def _rows(self, table: str, snapshot_id: UUID) -> list[dict]:
         """Load all rows in a pinned snapshot without truncating large collections."""
         rows = []
         while True:
-            page = self.database.select(
+            page = await self.database.select(
                 table, filters={**self.scope, "graph_version_id": snapshot_id}, limit=1000, offset=len(rows)
             )
             rows.extend(page)
             if len(page) < 1000:
                 return rows
 
-    def load(self, snapshot_id: UUID) -> tuple[list[SkillGraphNodeRecord], list[SkillGraphEdgeRecord], dict]:
+    async def load(self, snapshot_id: UUID) -> tuple[list[SkillGraphNodeRecord], list[SkillGraphEdgeRecord], dict]:
         """Load and verify a pinned immutable snapshot in this project and graph.
 
         Args:
             snapshot_id: Exact committed graph identity, never the mutable head.
         """
-        graph = self.database.get(SKILL_GRAPHS_TABLE, self.scope)
+        graph = await self.database.get(SKILL_GRAPHS_TABLE, self.scope)
         if graph is None or graph["is_deleted"]:
             raise GraphNotFoundError("Graph not found")
-        versions = self._rows(SKILL_GRAPH_VERSIONS_TABLE, snapshot_id)
+        versions = await self._rows(SKILL_GRAPH_VERSIONS_TABLE, snapshot_id)
         if not versions or versions[0]["status"] != "ready":
             raise ValueError("Ready graph snapshot not found")
         version = SkillGraphVersionRecord.model_validate(versions[0])
-        nodes = [SkillGraphNodeRecord.model_validate(row) for row in self._rows(SKILL_GRAPH_NODES_TABLE, snapshot_id)]
-        edges = [SkillGraphEdgeRecord.model_validate(row) for row in self._rows(SKILL_GRAPH_EDGES_TABLE, snapshot_id)]
+        nodes = [
+            SkillGraphNodeRecord.model_validate(row) for row in (await self._rows(SKILL_GRAPH_NODES_TABLE, snapshot_id))
+        ]
+        edges = [
+            SkillGraphEdgeRecord.model_validate(row) for row in (await self._rows(SKILL_GRAPH_EDGES_TABLE, snapshot_id))
+        ]
         digest = graph_digest(
             {
                 "nodes": sorted((node.model_dump(mode="json") for node in nodes), key=lambda row: row["node_id"]),
@@ -291,7 +301,7 @@ class SkillGraphStore:
             raise ValueError("Stored graph snapshot failed integrity validation")
         return nodes, edges, version.metadata
 
-    def search(self, snapshot_id: UUID, vector: list[float], *, top_k: int, node_type: str | None = None):
+    async def search(self, snapshot_id: UUID, vector: list[float], *, top_k: int, node_type: str | None = None):
         """Search vectors only inside a pinned project-scoped graph snapshot.
 
         Args:
@@ -303,7 +313,7 @@ class SkillGraphStore:
         filters = {**self.scope, "graph_version_id": snapshot_id}
         if node_type is not None:
             filters["node_type"] = node_type
-        return self.database.search(
+        return await self.database.search(
             SKILL_GRAPH_NODES_TABLE,
             vector_field="embedding",
             query_vector=vector,

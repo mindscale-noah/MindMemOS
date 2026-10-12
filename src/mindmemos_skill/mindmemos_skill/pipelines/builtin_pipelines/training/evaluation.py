@@ -6,11 +6,14 @@ from uuid import uuid4
 from ....common.asyncio import map_bounded
 from ....common.checkpoint import boundary
 from ....common.json import write_json
+from ....logging import get_logger
 from ....skill import SkillSet
 from .typing import HeldOutResultIndex, HeldOutTaskResult
 
 
-async def evaluate_skill(*, skill, env, samples, directory: Path, concurrency: int) -> dict:
+async def evaluate_skill(
+    *, skill, env, samples, directory: Path, concurrency: int, stage_name: str | None = None
+) -> dict:
     """Score held-out tasks without feeding results into candidate selection.
 
     Args:
@@ -19,6 +22,7 @@ async def evaluate_skill(*, skill, env, samples, directory: Path, concurrency: i
         samples: Ordered held-out samples, excluded from trainer optimization.
         directory: Dedicated evaluation directory bound to these inputs.
         concurrency: Maximum simultaneous environment calls.
+        stage_name: Optional algorithm stage for static winners; dynamic TreeSkill is inferred.
 
     Returns:
         Aggregate scores and counts; empty inputs produce zero counts and no score.
@@ -34,11 +38,16 @@ async def evaluate_skill(*, skill, env, samples, directory: Path, concurrency: i
     }
     boundary(directory / "inputs.json", identity, payload={"protocol": 1})
 
+    logger = get_logger(__name__)
+    stage_name = stage_name or "skill.evaluation"
+    logger.info(f"[{stage_name}] started | tasks={len(samples)} concurrency={concurrency}")
+
     async def evaluate(item):
         index, sample = item
         root = directory / f"task-{index:06d}"
         saved = boundary(root / "completed.json", identity)
         if saved is not None:
+            logger.info(f"[{stage_name}] item.reused | sample_id={sample.task.id}")
             return env.result_type.model_validate(saved["result"])
         result = await env.rollout(
             task=sample.task,
@@ -48,6 +57,7 @@ async def evaluate_skill(*, skill, env, samples, directory: Path, concurrency: i
             resume=False,
         )
         boundary(root / "completed.json", identity, payload={"result": result.model_dump(mode="json")})
+        logger.info(f"[{stage_name}] item.completed | sample_id={sample.task.id} success={result.reward.success}")
         return result
 
     results = await map_bounded(evaluate, enumerate(samples), concurrency=concurrency)
@@ -79,4 +89,5 @@ async def evaluate_skill(*, skill, env, samples, directory: Path, concurrency: i
     )
     write_json(directory / "results.json", index)
     write_json(directory / "summary.json", summary)
+    logger.info(f"[{stage_name}] completed | count={summary['count']} accuracy={summary['success_rate']}")
     return summary

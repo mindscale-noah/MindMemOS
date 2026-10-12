@@ -33,28 +33,28 @@ from sqlalchemy.schema import CreateTable
 
 
 @pytest.fixture
-def database(tmp_path):
+async def database(tmp_path):
     db = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'graphs.db'}"))
     store = create_persistence(db)
-    ensure_collection(store)
+    (await ensure_collection(store))
     try:
         yield db
     finally:
-        db.close()
+        (await db.close())
 
 
-def add_graph(db, project="p1", graph="g1"):
+async def add_graph(db, project="p1", graph="g1"):
     record = SkillGraphRecord(project_id=project, graph_id=graph, name="Graph")
-    db.insert(SKILL_GRAPHS_TABLE, [record.model_dump()])
+    (await db.insert(SKILL_GRAPHS_TABLE, [record.model_dump()]))
 
 
-def add_version(db, project="p1", graph="g1"):
+async def add_version(db, project="p1", graph="g1"):
     record = SkillGraphVersionRecord(project_id=project, graph_id=graph, graph_version_id=uuid4())
-    db.insert(SKILL_GRAPH_VERSIONS_TABLE, [record.model_dump()])
+    (await db.insert(SKILL_GRAPH_VERSIONS_TABLE, [record.model_dump()]))
     return record.graph_version_id
 
 
-def add_skill(db, version="skill-v1", project="p1"):
+async def add_skill(db, version="skill-v1", project="p1"):
     record = SkillVersionRecord(
         project_id=project,
         version_id=version,
@@ -66,40 +66,44 @@ def add_skill(db, version="skill-v1", project="p1"):
         skill_hash=skill_hash("content", {}),
         content_hash=content_hash("content"),
     )
-    db.insert(SKILL_VERSIONS_TABLE, [record.model_dump()])
+    (await db.insert(SKILL_VERSIONS_TABLE, [record.model_dump()]))
 
 
-def test_graph_resolve_rejects_ambiguous_family_and_version_prefixes(database):
+async def test_graph_resolve_rejects_ambiguous_family_and_version_prefixes(database):
     """Graph and snapshot prefixes must identify exactly one project-owned row."""
     for suffix in ("a", "b"):
         graph_id = f"g-{suffix}"
         snapshot = UUID(f"a{suffix}" + "0" * 30)
-        database.insert(
-            SKILL_GRAPHS_TABLE,
-            [
-                SkillGraphRecord(
-                    project_id="p1", graph_id=graph_id, public_id=f"skg-aa{suffix}", alias=graph_id, name=graph_id
-                ).model_dump()
-            ],
+        (
+            await database.insert(
+                SKILL_GRAPHS_TABLE,
+                [
+                    SkillGraphRecord(
+                        project_id="p1", graph_id=graph_id, public_id=f"skg-aa{suffix}", alias=graph_id, name=graph_id
+                    ).model_dump()
+                ],
+            )
         )
-        database.insert(
-            SKILL_GRAPH_VERSIONS_TABLE,
-            [
-                SkillGraphVersionRecord(
-                    project_id="p1",
-                    graph_id=graph_id,
-                    graph_version_id=snapshot,
-                    public_version_id=f"skgv-{snapshot.hex}",
-                ).model_dump()
-            ],
+        (
+            await database.insert(
+                SKILL_GRAPH_VERSIONS_TABLE,
+                [
+                    SkillGraphVersionRecord(
+                        project_id="p1",
+                        graph_id=graph_id,
+                        graph_version_id=snapshot,
+                        public_version_id=f"skgv-{snapshot.hex}",
+                    ).model_dump()
+                ],
+            )
         )
     resolver = GraphQueryService(database, "p1")
-    assert resolver.resolve("g-a")["graph_id"] == "skg-aaa"
-    assert resolver.resolve("skg-aab")["graph_id"] == "skg-aab"
+    assert (await resolver.resolve("g-a"))["graph_id"] == "skg-aaa"
+    assert (await resolver.resolve("skg-aab"))["graph_id"] == "skg-aab"
     with pytest.raises(GraphConflictError, match="Ambiguous"):
-        resolver.resolve("skg-aa")
+        (await resolver.resolve("skg-aa"))
     with pytest.raises(GraphConflictError, match="Ambiguous"):
-        resolver.resolve("skgv-a")
+        (await resolver.resolve("skgv-a"))
 
 
 def node(version, **changes):
@@ -122,13 +126,13 @@ def node(version, **changes):
     )
 
 
-def test_snapshot_nodes_edges_and_dynamic_vectors_round_trip(database):
-    add_graph(database)
-    add_skill(database)
-    v1 = add_version(database)
+async def test_snapshot_nodes_edges_and_dynamic_vectors_round_trip(database):
+    (await add_graph(database))
+    (await add_skill(database))
+    v1 = await add_version(database)
     first = node(v1)
     scene = node(v1, node_id="scene:1", node_type="scene", skill_version_id=None, owner_node_id="skill:1")
-    database.insert(SKILL_GRAPH_NODES_TABLE, [first.model_dump(), scene.model_dump()])
+    (await database.insert(SKILL_GRAPH_NODES_TABLE, [first.model_dump(), scene.model_dump()]))
     edge = SkillGraphEdgeRecord(
         project_id="p1",
         graph_id="g1",
@@ -138,114 +142,134 @@ def test_snapshot_nodes_edges_and_dynamic_vectors_round_trip(database):
         target_node_id="scene:1",
         weight=0.5,
     )
-    database.insert(SKILL_GRAPH_EDGES_TABLE, [edge.model_dump()])
+    (await database.insert(SKILL_GRAPH_EDGES_TABLE, [edge.model_dump()]))
     assert (
-        SkillGraphNodeRecord.model_validate(database.select(SKILL_GRAPH_NODES_TABLE, filters={"node_id": "skill:1"})[0])
+        SkillGraphNodeRecord.model_validate(
+            (await database.select(SKILL_GRAPH_NODES_TABLE, filters={"node_id": "skill:1"}))[0]
+        )
         == first
     )
-    assert SkillGraphEdgeRecord.model_validate(database.select(SKILL_GRAPH_EDGES_TABLE)[0]) == edge
-    v2 = add_version(database)
+    assert SkillGraphEdgeRecord.model_validate((await database.select(SKILL_GRAPH_EDGES_TABLE))[0]) == edge
+    v2 = await add_version(database)
     different_dimension = node(v2, embedding=[1.0, 0.5])
-    database.insert(SKILL_GRAPH_NODES_TABLE, [different_dimension.model_dump()])
-    assert database.select(SKILL_GRAPH_NODES_TABLE, filters={"graph_version_id": v2})[0]["embedding"] == [1.0, 0.5]
+    (await database.insert(SKILL_GRAPH_NODES_TABLE, [different_dimension.model_dump()]))
+    assert (await database.select(SKILL_GRAPH_NODES_TABLE, filters={"graph_version_id": v2}))[0]["embedding"] == [
+        1.0,
+        0.5,
+    ]
 
 
-def test_project_and_snapshot_foreign_keys(database):
-    add_graph(database)
-    add_graph(database, project="p2")
-    add_skill(database)
-    v1 = add_version(database)
-    v2 = add_version(database, project="p2")
+async def test_project_and_snapshot_foreign_keys(database):
+    (await add_graph(database))
+    (await add_graph(database, project="p2"))
+    (await add_skill(database))
+    v1 = await add_version(database)
+    v2 = await add_version(database, project="p2")
     with pytest.raises(IntegrityError):
-        database.insert(SKILL_GRAPH_NODES_TABLE, [node(v2, project_id="p2").model_dump()])
-    database.insert(SKILL_GRAPH_NODES_TABLE, [node(v1).model_dump()])
-    other = add_version(database)
+        (await database.insert(SKILL_GRAPH_NODES_TABLE, [node(v2, project_id="p2").model_dump()]))
+    (await database.insert(SKILL_GRAPH_NODES_TABLE, [node(v1).model_dump()]))
+    other = await add_version(database)
     with pytest.raises(IntegrityError):
-        database.insert(
+        (
+            await database.insert(
+                SKILL_GRAPH_NODES_TABLE,
+                [
+                    node(
+                        other, node_id="scene:1", node_type="scene", skill_version_id=None, owner_node_id="skill:1"
+                    ).model_dump()
+                ],
+            )
+        )
+    with pytest.raises(IntegrityError):
+        (
+            await database.insert(
+                SKILL_GRAPH_EDGES_TABLE,
+                [
+                    SkillGraphEdgeRecord(
+                        project_id="p1",
+                        graph_id="g1",
+                        graph_version_id=other,
+                        edge_id=uuid4(),
+                        source_node_id="skill:1",
+                        target_node_id="missing",
+                    ).model_dump()
+                ],
+            )
+        )
+    with pytest.raises(IntegrityError):
+        (await database.delete(SKILL_VERSIONS_TABLE, filters={"version_id": "skill-v1"}))
+
+
+async def test_uniqueness_prevents_duplicate_skill_and_edge(database):
+    (await add_graph(database))
+    (await add_skill(database))
+    version = await add_version(database)
+    (await database.insert(SKILL_GRAPH_NODES_TABLE, [node(version).model_dump()]))
+    with pytest.raises(IntegrityError):
+        (await database.insert(SKILL_GRAPH_NODES_TABLE, [node(version, node_id="another").model_dump()]))
+    (
+        await database.insert(
             SKILL_GRAPH_NODES_TABLE,
             [
                 node(
-                    other, node_id="scene:1", node_type="scene", skill_version_id=None, owner_node_id="skill:1"
+                    version, node_id="scene:1", node_type="scene", skill_version_id=None, owner_node_id="skill:1"
                 ).model_dump()
             ],
         )
-    with pytest.raises(IntegrityError):
-        database.insert(
-            SKILL_GRAPH_EDGES_TABLE,
-            [
-                SkillGraphEdgeRecord(
-                    project_id="p1",
-                    graph_id="g1",
-                    graph_version_id=other,
-                    edge_id=uuid4(),
-                    source_node_id="skill:1",
-                    target_node_id="missing",
-                ).model_dump()
-            ],
-        )
-    with pytest.raises(IntegrityError):
-        database.delete(SKILL_VERSIONS_TABLE, filters={"version_id": "skill-v1"})
-
-
-def test_uniqueness_prevents_duplicate_skill_and_edge(database):
-    add_graph(database)
-    add_skill(database)
-    version = add_version(database)
-    database.insert(SKILL_GRAPH_NODES_TABLE, [node(version).model_dump()])
-    with pytest.raises(IntegrityError):
-        database.insert(SKILL_GRAPH_NODES_TABLE, [node(version, node_id="another").model_dump()])
-    database.insert(
-        SKILL_GRAPH_NODES_TABLE,
-        [
-            node(
-                version, node_id="scene:1", node_type="scene", skill_version_id=None, owner_node_id="skill:1"
-            ).model_dump()
-        ],
     )
     values = dict(
         project_id="p1", graph_id="g1", graph_version_id=version, source_node_id="skill:1", target_node_id="scene:1"
     )
-    database.insert(SKILL_GRAPH_EDGES_TABLE, [SkillGraphEdgeRecord(**values, edge_id=uuid4()).model_dump()])
+    (await database.insert(SKILL_GRAPH_EDGES_TABLE, [SkillGraphEdgeRecord(**values, edge_id=uuid4()).model_dump()]))
     with pytest.raises(IntegrityError):
-        database.insert(SKILL_GRAPH_EDGES_TABLE, [SkillGraphEdgeRecord(**values, edge_id=uuid4()).model_dump()])
+        (await database.insert(SKILL_GRAPH_EDGES_TABLE, [SkillGraphEdgeRecord(**values, edge_id=uuid4()).model_dump()]))
 
 
-def test_snapshot_idempotency_and_current_pointer_constraints(database):
-    add_graph(database)
-    add_graph(database, graph="g2")
-    version = add_version(database)
+async def test_snapshot_idempotency_and_current_pointer_constraints(database):
+    (await add_graph(database))
+    (await add_graph(database, graph="g2"))
+    version = await add_version(database)
     assert (
-        database.update(SKILL_GRAPH_VERSIONS_TABLE, {"request_hash": "b" * 64}, filters={"graph_version_id": version})
-        == 1
-    )
+        await database.update(
+            SKILL_GRAPH_VERSIONS_TABLE, {"request_hash": "b" * 64}, filters={"graph_version_id": version}
+        )
+    ) == 1
     with pytest.raises(IntegrityError):
-        database.insert(
-            SKILL_GRAPH_VERSIONS_TABLE,
-            [
-                SkillGraphVersionRecord(
-                    project_id="p1", graph_id="g1", graph_version_id=uuid4(), request_hash="b" * 64
-                ).model_dump()
-            ],
+        (
+            await database.insert(
+                SKILL_GRAPH_VERSIONS_TABLE,
+                [
+                    SkillGraphVersionRecord(
+                        project_id="p1", graph_id="g1", graph_version_id=uuid4(), request_hash="b" * 64
+                    ).model_dump()
+                ],
+            )
         )
     graph = database.tables.get(SKILL_GRAPHS_TABLE).table
-    with database.engine.begin() as connection:
-        connection.execute(graph.update().where(graph.c.graph_id == "g1").values(current_version_id=version))
+    async with database.engine.begin() as connection:
+        (await connection.execute(graph.update().where(graph.c.graph_id == "g1").values(current_version_id=version)))
     with pytest.raises(IntegrityError):
-        with database.engine.begin() as connection:
-            connection.execute(graph.update().where(graph.c.graph_id == "g2").values(current_version_id=version))
+        async with database.engine.begin() as connection:
+            (
+                await connection.execute(
+                    graph.update().where(graph.c.graph_id == "g2").values(current_version_id=version)
+                )
+            )
     with pytest.raises(IntegrityError):
-        database.delete(
-            SKILL_GRAPH_VERSIONS_TABLE, filters={"project_id": "p1", "graph_id": "g1", "graph_version_id": version}
+        (
+            await database.delete(
+                SKILL_GRAPH_VERSIONS_TABLE, filters={"project_id": "p1", "graph_id": "g1", "graph_version_id": version}
+            )
         )
 
 
-def test_ready_constraints(database):
-    add_graph(database)
-    version = add_version(database)
+async def test_ready_constraints(database):
+    (await add_graph(database))
+    version = await add_version(database)
     table = database.tables.get(SKILL_GRAPH_VERSIONS_TABLE).table
     with pytest.raises(IntegrityError):
-        with database.engine.begin() as connection:
-            connection.execute(table.update().values(status="ready"))
+        async with database.engine.begin() as connection:
+            (await connection.execute(table.update().values(status="ready")))
     for changes in (
         {"status": "ready"},
         {"vector_count": 1},

@@ -19,7 +19,7 @@ class SkillManager(Algorithm[ConfigT], ABC):
     """
 
     @abstractmethod
-    def organize(self, *, skills: Mapping[str, Skill]) -> None:
+    async def organize(self, *, skills: Mapping[str, Skill]) -> None:
         """Replace the current scope and build its organization.
 
         Args:
@@ -31,7 +31,7 @@ class SkillManager(Algorithm[ConfigT], ABC):
         """
 
     @abstractmethod
-    def recommend(self, *, task: Task, limit: int = 5) -> list[str]:
+    async def recommend(self, *, task: Task, limit: int = 5) -> list[str]:
         """Recommend only skills from the most recently organized scope.
 
         Args:

@@ -87,7 +87,7 @@ HTTP 入口：
 - `/v1/skills/algos/train`：提交训练任务。
 - `/v1/skills/algos/evolve`：提交演化任务，正文为 `skill_version_id` 和可选 `auto_accept`。
 - `/v1/skills/tasks/show`：按 `task_id` 查询状态。
-- `/v1/skills/tasks/progress`：读取进度事件。
+- `/v1/skills/tasks/progress`：按 `after` 游标读取任务日志，包括结构化进度、物理 attempt 和失败 traceback。
 
 训练、演化受理返回 `202` 和任务快照。演化的 `kind` 为 `skill.evolve`。
 状态包括 `queued`、`running`、`succeeded`、`failed` 和 `cancelled`。

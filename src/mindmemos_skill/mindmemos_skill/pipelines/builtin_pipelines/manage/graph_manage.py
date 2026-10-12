@@ -4,10 +4,9 @@ from uuid import UUID, uuid4
 
 from ....algos.manage.skill_manage import SkillManageAlgorithm
 from ....api.typing import OrganizeRequest, OrganizeResult, RecommendRequest, RecommendResult
-from ....common.asyncio import run_sync
 from ....envs.typing import Task
 from ....errors import GraphNotFoundError
-from ....infra.task_manager.progress import ProgressReporter
+from ....logging import get_logger
 from ....persistence.db_services.skill_management.service import GraphQueryService
 from ....persistence.db_services.skill_management.writer import SkillGraphStore
 from ....persistence.store import SkillPersistence
@@ -34,7 +33,7 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         Returns:
             Public identity and selected graph snapshot.
         """
-        return await run_sync(self._queries(project_id).resolve, reference)
+        return await self._queries(project_id).resolve(reference)
 
     async def delete_graph(self, project_id: str, reference: str) -> None:
         """Soft-delete a graph in the authorized project.
@@ -43,7 +42,7 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
             project_id: Authorized project identity.
             reference: Active graph identity or alias.
         """
-        await run_sync(self._queries(project_id).delete, reference)
+        await self._queries(project_id).delete(reference)
 
     def __init__(self, config: GraphManagePipelineConfig, *, persistence: SkillPersistence):
         """Borrow the shared store without performing graph or model I/O.
@@ -56,12 +55,11 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
             raise TypeError("Graph management requires SkillPersistence")
         super().__init__(config, persistence=persistence)
 
-    async def organize(self, request: OrganizeRequest, *, reporter: ProgressReporter | None = None) -> OrganizeResult:
+    async def organize(self, request: OrganizeRequest) -> OrganizeResult:
         """Publish or reuse the graph for exactly the supplied Skill versions.
 
         Args:
             request: Authorized project, graph, actor, versions, and scenes.
-            reporter: Optional progress sink for graph publication.
 
         Returns:
             Immutable snapshot identity after successful publication.
@@ -69,14 +67,17 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         if self.config.algorithm is None:
             raise NotImplementedError("Graph organization requires algorithm configuration")
         validated = OrganizeRequest.model_validate(request)
-        if reporter is not None:
-            await reporter.report(stage="organize", message="Organizing Skill Set")
-        result = await run_sync(self._organize, validated)
-        if reporter is not None:
-            await reporter.report(stage="organized", message="Skill Set snapshot published")
+        get_logger(__name__).info(
+            "algorithm.progress", extra={"event_body": {"stage": "organize", "message": "Organizing Skill Set"}}
+        )
+        result = await self._organize(validated)
+        get_logger(__name__).info(
+            "algorithm.progress",
+            extra={"event_body": {"stage": "organized", "message": "Skill Set snapshot published"}},
+        )
         return result
 
-    def _organize(self, request: OrganizeRequest) -> OrganizeResult:
+    async def _organize(self, request: OrganizeRequest) -> OrganizeResult:
         """Load versions and call the synchronous graph algorithm."""
         graph = None
         if request.graph_id is not None:
@@ -84,7 +85,7 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
                 raise ValueError("An existing graph cannot receive a new alias")
             if request.graph_id.startswith("skgv-"):
                 raise ValueError("A graph version cannot be used as a graph identity")
-            graph = self._queries(request.project_id).graph(request.graph_id)
+            graph = await self._queries(request.project_id).graph(request.graph_id)
         graph_id = (
             graph["graph_id"]
             if graph is not None
@@ -94,11 +95,11 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         versions: dict[str, str] = {}
         skills: dict[str, Skill] = {}
         for reference in request.skill_refs:
-            _, version = self.persistence.skills.resolve(request.project_id, reference)
+            _, version = await self.persistence.skills.resolve(request.project_id, reference)
             version_id = version.version_id
             if version.skill_id in versions:
                 raise ValueError("Only one version per Skill family may be organized")
-            source = self.persistence.skills.get_skill(version_id)
+            source = await self.persistence.skills.get_skill(version_id)
             if source is None:
                 raise ValueError("Stored Skill version has no source")
             versions[version.skill_id] = version_id
@@ -113,11 +114,11 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
             message=request.commit_message,
         )
         algorithm = SkillManageAlgorithm(self.config.algorithm, store=store, scene_records={})
-        algorithm.organize(skills=skills)
+        (await algorithm.organize(skills=skills))
         snapshot_id = algorithm.snapshot_id
         if snapshot_id is None:
             raise RuntimeError("Organization completed without a graph snapshot")
-        public_id = self._queries(request.project_id).graph(graph_id)["public_id"]
+        public_id = (await self._queries(request.project_id).graph(graph_id))["public_id"]
         return OrganizeResult(
             graph_id=public_id,
             graph_version_id=snapshot_id,
@@ -135,11 +136,11 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         """
         if self.config.algorithm is None:
             raise NotImplementedError("Graph recommendation requires algorithm configuration")
-        return await run_sync(self._recommend, RecommendRequest.model_validate(request))
+        return await self._recommend(RecommendRequest.model_validate(request))
 
-    def _recommend(self, request: RecommendRequest) -> RecommendResult:
+    async def _recommend(self, request: RecommendRequest) -> RecommendResult:
         """Restore graph members and call the synchronous recommendation algorithm."""
-        graph = self._queries(request.project_id).graph(request.graph_id)
+        graph = await self._queries(request.project_id).graph(request.graph_id)
         graph_id = graph["graph_id"]
         snapshot_id = request.graph_version_id
         if snapshot_id is None:
@@ -153,7 +154,7 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
             actor_id="recommend",
             version_ids={},
         )
-        nodes, _, _ = store.load(snapshot_id)
+        nodes, _, _ = await store.load(snapshot_id)
         versions: dict[str, str] = {}
         skills: dict[str, Skill] = {}
         for node in nodes:
@@ -162,10 +163,10 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
             skill_id = node.metadata.get("collection_skill_id")
             if not isinstance(skill_id, str) or not node.skill_version_id or skill_id in versions:
                 raise ValueError("Graph has invalid Skill version bindings")
-            version = self.persistence.skills.version_by_id(request.project_id, node.skill_version_id)
+            version = await self.persistence.skills.version_by_id(request.project_id, node.skill_version_id)
             if version.skill_id != skill_id:
                 raise ValueError("Graph member differs from its stored Skill family")
-            source = self.persistence.skills.get_skill(version.version_id)
+            source = await self.persistence.skills.get_skill(version.version_id)
             if source is None:
                 raise ValueError("Stored Skill version has no source")
             versions[skill_id] = version.version_id
@@ -178,11 +179,12 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
             version_ids=versions,
         )
         algorithm = SkillManageAlgorithm(self.config.algorithm, store=store, scene_records={})
-        algorithm.restore(snapshot_id, skills=skills)
-        selected = algorithm.recommend(task=Task(id="recommend", instruction=request.task), limit=request.top_k)
+        (await algorithm.restore(snapshot_id, skills=skills))
+        selected = await algorithm.recommend(task=Task(id="recommend", instruction=request.task), limit=request.top_k)
         return RecommendResult(
             skills=[
-                self.persistence.skills.version_by_id(request.project_id, versions[skill_id]) for skill_id in selected
+                (await self.persistence.skills.version_by_id(request.project_id, versions[skill_id]))
+                for skill_id in selected
             ]
         )
 
@@ -199,7 +201,7 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         Returns:
             Skill Sets with stable public identities and representation modes.
         """
-        rows = await run_sync(self._queries(project_id).list_graphs)
+        rows = await self._queries(project_id).list_graphs()
         result = []
         for row in rows:
             item = dict(row)
@@ -222,11 +224,11 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
             Snapshots with stable public identities and revision numbers.
         """
         try:
-            graph = await run_sync(self._queries(project_id).graph, skill_set_id)
+            graph = await self._queries(project_id).graph(skill_set_id)
         except GraphNotFoundError:
             return []
         public_id = graph["public_id"]
-        rows = await run_sync(self._queries(project_id).snapshots, graph["graph_id"])
+        rows = await self._queries(project_id).snapshots(graph["graph_id"])
         result = []
         for row in rows:
             item = dict(row)
@@ -249,9 +251,9 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         Returns:
             The current graph representation of the selected Skill Set.
         """
-        graph = await run_sync(self._queries(project_id).graph, skill_set_id)
+        graph = await self._queries(project_id).graph(skill_set_id)
         public_id = graph["public_id"]
-        row = await run_sync(self._queries(project_id).snapshot, graph["graph_id"], snapshot_id)
+        row = await self._queries(project_id).snapshot(graph["graph_id"], snapshot_id)
         item = dict(row)
         item["skill_set_id"] = public_id
         item.pop("graph_version_id")
