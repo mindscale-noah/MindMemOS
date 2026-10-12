@@ -2,8 +2,8 @@
 
 import asyncio
 import json
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from mindmemos_skill.agents import AgentResult, OpenAIChatConfig
@@ -40,7 +40,7 @@ class Embeddings:
         self.calls = []
         self.fail = False
 
-    def embed(self, texts):
+    async def embed(self, texts):
         if self.fail:
             raise RuntimeError("Embedding failed")
         self.calls.append(list(texts))
@@ -53,7 +53,7 @@ class Chat:
         self.calls = []
         self.fail = False
 
-    def run(self, *, system, user, response_format):
+    async def run(self, *, system, user, response_format):
         if self.fail:
             raise RuntimeError("Chat failed")
         payload = json.loads(user)
@@ -77,10 +77,10 @@ class Chat:
 
 
 @pytest.fixture
-def setup(tmp_path):
+async def setup(tmp_path):
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'graph.db'}"))
     persistence = create_persistence(database)
-    ensure_collection(persistence)
+    (await ensure_collection(persistence))
     skills = {}
     for key, desc, io in [
         ("a", "Parse CSV tables", "outputs: [table_records]"),
@@ -95,18 +95,26 @@ def setup(tmp_path):
                 standard_format=False,
             )
         )
-        persistence.skills.add_skill(
-            skill,
-            SkillVersionRecord(
-                project_id="p",
-                skill_id=key,
-                version_id=f"v-{key}",
-                **skill.snapshot().model_dump(),
-            ),
+        (
+            await persistence.skills.add_skill(
+                skill,
+                SkillVersionRecord(
+                    project_id="p",
+                    skill_id=key,
+                    version_id=f"v-{key}",
+                    **skill.snapshot().model_dump(),
+                ),
+            )
         )
-        database.insert(
-            SKILLS_TABLE,
-            [SkillRecord(project_id="p", skill_id=key, name="Same name", active_version_id=f"v-{key}").model_dump()],
+        (
+            await database.insert(
+                SKILLS_TABLE,
+                [
+                    SkillRecord(
+                        project_id="p", skill_id=key, name="Same name", active_version_id=f"v-{key}"
+                    ).model_dump()
+                ],
+            )
         )
         skills[key] = skill
     store = SkillGraphStore(
@@ -146,50 +154,50 @@ def setup(tmp_path):
         )
 
     yield database, persistence, skills, store, config, embedding, chat, manager
-    database.close()
+    (await database.close())
 
 
-def test_registered_end_to_end_build_scene_link_rewrite_and_id_identity(setup):
+async def test_registered_end_to_end_build_scene_link_rewrite_and_id_identity(setup):
     database, persistence, skills, store, config, embedding, chat, factory = setup
     assert Algorithm.resolve("skill_manage") is SkillManageAlgorithm
     manager = factory()
     collection = SkillManageSkillSet(skills, algorithm=manager, limit=2, max_concurrency=2)
     assert not embedding.calls and not chat.calls
-    selected = collection.select(Task(id="task", instruction="Parse CSV records"))
+    selected = await collection.select(Task(id="task", instruction="Parse CSV records"))
     assert len(selected) == len(set(selected)) == 2 and set(selected) <= set(skills)
-    assert database.count(SKILL_GRAPH_NODES_TABLE) == 5
-    nodes = database.select(SKILL_GRAPH_NODES_TABLE)
+    assert (await database.count(SKILL_GRAPH_NODES_TABLE)) == 5
+    nodes = await database.select(SKILL_GRAPH_NODES_TABLE)
     assert len({node["node_id"] for node in nodes}) == 5
     assert {node["name"] for node in nodes if node["node_type"] == "skill"} == {"Same name"}
-    edges = database.select(SKILL_GRAPH_EDGES_TABLE)
+    edges = await database.select(SKILL_GRAPH_EDGES_TABLE)
     assert {edge["edge_type"] for edge in edges} >= {"dependency", "semantic", "containment", "flow"}
     dependency = next(edge for edge in edges if edge["edge_type"] == "dependency")
     assert (dependency["source_node_id"], dependency["target_node_id"]) == (node_id("a"), node_id("b"))
     assert len([call for call in chat.calls if "pairs" in call]) == 3
     assert chat.calls[-1]["instruction"] == "Parse CSV records"
     assert embedding.calls[-1] == ["Parse CSV records\ncsv"]
-    assert "secret" in json.dumps(database.select(SKILL_GRAPH_VERSIONS_TABLE), default=str)
-    assert database.count(SKILL_VERSIONS_TABLE) == 3
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
+    assert "secret" in json.dumps((await database.select(SKILL_GRAPH_VERSIONS_TABLE)), default=str)
+    assert (await database.count(SKILL_VERSIONS_TABLE)) == 3
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 1
     calls = len(embedding.calls)
     restored = factory()
-    restored.organize(skills=skills)
+    (await restored.organize(skills=skills))
     assert len(embedding.calls) == calls
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
-    assert restored.recommend(task=Task(id="again", instruction="Parse CSV records"), limit=2) == selected
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 1
+    assert (await restored.recommend(task=Task(id="again", instruction="Parse CSV records"), limit=2)) == selected
 
 
-def test_disabled_model_features_do_not_call_chat(setup):
+async def test_disabled_model_features_do_not_call_chat(setup):
     database, _, skills, _, _, embedding, chat, factory = setup
     manager = factory(llm_linking=False, query_rewrite=False, build_scene=False, mode="skill_only")
     chat.fail = True
-    manager.organize(skills=skills)
-    assert manager.recommend(task=Task(id="task", instruction="CSV"))
+    (await manager.organize(skills=skills))
+    assert await manager.recommend(task=Task(id="task", instruction="CSV"))
     assert not chat.calls
-    assert database.count(SKILL_GRAPH_NODES_TABLE) == 3
+    assert (await database.count(SKILL_GRAPH_NODES_TABLE)) == 3
 
 
-def test_atomic_interruption_rolls_back_and_retry_preserves_existing_versions(setup, monkeypatch):
+async def test_atomic_interruption_rolls_back_and_retry_preserves_existing_versions(setup, monkeypatch):
     database, _, skills, _, _, _, _, factory = setup
     original = Database.update
 
@@ -201,43 +209,43 @@ def test_atomic_interruption_rolls_back_and_retry_preserves_existing_versions(se
     monkeypatch.setattr(Database, "update", interrupted)
     manager = factory()
     with pytest.raises(RuntimeError, match="Interrupted"):
-        manager.organize(skills=skills)
+        (await manager.organize(skills=skills))
     for table in (
         SKILL_GRAPHS_TABLE,
         SKILL_GRAPH_VERSIONS_TABLE,
         SKILL_GRAPH_NODES_TABLE,
         SKILL_GRAPH_EDGES_TABLE,
     ):
-        assert database.count(table) == 0
-    assert database.count(SKILL_VERSIONS_TABLE) == 3
+        assert (await database.count(table)) == 0
+    assert (await database.count(SKILL_VERSIONS_TABLE)) == 3
     with pytest.raises(RuntimeError, match="Organize"):
-        manager.recommend(task=Task(id="task", instruction="CSV"))
+        (await manager.recommend(task=Task(id="task", instruction="CSV")))
     monkeypatch.setattr(Database, "update", original)
-    manager.organize(skills=skills)
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
-    assert database.count(SKILL_VERSIONS_TABLE) == 3
+    (await manager.organize(skills=skills))
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 1
+    assert (await database.count(SKILL_VERSIONS_TABLE)) == 3
 
 
-def test_failed_new_build_preserves_previous_published_snapshot(setup):
+async def test_failed_new_build_preserves_previous_published_snapshot(setup):
     database, _, skills, _, _, embedding, _, factory = setup
-    factory().organize(skills=skills)
-    old = database.select(SKILL_GRAPHS_TABLE)[0]
+    (await factory().organize(skills=skills))
+    old = (await database.select(SKILL_GRAPHS_TABLE))[0]
     embedding.fail = True
     manager = factory(mode="skill_only")
     with pytest.raises(RuntimeError, match="Embedding failed"):
-        manager.organize(skills=skills)
-    assert database.select(SKILL_GRAPHS_TABLE)[0] == old
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
+        (await manager.organize(skills=skills))
+    assert (await database.select(SKILL_GRAPHS_TABLE))[0] == old
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 1
 
 
-def test_project_bindings_and_content_cannot_expand_scope(setup):
+async def test_project_bindings_and_content_cannot_expand_scope(setup):
     database, _, skills, _, config, embedding, chat, factory = setup
     changed = dict(skills)
     changed["a"] = Skill(
         SkillContent(content="different", name="test-skill", description="Test instructions", standard_format=False)
     )
     with pytest.raises(ValueError, match="differs"):
-        factory().organize(skills=changed)
+        (await factory().organize(skills=changed))
     bad_store = SkillGraphStore(
         database, project_id="other", graph_id="g", actor_id="test", version_ids={key: f"v-{key}" for key in skills}
     )
@@ -245,26 +253,27 @@ def test_project_bindings_and_content_cannot_expand_scope(setup):
         config, store=bad_store, scene_records={}, embedding_model=embedding, chat_model=chat
     )
     with pytest.raises(Exception, match="project"):
-        manager.organize(skills=skills)
+        (await manager.organize(skills=skills))
     assert not embedding.calls and not chat.calls
 
 
-def test_corrupt_persisted_graph_is_rejected(setup):
+async def test_corrupt_persisted_graph_is_rejected(setup):
     database, _, skills, _, _, _, _, factory = setup
-    factory().organize(skills=skills)
-    database.update(
-        SKILL_GRAPH_NODES_TABLE, {"description": "corrupted"}, filters={"project_id": "p", "node_id": node_id("a")}
+    (await factory().organize(skills=skills))
+    (
+        await database.update(
+            SKILL_GRAPH_NODES_TABLE, {"description": "corrupted"}, filters={"project_id": "p", "node_id": node_id("a")}
+        )
     )
     with pytest.raises(ValueError, match="integrity"):
-        factory().organize(skills=skills)
+        (await factory().organize(skills=skills))
 
 
-def test_concurrent_identical_builds_publish_only_once(setup):
+async def test_concurrent_identical_builds_publish_only_once(setup):
     database, _, skills, _, _, _, _, factory = setup
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(lambda _: factory().organize(skills=skills), range(2)))
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
+    await asyncio.gather(*(factory().organize(skills=skills) for _ in range(2)))
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 1
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 1
 
 
 class Options(BaseModel):
@@ -274,7 +283,7 @@ class Options(BaseModel):
 class Env(Environment[Options]):
     config_type = Options
 
-    def _run(self, *, task, reward_data, skills, workspace):
+    async def _run(self, *, task, reward_data, skills, workspace):
         return RolloutResult(
             output=[skill.content for skill in skills],
             trajectory=[],
@@ -282,30 +291,27 @@ class Env(Environment[Options]):
         )
 
 
-def test_skillset_environment_resume_does_not_call_models(setup, tmp_path):
+async def test_skillset_environment_resume_does_not_call_models(setup, tmp_path):
     _, _, skills, _, _, embedding, chat, factory = setup
     collection = SkillManageSkillSet(skills, algorithm=factory(), limit=2, max_concurrency=2)
     env = Env(Options())
     task = Task(id="task", instruction="Parse CSV")
-    result = asyncio.run(env.rollout(task, tmp_path / "rollout", reward_data=RewardData(), skill_set=collection))
+    result = await env.rollout(task, tmp_path / "rollout", reward_data=RewardData(), skill_set=collection)
     embedding.fail = chat.fail = True
     new_collection = SkillManageSkillSet(skills, algorithm=factory(), limit=2, max_concurrency=2)
-    assert (
-        asyncio.run(env.rollout(task, tmp_path / "rollout", reward_data=RewardData(), skill_set=new_collection))
-        == result
-    )
+    assert (await env.rollout(task, tmp_path / "rollout", reward_data=RewardData(), skill_set=new_collection)) == result
 
 
-def test_empty_scope_uses_no_models(setup):
+async def test_empty_scope_uses_no_models(setup):
     database, _, _, _, config, embedding, chat, _ = setup
     store = SkillGraphStore(database, project_id="p", graph_id="empty", actor_id="test", version_ids={})
     manager = SkillManageAlgorithm(config, store=store, scene_records={}, embedding_model=embedding, chat_model=chat)
-    manager.organize(skills={})
-    assert manager.recommend(task=Task(id="task", instruction="CSV")) == []
+    (await manager.organize(skills={}))
+    assert (await manager.recommend(task=Task(id="task", instruction="CSV"))) == []
     assert not embedding.calls and not chat.calls
 
 
-def test_scene_vector_seed_changes_recommended_owner(setup):
+async def test_scene_vector_seed_changes_recommended_owner(setup):
     database, _, skills, store, config, embedding, chat, _ = setup
     scenes = {
         "b": SceneRecord.model_validate(
@@ -313,7 +319,7 @@ def test_scene_vector_seed_changes_recommended_owner(setup):
         )
     }
 
-    def embed(texts):
+    async def embed(texts):
         return [[0, 0, 1] if "special" in text else [1, 0, 0] for text in texts]
 
     embedding.embed = embed
@@ -323,13 +329,13 @@ def test_scene_vector_seed_changes_recommended_owner(setup):
     manager = SkillManageAlgorithm(
         settings, store=store, scene_records=scenes, embedding_model=embedding, chat_model=chat
     )
-    manager.organize(skills=skills)
-    assert manager.recommend(task=Task(id="task", instruction="special"), limit=1) == ["b"]
+    (await manager.organize(skills=skills))
+    assert (await manager.recommend(task=Task(id="task", instruction="special"), limit=1)) == ["b"]
 
 
-def test_durable_reload_uses_vectors_without_rebuilding(setup, tmp_path):
+async def test_durable_reload_uses_vectors_without_rebuilding(setup, tmp_path):
     _, _, skills, _, config, embedding, chat, factory = setup
-    factory().organize(skills=skills)
+    (await factory().organize(skills=skills))
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'graph.db'}"))
     create_persistence(database)
     try:
@@ -341,13 +347,13 @@ def test_durable_reload_uses_vectors_without_rebuilding(setup, tmp_path):
             config, store=store, scene_records=original.scene_records, embedding_model=embedding, chat_model=chat
         )
         embedding.fail = chat.fail = True
-        manager.organize(skills=skills)
-        assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
+        (await manager.organize(skills=skills))
+        assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 1
     finally:
-        database.close()
+        (await database.close())
 
 
-def test_invalid_llm_endpoints_never_publish(setup, monkeypatch):
+async def test_invalid_llm_endpoints_never_publish(setup, monkeypatch):
     database, _, skills, _, _, _, chat, factory = setup
 
     def run(**kwargs):
@@ -367,20 +373,20 @@ def test_invalid_llm_endpoints_never_publish(setup, monkeypatch):
             )
         )
 
-    monkeypatch.setattr(chat, "run", run)
+    monkeypatch.setattr(chat, "run", AsyncMock(side_effect=run))
     with pytest.raises(ValueError, match="outside"):
-        factory().organize(skills=skills)
-    assert database.count(SKILL_GRAPHS_TABLE) == 0
+        (await factory().organize(skills=skills))
+    assert (await database.count(SKILL_GRAPHS_TABLE)) == 0
 
 
-def test_new_configuration_adds_snapshot_without_rewriting_history(setup):
+async def test_new_configuration_adds_snapshot_without_rewriting_history(setup):
     database, _, skills, _, _, _, _, factory = setup
-    factory().organize(skills=skills)
-    old_nodes = database.select(SKILL_GRAPH_NODES_TABLE)
-    factory(mode="skill_only").organize(skills=skills)
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 2
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 2
-    current_nodes = database.select(SKILL_GRAPH_NODES_TABLE)
+    (await factory().organize(skills=skills))
+    old_nodes = await database.select(SKILL_GRAPH_NODES_TABLE)
+    (await factory(mode="skill_only").organize(skills=skills))
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 2
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 2
+    current_nodes = await database.select(SKILL_GRAPH_NODES_TABLE)
     assert all(row in current_nodes for row in old_nodes)
 
 
@@ -405,57 +411,57 @@ def test_pagerank_matches_source_frozen_golden():
         assert value == pytest.approx(golden["ppr"]["scores"][name], rel=1e-7, abs=1e-8)
 
 
-def test_scope_replacement_and_empty_scope_never_expand_from_bindings(setup):
+async def test_scope_replacement_and_empty_scope_never_expand_from_bindings(setup):
     database, _, skills, store, config, embedding, chat, _ = setup
     settings = config.model_copy(update={"build_scene": False, "llm_linking": False, "query_rewrite": False})
     manager = SkillManageAlgorithm(settings, store=store, embedding_model=embedding, chat_model=chat)
-    manager.organize(skills=skills)
-    manager.organize(skills={"c": skills["c"]})
-    assert manager.recommend(task=Task(id="task", instruction="CSV")) == ["c"]
+    (await manager.organize(skills=skills))
+    (await manager.organize(skills={"c": skills["c"]}))
+    assert (await manager.recommend(task=Task(id="task", instruction="CSV"))) == ["c"]
     calls = len(embedding.calls)
-    manager.organize(skills={})
-    assert manager.recommend(task=Task(id="task", instruction="CSV")) == []
+    (await manager.organize(skills={}))
+    assert (await manager.recommend(task=Task(id="task", instruction="CSV"))) == []
     assert len(embedding.calls) == calls
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 3
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 3
 
 
-def test_failed_scope_replacement_invalidates_recommendation(setup):
+async def test_failed_scope_replacement_invalidates_recommendation(setup):
     database, _, skills, _, _, _, _, factory = setup
     manager = factory()
-    manager.organize(skills=skills)
+    (await manager.organize(skills=skills))
     changed = dict(skills)
     changed["a"] = Skill(
         SkillContent(content="changed", name="test-skill", description="Test instructions", standard_format=False)
     )
     with pytest.raises(ValueError, match="differs"):
-        manager.organize(skills=changed)
+        (await manager.organize(skills=changed))
     with pytest.raises(RuntimeError, match="Organize"):
-        manager.recommend(task=Task(id="task", instruction="CSV"))
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 1
+        (await manager.recommend(task=Task(id="task", instruction="CSV")))
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 1
 
 
-def test_republishing_historical_build_selects_its_existing_snapshot(setup):
+async def test_republishing_historical_build_selects_its_existing_snapshot(setup):
     """Reusing a historical build advances the head without duplicating history."""
     database, _, skills, _, _, _, _, factory = setup
     original = factory()
-    original.organize(skills=skills)
+    (await original.organize(skills=skills))
     first = original.snapshot_id
     different = factory(mode="skill_only")
-    different.organize(skills=skills)
+    (await different.organize(skills=skills))
     assert different.snapshot_id != first
     repeated = factory()
-    repeated.organize(skills=skills)
+    (await repeated.organize(skills=skills))
     assert repeated.snapshot_id == first
-    assert database.get(SKILL_GRAPHS_TABLE, {"project_id": "p", "graph_id": "g"})["current_version_id"] == first
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 2
+    assert (await database.get(SKILL_GRAPHS_TABLE, {"project_id": "p", "graph_id": "g"}))["current_version_id"] == first
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 2
 
 
-def test_interrupted_historical_republication_preserves_current_head(setup, monkeypatch):
+async def test_interrupted_historical_republication_preserves_current_head(setup, monkeypatch):
     """A failed cached-head switch leaves the current graph and history intact."""
     database, _, skills, _, _, _, _, factory = setup
-    factory().organize(skills=skills)
+    (await factory().organize(skills=skills))
     current = factory(mode="skill_only")
-    current.organize(skills=skills)
+    (await current.organize(skills=skills))
     original_update = Database.update
 
     def interrupt(self, table, values, *, filters):
@@ -465,9 +471,8 @@ def test_interrupted_historical_republication_preserves_current_head(setup, monk
 
     monkeypatch.setattr(Database, "update", interrupt)
     with pytest.raises(RuntimeError, match="Interrupted cached"):
-        factory().organize(skills=skills)
-    assert (
-        database.get(SKILL_GRAPHS_TABLE, {"project_id": "p", "graph_id": "g"})["current_version_id"]
-        == current.snapshot_id
-    )
-    assert database.count(SKILL_GRAPH_VERSIONS_TABLE) == 2
+        (await factory().organize(skills=skills))
+    assert (await database.get(SKILL_GRAPHS_TABLE, {"project_id": "p", "graph_id": "g"}))[
+        "current_version_id"
+    ] == current.snapshot_id
+    assert (await database.count(SKILL_GRAPH_VERSIONS_TABLE)) == 2

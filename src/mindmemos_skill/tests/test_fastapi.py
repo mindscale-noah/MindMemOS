@@ -1,6 +1,5 @@
 """Verify the public Skill HTTP entry and explicit backend capability boundaries."""
 
-import asyncio
 import base64
 import subprocess
 import sys
@@ -69,11 +68,11 @@ async def service(tmp_path):
 @pytest_asyncio.fixture
 async def management_service(tmp_path, monkeypatch):
     """Build configured management routes with deterministic local embeddings."""
-    monkeypatch.setattr(
-        OpenAIEmbeddingClient,
-        "embed",
-        lambda self, texts: [[1.0, 0.0, 0.0] if "csv" in text.lower() else [0.0, 1.0, 0.0] for text in texts],
-    )
+
+    async def embed(self, texts):
+        return [[1.0, 0.0, 0.0] if "csv" in text.lower() else [0.0, 1.0, 0.0] for text in texts]
+
+    monkeypatch.setattr(OpenAIEmbeddingClient, "embed", embed)
     algorithm = {
         "embedding": {"model": "test", "base_url": "http://test.invalid/v1", "dimensions": 3},
         "build_scene": False,
@@ -211,7 +210,7 @@ def test_unavailable_backends_return_stable_errors(service):
         assert client.post("/skills/register", json={}).status_code == 404
 
 
-def test_manage_http_routes_publish_and_recommend_pinned_versions(management_service):
+async def test_manage_http_routes_publish_and_recommend_pinned_versions(management_service):
     """Connect authorized HTTP calls to the two configured skill_manage pipelines."""
 
     def resolver(token):
@@ -270,7 +269,7 @@ def test_manage_http_routes_publish_and_recommend_pinned_versions(management_ser
         assert snapshot_detail.status_code == 200, snapshot_detail.text
         assert {node["skill_version_id"] for node in snapshot_detail.json()["data"]["nodes"]} == set(versions)
         with management_service.repository.persistence.session(Scope(fields={"project_id": "project"})) as scoped:
-            snapshots = scoped.database.select(SKILL_GRAPH_VERSIONS_TABLE, filters={"graph_id": graph_id})
+            snapshots = await scoped.database.select(SKILL_GRAPH_VERSIONS_TABLE, filters={"graph_id": graph_id})
         body = {"graph_id": graph_id, "commit_message": "Initial organization", "skill_refs": versions}
         assert snapshots[0]["actor_id"] == "account-1"
         assert snapshots[0]["message"] == "Initial organization"
@@ -286,7 +285,7 @@ def test_manage_http_routes_publish_and_recommend_pinned_versions(management_ser
         assert reworded.status_code == 200, reworded.text
         assert reworded.json()["data"]["graph_version_id"] != snapshot
         with management_service.repository.persistence.session(Scope(fields={"project_id": "project"})) as scoped:
-            snapshots = scoped.database.select(SKILL_GRAPH_VERSIONS_TABLE, filters={"graph_id": graph_id})
+            snapshots = await scoped.database.select(SKILL_GRAPH_VERSIONS_TABLE, filters={"graph_id": graph_id})
         assert {row["message"] for row in snapshots} == {"Initial organization", "Revised explanation"}
         foreign = client.post(
             "/v1/skills/algos/organize",
@@ -337,7 +336,7 @@ def test_manage_http_routes_publish_and_recommend_pinned_versions(management_ser
         )
 
 
-def test_graph_rollout_mode_keeps_legacy_storage_identity(management_service):
+async def test_graph_rollout_mode_keeps_legacy_storage_identity(management_service):
     """The first rollout phase keeps old writers on the same graph family."""
     management_service._manage_pipeline.config.prefixed_graph_ids = False
     with TestClient(create_app(management_service)) as client:
@@ -348,12 +347,12 @@ def test_graph_rollout_mode_keeps_legacy_storage_identity(management_service):
         assert created.status_code == 200, created.text
         assert created.json()["data"]["graph_id"] == "shared"
         with management_service.repository.persistence.session(Scope(fields={"project_id": "project"})) as scoped:
-            graph = scoped.database.select(SKILL_GRAPHS_TABLE, filters={"graph_id": "shared"})
+            graph = await scoped.database.select(SKILL_GRAPHS_TABLE, filters={"graph_id": "shared"})
         assert len(graph) == 1
         assert graph[0]["alias"] == "shared"
 
 
-def test_skill_rollout_mode_keeps_legacy_id_generation(tmp_path):
+async def test_skill_rollout_mode_keeps_legacy_id_generation(tmp_path):
     """The compatibility phase shares deterministic ID formats with old writers."""
     config = deployment_config(
         {
@@ -366,7 +365,7 @@ def test_skill_rollout_mode_keeps_legacy_id_generation(tmp_path):
         },
         "project",
     )
-    service = asyncio.run(create_service(config))
+    service = await create_service(config)
     with TestClient(create_app(service)) as client:
         registered = client.post(
             "/v1/skills/register",
@@ -387,7 +386,7 @@ def test_skill_rollout_mode_keeps_legacy_id_generation(tmp_path):
         assert resolved.json()["data"]["skill_version_id"] == registered.json()["data"]["skill_version_id"]
 
 
-def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(service):
+async def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(service):
     """Convert sparse Harness messages into a project-owned physical attempt."""
     with TestClient(create_app(service)) as client:
         registered = client.post(
@@ -423,7 +422,7 @@ def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(servic
         response = report.json()["data"]
         assert response["skill_version_id"] == version_id
         with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
-            record = store.trajectories.get(response["trajectory_id"])
+            record = await store.trajectories.get(response["trajectory_id"])
         assert record is not None
         assert record.source == "reported"
         assert record.task_id != record.trajectory_id
@@ -444,7 +443,7 @@ def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(servic
         protected = client.post("/v1/skills/delete", json={"skill_id": detail["skill_id"]})
         assert protected.status_code == 200
         with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
-            assert store.trajectories.get(response["trajectory_id"]) is not None
+            assert (await store.trajectories.get(response["trajectory_id"])) is not None
         missing = client.post(
             "/v1/skills/trajectories/report",
             json={
@@ -458,7 +457,7 @@ def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(servic
         assert missing.json()["error"]["code"] == "skill_version_not_found"
 
 
-def test_report_without_user_message_keeps_task_instruction_empty(service):
+async def test_report_without_user_message_keeps_task_instruction_empty(service):
     """Do not invent a user instruction when a report only has Agent output."""
     with TestClient(create_app(service)) as client:
         registered = client.post(
@@ -485,12 +484,12 @@ def test_report_without_user_message_keeps_task_instruction_empty(service):
         )
         assert report.status_code == 201, report.text
         with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
-            record = store.trajectories.get(report.json()["data"]["trajectory_id"])
+            record = await store.trajectories.get(report.json()["data"]["trajectory_id"])
         assert record.task_instruction == ""
         assert record.task_system_prompt is None
 
 
-def test_report_show_list_cursor_and_same_execution_actor_filter(service):
+async def test_report_show_list_cursor_and_same_execution_actor_filter(service):
     """Read reported attempts without cursor drift or cross-report actor matches."""
     with TestClient(create_app(service)) as client:
         registered = client.post(
@@ -524,8 +523,8 @@ def test_report_show_list_cursor_and_same_execution_actor_filter(service):
         older = report("user-a", "agent-a")
         newer = report("user-b", "agent-b")
         with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
-            store.trajectories.mark_consumed(version_id, [older], "evolution-a")
-            store.trajectories.mark_consumed(version_id, [older], "evolution-b")
+            (await store.trajectories.mark_consumed(version_id, [older], "evolution-a"))
+            (await store.trajectories.mark_consumed(version_id, [older], "evolution-b"))
         counts = {"total": 2, "consumed": 1, "unconsumed": 1}
         detail = client.post("/v1/skills/show", json={"skill_id": skill_id}).json()["data"]
         assert "trajectory_counts" not in detail["version"]
@@ -589,7 +588,7 @@ def test_report_show_list_cursor_and_same_execution_actor_filter(service):
         assert mismatched.json()["data"]["items"] == []
 
 
-def test_history_and_trajectory_pages_select_only_summary_fields(service, monkeypatch):
+async def test_history_and_trajectory_pages_select_only_summary_fields(service, monkeypatch):
     """Keep large version and attempt content out of paginated database reads."""
     with TestClient(create_app(service)) as client:
         registered = client.post(
@@ -683,9 +682,9 @@ def test_history_and_trajectory_pages_select_only_summary_fields(service, monkey
         )
 
         with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
-            skill = store.skills.resolve_family("project", skill_id)
-            custom_history = store.skills.history(skill, limit=1, offset=0, fields=["version_id", "content"])
-            custom_attempts = store.trajectories.list_reported(
+            skill = await store.skills.resolve_family("project", skill_id)
+            custom_history = await store.skills.history(skill, limit=1, offset=0, fields=["version_id", "content"])
+            custom_attempts = await store.trajectories.list_reported(
                 skill_id,
                 skill_version_id=version_id,
                 status=None,
@@ -972,7 +971,7 @@ def test_list_cursor_keeps_scroll_stable_across_insert_and_rename(service):
         assert added_later not in seen
 
 
-def test_list_cursor_breaks_creation_time_ties_with_skill_id(service):
+async def test_list_cursor_breaks_creation_time_ties_with_skill_id(service):
     """Read every family once when imported records share a creation time."""
     with TestClient(create_app(service)) as client:
         ids = []
@@ -993,10 +992,12 @@ def test_list_cursor_breaks_creation_time_ties_with_skill_id(service):
             assert response.status_code == 201
             ids.append(response.json()["data"]["skill_id"])
         with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
-            rows = store.database.select(SKILLS_TABLE, order_by=["created_at"], limit=3)
+            rows = await store.database.select(SKILLS_TABLE, order_by=["created_at"], limit=3)
             for skill_id in ids:
-                store.database.update(
-                    SKILLS_TABLE, {"created_at": rows[0]["created_at"]}, filters={"skill_id": skill_id}
+                (
+                    await store.database.update(
+                        SKILLS_TABLE, {"created_at": rows[0]["created_at"]}, filters={"skill_id": skill_id}
+                    )
                 )
 
         seen = []
@@ -1039,13 +1040,13 @@ def test_local_import_does_not_load_http_dependencies():
     )
 
 
-def test_local_entry_rejects_public_bind_without_authentication(monkeypatch):
+async def test_local_entry_rejects_public_bind_without_authentication(monkeypatch):
     """Reject unauthenticated deployment on a public configured address."""
     path = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/dev.example.yaml"
     monkeypatch.setenv(SKILL_CONFIG_PATH_ENV, str(path))
     monkeypatch.setenv(SKILL_API_HOST_ENV, "0.0.0.0")
     with pytest.raises(ValueError, match="loopback address"):
-        asyncio.run(build_http_service())
+        (await build_http_service())
 
 
 def test_http_policy_cannot_override_project_binding(service):
@@ -1059,7 +1060,7 @@ def test_http_policy_cannot_override_project_binding(service):
 
 
 @pytest.mark.parametrize("mode", ["local", "gateway_jwt"])
-def test_complete_yaml_installs_authentication_without_host_overrides(tmp_path, mode):
+async def test_complete_yaml_installs_authentication_without_host_overrides(tmp_path, mode):
     """The complete YAML supplies credentials, project authorization and HTTP policy."""
     config = repository_config(tmp_path / "home").model_dump(mode="json")
     if mode == "local":
@@ -1071,7 +1072,7 @@ def test_complete_yaml_installs_authentication_without_host_overrides(tmp_path, 
         credential = gateway_token()
     path = tmp_path / "service.yaml"
     path.write_text(yaml.safe_dump(config))
-    service = asyncio.run(create_service(path))
+    service = await create_service(path)
     assert service.default_project_id is None
     with TestClient(create_app(service)) as client:
         assert client.post("/v1/skills/list", json={}).status_code == 401

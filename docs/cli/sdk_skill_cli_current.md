@@ -14,7 +14,7 @@ mindmemos --help
 
 以下命令均已接入 CLI。表中的 SDK 方法在 `SkillClient` 和 `AsyncSkillClient` 中均存在；HTTP 路径统一以 `/v1/skills/` 开头。CLI 负责引用解析、组合调用、本地输入与默认 JSON 输出。
 
-最后一列给出对应 FastAPI 接口的 JSON 输入；多次调用按“解析 → 读取/提交”列出。示例中的精确 ID 应替换为前序响应或实际已有对象的 ID。所有 Skill CLI 命令默认输出 JSON，不需要输出格式开关。认证放在请求头，确认开关和本机文件路径不进入请求体；`register-structured --json` 接收结构化输入，包装为请求体的 `skill`。`task progress` 的 `after` 单独放在 URL 查询参数。Graph 推荐同时列出 HTTP 支持的精确快照格式与当前 SDK 可构造的格式。
+最后一列给出对应 FastAPI 接口的 JSON 输入；多次调用按“解析 → 读取/提交”列出。示例中的精确 ID 应替换为前序响应或实际已有对象的 ID。除 `task progress` 输出纯文本外，其他 Skill CLI 命令默认输出 JSON，不需要输出格式开关。认证放在请求头，确认开关和本机文件路径不进入请求体；`register-structured --json` 接收结构化输入，包装为请求体的 `skill`。`task progress` 的 `after` 单独放在 URL 查询参数。Graph 推荐同时列出 HTTP 支持的精确快照格式与当前 SDK 可构造的格式。
 
 | 命令 | 当前 SDK 方法 | 当前 HTTP 接口 | 实现边界 | FastAPI JSON 输入（请求体示例） |
 | --- | --- | --- | --- | --- |
@@ -33,7 +33,7 @@ mindmemos --help
 | `skill evolve` | `evolve()` | `POST /v1/skills/algos/evolve` | 已实现异步受理；SDK 正确识别 `accepted` | 解析：`{"skill_ref":"demo-skill"}`<br>演进：`{"skill_version_id":"skv-version-id","auto_accept":false}` |
 | `skill train` | `train()` | `POST /v1/skills/algos/train` | 已实现异步受理；SDK 正确识别 `accepted` | 解析：`{"skill_ref":"demo-skill"}`<br>训练：`{"algo":"algo-name","env":{"class_name":"demo_offline","config":{}},"init_skill_version_id":"skv-version-id","work_dir":"/server/run-1","tasks":[{"task":{"id":"task-1","instruction":"完成任务"},"reward_data":{}}],"split":{"train":["task-1"],"val":[],"test":[]},"auto_accept":false}` |
 | `skill task show` | `show_task()` | `POST /v1/skills/tasks/show` | 已实现任务查询 | `{"task_id":"task-id"}` |
-| `skill task progress` | `task_progress()` | `POST /v1/skills/tasks/progress?after=…` | 已实现单次事件数组和 follow JSON Lines | `{"task_id":"task-id"}`<br>查询参数：`?after=0`，不放入 JSON |
+| `skill task progress` | `task_progress()` | `POST /v1/skills/tasks/progress?after=…` | 单次查询和 follow 均逐行输出纯文本日志 | `{"task_id":"task-id"}`<br>查询参数：`?after=0`，不放入 JSON |
 | `skill trajectory report` | `report_trajectory()` | `POST /v1/skills/trajectories/report` | 已实现 JSON 参数、文件和 stdin 输入 | `{"user_id":"user-1","agent_id":"agent-1","messages":[{"role":"user","content":"执行输入"}],"skill_version_id":"skv-version-id","status":"completed"}` |
 | `skill trajectory list` | `list_trajectories()` | `POST /v1/skills/trajectories/list` | 已实现过滤与 cursor 分页；CLI 无 cursor，按解析版本过滤 | 解析：`{"skill_ref":"demo-skill"}`<br>列表：`{"skill_id":"sk-family-id","skill_version_id":"skv-version-id","limit":20}` |
 | `skill trajectory show` | `show_trajectory()` | `POST /v1/skills/trajectories/show` | 已实现完整轨迹读取 | `{"trajectory_id":"trajectory-id"}` |
@@ -549,7 +549,7 @@ mindmemos skill task progress TASK_ID [--after SEQUENCE] [-f | --follow]
 | `--after` | 否 | `0` | 非负整数，作为 URL 查询参数发送 |
 | `-f` / `--follow` | 否 | `False` | CLI 持续读取新事件，当前 SDK 仅提供单次读取 |
 
-接口为 `POST /v1/skills/tasks/progress?after=0`，请求体只有 `{"task_id":"task-id"}`。SDK 已正确分开 body 和查询参数。默认单次输出事件数组 JSON；follow 持续输出时采用 JSON Lines，每行一个事件 JSON。follow 根据最新事件序号续读，每秒检查一次；任务 succeeded、failed 或 cancelled 后补读最终事件并停止。
+接口为 `POST /v1/skills/tasks/progress?after=0`，请求体只有 `{"task_id":"task-id"}`。SDK 已正确分开 body 和查询参数。单次查询和 follow 均逐行输出 `[时间戳] [name] message` 纯文本，分别取日志的 `occurred_at`、`payload.name` 和 `payload.message`。日志包含非空 `payload.traceback` 时，在消息下方按原始多行文本输出异常堆栈；不输出 JSON 或其他字段。没有新日志时不输出内容。follow 根据最新事件序号续读，每秒检查一次；任务 succeeded、failed 或 cancelled 后补读最终事件并停止。
 
 ## 13. 执行轨迹
 
@@ -703,7 +703,7 @@ HTTP 与 SDK `RecommendRequest` 均支持以下精确快照请求，CLI 显式�
 | --- | --- |
 | 默认输出 | 成功结果在 stdout 输出 JSON；普通 API 操作输出 data，不需要格式开关 |
 | `register-structured --json` | 仅接收 StructuredSkillInfo 输入，不控制输出格式 |
-| `task progress --follow` | JSON Lines，每行一个进度事件；单次读取输出 JSON 数组 |
+| `task progress` / `task progress --follow` | 纯文本，每行 `[时间戳] [name] message` |
 | 交互确认 | 提示写入 stderr，避免混入 stdout 的结果 JSON |
 | 错误输出 | 在 stderr 输出 JSON，包含错误码、说明和可用的 request_id，不输出凭据 |
 | 退出码 `0` | 成功、无结果或任务成功受理 |

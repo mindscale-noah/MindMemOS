@@ -2,7 +2,7 @@
 
 from ..infra.database import Database
 from .base import Persistence
-from .store import SkillPersistence, remove_remote_tables
+from .store import SkillPersistence
 
 
 def create_persistence(database: Database) -> SkillPersistence:
@@ -17,11 +17,10 @@ def create_persistence(database: Database) -> SkillPersistence:
     return Persistence.build("skill", {}, database=database, require_session=False)
 
 
-def ensure_collection(persistence: SkillPersistence) -> None:
-    """Create registered tables and retire obsolete synchronization tables.
+async def ensure_collection(persistence: SkillPersistence) -> None:
+    """Create the current registered tables.
 
     Args:
         persistence: Assembled data services whose collections should exist.
     """
-    persistence.database.create_tables()
-    remove_remote_tables(persistence.database)
+    await persistence.database.create_tables()

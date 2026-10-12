@@ -53,7 +53,7 @@ async def test_service_delegates_to_selected_training_pipeline(monkeypatch):
     class RecordingTraining(TrainingPipeline[Options]):
         config_type = Options
 
-        async def train(self, request, *, env, adapter=None, reporter=None):
+        async def train(self, request, *, env, adapter=None):
             calls.append((self, request, env))
             return AlgoSkillEvolveResult(
                 skill_id="skill",
@@ -138,10 +138,10 @@ async def test_repository_uses_shared_store_and_scoped_version_lookup(tmp_path, 
             Scope(fields={"project_id": service.default_project_id})
         ) as scoped:
             store = scoped.skills
-            assert store.resolve_family(service.default_project_id, "example").skill_id == item.skill.skill_id
-            assert store.version_by_id(service.default_project_id, item.version.version_id) == item.version
+            assert (await store.resolve_family(service.default_project_id, "example")).skill_id == item.skill.skill_id
+            assert (await store.version_by_id(service.default_project_id, item.version.version_id)) == item.version
             with pytest.raises(SkillNotFoundError):
-                store.version_by_id("another-project", item.version.version_id)
+                (await store.version_by_id("another-project", item.version.version_id))
         request = ListRequest(project_id=service.default_project_id)
         calls = []
         original = service.repository.list_skills
@@ -174,9 +174,9 @@ async def test_factory_closes_constructed_database_after_dependency_failure(tmp_
     closed = []
     original = SQLiteDatabase.close
 
-    def close(database):
+    async def close(database):
         closed.append(database)
-        original(database)
+        await original(database)
 
     monkeypatch.setattr(SQLiteDatabase, "close", close)
 
@@ -187,7 +187,7 @@ async def test_factory_closes_constructed_database_after_dependency_failure(tmp_
         def __init__(self, config, *, persistence):
             raise RuntimeError("Construction failed")
 
-        async def train(self, request, *, env, adapter=None, reporter=None):
+        async def train(self, request, *, env, adapter=None):
             raise NotImplementedError
 
     config = ServiceConfig.model_validate(
@@ -212,7 +212,7 @@ async def test_multiple_pipeline_request_selection(monkeypatch, operation):
     monkeypatch.setattr(Pipeline, "_registry", {})
     calls = []
 
-    def record(instance, request):
+    async def record(instance, request):
         calls.append((instance, request))
         return AlgoSkillEvolveResult(
             skill_id="skill",
@@ -229,15 +229,15 @@ async def test_multiple_pipeline_request_selection(monkeypatch, operation):
     class RecordingTraining(TrainingPipeline[Options]):
         config_type = Options
 
-        async def train(self, request, *, env, adapter=None, reporter=None):
-            return record(self, request)
+        async def train(self, request, *, env, adapter=None):
+            return await record(self, request)
 
     @Pipeline.register("evolution")
     class RecordingEvolution(EvolutionPipeline[Options]):
         config_type = Options
 
         async def evolve(self, request):
-            return record(self, request)
+            return await record(self, request)
 
     config = deployment_config(
         {
@@ -310,25 +310,24 @@ def test_singular_pipeline_config_is_rejected(field):
 
 @pytest.mark.asyncio
 async def test_repository_write_leaves_event_loop_available(tmp_path, monkeypatch):
-    """A synchronous storage write must allow concurrent async model work."""
+    """An awaited storage write allows concurrent model work."""
     import asyncio
-    from threading import Event
+    from asyncio import Event
 
     entered = Event()
     release = Event()
     async with await create_service(repository_config(tmp_path / "home", "project")) as service:
         original = SkillDataService.register
 
-        def slow_register(self, **kwargs):
+        async def slow_register(self, **kwargs):
             entered.set()
-            if not release.wait(timeout=2):
-                raise TimeoutError("The event loop was blocked by storage")
-            return original(self, **kwargs)
+            await asyncio.wait_for(release.wait(), timeout=2)
+            return await original(self, **kwargs)
 
         monkeypatch.setattr(SkillDataService, "register", slow_register)
 
         async def model_work():
-            assert await asyncio.to_thread(entered.wait, 1)
+            await asyncio.wait_for(entered.wait(), timeout=1)
             await asyncio.sleep(0)
             release.set()
 
@@ -364,7 +363,7 @@ async def test_pipeline_cleanup_awaits_owned_resources_before_database(tmp_path,
     class OwnedResources(TrainingPipeline[Options]):
         config_type = Options
 
-        async def train(self, request, *, env, adapter=None, reporter=None):
+        async def train(self, request, *, env, adapter=None):
             raise NotImplementedError
 
         async def close(self):
@@ -387,9 +386,9 @@ async def test_pipeline_cleanup_awaits_owned_resources_before_database(tmp_path,
         database = service.backends["database"]
         original = database.close
 
-        def close_database():
+        async def close_database():
             events.append("database")
-            original()
+            await original()
 
         monkeypatch.setattr(database, "close", close_database)
         await service.close()

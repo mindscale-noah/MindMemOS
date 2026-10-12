@@ -363,7 +363,7 @@ class NotImplementedAdapter:
         args: argparse.Namespace,
     ) -> dict[str, Any]:
         """Raise a clear phase-1 placeholder error."""
-        del memory, answer_llm, judge_llm, ctx, bench_config, args
+        # BenchmarkAdapter requires these arguments even for an unimplemented benchmark.
         raise NotImplementedError(f"{self.name} adapter is reserved for a later phase")
 
 

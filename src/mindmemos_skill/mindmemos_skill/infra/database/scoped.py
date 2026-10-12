@@ -1,6 +1,6 @@
 """Fail-closed database operations bound to arbitrary scope fields."""
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 
 from .typing import DailyCount, Filter, Scope
 
@@ -53,11 +53,11 @@ class ScopedDatabase:
             result.append({**record, **required})
         return result
 
-    def insert(self, table: str, records: list[dict]) -> int:
+    async def insert(self, table: str, records: list[dict]) -> int:
         """Insert records after binding their ownership to the active scope."""
-        return self._database.insert(table, self._records(table, records))
+        return await self._database.insert(table, self._records(table, records))
 
-    def upsert(self, table: str, records: list[dict], *, conflict_fields=None, update_fields=None) -> int:
+    async def upsert(self, table: str, records: list[dict], *, conflict_fields=None, update_fields=None) -> int:
         """Upsert only through a conflict key containing every scope dimension."""
         required = self._required(table)
         spec = self.tables.get(table)
@@ -66,25 +66,25 @@ class ScopedDatabase:
             raise ValueError("Scoped upsert conflict_fields must include every active scope field")
         if update_fields is not None and required.keys() & set(update_fields):
             raise ValueError("Scope fields cannot be updated")
-        return self._database.upsert(
+        return await self._database.upsert(
             table, self._records(table, records), conflict_fields=conflict_fields, update_fields=update_fields
         )
 
-    def update(self, table: str, values: dict, *, filters) -> int:
+    async def update(self, table: str, values: dict, *, filters) -> int:
         """Update only matching rows while preserving ownership fields."""
         if self._required(table).keys() & values.keys():
             raise ValueError("Scope fields cannot be updated")
-        return self._database.update(table, values, filters=self._filters(table, filters))
+        return await self._database.update(table, values, filters=self._filters(table, filters))
 
-    def update_many(self, table: str, records: list[dict]) -> int:
+    async def update_many(self, table: str, records: list[dict]) -> int:
         """Update primary-key records with an added ownership condition."""
         keys = set(self.tables.get(table).table.primary_key.columns.keys())
         if self._in_transaction:
-            return self._update_many_rows(table, records, keys)
-        with self.transaction() as transaction:
-            return transaction._update_many_rows(table, records, keys)
+            return await self._update_many_rows(table, records, keys)
+        async with self.transaction() as transaction:
+            return await transaction._update_many_rows(table, records, keys)
 
-    def _update_many_rows(self, table: str, records: list[dict], keys: set[str]) -> int:
+    async def _update_many_rows(self, table: str, records: list[dict], keys: set[str]) -> int:
         """Apply per-key updates on the current transaction handle."""
         count = 0
         for record in records:
@@ -92,14 +92,14 @@ class ScopedDatabase:
                 raise ValueError("Each update must contain the complete primary key")
             identity = {key: record[key] for key in keys}
             values = {key: value for key, value in record.items() if key not in keys}
-            count += self.update(table, values, filters=identity)
+            count += await self.update(table, values, filters=identity)
         return count
 
-    def delete(self, table: str, *, filters) -> int:
+    async def delete(self, table: str, *, filters) -> int:
         """Delete only rows inside the active scope."""
-        return self._database.delete(table, filters=self._filters(table, filters))
+        return await self._database.delete(table, filters=self._filters(table, filters))
 
-    def get(self, table: str, key):
+    async def get(self, table: str, key):
         """Read a primary-key record only when it belongs to the scope."""
         spec = self.tables.get(table)
         keys = list(spec.table.primary_key.columns.keys())
@@ -109,10 +109,10 @@ class ScopedDatabase:
             key = {keys[0]: key}
         if set(key) != set(keys) or any(value is None for value in key.values()):
             raise ValueError("Supply exactly the non-null primary key fields")
-        rows = self.select(table, filters=key, limit=1)
+        rows = await self.select(table, filters=key, limit=1)
         return rows[0] if rows else None
 
-    def select(
+    async def select(
         self,
         table: str,
         *,
@@ -137,7 +137,7 @@ class ScopedDatabase:
         Returns:
             Matching records inside the active scope.
         """
-        return self._database.select(
+        return await self._database.select(
             table,
             filters=self._filters(table, filters),
             any_filters=any_filters,
@@ -147,11 +147,11 @@ class ScopedDatabase:
             offset=offset,
         )
 
-    def count(self, table: str, *, filters=None) -> int:
+    async def count(self, table: str, *, filters=None) -> int:
         """Count rows inside the active scope."""
-        return self._database.count(table, filters=self._filters(table, filters))
+        return await self._database.count(table, filters=self._filters(table, filters))
 
-    def count_by_day(
+    async def count_by_day(
         self,
         table: str,
         *,
@@ -176,7 +176,7 @@ class ScopedDatabase:
         Returns:
             Daily primary and matched counts in the active scope.
         """
-        return self._database.count_by_day(
+        return await self._database.count_by_day(
             table,
             time_field=time_field,
             filters=self._filters(table, filters),
@@ -186,13 +186,13 @@ class ScopedDatabase:
             utc_offset_minutes=utc_offset_minutes,
         )
 
-    def select_distinct(self, table: str, field: str, *, filters=None) -> list:
+    async def select_distinct(self, table: str, field: str, *, filters=None) -> list:
         """Return unique field values inside the active scope."""
-        return self._database.select_distinct(table, field, filters=self._filters(table, filters))
+        return await self._database.select_distinct(table, field, filters=self._filters(table, filters))
 
-    def search(self, table: str, *, vector_field: str, query_vector, filters=None, fields=None, top_k: int = 10):
+    async def search(self, table: str, *, vector_field: str, query_vector, filters=None, fields=None, top_k: int = 10):
         """Search vectors only inside the active scope."""
-        return self._database.search(
+        return await self._database.search(
             table,
             vector_field=vector_field,
             query_vector=query_vector,
@@ -201,12 +201,12 @@ class ScopedDatabase:
             top_k=top_k,
         )
 
-    @contextmanager
-    def transaction(self):
+    @asynccontextmanager
+    async def transaction(self):
         """Yield a transaction that retains the same immutable scope."""
         if not self._active:
             raise RuntimeError("Scoped database is closed")
-        with self._database.transaction() as database:
+        async with self._database.transaction() as database:
             transaction = ScopedDatabase(database, self.scope, in_transaction=True)
             try:
                 yield transaction

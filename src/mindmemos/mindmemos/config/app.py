@@ -516,7 +516,9 @@ class KafkaConfig:
     enabled: bool = field(default=False)
     """Whether Kafka infrastructure is enabled."""
 
-    bootstrap_servers: str = field(default_factory=lambda: _env_str("MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
+    bootstrap_servers: str = field(
+        default_factory=lambda: _env_str("MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    )
     """Kafka broker addresses, comma-separated."""
 
     client_id: str = field(default="memos")

@@ -18,7 +18,7 @@ class FakeQdrant:
         self.upserts = []
 
     async def get_provider_binding(self, project_id: str, binding_id: str):
-        del project_id, binding_id
+        # Match the provider binding repository interface.
         return self.existing
 
     async def upsert_provider_binding(self, point) -> None:

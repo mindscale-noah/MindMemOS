@@ -1,70 +1,20 @@
-"""Bridge run-scoped Python logging records to OpenTelemetry logs."""
+"""Bridge service-wide Python logging records to OpenTelemetry logs."""
 
-import json
 import logging
+import sys
+import traceback
 from collections.abc import Callable, Mapping
-from typing import Any, Literal
+from typing import Literal
 
 from opentelemetry._logs import SeverityNumber
 from opentelemetry.sdk._logs import LoggerProvider
-from pydantic import BaseModel
 
-from .config import attach_otel_handler, detach_otel_handler
-
-_MAX_DEBUG_CHARS = 32768
-_SENSITIVE_KEYS = {"api_key", "password", "token", "secret", "authorization"}
-
-
-def _sensitive_key(key: Any) -> bool:
-    """Recognize common credential field names without inspecting values."""
-    name = str(key).lower().replace("-", "_")
-    return name in _SENSITIVE_KEYS or name.endswith(("_api_key", "_token", "_password", "_secret"))
-
-
-def _json_value(value: Any) -> Any:
-    """Turn structured debug content into portable JSON values."""
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    try:
-        return str(value)
-    except Exception:
-        return f"<{type(value).__name__}>"
-
-
-def _debug_text(value: Any) -> str:
-    """Serialize one bounded debug payload with credential-key redaction."""
-
-    def sanitize(item: Any) -> Any:
-        if isinstance(item, BaseModel):
-            return sanitize(item.model_dump(mode="python"))
-        if isinstance(item, Mapping):
-            return {str(key): "[REDACTED]" if _sensitive_key(key) else sanitize(child) for key, child in item.items()}
-        if isinstance(item, (list, tuple)):
-            return [sanitize(child) for child in item]
-        return _json_value(item)
-
-    content = json.dumps(sanitize(value), ensure_ascii=False, default=str)
-    return content if len(content) <= _MAX_DEBUG_CHARS else content[:_MAX_DEBUG_CHARS] + "...[truncated]"
-
-
-def debug_fields(body: Mapping[str, Any]) -> dict[str, str]:
-    """Redact and bound structured values before logging debug content.
-
-    Args:
-        body: Values to emit as a structured debug event.
-
-    Returns:
-        Safe serialized fields for a debug log record.
-    """
-    return {key: '"[REDACTED]"' if _sensitive_key(key) else _debug_text(value) for key, value in body.items()}
+from .config import attach_capture_handler, detach_capture_handler
+from .sanitization import safe_text
 
 
 class OpenTelemetryLoggingHandler(logging.Handler):
-    """Translate Python log records from one active run into OTel log records."""
+    """Translate Python records into OTel logs, including records outside algorithm runs."""
 
     def __init__(
         self,
@@ -79,9 +29,22 @@ class OpenTelemetryLoggingHandler(logging.Handler):
         self.capture_level = capture_level
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Emit a correlated OTel log for a record in this handler's run."""
+        """Emit a safe correlated log and report bridge failures to the terminal.
+
+        Args:
+            record: Prepared Python log record.
+        """
+        if record.__dict__.get("skip_otlp"):
+            return
+        try:
+            self._emit(record)
+        except Exception:
+            sys.stderr.write(f"OTel log forwarding failed\n{safe_text(traceback.format_exc())}\n")
+
+    def _emit(self, record: logging.LogRecord) -> None:
+        """Translate one prepared record into the provider's log protocol."""
         attributes = self.context()
-        if attributes is None or (record.levelno < logging.INFO and self.capture_level != "debug"):
+        if record.levelno < logging.INFO and self.capture_level != "debug":
             return
         severity = {
             logging.DEBUG: SeverityNumber.DEBUG,
@@ -90,42 +53,65 @@ class OpenTelemetryLoggingHandler(logging.Handler):
             logging.ERROR: SeverityNumber.ERROR,
             logging.CRITICAL: SeverityNumber.FATAL,
         }.get(record.levelno, SeverityNumber.INFO)
+        attributes = dict(attributes or {})
+        attributes.update(
+            {
+                key: record.__dict__[key]
+                for key in (
+                    "request_id",
+                    "project_id",
+                    "task_id",
+                    "attempt",
+                    "run_id",
+                    "trace_id",
+                    "span_id",
+                    "tree_id",
+                    "parent_id",
+                    "node_id",
+                    "group_id",
+                )
+                if record.__dict__.get(key) is not None
+            }
+        )
+        if record.exc_text:
+            attributes["exception.stacktrace"] = record.exc_text
         event_body = record.__dict__.get("event_body")
         structured = isinstance(event_body, Mapping)
         self.provider.get_logger(record.name).emit(
+            timestamp=int(record.created * 1_000_000_000),
             severity_number=severity,
             severity_text=record.levelname,
             event_name=record.getMessage() if structured else "python.log",
-            body=_json_value(event_body) if structured else {"message": record.getMessage()},
+            body=event_body if structured else {"message": record.getMessage()},
             attributes=dict(attributes),
         )
 
 
-def attach_run_logs(
+def attach_logs(
     provider: LoggerProvider,
     *,
     context: Callable[[], Mapping[str, str] | None],
     capture_level: Literal["info", "debug"],
 ) -> OpenTelemetryLoggingHandler:
-    """Forward current-run package logs to one OTel logger provider.
+    """Forward service-wide package logs to one OTel logger provider.
 
     Args:
         provider: OTel logger provider receiving Python records.
-        context: Correlation attributes for the active owning run, or None.
-        capture_level: Minimum algorithm audit detail level.
+        context: Optional correlation attributes; None still emits a service log.
+        capture_level: Minimum service log capture level.
 
     Returns:
         Attached handler to remove when the owning service closes.
     """
     handler = OpenTelemetryLoggingHandler(provider, context=context, capture_level=capture_level)
-    attach_otel_handler(handler)
+    attach_capture_handler(handler)
     return handler
 
 
-def detach_run_logs(handler: OpenTelemetryLoggingHandler) -> None:
+def detach_logs(handler: OpenTelemetryLoggingHandler) -> None:
     """Stop forwarding logs for a closed service.
 
     Args:
-        handler: Handler returned by attach_run_logs.
+        handler: Handler returned by attach_logs.
     """
-    detach_otel_handler(handler)
+    detach_capture_handler(handler)

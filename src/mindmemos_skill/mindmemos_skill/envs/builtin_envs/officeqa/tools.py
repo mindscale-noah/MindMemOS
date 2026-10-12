@@ -73,7 +73,7 @@ def format_tool_command(name: str, arguments: str, observation: str = "") -> str
     return name
 
 
-def run_tool(name: str, arguments: dict, documents: dict[str, Path], limit: int) -> str:
+async def run_tool(name: str, arguments: dict, documents: dict[str, Path], limit: int) -> str:
     """Dispatch original-format document tools within the public allowlist.
 
     Args:

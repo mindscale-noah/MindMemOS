@@ -2,8 +2,8 @@
 
 from .config import SpreadsheetBenchDataConfig, SpreadsheetBenchTextActionConfig, SpreadsheetBenchToolCallingConfig
 from .data import SpreadsheetBenchData
-from .text_action import SpreadsheetBenchTextActionEnvironment
-from .tool_calling import SpreadsheetBenchToolCallingEnvironment
+from .text_action_mode import SpreadsheetBenchTextActionEnvironment
+from .tool_call_mode import SpreadsheetBenchToolCallingEnvironment
 from .typing import SpreadsheetBenchRewardData, SpreadsheetBenchTask
 
 __all__ = [

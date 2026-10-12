@@ -55,7 +55,7 @@
 
 ## 环境与数据边界
 
-- 公共执行入口为异步的 `Environment.rollout(...) -> RolloutResult`；具体环境的同步 `_run(*, task, reward_data, skills, workspace)` 通过工作线程执行，负责准备公开材料、调用 Agent、收集轨迹及评分。
+- 公共执行入口为异步的 `Environment.rollout(...) -> RolloutResult`；具体环境的 `_run(*, task, reward_data, skills, workspace)` 为原生异步方法，由公共入口直接 `await`，负责准备公开材料、调用 Agent、收集轨迹及评分。
 - `DataSample` 绑定公开 `Task` 与私有 `RewardData`；`Reward` 是评分输出。答案、私有测试和参考文件不得进入 Agent 提示词或公开任务材料。
 - `Data.load()` 校验稳定且唯一的 Task ID；划分使用显式 seed 或已有 split 文件。split 文件保存名称与有序 ID 列表，不保存答案。数据下载由外部脚本负责，不放入基类加载流程。
 - 每次独立 rollout 使用独立 `work_dir`，不得并发复用。`audit/` 保存请求与结果，`workspace/` 存放 Agent 可用文件；不得修改进程全局工作目录。目录分离和 cwd 设置不等于文件访问隔离。
@@ -70,9 +70,10 @@
 - Skill 文件导出的具体操作归属 `skill/`。完整导出统一调用 `Skill.export()`，`SkillSnapshot` 仅负责序列化数据与校验；中心仓先通过 `Skill.from_snapshot()` 恢复数据对象，由 `skill/io.py` 处理目录替换与恢复；RepositoryPipeline 负责版本选择及仓库保护，不实现文件导出流程，不为导出快照实例化动态 Skill 依赖。算法所需的默认执行依赖延迟到实际组装时创建。
 
 - `Skill` 是数据对象，不继承 `Registrable`，不要求空配置，也不作为 YAML 后端。可优化 `content` 和辅助 `resources` 分开保存。`assemble(task)` 返回完整的任务专属 Skill 副本，保留具体类、依赖、辅助资源和导出能力，不原地修改源 Skill。
-- rollout 公开入口统一接收 `skill_set: SkillSet | None`，不接受旧的 `skills=`。SkillSet 默认全选，动态集合通过 `select(task)` 选择成员，并用 `config_snapshot()` 记录非敏感选择配置；异步 `SkillSet.assemble()` 按 `max_concurrency` 并行调用成员的同步 `assemble(task)` 并保持选择顺序。具体环境 `_run` 直接使用已组装的 Skill 列表，不按静态或动态类型分支，也不重复组装。恢复复用已保存的选择和组装内容，输入或选择配置变化要求新目录；不兼容的历史记录要求新的运行目录。
+- rollout 公开入口统一接收 `skill_set: SkillSet | None`，不接受旧的 `skills=`。SkillSet 默认全选，动态集合通过 `select(task)` 选择成员，并用 `config_snapshot()` 记录非敏感选择配置；异步 `SkillSet.assemble()` 按 `max_concurrency` 并行等待成员的异步 `assemble(task)` 并保持选择顺序。具体环境 `_run` 直接使用已组装的 Skill 列表，不按静态或动态类型分支，也不重复组装。恢复复用已保存的选择和组装内容，输入或选择配置变化要求新目录；不兼容的历史记录要求新的运行目录。
 - `snapshot()` / `from_snapshot()` 负责内容快照与数据恢复，保留已有实现元数据而不加载运行时代码。`content_hash` 覆盖原文 UTF-8 字节，`skill_hash` 同时覆盖 content 和 resources；源内容与某次任务组装结果不得混用。
 - 算法专属实现由调用方显式构造；需要动态行为时使用该算法自己的恢复入口。`algos/train/treeskill/` 提供任务时路由的 `TreeSkill` 与单轮主动采样的 `TreeSkillTrainer`；独立实验入口位于 `scripts/treeskill/`，也可通过通用 `training` pipeline 配置使用。
+- TreeSkill 的训练组织放在 `trainer.py`，动态 `TreeSkill(Skill)` 放在 `treeskill.py`，其 `assemble()` 负责唯一的任务路由。构建函数按 Markdown、分析、定位和融合归入 `construction/`，不依赖动态 Skill；阶段产物、patch 和统计归入 `artifacts.py`。不保留第二套树结构、独立路由类或兼容转发文件。
 - SpreadsheetBench 两个环境 `spreadsheetbench_tool_calling` 与 `spreadsheetbench_text_action` 互不继承，共同继承 `SpreadsheetExecutionEnvironment`；通过覆盖 `_system_prompt`、`_user_prompt`、`_get_observation` 实现；不复制 `_run()`、交互循环、工作区与任务评分。环境重算运行时和评分实现归入 `envs/builtin_envs/spreadsheetbench/`。
 - 所有算法的主流程保持通用；环境特殊提示词、分析或执行流程放在算法自身的 `env_specific/` 中，主入口文件名与环境注册名对应（例如 `spreadsheetbench_text_action.py`）。较长的同环境辅助实现可以按 `spreadsheetbench_*.py` 拆分，配置和数据类型仍分别归入该目录的 `config.py`、`typing.py`。
 - TreeSkill 的 SpreadsheetBench 文本动作环境的训练失败分析允许访问对应训练样本的标准答案，以复现原始 PASS 门控分析流程；这是仅限该训练分析 Agent 的例外。任务执行 Agent、通用分析以及 val/test 不得借此访问训练分析之外的私有答案。进入 Skill 的经验继续执行原始私有答案内容过滤。
@@ -113,4 +114,4 @@
 - `SkillPersistence.skills` 是统一的 Skill 身份、版本及快照访问入口；`resolve(project_id, reference)` 解析 Skill 家族或版本 ID、别名及唯一前缀，返回所属家族与选定版本；只需要家族记录的内部调用使用 `resolve_family(project_id, reference)`。`version_by_id(project_id, version_id)` 按精确版本加载并校验项目。事务及版本冲突检测留在 persistence。
 - TrainingRequest 传入 tasks、split、work_dir 和必填 init_skill_version_id、algo、env 配置；env 复用环境自己的 config_type，不接受 skill_ref。train 必填，val/test 可缺省；test 只评估已选定候选，不进入 trainer。具体训练和演进 pipeline 未实现时仍返回明确的未实现错误。
 
-- Pipeline 的业务接口、仓库与图查询接口、`close()` 均为异步；Service 与 `create_service()` 沿调用链使用 `await`。`SkillTrainer.train()`、`SkillEvolver.evolve()`、`Environment.rollout()` 和 `SkillSet.assemble()` 同样异步。仅进程入口创建事件循环，不在 pipeline 或训练主流程内使用 `asyncio.run()`；现有同步数据库事务、具体环境 `_run()` 和单个 Skill 的组装通过工作线程执行。
+- Pipeline 的业务接口、仓库与图查询接口、`close()` 均为异步；Service 与 `create_service()` 沿调用链使用 `await`。`SkillTrainer.train()`、`SkillEvolver.evolve()`、`Environment.rollout()` 和 `SkillSet.assemble()` 同样异步。仅进程入口创建事件循环，不在 pipeline 或训练主流程内使用 `asyncio.run()`；数据库事务、Agent、Embedding、具体环境 `_run()` 和单个 Skill 的组装均使用原生异步接口，逐层 `await`；禁止通过 `to_thread`、`run_in_executor` 或线程池包装同步业务接口。外部 CLI 和只有同步 API 的第三方模拟器使用异步子进程通信。纯计算、配置校验及本地快照文件处理保留普通函数。

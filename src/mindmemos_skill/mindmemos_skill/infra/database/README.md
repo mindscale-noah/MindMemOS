@@ -18,30 +18,33 @@ uv pip install -e './src/mindmemos_skill[postgres]'
 目录和连接在首次访问数据库时创建，构造对象和注册表都不会连接或建表。
 SQLite 启用 WAL、外键约束，并为每条连接加载 sqlite-vec。
 运行环境的 Python sqlite3 必须允许加载扩展；SQLite 需要支持 RETURNING（3.35+）。
-内存数据库使用单连接，只适合单线程测试；并发本地使用请选择文件数据库。
+内存数据库使用单连接，主要用于测试；同一 SQLite 实例使用协程锁串行化事务。持久化本地数据请选择文件数据库。
 
 远程后端使用 `PostgresDatabase(PostgresConfig(url=...))`。部署时先安装
 pgvector 并在目标库执行 `CREATE EXTENSION vector`；运行时只检查扩展，不安装。
 SQLAlchemy 连接池按进程管理，容量为 `pool_size + max_overflow`。
-同步接口应在同步路由或工作线程运行，不能直接阻塞异步事件循环。
+读写、查询、初始化和关闭均为异步接口，必须 `await`；事务使用 `async with`。
+SQLite 使用 `sqlite+aiosqlite`，PostgreSQL 使用 psycopg 原生异步驱动，不提供同步业务接口或线程适配。
+建表使用 SQLAlchemy 官方 `AsyncConnection.run_sync` DDL API，其 I/O 仍由异步驱动执行，不创建工作线程。
 
 已有服务配置通过注册名称切换后端，实例名称和业务依赖引用不变：
 
 ```yaml
-backends:
-  database:
-    module: infra
-    class_name: sqlite
-    config: {}
+service:
+  home: .mindmemos/skill
+  persistence:
+    database:
+      class_name: sqlite
+      config: {}
 ```
 
 PostgreSQL 使用 `class_name: postgres`，配置 `url`（`postgresql+psycopg://...`）、
 `pool_size`、`max_overflow`、`pool_timeout`。不要将真实凭据提交到配置仓库。
-切换 URL 不会迁移已有数据，需要单独执行数据迁移。
+切换 URL 不会迁移已有数据；此未上线 Skill 服务不提供旧库迁移逻辑，本地格式冲突按项目约定清理后重新初始化。
 
 ## 集中注册业务表
 
-下面的模型和表定义应位于业务的 `persistence` 模块；这里只用示例说明契约。
+下面的模型和表定义应位于业务的 `persistence` 模块；这里只用示例说明契约。示例中的 `await` 在异步函数内执行。
 
 ```python
 from pydantic import BaseModel, Field
@@ -68,12 +71,12 @@ tables = TableRegistry([
 ])
 db = SQLiteDatabase(tables=tables)
 try:
-    db.create_tables()  # Explicit initialization; not schema migration.
-    db.insert("items", [{"id": "a", "title": "Example", "embedding": [1., 0., 0.]}])
-    db.update_many("items", [{"id": "a", "revision": 1}])
-    hits = db.search("items", vector_field="embedding", query_vector=[1., 0., 0.], top_k=5)
+    await db.create_tables()  # Explicit initialization; not schema migration.
+    await db.insert("items", [{"id": "a", "title": "Example", "embedding": [1., 0., 0.]}])
+    await db.update_many("items", [{"id": "a", "revision": 1}])
+    hits = await db.search("items", vector_field="embedding", query_vector=[1., 0., 0.], top_k=5)
 finally:
-    db.close()
+    await db.close()
 ```
 
 也可以先通过服务配置创建数据库，再由业务组装代码集中调用
@@ -129,7 +132,7 @@ finally:
 ```python
 from mindmemos_skill.infra.database import Filter
 
-rows = db.select(
+rows = await db.select(
     "items",
     filters=[Filter(field="revision", op="ge", value=1)],
     fields=["id", "title"], order_by=["-revision"], limit=20, offset=0,
@@ -151,15 +154,15 @@ rows = db.select(
 ## 事务和错误
 
 ```python
-with db.transaction() as tx:
-    tx.insert("items", records)
-    tx.update("items", {"revision": 2}, filters={"id": "a"})
+async with db.transaction() as tx:
+    await tx.insert("items", records)
+    await tx.update("items", {"revision": 2}, filters={"id": "a"})
 ```
 
 独立操作自动提交或回滚。显式事务中的操作共用一个连接；每次操作使用保存点，
 即使调用者捕获其中一次批量操作的数据库异常，也不会保留该批次的部分写入。
 事务块异常退出时全部回滚；退出后 `tx` 失效。不支持嵌套 `transaction()`。
-同一 `tx` 不跨线程共享；服务应在请求完成后关闭数据库实例。
+同一 `tx` 不在并发协程间共享；数据库生命周期属于同一事件循环，服务完成所有操作后调用 `await db.close()`。
 
 未注册表、未知字段、输入不合法等抛出 `ValueError`（包括 Pydantic 验证错误）。
 批量输入错误标明表名、从 0 开始的记录序号和字段原因。

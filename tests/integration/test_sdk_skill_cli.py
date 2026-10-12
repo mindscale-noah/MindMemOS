@@ -23,7 +23,11 @@ CONTENT = "---\nname: cli-demo\ndescription: CLI integration example\n---\n# Ini
 @pytest.fixture
 def cli_server(tmp_path, monkeypatch, capsys):
     """Connect CLI commands to an isolated real service through its HTTP app."""
-    monkeypatch.setattr(OpenAIEmbeddingClient, "embed", lambda self, texts: [[1.0, 0.0, 0.0] for _ in texts])
+
+    async def embed(self, texts):
+        return [[1.0, 0.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(OpenAIEmbeddingClient, "embed", embed)
     service_config = ServiceConfig.model_validate(
         {
             "home": tmp_path / "home",
@@ -75,6 +79,8 @@ def cli_server(tmp_path, monkeypatch, capsys):
             output = capsys.readouterr()
             assert code == 0, output.err
             assert not output.err
+            if arguments[:2] == ("task", "progress"):
+                return output.out
             return json.loads(output.out)
 
         yield run
@@ -157,7 +163,7 @@ def test_cli_graph_snapshots_and_pinned_recommendations(cli_server):
     assert run("graph", "resolve", graph_id)["graph_version_id"] == published["graph_version_id"]
 
 
-def test_cli_async_endpoints_and_array_progress(cli_server, monkeypatch):
+def test_cli_async_endpoints_and_text_progress(cli_server, monkeypatch):
     from mindmemos_skill.demos.environment import DemoEnvironment
 
     run = cli_server
@@ -175,7 +181,17 @@ def test_cli_async_endpoints_and_array_progress(cli_server, monkeypatch):
         return {"task_id": task_id, "status": "succeeded"}
 
     async def task_progress(self, project_id, task_id, *, after=0):
-        return [] if after >= 1 else [{"sequence": 1, "stage": "done", "message": "Complete"}]
+        return (
+            []
+            if after >= 1
+            else [
+                {
+                    "sequence": 1,
+                    "occurred_at": "2026-10-10T10:00:00+08:00",
+                    "payload": {"name": "train", "body": {"stage": "done"}, "message": "Complete"},
+                }
+            ]
+        )
 
     monkeypatch.setattr(SkillService, "submit_evolution", submit_evolution)
     monkeypatch.setattr(SkillService, "submit_training", submit_training)
@@ -205,6 +221,8 @@ def test_cli_async_endpoints_and_array_progress(cli_server, monkeypatch):
     assert submissions[-1]["init_skill_version_id"] == registered["skill_version_id"]
     assert submissions[-1]["project_id"] == "cli-project"
     assert run("task", "show", "task-cli")["status"] == "succeeded"
-    assert run("task", "progress", "task-cli")[0]["sequence"] == 1
-    assert run("task", "progress", "task-cli", "--after", "1") == []
-    assert run("task", "progress", "task-cli", "--follow")["sequence"] == 1
+    assert run("task", "progress", "task-cli") == "[2026-10-10T02:00:00.000000Z] [INFO] [train] | Complete\n"
+    assert run("task", "progress", "task-cli", "--after", "1") == ""
+    assert (
+        run("task", "progress", "task-cli", "--follow") == "[2026-10-10T02:00:00.000000Z] [INFO] [train] | Complete\n"
+    )

@@ -9,6 +9,7 @@ environment:
       api_key: null  # Fill explicitly before model calls.
       base_url: null
     transactional_recalculation: true
+    # The task Python helper discovers soffice on the system PATH.
 data:
   class_name: spreadsheetbench
   config:

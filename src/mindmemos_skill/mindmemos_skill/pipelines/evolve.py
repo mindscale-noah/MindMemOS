@@ -3,7 +3,6 @@
 from abc import ABC, abstractmethod
 
 from ..api.typing import AlgoSkillEvolveResult, SkillPipelineRequest
-from ..infra.task_manager.progress import ProgressReporter
 from ..registry.base import ConfigT
 from .base import Pipeline
 
@@ -21,9 +20,7 @@ class EvolutionPipeline(Pipeline[ConfigT], ABC):
     """
 
     @abstractmethod
-    async def evolve(
-        self, request: SkillPipelineRequest, *, reporter: ProgressReporter | None = None
-    ) -> AlgoSkillEvolveResult:
+    async def evolve(self, request: SkillPipelineRequest) -> AlgoSkillEvolveResult:
         """Evolve one Skill and commit a child of its captured current version.
 
         Implementations must preserve project scope and source data, avoid
@@ -33,7 +30,6 @@ class EvolutionPipeline(Pipeline[ConfigT], ABC):
 
         Args:
             request: Skill selection and optional expected current version.
-            reporter: Optional progress sink for evolution milestones.
 
         Returns:
             Persisted Skill/version identities and the execution identity.

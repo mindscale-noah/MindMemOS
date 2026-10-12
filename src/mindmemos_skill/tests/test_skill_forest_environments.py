@@ -1,6 +1,5 @@
 """Offline reference parity for all non-LiveMath forest reflection adapters."""
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -37,7 +36,7 @@ def _pair(case):
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case["task"]["id"] for case in CASES])
-def test_reference_formatter_and_actual_optimizer_request(case, tmp_path):
+async def test_reference_formatter_and_actual_optimizer_request(case, tmp_path):
     sample, result = _pair(case)
     original = result.model_dump_json()
     environment = case["environment"]
@@ -59,8 +58,8 @@ def test_reference_formatter_and_actual_optimizer_request(case, tmp_path):
             requests.append((system, user))
             return '{"patch": {"edits": []}}'
 
-    asyncio.run(
-        generate_patch(
+    (
+        await generate_patch(
             skill=Skill(
                 source=SkillContent(
                     content="# Rules", name="test-skill", description="Task instructions", standard_format=False
@@ -78,7 +77,7 @@ def test_reference_formatter_and_actual_optimizer_request(case, tmp_path):
 
 
 @pytest.mark.parametrize("environment", TASK_TYPES)
-def test_outcome_reduction_uses_reference_merge_protocol(environment, tmp_path):
+async def test_outcome_reduction_uses_reference_merge_protocol(environment, tmp_path):
     pairs = [_pair(case) for case in CASES if case["environment"] == environment] * 2
     requests = []
 
@@ -97,19 +96,17 @@ def test_outcome_reduction_uses_reference_merge_protocol(environment, tmp_path):
             patch = {"edits": [{"op": "append", "content": "Verify the answer."}]}
             return json.dumps({"patch": patch} if "Trajectories (" in user else patch)
 
-    patch = asyncio.run(
-        generate_patch(
-            skill=Skill(
-                source=SkillContent(
-                    content="# Rules", name="test-skill", description="Task instructions", standard_format=False
-                )
-            ),
-            samples=[sample for sample, result in pairs],
-            results=[result for sample, result in pairs],
-            runtime=CaptureRuntime(),
-            directory=tmp_path,
-            seed=42,
-        )
+    patch = await generate_patch(
+        skill=Skill(
+            source=SkillContent(
+                content="# Rules", name="test-skill", description="Task instructions", standard_format=False
+            )
+        ),
+        samples=[sample for sample, result in pairs],
+        results=[result for sample, result in pairs],
+        runtime=CaptureRuntime(),
+        directory=tmp_path,
+        seed=42,
     )
     assert patch.edits
     assert len(requests) == 7

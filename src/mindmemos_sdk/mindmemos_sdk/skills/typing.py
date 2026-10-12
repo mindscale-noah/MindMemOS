@@ -392,13 +392,13 @@ class TrainingRequest(SkillRequestBody):
 
 
 class TaskProgressRequest(SkillRequestBody):
-    """Read training progress after one emitted event sequence number."""
+    """Read task logs after one committed log sequence number."""
 
     task_id: str
     """Server-generated training task identity."""
 
     after: int = Field(default=0, ge=0)
-    """Return progress events with a sequence number above this value."""
+    """Return task logs with a sequence number above this value; gaps are allowed."""
 
 
 SkillData = dict[str, Any] | list[dict[str, Any]]

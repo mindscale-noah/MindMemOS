@@ -71,6 +71,7 @@
         "json_2.1.2_tw-pddl.zip": "https://github.com/alfworld/alfworld/releases/download/0.4.0/json_2.1.2_tw-pddl.zip"
       },
       "files": {
+        "configs/base_config.yaml": "https://raw.githubusercontent.com/alfworld/alfworld/0.4.2/configs/base_config.yaml",
         "logic/alfred.pddl": "https://raw.githubusercontent.com/alfworld/alfworld/0.4.2/alfworld/data/alfred.pddl",
         "logic/alfred.twl2": "https://raw.githubusercontent.com/alfworld/alfworld/0.4.2/alfworld/data/alfred.twl2"
       }

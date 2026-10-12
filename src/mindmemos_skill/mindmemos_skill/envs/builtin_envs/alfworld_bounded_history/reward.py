@@ -3,7 +3,7 @@
 from ...typing import Reward
 
 
-def evaluate(*, won: bool, done: bool, max_steps: int) -> Reward:
+async def evaluate(*, won: bool, done: bool, max_steps: int) -> Reward:
     """Build a terminal episode reward.
 
     Args:

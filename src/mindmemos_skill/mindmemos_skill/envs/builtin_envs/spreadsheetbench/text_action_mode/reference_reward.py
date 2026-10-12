@@ -1,0 +1,134 @@
+"""Official cached-cell-value SpreadsheetBench comparison semantics."""
+
+from __future__ import annotations
+
+import datetime
+from pathlib import Path
+from typing import Any
+
+from ..ranges import default_sheet, split_region, split_targets
+
+
+def _openpyxl():
+    try:
+        import openpyxl
+    except ImportError as exc:
+        raise ImportError(
+            "SpreadsheetBench requires the mindmemos-skill[spreadsheetbench] optional dependency"
+        ) from exc
+    return openpyxl
+
+
+def _transform_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return round(float(value), 2)
+    if isinstance(value, (int, float)):
+        return round(float(value), 2)
+    if isinstance(value, datetime.time):
+        return str(value)[:-3]
+    if isinstance(value, datetime.datetime):
+        delta = value - datetime.datetime(1899, 12, 30)
+        return round(delta.days + delta.seconds / 86400.0, 0)
+    if isinstance(value, str):
+        try:
+            return round(float(value), 2)
+        except ValueError:
+            return value
+    return value
+
+
+def _same_value(left: Any, right: Any) -> bool:
+    left, right = _transform_value(left), _transform_value(right)
+    if left in {"", None} and right in {"", None}:
+        return True
+    return type(left) is type(right) and left == right
+
+
+def _cells(cell_range: str, *, max_row: int, max_column: int) -> list[str]:
+    if ":" not in cell_range:
+        return [cell_range]
+    openpyxl = _openpyxl()
+    start, end = cell_range.split(":", 1)
+    start_column_name = "".join(filter(str.isalpha, start)) or "A"
+    end_column_name = "".join(filter(str.isalpha, end)) or openpyxl.utils.get_column_letter(max_column)
+    start_row_text = "".join(filter(str.isdigit, start)) or "1"
+    end_row_text = "".join(filter(str.isdigit, end)) or str(max_row)
+    start_column = openpyxl.utils.column_index_from_string(start_column_name)
+    end_column = openpyxl.utils.column_index_from_string(end_column_name)
+    start_row = int(start_row_text)
+    end_row = int(end_row_text)
+    return [
+        f"{openpyxl.utils.get_column_letter(column)}{row}"
+        for column in range(start_column, end_column + 1)
+        for row in range(start_row, end_row + 1)
+    ]
+
+
+def compare_workbooks(
+    golden_path: str | Path,
+    output_path: str | Path,
+    answer_position: str,
+    *,
+    answer_sheet: str | None = None,
+) -> tuple[bool, str]:
+    """Compare workbooks.
+
+    Args:
+        golden_path: Private reference workbook used only by scoring or authorized training analysis.
+        output_path: Model-produced workbook to compare with the private reference.
+        answer_position: Released scoring ranges; reference analysis fills empty ranges from used cells.
+        answer_sheet: Released worksheet or worksheet list for unqualified ranges.
+    """
+    output_path = Path(output_path)
+    if not output_path.exists():
+        return False, "file not exist"
+    openpyxl = _openpyxl()
+    try:
+        golden = openpyxl.load_workbook(golden_path, data_only=True)
+        output = openpyxl.load_workbook(output_path, data_only=True)
+    except Exception as exc:
+        return False, f"load error: {exc}"
+    try:
+        fallback_sheet = default_sheet(golden.sheetnames, answer_sheet)
+        for target in split_targets(answer_position):
+            sheet, cell_range = split_region(target, fallback_sheet)
+            if sheet not in output.sheetnames:
+                return False, f"worksheet not found: {sheet}"
+            golden_sheet = golden[sheet]
+            for cell in _cells(
+                cell_range,
+                max_row=golden_sheet.max_row,
+                max_column=golden_sheet.max_column,
+            ):
+                expected = golden_sheet[cell].value
+                actual = output[sheet][cell].value
+                if not _same_value(expected, actual):
+                    return False, f"value@{sheet}!{cell}: gt={expected!r} pred={actual!r}"
+        return True, ""
+    finally:
+        golden.close()
+        output.close()
+
+
+def workbook_used_ranges(golden_path: str | Path) -> str:
+    """Return the released evaluator's full-sheet fallback answer position.
+
+    Args:
+        golden_path: Private reference workbook used only by scoring or authorized training analysis.
+    """
+
+    openpyxl = _openpyxl()
+    workbook = openpyxl.load_workbook(golden_path, data_only=True)
+    try:
+        ranges: list[str] = []
+        for sheet_name in workbook.sheetnames:
+            worksheet = workbook[sheet_name]
+            if worksheet.max_row and worksheet.max_column:
+                end_column = openpyxl.utils.get_column_letter(worksheet.max_column)
+                ranges.append(f"'{sheet_name}'!A1:{end_column}{worksheet.max_row}")
+        return ",".join(ranges) if ranges else "A1:Z100"
+    finally:
+        workbook.close()
+
+
+__all__ = ["compare_workbooks", "workbook_used_ranges"]

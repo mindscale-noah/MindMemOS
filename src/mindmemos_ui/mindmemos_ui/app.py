@@ -6,13 +6,13 @@ from pathlib import Path
 from time import monotonic
 
 import anyio
+import httpx
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mindmemos_sdk.config import ConfigManager
 from mindmemos_sdk.errors import ApiError, MindMemOSSDKError
-from mindmemos_sdk.skills import ListRequest as SkillListRequest
 from mindmemos_skill.common.skill_runtime import load_runtime_skill
 from mindmemos_skill.errors import SkillConflictError
 from mindmemos_skill.skill import Skill, SkillSnapshot
@@ -159,14 +159,14 @@ async def create_app(
 
     @app.post("/api/config/test")
     def test_connection():
-        config = manager.load_or_default()
-        with MindMemOSClient(config=config) as client:
-            client.skills.list(SkillListRequest(limit=1))
+        status = connections()["skill"]["status"]
+        if status != "connected":
+            raise ApiError("Skill service is unavailable or not configured", status_code=503)
         return {"ok": True}
 
     @app.get("/api/connections")
     def connections():
-        """Check each service with a bounded, read-only SDK request."""
+        """Check process liveness without authentication or database access."""
         config = manager.load_or_default()
         memory_url, memory_key = config.resolve_memory_connection()
         skill_url, skill_key = config.resolve_skill_connection()
@@ -177,24 +177,27 @@ async def create_app(
         if not memory_key and not skill_key:
             return result
 
-        probe_config = config.model_copy(deep=True)
-        probe_config.network.timeout_seconds = min(config.network.timeout_seconds, 5)
-        probe_config.network.max_retries = 0
-        with MindMemOSClient(config=probe_config) as client:
-            for name, key, probe in (
-                ("memory", memory_key, lambda: client.memory.get(top_k=1)),
-                ("skill", skill_key, lambda: client.skills.list(SkillListRequest(limit=1))),
+        # Liveness routes do not resolve credentials or touch business storage.
+        skill_health_path = "/health" if config.skill_service.base_url else "/healthz"
+        with httpx.Client(
+            timeout=min(config.network.timeout_seconds, 5),
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            for name, url, key, health_path in (
+                ("memory", memory_url, memory_key, "/healthz"),
+                ("skill", skill_url, skill_key, skill_health_path),
             ):
                 if not key:
                     continue
                 try:
-                    probe()
-                except ApiError as exc:
-                    result[name]["status"] = "unauthorized" if exc.status_code in {401, 403} else "unavailable"
-                except (MindMemOSSDKError, ValueError):
+                    response = client.get(url.rstrip("/") + health_path)
+                    response.raise_for_status()
+                    healthy = response.json().get("status") == "ok"
+                except (httpx.HTTPError, ValueError, AttributeError):
                     result[name]["status"] = "unavailable"
                 else:
-                    result[name]["status"] = "connected"
+                    result[name]["status"] = "connected" if healthy else "unavailable"
         return result
 
     @app.get("/api/memories")

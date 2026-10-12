@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from ....common.json import parse_model
 from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult
+from ....logging import get_logger
 from ....skill import Skill
 from .runtime import ForestRuntime, parallel
 from .typing import (
@@ -23,6 +24,8 @@ from .typing import (
     SkillForestReflectionContext,
     SkillForestTrajectoryContext,
 )
+
+logger = get_logger(__name__)
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -54,6 +57,7 @@ async def _reflect_batch(
             for i, (sample, result) in enumerate(batch, 1)
         ),
     )
+    logger.info("[skill_forest.reflection] started")
     response = await runtime.chat(
         messages=runtime.env_adapter.build_reflection_messages(context),
         directory=directory / "reflection" / name / f"{index:06d}",
@@ -69,7 +73,9 @@ async def _reflect_batch(
         )
         for edit in patch.edits
     ]
-    return patch.model_copy(update={"edits": edits})
+    patch = patch.model_copy(update={"edits": edits})
+    logger.info(f"[skill_forest.reflection] progress | extracted_items={len(patch.edits)}")
+    return patch
 
 
 async def _merge_group(
@@ -77,7 +83,12 @@ async def _merge_group(
 ) -> Patch:
     """Resolve overlapping edits within one bounded reduction group."""
     if len(patches) == 1:
+        logger.info(
+            f"[skill_forest.patch_merge] skipped | reason=single_patch | patch_edits={len(patches[0].edits)}"
+            f" | group_id={str(directory)}"
+        )
         return patches[0]
+    logger.info("[skill_forest.patch_merge] started")
     response = await runtime.chat(
         messages=runtime.env_adapter.build_patch_merge_messages(
             SkillForestPatchMergeContext(skill=text, patches=tuple(patches), success=name == "success", level=level)
@@ -85,7 +96,9 @@ async def _merge_group(
         directory=directory / name / f"{level:03d}" / f"{index:06d}",
     )
     patch = _parse(response, Patch)
-    return patch.model_copy(update={"edits": [edit.model_copy(update={"merge_level": level}) for edit in patch.edits]})
+    patch = patch.model_copy(update={"edits": [edit.model_copy(update={"merge_level": level}) for edit in patch.edits]})
+    logger.info(f"[skill_forest.patch_merge] progress | patch_edits={len(patch.edits)}")
+    return patch
 
 
 async def _reduce_evidence(
@@ -94,6 +107,11 @@ async def _reduce_evidence(
     """Reduce a single outcome stream without owning tree or candidate state."""
     config = runtime.config
     name = "success" if success else "failure"
+    if not batches:
+        logger.info(
+            f"[skill_forest.reflection] skipped | reason=empty_evidence_stream | source={name}"
+            f" | extracted_items=0 | group_id={str(directory)}"
+        )
     patches = await parallel(
         _reflect_batch(batch, success=success, index=index, text=text, runtime=runtime, directory=directory)
         for index, batch in enumerate(batches)
@@ -118,7 +136,13 @@ async def _rank_patch(patch: Patch, *, text: str, depth: int, runtime: ForestRun
     config = runtime.config
     budget = config.ranking_edit_budgets[min(depth, len(config.ranking_edit_budgets) - 1)]
     if not config.ranking_enabled or len(patch.edits) <= budget:
+        logger.info(
+            "[skill_forest.ranking] skipped"
+            f" | reason={'disabled' if not config.ranking_enabled else 'within_budget'}"
+            f" | patch_edits={len(patch.edits)} | edit_budget={budget} | group_id={str(directory)}"
+        )
         return patch
+    logger.info("[skill_forest.ranking] started")
     response = await runtime.chat(
         messages=runtime.env_adapter.build_ranking_messages(
             SkillForestRankingContext(skill=text, patch=patch, edit_budget=budget)
@@ -129,7 +153,9 @@ async def _rank_patch(patch: Patch, *, text: str, depth: int, runtime: ForestRun
     indices = list(dict.fromkeys(index for index in ranking.selected_indices if 0 <= index < len(patch.edits)))[:budget]
     if not indices:
         raise InvalidPatchError("Optimizer ranking returned no valid edit indices")
-    return patch.model_copy(update={"edits": [patch.edits[index] for index in indices]})
+    patch = patch.model_copy(update={"edits": [patch.edits[index] for index in indices]})
+    logger.info(f"[skill_forest.ranking] progress | patch_edits={len(patch.edits)}")
+    return patch
 
 
 async def generate_patch(
@@ -182,6 +208,7 @@ async def generate_patch(
         for stream, outcome in zip(streams, (False, True), strict=True)
     )
     if failure.edits and success.edits:
+        logger.info("[skill_forest.final_patch_merge] started")
         response = await runtime.chat(
             messages=runtime.env_adapter.build_final_patch_messages(
                 SkillForestFinalPatchContext(skill=text, failure=failure, success=success)
@@ -189,6 +216,7 @@ async def generate_patch(
             directory=directory / "final_merge",
         )
         patch = _parse(response, Patch)
+        logger.info(f"[skill_forest.final_patch_merge] progress | patch_edits={len(patch.edits)}")
     else:
         patch = failure if failure.edits else success
     patch = await _rank_patch(patch, text=text, depth=depth, runtime=runtime, directory=directory)

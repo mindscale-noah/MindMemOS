@@ -28,10 +28,8 @@ class MemoryRepository(CollectionRepository):
 
         by_collection: dict[str, list[MemoryPoint]] = {}
         for point in points:
-            project_id = str(point.payload.get("project_id") or "")
             vector_size = len(point.semantic_vector or []) or self._cfg.vector_size
             collection = await self._ensure_project_vector_collection(
-                project_id,
                 vector_size=vector_size,
                 enable_sparse=True,
                 payload_indexes=list(MEMORY_PAYLOAD_INDEX_SCHEMA),

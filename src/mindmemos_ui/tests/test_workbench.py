@@ -2,6 +2,7 @@
 
 from uuid import uuid4
 
+import httpx
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -65,13 +66,13 @@ def test_sdk_http_error_preserves_status_and_message(client, monkeypatch, status
     """Expose the upstream HTTP failure without replacing its useful explanation."""
     http, _ = client
 
-    class FailingSkills:
-        def list(self, request):
+    class FailingMemory:
+        def list(self, **kwargs):
             raise ApiError(message, status_code=status, response_body=body)
 
     class FailingSDK:
         def __init__(self, *, config):
-            self.skills = FailingSkills()
+            self.memory = FailingMemory()
 
         def __enter__(self):
             return self
@@ -80,7 +81,7 @@ def test_sdk_http_error_preserves_status_and_message(client, monkeypatch, status
             return None
 
     monkeypatch.setattr("mindmemos_ui.app.MindMemOSClient", FailingSDK)
-    response = http.post("/api/config/test")
+    response = http.get("/api/memories")
     assert response.status_code == status
     assert response.json() == {"detail": expected}
 
@@ -91,39 +92,50 @@ def test_connections_check_memory_and_skill_independently(client, monkeypatch):
     clock = [0.0]
     monkeypatch.setattr("mindmemos_ui.app.monotonic", lambda: clock[0])
 
-    class MemoryProbe:
-        def get(self, *, top_k):
-            calls.append(("memory", top_k))
-            raise ApiError("Invalid credential", status_code=401)
+    config = manager.load()
+    config.service_type = "custom"
+    config.memory_service.base_url = "http://memory.example"
+    config.skill_service.base_url = "http://skill.example"
+    from mindmemos_sdk.config.models import AuthConfig
 
-    class SkillProbe:
-        def list(self, request):
-            calls.append(("skill", request.limit))
-            return {"items": []}
+    config.skill_service.auth = AuthConfig(api_key="skill-secret")
+    manager.save(config)
 
-    class SDKProbe:
-        def __init__(self, *, config):
-            assert config.network.timeout_seconds == 5
-            assert config.network.max_retries == 0
-            self.memory = MemoryProbe()
-            self.skills = SkillProbe()
+    def probe(request):
+        calls.append(str(request.url))
+        assert "authorization" not in request.headers
+        assert "x-api-key" not in request.headers
+        if request.url.path == "/healthz":
+            return httpx.Response(503, json={"status": "unavailable"})
+        return httpx.Response(200, json={"status": "ok"})
 
-        def __enter__(self):
-            return self
+    real_client = httpx.Client
 
-        def __exit__(self, *_):
-            return None
+    def health_client(**kwargs):
+        assert kwargs == {"timeout": 5, "follow_redirects": False, "trust_env": False}
+        return real_client(transport=httpx.MockTransport(probe), **kwargs)
 
-    monkeypatch.setattr("mindmemos_ui.app.MindMemOSClient", SDKProbe)
+    def forbidden_sdk(**kwargs):
+        pytest.fail("Connection checks must not construct a business SDK client")
+
+    monkeypatch.setattr("mindmemos_ui.app.httpx.Client", health_client)
+    monkeypatch.setattr("mindmemos_ui.app.MindMemOSClient", forbidden_sdk)
     response = http.get("/api/connections")
     assert response.status_code == 200
-    assert response.json()["memory"]["status"] == "unauthorized"
+    assert response.json()["memory"]["status"] == "unavailable"
     assert response.json()["skill"]["status"] == "connected"
-    assert calls == [("memory", 1), ("skill", 1)]
+    assert len(calls) == 2
+    assert calls[0].endswith("/healthz")
+    assert calls[1] == "http://skill.example/health"
     assert "private-secret-value" not in response.text
+    calls.clear()
+    assert http.post("/api/config/test").json() == {"ok": True}
+    assert len(calls) == 2
 
     config = manager.load()
     config.memory_service.auth.api_key = None
+    config.skill_service.base_url = None
+    config.skill_service.auth = None
     manager.save(config)
     calls.clear()
     clock[0] = 1.0
@@ -202,7 +214,7 @@ def test_memories_page_uses_read_only_sdk_list_and_search(client, monkeypatch):
     )
 
 
-def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
+async def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
     from mindmemos_skill.infra.database import SQLiteConfig, SQLiteDatabase
     from mindmemos_skill.persistence import create_persistence, ensure_collection
     from mindmemos_skill.persistence.constants import (
@@ -225,11 +237,11 @@ def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
     db = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'graphs.db'}"))
     try:
         store = create_persistence(db)
-        ensure_collection(store)
+        await ensure_collection(store)
         snapshot = uuid4()
         scope = {"project_id": "project-a", "graph_id": "g"}
-        db.insert(SKILL_GRAPHS_TABLE, [SkillGraphRecord(**scope, name="Graph A").model_dump()])
-        db.insert(
+        await db.insert(SKILL_GRAPHS_TABLE, [SkillGraphRecord(**scope, name="Graph A").model_dump()])
+        await db.insert(
             SKILL_GRAPH_VERSIONS_TABLE, [SkillGraphVersionRecord(**scope, graph_version_id=snapshot).model_dump()]
         )
         for i in (1, 2):
@@ -244,8 +256,8 @@ def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
                 skill_hash=skill_hash("content", {}),
                 content_hash=content_hash("content"),
             )
-            db.insert(SKILL_VERSIONS_TABLE, [record.model_dump()])
-            db.insert(
+            await db.insert(SKILL_VERSIONS_TABLE, [record.model_dump()])
+            await db.insert(
                 SKILLS_TABLE,
                 [
                     SkillRecord(
@@ -259,7 +271,7 @@ def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
             node = SkillGraphNodeRecord(
                 **scope, graph_version_id=snapshot, node_id=f"n{i}", skill_version_id=f"version-{i}", name=f"Skill {i}"
             )
-            db.insert(SKILL_GRAPH_NODES_TABLE, [node.model_dump()])
+            await db.insert(SKILL_GRAPH_NODES_TABLE, [node.model_dump()])
         edge = SkillGraphEdgeRecord(
             **scope,
             graph_version_id=snapshot,
@@ -268,20 +280,20 @@ def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
             target_node_id="n2",
             edge_type="flow",
         )
-        db.insert(SKILL_GRAPH_EDGES_TABLE, [edge.model_dump()])
+        await db.insert(SKILL_GRAPH_EDGES_TABLE, [edge.model_dump()])
         service = GraphQueryService(db, "project-a")
-        result = service.snapshot("g", snapshot)
+        result = await service.snapshot("g", snapshot)
         assert len(result["nodes"]) == 2
         assert result["nodes"][0]["skill_version_id"] == "version-1"
         assert result["edges"][0]["edge_type"] == "flow"
         other = GraphQueryService(db, "project-b")
-        assert other.list_graphs() == []
+        assert await other.list_graphs() == []
         with pytest.raises(GraphNotFoundError):
-            other.snapshot("g", snapshot)
+            await other.snapshot("g", snapshot)
         with pytest.raises(ValueError, match="Skill version not found"):
-            other.version("version-1")
+            await other.version("version-1")
     finally:
-        db.close()
+        await db.close()
 
 
 def test_static_entrypoint(client):

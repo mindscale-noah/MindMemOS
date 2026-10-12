@@ -1,6 +1,6 @@
 """Regression coverage for file integrity and guarded model-response decoding."""
 
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -50,15 +50,15 @@ def test_json_files_are_not_repaired(tmp_path):
             read_json(path)
 
 
-def test_jsonl_streaming_append_preserves_records_and_reports_line(tmp_path):
+async def test_jsonl_streaming_append_preserves_records_and_reports_line(tmp_path):
     path = tmp_path / "records.jsonl"
     path.write_text('{"value":0}')
-    append_jsonl(path, Answer(value=1))
-    append_jsonl(path, [{"message": "line\nbreak"}])
+    (await append_jsonl(path, Answer(value=1)))
+    (await append_jsonl(path, [{"message": "line\nbreak"}]))
     assert list(read_jsonl(path)) == [{"value": 0}, {"value": 1}, [{"message": "line\nbreak"}]]
     before = path.read_bytes()
     with pytest.raises(TypeError):
-        append_jsonl(path, object())
+        (await append_jsonl(path, object()))
     assert path.read_bytes() == before
     with path.open("a") as stream:
         stream.write('\n{"broken":\n')
@@ -69,10 +69,9 @@ def test_jsonl_streaming_append_preserves_records_and_reports_line(tmp_path):
         next(records)
 
 
-def test_concurrent_jsonl_appends_keep_every_record(tmp_path):
+async def test_concurrent_jsonl_appends_keep_every_record(tmp_path):
     path = tmp_path / "nested/events.jsonl"
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(lambda index: append_jsonl(path, {"id": index, "text": "x" * 10000}), range(32)))
+    await asyncio.gather(*(append_jsonl(path, {"id": index, "text": "x" * 10000}) for index in range(32)))
     rows = list(read_jsonl(path))
     assert len(rows) == 32
     assert {row["id"] for row in rows} == set(range(32))

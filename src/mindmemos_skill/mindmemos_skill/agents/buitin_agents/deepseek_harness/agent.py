@@ -20,7 +20,7 @@ class DeepSeekHarnessAgent(Agent[DeepSeekHarnessConfig]):
     config_type = DeepSeekHarnessConfig
     """Settings validated by the shared registry."""
 
-    def run(self, *, system: str, user: str, workspace: Path) -> AgentResult:
+    async def run(self, *, system: str, user: str, workspace: Path) -> AgentResult:
         """Execute a complete native agent run and validate its terminal event.
 
         Args:
@@ -63,7 +63,7 @@ class DeepSeekHarnessAgent(Agent[DeepSeekHarnessConfig]):
         ]
         overrides = environment(self.config, DEEPSEEK_API_KEY_ENV, DEEPSEEK_BASE_URL_ENV)
         overrides[DSH_HOME_ENV] = str(audit / "home")
-        output = run_cli(command, workspace, self.config, overrides).rstrip("\n")
+        output = (await run_cli(command, workspace, self.config, overrides)).rstrip("\n")
         _, events = read_session_events(audit / "sessions")
         if not output.strip():
             raise RuntimeError("DeepSeek Harness returned an empty result")

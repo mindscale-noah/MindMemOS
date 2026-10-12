@@ -1,7 +1,6 @@
 """One reset/model/step loop with request-local simulator ownership."""
 
 import re
-from copy import deepcopy
 from pathlib import Path
 
 from ....agents import OpenAIChatAgent
@@ -14,33 +13,8 @@ from ..common import skill_text, total_usage
 from .config import ALFWorldConfig
 from .prompts import NO_HISTORY, WITH_HISTORY
 from .reward import evaluate
+from .simulator import Simulator
 from .typing import ALFWorldRewardData, ALFWorldTask
-
-
-def _create_simulator(config: ALFWorldConfig, gamefile: Path):
-    """Select one game before upstream initialization scans the dataset."""
-    from alfworld.agents.environment import get_environment
-
-    environment_class = get_environment(config.simulator["env"]["type"])
-
-    class SelectedGame(environment_class):
-        def collect_game_files(self, verbose=False):
-            """Initialize only the explicitly selected game."""
-            self.game_files = [str(gamefile)]
-            self.num_games = 1
-
-    split = "train"
-    if "valid_seen" in gamefile.parts:
-        split = "eval_in_distribution"
-    elif "valid_unseen" in gamefile.parts:
-        split = "eval_out_of_distribution"
-    simulator = SelectedGame(deepcopy(config.simulator), train_eval=split).init_env(batch_size=1)
-    try:
-        simulator.seed(config.seed)
-    except BaseException:
-        simulator.close()
-        raise
-    return simulator
 
 
 @Environment.register("alfworld_bounded_history")
@@ -83,17 +57,17 @@ class ALFWorldEnvironment(Environment[ALFWorldConfig]):
             identity.update(file_fingerprints(path for path in task.gamefile.parent.iterdir() if path.is_file()))
         return identity
 
-    def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+    async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Keep simulator state local and close it even if model execution fails."""
         if not isinstance(task, ALFWorldTask) or not isinstance(reward_data, ALFWorldRewardData):
             raise TypeError("ALFWorld requires ALFWorldTask and ALFWorldRewardData")
         text = skill_text(skills)
         history, responses, trajectory = [], [], []
         system = "You are an expert agent operating in the ALFRED Embodied Environment."
-        simulator = _create_simulator(self.config, task.gamefile)
+        simulator = await Simulator.create(self.config, task.gamefile)
         done, won, output = False, False, ""
         try:
-            observations, infos = simulator.reset()
+            observations, infos = await simulator.reset()
             observation = observations[0]
             marker = "Your task is to: "
             if marker not in observation:
@@ -122,7 +96,7 @@ class ALFWorldEnvironment(Environment[ALFWorldConfig]):
                         f"{text}\n\n{prompt}"
                     )
                 (workspace / f"prompt_{step + 1}.md").write_text(prompt, encoding="utf-8")
-                response = self.agent.run(system=system, user=prompt)
+                response = await self.agent.run(system=system, user=prompt)
                 if not isinstance(response.output, str):
                     raise TypeError("ALFWorld requires a text agent output")
                 responses.append(response)
@@ -136,7 +110,7 @@ class ALFWorldEnvironment(Environment[ALFWorldConfig]):
                 action = action_match.group(1).strip().lower()
                 reasoning = re.search(r"<think>(.*?)</think>", output, re.DOTALL)
                 history.append(f"[Observation {step + 1}: '{observation}', Action {step + 1}: '{action}']")
-                observations, scores, dones, infos = simulator.step([action])
+                observations, scores, dones, infos = await simulator.step([action])
                 observation, done = observations[0], bool(dones[0])
                 if done:
                     won = bool(infos["won"][0])
@@ -154,11 +128,11 @@ class ALFWorldEnvironment(Environment[ALFWorldConfig]):
                 if done:
                     break
         finally:
-            simulator.close()
+            await simulator.close()
         return RolloutResult(
             output=output,
             trajectory=trajectory,
-            reward=evaluate(won=won, done=done, max_steps=self.config.max_steps).model_copy(
+            reward=(await evaluate(won=won, done=done, max_steps=self.config.max_steps)).model_copy(
                 update={
                     "task_description": description,
                     "task_type": next(

@@ -132,7 +132,7 @@ class SpacyEntityExtractor:
         return self._entities_from_doc(doc)
 
     def extract_many(self, texts: list[str], langs: list[str]) -> list[list[Entity]]:
-        del langs
+        # EntityExtractor requires langs; this instance already binds a language-specific spaCy model.
         docs = run_nlp_with_retry(
             lambda: list(self._load().pipe(texts)),
             config=self.config,

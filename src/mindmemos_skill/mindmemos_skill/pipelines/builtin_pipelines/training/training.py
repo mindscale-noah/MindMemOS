@@ -9,13 +9,12 @@ from pydantic import BaseModel
 from ....algos import Algorithm
 from ....algos.train.skill_forest.trainer import SkillForestTrainer
 from ....api.typing import AlgoSkillEvolveResult, TrainingRequest
-from ....common.asyncio import run_sync
 from ....common.checkpoint import boundary, fingerprint
 from ....common.json import read_json, write_json
 from ....common.skill_runtime import load_runtime_skill
 from ....common.skill_versions import snapshot_from_version
 from ....envs import Environment
-from ....infra.task_manager.progress import NullProgressReporter, ProgressReporter
+from ....logging import get_logger, stage
 from ....persistence.store import SkillPersistence
 from ...base import Pipeline
 from ...config import PipelineComponentConfig
@@ -63,7 +62,6 @@ class ConfiguredTrainingPipeline(TrainingPipeline[TrainingPipelineConfig]):
         *,
         env: Environment,
         adapter: PipelineComponentConfig | None = None,
-        reporter: ProgressReporter | None = None,
     ) -> AlgoSkillEvolveResult:
         """Load a version, train in the supplied directory, evaluate and publish.
 
@@ -71,7 +69,6 @@ class ConfiguredTrainingPipeline(TrainingPipeline[TrainingPipelineConfig]):
             request: Explicit repository scope, base version, tasks, splits and directory.
             env: Environment selected for this run.
             adapter: Optional adaptation bound to this environment and trainer.
-            reporter: Optional progress sink shared with the trainer.
 
         Returns:
             An immutable published version and stable run identity.
@@ -93,7 +90,7 @@ class ConfiguredTrainingPipeline(TrainingPipeline[TrainingPipelineConfig]):
             trainer_options = options.model_dump() if isinstance(options, BaseModel) else options
             trainer_options = {**trainer_options, "env_adapter": adapter.model_dump()}
             trainer = Algorithm.build(self.config.trainer.class_name, trainer_options)
-        active_reporter = reporter or NullProgressReporter()
+
         if request.project_id is None:
             raise ValueError("project_id is required")
         root = Path(request.work_dir).expanduser().resolve()
@@ -114,42 +111,53 @@ class ConfiguredTrainingPipeline(TrainingPipeline[TrainingPipelineConfig]):
             sample.task.id: env.input_identity(sample.task, sample.reward_data) for sample in request.tasks
         }
         input_hash = fingerprint(identity)
-        async with AsyncFileLock(str(root.parent / f".{root.name}.pipeline.lock"), timeout=0):
-            store = self.persistence.skills
-            published = await run_sync(store.algorithm_publication, request.project_id, run_id, input_hash)
-            if published is not None:
-                return self._result(request, published, run_id)
-            base = await run_sync(store.version_by_id, request.project_id, request.init_skill_version_id)
-            owner = await run_sync(store.resolve_family, request.project_id, base.skill_id)
-            if root.exists() and any(root.iterdir()) and not (root / "request.json").exists():
-                raise ValueError("Training directory has no business input record; use a new work_dir")
-            # This is the business input record, never an algorithm checkpoint.
-            boundary(root / "request.json", identity, payload={"run_id": run_id})
-            samples = {sample.task.id: sample for sample in request.tasks}
-            trainer_input = {
-                "skill": load_runtime_skill(snapshot_from_version(base)),
-                "env": env,
-                "train_samples": [samples[key] for key in request.split.train],
-                "validation_samples": [samples[key] for key in request.split.val],
-                "work_dir": root / "train",
-            }
-            if reporter is not None:
-                trainer_input["progress"] = reporter
-            selected = await trainer.train(**trainer_input)
+        async with AsyncFileLock(str(root.parent / f".{root.name}.pipeline.lock"), timeout=0, run_in_executor=False):
+            with stage("training.prepare"):
+                store = self.persistence.skills
+                published = await store.algorithm_publication(request.project_id, run_id, input_hash)
+                if published is not None:
+                    return self._result(request, published, run_id)
+                base = await store.version_by_id(request.project_id, request.init_skill_version_id)
+                owner = await store.resolve_family(request.project_id, base.skill_id)
+                if root.exists() and any(root.iterdir()) and not (root / "request.json").exists():
+                    raise ValueError("Training directory has no business input record; use a new work_dir")
+                # This is the business input record, never an algorithm checkpoint.
+                boundary(root / "request.json", identity, payload={"run_id": run_id})
+                samples = {sample.task.id: sample for sample in request.tasks}
+                trainer_input = {
+                    "skill": load_runtime_skill(snapshot_from_version(base)),
+                    "env": env,
+                    "train_samples": [samples[key] for key in request.split.train],
+                    "validation_samples": [samples[key] for key in request.split.val],
+                    "work_dir": root / "train",
+                }
+
+            with stage("training.train"):
+                selected = await trainer.train(**trainer_input)
             report = trainer.build_report(root / "train")
             write_json(root / "selected_skill.json", selected.snapshot())
             for name, ids in (("val", request.split.val), ("test", request.split.test)):
                 if ids:
-                    await active_reporter.report(
-                        stage=name, message=f"Evaluating {name} samples", completed=0, total=len(ids)
+                    get_logger(__name__).info(
+                        "algorithm.progress",
+                        extra={
+                            "event_body": {
+                                "stage": name,
+                                "message": f"Evaluating {name} samples",
+                                "completed": 0,
+                                "total": len(ids),
+                            }
+                        },
                     )
-                    evaluation = await evaluate_skill(
-                        skill=selected,
-                        env=env,
-                        samples=[samples[key] for key in ids],
-                        directory=root / name,
-                        concurrency=self.config.evaluation_concurrency,
-                    )
+                    with stage("evaluate"):
+                        evaluation = await evaluate_skill(
+                            skill=selected,
+                            env=env,
+                            samples=[samples[key] for key in ids],
+                            directory=root / name,
+                            concurrency=self.config.evaluation_concurrency,
+                            stage_name=f"skill_forest.{name}" if isinstance(trainer, SkillForestTrainer) else None,
+                        )
                     if isinstance(trainer, SkillForestTrainer):
                         result_path = root / "train" / "result.json"
                         result_data = read_json(result_path)
@@ -158,23 +166,34 @@ class ConfiguredTrainingPipeline(TrainingPipeline[TrainingPipelineConfig]):
                             "tasks": read_json(root / name / "results.json")["tasks"],
                         }
                         write_json(result_path, result_data)
-                    await active_reporter.report(
-                        stage=name, message=f"Evaluated {name} samples", completed=len(ids), total=len(ids)
+                    get_logger(__name__).info(
+                        "algorithm.progress",
+                        extra={
+                            "event_body": {
+                                "stage": name,
+                                "message": f"Evaluated {name} samples",
+                                "completed": len(ids),
+                                "total": len(ids),
+                            }
+                        },
                     )
-            version = await run_sync(
-                store.commit_algorithm,
-                owner,
-                selected.snapshot(),
-                run_id=run_id,
-                input_hash=input_hash,
-                algorithm=self.config.trainer.class_name.replace("_", "-"),
-                base_version_id=base.version_id,
-                active=request.auto_accept,
-                report=report,
-            )
+            with stage("training.publish"):
+                version = await store.commit_algorithm(
+                    owner,
+                    selected.snapshot(),
+                    run_id=run_id,
+                    input_hash=input_hash,
+                    algorithm=self.config.trainer.class_name.replace("_", "-"),
+                    base_version_id=base.version_id,
+                    active=request.auto_accept,
+                    report=report,
+                )
             result = self._result(request, version, run_id)
             write_json(root / "publication.json", result)
-            await active_reporter.report(stage="published", message="Selected Skill version published")
+            get_logger(__name__).info(
+                "algorithm.progress",
+                extra={"event_body": {"stage": "published", "message": "Selected Skill version published"}},
+            )
             return result
 
     @staticmethod

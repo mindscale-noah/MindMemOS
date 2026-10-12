@@ -93,7 +93,7 @@ class PlatformGatewayRouter:
         self._retry_after = max(0.0, float(retry_after))
 
     async def acompletion(self, *, model: str, messages: list[dict[str, Any]], **kwargs: Any) -> GatewayResponse:
-        del model
+        # The Router interface supplies model; the hydrated endpoint determines the actual model.
         payload = self._request_payload(
             {
                 "model": self._endpoint.model,
@@ -105,7 +105,7 @@ class PlatformGatewayRouter:
         return await self._post("chat/completions", payload)
 
     async def aembedding(self, *, model: str, input: str | list[str], **kwargs: Any) -> GatewayResponse:
-        del model
+        # The Router interface supplies model; the hydrated endpoint determines the actual model.
         payload = self._request_payload(
             {
                 "model": self._endpoint.model,
@@ -125,7 +125,7 @@ class PlatformGatewayRouter:
         top_n: int,
         **kwargs: Any,
     ) -> GatewayResponse:
-        del model
+        # The Router interface supplies model; the hydrated endpoint determines the actual model.
         payload = self._request_payload(
             {
                 "model": self._endpoint.model,

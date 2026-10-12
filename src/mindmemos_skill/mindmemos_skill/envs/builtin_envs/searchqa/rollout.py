@@ -55,7 +55,9 @@ class SearchQAEnvironment(Environment[SearchQAConfig]):
             raise ValueError("Injected agent config must match the environment's agent config")
         self.agent = agent if agent is not None else OpenAIChatAgent(config.agent)
 
-    def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> SearchQAResult:
+    async def _run(
+        self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path
+    ) -> SearchQAResult:
         """Run refinement without giving the answering model evaluation feedback."""
         if not isinstance(task, SearchQATask) or not isinstance(reward_data, SearchQARewardData):
             raise TypeError("SearchQA requires SearchQATask and SearchQARewardData")
@@ -79,7 +81,7 @@ class SearchQAEnvironment(Environment[SearchQAConfig]):
                     "Use <answer>...</answer> tags for your final answer."
                 )
             )
-            response = self.agent.run(system=system, user=prompt)
+            response = await self.agent.run(system=system, user=prompt)
             if not isinstance(response.output, str):
                 raise TypeError("SearchQA requires a text agent output")
             output = response.output
@@ -87,7 +89,7 @@ class SearchQAEnvironment(Environment[SearchQAConfig]):
             trajectory.extend(response.trajectory)
             if turn > 0 and "<answer>" in output.lower():
                 break
-        reward = evaluate(output, task, reward_data)
+        reward = await evaluate(output, task, reward_data)
         trajectory.append({"role": "system", "content": reward.detail})
         (workspace / "response.txt").write_text(output, encoding="utf-8")
         return SearchQAResult(output=output, trajectory=trajectory, reward=reward, usage=total_usage(responses))

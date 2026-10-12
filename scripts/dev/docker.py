@@ -51,8 +51,10 @@ def prepare_collector(root: Path, plan: DependencyPlan) -> None:
         return
     document = yaml.safe_load((root / "dockers" / "otel" / "collector.yaml").read_text())
     if "kafka-exporter" not in plan.services:
-        document["receivers"].pop("prometheus", None)
-        document["service"]["pipelines"].pop("metrics", None)
+        jobs = document["receivers"]["prometheus"]["config"]["scrape_configs"]
+        document["receivers"]["prometheus"]["config"]["scrape_configs"] = [
+            job for job in jobs if job["job_name"] != "kafka-exporter"
+        ]
     content = yaml.safe_dump(document, sort_keys=False)
     project = json.loads(compose(root, "config", "--format", "json", capture=True).stdout)["name"]
     directory = _runtime_directory(root, project)

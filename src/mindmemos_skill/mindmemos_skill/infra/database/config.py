@@ -10,8 +10,8 @@ class SQLiteConfig(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown settings."""
 
-    url: str = "sqlite+pysqlite:///./data/mindmemos.db"
-    """SQLite file URL; memory databases are intended for single-threaded tests."""
+    url: str = "sqlite+aiosqlite:///./data/mindmemos.db"
+    """SQLite file URL; operations use the asynchronous SQLite driver."""
 
     timeout: float = Field(default=5, gt=0)
     """Seconds to wait for a database write lock."""
@@ -19,9 +19,9 @@ class SQLiteConfig(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url(cls, value: str) -> str:
-        """Require the supported synchronous SQLite driver."""
-        if make_url(value).drivername not in {"sqlite", "sqlite+pysqlite"}:
-            raise ValueError("Expected a sqlite+pysqlite URL")
+        """Require the supported SQLite URL."""
+        if make_url(value).drivername not in {"sqlite", "sqlite+pysqlite", "sqlite+aiosqlite"}:
+            raise ValueError("Expected a SQLite URL")
         return value
 
 
@@ -46,7 +46,7 @@ class PostgresConfig(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url(cls, value: str) -> str:
-        """Require the supported synchronous PostgreSQL driver."""
+        """Require the supported PostgreSQL driver."""
         if make_url(value).drivername != "postgresql+psycopg":
             raise ValueError("Expected a postgresql+psycopg URL")
         return value

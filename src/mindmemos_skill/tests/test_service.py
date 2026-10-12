@@ -48,7 +48,7 @@ def registered_pipeline(monkeypatch):
             self.agent = config.agent.model_copy(deep=True)
             events.append(("created", self))
 
-        async def train(self, request, *, env, adapter=None, reporter=None):
+        async def train(self, request, *, env, adapter=None):
             raise NotImplementedError
 
         async def close(self):
@@ -108,9 +108,9 @@ async def test_invalid_assembly_does_not_construct_backends(tmp_path, registered
     opened = []
     original = SQLiteDatabase.__init__
 
-    def observe(self, config):
+    async def observe(self, config):
         opened.append(True)
-        original(self, config)
+        await original(self, config)
 
     monkeypatch.setattr(SQLiteDatabase, "__init__", observe)
     config = assembly_config(tmp_path)
@@ -208,7 +208,7 @@ async def test_persistence_does_not_implicitly_enable_repository(tmp_path):
     try:
         await service.initialize_storage()
         with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
-            assert scoped.skills.list_skills("project", limit=10, offset=0) == []
+            assert (await scoped.skills.list_skills("project", limit=10, offset=0)) == []
         with pytest.raises(NotImplementedError):
             service.repository
     finally:
@@ -224,9 +224,9 @@ async def test_cleanup_reaches_database_when_pipeline_close_fails(tmp_path, regi
     database = service.backends["database"]
     original = database.close
 
-    def close_database():
+    async def close_database():
         closed.append("database")
-        original()
+        await original()
 
     async def fail_close():
         raise RuntimeError("cleanup failed")
@@ -245,9 +245,9 @@ async def test_factory_closes_completed_pipelines_on_later_failure(tmp_path, reg
     database_closed = []
     original = SQLiteDatabase.close
 
-    def close_database(self):
+    async def close_database(self):
         database_closed.append(True)
-        original(self)
+        await original(self)
 
     monkeypatch.setattr(SQLiteDatabase, "close", close_database)
 
@@ -258,7 +258,7 @@ async def test_factory_closes_completed_pipelines_on_later_failure(tmp_path, reg
         def __init__(self, config, *, persistence):
             raise RuntimeError("construction failed")
 
-        async def train(self, request, *, env, adapter=None, reporter=None):
+        async def train(self, request, *, env, adapter=None):
             raise NotImplementedError
 
     config = assembly_config(tmp_path)
@@ -319,9 +319,9 @@ async def test_initialization_failure_closes_constructed_resources(tmp_path, reg
     closed = []
     original = SQLiteDatabase.close
 
-    def close(database):
+    async def close(database):
         closed.append(database)
-        original(database)
+        await original(database)
 
     def fail(store):
         raise RuntimeError("initialization failed")
@@ -350,6 +350,8 @@ async def test_observability_only_is_initialized_without_repository(tmp_path):
         }
     )
     async with await create_service(config) as service:
-        assert OBSERVABILITY_RUNS_TABLE in inspect(service.backends["observability_database"].engine).get_table_names()
+        async with service.backends["observability_database"].engine.connect() as connection:
+            names = await connection.run_sync(lambda sync: inspect(sync).get_table_names())
+        assert OBSERVABILITY_RUNS_TABLE in names
         with pytest.raises(NotImplementedError):
             service.repository

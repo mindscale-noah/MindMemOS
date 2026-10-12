@@ -4,7 +4,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Generic, TypeVar
 
-from ...logging import get_logger
+from ...logging import get_logger, log_context
+from ...logging.tracing import log_failure
 
 logger = get_logger(__name__)
 ItemT = TypeVar("ItemT")
@@ -62,7 +63,7 @@ class TaskDispatcher(Generic[ItemT]):
         if len(self._tasks) >= self._max_buffered:
             self._capacity_changed.clear()
             return False
-        task = asyncio.create_task(self._execute(item), name=f"skill-dispatch-{task_id}")
+        task = asyncio.create_task(self._execute(task_id, item), name=f"skill-dispatch-{task_id}")
         self._tasks[task_id] = task
 
         def finished(done: asyncio.Task) -> None:
@@ -73,7 +74,6 @@ class TaskDispatcher(Generic[ItemT]):
                 logger.error(
                     "task.dispatch.failed",
                     extra={"event_body": {"task_id": task_id}},
-                    exc_info=done.exception(),
                 )
 
         task.add_done_callback(finished)
@@ -92,10 +92,15 @@ class TaskDispatcher(Generic[ItemT]):
         while not self.try_submit(task_id, item):
             await self._capacity_changed.wait()
 
-    async def _execute(self, item: ItemT) -> None:
-        """Hold the execution slot across the entire callback, including cleanup."""
-        async with self._gate:
-            await self._handler(item)
+    async def _execute(self, task_id: str, item: ItemT) -> None:
+        """Hold the slot and log unexpected failures before leaving task context."""
+        with log_context(task_id=task_id):
+            try:
+                async with self._gate:
+                    await self._handler(item)
+            except Exception:
+                log_failure(logger, "task.dispatch.execution.failed", body={"task_id": task_id})
+                raise
 
     async def close(self) -> None:
         """Reject new work, wake submitters, and cancel all admitted callbacks."""

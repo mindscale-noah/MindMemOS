@@ -6,6 +6,10 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from ...typing import Reward
+from .ranges import default_sheet as _default_sheet
+from .ranges import split_region as _region
+from .ranges import split_targets as _targets
+from .recalculation import recalculate_workbook
 from .typing import SpreadsheetBenchRewardData
 
 
@@ -34,29 +38,6 @@ def _same(expected, actual) -> bool:
     return type(expected) is type(actual) and expected == actual
 
 
-def _targets(position: str) -> list[str]:
-    """Parse comma-separated targets while preserving quoted sheet names."""
-    position = position.strip()
-    bang = position.find("!")
-    if bang > 0:
-        sheet = position[:bang].lstrip()
-        if sheet[-1:] in {"'", '"'} and sheet[:1] != sheet[-1:]:
-            position = sheet[-1] + position
-    parts, current, quote = [], "", None
-    for character in position:
-        if character in {"'", '"'}:
-            quote = character if quote is None else (None if quote == character else quote)
-        if character == "," and quote is None:
-            if current.strip():
-                parts.append(current.strip())
-            current = ""
-        else:
-            current += character
-    if current.strip():
-        parts.append(current.strip())
-    return parts
-
-
 def _coordinates(region: str, *, max_row: int = 1, max_column: int = 1) -> list[str]:
     """Expand shared ranges in row-major order using workbook bounds."""
     from openpyxl.utils import column_index_from_string, get_column_letter
@@ -76,28 +57,6 @@ def _coordinates(region: str, *, max_row: int = 1, max_column: int = 1) -> list[
     if left > right or top > bottom:
         raise ValueError(f"answer range is reversed: {region!r}")
     return [f"{get_column_letter(column)}{row}" for row in range(top, bottom + 1) for column in range(left, right + 1)]
-
-
-def _region(target: str, default_sheet: str) -> tuple[str, str]:
-    """Split an answer target while retaining quoted sheet names."""
-    if "!" in target:
-        sheet, region = target.rsplit("!", 1)
-    else:
-        sheet, region = default_sheet, target
-    return sheet.strip().strip("'\""), region.strip().strip("'\"")
-
-
-def _default_sheet(sheetnames: list[str], answer_sheet: str | None) -> str:
-    """Resolve the shared default sheet for unqualified ranges."""
-    if not answer_sheet:
-        return sheetnames[0]
-    default = answer_sheet.strip().strip("'\"")
-    if default in sheetnames:
-        return default
-    return next(
-        (part.strip().strip("'\"") for part in _targets(answer_sheet) if part.strip().strip("'\"") in sheetnames),
-        default,
-    )
 
 
 def compare_workbooks(
@@ -222,12 +181,19 @@ def verification_report(
     return report
 
 
-def evaluate(reward_data: SpreadsheetBenchRewardData, directories: list[Path]) -> Reward:
-    """Score all outputs with one shared aggregation and feedback contract.
+async def evaluate(
+    reward_data: SpreadsheetBenchRewardData,
+    directories: list[Path],
+    *,
+    transactional_recalculation: bool = True,
+) -> Reward:
+    """Recalculate formula outputs, then score the selected files with shared feedback.
 
     Args:
         reward_data: Private workbook references and scoring regions.
         directories: Public case directories in reference order.
+        transactional_recalculation: Generate output.recalc.xlsx for formula workbooks before scoring;
+            False scores the original cached values without starting LibreOffice.
 
     Returns:
         Case pass fraction, all-cases success, and post-execution cell reports.
@@ -235,6 +201,7 @@ def evaluate(reward_data: SpreadsheetBenchRewardData, directories: list[Path]) -
     Raises:
         ValueError: Case counts differ, the scoring range is empty or invalid,
             or an output is a symbolic link.
+        RuntimeError: Recalculation fails; the original output is preserved and is not scored as a fallback.
     """
     if len(directories) != len(reward_data.cases):
         raise ValueError("Output directories must match reference cases")
@@ -253,13 +220,36 @@ def evaluate(reward_data: SpreadsheetBenchRewardData, directories: list[Path]) -
             reports.append(f"## Execution (case {reference.number})\nERROR: output-not-found")
             continue
         executed += 1
+        recalculation = {"status": "disabled"}
+        if transactional_recalculation:
+            status = await recalculate_workbook(prediction)
+            if status["status"] == "failure":
+                raise RuntimeError(
+                    f"SpreadsheetBench recalculation failed for case {reference.number}: {status['error']}"
+                )
+            recalculation = {
+                "status": status["status"],
+                "formula_count": status["formula_count_before"],
+                "excel_errors": status.get("excel_errors", []),
+            }
+            if status["status"] != "not_needed":
+                prediction = directory / "output.recalc.xlsx"
         ok, reason = compare_workbooks(
             reference.path, prediction, reward_data.answer_position, answer_sheet=reward_data.answer_sheet
         )
         passed += int(ok)
         if not ok:
             failure = failure or f"eval-mismatch: {reason[:200]}"
-        cases.append({"no": reference.number, "stage": "eval", "ok": ok, "reason": reason})
+        cases.append(
+            {
+                "no": reference.number,
+                "stage": "eval",
+                "ok": ok,
+                "reason": reason,
+                "scored_file": prediction.name,
+                "recalculation": recalculation,
+            }
+        )
         report = verification_report(
             prediction, reference.path, reward_data.answer_position, answer_sheet=reward_data.answer_sheet
         )

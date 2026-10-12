@@ -5,14 +5,14 @@ import json
 import httpx
 import pytest
 from mindmemos_skill.infra.embedding import OpenAIEmbeddingClient, OpenAIEmbeddingConfig
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 
 def config(**updates):
     return OpenAIEmbeddingConfig(model="test", base_url="http://test.invalid/v1", dimensions=2, batch_size=2, **updates)
 
 
-def test_batches_indices_and_borrowed_client_lifecycle():
+async def test_batches_indices_and_borrowed_client_lifecycle():
     calls = []
 
     def handler(request):
@@ -31,15 +31,15 @@ def test_batches_indices_and_borrowed_client_lifecycle():
             },
         )
 
-    with OpenAI(
+    async with AsyncOpenAI(
         api_key="test",
         base_url="http://test.invalid/v1",
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     ) as sdk:
         client = OpenAIEmbeddingClient(config(send_dimensions=True), client=sdk)
-        assert client.embed([]) == []
+        assert (await client.embed([])) == []
         assert not calls
-        assert client.embed(["a", "b", "c"]) == [[1, 1], [2, 1], [1, 1]]
+        assert (await client.embed(["a", "b", "c"])) == [[1, 1], [2, 1], [1, 1]]
         assert [payload["input"] for payload in calls] == [["a", "b"], ["c"]]
         assert all(payload["dimensions"] == 2 and payload["encoding_format"] == "float" for payload in calls)
         assert not sdk.is_closed()
@@ -54,17 +54,17 @@ def test_batches_indices_and_borrowed_client_lifecycle():
         [],
     ],
 )
-def test_invalid_provider_response_is_rejected(data):
+async def test_invalid_provider_response_is_rejected(data):
     def handler(request):
         return httpx.Response(
             200,
             json={"object": "list", "model": "test", "data": data, "usage": {"prompt_tokens": 1, "total_tokens": 1}},
         )
 
-    with OpenAI(
+    async with AsyncOpenAI(
         api_key="test",
         base_url="http://test.invalid/v1",
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     ) as sdk:
         with pytest.raises(ValueError):
-            OpenAIEmbeddingClient(config(), client=sdk).embed(["text"])
+            (await OpenAIEmbeddingClient(config(), client=sdk).embed(["text"]))

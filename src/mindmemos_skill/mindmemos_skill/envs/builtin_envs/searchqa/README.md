@@ -1,63 +1,122 @@
 ## 1. Official Dataset
 
-Download the release from the [official SearchQA source](https://github.com/nyu-dl/SearchQA).
+Official source: [SearchQA](https://github.com/nyu-dl/dl4ir-searchQA). Run the project download script
+from the repository root with Python 3.12 or 3.13:
 
-## 2. Split File Format
+```bash
+uv run python scripts/download_datasets.py download --benchmark skill --dataset searchqa --source-archive /absolute/path/to/SearchQA.zip
+```
 
-Provide a UTF-8 JSON object mapping split names to ordered source task IDs:
+The default destination is `data/mindmemos_skill/searchqa/`. The script uses the sources and pinned versions in
+`config/presets/dataset_download_sources.json`.
+
+First obtain the official archive from the [upstream Google Drive release](https://drive.google.com/drive/u/2/folders/1kBkQGooNyG0h8waaOJpgdGtOnlb1S649).
+Replace the archive argument with its local path; repeat `--source-archive` when
+importing multiple archives in the same invocation. The script imports and
+extracts archives; it does not convert raw crawler or TSV files. The example
+below requires JSON records with `id`, `question`, `context`, and `answers`
+(a list of strings), preserving the IDs in our split file. Raw releases lacking
+these fields need conversion before this loader can use them; the project does
+not currently provide that conversion.
+
+## 2. Split File Format and Provided Paths
+
+Use the repository-provided Skill-Forest split file:
+
+```text
+resources/mindmemos_skill_eval/skill_forest-searchqa/data_splits/splits.json
+```
+
+The split file is a UTF-8 JSON object mapping nonblank split names to ordered
+lists of string task IDs. For example:
 
 ```json
 {"train": ["task-1"], "val": ["task-2"], "test": ["task-3"]}
 ```
 
-Use the dataset's `id` values as strings (OfficeQA also accepts `uid`). Every ID
-must exist in the loaded dataset. IDs must not repeat across or within splits.
-Empty splits and partial dataset selection are allowed.
+Every ID must exist in the loaded data and must not repeat within or across
+splits. Empty splits and partial selection are allowed; unlisted tasks are
+excluded. The order within each split is preserved. The example IDs above
+illustrate the format; use the provided file with the official dataset.
 
-## 3. Environment Initialization
+## 3. Environment Initialization and Rollout
+
+Run the following complete example from the repository root after downloading
+the data. Use a Python environment in which `mindmemos_skill` is installed.
+The example uses the Skill-Forest paper target model, GPT-5.4-mini, with
+medium reasoning and a 16384-token completion budget. Set `api_key` and
+`base_url` for your provider; use its equivalent deployment name if needed.
+These settings are passed explicitly rather than inherited from generic defaults. This example loads data, applies the
+provided split file, runs one no-skill test task, and prints the result.
+Each execution uses a new work directory and makes real model calls.
 
 ```python
+import asyncio
+from pathlib import Path
+from uuid import uuid4
+
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.data import Data
 
-data = Data.build("searchqa", {"data_path": "/path/to/searchqa/items.json"})
+root = Path.cwd()
+
+import json
+
+# Locate the JSON release with the normalized fields required by this loader.
+required = {"id", "question", "context", "answers"}
+records = {}
+for path in sorted((root / "data/mindmemos_skill/searchqa").rglob("*.json")):
+    if path.name == "download_receipt.json":
+        continue
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        payload = [payload] if "id" in payload else payload.get("data", list(payload.values()))
+    if not isinstance(payload, list):
+        continue
+    for row in payload:
+        if isinstance(row, dict) and required <= row.keys():
+            identifier = str(row["id"])
+            if identifier in records and records[identifier] != row:
+                raise ValueError(f"Conflicting SearchQA records for {identifier}")
+            records[identifier] = row
+if not records:
+    raise ValueError("The archive must contain JSON records with id, question, context, and answers")
+
+# Keep generated loader input separate from the verified download payload.
+prepared = root / "output/env_examples/searchqa/items.json"
+prepared.parent.mkdir(parents=True, exist_ok=True)
+prepared.write_text(json.dumps(list(records.values())), encoding="utf-8")
+data = Data.build("searchqa", {"data_path": prepared})
 samples = data.load()
-splits = data.split(samples, split_file="/path/to/splits.json")
+split_file = root / "resources/mindmemos_skill_eval/skill_forest-searchqa/data_splits/splits.json"
+splits = data.split(samples, split_file=split_file)
+
+agent = {
+    "model": "gpt-5.4-mini",
+    "api_key": "your-api-key",
+    "base_url": "https://your-model-service.example/v1",
+    "max_completion_tokens": 16384,
+    "reasoning_effort": "medium",
+}
+
 env = Environment.build("searchqa", {
-    "agent": {
-        "model": "your-model",
-        "api_key": "your-api-key",
-        "base_url": "https://gateway.example.com/v1",
-        "timeout_s": 180,
-        "max_retries": 3,
-        "max_completion_tokens": 4096,
-        "temperature": None,
-        "reasoning_effort": None,
-    },
+    "agent": agent,
     "max_turns": 1,
     "max_context_chars": 6000,
-    "evaluator_version": "searchqa-v1",
 })
+
+async def main():
+    """Run one test task and print its rollout result."""
+    sample = splits["test"][0]
+    work_dir = root / "output/env_examples/searchqa" / uuid4().hex
+    result = await env.rollout(
+        task=sample.task,
+        reward_data=sample.reward_data,
+        work_dir=work_dir,
+        resume=False,
+    )
+    print(result)
+
+
+asyncio.run(main())
 ```
-
-`Environment.build()` receives the inner environment configuration. A training
-request uses `env={"class_name": "searchqa", "config": ...}`; the local evaluation
-YAML uses the same envelope under `environment`.
-
-| Environment field | Default | Meaning |
-| --- | --- | --- |
-| `agent` | Required | OpenAI-compatible chat model configuration; supply `model`, `api_key`, and `base_url` for model calls. |
-| `max_turns` | `1` | Maximum answering and self-review rounds per task; must be at least 1. Additional rounds do not receive private scoring feedback. |
-| `max_context_chars` | `6000` | Public passage character budget; must be at least 1. Truncation prefers `[DOC]` boundaries and uses a character-prefix fallback. |
-| `evaluator_version` | `searchqa-v1` | Exact-match, token F1, and feedback protocol identifier recorded for audit and resume checks. |
-
-Connection values come exclusively from configuration. `timeout_s` is the timeout
-for each physical request, and `max_retries=3` allows up to four physical requests
-per model call. `max_completion_tokens` includes reasoning tokens; `None` omits
-the API limit. `temperature=None` and `reasoning_effort=None` omit those request
-parameters. Use values supported by the configured model service.
-
-The dataset path belongs to `SearchQADataConfig.data_path`, separate from the
-environment. Algorithm models such as Skill-Forest's `optimizer` are configured
-independently in the service YAML. The annotated example is
-[`skill_forest_searchqa.yaml`](../../../../../../config/mindmemos_eval/skill_evaluation/skill_forest_searchqa.yaml).

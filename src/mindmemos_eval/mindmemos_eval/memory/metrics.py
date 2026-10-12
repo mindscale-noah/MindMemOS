@@ -211,13 +211,13 @@ async def collect_clickhouse_metrics(run: BenchmarkRunRef, config: ClickHouseCol
         return {"enabled": True, "llm_call_count": 0, "llm_by_task": []}
 
     try:
-        totals = await asyncio.to_thread(_query_clickhouse_json, config, _llm_totals_sql(run, request_ids, config))
-        by_task = await asyncio.to_thread(_query_clickhouse_json, config, _llm_by_task_sql(run, request_ids, config))
+        totals = await asyncio.to_thread(_query_clickhouse_json, config, _llm_totals_sql(run, config))
+        by_task = await asyncio.to_thread(_query_clickhouse_json, config, _llm_by_task_sql(run, config))
         token_percentiles = await asyncio.to_thread(
-            _query_clickhouse_json, config, _llm_token_percentiles_sql(run, request_ids, config)
+            _query_clickhouse_json, config, _llm_token_percentiles_sql(run, config)
         )
         search_token_perc = await asyncio.to_thread(
-            _query_clickhouse_json, config, _search_token_percentiles_sql(run, request_ids, config)
+            _query_clickhouse_json, config, _search_token_percentiles_sql(run, config)
         )
     except Exception as exc:  # noqa: BLE001 - collector should keep producing Qdrant metrics.
         if config.strict:
@@ -444,8 +444,7 @@ def _parse_dt(value: Any) -> datetime | None:
     return None
 
 
-def _llm_totals_sql(run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig) -> str:
-    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
+def _llm_totals_sql(run: BenchmarkRunRef, config: ClickHouseCollectorConfig) -> str:
     table = _qualified_table(config)
     return f"""
 WITH benchmark_traces AS (
@@ -467,8 +466,7 @@ FORMAT JSON
 """.strip()
 
 
-def _llm_by_task_sql(run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig) -> str:
-    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
+def _llm_by_task_sql(run: BenchmarkRunRef, config: ClickHouseCollectorConfig) -> str:
     table = _qualified_table(config)
     return f"""
 WITH benchmark_traces AS (
@@ -494,11 +492,8 @@ FORMAT JSON
 """.strip()
 
 
-def _llm_token_percentiles_sql(
-    run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig
-) -> str:
+def _llm_token_percentiles_sql(run: BenchmarkRunRef, config: ClickHouseCollectorConfig) -> str:
     """Compute token count percentiles per LLM task."""
-    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
     table = _qualified_table(config)
     return f"""
 WITH benchmark_traces AS (
@@ -522,9 +517,7 @@ FORMAT JSON
 """.strip()
 
 
-def _search_token_percentiles_sql(
-    run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig
-) -> str:
+def _search_token_percentiles_sql(run: BenchmarkRunRef, config: ClickHouseCollectorConfig) -> str:
     """Compute search-stage token totals and per-query percentiles, entirely from ClickHouse.
 
     Groups by TraceId so that all search.* LLM calls within one search request
@@ -533,7 +526,6 @@ def _search_token_percentiles_sql(
     prompt/completion/total token sums so no Qdrant data is needed for search
     token summaries.
     """
-    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
     table = _qualified_table(config)
     return f"""
 WITH benchmark_traces AS (

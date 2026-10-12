@@ -58,7 +58,7 @@ async def test_same_trainer_uses_run_adapter_for_reflection_and_synthesis(tmp_pa
         def __init__(self, config):
             pass
 
-        def run(self, *, messages):
+        async def run(self, *, messages):
             messages_seen.append(messages)
             if messages[1]["content"].startswith("## Skill Candidate 1"):
                 return AgentResult(output="# Skill\nimproved synthesized\n")

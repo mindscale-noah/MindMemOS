@@ -1,11 +1,10 @@
 """Summarize a TreeSkill comparison, including edits that never became patches."""
 
-import argparse
 import csv
-import json
 from collections import Counter
 from pathlib import Path
 
+from mindmemos_skill.algos.train.treeskill.artifacts import model_usage
 from mindmemos_skill.common.json import read_json, write_json
 
 
@@ -56,7 +55,7 @@ def collect_patch_report(training: Path) -> dict:
     counts = Counter(row["disposition"] for row in rows)
     reasons = Counter(row["reason"] or "unspecified" for row in rows if row["disposition"] != "applied")
     # Model/parse failures have no patch.json and must remain visible separately.
-    calls = [read_json(path) for path in sorted((training / "model_calls").glob("**/attempt-*.json"))]
+    usage = model_usage(training)
     return {
         "patch_records": len(rows),
         "applied": counts["applied"],
@@ -66,8 +65,9 @@ def collect_patch_report(training: Path) -> dict:
         "non_applied_reasons": dict(reasons),
         "stages": stages,
         "stage_failures": failures,
-        "model_attempts": len(calls),
-        "failed_model_attempts": sum(call["status"] == "failed" for call in calls),
+        "model_calls": usage["calls"],
+        "failed_model_calls": usage["failed_calls"],
+        "model_usage_complete": usage["usage_complete"],
         "rows": rows,
     }
 
@@ -76,17 +76,31 @@ def build_comparison(root: Path) -> dict:
     """Write a live comparison and detailed patch tables from committed artifacts.
 
     Args:
-        root: Experiment directory created by run.py.
+        root: Experiment directory created by the SDK runner.
 
     Returns:
         Current run state, stage scores, paired outcomes, and patch diagnostics.
     """
     manifest = read_json(root / "manifest.json")
+    # Earlier local-service manifests stored task membership only in split.json.
+    test_ids = manifest["test_ids"] if "test_ids" in manifest else read_json(root / "split.json")["test"]
     result = {"status": manifest["status"], "protocol": manifest["protocol"], "phases": {}}
+    baseline_skipped = manifest["protocol"].get("baseline_skipped", False)
     for name in ("baseline", "evolved"):
+        if name == "baseline" and baseline_skipped:
+            result["phases"][name] = {"status": "skipped"}
+            continue
         path = root / name / "summary.json"
         if path.exists():
             result["phases"][name] = read_json(path)
+        elif name == "evolved":
+            service_root = root / "training" / "test"
+            summary = service_root / "summary.json"
+            if summary.exists():
+                result["phases"][name] = {
+                    **read_json(summary),
+                    "items": read_json(service_root / "results.json")["tasks"],
+                }
     training = root / "training" / "train"
     summary_path = training / "summary.json"
     if summary_path.exists():
@@ -104,11 +118,11 @@ def build_comparison(root: Path) -> dict:
             "baseline_success": before[task_id]["success"],
             "evolved_success": after[task_id]["success"],
         }
-        for task_id in manifest["test_ids"]
+        for task_id in test_ids
         if task_id in before and task_id in after
     ]
     result["paired"] = {
-        "expected": len(manifest["test_ids"]),
+        "expected": 0 if baseline_skipped else len(test_ids),
         "completed": len(paired),
         "mean_score_delta": sum(row["score_delta"] for row in paired) / len(paired) if paired else None,
         "gained_successes": sum(not row["baseline_success"] and row["evolved_success"] for row in paired),
@@ -133,9 +147,3 @@ def build_comparison(root: Path) -> dict:
             writer.writeheader()
             writer.writerows(rows)
     return result
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True)
-    print(json.dumps(build_comparison(parser.parse_args().output.resolve()), ensure_ascii=False, indent=2))

@@ -12,12 +12,12 @@ from mindmemos_skill.persistence.factory import create_persistence
 from mindmemos_skill.skill import Skill, SkillContent
 
 
-def test_soft_delete_preserves_rows_and_survives_repeat_migration():
+async def test_soft_delete_preserves_rows_and_survives_repeat_initialization():
     with TemporaryDirectory() as directory:
         persistence = create_persistence(SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{directory}/data.db")))
-        persistence.initialize_storage()
+        (await persistence.initialize_storage())
         with persistence.session(Scope(fields={"project_id": "p"})) as session:
-            skill = session.skills.register(
+            skill = await session.skills.register(
                 project_id="p",
                 name="Test",
                 alias=None,
@@ -27,23 +27,29 @@ def test_soft_delete_preserves_rows_and_survives_repeat_migration():
                     SkillContent(content="hello", name="Test", description="Description", standard_format=False)
                 ).snapshot(),
             )
-            session.database.insert(
-                SKILL_GRAPHS_TABLE,
-                [SkillGraphRecord(project_id="p", graph_id="g", name="Graph").model_dump()],
+            (
+                await session.database.insert(
+                    SKILL_GRAPHS_TABLE,
+                    [SkillGraphRecord(project_id="p", graph_id="g", name="Graph").model_dump()],
+                )
             )
             graphs = GraphQueryService(session.database, "p")
-            session.skills.delete(skill)
-            graphs.delete("g")
-            assert session.skills.list_skills("p", limit=10, offset=0) == []
-            assert graphs.list_graphs() == []
+            (await session.skills.delete(skill))
+            await graphs.delete("g")
+            assert (await session.skills.list_skills("p", limit=10, offset=0)) == []
+            assert await graphs.list_graphs() == []
             with pytest.raises(SkillNotFoundError):
-                session.skills.resolve_family("p", skill.skill_id)
+                (await session.skills.resolve_family("p", skill.skill_id))
             with pytest.raises(GraphNotFoundError):
-                graphs.graph("g")
-            assert session.database.count(SKILL_VERSIONS_TABLE, filters={"skill_id": skill.skill_id}) == 1
-            assert session.database.get(SKILLS_TABLE, {"project_id": "p", "skill_id": skill.skill_id})["deleted_at"]
-            assert session.database.get(SKILL_GRAPHS_TABLE, {"project_id": "p", "graph_id": "g"})["deleted_at"]
-        persistence.initialize_storage()
+                await graphs.graph("g")
+            assert (await session.database.count(SKILL_VERSIONS_TABLE, filters={"skill_id": skill.skill_id})) == 1
+            assert (await session.database.get(SKILLS_TABLE, {"project_id": "p", "skill_id": skill.skill_id}))[
+                "deleted_at"
+            ]
+            assert (await session.database.get(SKILL_GRAPHS_TABLE, {"project_id": "p", "graph_id": "g"}))["deleted_at"]
+        (await persistence.initialize_storage())
         with persistence.session(Scope(fields={"project_id": "p"})) as session:
-            assert session.skills.list_skills("p", limit=10, offset=0) == []
-            assert GraphQueryService(session.database, "p").list_graphs() == []
+            assert (await session.skills.list_skills("p", limit=10, offset=0)) == []
+            assert (await GraphQueryService(session.database, "p").list_graphs()) == []
+
+        await persistence.database.close()

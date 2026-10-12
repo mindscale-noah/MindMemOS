@@ -3,8 +3,6 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from sqlalchemy import inspect
-
 from ..infra.database import Database, Scope, TableRegistry
 from .base import Persistence
 from .config import SkillPersistenceConfig
@@ -12,27 +10,6 @@ from .constants import OPTIONAL_SCOPE_FIELDS, REQUIRED_SCOPE_FIELDS
 from .db_services.skills import SkillDataService
 from .db_services.trajectories import TrajectoryDataService
 from .tables import build_persistence_tables
-
-
-def remove_remote_tables(database: Database) -> None:
-    """Drop retired synchronization tables in foreign-key dependency order.
-
-    Args:
-        database: Skill database being upgraded.
-    """
-    with database.engine.begin() as connection:
-        existing = set(inspect(connection).get_table_names())
-        quote = connection.dialect.identifier_preparer.quote
-        for suffix in ("_v1", ""):
-            for name in (
-                "remote_operations",
-                "remote_trajectory_bindings",
-                "remote_version_bindings",
-                "remote_skill_bindings",
-            ):
-                table = f"{name}{suffix}"
-                if table in existing:
-                    connection.exec_driver_sql(f"DROP TABLE {quote(table)}")
 
 
 def validate_skill_scope(scope: Scope) -> None:
@@ -145,7 +122,6 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
             finally:
                 self._current_session.reset(token)
 
-    def initialize_storage(self) -> None:
+    async def initialize_storage(self) -> None:
         """Create tables for the current Skill repository schema."""
-        self._database.create_tables()
-        remove_remote_tables(self._database)
+        (await self._database.create_tables())

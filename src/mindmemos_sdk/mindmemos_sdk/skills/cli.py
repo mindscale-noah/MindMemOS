@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -229,7 +230,7 @@ def _print_json(data, *, stream=None):
 
 
 def run_skill_command(args: argparse.Namespace) -> int:
-    """Execute one Skill command with a clean JSON output boundary.
+    """Execute one Skill command with JSON results or plain-text progress.
 
     Args:
         args: Parsed arguments containing a directly bound command handler.
@@ -454,23 +455,49 @@ def _task_show(client, args):
     return client.show_task(TaskShowRequest(task_id=args.task_id))
 
 
+def _print_task_log(event):
+    """Print the timestamp, logger name, message and optional traceback."""
+    payload = event["payload"]
+    timestamp = event.get("occurred_at", "-")
+    if timestamp != "-":
+        timestamp = (
+            datetime.fromisoformat(timestamp).astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        )
+    fields = {key: event.get(key) for key in ("project_id", "task_id", "attempt")}
+    fields.update(
+        {
+            key: payload.get(key)
+            for key in ("run_id", "tree_id", "parent_id", "node_id", "group_id", "request_id", "trace_id", "span_id")
+        }
+    )
+    identity = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+    prefix = f"[{timestamp}] [{payload.get('level', 'INFO')}] [{payload.get('name', '-')}]"
+    print(f"{prefix}{f' | {identity}' if identity else ''} | {payload.get('message', '')}", flush=True)
+    if payload.get("traceback"):
+        print(payload["traceback"].rstrip("\n"), flush=True)
+
+
 def _task_progress(client, args):
-    """Read event JSON, or follow new events until the task terminates."""
+    """Print task logs as text, or follow new logs until the task terminates."""
     after = args.after
     while True:
         data = client.task_progress(TaskProgressRequest(task_id=args.task_id, after=after))
         events = data
-        if not args.follow:
-            return events
         for event in events:
-            _print_json(event)
+            _print_task_log(event)
             after = max(after, event["sequence"])
+        if not args.follow:
+            return None
         snapshot = client.show_task(TaskShowRequest(task_id=args.task_id))
         if snapshot["status"] in ("succeeded", "failed", "cancelled"):
             # Fetch once more after observing termination to include the final boundary.
-            final = client.task_progress(TaskProgressRequest(task_id=args.task_id, after=after))
-            for event in final:
-                _print_json(event)
+            while True:
+                final = client.task_progress(TaskProgressRequest(task_id=args.task_id, after=after))
+                if not final:
+                    break
+                for event in final:
+                    _print_task_log(event)
+                    after = max(after, event["sequence"])
             return None
         time.sleep(1)
 

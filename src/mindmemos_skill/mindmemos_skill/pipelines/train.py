@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 
 from ..api.typing import AlgoSkillEvolveResult, TrainingRequest
 from ..envs import Environment
-from ..infra.task_manager.progress import ProgressReporter
 from ..registry.base import ConfigT
 from .base import Pipeline
 from .config import PipelineComponentConfig
@@ -35,7 +34,6 @@ class TrainingPipeline(Pipeline[ConfigT], ABC):
         *,
         env: Environment,
         adapter: PipelineComponentConfig | None = None,
-        reporter: ProgressReporter | None = None,
     ) -> AlgoSkillEvolveResult:
         """Train one Skill and commit a child of its captured current version.
 
@@ -49,7 +47,6 @@ class TrainingPipeline(Pipeline[ConfigT], ABC):
                 and Skill selection, and the required input version.
             env: Environment selected for this run.
             adapter: Optional trainer-specific adaptation for the selected environment.
-            reporter: Optional progress sink shared with the trainer.
 
         Returns:
             The final selected and persisted Skill version, its parent version,

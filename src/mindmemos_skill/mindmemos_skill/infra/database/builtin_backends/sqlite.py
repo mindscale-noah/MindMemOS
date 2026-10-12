@@ -3,9 +3,10 @@
 import struct
 from pathlib import Path
 
-from sqlalchemy import LargeBinary, create_engine, event, func, literal
+from sqlalchemy import LargeBinary, event, func, literal
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.types import TypeDecorator
@@ -81,23 +82,26 @@ class SQLiteDatabase(Database):
         options = {"connect_args": {"timeout": config.timeout, "check_same_thread": False}}
         if url.database in (None, "", ":memory:"):
             options["poolclass"] = StaticPool
-        engine = create_engine(url, **options)
+        engine = create_async_engine(url.set(drivername="sqlite+aiosqlite"), **options)
         engine.dialect.colspecs = {**engine.dialect.colspecs, Vector: SQLiteVector}
 
-        @event.listens_for(engine, "do_connect")
+        @event.listens_for(engine.sync_engine, "do_connect")
         def prepare_directory(dialect, record, args, params):
             if url.database not in (None, "", ":memory:"):
                 Path(url.database).parent.mkdir(parents=True, exist_ok=True)
 
-        @event.listens_for(engine, "connect")
+        @event.listens_for(engine.sync_engine, "connect")
         def initialize(connection, record):
             import sqlite_vec
 
-            connection.enable_load_extension(True)
-            try:
-                sqlite_vec.load(connection)
-            finally:
-                connection.enable_load_extension(False)
+            async def load_extension(driver):
+                await driver.enable_load_extension(True)
+                try:
+                    await driver.load_extension(sqlite_vec.loadable_path())
+                finally:
+                    await driver.enable_load_extension(False)
+
+            connection.run_async(load_extension)
             # SQLAlchemy owns BEGIN, including read-only and DDL transactions.
             connection.isolation_level = None
             cursor = connection.cursor()
@@ -107,7 +111,7 @@ class SQLiteDatabase(Database):
             finally:
                 cursor.close()
 
-        @event.listens_for(engine, "begin")
+        @event.listens_for(engine.sync_engine, "begin")
         def begin(connection):
             connection.exec_driver_sql("BEGIN")
 

@@ -1,4 +1,4 @@
-"""Bounded batches of validated OpenAI-compatible embeddings."""
+"""Bounded batches of validated AsyncOpenAI-compatible embeddings."""
 
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
@@ -7,13 +7,13 @@ from ..database.vector import Vector
 from .config import OpenAIEmbeddingConfig
 
 if TYPE_CHECKING:
-    from openai import OpenAI
+    from openai import AsyncOpenAI
 
 
 class OpenAIEmbeddingClient:
     """Construct transports lazily and preserve the ownership of injected clients."""
 
-    def __init__(self, config: OpenAIEmbeddingConfig, *, client: "OpenAI | None" = None):
+    def __init__(self, config: OpenAIEmbeddingConfig, *, client: "AsyncOpenAI | None" = None):
         """Retain settings without opening a connection.
 
         Args:
@@ -23,7 +23,7 @@ class OpenAIEmbeddingClient:
         self.config = config.model_copy(deep=True)
         self._client = client
 
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Embed ordered batches and validate count, indices, and vector contents.
 
         Args:
@@ -41,18 +41,18 @@ class OpenAIEmbeddingClient:
         if any(not isinstance(text, str) for text in texts):
             raise TypeError("Embedding inputs must be strings")
         if self._client is not None:
-            return self._embed(self._client, texts)
-        from openai import OpenAI
+            return await self._embed(self._client, texts)
+        from openai import AsyncOpenAI
 
-        with OpenAI(
+        async with AsyncOpenAI(
             base_url=self.config.base_url,
             api_key=self.config.api_key if self.config.api_key else "unused",
             timeout=self.config.timeout_s,
             max_retries=self.config.max_retries,
         ) as client:
-            return self._embed(client, texts)
+            return await self._embed(client, texts)
 
-    def _embed(self, client: "OpenAI", texts: Sequence[str]) -> list[list[float]]:
+    async def _embed(self, client: "AsyncOpenAI", texts: Sequence[str]) -> list[list[float]]:
         """Validate each response before appending its ordered vectors."""
         vectors = []
         validator = Vector(self.config.dimensions)
@@ -60,7 +60,7 @@ class OpenAIEmbeddingClient:
             batch = list(texts[start : start + self.config.batch_size])
             options = {"dimensions": self.config.dimensions} if self.config.send_dimensions else {}
             try:
-                response = client.embeddings.create(
+                response = await client.embeddings.create(
                     model=self.config.model, input=batch, encoding_format="float", **options
                 )
             except Exception as exc:

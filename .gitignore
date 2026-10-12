@@ -9,6 +9,12 @@ wheels/
 .DS_Store
 tmp/
 .vscode/
+*.txt
+# Required packaged prompts, runtime locks, and initial Skill license.
+!src/mindmemos_skill/mindmemos_skill/algos/train/treeskill/construction/prompts/*.txt
+!src/mindmemos_skill/mindmemos_skill/envs/builtin_envs/spreadsheetbench/text_action_mode/prompts/*.txt
+!src/mindmemos_skill/mindmemos_skill/envs/builtin_envs/spreadsheetbench/*/requirements/*.txt
+!resources/mindmemos_skill_eval/treeskill-spreadsheetbench/initial_skill/LICENSE.txt
 
 config/*.yaml
 !config/*.example.yaml

@@ -13,7 +13,7 @@ def _normalize(text: str) -> str:
     return " ".join(re.sub(r"\b(a|an|the)\b", " ", text).split())
 
 
-def evaluate(response: str, task: SearchQATask, reward_data: SearchQARewardData) -> SearchQAReward:
+async def evaluate(response: str, task: SearchQATask, reward_data: SearchQARewardData) -> SearchQAReward:
     """Score an answer and preserve the exact analyst-facing report.
 
     Args:

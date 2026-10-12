@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transactional formula recalculation for SpreadsheetBench policies."""
+"""Recalculate formula outputs into separate workbooks for SpreadsheetBench evaluation."""
 
 from __future__ import annotations
 
@@ -7,83 +7,21 @@ import argparse
 import hashlib
 import json
 import os
-import shlex
 import shutil
-import subprocess
 import sys
 import tempfile
-import uuid
 from pathlib import Path
 from typing import Any
 
-from .constants import LIBREOFFICE_PYTHON_ENV, SOFFICE_PATH_ENV
+from ....infra.execution import ExecutionConfig, execute
+from .recalculation_cli import _copy_for_recalculation
+
+SOFFICE_PATH_ENV = "SPREADSHEETBENCH_SOFFICE_PATH"
+"""Explicit path to the LibreOffice binary."""
 
 EXCEL_ERRORS = ("#VALUE!", "#DIV/0!", "#REF!", "#NAME?", "#NULL!", "#NUM!", "#N/A")
 LIBREOFFICE_PROGRAM_RELATIVE_PATH = Path("libreoffice-appimage/squashfs-root/opt/libreoffice24.2/program")
 STATUS_FILENAME = ".spreadsheetbench_recalc_status.json"
-TASK_LOCAL_HELPER_FILENAME = ".spreadsheetbench_recalculate.py"
-
-
-def stage_task_local_helper(working_dir: str | Path) -> Path:
-    """Expose the canonical helper through a stable path inside one task workspace.
-
-    Args:
-        working_dir: Agent-visible task workspace where tools execute.
-    """
-
-    destination = Path(working_dir).absolute() / TASK_LOCAL_HELPER_FILENAME
-    source = Path(__file__).with_name("runtime") / "recalculate_entry.py"
-    if destination.exists():
-        if destination.is_file() and destination.read_bytes() == source.read_bytes():
-            return destination
-        raise FileExistsError(f"task-local recalculation helper already exists: {destination}")
-
-    shutil.copyfile(source, destination)
-    return destination
-
-
-def append_recalculation_instructions(
-    prompt: str,
-    *,
-    working_dir: str | Path,
-    output_file: str | Path,
-) -> str:
-    """Append the canonical transactional recalculation command to a task prompt.
-
-    Args:
-        prompt: Explicit prompt for this operation.
-        working_dir: Agent-visible task workspace where tools execute.
-        output_file: Exact workbook output path required by the task.
-    """
-
-    workspace = Path(working_dir).absolute()
-    helper_path = stage_task_local_helper(workspace)
-    output_path = Path(output_file).absolute()
-    status_path = workspace / STATUS_FILENAME
-    output_argument = (
-        output_path.relative_to(workspace).as_posix() if output_path.is_relative_to(workspace) else str(output_path)
-    )
-    command = shlex.join(
-        [
-            str(Path(sys.executable).absolute()),
-            f"./{helper_path.name}",
-            output_argument,
-            "--status-path",
-            status_path.name,
-        ]
-    )
-    return (
-        f"{prompt}\n\n"
-        "### formula_recalculation\n"
-        "If you create or modify formulas in the output workbook, save it and then "
-        "run this exact command before signaling completion:\n"
-        f"{command}\n\n"
-        "This command is the canonical task-local recalculation command for this run. "
-        "Do not substitute another helper or change its paths. A `success` or `not_needed` JSON "
-        "status permits completion. If it reports `errors_found` or `failure`, inspect "
-        "the reported problem, correct the workbook when possible using task-visible "
-        "information, and rerun the same command."
-    )
 
 
 def _sha256(path: Path) -> str:
@@ -128,16 +66,13 @@ def _first_executable(candidates: list[str | Path | None], label: str) -> Path:
     raise FileNotFoundError(f"{label} not found or not executable; checked: {checked}")
 
 
-def _find_libreoffice_programs(
-    *,
-    soffice_path: str | None = None,
-    libreoffice_python: str | None = None,
-) -> tuple[Path, Path]:
+def _find_soffice(*, soffice_path: str | None = None) -> Path:
+    """Locate a configured, packaged, or system LibreOffice executable."""
     local_program_dir = _local_program_dir()
     wrapper_program_dir = _program_dir_from_soffice_wrapper()
     system_soffice = shutil.which("soffice")
 
-    soffice = _first_executable(
+    return _first_executable(
         [
             soffice_path,
             os.getenv(SOFFICE_PATH_ENV),
@@ -146,22 +81,10 @@ def _find_libreoffice_programs(
             system_soffice,
             "/usr/lib/libreoffice/program/soffice",
             "/opt/libreoffice/program/soffice",
+            "/Applications/LibreOffice.app/Contents/MacOS/soffice",
         ],
         "LibreOffice soffice",
     )
-    python = _first_executable(
-        [
-            libreoffice_python,
-            os.getenv(LIBREOFFICE_PYTHON_ENV),
-            soffice.parent / "python",
-            local_program_dir / "python",
-            wrapper_program_dir / "python" if wrapper_program_dir else None,
-            "/usr/lib/libreoffice/program/python",
-            "/opt/libreoffice/program/python",
-        ],
-        "LibreOffice Python with pyuno",
-    )
-    return soffice, python
 
 
 def _workbook_formula_state(path: Path) -> dict[str, Any]:
@@ -173,7 +96,7 @@ def _workbook_formula_state(path: Path) -> dict[str, Any]:
         for worksheet in workbook.worksheets:
             for row in worksheet.iter_rows():
                 for cell in row:
-                    if isinstance(cell.value, str) and cell.value.startswith("="):
+                    if cell.data_type == "f":
                         formulas.append((worksheet.title, cell.coordinate))
     finally:
         workbook.close()
@@ -212,32 +135,45 @@ def _write_status(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def recalculate_workbook(
+async def recalculate_workbook(
     workbook: Path,
     *,
     status_path: Path | None = None,
+    output_path: Path | None = None,
     soffice_path: str | None = None,
-    libreoffice_python: str | None = None,
     timeout: int = 90,
 ) -> dict[str, Any]:
-    """Recalculate a workbook copy and replace the original only after validation.
+    """Recalculate a temporary copy and publish it without changing the source workbook.
 
     Args:
         workbook: Workbook path handled by the recalculation process.
         status_path: Optional JSON status output path, defaulting beside the workbook.
+        output_path: Recalculated file; defaults to <source stem>.recalc<suffix> beside the source.
         soffice_path: Optional explicit LibreOffice executable path.
-        libreoffice_python: Optional Python executable containing matching pyuno bindings.
         timeout: Maximum runtime in seconds.
+
+    Returns:
+        JSON status containing status (success, errors_found, not_needed, or failure),
+        workbook and output_workbook paths, created_output, formula counts, and any error details.
+
+    Raises:
+        ValueError: The output aliases the source or is a symbolic link.
     """
 
     workbook = workbook.expanduser().resolve()
+    output_path = (
+        (output_path or workbook.with_name(f"{workbook.stem}.recalc{workbook.suffix}")).expanduser().absolute()
+    )
+    if output_path.is_symlink() or output_path.resolve() == workbook:
+        raise ValueError("Recalculated output must be a separate file and must not be a symbolic link")
     status_path = (status_path or workbook.parent / STATUS_FILENAME).expanduser().resolve()
     status: dict[str, Any] = {
         "method": "libreoffice_transactional_recalculation",
         "workbook": str(workbook),
+        "output_workbook": str(output_path),
         "status": "failure",
         "attempted": False,
-        "replaced_output": False,
+        "created_output": False,
     }
     if not workbook.is_file():
         status["error"] = f"workbook not found: {workbook}"
@@ -245,11 +181,11 @@ def recalculate_workbook(
         return status
 
     work_root: Path | None = None
-    office_process: subprocess.Popen[str] | None = None
     office_stdout = ""
     office_stderr = ""
 
     try:
+        output_path.unlink(missing_ok=True)
         before = _workbook_formula_state(workbook)
         status.update(
             {
@@ -262,24 +198,24 @@ def recalculate_workbook(
             status.update({"status": "not_needed", "error": ""})
             return status
 
-        soffice, office_python = _find_libreoffice_programs(
-            soffice_path=soffice_path,
-            libreoffice_python=libreoffice_python,
-        )
+        soffice = _find_soffice(soffice_path=soffice_path)
         status.update(
             {
                 "attempted": True,
                 "soffice": str(soffice),
-                "libreoffice_python": str(office_python),
+                "engine": "libreoffice_headless_conversion",
             }
         )
 
-        work_root = Path(tempfile.mkdtemp(prefix=".spreadsheetbench_recalc_", dir=workbook.parent))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        work_root = Path(tempfile.mkdtemp(prefix=".spreadsheetbench_recalc_", dir=output_path.parent))
         profile_dir = work_root / "profile"
         profile_dir.mkdir()
         temporary_workbook = work_root / workbook.name
-        shutil.copy2(workbook, temporary_workbook)
-        pipe_name = f"spreadsheetbench_recalc_{uuid.uuid4().hex}"
+        _copy_for_recalculation(workbook, temporary_workbook)
+        converted_dir = work_root / "converted"
+        converted_dir.mkdir()
+        converted_workbook = converted_dir / workbook.name
 
         office_command = [
             str(soffice),
@@ -289,51 +225,37 @@ def recalculate_workbook(
             "--nodefault",
             "--norestore",
             "--nofirststartwizard",
-            f"--accept=pipe,name={pipe_name};urp;StarOffice.ServiceManager",
+            "--convert-to",
+            workbook.suffix.lstrip("."),
+            "--outdir",
+            str(converted_dir),
+            str(temporary_workbook),
         ]
         office_environment = os.environ.copy()
         office_environment["SAL_USE_VCLPLUGIN"] = "svp"
-        office_process = subprocess.Popen(
+        office = await execute(
             office_command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=office_environment,
+            temporary_workbook.parent,
+            ExecutionConfig(timeout_s=timeout, environment=office_environment),
         )
+        office_stdout, office_stderr = office.stdout, office.stderr
+        if office.returncode != 0 or not converted_workbook.is_file():
+            detail = office.stderr.strip() or office.stdout.strip() or "converted workbook was not created"
+            raise RuntimeError(f"LibreOffice conversion failed with exit {office.returncode}: {detail}")
 
-        worker_command = [
-            str(office_python),
-            str(Path(__file__).with_name("runtime") / "uno_worker.py"),
-            "--pipe-name",
-            pipe_name,
-            "--timeout",
-            str(timeout),
-            str(temporary_workbook),
-        ]
-        worker = subprocess.run(
-            worker_command,
-            capture_output=True,
-            text=True,
-            timeout=timeout + 15,
-            check=False,
-        )
-        if worker.returncode != 0:
-            detail = worker.stderr.strip() or worker.stdout.strip()
-            raise RuntimeError(f"LibreOffice UNO worker failed with exit {worker.returncode}: {detail}")
-
-        after = _workbook_formula_state(temporary_workbook)
+        after = _workbook_formula_state(converted_workbook)
         if after["formula_count"] != before["formula_count"]:
             raise RuntimeError(
                 f"formula count changed during recalculation: {before['formula_count']} -> {after['formula_count']}"
             )
 
-        os.replace(temporary_workbook, workbook)
+        os.replace(converted_workbook, output_path)
         status.update(
             {
                 "status": "errors_found" if after["excel_errors"] else "success",
                 "error": "",
-                "replaced_output": True,
-                "sha256_after": _sha256(workbook),
+                "created_output": True,
+                "sha256_after": _sha256(output_path),
                 "formula_count_after": after["formula_count"],
                 "cached_formula_value_count_after": after["cached_formula_value_count"],
                 "excel_errors": after["excel_errors"],
@@ -344,14 +266,6 @@ def recalculate_workbook(
         status["error"] = str(exc)
         return status
     finally:
-        if office_process is not None:
-            if office_process.poll() is None:
-                office_process.terminate()
-            try:
-                office_stdout, office_stderr = office_process.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                office_process.kill()
-                office_stdout, office_stderr = office_process.communicate(timeout=5)
         if status["status"] == "failure":
             status["libreoffice_stdout"] = office_stdout.strip()
             status["libreoffice_stderr"] = office_stderr.strip()
@@ -360,59 +274,28 @@ def recalculate_workbook(
         _write_status(status_path, status)
 
 
-def preflight_recalculation_runtime(directory: Path) -> dict[str, Any]:
-    """Verify that the configured LibreOffice runtime produces cached formula values.
-
-    Args:
-        directory: Experiment-owned directory for runtime checks and their artifacts.
-    """
-
-    from openpyxl import Workbook, load_workbook
-
-    directory.mkdir(parents=True, exist_ok=True)
-    workbook_path = directory / "formula.xlsx"
-    status_path = directory / "status.json"
-    workbook = Workbook()
-    worksheet = workbook.active
-    worksheet["A1"] = 1
-    worksheet["A2"] = 2
-    worksheet["B1"] = "=SUM(A1:A2)"
-    workbook.save(workbook_path)
-    workbook.close()
-
-    status = recalculate_workbook(workbook_path, status_path=status_path)
-    if status["status"] != "success":
-        raise RuntimeError(f"transactional recalculation preflight failed: {status.get('error') or status['status']}")
-    cached = load_workbook(workbook_path, data_only=True)
-    try:
-        value = cached.active["B1"].value
-    finally:
-        cached.close()
-    if value != 3:
-        raise RuntimeError(f"transactional recalculation preflight returned {value!r}, expected 3")
-    return status
-
-
 def build_arg_parser() -> argparse.ArgumentParser:
+    """Return command-line options for recalculating a separate workbook."""
     parser = argparse.ArgumentParser(description="Recalculate spreadsheet formulas with LibreOffice")
     parser.add_argument("workbook", nargs="?", type=Path)
     parser.add_argument("--status-path", type=Path, default=None)
+    parser.add_argument("--output-path", type=Path, default=None)
     parser.add_argument("--soffice-path", default=None)
-    parser.add_argument("--libreoffice-python", default=None)
     parser.add_argument("--timeout", type=int, default=90)
     return parser
 
 
-def main() -> int:
+async def main() -> int:
+    """Recalculate the supplied workbook path and print its JSON status."""
     args = build_arg_parser().parse_args()
     if args.workbook is None:
         raise SystemExit("workbook path is required")
 
-    result = recalculate_workbook(
+    result = await recalculate_workbook(
         args.workbook,
         status_path=args.status_path,
+        output_path=args.output_path,
         soffice_path=args.soffice_path,
-        libreoffice_python=args.libreoffice_python,
         timeout=args.timeout,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -425,7 +308,5 @@ if __name__ == "__main__":
 
 __all__ = [
     "STATUS_FILENAME",
-    "append_recalculation_instructions",
-    "preflight_recalculation_runtime",
     "recalculate_workbook",
 ]

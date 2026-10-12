@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
@@ -26,7 +27,7 @@ def test_registration_and_config(name):
         Agent.build(name, {"temperature": 0.5})
 
 
-def test_codex_native_result(monkeypatch, tmp_path):
+async def test_codex_native_result(monkeypatch, tmp_path):
     """Forward stdin, credentials, model settings, and preserve native events."""
     stream = [
         {"type": "thread.started", "thread_id": "thread-1"},
@@ -34,17 +35,17 @@ def test_codex_native_result(monkeypatch, tmp_path):
         {"type": "turn.completed", "usage": {"input_tokens": 2, "output_tokens": 3, "cached_input_tokens": 1}},
     ]
 
-    def fake_run(command, workspace, config, overrides, prompt):
+    async def fake_run(command, workspace, config, overrides, prompt):
         assert workspace == tmp_path and prompt == "task"
         assert command[-1] == "-" and "--ephemeral" in command
         assert 'developer_instructions="instructions"' in command
         assert overrides == {"CODEX_API_KEY": "secret"}
         return "\n".join(map(json.dumps, stream))
 
-    monkeypatch.setattr(codex_module, "run_cli", fake_run)
-    result = Agent.build("codex", {"model": "model", "api_key": "secret", "base_url": "https://example.com/v1"}).run(
-        system="instructions", user="task", workspace=tmp_path
-    )
+    monkeypatch.setattr(codex_module, "run_cli", AsyncMock(side_effect=fake_run))
+    result = await Agent.build(
+        "codex", {"model": "model", "api_key": "secret", "base_url": "https://example.com/v1"}
+    ).run(system="instructions", user="task", workspace=tmp_path)
     assert isinstance(result, AgentResult)
     assert result.output == "done" and result.trajectory[2:] == stream
     assert result.usage["total_tokens"] == 5
@@ -59,20 +60,22 @@ def test_codex_native_result(monkeypatch, tmp_path):
         [{"type": "turn.completed"}],
     ],
 )
-def test_codex_requires_completed_nonempty_output(monkeypatch, tmp_path, events):
+async def test_codex_requires_completed_nonempty_output(monkeypatch, tmp_path, events):
     """Never treat a partial stream or provider failure as success."""
-    monkeypatch.setattr(codex_module, "run_cli", lambda *args: "\n".join(map(json.dumps, events)))
+    monkeypatch.setattr(codex_module, "run_cli", AsyncMock(return_value="\n".join(map(json.dumps, events))))
     with pytest.raises(RuntimeError):
-        Agent.build("codex", {"api_key": "secret", "base_url": "https://example.com/v1"}).run(
-            system="", user="task", workspace=tmp_path
+        (
+            await Agent.build("codex", {"api_key": "secret", "base_url": "https://example.com/v1"}).run(
+                system="", user="task", workspace=tmp_path
+            )
         )
 
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_claude_terminal_and_environment(monkeypatch, tmp_path, failure):
+async def test_claude_terminal_and_environment(monkeypatch, tmp_path, failure):
     """Honor native turn limits and terminal errors."""
 
-    def fake_run(command, workspace, config, overrides, prompt):
+    async def fake_run(command, workspace, config, overrides, prompt):
         assert command[command.index("--max-turns") + 1] == "4"
         assert command[command.index("--setting-sources") + 1] == ""
         assert overrides["ANTHROPIC_AUTH_TOKEN"] == "secret"
@@ -87,7 +90,7 @@ def test_claude_terminal_and_environment(monkeypatch, tmp_path, failure):
             }
         )
 
-    monkeypatch.setattr(claude_module, "run_cli", fake_run)
+    monkeypatch.setattr(claude_module, "run_cli", AsyncMock(side_effect=fake_run))
     agent = Agent.build(
         "claude",
         {
@@ -99,19 +102,19 @@ def test_claude_terminal_and_environment(monkeypatch, tmp_path, failure):
     )
     if failure:
         with pytest.raises(RuntimeError):
-            agent.run(system="instructions", user="task", workspace=tmp_path)
+            (await agent.run(system="instructions", user="task", workspace=tmp_path))
     else:
-        result = agent.run(system="instructions", user="task", workspace=tmp_path)
+        result = await agent.run(system="instructions", user="task", workspace=tmp_path)
         assert result.output == "answer" and result.usage["total_tokens"] == 6
 
 
 @pytest.mark.parametrize("version", [0, 2])
 @pytest.mark.parametrize("reason", ["completed", "cancelled"])
-def test_deepseek_sessions_and_isolation(monkeypatch, tmp_path, reason, version):
+async def test_deepseek_sessions_and_isolation(monkeypatch, tmp_path, reason, version):
     """Read only the fresh main session and reject unfinished native runs."""
     roots = []
 
-    def fake_run(command, workspace, config, overrides):
+    async def fake_run(command, workspace, config, overrides):
         patch = yaml.safe_load(Path(command[command.index("--patch") + 1]).read_text())
         root = Path(patch[0]["config"]["root"])
         roots.append(root)
@@ -122,14 +125,14 @@ def test_deepseek_sessions_and_isolation(monkeypatch, tmp_path, reason, version)
         (root / "session-main.jsonl").write_text("\n".join(map(json.dumps, rows)))
         return "answer\n"
 
-    monkeypatch.setattr(dsh_module, "run_cli", fake_run)
+    monkeypatch.setattr(dsh_module, "run_cli", AsyncMock(side_effect=fake_run))
     agent = Agent.build("deepseek_harness", {"api_key": "secret", "base_url": "https://example.com/v1"})
     if reason == "cancelled":
         with pytest.raises(RuntimeError):
-            agent.run(system="instructions", user="task", workspace=tmp_path)
+            (await agent.run(system="instructions", user="task", workspace=tmp_path))
     else:
         for _ in range(2):
-            result = agent.run(system="instructions", user="task", workspace=tmp_path)
+            result = await agent.run(system="instructions", user="task", workspace=tmp_path)
             assert result.output == "answer" and result.usage == {}
         assert roots[0] != roots[1]
 
@@ -141,18 +144,18 @@ def test_invalid_jsonl(text):
         parse_json_lines(text, cli_name="test")
 
 
-def test_process_stdin_exit_and_timeout(tmp_path):
+async def test_process_stdin_exit_and_timeout(tmp_path):
     """Exercise actual process IO, exit errors, and timeout cleanup."""
     config = CLIConfig(timeout_s=5)
-    output = run_cli([sys.executable, "-c", "import sys; print(sys.stdin.read())"], tmp_path, config, {}, "你好")
+    output = await run_cli([sys.executable, "-c", "import sys; print(sys.stdin.read())"], tmp_path, config, {}, "你好")
     assert output.strip() == "你好"
     with pytest.raises(RuntimeError, match="status 2"):
-        run_cli([sys.executable, "-c", "raise SystemExit(2)"], tmp_path, config, {})
+        (await run_cli([sys.executable, "-c", "raise SystemExit(2)"], tmp_path, config, {}))
     with pytest.raises(subprocess.TimeoutExpired):
-        run_cli([sys.executable, "-c", "import time; time.sleep(10)"], tmp_path, CLIConfig(timeout_s=0.1), {})
+        (await run_cli([sys.executable, "-c", "import time; time.sleep(10)"], tmp_path, CLIConfig(timeout_s=0.1), {}))
 
 
-def test_cli_process_excludes_ambient_model_credentials(monkeypatch, tmp_path):
+async def test_cli_process_excludes_ambient_model_credentials(monkeypatch, tmp_path):
     """Pass configured credentials while removing competing parent model settings."""
     from mindmemos_skill.agents.buitin_agents.constants import NATIVE_CONNECTION_ENV
 
@@ -164,5 +167,5 @@ def test_cli_process_excludes_ambient_model_credentials(monkeypatch, tmp_path):
         + repr(NATIVE_CONNECTION_ENV)
         + "}))"
     )
-    result = json.loads(run_cli([sys.executable, "-c", script], tmp_path, CLIConfig(), overrides))
+    result = json.loads((await run_cli([sys.executable, "-c", script], tmp_path, CLIConfig(), overrides)))
     assert result == {variable: overrides.get(variable) for variable in NATIVE_CONNECTION_ENV}

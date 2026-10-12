@@ -1,7 +1,7 @@
 """End-to-end training artifacts, held-out separation and reference analysis gates."""
 
-import asyncio
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -10,11 +10,13 @@ from mindmemos_skill.algos.train.treeskill import TreeSkillTrainer, TreeSkillTra
 from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_text_action import (
     SpreadsheetBenchReferenceAnalyzer,
 )
-from mindmemos_skill.algos.train.treeskill.experiment import run_experiment
-from mindmemos_skill.algos.train.treeskill.typing import ChatResponse, TraceEvidence, TrainingRollout
+from mindmemos_skill.algos.train.treeskill.trainer import run_experiment
+from mindmemos_skill.algos.train.treeskill.typing import TraceEvidence, TrainingRollout
 from mindmemos_skill.envs import Reward, RolloutResult, Task
-from mindmemos_skill.envs.builtin_envs.spreadsheetbench.config import SpreadsheetBenchTextActionConfig
-from mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action import SpreadsheetBenchTextActionEnvironment
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench import SpreadsheetBenchTextActionConfig
+from mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_mode.environment import (
+    SpreadsheetBenchTextActionEnvironment,
+)
 from mindmemos_skill.envs.builtin_envs.spreadsheetbench.typing import (
     SpreadsheetBenchRewardData,
     SpreadsheetBenchTask,
@@ -22,7 +24,11 @@ from mindmemos_skill.envs.builtin_envs.spreadsheetbench.typing import (
     WorkbookReference,
 )
 from mindmemos_skill.envs.data import DataSample, RewardData
+from mindmemos_skill.logging.tracing import bind_tracer
 from mindmemos_skill.skill import Skill, SkillContent, SkillSet
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from . import treeskill_smoke as smoke
 
@@ -34,6 +40,33 @@ def make_trainer():
 
 def make_sample(identifier):
     return DataSample(task=Task(id=identifier, instruction="Save and verify"), reward_data=RewardData())
+
+
+@pytest.mark.asyncio
+async def test_routed_empty_selection_accepts_a_standard_initial_skill(tmp_path):
+    """An explicit no-Skill route is a valid execution, not a source validation error."""
+    from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillConfig
+    from mindmemos_skill.algos.train.treeskill.trainer import sample_tasks
+
+    class EmptyRouter(OpenAIChatAgent):
+        async def run(self, **kwargs):
+            return AgentResult(output='{"selected_subtree_ids":[]}')
+
+    router = EmptyRouter(OpenAIChatConfig(model="offline"))
+    source = SkillContent(content="---\nname: workbook\ndescription: Edit workbooks.\n---\n# Save\nSave output.\n")
+    skill = TreeSkill(TreeSkillConfig(router=router.config), source=source, router=router)
+    records, failures = await sample_tasks(
+        env=smoke.SmokeEnvironment(smoke.SmokeConfig()),
+        skill=skill,
+        samples=[make_sample("test")],
+        directory=tmp_path / "test",
+        repeats=1,
+        concurrency=1,
+    )
+    assert len(records) == 1 and not failures
+    assert records[0].result.reward.score == 0
+    selection = next((tmp_path / "test").glob("*/attempt-*/routing/selection.json"))
+    assert json.loads(selection.read_text())["content"] == ""
 
 
 @pytest.mark.asyncio
@@ -53,10 +86,16 @@ async def test_smoke_preserves_patch_history_and_only_tests_final_skill(tmp_path
     assert summary["duration_s"] >= sum(summary["stages"].values())
     config = json.loads((root / "config.json").read_text())
     assert set(config) == {"algorithm"}
-    assert config["algorithm"]["optimizer"]["model"] == "offline-smoke"
+    assert config["algorithm"]["optimizer"]["model"] == "[REDACTED]"
     training_config = json.loads((root / "training/config.json").read_text())
     assert training_config == config
-    training_calls = list((root / "training/model_calls/optimizer").glob("**/attempt-*.json"))
+    training_calls = list((root / "training/items").glob("**/outcome.json"))
+    assert len(training_calls) == 3
+    assert {json.loads(path.read_text())["task"] for path in training_calls} == {
+        "treeskill_trajectory_analysis",
+        "treeskill_evidence_localization",
+        "treeskill_node_fusion",
+    }
     assert all('"task_id": "test"' not in path.read_text() for path in training_calls)
 
 
@@ -119,7 +158,7 @@ async def test_overlap_is_rejected_before_any_rollout(tmp_path):
 @pytest.mark.asyncio
 async def test_collection_failures_are_not_zero_score_evidence(tmp_path):
     class FailingEnvironment(smoke.SmokeEnvironment):
-        def _run(self, **kwargs):
+        async def _run(self, **kwargs):
             raise RuntimeError("execution failed")
 
     root = tmp_path / "failed"
@@ -166,14 +205,15 @@ def spreadsheet_sample(tmp_path, identifier="sheet"):
     return DataSample(task=task, reward_data=reward)
 
 
-class ScriptedModel:
+class ScriptedAgent(OpenAIChatAgent):
     def __init__(self, outputs):
+        super().__init__(OpenAIChatConfig(model="offline"))
         self.outputs = iter(outputs)
         self.calls = []
 
-    async def chat(self, task, messages, **kwargs):
-        self.calls.append({"task": task, "messages": messages})
-        return ChatResponse(content=next(self.outputs))
+    async def run_messages(self, *, messages, tools=None, response_format=None):
+        self.calls.append({"messages": list(messages)})
+        return AgentResult(output=next(self.outputs))
 
 
 @pytest.mark.asyncio
@@ -187,8 +227,12 @@ async def test_reference_failure_analysis_requires_pass_and_keeps_gold_out_of_po
     import shutil
 
     shutil.copyfile(sample.task.cases[0].path, work / "workspace" / case_directory / "input.xlsx")
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.recalculation_cli import stage_task_local_helper
+
+    stage_task_local_helper(work / "workspace" / case_directory)
+
     report = "# Failure Memory Item 1\n\n## Title\nVerify\n\n## Description\nCheck saved values.\n\n## Content\nVerify preserved cells after saving.\n\n## Skill Reflection\nAdd verification.\n\nACTION: TASK_COMPLETE"
-    model = ScriptedModel(
+    model = ScriptedAgent(
         [
             report,
             'Action:\n{"name":"bash","arguments":{"command":"cp agent_work/input.xlsx agent_work/output.xlsx"}}',
@@ -207,27 +251,49 @@ async def test_reference_failure_analysis_requires_pass_and_keeps_gold_out_of_po
         ),
     )
     analyzer = SpreadsheetBenchReferenceAnalyzer(
-        chat_model=model,
-        task="analysis",
-        output_root=tmp_path / "analysis",
-        concurrency=1,
+        agent=model,
+        failure_agent=model,
         success_score_threshold=1,
-        temperature=1,
-        max_tokens=4096,
         max_turns=5,
     )
-    records, failures = await analyzer.analyze(
+    from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_text_action import (
+        TreeSkillSpreadsheetBenchReferenceEnvAdapter,
+    )
+
+    trainer = make_trainer()
+    adapter = TreeSkillSpreadsheetBenchReferenceEnvAdapter()
+    records, failures = await trainer._analyze(
         [TraceEvidence(trajectory_id="train-1", task_id="sheet", transcript="", score=0)],
-        trajectories_by_id={"train-1": trajectory},
+        [trajectory],
+        analyzer,
+        adapter,
+        tmp_path / "analysis",
     )
     assert not failures and len(records) == 1
     assert "[System Check]" in model.calls[1]["messages"][-1]["content"]
-    assert (tmp_path / "analysis/error/train-1/evaluate_passed.flag").exists()
+    prompt = model.calls[0]["messages"][1]["content"]
+    command = prompt.split("run this exact command before signaling completion:\n")[1].splitlines()[0]
+    import shlex
+
+    assert shlex.split(command)[1:3] == ["./.treeskill_recalculate.py", "agent_work/output.xlsx"]
+    assert str(work / "workspace") not in command
+
+    assert list((tmp_path / "analysis").rglob("evaluate_passed.flag"))
     assert not (work / "workspace/gold.xlsx").exists()
-    assert (tmp_path / "analysis/error/train-1/agent_work/gold.xlsx").exists()
+    assert list((tmp_path / "analysis").rglob("agent_work/gold.xlsx"))
+    before_calls = len(model.calls)
+    recovered, recovered_failures = await trainer._analyze(
+        [TraceEvidence(trajectory_id="train-1", task_id="sheet", transcript="", score=0)],
+        [trajectory],
+        analyzer,
+        adapter,
+        tmp_path / "analysis",
+    )
+    assert recovered == records and not recovered_failures
+    assert len(model.calls) == before_calls
 
 
-def test_reference_policy_uses_original_messages_and_private_scoring(tmp_path):
+async def test_reference_policy_uses_original_messages_and_private_scoring(tmp_path):
     sample = spreadsheet_sample(tmp_path)
     config = OpenAIChatConfig(model="offline")
 
@@ -236,7 +302,7 @@ def test_reference_policy_uses_original_messages_and_private_scoring(tmp_path):
             super().__init__(config)
             self.calls = []
 
-        def run(self, *, messages):
+        async def run(self, *, messages):
             self.calls.append(list(messages))
             output = (
                 'Action:\n{"name":"bash","arguments":{"command":"cp input.xlsx output.xlsx"}}'
@@ -249,26 +315,24 @@ def test_reference_policy_uses_original_messages_and_private_scoring(tmp_path):
     env = SpreadsheetBenchTextActionEnvironment(
         SpreadsheetBenchTextActionConfig(agent=config, transactional_recalculation=False), agent=agent
     )
-    result = asyncio.run(
-        env.rollout(
-            sample.task,
-            tmp_path / "run",
-            reward_data=sample.reward_data,
-            skill_set=SkillSet(
-                {
-                    "0": Skill(
-                        source=SkillContent(
-                            content="# Workbook\nPreserve cells.",
-                            name="test-skill",
-                            description="Task instructions",
-                            standard_format=False,
-                        )
+    result = await env.rollout(
+        sample.task,
+        tmp_path / "run",
+        reward_data=sample.reward_data,
+        skill_set=SkillSet(
+            {
+                "0": Skill(
+                    source=SkillContent(
+                        content="# Workbook\nPreserve cells.",
+                        name="test-skill",
+                        description="Task instructions",
+                        standard_format=False,
                     )
-                },
-                max_concurrency=1,
-            ),
-            resume=False,
-        )
+                )
+            },
+            max_concurrency=1,
+        ),
+        resume=False,
     )
     assert result.reward.score == 1
     assert all("reference.xlsx" not in json.dumps(call) and "gold.xlsx" not in json.dumps(call) for call in agent.calls)
@@ -279,10 +343,10 @@ def test_reference_policy_uses_original_messages_and_private_scoring(tmp_path):
 @pytest.mark.asyncio
 async def test_mixed_collection_failure_skips_only_that_data(tmp_path):
     class MixedEnvironment(smoke.SmokeEnvironment):
-        def _run(self, *, task, **kwargs):
+        async def _run(self, *, task, **kwargs):
             if task.id == "bad":
                 raise RuntimeError("Provider unavailable")
-            return super()._run(task=task, **kwargs)
+            return await super()._run(task=task, **kwargs)
 
     root = tmp_path / "mixed"
     final = await run_experiment(
@@ -313,12 +377,12 @@ async def test_mixed_collection_failure_skips_only_that_data(tmp_path):
 
 @pytest.mark.asyncio
 async def test_reference_analysis_request_failure_does_not_cancel_other_records(tmp_path):
-    class MixedModel:
-        async def chat(self, task, messages, **kwargs):
+    class MixedAgent(OpenAIChatAgent):
+        async def run_messages(self, *, messages, tools=None, response_format=None):
             if "FAIL_PROVIDER" in messages[-1]["content"]:
                 raise RuntimeError("Provider unavailable")
-            return ChatResponse(
-                content="# Success Memory Item 1\n\n## Title\nVerify\n\n## Description\nChecked the result.\n\n## Content\nVerify saved output.\n"
+            return AgentResult(
+                output="# Success Memory Item 1\n\n## Title\nVerify\n\n## Description\nChecked the result.\n\n## Content\nVerify saved output.\n"
             )
 
     trajectories = {}
@@ -336,27 +400,27 @@ async def test_reference_analysis_request_failure_does_not_cancel_other_records(
         )
         evidence.append(TraceEvidence(trajectory_id=name, task_id=name, transcript=text, score=1))
     analyzer = SpreadsheetBenchReferenceAnalyzer(
-        chat_model=MixedModel(),
-        task="analysis",
-        output_root=tmp_path / "analysis",
-        concurrency=2,
+        agent=MixedAgent(OpenAIChatConfig(model="offline")),
+        failure_agent=MixedAgent(OpenAIChatConfig(model="offline")),
         success_score_threshold=1,
-        temperature=1,
-        max_tokens=4096,
     )
-    records, failures = await analyzer.analyze(evidence, trajectories_by_id=trajectories)
+    from mindmemos_skill.algos.train.treeskill.env_adapter import TreeSkillEnvAdapter
+
+    records, failures = await make_trainer()._analyze(
+        evidence, list(trajectories.values()), analyzer, TreeSkillEnvAdapter(), tmp_path / "analysis"
+    )
     assert [record.instance_id for record in records] == ["good"]
     assert failures == ["bad"]
-    assert "Provider unavailable" in (tmp_path / "analysis/failures/bad.txt").read_text()
+    assert "Provider unavailable" in "".join(path.read_text() for path in (tmp_path / "analysis").rglob("outcome.json"))
 
 
 @pytest.mark.asyncio
-async def test_router_provider_failure_is_a_skipped_test_not_full_skill_fallback(tmp_path):
+async def test_router_provider_failure_uses_full_skill_reference_fallback(tmp_path):
     class FailingRouter(smoke.SmokeAgent):
-        def run_messages(self, *, messages, **kwargs):
+        async def run_messages(self, *, messages, **kwargs):
             if messages[-1]["content"].startswith("Route"):
                 raise RuntimeError("Router unavailable")
-            return super().run_messages(messages=messages, **kwargs)
+            return await super().run_messages(messages=messages, **kwargs)
 
     trainer = make_trainer()
     trainer.agent_factory = FailingRouter
@@ -377,9 +441,10 @@ async def test_router_provider_failure_is_a_skipped_test_not_full_skill_fallback
         work_dir=root,
     )
     summary = json.loads((root / "summary.json").read_text())
-    assert summary["test"]["mean_score"] is None and summary["test"]["skipped"] == 1
-    assert summary["status"] == "partial"
-    assert summary["model_usage"]["failed_calls"] == 1
+    assert summary["test"]["mean_score"] == 1 and summary["test"]["skipped"] == 0
+    assert summary["status"] == "completed"
+    selection = next((root / "test").glob("*/attempt-*/routing/selection.json"))
+    assert "Router unavailable" in json.loads(selection.read_text())["fallback_reason"]
 
 
 def test_reference_split_is_pinned_without_live_dependencies():
@@ -391,13 +456,13 @@ def test_reference_split_is_pinned_without_live_dependencies():
     assert not set(splits["train"]) & set(splits["test"])
 
 
-def test_transactional_recalculation_preserves_literal_workbook(tmp_path):
+async def test_transactional_recalculation_preserves_literal_workbook(tmp_path):
     from mindmemos_skill.envs.builtin_envs.spreadsheetbench.recalculation import recalculate_workbook
 
     sample = spreadsheet_sample(tmp_path)
     path = sample.task.cases[0].path
     before = path.read_bytes()
-    result = recalculate_workbook(path)
+    result = await recalculate_workbook(path)
     assert result["status"] == "not_needed"
     assert path.read_bytes() == before
 
@@ -424,23 +489,10 @@ async def test_trained_snapshot_preserves_explicit_credentials(tmp_path):
     assert snapshot.config["router"]["api_key"] == "explicit-test-key"
     restored = TreeSkill.from_snapshot(snapshot)
     assert restored.config.router.api_key == "explicit-test-key"
-    injected = smoke.SmokeAgent(trainer.config.router)
+    injected = smoke.SmokeAgent(final.config.router)
     restored = TreeSkill.from_snapshot(snapshot, router=injected)
     assert restored.router is injected
-    assert (
-        "Verify the saved output." in (await asyncio.to_thread(restored.assemble, make_sample("new-task").task)).content
-    )
-
-
-def test_standalone_uno_worker_has_no_package_import_dependency():
-    import subprocess
-    import sys
-
-    from mindmemos_skill.envs.builtin_envs.spreadsheetbench import recalculation
-
-    worker = Path(recalculation.__file__).with_name("runtime") / "uno_worker.py"
-    result = subprocess.run([sys.executable, "-I", str(worker), "--help"], capture_output=True, text=True, check=True)
-    assert "--pipe-name" in result.stdout
+    assert "Verify the saved output." in (await restored.assemble(make_sample("new-task").task)).content
 
 
 def test_treeskill_environment_inherits_scoring_and_rejects_changed_workbooks(tmp_path):
@@ -462,3 +514,91 @@ def test_text_action_config_uses_explicit_stagnation_option():
     config = SpreadsheetBenchTextActionConfig(agent=OpenAIChatConfig(model="offline"), stagnation_limit=7)
     assert config.stagnation_limit == 7
     assert config.model_dump()["stagnation_limit"] == 7
+
+
+@pytest.mark.asyncio
+async def test_internal_stages_correlate_with_training_and_held_out_test(tmp_path, caplog):
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("treeskill-test")
+    try:
+        with (
+            caplog.at_level(logging.INFO),
+            bind_tracer(tracer),
+            tracer.start_as_current_span("algorithm.train") as parent,
+        ):
+            summary = await smoke.run_smoke(tmp_path / "staged")
+        spans = [span for span in exporter.get_finished_spans() if span.name.startswith("treeskill.")]
+        assert [span.name for span in spans] == [
+            "treeskill.rollout",
+            "treeskill.analyze",
+            "treeskill.merge",
+            "treeskill.test",
+        ]
+        for span in spans:
+            assert span.parent.span_id == parent.get_span_context().span_id
+            assert span.context.trace_id == parent.get_span_context().trace_id
+            assert span.status.status_code.name == "OK"
+            assert span.attributes["stage"] == span.name
+            assert span.attributes["duration_ms"] >= 0
+        records = [record for record in caplog.records if record.msg == "stage.completed"]
+        assert {record.event_body["stage"] for record in records} == {span.name for span in spans}
+        assert all(record.event_body["duration_ms"] >= 0 for record in records)
+        assert summary["test"]["completed"] == 1
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_rollout_stage_records_uncaught_failure_and_stops_later_stages(tmp_path, monkeypatch, caplog):
+    from mindmemos_skill.algos.train.treeskill import trainer as trainer_module
+
+    async def fail_collection(**kwargs):
+        raise RuntimeError("Collection infrastructure failed")
+
+    monkeypatch.setattr(trainer_module, "sample_tasks", fail_collection)
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    try:
+        with caplog.at_level(logging.INFO), bind_tracer(provider.get_tracer("treeskill-test")):
+            with pytest.raises(RuntimeError, match="Collection infrastructure failed"):
+                await smoke.run_smoke(tmp_path / "failed-stage")
+        spans = exporter.get_finished_spans()
+        assert [span.name for span in spans] == ["treeskill.rollout"]
+        assert spans[0].status.status_code.name == "ERROR"
+        assert any(event.name == "exception" for event in spans[0].events)
+        failure = next(record for record in caplog.records if record.msg == "stage.failed")
+        assert failure.event_body["stage"] == "treeskill.rollout"
+        assert failure.event_body["duration_ms"] >= 0
+        assert failure.exc_info or failure.exc_text
+    finally:
+        provider.shutdown()
+
+
+async def test_training_router_applies_reference_budget_to_actual_requests(tmp_path):
+    observed = []
+
+    class CaptureAgent(smoke.SmokeAgent):
+        async def run_messages(self, **kwargs):
+            if kwargs["messages"][-1]["content"].startswith("Route"):
+                observed.append((self.config.temperature, self.config.max_completion_tokens))
+            return await super().run_messages(**kwargs)
+
+    trainer = make_trainer()
+    trainer.agent_factory = CaptureAgent
+    source = Skill(
+        source=SkillContent(
+            content="# Workflow\nSave the output.\n", name="test", description="Test", standard_format=False
+        )
+    )
+    final = await trainer.train(
+        skill=source,
+        env=smoke.SmokeEnvironment(smoke.SmokeConfig()),
+        train_samples=[make_sample("train")],
+        work_dir=tmp_path / "run",
+    )
+    assert "Verify" in (await final.assemble(Task(id="test", instruction="Verify"))).content
+    assert observed == [(0.0, 16384)]
+    assert trainer.config.router.max_completion_tokens != 16384

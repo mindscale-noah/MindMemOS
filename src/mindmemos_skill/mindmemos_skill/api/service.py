@@ -5,18 +5,22 @@ from contextlib import AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from fnmatch import fnmatchcase
-from inspect import isawaitable
+from functools import wraps
+from inspect import isawaitable, signature
 from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
-from ..common.asyncio import run_sync
 from ..common.checkpoint import fingerprint
 from ..config.config import FastAPIConfig, ServiceName
 from ..envs import Environment
 from ..errors import SkillNotFoundError, SkillVersionNotFoundError
 from ..infra.database import Database, Scope
-from ..infra.task_manager import ProgressEvent, ProgressReporter, TaskManager, TaskSnapshot, TaskSpec
-from ..infra.task_manager.progress import EventProgressReporter
+from ..infra.observability import OpenTelemetryRecorder
+from ..infra.task_manager import TaskManager, TaskSnapshot, TaskSpec
+from ..logging import get_logger, log_context, stage, traced
+from ..logging.context import _context
+from ..logging.tracing import bind_tracer
+from ..logging.typing import TaskLog
 from ..persistence import SkillRecord, SkillVersionRecord, SkillVersionSummary, TrajectoryRecord, TrajectorySummary
 from ..persistence.db_services.trajectories.typing import TrajectoryStatistics
 from ..persistence.observability import AlgorithmAuditPersistence, AuditLog, AuditRun, AuditSpan
@@ -45,6 +49,7 @@ from .typing import (
     RegisterRequest,
     RegisterResult,
     ReportTrajectoryRequest,
+    RequestAuth,
     SetMetaRequest,
     ShowRequest,
     ShowTrajectoryRequest,
@@ -81,6 +86,36 @@ def _select_pipeline(pipelines: dict[str, PipelineT], name: str | None) -> Pipel
     if len(pipelines) != 1:
         raise ValueError(f"pipeline is required; available: {list(pipelines)}")
     return next(iter(pipelines.values()))
+
+
+def _service_call(function):
+    """Bind the owning provider and log public calls including Python integrations."""
+    call_signature = signature(function)
+    monitored = traced(f"service.{function.__name__}", record_args=True, record_result=True)(function)
+
+    @wraps(function)
+    async def call(self, *args, **kwargs):
+        arguments = call_signature.bind(self, *args, **kwargs).arguments
+        request = arguments.get("request")
+        project_id = arguments.get("project_id") or self.default_project_id
+        if isinstance(request, RequestAuth):
+            project_id = request.project_id or project_id
+        elif isinstance(request, dict):
+            project_id = request.get("project_id") or project_id
+        spec = arguments.get("spec")
+        if isinstance(spec, TaskSpec):
+            project_id = spec.project_id
+        with (
+            bind_tracer(self._observability.telemetry.tracer),
+            log_context(
+                request_id=_context.get().get("request_id") or f"req_{uuid4().hex}",
+                project_id=project_id,
+                service_name="mindmemos-skill",
+            ),
+        ):
+            return await monitored(self, *args, **kwargs)
+
+    return call
 
 
 class SkillService(MindMemOSSkill):
@@ -130,6 +165,11 @@ class SkillService(MindMemOSSkill):
         self._task_manager: TaskManager | None = None
 
     @property
+    def telemetry(self) -> OpenTelemetryRecorder:
+        """Return the service-owned OpenTelemetry recorder for entry boundaries."""
+        return self._observability.telemetry
+
+    @property
     def backends(self) -> dict[str, Any]:
         """Return assembled backend instances for diagnostics and lifecycle inspection."""
         return self._backends.copy()
@@ -151,19 +191,19 @@ class SkillService(MindMemOSSkill):
         )
 
     async def close(self) -> None:
-        """Close pipelines before their borrowed database in reverse construction order."""
-        if self._task_manager is not None:
-            await self._task_manager.close()
-        async with AsyncExitStack() as cleanup:
-            if self._observability.database is None:
-                cleanup.callback(self._observability.close)
-            for backend in self._backends.values():
-                if isinstance(backend, Pipeline):
-                    cleanup.push_async_callback(backend.close)
-                elif isinstance(backend, Database):
-                    cleanup.callback(backend.close)
-                elif isinstance(backend, AlgorithmAuditPersistence):
-                    cleanup.callback(backend.close)
+        """Close tasks and pipelines before storage, even if a resource fails."""
+        try:
+            async with AsyncExitStack() as cleanup:
+                if self._observability.database is None:
+                    cleanup.push_async_callback(self._observability.close)
+                for backend in self._backends.values():
+                    if isinstance(backend, (Pipeline, Database, AlgorithmAuditPersistence)):
+                        cleanup.push_async_callback(backend.close)
+                if self._task_manager is not None:
+                    cleanup.push_async_callback(self._task_manager.close)
+        except Exception:
+            get_logger(__name__).exception("service.close.failed")
+            raise
 
     @property
     def repository(self) -> RepositoryPipeline:
@@ -176,8 +216,9 @@ class SkillService(MindMemOSSkill):
         """Idempotently initialize configured stores without enabling repository APIs."""
         for backend in self._backends.values():
             if isinstance(backend, (SkillPersistence, AlgorithmAuditPersistence)):
-                await run_sync(backend.initialize_storage)
+                await backend.initialize_storage()
 
+    @_service_call
     async def algorithm_run(self, project_id: str | None, run_id: str) -> AuditRun | None:
         """Read one project-scoped algorithm run.
 
@@ -191,8 +232,9 @@ class SkillService(MindMemOSSkill):
         if self._observability.database is None:
             raise NotImplementedError("Observability is not configured")
         scope = await self._authorized_scope(project_id)
-        return await run_sync(self._observability.get_run, scope.require("project_id"), run_id)
+        return await self._observability.get_run(scope.require("project_id"), run_id)
 
+    @_service_call
     async def algorithm_spans(
         self, project_id: str | None, run_id: str, *, limit: int = 500, offset: int = 0
     ) -> list[AuditSpan]:
@@ -210,10 +252,9 @@ class SkillService(MindMemOSSkill):
         if self._observability.database is None:
             raise NotImplementedError("Observability is not configured")
         scope = await self._authorized_scope(project_id)
-        return await run_sync(
-            self._observability.spans, scope.require("project_id"), run_id, limit=limit, offset=offset
-        )
+        return await self._observability.spans(scope.require("project_id"), run_id, limit=limit, offset=offset)
 
+    @_service_call
     async def algorithm_logs(
         self, project_id: str | None, run_id: str, *, limit: int = 200, offset: int = 0
     ) -> list[AuditLog]:
@@ -231,7 +272,7 @@ class SkillService(MindMemOSSkill):
         if self._observability.database is None:
             raise NotImplementedError("Observability is not configured")
         scope = await self._authorized_scope(project_id)
-        return await run_sync(self._observability.logs, scope.require("project_id"), run_id, limit=limit, offset=offset)
+        return await self._observability.logs(scope.require("project_id"), run_id, limit=limit, offset=offset)
 
     @contextmanager
     def request_principal(self, principal: object):
@@ -295,6 +336,7 @@ class SkillService(MindMemOSSkill):
             raise RuntimeError("Task manager is already attached")
         self._task_manager = manager
 
+    @_service_call
     async def submit_training(self, request: TrainingRequest | dict) -> TaskSnapshot:
         """Authorize and enqueue a training request without waiting for the algorithm.
 
@@ -320,6 +362,7 @@ class SkillService(MindMemOSSkill):
         )
         return await self._task_manager.submit(spec)
 
+    @_service_call
     async def submit_evolution(
         self, project_id: str | None, version_id: str, *, pipeline: str | None = None, auto_accept: bool = True
     ) -> TaskSnapshot:
@@ -351,7 +394,7 @@ class SkillService(MindMemOSSkill):
         async def prepare() -> SkillPipelineRequest:
             """Resolve the exact baseline within the authorized storage session."""
             try:
-                version = await run_sync(self._persistence.skills.version_by_id, project_id, version_id)
+                version = await self._persistence.skills.version_by_id(project_id, version_id)
             except SkillNotFoundError as exc:
                 raise SkillVersionNotFoundError("Skill version not found in this project") from exc
             return SkillPipelineRequest(
@@ -378,6 +421,7 @@ class SkillService(MindMemOSSkill):
         )
         return await self._task_manager.submit(spec)
 
+    @_service_call
     async def task_status(self, project_id: str | None, task_id: str) -> TaskSnapshot | None:
         """Read one authorized task state.
 
@@ -393,28 +437,29 @@ class SkillService(MindMemOSSkill):
         scope = await self._authorized_scope(project_id)
         return await self._task_manager.get(scope.require("project_id"), task_id)
 
-    async def task_progress(self, project_id: str | None, task_id: str, *, after: int = 0) -> list[ProgressEvent]:
-        """Read authorized algorithm-selected progress events.
+    @_service_call
+    async def task_progress(self, project_id: str | None, task_id: str, *, after: int = 0) -> list[TaskLog]:
+        """Read authorized task logs used for progress and failure diagnostics.
 
         Args:
             project_id: Requested project or the configured default project.
             task_id: Stable submitted task identity.
-            after: Last observed one-based event sequence.
+            after: Last observed committed log sequence; gaps are allowed.
 
         Returns:
-            Subsequent progress events in report order.
+            Subsequent task logs in committed order, including historical attempts.
         """
         if self._task_manager is None:
             raise NotImplementedError("Asynchronous Skill tasks are not configured")
         scope = await self._authorized_scope(project_id)
-        return await self._task_manager.events(scope.require("project_id"), task_id, after=after)
+        return await self._task_manager.logs(scope.require("project_id"), task_id, after=after)
 
-    async def execute_task(self, spec: TaskSpec, progress: ProgressReporter) -> dict:
+    @_service_call
+    async def execute_task(self, spec: TaskSpec) -> dict[str, Any]:
         """Execute a previously authorized task in a trusted worker scope.
 
         Args:
             spec: Persisted immutable Skill request.
-            progress: Reporter injected into the selected algorithm.
 
         Returns:
             JSON-compatible published algorithm result.
@@ -436,16 +481,17 @@ class SkillService(MindMemOSSkill):
             raise RuntimeError("Skill task worker requires persistence")
         with self._persistence.session(Scope(fields={"project_id": spec.project_id})):
             if spec.kind == "skill.train":
-                result = await self._run_training(request, reporter=progress)
+                result = await self._run_training(request)
             else:
                 definition = spec.payload["pipeline"]
                 pipeline = Pipeline.build(definition["class_name"], definition["config"], persistence=self._persistence)
                 try:
                     if not isinstance(pipeline, EvolutionPipeline):
                         raise ValueError("Task pipeline must implement EvolutionPipeline")
-                    result = await self._run_evolution(request, pipeline=pipeline, reporter=progress)
+                    result = await self._run_evolution(request, pipeline=pipeline)
                 finally:
-                    await pipeline.close()
+                    with stage("cleanup"):
+                        await pipeline.close()
         return result.model_dump(mode="json")
 
     def _project_id(self, requested: str | None) -> str:
@@ -462,6 +508,7 @@ class SkillService(MindMemOSSkill):
         """Bind request scope without mutating the caller's model."""
         return request.model_copy(update={"project_id": self._project_id(request.project_id)})
 
+    @_service_call
     async def list_skill_sets(self, project_id: str | None = None) -> list[dict]:
         """List Skill Sets in the authorized project.
 
@@ -476,6 +523,7 @@ class SkillService(MindMemOSSkill):
         project_id = self._project_id(project_id)
         return await self._execute(project_id, self._manage_pipeline.list_skill_sets, project_id)
 
+    @_service_call
     async def resolve_graph(self, reference: str, project_id: str | None = None) -> dict:
         """Resolve a graph family or immutable version in the authorized project.
 
@@ -491,6 +539,7 @@ class SkillService(MindMemOSSkill):
         project_id = self._project_id(project_id)
         return await self._execute(project_id, self._manage_pipeline.resolve_graph, project_id, reference)
 
+    @_service_call
     async def delete_graph(self, reference: str, project_id: str | None = None) -> None:
         """Soft-delete a graph in the authorized project.
 
@@ -503,6 +552,7 @@ class SkillService(MindMemOSSkill):
         project_id = self._project_id(project_id)
         await self._execute(project_id, self._manage_pipeline.delete_graph, project_id, reference)
 
+    @_service_call
     async def resolve_skill_reference(self, reference: str, project_id: str | None = None) -> SkillDetail:
         """Resolve a Skill family or immutable version in the authorized project.
 
@@ -516,6 +566,7 @@ class SkillService(MindMemOSSkill):
         project_id = self._project_id(project_id)
         return await self._execute(project_id, self.repository.resolve_skill_reference, project_id, reference)
 
+    @_service_call
     async def list_skill_set_snapshots(self, skill_set_id: str, project_id: str | None = None) -> list[dict]:
         """List immutable snapshots and revisions of one Skill Set.
 
@@ -531,6 +582,7 @@ class SkillService(MindMemOSSkill):
         project_id = self._project_id(project_id)
         return await self._execute(project_id, self._manage_pipeline.list_skill_set_snapshots, project_id, skill_set_id)
 
+    @_service_call
     async def get_skill_set_snapshot(self, skill_set_id: str, snapshot_id: UUID, project_id: str | None = None) -> dict:
         """Read one Skill Set snapshot in the authorized project.
 
@@ -549,6 +601,7 @@ class SkillService(MindMemOSSkill):
             project_id, self._manage_pipeline.get_skill_set_snapshot, project_id, skill_set_id, snapshot_id
         )
 
+    @_service_call
     async def get_skill_version(self, version_id: str, project_id: str | None = None) -> SkillVersionRecord:
         """Read an exact Skill version in the authorized project.
 
@@ -562,6 +615,7 @@ class SkillService(MindMemOSSkill):
         project_id = self._project_id(project_id)
         return await self._execute(project_id, self.repository.get_skill_version, project_id, version_id)
 
+    @_service_call
     async def list_skill_versions(self, skill_id: str, project_id: str | None = None) -> list[SkillVersionRecord]:
         """Read the complete version history of an exact Skill family.
 
@@ -575,14 +629,12 @@ class SkillService(MindMemOSSkill):
         project_id = self._project_id(project_id)
         return await self._execute(project_id, self.repository.list_skill_versions, project_id, skill_id)
 
-    async def organize_skills(
-        self, request: OrganizeRequest, *, reporter: ProgressReporter | None = None
-    ) -> OrganizeResult:
+    @_service_call
+    async def organize_skills(self, request: OrganizeRequest) -> OrganizeResult:
         """Authorize an explicit version collection before publishing its graph.
 
         Args:
             request: Graph identity, actor, exact versions, and optional scenes.
-            reporter: Optional progress sink for graph publication.
 
         Returns:
             Published immutable graph snapshot identity.
@@ -590,8 +642,9 @@ class SkillService(MindMemOSSkill):
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         scoped = self._scoped(OrganizeRequest.model_validate(request))
-        return await self._execute(scoped.project_id, self._manage_pipeline.organize, scoped, reporter=reporter)
+        return await self._execute(scoped.project_id, self._manage_pipeline.organize, scoped)
 
+    @_service_call
     async def recommend_skills(self, request: RecommendRequest) -> RecommendResult:
         """Authorize a pinned project graph before recommending versions.
 
@@ -606,6 +659,7 @@ class SkillService(MindMemOSSkill):
         scoped = self._scoped(RecommendRequest.model_validate(request))
         return await self._execute(scoped.project_id, self._manage_pipeline.recommend, scoped)
 
+    @_service_call
     async def register_skill(self, request: RegisterRequest) -> RegisterResult:
         """Register a complete source under a new central identity.
 
@@ -615,6 +669,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(RegisterRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.register_skill, request)
 
+    @_service_call
     async def register_from_local(self, request: RegisterFromLocalRequest) -> RegisterResult:
         """Authorize a project before reading and registering local source files.
 
@@ -627,6 +682,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(RegisterFromLocalRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.register_from_local, request)
 
+    @_service_call
     async def commit_from_local(self, request: CommitFromLocalRequest) -> SkillDetail:
         """Authorize a project before reading and publishing local source files.
 
@@ -639,6 +695,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(CommitFromLocalRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.commit_from_local, request)
 
+    @_service_call
     async def list_skills(self, request: ListRequest) -> list[SkillRecord]:
         """List central records in one project.
 
@@ -648,6 +705,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(ListRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.list_skills, request)
 
+    @_service_call
     async def list_skill_page(self, request: SkillPageRequest) -> SkillPage:
         """Filter a stable family page using repository and trajectory evidence.
 
@@ -709,6 +767,7 @@ class SkillService(MindMemOSSkill):
             has_more=request.limit is not None and len(matches) > request.limit,
         )
 
+    @_service_call
     async def report_trajectory(self, request: ReportTrajectoryRequest) -> TrajectoryRecord:
         """Persist one authenticated Agent report against its loaded version.
 
@@ -721,6 +780,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(ReportTrajectoryRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.report_trajectory, request)
 
+    @_service_call
     async def show_trajectory(self, request: ShowTrajectoryRequest) -> TrajectoryRecord:
         """Read one physical attempt in the caller's project.
 
@@ -730,6 +790,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(ShowTrajectoryRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.show_trajectory, request)
 
+    @_service_call
     async def list_trajectories(self, request: ListTrajectoriesRequest) -> list[TrajectorySummary]:
         """Page reported attempts for one family.
 
@@ -739,6 +800,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(ListTrajectoriesRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.list_trajectories, request)
 
+    @_service_call
     async def trajectory_statistics(self, request: TrajectoryStatisticsRequest) -> TrajectoryStatistics:
         """Query bounded aggregates in the authorized project.
 
@@ -752,13 +814,12 @@ class SkillService(MindMemOSSkill):
         result = await self._execute(request.project_id, self.repository.trajectory_statistics, request)
         algorithms = list(self._evolution_pipelines)
         algorithms.extend(Pipeline.name_for(type(pipeline)) for pipeline in self._evolution_pipelines.values())
-        latest = await run_sync(
-            self._observability.latest_evolution, request.project_id, request.version_id, algorithms
-        )
+        latest = await self._observability.latest_evolution(request.project_id, request.version_id, algorithms)
         if latest is not None:
             result = result.model_copy(update={"last_evolved_at": latest})
         return result
 
+    @_service_call
     async def skill_has_reported_trajectory(
         self,
         project_id: str,
@@ -788,6 +849,7 @@ class SkillService(MindMemOSSkill):
             snapshot_at=snapshot_at,
         )
 
+    @_service_call
     async def show_skill(self, request: ShowRequest) -> SkillDetail:
         """Read central metadata and an owned version.
 
@@ -797,6 +859,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(ShowRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.show_skill, request)
 
+    @_service_call
     async def resolve_skill_version(self, request: VersionResolveRequest) -> VersionResolution:
         """Resolve a project-scoped source hash to one immutable version.
 
@@ -807,6 +870,7 @@ class SkillService(MindMemOSSkill):
 
         return await self._execute(request.project_id, self.repository.resolve_skill_version, request)
 
+    @_service_call
     async def export_skill(self, request: ExportRequest) -> str:
         """Export a complete stored snapshot without tracking the directory.
 
@@ -819,6 +883,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(ExportRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.export_skill, request)
 
+    @_service_call
     async def commit_skill(self, request: CommitRequest) -> SkillDetail:
         """Save a child of an owned version and optionally select it as current.
 
@@ -828,6 +893,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(CommitRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.commit_skill, request)
 
+    @_service_call
     async def skill_history(self, request: HistoryRequest) -> list[SkillVersionSummary]:
         """Read a page of versions without changing the active selection.
 
@@ -837,6 +903,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(HistoryRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.skill_history, request)
 
+    @_service_call
     async def diff_skill(self, request: DiffRequest) -> DiffResult:
         """Compare complete snapshots from the same Skill.
 
@@ -846,6 +913,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(DiffRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.diff_skill, request)
 
+    @_service_call
     async def active_skill(self, request: ActiveRequest) -> SkillRecord:
         """Change the current pointer without editing any application directory.
 
@@ -855,6 +923,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(ActiveRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.active_skill, request)
 
+    @_service_call
     async def set_skill_meta(self, request: SetMetaRequest) -> SkillRecord:
         """Update name or alias without creating a version.
 
@@ -864,6 +933,7 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(SetMetaRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.set_skill_meta, request)
 
+    @_service_call
     async def delete_skill(self, request: SkillRequest) -> None:
         """Delete central data only when no retained evidence references it.
 
@@ -873,14 +943,12 @@ class SkillService(MindMemOSSkill):
         request = self._scoped(SkillRequest.model_validate(request))
         return await self._execute(request.project_id, self.repository.delete_skill, request)
 
-    async def run_evolution(
-        self, request: SkillPipelineRequest | None = None, *, reporter: ProgressReporter | None = None
-    ) -> AlgoSkillEvolveResult:
+    @_service_call
+    async def run_evolution(self, request: SkillPipelineRequest | None = None) -> AlgoSkillEvolveResult:
         """Run the selected evolution pipeline and return its result.
 
         Args:
             request: Skill/version selection; required when a pipeline is configured.
-            reporter: Optional progress sink for evolution milestones.
 
         Returns:
             Completed evolution result.
@@ -896,54 +964,44 @@ class SkillService(MindMemOSSkill):
         request = SkillPipelineRequest.model_validate(request)
         scoped = request.model_copy(update={"project_id": self._project_id(request.project_id)})
         pipeline = _select_pipeline(self._evolution_pipelines, request.pipeline)
-        return await self._execute(scoped.project_id, self._run_evolution, scoped, pipeline=pipeline, reporter=reporter)
+        return await self._execute(scoped.project_id, self._run_evolution, scoped, pipeline=pipeline)
 
     async def _run_evolution(
-        self, request: SkillPipelineRequest, *, pipeline: EvolutionPipeline, reporter: ProgressReporter | None = None
+        self, request: SkillPipelineRequest, *, pipeline: EvolutionPipeline
     ) -> AlgoSkillEvolveResult:
         """Record direct and worker evolution attempts through the shared audit sink."""
         if self._persistence is None:
-            if reporter is None:
-                return await pipeline.evolve(request)
-            return await pipeline.evolve(request, reporter=reporter)
+            return await pipeline.evolve(request)
         request = request.model_copy(update={"run_id": request.run_id or "evolve_" + uuid4().hex})
         previous = (
-            self._observability.get_run(request.project_id, request.run_id)
+            (await self._observability.get_run(request.project_id, request.run_id))
             if self._observability.database is not None
             else None
         )
         if previous is not None:
             base_version_id = previous.base_version_id
         else:
-            owner = await run_sync(self._persistence.skills.resolve_family, request.project_id, request.skill_ref)
-            base = await run_sync(self._persistence.skills.version, owner, request.base_version_id)
+            owner = await self._persistence.skills.resolve_family(request.project_id, request.skill_ref)
+            base = await self._persistence.skills.version(owner, request.base_version_id)
             base_version_id = base.version_id
 
-        async def log_progress(event: ProgressEvent) -> str:
-            """Provide event identities for direct-call progress logs."""
-            return uuid4().hex
-
-        with self._observability.trace_run(
+        async with self._observability.trace_run(
             project_id=request.project_id,
             run_id=request.run_id,
             algorithm=request.pipeline or Pipeline.name_for(type(pipeline)),
             base_version_id=base_version_id,
             operation="evolve",
         ) as audit:
-            result = await pipeline.evolve(
-                request, reporter=reporter or EventProgressReporter(log_progress, task_id=request.run_id)
-            )
+            result = await pipeline.evolve(request)
             audit.published_version_id = result.version_id
             return result
 
-    async def run_training(
-        self, request: TrainingRequest | None = None, *, reporter: ProgressReporter | None = None
-    ) -> AlgoSkillEvolveResult:
+    @_service_call
+    async def run_training(self, request: TrainingRequest | None = None) -> AlgoSkillEvolveResult:
         """Run the selected training pipeline and return its result.
 
         Args:
             request: Training inputs; required when a pipeline is configured.
-            reporter: Optional progress sink for training milestones.
 
         Returns:
             Completed training result.
@@ -958,22 +1016,20 @@ class SkillService(MindMemOSSkill):
             raise ValueError("A training request is required")
         request = TrainingRequest.model_validate(request)
         scoped = request.model_copy(update={"project_id": self._project_id(request.project_id)})
-        return await self._execute(scoped.project_id, self._run_training, scoped, reporter=reporter)
+        return await self._execute(scoped.project_id, self._run_training, scoped)
 
-    async def _run_training(
-        self, request: TrainingRequest, *, reporter: ProgressReporter | None = None
-    ) -> AlgoSkillEvolveResult:
+    async def _run_training(self, request: TrainingRequest) -> AlgoSkillEvolveResult:
         """Execute one authorized training run with the same algorithm contract."""
         pipeline = _select_pipeline(self._training_pipelines, request.algo)
         run_id = training_run_id(request.project_id, request.work_dir)
 
-        with self._observability.trace_run(
+        async with self._observability.trace_run(
             project_id=request.project_id,
             run_id=run_id,
             algorithm=request.algo or next(iter(self._training_pipelines)),
             base_version_id=request.init_skill_version_id,
         ) as audit:
             env = Environment.build(request.env.class_name, request.env.config)
-            result = await pipeline.train(request, env=env, reporter=reporter)
+            result = await pipeline.train(request, env=env)
             audit.published_version_id = result.version_id
             return result

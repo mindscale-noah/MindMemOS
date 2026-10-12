@@ -63,6 +63,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = [
     "src/mindmemos/tests",

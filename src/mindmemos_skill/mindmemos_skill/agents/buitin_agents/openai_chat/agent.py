@@ -9,7 +9,6 @@ from pydantic import BaseModel, JsonValue
 
 from ....common.json import parse_model
 from ....logging import get_logger
-from ....logging.otel import debug_fields
 from ....persistence.observability import get_log_context
 from ...base import Agent
 from ...typing import AgentResult, ToolCall, ToolTurn
@@ -67,7 +66,7 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
         self.parse_feedback = parse_feedback or _parse_feedback
         self.native_tools = native_tools
 
-    def run(
+    async def run(
         self,
         *,
         system: str | None = None,
@@ -89,15 +88,15 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             The original Agent result with its trajectory and usage.
         """
 
-        def call():
+        async def call():
             """Invoke the existing Agent behavior exactly once."""
-            return self._run_untraced(
+            return await self._run_untraced(
                 system=system, user=user, messages=messages, tools=tools, response_format=response_format
             )
 
         session = get_log_context()
         if session is None:
-            return call()
+            return await call()
         input_payload = {
             "system": system,
             "user": user,
@@ -110,7 +109,7 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             {"algorithm.capture_level": session.level, "gen_ai.request.model": self.config.model},
         ) as span:
             try:
-                result = call()
+                result = await call()
             except BaseException as exc:
                 get_logger(__name__).error(
                     "agent.call",
@@ -125,7 +124,7 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
                 if session.level == "debug":
                     get_logger(__name__).debug(
                         "agent.io",
-                        extra={"event_body": debug_fields({"input": input_payload, "error_type": type(exc).__name__})},
+                        extra={"event_body": {"input": input_payload, "error_type": type(exc).__name__}},
                     )
                 raise
             usage = result.usage
@@ -142,13 +141,11 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             if session.level == "debug":
                 get_logger(__name__).debug(
                     "agent.io",
-                    extra={
-                        "event_body": debug_fields({"input": input_payload, "output": result.model_dump(mode="json")})
-                    },
+                    extra={"event_body": {"input": input_payload, "output": result.model_dump(mode="json")}},
                 )
             return result
 
-    def _run_untraced(
+    async def _run_untraced(
         self,
         *,
         system: str | None = None,
@@ -187,7 +184,7 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             options = {"messages": conversation, "tools": tools if self.native_tools else None}
             if response_format is not None:
                 options["response_format"] = response_format
-            result = transport.run_messages(**options)
+            result = await transport.run_messages(**options)
             attempts.append(result)
             if self.output_parser is None:
                 break
@@ -243,7 +240,7 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             raise ValueError("Tool observations require an observation callback")
         return self.encode_observation(call, content)
 
-    def run_messages(
+    async def run_messages(
         self,
         *,
         messages: list[dict[str, JsonValue]],
@@ -264,8 +261,8 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             RuntimeError: The response is refused, truncated, empty, or violates the requested protocol.
             ValueError: The configured credential is unavailable.
         """
-        from openai import APIConnectionError, APIStatusError, DefaultHttpxClient, OpenAI
-        from tenacity import RetryCallState, Retrying, retry_if_exception, stop_after_attempt, wait_exponential
+        from openai import APIConnectionError, APIStatusError, AsyncOpenAI, DefaultAsyncHttpxClient
+        from tenacity import AsyncRetrying, RetryCallState, retry_if_exception, stop_after_attempt, wait_exponential
 
         self.config.require_connection()
         api_key = self.config.api_key
@@ -307,12 +304,8 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             assert state.outcome is not None and state.next_action is not None
             error = state.outcome.exception()
             get_logger(__name__).warning(
-                "OpenAI chat retry %d/%d; sleep %.3f seconds; reason: %s: %s",
-                state.attempt_number,
-                self.config.max_retries,
-                state.next_action.sleep,
-                type(error).__name__,
-                error,
+                f"agent.retry | attempt={state.attempt_number}/{self.config.max_retries}"
+                f" sleep={state.next_action.sleep:.3f}s | error={type(error).__name__}: {error}"
             )
 
         def retry_delay(state: RetryCallState) -> float:
@@ -327,26 +320,25 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
                 return nominal * (0.5 + 0.5 * random.random())
             return nominal
 
-        with OpenAI(
+        async with AsyncOpenAI(
             api_key=api_key,
             base_url=self.config.base_url,
             timeout=self.config.timeout_s,
             # Tenacity owns retries so the configured limit counts physical requests.
             max_retries=0,
-            http_client=DefaultHttpxClient(trust_env=False),
+            http_client=DefaultAsyncHttpxClient(trust_env=False),
         ) as client:
-            response = Retrying(
+
+            async def request():
+                return await client.chat.completions.create(model=self.config.model, messages=messages, **options)
+
+            response = await AsyncRetrying(
                 stop=stop_after_attempt(self.config.max_retries + 1),
                 wait=retry_delay,
                 retry=retry_if_exception(is_retryable),
                 before_sleep=log_retry,
                 reraise=True,
-            )(
-                client.chat.completions.create,
-                model=self.config.model,
-                messages=messages,
-                **options,
-            )
+            )(request)
         if not response.choices:
             raise RuntimeError("The model returned no choices")
         choice = response.choices[0]

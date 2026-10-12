@@ -45,7 +45,9 @@ class LiveMathEnvironment(Environment[LiveMathConfig]):
             raise ValueError("Injected agent config must match the environment's agent config")
         self.agent = agent if agent is not None else OpenAIChatAgent(config.agent)
 
-    def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> LiveMathResult:
+    async def _run(
+        self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path
+    ) -> LiveMathResult:
         """Execute only public prompts, then compare the response with the private key."""
         if not isinstance(task, LiveMathTask) or not isinstance(reward_data, LiveMathRewardData):
             raise TypeError("LiveMath requires LiveMathTask and LiveMathRewardData")
@@ -57,7 +59,7 @@ class LiveMathEnvironment(Environment[LiveMathConfig]):
         user = f"## Question\n{task.instruction}\n\n## Choices\n{choices}"
         (workspace / "task.md").write_text(user, encoding="utf-8")
         (workspace / "system.md").write_text(system, encoding="utf-8")
-        response = self.agent.run(system=system, user=user)
+        response = await self.agent.run(system=system, user=user)
         if not isinstance(response.output, str):
             raise TypeError("LiveMath requires a text agent output")
         (workspace / "response.txt").write_text(response.output, encoding="utf-8")
@@ -65,6 +67,6 @@ class LiveMathEnvironment(Environment[LiveMathConfig]):
         return LiveMathResult(
             output=response.output,
             trajectory=response.trajectory,
-            reward=evaluate(response.output, task, reward_data),
+            reward=(await evaluate(response.output, task, reward_data)),
             usage=usage,
         )

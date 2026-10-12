@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from .test_treeskill import Router
 
 
-def test_runtime_restores_standard_crlf_source_without_loading_provider(tmp_path, monkeypatch):
+async def test_runtime_restores_standard_crlf_source_without_loading_provider(tmp_path, monkeypatch):
     source = SkillContent(
         content="---\r\nname: test\r\ndescription: Rules\r\n---\r\n# First\r\nDo A.\r\n# Second\r\nDo B.\r\n",
         resources={"assets/raw.bin": b"\x00\xff\r\n"},
@@ -26,13 +26,13 @@ def test_runtime_restores_standard_crlf_source_without_loading_provider(tmp_path
         calls.append(config)
         return router
 
-    monkeypatch.setattr("mindmemos_skill.algos.train.treeskill.skill.OpenAIChatAgent", provider)
+    monkeypatch.setattr("mindmemos_skill.algos.train.treeskill.treeskill.OpenAIChatAgent", provider)
     snapshot = skill.snapshot()
     restored = load_runtime_skill(snapshot)
     restored.export(tmp_path / "source")
     assert calls == []
     assert (tmp_path / "source/SKILL.md").read_bytes() == source.content.encode()
-    selected = restored.assemble(Task(id="route", instruction="Do A"))
+    selected = await restored.assemble(Task(id="route", instruction="Do A"))
     assert len(calls) == 1
     assert "Do A" in selected.content and "Do B" not in selected.content
     assert selected.source.standard_format is False
@@ -67,7 +67,7 @@ async def test_interrupted_assembly_reuses_full_snapshot_and_rejects_resource_ta
         config_type = Options
         attempts = 0
 
-        def _run(self, *, task, reward_data, skills, workspace):
+        async def _run(self, *, task, reward_data, skills, workspace):
             self.attempts += 1
             assert isinstance(skills[0], TreeSkill)
             assert skills[0].router is router

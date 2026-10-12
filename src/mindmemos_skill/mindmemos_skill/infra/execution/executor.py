@@ -1,5 +1,6 @@
 """Run local commands with a selected Python environment and bounded lifetime."""
 
+import asyncio
 import os
 import shlex
 import shutil
@@ -42,21 +43,30 @@ def _python_launchers(directory: Path, python: list[str], search_path: str) -> N
             path.chmod(0o700)
 
 
-def _terminate(process: subprocess.Popen) -> None:
+async def _terminate(process: asyncio.subprocess.Process) -> None:
     """Stop the command's process tree using the host platform's mechanism."""
     if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
-        if process.poll() is None:
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill",
+            "/PID",
+            str(process.pid),
+            "/T",
+            "/F",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await killer.wait()
+        if process.returncode is None:
             process.kill()
     else:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    process.communicate()
+    await process.wait()
 
 
-def execute(
+async def execute(
     command: list[str], workspace: Path, config: ExecutionConfig, *, input_text: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Execute locally with persistent workspace files and the chosen Python.
@@ -87,21 +97,29 @@ def execute(
         options = (
             {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
         )
-        process = subprocess.Popen(
-            invocation,
+        process = await asyncio.create_subprocess_exec(
+            *invocation,
             cwd=workspace.resolve(),
             env=env,
             stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             **options,
         )
         try:
-            stdout, stderr = process.communicate(input=input_text, timeout=config.timeout_s)
+            async with asyncio.timeout(config.timeout_s):
+                stdout, stderr = await process.communicate(
+                    input=input_text.encode("utf-8") if input_text is not None else None
+                )
+        except TimeoutError as exc:
+            await _terminate(process)
+            raise subprocess.TimeoutExpired(invocation, config.timeout_s) from exc
         except BaseException:
-            _terminate(process)
+            await _terminate(process)
             raise
-    return subprocess.CompletedProcess(invocation, process.returncode, stdout, stderr)
+    return subprocess.CompletedProcess(
+        invocation,
+        process.returncode,
+        stdout.decode("utf-8", errors="replace"),
+        stderr.decode("utf-8", errors="replace"),
+    )

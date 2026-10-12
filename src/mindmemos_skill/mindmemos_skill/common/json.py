@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, TypeVar
 
-from filelock import FileLock
+from filelock import AsyncFileLock
 from json_repair import repair_json
 from pydantic import BaseModel
 
@@ -72,7 +72,7 @@ def write_json(path: str | Path, value: object) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def append_jsonl(path: str | Path, value: object) -> None:
+async def append_jsonl(path: str | Path, value: object) -> None:
     """Append one JSONL record under a cooperative interprocess file lock.
 
     Args:
@@ -87,7 +87,7 @@ def append_jsonl(path: str | Path, value: object) -> None:
     record = (_serialize(value) + "\n").encode("utf-8")
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(destination) + ".lock"):
+    async with AsyncFileLock(str(destination) + ".lock", run_in_executor=False):
         with destination.open("a+b") as stream:
             if stream.tell():
                 stream.seek(-1, 2)

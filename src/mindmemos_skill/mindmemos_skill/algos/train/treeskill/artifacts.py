@@ -1,41 +1,16 @@
 """Atomic experiment artifacts and reference text normalization."""
 
 import difflib
-import json
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
-from ....common.json import write_json
-from ....skill import content_hash
+from ....common.json import read_json, write_json
+from ....common.secrets import redact_credentials
 from .config import TreeSkillTrainerConfig
-
-REFERENCE_COMMIT = "e83aae887f08eb9fa1596384404dc7757a6a7f2f"
-"""Pinned upstream revision used by the prompt and algorithm parity tests."""
-
-
-def normalize_skill_text(content: str) -> str:
-    """Apply the reference algorithm's text normalization.
-
-    Args:
-        content: Source or candidate Markdown.
-
-    Returns:
-        LF-delimited text with exactly one final newline.
-    """
-    return content.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
-
-
-def compute_skill_content_hash(content: str) -> str:
-    """Hash the exact UTF-8 document text.
-
-    Args:
-        content: Complete Skill document.
-
-    Returns:
-        SHA-256 content identity.
-    """
-    return content_hash(content)
+from .typing import TrainingRollout
 
 
 def record_patch(directory: Path, *, before: str, after: str, payload: dict) -> None:
@@ -61,35 +36,114 @@ def record_patch(directory: Path, *, before: str, after: str, payload: dict) -> 
 
 
 def experiment_config(trainer_config: TreeSkillTrainerConfig) -> dict[str, JsonValue]:
-    """Serialize algorithm settings including explicit connection settings.
+    """Serialize algorithm settings with credentials masked for experiment records.
 
     Args:
         trainer_config: Validated algorithm and provider settings.
 
     Returns:
-        JSON-compatible algorithm configuration with explicit API keys.
+        JSON-compatible algorithm configuration with redacted credentials.
     """
     return {
-        "algorithm": trainer_config.model_dump(mode="json"),
+        "algorithm": redact_credentials(trainer_config.model_dump(mode="json")),
     }
 
 
 def model_usage(directory: Path) -> dict:
-    """Aggregate recorded algorithm requests without double-counting parser retries.
+    """Aggregate trainer-owned item records without counting checkpoint copies.
 
     Args:
-        directory: Root of the per-attempt model audit tree.
+        directory: Run root containing item and routing outcomes.
 
     Returns:
-        Observed token totals, request count and availability information.
+        Logical call counts, reported tokens and explicit usage coverage.
     """
-    calls = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(directory.glob("**/attempt-*.json"))]
+    training = directory / "training" if (directory / "training").is_dir() else directory
+    paths = [
+        *training.glob("items/*/*/attempt-*/outcome.json"),
+        *training.glob("rollouts/train/*/attempt-*/routing/outcome.json"),
+        *directory.glob("test/*/attempt-*/routing/outcome.json"),
+    ]
+    outcomes = [read_json(path) for path in sorted(paths)]
+    responses = [response for outcome in outcomes for response in outcome.get("responses", [])]
+    failed = sum(outcome.get("failed_calls", 0) for outcome in outcomes)
+    interrupted = sum(outcome.get("interrupted", False) for outcome in outcomes)
+    reported = sum(bool(response.get("usage")) for response in responses)
     return {
-        "calls": len(calls),
-        "failed_calls": sum(call["status"] == "failed" for call in calls),
-        "usage_reported_calls": sum(bool(call.get("response", {}).get("usage")) for call in calls),
+        "calls": len(responses) + failed,
+        "failed_calls": failed,
+        "usage_reported_calls": reported,
+        "usage_complete": failed == 0 and interrupted == 0 and reported == len(responses),
+        "interrupted_items": interrupted,
+        "scope": "logical_agent_calls",
         **{
-            key: sum(int(call.get("response", {}).get("usage", {}).get(key, 0)) for call in calls)
+            key: sum(int(response.get("usage", {}).get(key, 0)) for response in responses)
             for key in ("input_tokens", "output_tokens", "total_tokens")
         },
     }
+
+
+def score_report(
+    records: Sequence[TrainingRollout], failures: Sequence[dict[str, JsonValue]], expected: int
+) -> dict[str, JsonValue]:
+    """Report environment scores with explicit execution coverage.
+
+    Args:
+        records: Completed rollouts with actual rewards.
+        failures: Failed execution slots, never substituted with zero rewards.
+        expected: Requested number of physical sampling slots.
+
+    Returns:
+        Mean score and success fraction over completed slots, with denominators.
+    """
+    count = len(records)
+    return {
+        "expected": expected,
+        "completed": count,
+        "failed": len(failures),
+        "skipped": len(failures),
+        "score_sum": sum(record.result.reward.score for record in records),
+        "mean_score": sum(record.result.reward.score for record in records) / count if count else None,
+        "success_count": sum(record.result.reward.success for record in records),
+        "success_rate": sum(record.result.reward.success for record in records) / count if count else None,
+        "complete": count == expected,
+        "rollout_duration_s": sum(record.result.duration_s for record in records),
+        "usage": {
+            "input_tokens": sum(record.result.usage.input_tokens for record in records),
+            "output_tokens": sum(record.result.usage.output_tokens for record in records),
+            "total_tokens": sum(record.result.usage.total_tokens for record in records),
+        },
+    }
+
+
+def record_training_stage(
+    root: Path,
+    name: Literal["evidence", "analysis", "localization", "fusion"],
+    records: Sequence[BaseModel],
+    failures: Sequence[BaseModel | str] = (),
+) -> None:
+    """Save one stage's validated records and independent item failures.
+
+    Args:
+        root: Experiment training directory.
+        name: Stage owning this artifact's fixed JSON format.
+        records: Evidence, analyses, localized lessons or applied edits for this stage.
+        failures: Structured item failures or failed analysis trajectory IDs.
+    """
+    values = [item.model_dump(mode="json") for item in records]
+    errors = [item.model_dump(mode="json") if isinstance(item, BaseModel) else item for item in failures]
+    keys = {"analysis": "records", "localization": "evidence", "fusion": "edits"}
+    write_json(
+        root / "stages" / f"{name}.json", values if name == "evidence" else {keys[name]: values, "failures": errors}
+    )
+
+
+def record_experiment_report(directory: Path, summary: dict[str, JsonValue]) -> None:
+    """Save the current training or held-out experiment report atomically.
+
+    Args:
+        directory: Run root receiving summary.json.
+        summary: Report with status, stage timings, coverage denominators, training
+            metrics and optional held-out scores; unavailable scores remain None.
+    """
+    write_json(directory / "summary.json", summary)

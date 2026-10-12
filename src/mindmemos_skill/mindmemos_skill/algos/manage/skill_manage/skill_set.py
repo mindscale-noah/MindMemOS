@@ -31,11 +31,11 @@ class SkillManageSkillSet(SkillSet):
         """Record selection settings without inspecting Skill version identities."""
         return {"limit": self.limit, **self.algorithm.config_snapshot()}
 
-    def select(self, task: Task) -> list[str]:
+    async def select(self, task: Task) -> list[str]:
         """Organize the explicit scope and request its task-specific member IDs.
 
         Args:
             task: Public task passed to the selection algorithm.
         """
-        self.algorithm.organize(skills=self.skills)
-        return self.algorithm.recommend(task=task, limit=self.limit)
+        (await self.algorithm.organize(skills=self.skills))
+        return await self.algorithm.recommend(task=task, limit=self.limit)

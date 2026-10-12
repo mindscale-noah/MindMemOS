@@ -1,6 +1,5 @@
 """Historical LiveMath reflection parity through the unified result interface."""
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -18,7 +17,7 @@ CASES = json.loads((Path(__file__).parent / "fixtures/skill_forest/livemath_refl
 
 
 @pytest.mark.parametrize("case", CASES, ids=["failure", "success"])
-def test_actual_reflection_request_matches_historical_input(case, tmp_path):
+async def test_actual_reflection_request_matches_historical_input(case, tmp_path):
     sample = DataSample(task=LiveMathTask.model_validate(case["task"]), reward_data=RewardData())
     result = RolloutResult.model_validate(case["result"])
     assert (
@@ -40,19 +39,17 @@ def test_actual_reflection_request_matches_historical_input(case, tmp_path):
             assert {"system": system, "user": user} == case["expected"]
             return '{"batch_size": 1, "patch": {"edits": []}}'
 
-    patch = asyncio.run(
-        generate_patch(
-            skill=Skill(
-                source=SkillContent(
-                    content=case["skill"], name="test-skill", description="Task instructions", standard_format=False
-                )
-            ),
-            samples=[sample],
-            results=[result],
-            runtime=CaptureRuntime(),
-            directory=tmp_path,
-            seed=42,
-        )
+    patch = await generate_patch(
+        skill=Skill(
+            source=SkillContent(
+                content=case["skill"], name="test-skill", description="Task instructions", standard_format=False
+            )
+        ),
+        samples=[sample],
+        results=[result],
+        runtime=CaptureRuntime(),
+        directory=tmp_path,
+        seed=42,
     )
     assert not patch.edits
 

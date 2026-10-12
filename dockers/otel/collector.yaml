@@ -19,6 +19,11 @@ receivers:
           static_configs:
             - targets: ["${env:KAFKA_EXPORTER_TARGET}"]
 
+        - job_name: otel-collector
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["127.0.0.1:8888"]
+
 processors:
   # Batch before writing; keeps ClickHouse inserts efficient.
   batch:

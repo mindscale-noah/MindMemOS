@@ -1,0 +1,766 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": [
+    "mindmemos",
+    "skill",
+    "otel"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "mindmemos-clickhouse"
+        },
+        "query": "SELECT DISTINCT ServiceName FROM otel_logs ORDER BY 1",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "'*'",
+        "current": {
+          "selected": true,
+          "text": [
+            "mindmemos-skill"
+          ],
+          "value": [
+            "mindmemos-skill"
+          ]
+        }
+      },
+      {
+        "name": "project",
+        "label": "Project",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "mindmemos-clickhouse"
+        },
+        "query": "SELECT DISTINCT if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) FROM otel_traces WHERE ServiceName = 'mindmemos-skill' AND if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) != '' ORDER BY 1",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "'*'",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "run",
+        "label": "Run",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "mindmemos-clickhouse"
+        },
+        "query": "SELECT DISTINCT if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) FROM otel_traces WHERE ServiceName = 'mindmemos-skill' AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) != '' ORDER BY 1",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "'*'",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "span_name",
+        "label": "Span name",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "mindmemos-clickhouse"
+        },
+        "query": "SELECT DISTINCT SpanName FROM otel_traces WHERE ServiceName = 'mindmemos-skill' ORDER BY 1",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "'*'",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "request",
+        "label": "Request ID",
+        "type": "textbox",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": []
+      },
+      {
+        "name": "task",
+        "label": "Task ID",
+        "type": "textbox",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": []
+      },
+      {
+        "name": "attempt",
+        "label": "Attempt",
+        "type": "textbox",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": []
+      },
+      {
+        "name": "trace",
+        "label": "Trace ID",
+        "type": "textbox",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": []
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MindMemOS Skill Spans",
+  "uid": "mindmemos-skill-spans",
+  "version": 4,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Span rate by operation",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT toStartOfInterval(Timestamp, INTERVAL 30 SECOND) AS time, SpanName, count() AS spans FROM otel_traces WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR SpanAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR SpanAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) AND ('*' IN (${span_name:singlequote}) OR SpanName IN (${span_name:singlequote})) GROUP BY time, SpanName ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Log rate by severity",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 50,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT toStartOfInterval(Timestamp, INTERVAL 30 SECOND) AS time, SeverityText, count() AS logs FROM otel_logs WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(LogAttributes['project_id'] != '', LogAttributes['project_id'], LogAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(LogAttributes['run_id'] != '', LogAttributes['run_id'], LogAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR LogAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR LogAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) GROUP BY time, SeverityText ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Error spans (selected range)",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT count() AS error_spans FROM otel_traces WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR SpanAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR SpanAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) AND StatusCode = 'Error' AND ('*' IN (${span_name:singlequote}) OR SpanName IN (${span_name:singlequote}))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Total spans (selected range)",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT count() AS spans FROM otel_traces WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR SpanAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR SpanAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) AND ('*' IN (${span_name:singlequote}) OR SpanName IN (${span_name:singlequote}))"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Algorithm execution duration",
+      "description": "Completed algorithm root spans, including failures. Queue wait is excluded.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT toStartOfInterval(Timestamp, INTERVAL 30 SECOND) AS time, SpanName, avg(Duration) / 1e9 AS average_s, quantile(0.95)(Duration) / 1e9 AS p95_s FROM otel_traces WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR SpanAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR SpanAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) AND SpanName IN ('algorithm.train', 'algorithm.evolve') AND ('*' IN (${span_name:singlequote}) OR SpanName IN (${span_name:singlequote})) GROUP BY time, SpanName ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Recent Skill spans",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "format": 1,
+          "rawSql": "SELECT Timestamp, if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) AS project_id, if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) AS run_id, SpanName, round(Duration / 1e9, 3) AS duration_s, StatusCode, SpanAttributes['error.type'] AS error_type, TraceId, SpanId, ParentSpanId FROM otel_traces WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR SpanAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR SpanAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) AND ('*' IN (${span_name:singlequote}) OR SpanName IN (${span_name:singlequote})) ORDER BY Timestamp DESC LIMIT 200"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Recent logs (with trace correlation)",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "format": 1,
+          "rawSql": "SELECT Timestamp, SeverityText, if(LogAttributes['project_id'] != '', LogAttributes['project_id'], LogAttributes['algorithm.project_id']) AS project_id, if(LogAttributes['run_id'] != '', LogAttributes['run_id'], LogAttributes['algorithm.run_id']) AS run_id, Body, TraceId, SpanId FROM otel_logs WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(LogAttributes['project_id'] != '', LogAttributes['project_id'], LogAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(LogAttributes['run_id'] != '', LogAttributes['run_id'], LogAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR LogAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR LogAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) ORDER BY Timestamp DESC LIMIT 200"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Algorithm errors and traceback",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "format": 1,
+          "rawSql": "SELECT Timestamp, if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) AS project_id, if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) AS run_id, SpanName, round(Duration / 1e9, 3) AS duration_s, SpanAttributes['error.type'] AS error_type, SpanAttributes['error.occurred_at'] AS occurred_at, SpanAttributes['error.stage'] AS stage, coalesce(nullIf(SpanAttributes['error.traceback'], ''), nullIf(SpanAttributes['exception.stacktrace'], ''), arrayFirst(x -> x['exception.stacktrace'] != '', `Events.Attributes`)['exception.stacktrace']) AS traceback, StatusMessage, TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR SpanAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR SpanAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) AND StatusCode = 'Error' AND ('*' IN (${span_name:singlequote}) OR SpanName IN (${span_name:singlequote})) ORDER BY Timestamp DESC LIMIT 200"
+        }
+      ],
+      "description": "Empty traceback means the producer did not export it. Timestamp is span start; occurred_at is the exported error time.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceback"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 800
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Request duration and input/output",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 52,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT Timestamp, SpanName, TraceId, SpanAttributes['request_id'] AS request_id, Duration / 1000000 AS duration_ms, SpanAttributes['arguments'] AS input, SpanAttributes['result'] AS output, StatusCode, SpanAttributes FROM otel_traces WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR SpanAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR SpanAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) AND (SpanName LIKE 'service.%' OR SpanName = 'http.request') ORDER BY Timestamp DESC LIMIT 200",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Task end-to-end and current attempt duration",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 60,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT Timestamp, SpanAttributes['task_id'] AS task_id, SpanAttributes['attempt'] AS attempt, toFloat64OrNull(SpanAttributes['waiting_ms']) AS waiting_ms, toFloat64OrNull(SpanAttributes['execution_ms']) AS execution_ms, toFloat64OrNull(SpanAttributes['end_to_end_ms']) AS end_to_end_ms, SpanAttributes['status'] AS status, TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR SpanAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR SpanAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) AND SpanName = 'task.execute' ORDER BY Timestamp DESC LIMIT 200",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Stage durations and failures",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 68,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT Timestamp, SpanAttributes['stage'] AS stage, Duration / 1000000 AS duration_ms, StatusCode, SpanAttributes['task_id'] AS task_id, TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR SpanAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR SpanAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) AND SpanAttributes['stage'] != '' ORDER BY Timestamp DESC LIMIT 200",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Raw spans, exception events and parent relationships",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 76,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT Timestamp, TraceId, SpanId, ParentSpanId, SpanName, SpanAttributes, `Events.Name`, `Events.Attributes`, ResourceAttributes FROM otel_traces WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(SpanAttributes['project_id'] != '', SpanAttributes['project_id'], SpanAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(SpanAttributes['run_id'] != '', SpanAttributes['run_id'], SpanAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR SpanAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR SpanAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) ORDER BY Timestamp DESC LIMIT 200",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Request/task logs with input, output and traceback",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 84,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT Timestamp, TraceId, SpanId, SeverityText, LogAttributes['request_id'] AS request_id, LogAttributes['task_id'] AS task_id, Body, LogAttributes['exception.stacktrace'] AS traceback, LogAttributes FROM otel_logs WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR if(LogAttributes['project_id'] != '', LogAttributes['project_id'], LogAttributes['algorithm.project_id']) IN (${project:singlequote})) AND ('*' IN (${run:singlequote}) OR if(LogAttributes['run_id'] != '', LogAttributes['run_id'], LogAttributes['algorithm.run_id']) IN (${run:singlequote})) AND (arrayStringConcat([${request:sqlstring}]) = '' OR LogAttributes['request_id'] = arrayStringConcat([${request:sqlstring}])) AND (arrayStringConcat([${task:sqlstring}]) = '' OR LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) OR TraceId IN (SELECT TraceId FROM otel_traces WHERE $__timeFilter(Timestamp) AND SpanAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '' UNION DISTINCT SELECT TraceId FROM otel_logs WHERE $__timeFilter(Timestamp) AND LogAttributes['task_id'] = arrayStringConcat([${task:sqlstring}]) AND TraceId != '')) AND (arrayStringConcat([${attempt:sqlstring}]) = '' OR LogAttributes['attempt'] = arrayStringConcat([${attempt:sqlstring}])) AND (arrayStringConcat([${trace:sqlstring}]) = '' OR TraceId = arrayStringConcat([${trace:sqlstring}])) ORDER BY Timestamp DESC LIMIT 300",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 14,
+      "type": "table",
+      "title": "Database task counts by project (latest 30-second sample)",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 92,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT ServiceName, LogAttributes['project_id'] AS project, argMax(JSONExtractInt(Body, 'queued'), Timestamp) AS queued, argMax(JSONExtractInt(Body, 'running'), Timestamp) AS running, argMax(JSONExtractInt(Body, 'succeeded'), Timestamp) AS succeeded, argMax(JSONExtractInt(Body, 'failed'), Timestamp) AS failed, max(Timestamp) AS sampled_at FROM otel_logs WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR LogAttributes['project_id'] IN (${project:singlequote})) AND JSONHas(Body, 'queued') AND JSONHas(Body, 'group_id') GROUP BY ServiceName, project",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 15,
+      "type": "table",
+      "title": "Kafka notification lag (broker offsets, independent of DB backlog)",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 100,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT Attributes['topic'] AS topic, Attributes['consumergroup'] AS consumer_group, Attributes['partition'] AS partition, argMax(Value, TimeUnix) AS lag, max(TimeUnix) AS sampled_at FROM otel_metrics_gauge WHERE $__timeFilter(TimeUnix) AND MetricName = 'kafka_consumergroup_lag' AND Attributes['topic'] IN (SELECT JSONExtractString(Body, 'topic') FROM otel_logs WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) AND ('*' IN (${project:singlequote}) OR LogAttributes['project_id'] IN (${project:singlequote})) AND JSONHas(Body, 'group_id')) GROUP BY topic, consumer_group, partition ORDER BY topic, consumer_group, partition",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 16,
+      "type": "table",
+      "title": "Collector receive/export health (latest cumulative counters)",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 108,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT MetricName, Attributes, argMax(Value, TimeUnix) AS value, max(TimeUnix) AS sampled_at FROM otel_metrics_sum WHERE $__timeFilter(TimeUnix) AND (MetricName LIKE 'otelcol_receiver_%' OR MetricName LIKE 'otelcol_exporter_%') GROUP BY MetricName, Attributes ORDER BY MetricName",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 17,
+      "type": "table",
+      "title": "Last received data (empty or stale data is not zero activity)",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "mindmemos-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 116,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "mindmemos-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "sql",
+          "rawSql": "SELECT ServiceName, count() AS received_logs, max(Timestamp) AS last_received_at, dateDiff('second', max(Timestamp), now()) AS seconds_since_last_log FROM otel_logs WHERE $__timeFilter(Timestamp) AND ('*' IN (${service:singlequote}) OR ServiceName IN (${service:singlequote})) GROUP BY ServiceName",
+          "format": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    }
+  ]
+}

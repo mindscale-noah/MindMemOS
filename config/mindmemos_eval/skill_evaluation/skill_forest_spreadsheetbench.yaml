@@ -8,6 +8,7 @@ environment:
       model: gpt-5.4-mini
       api_key: null  # Fill explicitly before model calls.
       base_url: null
+    transactional_recalculation: false
 data:
   class_name: spreadsheetbench
   config:

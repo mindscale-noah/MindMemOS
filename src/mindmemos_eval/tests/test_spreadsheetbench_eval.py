@@ -131,13 +131,13 @@ def test_compare_workbooks_uses_spreadsheetbench_value_semantics(tmp_path: Path)
     assert generate_cell_names("A1:B2") == ["A1", "A2", "B1", "B2"]
 
 
-def test_agent_tools_keep_access_inside_workdir(tmp_path: Path) -> None:
+async def test_agent_tools_keep_access_inside_workdir(tmp_path: Path) -> None:
     tools = ReactAgentTools(tmp_path)
 
-    assert "Successfully wrote" in tools.write("note.txt", "hello")
-    assert tools.read("note.txt") == "hello"
-    assert "outside the working directory" in tools.read("../secret.txt")
-    assert "installing packages is disabled" in tools.shell(["pip install nope"])
+    assert "Successfully wrote" in (await tools.write("note.txt", "hello"))
+    assert (await tools.read("note.txt")) == "hello"
+    assert "outside the working directory" in (await tools.read("../secret.txt"))
+    assert "installing packages is disabled" in (await tools.shell(["pip install nope"]))
 
 
 class _CopyingAgentFactory:
@@ -151,7 +151,7 @@ class _CopyingAgentFactory:
 
         from mindmemos_eval.skills.agents import RunResult
 
-        del system_prompt
+        # Match the agent factory interface; the deterministic agent needs no prompt.
         value = self.value
 
         class Agent:

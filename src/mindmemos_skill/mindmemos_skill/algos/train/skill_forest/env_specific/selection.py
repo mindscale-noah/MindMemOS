@@ -23,5 +23,5 @@ def select_env_adapter(env: Environment) -> SkillForestEnvAdapter:
         environment_name = f"{type(env).__module__}.{type(env).__qualname__}"
     adapter_name = environment_name if environment_name in BUILTIN_ADAPTER_NAMES else "generic"
     adapter = SkillForestEnvAdapter.build(adapter_name, {})
-    logger.info("Skill-Forest environment=%s adapter=%s (automatic selection)", environment_name, adapter_name)
+    logger.info(f"adapter.selected | algorithm=skill_forest environment={environment_name} adapter={adapter_name}")
     return adapter

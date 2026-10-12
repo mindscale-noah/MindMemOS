@@ -1,6 +1,8 @@
 """Verify scoped process control and destructive cleanup boundaries."""
 
 import json
+import os
+import signal
 import subprocess
 import sys
 import threading
@@ -11,6 +13,49 @@ from unittest.mock import Mock
 import pytest
 
 from scripts.dev import control, docker
+
+
+def test_repeated_interrupts_do_not_abandon_children(tmp_path):
+    """Reap a child that ignores termination even if shutdown is interrupted again."""
+    ready = tmp_path / "ready"
+    stopping = tmp_path / "stopping"
+    child_code = (
+        "import os, signal, time; from pathlib import Path; "
+        f"signal.signal(signal.SIGTERM, lambda *_: Path({str(stopping)!r}).touch()); "
+        f"Path({str(ready)!r}).write_text(str(os.getpid())); time.sleep(60)"
+    )
+    launcher_code = (
+        "import sys; from pathlib import Path; from scripts.dev import run; "
+        f"run.ROOT=Path({str(tmp_path)!r}); "
+        f"raise SystemExit(run._run_apis([[sys.executable, '-c', {child_code!r}]]))"
+    )
+    launcher = subprocess.Popen([sys.executable, "-c", launcher_code], start_new_session=True)
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists():
+            assert launcher.poll() is None
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        launcher.send_signal(signal.SIGINT)
+        while not stopping.exists():
+            assert launcher.poll() is None
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        launcher.send_signal(signal.SIGINT)
+        launcher.send_signal(signal.SIGTERM)
+        assert launcher.wait(timeout=15) == 130
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(ready.read_text()), 0)
+        assert not list(control._directory(tmp_path).glob("*.sock"))
+    finally:
+        if launcher.poll() is None:
+            launcher.kill()
+            launcher.wait(timeout=5)
+        if ready.exists():
+            try:
+                os.kill(int(ready.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def test_cancel_clean_changes_nothing(tmp_path, monkeypatch, capsys):
@@ -128,8 +173,11 @@ def test_collector_mount_is_durable_and_matches_dependencies(tmp_path, monkeypat
     docker.prepare_collector(tmp_path, DependencyPlan(services=services))
     mount = Path(os.environ[env.OTEL_CONFIG])
     generated = yaml.safe_load(mount.read_text())
-    assert ("prometheus" in generated["receivers"]) == kafka
-    assert ("metrics" in generated["service"]["pipelines"]) == kafka
+    assert "prometheus" in generated["receivers"]
+    jobs = generated["receivers"]["prometheus"]["config"]["scrape_configs"]
+    assert any(job["job_name"] == "kafka-exporter" for job in jobs) == kafka
+    assert any(job["job_name"] == "otel-collector" for job in jobs)
+    assert "metrics" in generated["service"]["pipelines"]
     assert generated["exporters"]["clickhouse"]["password"] == "${env:CLICKHOUSE_PASSWORD}"
     assert mount.is_file() and target.read_bytes() == original
     modified = mount.stat().st_mtime_ns

@@ -61,7 +61,7 @@ class Training(TrainingPipeline[Options]):
 
     config_type = Options
 
-    async def train(self, request, *, env, adapter=None, reporter=None):
+    async def train(self, request, *, env, adapter=None):
         raise NotImplementedError
 
 

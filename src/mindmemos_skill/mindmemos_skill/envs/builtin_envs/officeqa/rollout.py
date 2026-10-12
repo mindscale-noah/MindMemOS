@@ -42,7 +42,7 @@ class OfficeQAEnvironment(Environment[OfficeQAConfig]):
             raise ValueError("Injected agent config must match the environment's agent config")
         self.agent = agent if agent is not None else OpenAIChatAgent(config.agent)
 
-    def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+    async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Expose only allowlisted public documents through explicit tools."""
         if not isinstance(task, OfficeQATask) or not isinstance(reward_data, OfficeQARewardData):
             raise TypeError("OfficeQA requires OfficeQATask and OfficeQARewardData")
@@ -65,7 +65,7 @@ class OfficeQAEnvironment(Environment[OfficeQAConfig]):
         trajectory, responses = list(messages), []
         output, answer, failure = "", "", ""
         for turn in range(1, self.config.max_tool_turns + 1):
-            response = self.agent.run_messages(messages=messages, tools=TOOL_SCHEMAS)
+            response = await self.agent.run_messages(messages=messages, tools=TOOL_SCHEMAS)
             if not isinstance(response.output, str):
                 raise TypeError("OfficeQA requires a text agent output")
             output = response.output
@@ -86,7 +86,9 @@ class OfficeQAEnvironment(Environment[OfficeQAConfig]):
                 except (ValueError, TypeError) as exc:
                     observation = f"Error: {exc}"
                 else:
-                    observation = run_tool(function["name"], arguments, task.documents, self.config.max_tool_chars)
+                    observation = await run_tool(
+                        function["name"], arguments, task.documents, self.config.max_tool_chars
+                    )
                 feedback = {"role": "tool", "tool_call_id": call["id"], "content": observation}
                 messages.append(feedback)
                 trajectory.append(feedback)
@@ -107,6 +109,6 @@ class OfficeQAEnvironment(Environment[OfficeQAConfig]):
         return RolloutResult(
             output=output,
             trajectory=trajectory,
-            reward=evaluate(answer, reward_data, fail_reason=failure),
+            reward=(await evaluate(answer, reward_data, fail_reason=failure)),
             usage=total_usage(responses),
         )

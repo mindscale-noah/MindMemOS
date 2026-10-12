@@ -1,19 +1,49 @@
 """Registered environment adaptation for TreeSkill analysis and routing."""
 
 import json
+from functools import partial
+from importlib.resources import files
+from pathlib import Path
 
 from ....envs.base import Environment
 from ....envs.typing import Task
 from ....registry.base import Registrable
 from .config import TreeSkillEnvAdapterConfig
-from .prompts import ANALYSIS_SYSTEM_PROMPT, ROUTING_SYSTEM_PROMPT, analysis_user_prompt
 from .typing import (
     TraceEvidence,
+    TrainingRollout,
     TrajectoryAnalyzer,
     TreeSkillAnalysisContext,
     TreeSkillAnalysisRuntime,
     TreeSkillRoutingContext,
 )
+
+ANALYSIS_SYSTEM_PROMPT = (
+    files(f"{__package__}.construction.prompts").joinpath("analysis_system_prompt.txt").read_text(encoding="utf-8")
+)
+
+ROUTING_SYSTEM_PROMPT = (
+    files(f"{__package__}.construction.prompts").joinpath("routing_system_prompt.txt").read_text(encoding="utf-8")
+)
+
+
+def analysis_user_prompt(evidence: TraceEvidence, *, source: str) -> str:
+    """Analysis user prompt.
+
+    Args:
+        evidence: Ordered trajectory-derived evidence available to this stage.
+        source: Outcome label determined from the recorded score.
+    """
+    payload = {
+        "instance_id": evidence.trajectory_id,
+        "task_id": evidence.task_id,
+        "record_source": source,
+        "score": evidence.score,
+        "evaluator_feedback": evidence.annotation_detail,
+        "annotation_metadata": evidence.annotation_metadata,
+        "trajectory": evidence.transcript,
+    }
+    return "Analyze this trajectory.\n\n" + json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 class TreeSkillEnvAdapter(Registrable[TreeSkillEnvAdapterConfig]):
@@ -104,25 +134,44 @@ class TreeSkillEnvAdapter(Registrable[TreeSkillEnvAdapterConfig]):
             },
         ]
 
+    def prepare_analysis_workspace(self, trajectory: TrainingRollout, workspace: Path) -> None:
+        """Prepare optional tool inputs when requested by the trainer.
+
+        Args:
+            trajectory: Training execution with any permitted analysis inputs.
+            workspace: Fresh trainer-owned tool workspace.
+        """
+        # Generic analysis needs no additional tool inputs.
+
+    def analysis_phases(self, evidence: list[TraceEvidence], threshold: float) -> list[list[TraceEvidence]]:
+        """Return the environment's required scheduling order.
+
+        Args:
+            evidence: Ordered training evidence.
+            threshold: Shared protocol cutoff used by outcome-aware adapters.
+
+        Returns:
+            Independent items grouped into sequential phases.
+        """
+        return [evidence]
+
     def create_analyzer(self, runtime: TreeSkillAnalysisRuntime) -> TrajectoryAnalyzer:
         """Construct the default analyzer with this adapter's message hook.
 
         Args:
-            runtime: Borrowed recorded models, stage settings and output directory.
+            runtime: Direct agents and fixed stage settings.
 
         Returns:
             An analyzer ready to run, without making calls during construction.
         """
-        from .analysis import TreeSkillTrajectoryAnalyzer
+        from .construction.analysis import analyze_trajectory, parse_analysis
 
         config = runtime.config
-        return TreeSkillTrajectoryAnalyzer(
-            chat_model=runtime.chat_model,
-            task=config.analysis_task,
-            concurrency=config.analysis_concurrency,
+        runtime.agent.output_parser = parse_analysis
+        return partial(
+            analyze_trajectory,
+            agent=runtime.agent,
             success_score_threshold=config.success_score_threshold,
-            temperature=config.analysis_temperature,
-            max_tokens=config.analysis_max_tokens,
             env_adapter=self,
         )
 

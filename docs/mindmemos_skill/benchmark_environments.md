@@ -61,18 +61,18 @@ Windows 使用对应环境下的 `Scripts/python.exe`。`make dev` 默认将项�
 
 安装成功后写入完成标记。后续初始化直接复用已安装环境，不重复安装；并发初始化通过文件锁避免重复准备。安装中断时不写完成标记，下次初始化可以重试。若锁定依赖清单变化，则报错提示重建该环境，避免在任务运行时修改现有依赖。模型在 shell 中使用 `python` 或 `python3` 时，自动运行对应协议的解释器。
 
-依赖清单随 Python 包分发，位于 `mindmemos_skill/envs/builtin_envs/spreadsheetbench/runtime/requirements/`：
+依赖清单随 Python 包分发，位于 `mindmemos_skill/envs/builtin_envs/spreadsheetbench/`：
 
 | 协议 | 对齐来源 | 依赖清单 | 表格执行库 |
 | --- | --- | --- | --- |
-| `text_action` | [Trace2Skill 官方 xlsx Skill](https://github.com/Qwen-Applications/Trace2Skill/blob/main/spreadsheet_agent/skills/xlsx/SKILL.md) | `text_action/requirements.in` | openpyxl、pandas；NumPy 是间接依赖 |
-| `tool_calling` | [SkillOpt 官方表格协议](https://github.com/microsoft/SkillOpt/blob/main/skillopt/envs/spreadsheetbench/prompts/react_system.md)、[项目依赖](https://github.com/microsoft/SkillOpt/blob/main/pyproject.toml) | `tool_calling/requirements.in` | openpyxl、pandas、NumPy |
+| `text_action` | [Trace2Skill 官方 xlsx Skill](https://github.com/Qwen-Applications/Trace2Skill/blob/main/spreadsheet_agent/skills/xlsx/SKILL.md) | `text_action_mode/requirements/requirements.in` | openpyxl、pandas；NumPy 是间接依赖 |
+| `tool_calling` | [SkillOpt 官方表格协议](https://github.com/microsoft/SkillOpt/blob/main/skillopt/envs/spreadsheetbench/prompts/react_system.md)、[项目依赖](https://github.com/microsoft/SkillOpt/blob/main/pyproject.toml) | `tool_call_mode/requirements/requirements.in` | openpyxl、pandas、NumPy |
 
 每套清单对应一个 `requirements.txt`，锁定全部直接和间接依赖版本。上游没有锁定 openpyxl/pandas 的具体版本；这里固定本地验证的 openpyxl 3.1.5 和 pandas 2.3.3。模型客户端、训练、缓存等主程序依赖由 MindMemOS 服务环境提供，不复制到任务环境。
 
 两个 SpreadsheetBench 协议都在初始化时检查管理的解释器、依赖导入和工作簿读写；检查成功后直接返回，失败抛出环境异常，不记录成任务得分 0。解释器路径统一保存在内部 `execution.python_command` 中；rollout 的 `audit/execution.json`、采样和重测的 manifest 直接从该字段读取路径。依赖版本由锁定的 requirements 清单确定，不额外采集或确认版本号。工具执行时将工作目录设为当前任务的 workspace。
 
-Python 工具依赖与公式重算依赖分开准备：LibreOffice/匹配的 pyuno 仍由现有重算配置提供，安装上述 Python 清单不能替代 LibreOffice。任务中的重算助手使用服务的 Python（保留虚拟环境路径），以加载服务侧重算模块。
+Python 工具依赖与公式重算依赖分开准备：评分器的 Python 代码调用宿主 LibreOffice 的无界面重保存命令，不依赖 LibreOffice 自带的 Python 或 pyuno。安装上述 Python 清单不能替代 LibreOffice。
 
 公共执行层在 macOS/Linux 使用 `/bin/sh -c`，Windows 使用 `cmd.exe /d /s /c`。命令需要符合当前系统 shell 的语法；不会将 Bash 脚本自动翻译为 PowerShell。每条命令启动新进程，工作目录文件跨轮保留，内存、cd 和 export 不跨命令保留。
 
@@ -89,6 +89,38 @@ Python 工具依赖与公式重算依赖分开准备：LibreOffice/匹配的 pyu
 安装 `mindmemos-skill[alfworld]`，准备官方数据和配置。将官方 YAML 解析后的字典传入 `simulator`，完整设置进入 rollout identity。数据 manifest 指向具体 `gamefile`；每次 rollout 独立创建、reset、step 并在 `finally` 中关闭 simulator。`history_length` 控制 prompt 中最近的 observation/action 数量，完整 trajectory 仍会保留。
 
 模型或基础设施异常直接向上传播，不沿用旧代码把 provider error 转成 `look` 动作继续计分的做法。有效模型响应缺少 action tag 时，仍保留参考实现的 `look` fallback。
+
+## Skill-Forest README 配置核对（2026-10-09）
+
+五个环境 README 的初始化示例显式设置论文实验参数，不依赖通用 Agent 默认值。
+核对依据为本地 Skill-Forest 论文 `sections/05_results.tex`、
+`skillopt-self-validate` 实验仓库的 `configs/<benchmark>/default.yaml`、
+`random-skill-forest/run_dataset.sh` 及对应环境的生效代码。实验仓库 HEAD 为
+`5d041ffe6e63409d7f05135e7c705cf85357900e`；工作区含修改，因此这里记录配置核对，
+不声明整个执行器与该提交或历史运行逐字一致。
+
+| 参数 | 当前通用默认值 | README 显式实验值 |
+| --- | --- | --- |
+| target model | 调用方必填 | `gpt-5.4-mini` |
+| completion tokens | 4096 | 16384，五个环境相同 |
+| reasoning effort | 不发送 | `medium`，五个环境相同 |
+| SearchQA | 1 轮、6000 context chars | 显式设置相同值 |
+| LiveMath | 单轮、choice seed 42 | 单轮、显式 choice seed 42 |
+| OfficeQA | 12 轮 | 显式 24 轮、本地文档工具 |
+| SpreadsheetBench tool calling | 30 轮、tool 加载、无停滞截断、无评分前重算 | 显式设置相同值 |
+| ALFWorld | 50 步、history 5、seed 42 | 显式 50 步、history 2、seed 42 |
+
+OfficeQA 的 `read` 仍由工具实现限制为 4000 字符；`max_tool_chars=16000` 是额外上限，
+不能将它表述为每次 read 返回 16000 字符。ALFWorld 下载的 0.4.2 base config
+在 dataset、logic、env、general 四个部分与参考 `vendor/config_tw.yaml` 相同；
+示例仅替换本地数据路径并关闭 CUDA。
+
+SpreadsheetBench README 的主示例只运行 Skill-Forest 的原生工具环境。
+`spreadsheetbench_text_action` 属于另一套执行协议，不因换成 Skill-Forest split 就成为论文配置。
+README 示例均为单次 no-skill rollout；论文的 Skill 训练、候选选择、三次测试取均值以及
+整题超时和并发由实验调用层配置。模型重试、提示词和工具实现的完整一致性不由本次参数核对保证。
+五组 split 已核对：SearchQA、LiveMath、OfficeQA、SpreadsheetBench 的 ID 和顺序
+与参考 manifest 相同；ALFWorld 使用项目 ID，但对应 gamefile 和顺序与参考 manifest 相同。
 
 ## 验证
 
@@ -111,6 +143,7 @@ tool_env = Environment.build("spreadsheetbench_tool_calling", {
     "agent": {"model": "your-model"},
     "skill_loading_mode": "tool",
     "max_turns": 30,
+    "transactional_recalculation": False,
 })
 text_env = Environment.build("spreadsheetbench_text_action", {
     "agent": {"model": "your-model"},
@@ -126,6 +159,31 @@ text_env = Environment.build("spreadsheetbench_text_action", {
 `SpreadsheetBenchTextActionEnvironment` 固定解析文本 `Action:` JSON，仅提供 bash；结果以用户消息 `Observation:` 返回，不发送原生工具声明。技能预加载到 system prompt。该环境要求单工作簿，展示前 5 行预览，以 `ACTION: TASK_COMPLETE` 结束，并在输出文件缺失时提醒一次。默认连续 5 次相同动作结果或格式错误会停止。
 
 两个类互不继承，共同继承 `SpreadsheetExecutionEnvironment`。公共基类负责工作区准备、case 遍历、交互循环、usage 汇总和评分；具体协议由各子类提供。旧环境注册名 `spreadsheetbench` 和 `spreadsheetbench_reference` 已移除，旧配置需迁移到上述新名称，rollout 使用新的工作目录。
+
+text-action 默认开启 `transactional_recalculation`。环境向任务目录复制独立 `.treeskill_recalculate.py`，提示词要求 Agent 使用受控 Python 执行该脚本。脚本通过 `shutil.which()` 从进程 PATH 查找 `soffice`（Windows 优先 `soffice.com`），不导入 UNO，不寻找其他 Python，不接受显式 LibreOffice 路径配置，也不生成 soffice 启动脚本。部署时必须把 LibreOffice 程序目录加入启动服务/任务的系统 PATH；执行层保留原 PATH，仅前置受控 Python 的启动目录。
+
+重算先复制 OOXML 工作簿、清除旧公式缓存并设置自动计算，再调用 LibreOffice 无界面转换。每次使用独立临时目录和用户配置目录；转换失败或公式数量变化时保留原文件，检查通过才替换 `output.xlsx`。`success` / `not_needed` 允许完成，`errors_found` / `failure` 要求修正重试。评分和训练失败 analyzer 的 `evaluate_output` 只读输出缓存，不自动补算。analyzer 复制工作区后生成指向分析副本 `agent_work/output.xlsx` 的重算命令；与任务 Agent 共用脚本与受控 Python 环境。关闭开关时不检查 soffice，也不提供重算命令。
+
+该流程保留远端 `feat/treeskill-integration`（`e83aae887f08eb9fa1596384404dc7757a6a7f2f`）的主动重算和 PASS 门控；底层使用命令行转换替代 UNO `calculateAll()`，不声称两种计算行为在全部工作簿上严格等价。重算脚本可按各平台 PATH 定位程序，但完整 text-action 环境仍需 bash，原生 Windows 应提供相应 shell。
+
+tool-calling 的行为保持不变：默认关闭 `transactional_recalculation`，显式开启后由公共评分器自动重算，保留原始 `output.xlsx` 并生成 `output.recalc.xlsx`。该路径仍使用 LibreOffice 无界面转换，不依赖 UNO Python，通过 `SPREADSHEETBENCH_SOFFICE_PATH` 指定 soffice，状态写入 `.spreadsheetbench_recalc_status.json`。
+
+可使用 text-action 的实际 bash/Python 调用链验证 LibreOffice 重算，不访问模型：
+
+```bash
+MINDMEMOS_HOME="$PWD/.mindmemos" PYTHONPATH=.:src/mindmemos_skill:src/mindmemos_sdk \
+  .venv/bin/python -m scripts.sampling.check_text_action_recalculation \
+  --output output/text_action_recalculation_check
+```
+
+可用 Python 单独检查 tool-calling 的自动重算和评分，不访问模型。`--output` 必须是新的目录，检查覆盖默认值、显式开启、无公式跳过、目标范围外公式错误，以及手动计算模式下的过期缓存：
+
+```bash
+PYTHONPATH=.:src/mindmemos_skill:src/mindmemos_sdk .venv/bin/python -m scripts.sampling.check_recalculation \
+  --output output/spreadsheetbench_recalculation_check
+```
+
+检查生成测试工作簿和 `report.json`；开启重算时应得到缓存值 `3`、`30`、`37`、`ok`，原始 `output.xlsx` 字节保持不变。
 
 ### 算法通过继承定制交互
 

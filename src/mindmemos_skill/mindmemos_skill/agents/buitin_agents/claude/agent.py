@@ -16,7 +16,7 @@ class ClaudeAgent(Agent[ClaudeConfig]):
     config_type = ClaudeConfig
     """Settings validated by the shared registry."""
 
-    def run(self, *, system: str, user: str, workspace: Path) -> AgentResult:
+    async def run(self, *, system: str, user: str, workspace: Path) -> AgentResult:
         """Execute a complete native agent run.
 
         Args:
@@ -57,7 +57,7 @@ class ClaudeAgent(Agent[ClaudeConfig]):
         )
         if self.config.max_completion_tokens is not None:
             overrides[CLAUDE_MAX_TOKENS_ENV] = str(self.config.max_completion_tokens)
-        stream = parse_json_lines(run_cli(command, workspace, self.config, overrides, user), cli_name="Claude")
+        stream = parse_json_lines((await run_cli(command, workspace, self.config, overrides, user)), cli_name="Claude")
         terminal = next((event for event in reversed(stream) if event.get("type") == "result"), None)
         if terminal is None or terminal.get("is_error") or terminal.get("subtype") not in {None, "success"}:
             raise RuntimeError(f"Claude did not complete: {terminal}")

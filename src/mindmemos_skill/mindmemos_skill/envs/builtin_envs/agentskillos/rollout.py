@@ -61,7 +61,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
         identity[f"evaluator:{self.config.benchmark_root}"] = digest
         return identity
 
-    def _score(self, task_path: Path, output_dir: Path, report_path: Path, *, preflight: bool = False) -> None:
+    async def _score(self, task_path: Path, output_dir: Path, report_path: Path, *, preflight: bool = False) -> None:
         """Run the isolated official scorer and fail on process or setup errors."""
         if evaluator_digest(self.config.benchmark_root) != self._evaluator_digest:
             raise ValueError("Official evaluator sources changed; construct a new environment")
@@ -80,11 +80,11 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
         ]
         if preflight:
             command.append("--preflight")
-        result = execute(command, task_path.parent, self.config.evaluator)
+        result = await execute(command, task_path.parent, self.config.evaluator)
         if result.returncode:
             raise RuntimeError(f"Official AgentSkillOS scoring failed: {result.stderr}")
 
-    def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+    async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Prepare public materials, execute native tools, then privately score artifacts."""
         from ....algos.manage.skill_manage.parsing import extract_frontmatter
 
@@ -122,7 +122,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
         task_path = audit / f"official-task-{identifier}.json"
         report_path = audit / f"official-score-{identifier}.json"
         task_path.write_text(json.dumps(reward_data.task_config, ensure_ascii=False), encoding="utf-8")
-        self._score(task_path, outputs, report_path, preflight=True)
+        (await self._score(task_path, outputs, report_path, preflight=True))
         system = (
             "Complete the user's task by producing actual deliverable files. "
             "Available Skills and their resources are in .agents/skills/. Read relevant SKILL.md files "
@@ -132,13 +132,13 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
             "Do not read files outside this execution directory."
         )
         user = task.instruction + "\n\nOutput directory: workspace/\nExpected deliverables:\n" + "\n".join(task.outputs)
-        response = self.agent.run(system=system, user=user, workspace=attempt)
+        response = await self.agent.run(system=system, user=user, workspace=attempt)
         if not isinstance(response.output, str):
             raise TypeError("AgentSkillOS executor must return a text completion")
         # Avoid allowing generated links to redirect private scoring outside the outputs.
         if outputs.is_symlink() or any(path.is_symlink() for path in outputs.rglob("*")):
             raise ValueError("Deliverables must not contain symlinks")
-        self._score(task_path, outputs, report_path)
+        (await self._score(task_path, outputs, report_path))
         official = json.loads(report_path.read_text(encoding="utf-8"))
         if official.get("task_id") != task.id or type(official.get("passed")) is not bool:
             raise ValueError("Official scoring returned a mismatched or invalid task result")

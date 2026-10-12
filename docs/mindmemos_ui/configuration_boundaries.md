@@ -70,9 +70,9 @@ Memory 配置仅包含 Memory 服务连接字段。字段名参考当前 SDK；�
 | TreeSkill 三阶段 temperature、max_tokens | 算法开发者 | 分析/定位/融合温度 1/0/0；token 限制 4096/2048/4096 | `TreeSkillTrainerConfig`；不从普通客户端连接配置读取 |
 | `env_adapter`、`annotation_mode`、`require_skill_match`、`success_score_threshold` | 算法 / 环境协议管理 | 当前 generic、required、true、1.0；阈值应匹配环境评分定义 | 协议变更需显式实验配置和记录，不能让普通请求随意关闭匹配检查 |
 | `algorithm_version`、`prompt_version`、各阶段 `*_task` | 算法开发者 | 随代码/协议版本管理，作为追踪信息 | 当前配置字段仍可被 YAML 覆盖；建议产品组装层限制任意修改，不能仅改版本名冒充新算法 |
-| `reference_routing`、`tree_metadata`、树结构及优化得到的指令 | 算法生成 / 版本管理 | 随 Skill 产物保存与恢复，不作为用户连接配置 | `TreeSkillConfig` 与 Skill 快照；结构和指令不放全局 ENV |
+| `tree_metadata`、树结构及优化得到的指令 | 算法生成 / 版本管理 | 随 Skill 产物保存与恢复，不作为用户连接配置 | `TreeSkillConfig` 与 Skill 快照；结构和指令不放全局 ENV |
 | 执行器、Shell、环境变量、命令超时 | 部署者 / 环境适配层 | 当前使用运行 Python 和平台 Shell；按服务运行环境指定 | `ExecutionConfig`；远端执行使用服务端路径和依赖 |
-| 参考实验专用选项、数据加载器、环境配置 | 实验者 / 环境维护者 | 通过专用实验 YAML 显式配置；不塞进普通服务连接文件 | `TreeSkillExperimentConfig`、环境 Config；保留训练/验证/测试分离 |
+| 参考实验专用选项、数据加载器、环境配置 | 实验者 / 环境维护者 | 通过专用实验 YAML 显式配置；不塞进普通服务连接文件 | 训练脚本参数、环境 Config；保留训练/验证/测试分离 |
 | 工作目录、运行 ID、最终生效参数、审计快照 | 服务端自动管理 | 每次运行独立目录，记录完整有效配置与版本，凭据脱敏 | Pipeline 负责运行资源和持久化；算法不直接访问业务数据库 |
 
 ## 文件组织建议

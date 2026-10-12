@@ -20,10 +20,10 @@ service:
           config:
             optimizer: {model: gpt-5.4-mini, api_key: null, base_url: null}
             router: {model: gpt-5.4-mini, api_key: null, base_url: null}
-            rollout_concurrency: 4
-            analysis_concurrency: 4
-            localization_concurrency: 4
-        evaluation_concurrency: 4
+            rollout_concurrency: 32
+            analysis_concurrency: 32
+            localization_concurrency: 32
+        evaluation_concurrency: 32
     skill_forest:
       class_name: training
       config:

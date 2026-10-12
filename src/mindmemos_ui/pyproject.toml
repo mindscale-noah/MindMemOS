@@ -3,7 +3,7 @@ name = "mindmemos-ui"
 version = "0.1.0"
 description = "Local MindMemOS skill workbench"
 requires-python = ">=3.11,<3.14"
-dependencies = ["mindmemos-skill>=0.0.1", "mindmemos-sdk>=0.1.4", "fastapi>=0.136.1", "uvicorn>=0.47.0", "python-dotenv>=1,<2"]
+dependencies = ["mindmemos-skill>=0.0.1", "mindmemos-sdk>=0.1.4", "fastapi>=0.136.1", "uvicorn>=0.47.0", "python-dotenv>=1,<2", "httpx>=0.28,<1"]
 
 [project.scripts]
 mindmemos-ui = "mindmemos_ui.cli:main"

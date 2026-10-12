@@ -17,7 +17,7 @@ class CodexAgent(Agent[CodexConfig]):
     config_type = CodexConfig
     """Settings validated by the shared registry."""
 
-    def run(self, *, system: str, user: str, workspace: Path) -> AgentResult:
+    async def run(self, *, system: str, user: str, workspace: Path) -> AgentResult:
         """Execute a complete native agent run.
 
         Args:
@@ -59,7 +59,7 @@ class CodexAgent(Agent[CodexConfig]):
             command.extend(["--config", f"developer_instructions={json.dumps(system)}"])
         command.extend([*self.config.extra_args, "-"])
         stream = parse_json_lines(
-            run_cli(command, workspace, self.config, environment(self.config, CODEX_API_KEY_ENV), user),
+            (await run_cli(command, workspace, self.config, environment(self.config, CODEX_API_KEY_ENV), user)),
             cli_name="Codex",
         )
         terminal = next(

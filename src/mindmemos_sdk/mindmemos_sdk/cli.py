@@ -818,7 +818,7 @@ def _handle_memory_dreaming(args: argparse.Namespace) -> int:
 
 
 def _handle_doctor(args: argparse.Namespace) -> int:
-    del args
+    # CLI handlers share the argparse namespace signature; doctor uses persisted configuration.
     manager = ConfigManager()
     if not manager.exists():
         print(f"config: missing ({manager.config_path})")

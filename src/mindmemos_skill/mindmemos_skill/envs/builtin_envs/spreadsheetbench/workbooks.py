@@ -3,6 +3,7 @@
 import shutil
 from pathlib import Path
 
+from .recalculation import STATUS_FILENAME
 from .typing import SpreadsheetBenchRewardData, SpreadsheetBenchTask
 
 
@@ -30,5 +31,7 @@ def prepare_cases(task: SpreadsheetBenchTask, reward_data: SpreadsheetBenchRewar
         destination.unlink(missing_ok=True)
         shutil.copyfile(source.path, destination)
         (directory / "output.xlsx").unlink(missing_ok=True)
+        (directory / "output.recalc.xlsx").unlink(missing_ok=True)
+        (directory / STATUS_FILENAME).unlink(missing_ok=True)
         directories.append(directory)
     return directories

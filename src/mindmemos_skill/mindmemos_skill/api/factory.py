@@ -65,7 +65,9 @@ async def create_service(
     )
     try:
         async with AsyncExitStack() as startup:
-            await startup.enter_async_context(AsyncFileLock(str(resolved.home / ".storage.lock")))
+            await startup.enter_async_context(
+                AsyncFileLock(str(resolved.home / ".storage.lock"), run_in_executor=False)
+            )
             await service.initialize_storage()
             manager = service.task_manager
             if isinstance(manager, KafkaTaskManager):
@@ -161,6 +163,7 @@ async def _assemble_service(
             if config.task_manager.mode == "local":
                 manager = LocalTaskManager(
                     service.execute_task,
+                    tracer=observability.telemetry.tracer,
                     max_concurrency=config.task_manager.max_concurrency,
                     max_buffered=config.task_manager.max_buffered,
                 )
@@ -171,6 +174,7 @@ async def _assemble_service(
                     topic=config.task_manager.topic,
                     group_id=config.task_manager.group_id,
                     handler=service.execute_task if config.task_manager.worker else None,
+                    tracer=observability.telemetry.tracer,
                     max_concurrency=config.task_manager.max_concurrency,
                     max_buffered=config.task_manager.max_buffered,
                     scan_interval_seconds=config.task_manager.scan_interval_seconds,
@@ -179,13 +183,13 @@ async def _assemble_service(
         return service
     except BaseException:
         if observability is not None and observability_database is None:
-            observability.close()
+            (await observability.close())
         async with AsyncExitStack() as cleanup:
             for backend in backends.values():
                 if isinstance(backend, Pipeline):
                     cleanup.push_async_callback(backend.close)
                 elif isinstance(backend, Database):
-                    cleanup.callback(backend.close)
+                    cleanup.push_async_callback(backend.close)
                 elif isinstance(backend, AlgorithmAuditPersistence):
-                    cleanup.callback(backend.close)
+                    cleanup.push_async_callback(backend.close)
         raise

@@ -141,7 +141,11 @@ async def test_stable_history_with_ties_and_new_insert(service):
     cutoff = utcnow()
     tied = cutoff - timedelta(seconds=1)
     with service._persistence.session(Scope(fields={"project_id": "p"})) as session:
-        session.database.update(SKILL_VERSIONS_TABLE, {"created_at": tied}, filters={"skill_id": first.skill_id})
+        (
+            await session.database.update(
+                SKILL_VERSIONS_TABLE, {"created_at": tied}, filters={"skill_id": first.skill_id}
+            )
+        )
     initial = await service.skill_history(
         HistoryRequest(
             project_id="p",
@@ -165,8 +169,8 @@ async def test_stable_history_with_ties_and_new_insert(service):
     assert ids == sorted(ids)
     assert len(await service.skill_history(HistoryRequest(project_id="p", skill_id=first.skill_id))) == 6
     with service._persistence.session(Scope(fields={"project_id": "p"})) as session:
-        family = session.skills.resolve_family("p", first.skill_id)
-        projected = session.skills.history(family, limit=None, fields=["version_id"])
+        family = await session.skills.resolve_family("p", first.skill_id)
+        projected = await session.skills.history(family, limit=None, fields=["version_id"])
         assert len(projected) == 6 and set(projected[0]) == {"version_id"}
 
 
@@ -177,8 +181,10 @@ async def test_family_cursor_and_metadata(service):
         families.append(await service.register_skill(RegisterRequest(project_id="p", skill=plain(name))))
     cutoff = utcnow()
     with service._persistence.session(Scope(fields={"project_id": "p"})) as session:
-        session.database.update(
-            SKILLS_TABLE, {"created_at": cutoff - timedelta(seconds=1)}, filters={"project_id": "p"}
+        (
+            await session.database.update(
+                SKILLS_TABLE, {"created_at": cutoff - timedelta(seconds=1)}, filters={"project_id": "p"}
+            )
         )
     first = await service.list_skill_page(SkillPageRequest(project_id="p", snapshot_at=cutoff, limit=2))
     assert first.has_more
@@ -234,29 +240,29 @@ async def test_unlimited_queries_and_hash_search_past_deleted_rows(service):
             template.version.model_copy(update={"version_id": f"skv-bulk-{i:04d}", "version_label": f"v2.0.{i}"})
             for i in range(1001)
         ]
-        session.database.insert(SKILL_VERSIONS_TABLE, [copy.model_dump() for copy in copies])
+        (await session.database.insert(SKILL_VERSIONS_TABLE, [copy.model_dump() for copy in copies]))
     history = await service.skill_history(HistoryRequest(project_id="p", skill_id=removed.skill_id))
     assert len(history) == 1002
     assert len(await service.list_skill_versions(removed.skill_id, "p")) == 1002
     with service._persistence.session(Scope(fields={"project_id": "p"})) as session:
-        session.skills.delete(template.skill)
+        (await session.skills.delete(template.skill))
     visible = await service.register_skill(RegisterRequest(project_id="p", skill=plain()))
     resolved = await service.resolve_skill_version(VersionResolveRequest(project_id="p", skill_hash=visible.skill_hash))
     assert resolved.skill_version_id == visible.skill_version_id
     with service._persistence.session(Scope(fields={"project_id": "p"})) as session:
-        family = session.skills.resolve_family("p", visible.skill_id)
+        family = await session.skills.resolve_family("p", visible.skill_id)
         families = []
         versions = []
-        version = session.skills.version(family)
+        version = await session.skills.version(family)
         for i in range(1001):
             family_id, version_id = f"sk-bulk-{i:04d}", f"skv-family-{i:04d}"
             families.append(
                 family.model_copy(update={"skill_id": family_id, "active_version_id": version_id}).model_dump()
             )
             versions.append(version.model_copy(update={"skill_id": family_id, "version_id": version_id}).model_dump())
-        with session.database.transaction() as tx:
-            tx.insert(SKILL_VERSIONS_TABLE, versions)
-            tx.insert(SKILLS_TABLE, families)
+        async with session.database.transaction() as tx:
+            (await tx.insert(SKILL_VERSIONS_TABLE, versions))
+            (await tx.insert(SKILLS_TABLE, families))
     assert len(await service.list_skills(ListRequest(project_id="p"))) == 1002
     page = await service.list_skill_page(SkillPageRequest(project_id="p", snapshot_at=utcnow()))
     assert len(page.items) == 1002 and not page.has_more

@@ -1,7 +1,7 @@
 """Behavioral contracts shared by real SQLite and optional PostgreSQL."""
 
+import asyncio
 import os
-from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
@@ -51,7 +51,7 @@ def registry(suffix=""):
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
-def db(request, tmp_path):
+async def db(request, tmp_path):
     tables = registry("_" + uuid4().hex[:12])
     if request.param == "postgres":
         url = os.environ.get(POSTGRES_TEST_URL)
@@ -60,145 +60,150 @@ def db(request, tmp_path):
         database = PostgresDatabase(PostgresConfig(url=url), tables=tables)
     else:
         database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'store.db'}"), tables=tables)
-    database.create_tables()
+    (await database.create_tables())
     try:
         yield database
     finally:
-        with database.engine.begin() as connection:
-            tables.get("items").table.drop(connection)
-        database.close()
+        async with database.engine.begin() as connection:
+            await connection.run_sync(tables.get("items").table.drop)
+        (await database.close())
 
 
-def seed(db):
-    db.insert(
-        "items",
-        [
-            {"id": "a", "name": "alpha", "embedding": [1.0, 0.0, 0.0]},
-            {"id": "b", "name": "beta", "embedding": [0.0, 1.0, 0.0], "rank": 2},
-            {"id": "c", "name": "gamma", "embedding": [-1.0, 0.0, 0.0], "status": "hidden"},
-        ],
+async def seed(db):
+    (
+        await db.insert(
+            "items",
+            [
+                {"id": "a", "name": "alpha", "embedding": [1.0, 0.0, 0.0]},
+                {"id": "b", "name": "beta", "embedding": [0.0, 1.0, 0.0], "rank": 2},
+                {"id": "c", "name": "gamma", "embedding": [-1.0, 0.0, 0.0], "status": "hidden"},
+            ],
+        )
     )
 
 
-def test_crud_defaults_projection_and_filters(db):
-    seed(db)
-    assert db.get("items", "missing") is None
-    assert db.get("items", "a")["status"] == "active"
-    assert db.count("items", filters={"status": "active"}) == 2
-    assert db.select("items", fields=["id"], order_by=["-rank"], limit=1) == [{"id": "b"}]
-    assert db.select("items", fields=["id"], offset=2) == [{"id": "c"}]
-    assert db.count("items", filters=[Filter(field="rank", op="ge", value=1)]) == 1
-    assert db.count("items", filters=[Filter(field="id", op="in", value=["a", "c"])]) == 2
-    assert db.count("items", filters=[Filter(field="note", op="is_null")]) == 3
-    assert db.update("items", {"note": "kept"}, filters={"id": "a"}) == 1
-    assert db.update_many("items", [{"id": "a", "rank": 3}, {"id": "missing", "rank": 1}]) == 1
-    assert db.get("items", "a")["note"] == "kept"
-    assert db.update("items", {"note": None}, filters={"id": "a"}) == 1
-    assert db.get("items", "a")["note"] is None
-    assert db.delete("items", filters={"id": "b"}) == 1
-    assert db.count("items") == 2
+async def test_crud_defaults_projection_and_filters(db):
+    (await seed(db))
+    assert (await db.get("items", "missing")) is None
+    assert (await db.get("items", "a"))["status"] == "active"
+    assert (await db.count("items", filters={"status": "active"})) == 2
+    assert (await db.select("items", fields=["id"], order_by=["-rank"], limit=1)) == [{"id": "b"}]
+    assert (await db.select("items", fields=["id"], offset=2)) == [{"id": "c"}]
+    assert (await db.count("items", filters=[Filter(field="rank", op="ge", value=1)])) == 1
+    assert (await db.count("items", filters=[Filter(field="id", op="in", value=["a", "c"])])) == 2
+    assert (await db.count("items", filters=[Filter(field="note", op="is_null")])) == 3
+    assert (await db.update("items", {"note": "kept"}, filters={"id": "a"})) == 1
+    assert (await db.update_many("items", [{"id": "a", "rank": 3}, {"id": "missing", "rank": 1}])) == 1
+    assert (await db.get("items", "a"))["note"] == "kept"
+    assert (await db.update("items", {"note": None}, filters={"id": "a"})) == 1
+    assert (await db.get("items", "a"))["note"] is None
+    assert (await db.delete("items", filters={"id": "b"})) == 1
+    assert (await db.count("items")) == 2
 
 
-def test_or_filters_and_literal_prefix_preserve_scope(db):
-    seed(db)
-    assert db.select(
-        "items",
-        any_filters=[Filter(field="id", value="a"), Filter(field="name", value="beta")],
-        fields=["id"],
+async def test_or_filters_and_literal_prefix_preserve_scope(db):
+    (await seed(db))
+    assert (
+        await db.select(
+            "items",
+            any_filters=[Filter(field="id", value="a"), Filter(field="name", value="beta")],
+            fields=["id"],
+        )
     ) == [{"id": "a"}, {"id": "b"}]
-    db.update("items", {"name": "a%_literal"}, filters={"id": "a"})
-    db.update("items", {"name": "aXXliteral"}, filters={"id": "b"})
-    assert db.select("items", filters=[Filter(field="name", op="starts_with", value="a%_")], fields=["id"]) == [
+    (await db.update("items", {"name": "a%_literal"}, filters={"id": "a"}))
+    (await db.update("items", {"name": "aXXliteral"}, filters={"id": "b"}))
+    assert (await db.select("items", filters=[Filter(field="name", op="starts_with", value="a%_")], fields=["id"])) == [
         {"id": "a"}
     ]
     with db.scoped(Scope(fields={"id": "a"})) as scoped:
-        assert scoped.select("items", any_filters=[Filter(field="id", value="b")]) == []
+        assert (await scoped.select("items", any_filters=[Filter(field="id", value="b")])) == []
     with pytest.raises(ValueError, match="any_filters"):
-        db.select("items", any_filters=[])
+        (await db.select("items", any_filters=[]))
     with pytest.raises(ValueError, match="any_filters"):
-        db.select("items", any_filters=iter(()))
+        (await db.select("items", any_filters=iter(())))
 
 
-def test_vector_search_filter_before_top_k(db):
-    seed(db)
-    hits = db.search("items", vector_field="embedding", query_vector=[1.0, 0.0, 0.0], fields=["id"], top_k=3)
+async def test_vector_search_filter_before_top_k(db):
+    (await seed(db))
+    hits = await db.search("items", vector_field="embedding", query_vector=[1.0, 0.0, 0.0], fields=["id"], top_k=3)
     assert [h.record["id"] for h in hits] == ["a", "b", "c"]
     assert [h.distance for h in hits] == pytest.approx([0.0, 1.0, 2.0], abs=1e-6)
-    filtered = db.search(
+    filtered = await db.search(
         "items", vector_field="embedding", query_vector=[1.0, 0.0, 0.0], filters={"status": "hidden"}, top_k=1
     )
     assert filtered[0].record["id"] == "c"
-    db.update_many("items", [{"id": "c", "embedding": [1.0, 0.0, 0.0]}])
-    assert db.get("items", "c")["embedding"] == pytest.approx([1.0, 0.0, 0.0])
-    db.insert("items", [{"id": "n", "name": "no_vector"}])
-    assert len(db.search("items", vector_field="embedding", query_vector=[1.0, 0.0, 0.0])) == 3
+    (await db.update_many("items", [{"id": "c", "embedding": [1.0, 0.0, 0.0]}]))
+    assert (await db.get("items", "c"))["embedding"] == pytest.approx([1.0, 0.0, 0.0])
+    (await db.insert("items", [{"id": "n", "name": "no_vector"}]))
+    assert len((await db.search("items", vector_field="embedding", query_vector=[1.0, 0.0, 0.0]))) == 3
 
 
 @pytest.mark.parametrize("vector", [[0.0, 0.0, 0.0], [1.0, 2.0], [float("nan"), 0.0, 0.0], [1e100, 0.0, 0.0]])
-def test_invalid_vectors_rejected_before_write(db, vector):
+async def test_invalid_vectors_rejected_before_write(db, vector):
     with pytest.raises(ValueError):
-        db.insert("items", [{"id": "a", "name": "alpha", "embedding": vector}])
+        (await db.insert("items", [{"id": "a", "name": "alpha", "embedding": vector}]))
     with pytest.raises(ValueError):
-        db.search("items", vector_field="embedding", query_vector=vector)
-    assert db.count("items") == 0
+        (await db.search("items", vector_field="embedding", query_vector=vector))
+    assert (await db.count("items")) == 0
 
 
-def test_validation_entire_batch_and_partial_fields(db):
+async def test_validation_entire_batch_and_partial_fields(db):
     with pytest.raises(ValueError, match="record 1.*rank"):
-        db.insert("items", [{"id": "a", "name": "alpha"}, {"id": "b", "name": "beta", "rank": -1}])
-    assert db.count("items") == 0
-    seed(db)
+        (await db.insert("items", [{"id": "a", "name": "alpha"}, {"id": "b", "name": "beta", "rank": -1}]))
+    assert (await db.count("items")) == 0
+    (await seed(db))
     with pytest.raises(ValueError, match="record 1"):
-        db.update_many("items", [{"id": "a", "rank": 3}, {"id": "b", "name": ""}])
-    assert db.get("items", "a")["rank"] == 0
+        (await db.update_many("items", [{"id": "a", "rank": 3}, {"id": "b", "name": ""}]))
+    assert (await db.get("items", "a"))["rank"] == 0
     with pytest.raises(ValueError, match="Unknown input fields"):
-        db.insert("items", [{"id": "d", "name": "delta", "typo": 1}])
+        (await db.insert("items", [{"id": "d", "name": "delta", "typo": 1}]))
     with pytest.raises(ValueError):
-        db.update("items", {"name": None}, filters={"id": "a"})
+        (await db.update("items", {"name": None}, filters={"id": "a"}))
     with pytest.raises(ValueError):
-        db.update("items", {"rank": "3"}, filters={"id": "a"})
-    assert db.update("items", {"id": "renamed"}, filters={"id": "a"}) == 1
-    assert db.get("items", "a") is None
-    assert db.get("items", "renamed")["name"] == "alpha"
+        (await db.update("items", {"rank": "3"}, filters={"id": "a"}))
+    assert (await db.update("items", {"id": "renamed"}, filters={"id": "a"})) == 1
+    assert (await db.get("items", "a")) is None
+    assert (await db.get("items", "renamed"))["name"] == "alpha"
 
 
-def test_atomic_batch_and_transaction_rollback(db):
+async def test_atomic_batch_and_transaction_rollback(db):
     with pytest.raises(IntegrityError):
-        db.insert("items", [{"id": "a", "name": "same"}, {"id": "b", "name": "same"}])
-    assert db.count("items") == 0
+        (await db.insert("items", [{"id": "a", "name": "same"}, {"id": "b", "name": "same"}]))
+    assert (await db.count("items")) == 0
     with pytest.raises(RuntimeError, match="abort"):
-        with db.transaction() as tx:
-            tx.insert("items", [{"id": "a", "name": "alpha"}])
-            assert tx.get("items", "a") is not None
+        async with db.transaction() as tx:
+            (await tx.insert("items", [{"id": "a", "name": "alpha"}]))
+            assert (await tx.get("items", "a")) is not None
             raise RuntimeError("abort")
-    assert db.count("items") == 0
+    assert (await db.count("items")) == 0
     with pytest.raises(RuntimeError, match="closed"):
-        tx.count("items")
-    with db.transaction() as tx:
-        tx.insert("items", [{"id": "a", "name": "alpha"}])
+        (await tx.count("items"))
+    async with db.transaction() as tx:
+        (await tx.insert("items", [{"id": "a", "name": "alpha"}]))
         with pytest.raises(IntegrityError):
-            tx.insert("items", [{"id": "b", "name": "beta"}, {"id": "c", "name": "alpha"}])
-        assert tx.count("items") == 1
-    assert db.count("items") == 1
+            (await tx.insert("items", [{"id": "b", "name": "beta"}, {"id": "c", "name": "alpha"}]))
+        assert (await tx.count("items")) == 1
+    assert (await db.count("items")) == 1
 
 
-def test_upsert_unique_constraint_and_explicit_fields(db):
-    seed(db)
-    assert db.upsert("items", [{"id": "a", "name": "new", "rank": 5}], update_fields=["name"]) == 1
-    assert db.get("items", "a")["rank"] == 0
-    assert db.get("items", "a")["name"] == "new"
-    assert db.upsert("items", [{"id": "a", "name": "ignored"}]) == 0
+async def test_upsert_unique_constraint_and_explicit_fields(db):
+    (await seed(db))
+    assert (await db.upsert("items", [{"id": "a", "name": "new", "rank": 5}], update_fields=["name"])) == 1
+    assert (await db.get("items", "a"))["rank"] == 0
+    assert (await db.get("items", "a"))["name"] == "new"
+    assert (await db.upsert("items", [{"id": "a", "name": "ignored"}])) == 0
     assert (
-        db.upsert("items", [{"id": "new", "name": "new", "rank": 9}], conflict_fields=["name"], update_fields=["rank"])
-        == 1
-    )
-    assert db.get("items", "a")["rank"] == 9
-    assert db.get("items", "new") is None
+        await db.upsert(
+            "items", [{"id": "new", "name": "new", "rank": 9}], conflict_fields=["name"], update_fields=["rank"]
+        )
+    ) == 1
+    assert (await db.get("items", "a"))["rank"] == 9
+    assert (await db.get("items", "new")) is None
     with pytest.raises(ValueError):
-        db.upsert("items", [{"id": "z", "name": "z"}], conflict_fields=["status"])
+        (await db.upsert("items", [{"id": "z", "name": "z"}], conflict_fields=["status"]))
 
 
-def test_unknown_query_fields_and_invalid_operands(db):
+async def test_unknown_query_fields_and_invalid_operands(db):
     for operation in [
         lambda: db.count("unknown"),
         lambda: db.select("items", fields=["typo"]),
@@ -209,7 +214,7 @@ def test_unknown_query_fields_and_invalid_operands(db):
         lambda: db.update("items", {"typo": "a"}, filters={}),
     ]:
         with pytest.raises(ValueError):
-            operation()
+            await operation()
 
 
 def test_registry_validation_and_isolation():
@@ -225,36 +230,35 @@ def test_registry_validation_and_isolation():
         )
 
 
-def test_default_backend_registration_is_lazy(tmp_path):
+async def test_default_backend_registration_is_lazy(tmp_path):
     path = tmp_path / "nested" / "store.db"
     database = Infrastructure.build("sqlite", {"url": f"sqlite:///{path}"})
     assert not path.parent.exists()
     database.tables.register(registry().get("items"))
-    database.create_tables()
+    (await database.create_tables())
     assert path.exists()
-    database.close()
+    (await database.close())
     with pytest.raises(RuntimeError, match="closed"):
-        database.count("items")
+        (await database.count("items"))
 
 
-def test_sqlite_connections_and_concurrent_writes(tmp_path):
+async def test_sqlite_connections_and_concurrent_writes(tmp_path):
     database = SQLiteDatabase(
         SQLiteConfig(url=f"sqlite:///{tmp_path / 'concurrent.db'}", timeout=10), tables=registry()
     )
-    database.create_tables()
+    (await database.create_tables())
     try:
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            list(pool.map(lambda i: database.insert("items", [{"id": str(i), "name": f"row{i}"}]), range(20)))
-        assert database.count("items") == 20
-        with database.engine.connect() as a, database.engine.connect() as b:
-            assert a.scalar(text("SELECT vec_version()"))
-            assert b.scalar(text("PRAGMA foreign_keys")) == 1
-            assert b.scalar(text("PRAGMA journal_mode")) == "wal"
+        await asyncio.gather(*(database.insert("items", [{"id": str(i), "name": f"row{i}"}]) for i in range(20)))
+        assert (await database.count("items")) == 20
+        async with database.engine.connect() as a, database.engine.connect() as b:
+            assert await a.scalar(text("SELECT vec_version()"))
+            assert (await b.scalar(text("PRAGMA foreign_keys"))) == 1
+            assert (await b.scalar(text("PRAGMA journal_mode"))) == "wal"
     finally:
-        database.close()
+        (await database.close())
 
 
-def test_composite_key_server_defaults_and_foreign_keys(tmp_path):
+async def test_composite_key_server_defaults_and_foreign_keys(tmp_path):
     class Parent(BaseModel):
         id: int | None = None
         name: str
@@ -283,21 +287,21 @@ def test_composite_key_server_defaults_and_foreign_keys(tmp_path):
     )
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'relations.db'}"), tables=tables)
     try:
-        database.create_tables()
-        database.insert("parents", [{"name": "p"}])
-        assert database.get("parents", 1)["name"] == "p"
-        database.insert("children", [{"parent_id": 1, "key": "k"}])
-        database.update_many("children", [{"parent_id": 1, "key": "k", "value": 9}])
-        assert database.get("children", {"parent_id": 1, "key": "k"})["value"] == 9
+        (await database.create_tables())
+        (await database.insert("parents", [{"name": "p"}]))
+        assert (await database.get("parents", 1))["name"] == "p"
+        (await database.insert("children", [{"parent_id": 1, "key": "k"}]))
+        (await database.update_many("children", [{"parent_id": 1, "key": "k", "value": 9}]))
+        assert (await database.get("children", {"parent_id": 1, "key": "k"}))["value"] == 9
         with pytest.raises(IntegrityError):
-            database.insert("children", [{"parent_id": 999, "key": "k"}])
-        assert database.update("parents", {"name": "new"}, filters={"id": 1}) == 1
-        assert database.get("parents", 1)["name"] == "new"
+            (await database.insert("children", [{"parent_id": 999, "key": "k"}]))
+        assert (await database.update("parents", {"name": "new"}, filters={"id": 1})) == 1
+        assert (await database.get("parents", 1))["name"] == "new"
     finally:
-        database.close()
+        (await database.close())
 
 
-def test_postgres_compilation_and_codec_without_server():
+async def test_postgres_compilation_and_codec_without_server():
     pytest.importorskip("psycopg")
     pytest.importorskip("pgvector")
     from sqlalchemy.schema import CreateTable
@@ -316,7 +320,7 @@ def test_postgres_compilation_and_codec_without_server():
         stored = vector_type.bind_processor(dialect)([1.0, 0.0, 0.0])
         assert vector_type.result_processor(dialect, None)(stored) == [1.0, 0.0, 0.0]
     finally:
-        database.close()
+        (await database.close())
 
 
 @pytest.mark.asyncio
@@ -341,9 +345,36 @@ async def test_service_shutdown_closes_database(tmp_path):
     )
     database = service.backends["database"]
     database.tables.register(registry().get("items"))
-    database.create_tables()
+    (await database.create_tables())
     with TestClient(create_app(service)) as client:
         assert client.get("/health").status_code == 200
-        assert database.count("items") == 0
+        assert (await database.count("items")) == 0
     with pytest.raises(RuntimeError, match="closed"):
-        database.count("items")
+        (await database.count("items"))
+
+
+@pytest.mark.parametrize("outcome", ["installed", "missing", "query_error"])
+async def test_postgres_extension_probe_uses_native_async_cursor(outcome):
+    """Check cursor cleanup and rollback on every connection-initialization path."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from mindmemos_skill.infra.database.builtin_backends.postgres import _check_extension
+
+    cursor = AsyncMock()
+    cursor.__aenter__.return_value = cursor
+    cursor.fetchone.return_value = (1,) if outcome == "installed" else None
+    if outcome == "query_error":
+        cursor.execute.side_effect = RuntimeError("extension probe failed")
+    connection = SimpleNamespace(cursor=lambda: cursor, rollback=AsyncMock())
+    if outcome == "installed":
+        await _check_extension(connection)
+        cursor.fetchone.assert_awaited_once()
+    else:
+        with pytest.raises(
+            RuntimeError, match="vector extension" if outcome == "missing" else "extension probe failed"
+        ):
+            await _check_extension(connection)
+    cursor.execute.assert_awaited_once_with("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+    cursor.__aexit__.assert_awaited_once()
+    connection.rollback.assert_awaited_once()

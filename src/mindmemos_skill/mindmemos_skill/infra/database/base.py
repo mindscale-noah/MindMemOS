@@ -1,8 +1,9 @@
 """Backend-independent operations on registered, validated tables."""
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from copy import copy
 from datetime import timedelta
 from itertools import groupby
@@ -31,6 +32,7 @@ class Database(Infrastructure, ABC):
         self.engine = self._create_engine(config)
         self._connection = None
         self._closed = False
+        self._transaction_lock = asyncio.Lock() if self.engine.dialect.name == "sqlite" else None
 
     @abstractmethod
     def _create_engine(self, config):
@@ -47,21 +49,27 @@ class Database(Infrastructure, ABC):
         """Build a bound cosine-distance expression."""
         raise NotImplementedError
 
-    @contextmanager
-    def _connect(self):
+    @asynccontextmanager
+    async def _connect(self):
         if self._closed:
             raise RuntimeError("Database or transaction is closed")
         if self._connection is not None:
             if not self._connection.in_transaction():
                 raise RuntimeError("Transaction is no longer active")
-            with self._connection.begin_nested():
+            async with self._connection.begin_nested():
                 yield self._connection
         else:
-            with self.engine.begin() as connection:
-                yield connection
+            if self._transaction_lock is not None:
+                await self._transaction_lock.acquire()
+            try:
+                async with self.engine.begin() as connection:
+                    yield connection
+            finally:
+                if self._transaction_lock is not None:
+                    self._transaction_lock.release()
 
-    @contextmanager
-    def transaction(self):
+    @asynccontextmanager
+    async def transaction(self):
         """Bind operations to one connection and commit or roll back together.
 
         Yields:
@@ -72,7 +80,7 @@ class Database(Infrastructure, ABC):
         """
         if self._connection is not None:
             raise RuntimeError("Nested transactions are not supported")
-        with self._connect() as connection:
+        async with self._connect() as connection:
             transaction = copy(self)
             transaction._connection = connection
             try:
@@ -99,30 +107,30 @@ class Database(Infrastructure, ABC):
         finally:
             handle._active = False
 
-    def create_tables(self):
+    async def create_tables(self):
         """Explicitly create registered tables in foreign-key dependency order.
 
         Existing tables are left intact; schema migration is a deployment concern.
         """
-        with self._connect() as connection:
+        async with self._connect() as connection:
             catalogs = {}
             for spec in self.tables.values():
                 catalogs.setdefault(spec.table.metadata, []).append(spec.table)
             for metadata, tables in catalogs.items():
                 # create_all adds named cycle-breaking foreign keys after their tables.
-                metadata.create_all(connection, tables=tables, checkfirst=True)
+                await connection.run_sync(lambda sync: metadata.create_all(sync, tables=tables, checkfirst=True))
                 for table in tables:
                     for index in table.indexes:
-                        index.create(connection, checkfirst=True)
+                        await connection.run_sync(lambda sync: index.create(sync, checkfirst=True))
 
-    def close(self):
+    async def close(self):
         """Release this database's pool; active transactions must finish first."""
         if self._connection is not None:
             raise RuntimeError("Use the transaction context to close its connection")
-        self.engine.dispose()
+        await self.engine.dispose()
         self._closed = True
 
-    def insert(self, table: str, records: list[dict]) -> int:
+    async def insert(self, table: str, records: list[dict]) -> int:
         """Insert a fully validated batch atomically.
 
         Args:
@@ -134,13 +142,13 @@ class Database(Infrastructure, ABC):
         """
         spec = self.tables.get(table)
         rows = validate_batch(spec, records)
-        with self._connect() as connection:
+        async with self._connect() as connection:
             # Adjacent groups preserve input order and database-default semantics.
             for _, group in groupby(rows, key=lambda row: tuple(sorted(row))):
-                connection.execute(spec.table.insert(), list(group))
+                (await connection.execute(spec.table.insert(), list(group)))
         return len(rows)
 
-    def upsert(self, table: str, records: list[dict], *, conflict_fields=None, update_fields=None) -> int:
+    async def upsert(self, table: str, records: list[dict], *, conflict_fields=None, update_fields=None) -> int:
         """Atomically insert or update using an existing unique constraint.
 
         Args:
@@ -165,7 +173,7 @@ class Database(Infrastructure, ABC):
         if any(not set(keys + updates) <= row.keys() for row in rows):
             raise ValueError("Each upsert record must supply conflict and update fields")
         count = 0
-        with self._connect() as connection:
+        async with self._connect() as connection:
             for _, group in groupby(rows, key=lambda row: tuple(sorted(row))):
                 statement = self._insert_statement(spec.table)
                 if updates:
@@ -174,10 +182,12 @@ class Database(Infrastructure, ABC):
                     )
                 else:
                     statement = statement.on_conflict_do_nothing(index_elements=keys)
-                count += len(connection.execute(statement.returning(*spec.table.primary_key), list(group)).all())
+                count += len(
+                    (await connection.execute(statement.returning(*spec.table.primary_key), list(group))).all()
+                )
         return count
 
-    def update(self, table: str, values: dict, *, filters) -> int:
+    async def update(self, table: str, values: dict, *, filters) -> int:
         """Apply the same partial values to all matching records.
 
         Args:
@@ -197,10 +207,10 @@ class Database(Infrastructure, ABC):
         statement = (
             spec.table.update().where(filter_clause(spec, filters)).values(row).returning(*spec.table.primary_key)
         )
-        with self._connect() as connection:
-            return len(connection.execute(statement).all())
+        async with self._connect() as connection:
+            return len((await connection.execute(statement)).all())
 
-    def update_many(self, table: str, records: list[dict]) -> int:
+    async def update_many(self, table: str, records: list[dict]) -> int:
         """Apply per-record changes, locating rows by their complete primary key.
 
         Args:
@@ -225,13 +235,13 @@ class Database(Infrastructure, ABC):
         if any(not row for row in rows):
             raise ValueError("Each update must include at least one changed field")
         count = 0
-        with self._connect() as connection:
+        async with self._connect() as connection:
             for (condition, _), row in zip(prepared, rows):
                 statement = spec.table.update().where(condition).values(row).returning(*spec.table.primary_key)
-                count += len(connection.execute(statement).all())
+                count += len((await connection.execute(statement)).all())
         return count
 
-    def delete(self, table: str, *, filters) -> int:
+    async def delete(self, table: str, *, filters) -> int:
         """Delete matching rows atomically.
 
         Args:
@@ -245,10 +255,10 @@ class Database(Infrastructure, ABC):
             raise ValueError("Supply filters; use {} explicitly to delete every row")
         spec = self.tables.get(table)
         statement = spec.table.delete().where(filter_clause(spec, filters)).returning(*spec.table.primary_key)
-        with self._connect() as connection:
-            return len(connection.execute(statement).all())
+        async with self._connect() as connection:
+            return len((await connection.execute(statement)).all())
 
-    def get(self, table: str, key):
+    async def get(self, table: str, key):
         """Read a record by its primary key.
 
         Args:
@@ -266,10 +276,10 @@ class Database(Infrastructure, ABC):
             key = {keys[0]: key}
         if set(key) != set(keys) or any(value is None for value in key.values()):
             raise ValueError("Supply exactly the non-null primary key fields")
-        rows = self.select(table, filters=key, limit=1)
+        rows = await self.select(table, filters=key, limit=1)
         return rows[0] if rows else None
 
-    def select(
+    async def select(
         self,
         table: str,
         *,
@@ -310,10 +320,10 @@ class Database(Infrastructure, ABC):
                 raise ValueError("any_filters must contain at least one condition")
             conditions.append(or_(*(filter_clause(spec, [condition]) for condition in choices)))
         statement = select(*columns).where(*conditions).order_by(*ordering).limit(limit).offset(offset)
-        with self._connect() as connection:
-            return [dict(row) for row in connection.execute(statement).mappings()]
+        async with self._connect() as connection:
+            return [dict(row) for row in (await connection.execute(statement)).mappings()]
 
-    def select_distinct(self, table: str, field: str, *, filters=None) -> list[Any]:
+    async def select_distinct(self, table: str, field: str, *, filters=None) -> list[Any]:
         """Return distinct values of one registered column matching the filters.
 
         Args:
@@ -327,10 +337,10 @@ class Database(Infrastructure, ABC):
         spec = self.tables.get(table)
         column = column_for(spec, field)
         statement = select(column).where(filter_clause(spec, filters)).distinct()
-        with self._connect() as connection:
-            return list(connection.execute(statement).scalars())
+        async with self._connect() as connection:
+            return list((await connection.execute(statement)).scalars())
 
-    def count(self, table: str, *, filters=None) -> int:
+    async def count(self, table: str, *, filters=None) -> int:
         """Count matching rows without fetching records.
 
         Args:
@@ -342,10 +352,10 @@ class Database(Infrastructure, ABC):
         """
         spec = self.tables.get(table)
         statement = select(func.count()).select_from(spec.table).where(filter_clause(spec, filters))
-        with self._connect() as connection:
-            return connection.execute(statement).scalar_one()
+        async with self._connect() as connection:
+            return (await connection.execute(statement)).scalar_one()
 
-    def count_by_day(
+    async def count_by_day(
         self,
         table: str,
         *,
@@ -404,10 +414,10 @@ class Database(Infrastructure, ABC):
             .group_by(day)
             .order_by(day)
         )
-        with self._connect() as connection:
-            return [DailyCount.model_validate(dict(row)) for row in connection.execute(statement).mappings()]
+        async with self._connect() as connection:
+            return [DailyCount.model_validate(dict(row)) for row in (await connection.execute(statement)).mappings()]
 
-    def search(self, table: str, *, vector_field: str, query_vector, filters=None, fields=None, top_k: int = 10):
+    async def search(self, table: str, *, vector_field: str, query_vector, filters=None, fields=None, top_k: int = 10):
         """Return exact cosine neighbors among rows matching the filters.
 
         Args:
@@ -436,10 +446,10 @@ class Database(Infrastructure, ABC):
             .order_by(distance, *spec.table.primary_key.columns)
             .limit(top_k)
         )
-        with self._connect() as connection:
+        async with self._connect() as connection:
             return [
                 SearchHit(record={c.key: row[i] for i, c in enumerate(columns)}, distance=row[-1])
-                for row in connection.execute(statement)
+                for row in (await connection.execute(statement))
             ]
 
     def _columns(self, spec, fields):

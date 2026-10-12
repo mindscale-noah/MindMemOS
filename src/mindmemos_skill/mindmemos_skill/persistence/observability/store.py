@@ -1,13 +1,13 @@
 """Persist algorithm runs, correlated spans, and debug logs in one SQL backend."""
 
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
-from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.sdk._logs import ReadWriteLogRecord
 from opentelemetry.sdk.trace import ReadableSpan
@@ -15,8 +15,9 @@ from opentelemetry.trace import Link, SpanContext, Status, StatusCode, TraceFlag
 
 from ...infra.database import Database, Filter, TableRegistry
 from ...infra.observability import OpenTelemetryRecorder, serialize_log, serialize_span
-from ...logging import get_logger
-from ...logging.otel import attach_run_logs, detach_run_logs
+from ...logging import get_logger, log_context
+from ...logging.otel import attach_logs, detach_logs
+from ...logging.tracing import bind_tracer
 from .constants import OBSERVABILITY_LOGS_TABLE, OBSERVABILITY_RUNS_TABLE, OBSERVABILITY_SPANS_TABLE
 from .tables import build_tables
 from .typing import AuditLog, AuditRun, AuditSpan
@@ -36,6 +37,7 @@ class AuditSession:
         self.level = level
         self.export_failed = False
         self.published_version_id: str | None = None
+        self.pending: set[asyncio.Task[None]] = set()
 
     @contextmanager
     def span(self, name: str, attributes: Mapping[str, str | int | float | bool] | None = None) -> Iterator[Any]:
@@ -50,7 +52,7 @@ class AuditSession:
         """
         if not name:
             raise ValueError("Span name must be nonempty")
-        with self.store.telemetry.tracer.start_as_current_span(name, record_exception=False) as span:
+        with self.store.telemetry.tracer.start_as_current_span(name) as span:
             span.set_attribute("algorithm.project_id", self.project_id)
             span.set_attribute("algorithm.run_id", self.run_id)
             for key, value in (attributes or {}).items():
@@ -101,28 +103,29 @@ class AlgorithmAuditPersistence:
                 return None
             return {"algorithm.project_id": session.project_id, "algorithm.run_id": session.run_id}
 
-        self._log_handler = attach_run_logs(
+        self._log_handler = attach_logs(
             self.telemetry.logger_provider, context=log_context, capture_level=capture_level
         )
         self._closed = False
+        self._write_lock = asyncio.Lock()
 
-    def initialize_storage(self) -> None:
+    async def initialize_storage(self) -> None:
         """Create missing observability tables without changing existing tables."""
         if self.database is not None:
-            self.database.create_tables()
+            (await self.database.create_tables())
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Stop the local tracer provider before the owning database closes."""
         if self._closed:
             return
         self._closed = True
-        detach_run_logs(self._log_handler)
-        self.telemetry.close()
+        detach_logs(self._log_handler)
+        await self.telemetry.close()
 
-    @contextmanager
-    def trace_run(
+    @asynccontextmanager
+    async def trace_run(
         self, *, project_id: str, run_id: str, algorithm: str, base_version_id: str, operation: str = "train"
-    ) -> Iterator[AuditSession]:
+    ) -> AsyncIterator[AuditSession]:
         """Record one algorithm attempt with a root span and durable run status.
 
         Args:
@@ -135,15 +138,17 @@ class AlgorithmAuditPersistence:
         Yields:
             Active session used by nested Agent calls.
         """
-        previous = self.get_run(project_id, run_id) if self.database is not None else None
+        previous = (await self.get_run(project_id, run_id)) if self.database is not None else None
         if previous is not None and (previous.algorithm != algorithm or previous.base_version_id != base_version_id):
             raise ValueError("Run identity conflicts with its existing audit record")
         prior_roots = (
-            self.database.select(
-                OBSERVABILITY_SPANS_TABLE,
-                filters={"project_id": project_id, "run_id": run_id, "name": f"algorithm.{operation}"},
-                order_by=["-started_at"],
-                limit=1,
+            (
+                await self.database.select(
+                    OBSERVABILITY_SPANS_TABLE,
+                    filters={"project_id": project_id, "run_id": run_id, "name": f"algorithm.{operation}"},
+                    order_by=["-started_at"],
+                    limit=1,
+                )
             )
             if previous is not None
             else []
@@ -166,10 +171,14 @@ class AlgorithmAuditPersistence:
         session.published_version_id = previous.published_version_id if previous is not None else None
         token = _active_session.set(session)
         error_type = None
+        interrupted = False
+        cancelled = None
         try:
-            with self.telemetry.tracer.start_as_current_span(
-                f"algorithm.{operation}", context=otel_context.Context(), links=links, record_exception=False
-            ) as span:
+            with (
+                log_context(run_id=run_id, project_id=project_id),
+                bind_tracer(self.telemetry.tracer),
+                self.telemetry.tracer.start_as_current_span(f"algorithm.{operation}", links=links) as span,
+            ):
                 context = span.get_span_context()
                 trace_id = trace.format_trace_id(context.trace_id)
                 span.set_attribute("algorithm.project_id", project_id)
@@ -179,30 +188,32 @@ class AlgorithmAuditPersistence:
                 span.set_attribute("algorithm.capture_level", self.capture_level)
                 started = datetime.now(UTC)
                 if self.database is not None:
-                    self.database.upsert(
-                        OBSERVABILITY_RUNS_TABLE,
-                        [
-                            AuditRun(
-                                project_id=project_id,
-                                run_id=run_id,
-                                algorithm=algorithm,
-                                base_version_id=base_version_id,
-                                status="running",
-                                audit_status="incomplete" if session.export_failed else "complete",
-                                capture_level=self.capture_level,
-                                trace_id=trace_id,
-                                started_at=started,
-                            ).model_dump(mode="python")
-                        ],
-                        update_fields=[
-                            "status",
-                            "audit_status",
-                            "capture_level",
-                            "trace_id",
-                            "started_at",
-                            "finished_at",
-                            "error_type",
-                        ],
+                    (
+                        await self.database.upsert(
+                            OBSERVABILITY_RUNS_TABLE,
+                            [
+                                AuditRun(
+                                    project_id=project_id,
+                                    run_id=run_id,
+                                    algorithm=algorithm,
+                                    base_version_id=base_version_id,
+                                    status="running",
+                                    audit_status="incomplete" if session.export_failed else "complete",
+                                    capture_level=self.capture_level,
+                                    trace_id=trace_id,
+                                    started_at=started,
+                                ).model_dump(mode="python")
+                            ],
+                            update_fields=[
+                                "status",
+                                "audit_status",
+                                "capture_level",
+                                "trace_id",
+                                "started_at",
+                                "finished_at",
+                                "error_type",
+                            ],
+                        )
                     )
                 get_logger(__name__).info(
                     "algorithm.run.started",
@@ -210,6 +221,10 @@ class AlgorithmAuditPersistence:
                 )
                 try:
                     yield session
+                except asyncio.CancelledError as exc:
+                    cancelled = exc
+                    span.set_attribute("status", "interrupted")
+                    get_logger(__name__).info("algorithm.run.interrupted")
                 except BaseException as exc:
                     span.set_attribute("error.type", type(exc).__name__)
                     span.set_status(Status(StatusCode.ERROR))
@@ -223,22 +238,31 @@ class AlgorithmAuditPersistence:
                         "algorithm.run.completed",
                         extra={"event_body": {"published_version_id": session.published_version_id}},
                     )
+            if cancelled is not None:
+                raise cancelled
+        except asyncio.CancelledError:
+            interrupted = True
+            raise
         except BaseException as exc:
             error_type = type(exc).__name__
             raise
         finally:
+            if session.pending:
+                await asyncio.gather(*session.pending)
             _active_session.reset(token)
             if self.database is not None:
-                self.database.update(
-                    OBSERVABILITY_RUNS_TABLE,
-                    {
-                        "status": "failed" if error_type else "completed",
-                        "audit_status": "incomplete" if session.export_failed else "complete",
-                        "published_version_id": session.published_version_id,
-                        "finished_at": datetime.now(UTC),
-                        "error_type": error_type,
-                    },
-                    filters={"project_id": project_id, "run_id": run_id},
+                (
+                    await self.database.update(
+                        OBSERVABILITY_RUNS_TABLE,
+                        {
+                            "status": "running" if interrupted else "failed" if error_type else "completed",
+                            "audit_status": "incomplete" if session.export_failed else "complete",
+                            "published_version_id": session.published_version_id,
+                            "finished_at": None if interrupted else datetime.now(UTC),
+                            "error_type": error_type,
+                        },
+                        filters={"project_id": project_id, "run_id": run_id},
+                    )
                 )
 
     def _write_span(self, span: ReadableSpan) -> None:
@@ -254,7 +278,24 @@ class AlgorithmAuditPersistence:
             run_id=session.run_id,
             **payload,
         )
-        self.database.upsert(OBSERVABILITY_SPANS_TABLE, [record.model_dump(mode="python")])
+        self._enqueue(
+            session, lambda: self.database.upsert(OBSERVABILITY_SPANS_TABLE, [record.model_dump(mode="python")])
+        )
+
+    def _enqueue(self, session: AuditSession, operation: Callable[[], Awaitable[int]]) -> None:
+        """Queue an async database write and retain it until the run drains."""
+
+        async def write():
+            try:
+                async with self._write_lock:
+                    await operation()
+            except Exception:
+                session.export_failed = True
+                get_logger(__name__).exception("audit.persistence.failed")
+
+        task = asyncio.create_task(write())
+        session.pending.add(task)
+        task.add_done_callback(session.pending.discard)
 
     def _mark_export_failure(self, error: Exception) -> None:
         """Mark the active run incomplete after a span sink failure."""
@@ -282,9 +323,11 @@ class AlgorithmAuditPersistence:
             name=payload["name"],
             body=body if isinstance(body, dict) else {"value": body},
         )
-        self.database.insert(OBSERVABILITY_LOGS_TABLE, [record.model_dump(mode="python")])
+        self._enqueue(
+            session, lambda: self.database.insert(OBSERVABILITY_LOGS_TABLE, [record.model_dump(mode="python")])
+        )
 
-    def get_run(self, project_id: str, run_id: str) -> AuditRun | None:
+    async def get_run(self, project_id: str, run_id: str) -> AuditRun | None:
         """Read a run only within its project scope.
 
         Args:
@@ -296,10 +339,10 @@ class AlgorithmAuditPersistence:
         """
         if self.database is None:
             return None
-        row = self.database.get(OBSERVABILITY_RUNS_TABLE, {"project_id": project_id, "run_id": run_id})
+        row = await self.database.get(OBSERVABILITY_RUNS_TABLE, {"project_id": project_id, "run_id": run_id})
         return AuditRun.model_validate(row) if row is not None else None
 
-    def latest_evolution(self, project_id: str, version_id: str, algorithms: list[str]) -> datetime | None:
+    async def latest_evolution(self, project_id: str, version_id: str, algorithms: list[str]) -> datetime | None:
         """Read the latest indexed evolution start without loading audit payloads.
 
         Args:
@@ -312,7 +355,7 @@ class AlgorithmAuditPersistence:
         """
         if self.database is None or not algorithms:
             return None
-        rows = self.database.select(
+        rows = await self.database.select(
             OBSERVABILITY_RUNS_TABLE,
             filters=[
                 Filter(field="project_id", value=project_id),
@@ -325,7 +368,7 @@ class AlgorithmAuditPersistence:
         )
         return rows[0]["started_at"] if rows else None
 
-    def spans(self, project_id: str, run_id: str, *, limit: int = 500, offset: int = 0) -> list[AuditSpan]:
+    async def spans(self, project_id: str, run_id: str, *, limit: int = 500, offset: int = 0) -> list[AuditSpan]:
         """Read one stable page of a run's completed trace tree.
 
         Args:
@@ -341,7 +384,7 @@ class AlgorithmAuditPersistence:
             raise ValueError("Invalid observability page")
         if self.database is None:
             return []
-        rows = self.database.select(
+        rows = await self.database.select(
             OBSERVABILITY_SPANS_TABLE,
             filters={"project_id": project_id, "run_id": run_id},
             order_by=["started_at", "span_id"],
@@ -350,7 +393,7 @@ class AlgorithmAuditPersistence:
         )
         return [AuditSpan.model_validate(row) for row in rows]
 
-    def logs(self, project_id: str, run_id: str, *, limit: int = 200, offset: int = 0) -> list[AuditLog]:
+    async def logs(self, project_id: str, run_id: str, *, limit: int = 200, offset: int = 0) -> list[AuditLog]:
         """Read one stable page of trace-correlated audit logs.
 
         Args:
@@ -366,7 +409,7 @@ class AlgorithmAuditPersistence:
             raise ValueError("Invalid observability page")
         if self.database is None:
             return []
-        rows = self.database.select(
+        rows = await self.database.select(
             OBSERVABILITY_LOGS_TABLE,
             filters={"project_id": project_id, "run_id": run_id},
             order_by=["occurred_at", "event_id"],
