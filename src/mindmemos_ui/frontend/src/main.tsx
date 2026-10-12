@@ -37,10 +37,8 @@ function App() {
       }
     }
     void refresh();
-    const interval = window.setInterval(refresh, 30000);
     return () => {
       active = false;
-      window.clearInterval(interval);
     };
   }, [start.value, connectionRevision]);
   const [visited, setVisited] = useState(() => new Set([page]));
@@ -76,7 +74,7 @@ function App() {
             aria-label="Service connection status"
           >
             <div className="connection-status-heading">
-              <span>Service connections</span>
+              <span>Service availability</span>
               <button type="button" onClick={connectionRefresh.refresh}>
                 Refresh
               </button>
@@ -89,7 +87,7 @@ function App() {
                 : !connection
                   ? "Checking…"
                   : {
-                      connected: "Connected",
+                      connected: "Available",
                       unconfigured: "Not configured",
                       unauthorized: "Authentication failed",
                       unavailable: "Unavailable",

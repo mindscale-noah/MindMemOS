@@ -1,6 +1,5 @@
 """Workbench routes backed by the configured Skill service through its SDK."""
 
-import asyncio
 import hashlib
 import secrets
 import time
@@ -452,7 +451,7 @@ def sdk_workbench_router(
         target = _export_directory(str(target), manager.config_dir)
         if _directory_hash(target) != expected:
             raise HTTPException(409, "Destination changed; preview again")
-        path = await asyncio.to_thread(Skill.from_snapshot(snapshot).export, target, overwrite=True)
+        path = Skill.from_snapshot(snapshot).export(target, overwrite=True)
         return {"path": str(path)}
 
     @router.get("/graphs")
@@ -484,7 +483,7 @@ def sdk_workbench_router(
                 key = (ref.skill_id, ref.version_id)
                 if key not in assembled_by_version:
                     runtime = skill_loader(_snapshot(version))
-                    assembled_by_version[key] = await asyncio.to_thread(runtime.assemble, task.model_copy(deep=True))
+                    assembled_by_version[key] = await runtime.assemble(task.model_copy(deep=True))
                 assembled.append(assembled_by_version[key])
         except NotImplementedError:
             raise HTTPException(501, "This Skill implementation does not support runtime assembly") from None
