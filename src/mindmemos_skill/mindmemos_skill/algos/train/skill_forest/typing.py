@@ -281,7 +281,7 @@ class SkillForestSkillMergeContext(BaseModel):
 class OptimizerAgent(Protocol):
     """Synchronous optimizer interface used by the bounded model transport."""
 
-    def run(self, *, messages: list[dict[str, str]]) -> AgentResult:
+    async def run(self, *, messages: list[dict[str, str]]) -> AgentResult:
         """Generate an optimizer response.
 
         Args:

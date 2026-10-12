@@ -1,6 +1,5 @@
 """Offline verification of shared candidate ranking without per-call files."""
 
-import asyncio
 import json
 from types import SimpleNamespace
 
@@ -26,7 +25,7 @@ class RankingOptimizer:
     def __call__(self, config):
         return self
 
-    def run(self, *, messages):
+    async def run(self, *, messages):
         self.messages.append(messages)
         if "## Edits Pool" in messages[1]["content"]:
             if isinstance(self.response, Exception):
@@ -39,7 +38,7 @@ class RankingOptimizer:
         )
 
 
-def run_generation(directory, response, *, depth=0, trainer_entry=False, **options):
+async def run_generation(directory, response, *, depth=0, trainer_entry=False, **options):
     """Exercise real generation, adapter and audited model transport offline."""
     settings = SkillForestTrainerConfig(optimizer={"model": "offline"}, **options)
     optimizer = RankingOptimizer(response)
@@ -79,12 +78,12 @@ def run_generation(directory, response, *, depth=0, trainer_entry=False, **optio
         finally:
             await runtime.close()
 
-    return asyncio.run(generate()), optimizer
+    return (await generate()), optimizer
 
 
 @pytest.mark.parametrize("depth,budget", [(0, 3), (1, 2), (2, 1), (5, 1)])
-def test_ranking_respects_depth_order_without_stage_files(tmp_path, depth, budget):
-    patch, optimizer = run_generation(
+async def test_ranking_respects_depth_order_without_stage_files(tmp_path, depth, budget):
+    patch, optimizer = await run_generation(
         tmp_path,
         '{"selected_indices": [3, 3, -1, 99, 2, 1, 0]}',
         depth=depth,
@@ -98,8 +97,8 @@ def test_ranking_respects_depth_order_without_stage_files(tmp_path, depth, budge
 
 
 @pytest.mark.parametrize("options", [{}, {"ranking_enabled": False, "ranking_edit_budgets": (1,)}])
-def test_ranking_skips_within_budget_or_when_disabled(tmp_path, options):
-    patch, optimizer = run_generation(tmp_path, RuntimeError("Ranking must not run"), **options)
+async def test_ranking_skips_within_budget_or_when_disabled(tmp_path, options):
+    patch, optimizer = await run_generation(tmp_path, RuntimeError("Ranking must not run"), **options)
     assert len(patch.edits) == 4
     assert len(optimizer.messages) == 1
     assert not list(tmp_path.rglob("*.json"))
@@ -115,15 +114,15 @@ def test_ranking_skips_within_budget_or_when_disabled(tmp_path, options):
         '{"selected_indices": [1.5]}',
     ],
 )
-def test_invalid_ranking_fails_proposal_without_truncation(tmp_path, response):
+async def test_invalid_ranking_fails_proposal_without_truncation(tmp_path, response):
     with pytest.raises(InvalidPatchError):
-        run_generation(tmp_path, response, ranking_edit_budgets=(2,))
+        (await run_generation(tmp_path, response, ranking_edit_budgets=(2,)))
     assert not list(tmp_path.rglob("*.json"))
 
 
-def test_ranking_provider_failure_is_not_an_invalid_patch(tmp_path):
+async def test_ranking_provider_failure_is_not_an_invalid_patch(tmp_path):
     with pytest.raises(RuntimeError, match="provider offline"):
-        run_generation(tmp_path, RuntimeError("provider offline"), ranking_edit_budgets=(2,))
+        (await run_generation(tmp_path, RuntimeError("provider offline"), ranking_edit_budgets=(2,)))
     assert not list(tmp_path.rglob("*.json"))
 
 
@@ -158,18 +157,18 @@ def test_ranking_budgets_require_nonempty_positive_limits(budgets):
         SkillForestTrainerConfig(optimizer={"model": "offline"}, ranking_edit_budgets=budgets)
 
 
-def test_ranking_selects_from_final_merged_pool(tmp_path):
+async def test_ranking_selects_from_final_merged_pool(tmp_path):
     class MergeOptimizer(RankingOptimizer):
-        def run(self, *, messages):
+        async def run(self, *, messages):
             if messages[1]["content"].startswith("## Current Skill"):
-                return super().run(messages=messages)
+                return await super().run(messages=messages)
             request = json.loads(messages[1]["content"])
             if "groups" in request:
                 self.messages.append(messages)
                 return AgentResult(
                     output=json.dumps({"edits": [{"op": "append", "content": f"Merged {i}"} for i in range(6)]})
                 )
-            return super().run(messages=messages)
+            return await super().run(messages=messages)
 
     optimizer = MergeOptimizer('{"selected_indices": [5, 1, 4, 0]}')
     settings = SkillForestTrainerConfig(optimizer={"model": "offline"})
@@ -197,7 +196,7 @@ def test_ranking_selects_from_final_merged_pool(tmp_path):
         finally:
             await runtime.close()
 
-    patch = asyncio.run(generate())
+    patch = await generate()
     assert [edit.content for edit in patch.edits] == [f"Merged {i}" for i in [5, 1, 4, 0]]
     assert len(optimizer.messages) == 4
     assert "[5] op=append" in optimizer.messages[-1][1]["content"]

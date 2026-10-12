@@ -9,24 +9,24 @@ from mindmemos_skill.envs.builtin_envs.officeqa.typing import OfficeQATask
 from mindmemos_skill.envs.typing import Reward, RolloutResult, Task
 
 
-def test_officeqa_tool_defaults_and_original_responses(tmp_path):
+async def test_officeqa_tool_defaults_and_original_responses(tmp_path):
     path = tmp_path / "public.txt"
     lines = [f"value {index}\n" for index in range(100)]
     path.write_text("".join(lines))
     documents = {"public.txt": path}
-    assert run_tool("read", {"path": "public.txt"}, documents, 16000) == "".join(lines[:80])
-    assert run_tool("read", {"path": "public.txt", "start": 99}, documents, 16000) == "".join(lines[98:])
-    assert run_tool("read", {"path": "public.txt", "start": 200}, documents, 16000) == "[empty file]"
-    assert run_tool("glob", {"pattern": "*.csv"}, documents, 16000) == "[no matches]"
-    assert run_tool("grep", {"path": "public.txt", "pattern": "VALUE"}, documents, 16000) == "\n".join(
+    assert (await run_tool("read", {"path": "public.txt"}, documents, 16000)) == "".join(lines[:80])
+    assert (await run_tool("read", {"path": "public.txt", "start": 99}, documents, 16000)) == "".join(lines[98:])
+    assert (await run_tool("read", {"path": "public.txt", "start": 200}, documents, 16000)) == "[empty file]"
+    assert (await run_tool("glob", {"pattern": "*.csv"}, documents, 16000)) == "[no matches]"
+    assert (await run_tool("grep", {"path": "public.txt", "pattern": "VALUE"}, documents, 16000)) == "\n".join(
         f"{index + 1}: value {index}" for index in range(20)
     )
-    assert run_tool("read", {}, documents, 16000) == "[read error: missing path]"
-    assert run_tool("read", {"path": "../private"}, documents, 16000) == "[read error: path not allowed]"
-    assert run_tool("grep", {"path": "public.txt"}, documents, 16000) == "[grep error: missing pattern or path]"
+    assert (await run_tool("read", {}, documents, 16000)) == "[read error: missing path]"
+    assert (await run_tool("read", {"path": "../private"}, documents, 16000)) == "[read error: path not allowed]"
+    assert (await run_tool("grep", {"path": "public.txt"}, documents, 16000)) == "[grep error: missing pattern or path]"
     path.write_text("x" * 6000)
-    assert len(run_tool("read", {"path": "public.txt"}, documents, 16000)) == 4000
-    assert len(run_tool("read", {"path": "public.txt"}, documents, 10)) == 10
+    assert len((await run_tool("read", {"path": "public.txt"}, documents, 16000))) == 4000
+    assert len((await run_tool("read", {"path": "public.txt"}, documents, 10))) == 10
     assert format_tool_command("read", '{"path":"public.txt"}') == "read(path='public.txt', start=1, limit=80)"
     assert (
         format_tool_command("grep", '{"path":"public.txt","pattern":"VALUE"}')

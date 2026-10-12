@@ -1,6 +1,7 @@
 """Round-robin rollout groups with completion-driven rejection and draining."""
 
 import asyncio
+import logging
 from collections import deque
 from collections.abc import Callable, Sequence
 from contextvars import copy_context
@@ -14,6 +15,8 @@ from ....common.json import append_jsonl
 from ....envs.base import Environment
 from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult
+from ....logging import get_logger
+from ....logging.tracing import log_failure
 from ....skill import Skill
 from .typing import RolloutExecutor, RolloutLoader, StopPredicate
 
@@ -29,6 +32,7 @@ class RolloutGroup:
         env: Environment,
         directory: Path,
         stop_when: StopPredicate | None,
+        stage_name: str,
     ) -> None:
         """Initialize one caller-owned group and its completion signal.
 
@@ -38,6 +42,7 @@ class RolloutGroup:
             env: Caller-owned rollout environment.
             directory: Unique artifact directory identifying the group.
             stop_when: Optional predicate evaluated against completed results.
+            stage_name: Explicit algorithm phase for this rollout group.
         """
         self.pending = deque(enumerate(samples))
         self.skill = skill
@@ -51,6 +56,7 @@ class RolloutGroup:
         self.done = asyncio.Event()
         self.submitted_at = perf_counter()
         self.context = copy_context()
+        self.stage_name = stage_name
 
     def finish_if_drained(self) -> None:
         """Signal completion only after all started calls have returned."""
@@ -91,12 +97,31 @@ class RolloutScheduler:
         self.sequence = 0
         self.session_id = uuid4().hex
 
-    def _log(self, event: str, group: RolloutGroup, **details: JsonValue) -> None:
+    @staticmethod
+    def _log_failure(group: RolloutGroup) -> None:
+        """Keep worker diagnostics in the submitting task's logging context."""
+        group.context.run(
+            log_failure,
+            get_logger(__name__),
+            "algorithm.item.failed",
+            body={"operation": "scheduler", "stage": group.stage_name, "group_id": str(group.directory)},
+        )
+
+    async def _log(self, event: str, group: RolloutGroup, **details: JsonValue) -> None:
         """Record queue occupancy and relative timestamps without task content."""
+        if event != "rollout_released":
+            detail_text = " ".join(f"{key}={value}" for key, value in details.items())
+            group.context.run(
+                get_logger(__name__).log,
+                logging.ERROR if event == "rollout_failed" else logging.INFO,
+                f"[{group.stage_name}] {event} | group_id={group.directory}"
+                f" | done={len(group.results)} running={group.active} pending={len(group.pending)}"
+                f" | elapsed={perf_counter() - group.submitted_at:.1f}s | {detail_text}",
+            )
         if self.log_path is None:
             return
         self.sequence += 1
-        append_jsonl(
+        await append_jsonl(
             self.log_path,
             {
                 "session_id": self.session_id,
@@ -113,7 +138,7 @@ class RolloutScheduler:
             },
         )
 
-    def _stop(self, group: RolloutGroup, reason: str) -> None:
+    async def _stop(self, group: RolloutGroup, reason: str) -> None:
         """Remove only unstarted work and record the remaining drain size."""
         if group.stopped:
             return
@@ -122,7 +147,7 @@ class RolloutScheduler:
         group.pending.clear()
         self.queue = deque(item for item in self.queue if item is not group)
         group.finish_if_drained()
-        self._log("group_stopped", group, reason=reason, removed=removed)
+        await self._log("group_stopped", group, reason=reason, removed=removed)
 
     async def collect(
         self,
@@ -132,6 +157,7 @@ class RolloutScheduler:
         skill: Skill,
         directory: Path,
         stop_when: Callable[[dict[str, RolloutResult]], bool] | None = None,
+        stage_name: str = "skill_forest.rollout",
     ) -> dict[str, RolloutResult]:
         """Submit a group and return all completed results after physical draining.
 
@@ -140,6 +166,7 @@ class RolloutScheduler:
             samples: Ordered unique task samples, including private scoring data.
             skill: Complete candidate to evaluate.
             directory: Unique group directory for numbered physical calls.
+            stage_name: Training, root, candidate or selection evaluation phase.
             stop_when: Synchronous rejection predicate checked before submission
                 and after each result, before that worker starts another task.
 
@@ -152,7 +179,9 @@ class RolloutScheduler:
         """
         if self.closed:
             raise RuntimeError("Rollout scheduler is closed")
-        group = RolloutGroup(samples=samples, skill=skill, env=env, directory=directory, stop_when=stop_when)
+        group = RolloutGroup(
+            samples=samples, skill=skill, env=env, directory=directory, stop_when=stop_when, stage_name=stage_name
+        )
         if self.load_result is not None:
             pending = deque()
             for index, sample in group.pending:
@@ -165,9 +194,9 @@ class RolloutScheduler:
         self.groups.add(group)
         try:
             self.queue.append(group)
-            self._log("group_submitted", group, tasks=len(samples), reused=len(group.results))
+            await self._log("group_submitted", group, tasks=len(samples), reused=len(group.results))
             if stop_when is not None and stop_when(group.results):
-                self._stop(group, "early_rejection")
+                await self._stop(group, "early_rejection")
             elif not group.pending:
                 self.queue.remove(group)
             group.finish_if_drained()
@@ -177,11 +206,11 @@ class RolloutScheduler:
             await group.done.wait()
             if group.error is not None:
                 raise group.error
-            self._log("group_completed", group, completed=len(group.results), stopped=group.stopped)
+            await self._log("group_completed", group, completed=len(group.results), stopped=group.stopped)
             return group.results
         except BaseException:
             try:
-                self._stop(group, "caller_cancelled_or_failed")
+                await self._stop(group, "caller_cancelled_or_failed")
             finally:
                 await group.done.wait()
             raise
@@ -203,7 +232,7 @@ class RolloutScheduler:
             self.active += 1
             started = perf_counter()
             try:
-                self._log(
+                await self._log(
                     "rollout_started",
                     group,
                     task_id=sample.task.id,
@@ -220,7 +249,7 @@ class RolloutScheduler:
                     context=group.context.copy(),
                 )
                 group.results[sample.task.id] = result
-                self._log(
+                await self._log(
                     "rollout_completed",
                     group,
                     task_id=sample.task.id,
@@ -229,12 +258,13 @@ class RolloutScheduler:
                     after_stop=group.stopped,
                 )
                 if not group.stopped and group.stop_when is not None and group.stop_when(group.results):
-                    self._stop(group, "early_rejection")
+                    await self._stop(group, "early_rejection")
             except Exception as exc:
+                self._log_failure(group)
                 group.error = group.error or exc
                 try:
-                    self._stop(group, "execution_or_logging_failed")
-                    self._log(
+                    await self._stop(group, "execution_or_logging_failed")
+                    await self._log(
                         "rollout_failed",
                         group,
                         task_id=sample.task.id,
@@ -243,17 +273,20 @@ class RolloutScheduler:
                         error=f"{type(exc).__name__}: {exc}",
                     )
                 except Exception as log_error:
+                    self._log_failure(group)
                     group.error = group.error or log_error
             finally:
                 group.active -= 1
                 self.active -= 1
                 try:
-                    self._log("rollout_released", group, task_id=sample.task.id, index=index)
+                    await self._log("rollout_released", group, task_id=sample.task.id, index=index)
                 except Exception as exc:
+                    self._log_failure(group)
                     group.error = group.error or exc
                     try:
-                        self._stop(group, "logging_failed")
+                        await self._stop(group, "logging_failed")
                     except Exception:
+                        self._log_failure(group)
                         pass
                 group.finish_if_drained()
 
@@ -264,8 +297,9 @@ class RolloutScheduler:
         try:
             for group in list(self.groups):
                 try:
-                    self._stop(group, "scheduler_closed")
+                    await self._stop(group, "scheduler_closed")
                 except Exception as exc:
+                    self._log_failure(group)
                     error = error or exc
         finally:
             await asyncio.gather(*(group.done.wait() for group in list(self.groups)))

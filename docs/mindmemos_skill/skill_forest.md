@@ -205,3 +205,27 @@ Trainer 根据目录自动判断恢复，无需传入恢复开关。硬中断时
 ```
 
 离线测试覆盖执行协议与数学条件，不代表真实模型效果或各数据集已完成端到端实验。
+
+## 实时进度与阶段指标
+
+算法直接使用普通 logger 和 f-string。统一消息格式为 `事件 | key=value 字段 | 结果或耗时`，
+控制台增加 UTC 时间、级别、logger 和任务关联字段，任务进度与 CLI 复用同一消息字符串，不追加 JSON 指标行。
+节点上下文由 `log_context(tree_id=..., parent_id=..., node_id=...)` 绑定；
+共享 rollout worker 显式使用提交者上下文，避免把日志归给创建共享 worker 的第一个任务。
+
+采样调度器在实际开始、完成、复用、提前停止或失败时输出事件。`done` 是已有有效结果数量，
+`running` 和 `pending` 使用调度器本身的执行数量和待执行队列，执行错误单独记录，不能替换成零分。
+反思、patch 合并、排序、候选验证、树扩展和合成直接记录已有结果中的关键统计或决策原因。
+训练汇总记录接受／拒绝候选数量、Skill 字符数变化、复用和报告耗时，完整指标保留在实验产物中。
+
+任务执行入口统一通过 `async_task_log_reporter()` 收集日志；算法不创建额外的进度计数对象，等待期间不输出定时心跳。
+提前淘汰只移除尚未启动的任务，已经执行的任务仍等待结束后再返回结果。
+
+根节点共享轨迹的日志标注 `score_scope=tree_validation_memberships`，表示各树验证集成员的统计，
+不能当作独立物理 rollout 数。模型 usage 和生成计数描述当前训练调用；完整结果恢复时，
+`reused` 标明复用，`recorded_training_duration_s` 保留历史训练耗时。没有上报轨迹耗时的测试环境单列
+`duration_reported_count`，默认零不表示已测得零消耗。`result.json` 的 `training.stages` 和
+`training.metrics` 保存阶段耗时与本次模型／patch 指标。
+
+`scripts/skill_forest/run.py` 在运行期间持续读取增量 task progress，并保存完整的
+`service_progress.jsonl`；终态会读完剩余日志。日志不打印提示词、Skill 全文、轨迹或私有答案。

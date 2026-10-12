@@ -24,7 +24,7 @@ def events(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def test_groups_round_robin_and_late_arrival(tmp_path):
+async def test_groups_round_robin_and_late_arrival(tmp_path):
     async def run():
         started = []
         first = asyncio.Event()
@@ -54,14 +54,14 @@ def test_groups_round_robin_and_late_arrival(tmp_path):
         finally:
             await scheduler.close()
 
-    asyncio.run(asyncio.wait_for(run(), timeout=5))
+    (await asyncio.wait_for(run(), timeout=5))
     log = events(tmp_path / "scheduler.jsonl")
     assert [event["sequence"] for event in log] == list(range(1, len(log) + 1))
     assert all(event["queue_wait_s"] >= 0 for event in log if event["event"] == "rollout_started")
     assert log[-1]["active"] == log[-1]["queued"] == 0
 
 
-def test_one_group_fills_workers_and_refills_without_batch_barrier(tmp_path):
+async def test_one_group_fills_workers_and_refills_without_batch_barrier(tmp_path):
     async def run():
         started = []
         full = asyncio.Event()
@@ -97,11 +97,11 @@ def test_one_group_fills_workers_and_refills_without_batch_barrier(tmp_path):
             release_rest.set()
             await scheduler.close()
 
-    asyncio.run(asyncio.wait_for(run(), timeout=5))
+    (await asyncio.wait_for(run(), timeout=5))
 
 
 @pytest.mark.parametrize("stop", ["rejection", "cancel", "failure"])
-def test_stop_removes_queued_tasks_and_drains_started_calls(tmp_path, stop):
+async def test_stop_removes_queued_tasks_and_drains_started_calls(tmp_path, stop):
     async def run():
         full = asyncio.Event()
         first_return = asyncio.Event()
@@ -162,7 +162,7 @@ def test_stop_removes_queued_tasks_and_drains_started_calls(tmp_path, stop):
             second_return.set()
             await scheduler.close()
 
-    asyncio.run(asyncio.wait_for(run(), timeout=5))
+    (await asyncio.wait_for(run(), timeout=5))
     log = events(tmp_path / "scheduler.jsonl")
     stopped = next(event for event in log if event["event"] == "group_stopped")
     assert stopped["removed"] == 4
@@ -170,7 +170,7 @@ def test_stop_removes_queued_tasks_and_drains_started_calls(tmp_path, stop):
     assert any(event["event"] == "rollout_completed" and event["after_stop"] for event in log)
 
 
-def test_logging_failure_does_not_strand_workers(tmp_path, monkeypatch):
+async def test_logging_failure_does_not_strand_workers(tmp_path, monkeypatch):
     async def run():
         async def execute(**kwargs):
             return result()
@@ -189,10 +189,10 @@ def test_logging_failure_does_not_strand_workers(tmp_path, monkeypatch):
         finally:
             await scheduler.close()
 
-    asyncio.run(asyncio.wait_for(run(), timeout=5))
+    (await asyncio.wait_for(run(), timeout=5))
 
 
-def test_workers_preserve_each_submitting_context(tmp_path):
+async def test_workers_preserve_each_submitting_context(tmp_path):
     identity = ContextVar("rollout_test_identity")
 
     async def run():
@@ -215,4 +215,4 @@ def test_workers_preserve_each_submitting_context(tmp_path):
         finally:
             await scheduler.close()
 
-    asyncio.run(asyncio.wait_for(run(), timeout=5))
+    (await asyncio.wait_for(run(), timeout=5))

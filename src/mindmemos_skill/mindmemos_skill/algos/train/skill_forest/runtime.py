@@ -11,15 +11,17 @@ from typing import Any, TypeVar
 from pydantic import JsonValue
 
 from ....agents import OpenAIChatAgent
-from ....common.asyncio import run_sync
 from ....envs.base import Environment
 from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult
+from ....logging import get_logger
 from ....skill import Skill, SkillSet
 from .config import SkillForestTrainerConfig
 from .env_adapter import SkillForestEnvAdapter
 from .scheduler import RolloutScheduler
 from .typing import AgentFactory
+
+logger = get_logger(__name__)
 
 ResultT = TypeVar("ResultT")
 
@@ -53,6 +55,17 @@ class ForestRuntime:
         else:
             self.env_adapter = SkillForestEnvAdapter.build("generic", {})
         self.agent_factory = agent_factory
+        self.metrics = {
+            "model_calls": 0,
+            "model_errors": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "usage_reported_calls": 0,
+            "proposed_patches": 0,
+            "proposed_edits": 0,
+            "invalid_patches": 0,
+        }
         self.model_slots = asyncio.Semaphore(config.model_concurrency)
         self.scheduler = RolloutScheduler(self._rollout, concurrency=config.rollout_concurrency)
 
@@ -97,9 +110,7 @@ class ForestRuntime:
                 "work_dir": directory,
                 "resume": False,
             }
-            result = (
-                await env.rollout(**kwargs) if isinstance(env, Environment) else await run_sync(env.rollout, **kwargs)
-            )
+            result = await env.rollout(**kwargs)
             path = self._trajectory_path(directory)
             if path is not None:
                 self._append_trajectory(
@@ -126,11 +137,21 @@ class ForestRuntime:
         Returns:
             Nonempty optimizer response text.
         """
+        logger.info("[skill_forest.optimizer] started")
         async with self.model_slots:
             agent = self.agent_factory(self.config.optimizer)
-            result = await run_sync(agent.run, messages=messages)
-            if not isinstance(result.output, str) or not result.output.strip():
-                raise ValueError("Optimizer must return nonempty text")
+            self.metrics["model_calls"] += 1
+            try:
+                result = await agent.run(messages=messages)
+                if not isinstance(result.output, str) or not result.output.strip():
+                    raise ValueError("Optimizer must return nonempty text")
+            except BaseException:
+                self.metrics["model_errors"] += 1
+                raise
+            for key in ("input_tokens", "output_tokens", "total_tokens"):
+                self.metrics[key] += int(result.usage.get(key, 0))
+            self.metrics["usage_reported_calls"] += bool(result.usage)
+            logger.info(f"[skill_forest.optimizer] progress | model_calls=1 | usage_reported={bool(result.usage)}")
             return result.output
 
     async def close(self) -> None:
