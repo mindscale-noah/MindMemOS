@@ -5,13 +5,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk._logs import LoggerProvider, LogRecordProcessor, ReadWriteLogRecord
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk._logs import LoggerProvider, LogRecordProcessor, ReadableLogRecord, ReadWriteLogRecord
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.trace import Status
+
+from ...logging.context import _context
+from ...logging.sanitization import safe_text
+from .otlp import AsyncOTLPExporter
 
 
 def _json_value(value: Any) -> Any:
@@ -23,6 +24,28 @@ def _json_value(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
+
+
+def _sanitized_span(span: ReadableSpan) -> ReadableSpan:
+    """Redact SDK-generated exception events before audit and OTLP export."""
+
+    def attributes(values):
+        return {key: safe_text(value) if isinstance(value, str) else value for key, value in values.items()}
+
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=span.parent,
+        resource=span.resource,
+        attributes=attributes(span.attributes or {}),
+        events=[Event(event.name, attributes(event.attributes or {}), event.timestamp) for event in span.events],
+        links=span.links,
+        kind=span.kind,
+        status=Status(span.status.status_code, safe_text(span.status.description) if span.status.description else None),
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
 
 
 def serialize_span(span: ReadableSpan) -> dict[str, Any] | None:
@@ -91,12 +114,15 @@ class _CallbackSpanProcessor(SpanProcessor):
         self.on_error = on_error
 
     def on_start(self, span, parent_context=None) -> None:
-        """Leave in-progress state to the owning application."""
+        """Attach inherited request, task and run correlation to every child span."""
+        for key, value in _context.get().items():
+            if value is not None:
+                span.set_attribute(key, value)
 
     def on_end(self, span: ReadableSpan) -> None:
         """Deliver a completed span and report sink failures."""
         try:
-            self.on_end_callback(span)
+            self.on_end_callback(_sanitized_span(span))
         except Exception as exc:
             self.on_error(exc)
 
@@ -158,20 +184,32 @@ class OpenTelemetryRecorder:
         resource = Resource.create({SERVICE_NAME: service_name})
         self.provider = TracerProvider(resource=resource)
         self.provider.add_span_processor(_CallbackSpanProcessor(on_span_end, on_export_error))
-        if otlp_endpoint is not None:
-            base = otlp_endpoint.rstrip("/")
+        self.otlp = AsyncOTLPExporter(otlp_endpoint, otlp_timeout) if otlp_endpoint else None
+        if self.otlp is not None:
             self.provider.add_span_processor(
-                BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{base}/v1/traces", timeout=otlp_timeout))
+                _CallbackSpanProcessor(lambda span: self.otlp.enqueue("traces", span), on_export_error)
             )
         self.tracer = self.provider.get_tracer(instrumentation_name)
         self.logger_provider = LoggerProvider(resource=resource, shutdown_on_exit=False)
         self.logger_provider.add_log_record_processor(_CallbackLogProcessor(on_log_emit, on_export_error))
-        if otlp_endpoint is not None:
-            self.logger_provider.add_log_record_processor(
-                BatchLogRecordProcessor(OTLPLogExporter(endpoint=f"{base}/v1/logs", timeout=otlp_timeout))
-            )
+        if self.otlp is not None:
+            self.logger_provider.add_log_record_processor(_CallbackLogProcessor(self._export_log, on_export_error))
 
-    def close(self) -> None:
-        """Stop the local provider after its active spans have ended."""
+    def _export_log(self, record: ReadWriteLogRecord) -> None:
+        """Freeze mutable SDK records before asynchronous export."""
+        self.otlp.enqueue(
+            "logs",
+            ReadableLogRecord(
+                log_record=record.log_record,
+                resource=record.resource,
+                instrumentation_scope=record.instrumentation_scope,
+                limits=record.limits,
+            ),
+        )
+
+    async def close(self) -> None:
+        """Stop providers and await remaining native HTTP exports."""
         self.logger_provider.shutdown()
         self.provider.shutdown()
+        if self.otlp is not None:
+            await self.otlp.close()

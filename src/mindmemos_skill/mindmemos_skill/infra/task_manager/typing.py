@@ -1,10 +1,13 @@
-"""Transport-independent task and progress records."""
+"""Transport-independent task execution records."""
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field
+
+from ...logging.context import capture_trace_context, current_request_id
 
 
 class TaskStatus(StrEnum):
@@ -35,39 +38,11 @@ class TaskSpec(BaseModel):
     payload: dict[str, Any]
     """Validated JSON-compatible business request, including explicit configuration."""
 
+    trace_context: dict[str, str] = Field(default_factory=capture_trace_context)
+    """Saved W3C traceparent and optional tracestate from the submission span."""
 
-class ProgressEvent(BaseModel):
-    """One algorithm-selected progress boundary."""
-
-    model_config = ConfigDict(extra="forbid")
-    """Reject undeclared progress fields."""
-
-    stage: str = Field(min_length=1, max_length=100)
-    """Stable stage identifier selected by the algorithm."""
-
-    message: str = Field(min_length=1, max_length=500)
-    """Short, non-sensitive user-facing progress summary."""
-
-    sequence: int | None = Field(default=None, ge=1)
-    """Task-scoped event order assigned after the report is stored."""
-
-    completed: int | None = Field(default=None, ge=0)
-    """Completed items in this stage, if a denominator exists."""
-
-    total: int | None = Field(default=None, ge=1)
-    """Total items in this stage, if meaningful."""
-
-    occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    """UTC time when the algorithm reported progress."""
-
-    @model_validator(mode="after")
-    def check_count(self) -> "ProgressEvent":
-        """Require both counts together and keep the fraction valid."""
-        if (self.completed is None) != (self.total is None):
-            raise ValueError("completed and total must be supplied together")
-        if self.total is not None and self.completed > self.total:
-            raise ValueError("completed cannot exceed total")
-        return self
+    request_id: str | None = Field(default_factory=current_request_id)
+    """Original submission request identity, retained across worker recovery."""
 
 
 class TaskSnapshot(BaseModel):
@@ -88,9 +63,6 @@ class TaskSnapshot(BaseModel):
     status: TaskStatus
     """Current lifecycle state."""
 
-    progress: ProgressEvent | None = None
-    """Most recently committed algorithm progress."""
-
     result: dict[str, Any] | None = None
     """Successful JSON-compatible result."""
 
@@ -99,3 +71,42 @@ class TaskSnapshot(BaseModel):
 
     attempt: int = 0
     """Number of physical execution attempts begun."""
+
+    accepted_at: AwareDatetime | None = None
+    """First task acceptance time; never reset when reclaiming an attempt."""
+
+    started_at: AwareDatetime | None = None
+    """Start of the current physical attempt, or None while queued."""
+
+    finished_at: AwareDatetime | None = None
+    """Terminal result commit time, or None before successful persistence."""
+
+    @computed_field
+    @property
+    def waiting_ms(self) -> float | None:
+        """Return time before this attempt, including prior interrupted attempts."""
+        if self.accepted_at is None:
+            return None
+        return max(
+            0, ((self.started_at or self.finished_at or datetime.now(UTC)) - self.accepted_at).total_seconds() * 1000
+        )
+
+    @computed_field
+    @property
+    def execution_ms(self) -> float | None:
+        """Return elapsed execution time for this attempt, including result commit."""
+        if self.started_at is None:
+            return None
+        return max(0, ((self.finished_at or datetime.now(UTC)) - self.started_at).total_seconds() * 1000)
+
+    @computed_field
+    @property
+    def end_to_end_ms(self) -> float | None:
+        """Return elapsed time since first acceptance, including recovery waits."""
+        if self.accepted_at is None:
+            return None
+        return max(0, ((self.finished_at or datetime.now(UTC)) - self.accepted_at).total_seconds() * 1000)
+
+
+TaskHandler = Callable[[TaskSpec], Awaitable[dict[str, Any]]]
+"""Request-only task handler returning JSON-compatible fields defined by its pipeline."""

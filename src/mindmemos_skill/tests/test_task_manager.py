@@ -13,6 +13,7 @@ from mindmemos_skill.infra.database.builtin_backends.sqlite import SQLiteDatabas
 from mindmemos_skill.infra.database.config import SQLiteConfig
 from mindmemos_skill.infra.task_manager import LocalTaskManager, TaskSpec, TaskStatus
 from mindmemos_skill.infra.task_manager.kafka import KafkaTaskManager
+from mindmemos_skill.logging import get_logger
 from mindmemos_skill.persistence.config import SkillPersistenceConfig
 from mindmemos_skill.persistence.db_services.tasks import TaskDataService
 from mindmemos_skill.persistence.store import SkillPersistence
@@ -22,22 +23,87 @@ from pydantic import BaseModel
 from .service_config import deployment_config
 
 
+async def finished_task(manager, project_id, task_id):
+    """Wait until terminal state guarantees that captured logs have drained."""
+
+    async def poll():
+        while True:
+            snapshot = await manager.get(project_id, task_id)
+            if snapshot.status not in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+                return snapshot
+            await asyncio.sleep(0)
+
+    return await asyncio.wait_for(poll(), timeout=2)
+
+
+async def test_local_failure_retains_message_traceback_and_logs(caplog):
+    async def handler(spec):
+        raise ValueError("Invalid training input")
+
+    manager = LocalTaskManager(handler)
+    spec = TaskSpec(task_id="failed-local", project_id="p1", kind="skill.train", payload={})
+    try:
+        await manager.submit(spec)
+        snapshot = await finished_task(manager, "p1", spec.task_id)
+        assert snapshot.status == TaskStatus.FAILED
+        assert snapshot.error_type == "ValueError"
+        logs = await manager.logs("p1", spec.task_id)
+        failure = next(log for log in logs if log.payload["traceback"])
+        assert "ValueError: Invalid training input" in failure.payload["traceback"]
+        assert "Traceback" in failure.payload["traceback"]
+        assert any(record.exc_text and record.task_id == spec.task_id for record in caplog.records)
+    finally:
+        await manager.close()
+
+
+async def test_kafka_failure_diagnostics_survive_storage_reopen(tmp_path):
+    path = tmp_path / "failure.db"
+    database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{path}"))
+    await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
+    store = TaskDataService(database)
+
+    async def handler(spec):
+        raise ValueError("Training configuration changed after task submission")
+
+    manager = KafkaTaskManager(store=store, bootstrap_servers="unused", topic="test", group_id="test", handler=handler)
+    spec = TaskSpec(task_id="failed-kafka", project_id="p1", kind="skill.train", payload={})
+    try:
+        await store.create(spec)
+        await manager._execute(spec.task_id)
+    finally:
+        await manager.close()
+        await database.close()
+    database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{path}"))
+    try:
+        await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
+        record = await TaskDataService(database).get("p1", spec.task_id)
+        snapshot = record.snapshot()
+        assert snapshot.status == TaskStatus.FAILED
+        logs = await TaskDataService(database).logs("p1", spec.task_id)
+        failure = next(log for log in logs if log.payload["traceback"])
+        assert "ValueError: Training configuration changed" in failure.payload["traceback"]
+        assert failure.payload["body"]["stage"] == "failed"
+    finally:
+        await database.close()
+
+
 @pytest.mark.asyncio
-async def test_local_tasks_use_algorithm_reporter_without_persistence():
-    async def handler(spec, progress):
-        await progress.report(stage="collect", message="Collected one sample", completed=1, total=1)
+async def test_local_tasks_use_standard_logs_without_persistence():
+    async def handler(spec):
+        get_logger(__name__).info(
+            "algorithm.progress",
+            extra={"event_body": {"stage": "collect", "message": "Collected one sample", "completed": 1, "total": 1}},
+        )
         return {"task_id": spec.task_id}
 
     manager = LocalTaskManager(handler)
     spec = TaskSpec(task_id="local-1", project_id="p1", kind="skill.train", payload={})
     assert (await manager.submit(spec)).status == TaskStatus.QUEUED
-    await asyncio.sleep(0)
-    snapshot = await manager.get("p1", spec.task_id)
+    snapshot = await finished_task(manager, "p1", spec.task_id)
     assert snapshot.status == TaskStatus.SUCCEEDED
-    assert snapshot.progress.sequence == 1
     assert snapshot.result == {"task_id": spec.task_id}
     assert await manager.get("p2", spec.task_id) is None
-    assert (await manager.events("p1", spec.task_id))[0].stage == "collect"
+    assert any(log.payload.get("body", {}).get("stage") == "collect" for log in await manager.logs("p1", spec.task_id))
     await manager.close()
 
 
@@ -66,7 +132,7 @@ async def test_one_service_selects_environment_and_restores_queued_samples(tmp_p
         task_type = FirstTask
         reward_data_type = FirstReward
 
-        def _run(self, *, task, reward_data, skills, workspace):
+        async def _run(self, *, task, reward_data, skills, workspace):
             raise NotImplementedError
 
     @Environment.register("queued_second")
@@ -75,7 +141,7 @@ async def test_one_service_selects_environment_and_restores_queued_samples(tmp_p
         task_type = SecondTask
         reward_data_type = SecondReward
 
-        def _run(self, *, task, reward_data, skills, workspace):
+        async def _run(self, *, task, reward_data, skills, workspace):
             raise NotImplementedError
 
     calls = []
@@ -84,7 +150,7 @@ async def test_one_service_selects_environment_and_restores_queued_samples(tmp_p
     class TrainingProbe(TrainingPipeline[Options]):
         config_type = Options
 
-        async def train(self, request, *, env, adapter=None, reporter=None):
+        async def train(self, request, *, env, adapter=None):
             calls.append(
                 (
                     type(env),
@@ -157,7 +223,7 @@ async def test_one_service_selects_environment_and_restores_queued_samples(tmp_p
             payload={"request": payload, "config_fingerprint": "outdated"},
         )
         with pytest.raises(ValueError, match="configuration changed"):
-            await service.execute_task(changed, None)
+            await service.execute_task(changed)
     finally:
         await service.close()
 
@@ -173,7 +239,7 @@ async def test_service_submits_same_training_pipeline_with_progress(tmp_path):
 
         config_type = Options
 
-        def _run(self, *, task, reward_data, skills, workspace):
+        async def _run(self, *, task, reward_data, skills, workspace):
             raise NotImplementedError
 
     @Pipeline.register("async_training_probe")
@@ -182,8 +248,10 @@ async def test_service_submits_same_training_pipeline_with_progress(tmp_path):
 
         config_type = Options
 
-        async def train(self, request, *, env, adapter=None, reporter=None):
-            await reporter.report(stage="selection", message="Selected candidate")
+        async def train(self, request, *, env, adapter=None):
+            get_logger(__name__).info(
+                "algorithm.progress", extra={"event_body": {"stage": "selection", "message": "Selected candidate"}}
+            )
             return AlgoSkillEvolveResult(
                 skill_id="skill",
                 base_version_id=request.init_skill_version_id,
@@ -228,7 +296,10 @@ async def test_service_submits_same_training_pipeline_with_progress(tmp_path):
             await asyncio.sleep(0.01)
         assert status.status == TaskStatus.SUCCEEDED
         assert status.result["version_id"] == "version-2"
-        assert (await service.task_progress("p1", submitted.task_id))[0].stage == "selection"
+        assert any(
+            log.payload.get("body", {}).get("stage") == "selection"
+            for log in await service.task_progress("p1", submitted.task_id)
+        )
     finally:
         await service.close()
 
@@ -249,9 +320,11 @@ async def test_http_evolution_accepts_task_before_algorithm_finishes(tmp_path):
 
         config_type = Options
 
-        async def evolve(self, request, *, reporter=None):
+        async def evolve(self, request):
             choices.append(request.auto_accept)
-            await reporter.report(stage="evidence", message="Evolution task started")
+            get_logger(__name__).info(
+                "algorithm.progress", extra={"event_body": {"stage": "evidence", "message": "Evolution task started"}}
+            )
             started.set()
             await release.wait()
             return AlgoSkillEvolveResult(
@@ -313,51 +386,64 @@ async def test_http_evolution_accepts_task_before_algorithm_finishes(tmp_path):
             assert status.status == TaskStatus.SUCCEEDED
             assert status.result["base_version_id"] == version_id
             assert status.result["skill_id"] == registered.skill_id
-            assert (await service.task_progress("p1", task_id))[0].stage == "evidence"
+            response = await client.post("/v1/skills/tasks/progress", json={"task_id": task_id})
+            assert response.status_code == 200
+            logs = response.json()["data"]
+            evidence = next(row for row in logs if (row["payload"].get("body") or {}).get("stage") == "evidence")
+            assert evidence["attempt"] == 1 and evidence["task_id"] == task_id
+            after = logs[-1]["sequence"]
+            response = await client.post(
+                "/v1/skills/tasks/progress", json={"task_id": task_id}, params={"after": after}
+            )
+            assert response.json()["data"] == []
+            assert any(
+                log.payload.get("body", {}).get("stage") == "evidence"
+                for log in await service.task_progress("p1", task_id)
+            )
     finally:
         release.set()
         await service.close()
 
 
-def test_task_tables_reopen_and_reclaim_expired_attempt(tmp_path):
+async def test_task_tables_reopen_and_reclaim_expired_attempt(tmp_path):
     path = tmp_path / "existing-skill.db"
 
-    def open_store():
+    async def open_store():
         database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{path}"))
-        SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
+        (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
         return database, TaskDataService(database)
 
-    database, store = open_store()
+    database, store = await open_store()
     spec = TaskSpec(task_id="cloud-1", project_id="p1", kind="skill.train", payload={"work_dir": "shared"})
-    store.create(spec)
-    database.close()
+    (await store.create(spec))
+    (await database.close())
 
-    database, store = open_store()
-    assert len(store.due()) == 1
-    first, token = store.claim(spec.task_id, lease_seconds=0)
+    database, store = await open_store()
+    assert len((await store.due())) == 1
+    first, token = await store.claim(spec.task_id, lease_seconds=0)
     assert first.attempt == 1
-    assert store.claim(spec.task_id) is not None
-    assert not store.heartbeat(spec.task_id, token)
-    assert not store.finish(spec.task_id, token, result={})
-    database.close()
+    assert (await store.claim(spec.task_id)) is not None
+    assert not (await store.heartbeat(spec.task_id, token))
+    assert not (await store.finish(spec.task_id, token, result={}))
+    (await database.close())
 
-    database, store = open_store()
-    assert store.get("p2", spec.task_id) is None
-    assert store.get("p1", spec.task_id).attempt == 2
-    database.close()
+    database, store = await open_store()
+    assert (await store.get("p2", spec.task_id)) is None
+    assert (await store.get("p1", spec.task_id)).attempt == 2
+    (await database.close())
 
 
 @pytest.mark.asyncio
 async def test_kafka_submission_never_waits_for_broker_confirmation(tmp_path):
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'skill.db'}"))
-    SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
+    (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
     manager = KafkaTaskManager(
         store=TaskDataService(database), bootstrap_servers="unused:9092", topic="skill.train.jobs", group_id="skill"
     )
     confirmation = asyncio.get_running_loop().create_future()
 
     class Producer:
-        async def send(self, topic, value, *, key):
+        async def send(self, topic, value, *, key, headers):
             assert topic == "skill.train.jobs"
             return confirmation
 
@@ -371,20 +457,20 @@ async def test_kafka_submission_never_waits_for_broker_confirmation(tmp_path):
     await asyncio.sleep(0)
     manager._producer = None
     manager._started = False
-    database.close()
+    (await database.close())
 
 
 @pytest.mark.asyncio
 async def test_kafka_recovery_republishes_unconfirmed_database_task(tmp_path):
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'skill.db'}"))
-    SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
+    (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
     store = TaskDataService(database)
     spec = TaskSpec(task_id="recover-1", project_id="p1", kind="skill.train", payload={})
-    store.create(spec)
+    (await store.create(spec))
     calls = []
 
     class Producer:
-        async def send(self, topic, value, *, key):
+        async def send(self, topic, value, *, key, headers):
             calls.append(key)
             future = asyncio.get_running_loop().create_future()
             future.set_result(None)
@@ -405,31 +491,30 @@ async def test_kafka_recovery_republishes_unconfirmed_database_task(tmp_path):
                 break
             await asyncio.sleep(0.01)
         assert calls == [b"recover-1"]
-        assert store.get("p1", spec.task_id).status == TaskStatus.QUEUED
+        assert (await store.get("p1", spec.task_id)).status == TaskStatus.QUEUED
     finally:
         scanning.cancel()
         await asyncio.gather(scanning, return_exceptions=True)
-        database.close()
+        (await database.close())
 
 
 @pytest.mark.asyncio
 async def test_kafka_disconnected_submission_remains_recoverable(tmp_path):
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'skill.db'}"))
-    SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
+    (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
     store = TaskDataService(database)
     manager = KafkaTaskManager(store=store, bootstrap_servers="unused:9092", topic="skill.train.jobs", group_id="skill")
     manager._started = True
     spec = TaskSpec(task_id="disconnected-1", project_id="p1", kind="skill.train", payload={})
     assert (await manager.submit(spec)).status == TaskStatus.QUEUED
-    assert [item.task_id for item in store.due()] == [spec.task_id]
-    database.close()
+    assert [item.task_id for item in (await store.due())] == [spec.task_id]
+    (await database.close())
 
 
 @pytest.mark.asyncio
 async def test_background_training_preserves_keys_after_database_reopen(tmp_path):
     """Restore explicit nested model credentials from durable task JSON."""
     from mindmemos_skill.agents import OpenAIChatConfig
-    from mindmemos_skill.infra.task_manager.progress import NullProgressReporter
 
     from .test_training_request import search_request
 
@@ -442,7 +527,7 @@ async def test_background_training_preserves_keys_after_database_reopen(tmp_path
     class Probe(TrainingPipeline[Options]):
         config_type = Options
 
-        async def train(self, request, *, env, adapter=None, reporter=None):
+        async def train(self, request, *, env, adapter=None):
             received.append((env.config.agent.api_key, self.config.model.api_key))
             return AlgoSkillEvolveResult(
                 skill_id="skill",
@@ -490,9 +575,9 @@ async def test_background_training_preserves_keys_after_database_reopen(tmp_path
     await service.close()
     restored = await create_service(config)
     try:
-        record = TaskDataService(restored.backends["database"]).get("p1", submitted.task_id)
+        record = await TaskDataService(restored.backends["database"]).get("p1", submitted.task_id)
         assert record.payload["request"]["env"]["config"]["agent"]["api_key"] == "environment-test-key"
-        await restored.execute_task(record.spec(), NullProgressReporter())
+        await restored.execute_task(record.spec())
         assert received == [("environment-test-key", "algorithm-test-key")]
     finally:
         await restored.close()
@@ -502,7 +587,6 @@ async def test_background_training_preserves_keys_after_database_reopen(tmp_path
 async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_path):
     """Freeze the complete pipeline settings instead of adopting worker changes."""
     from mindmemos_skill.agents import OpenAIChatConfig
-    from mindmemos_skill.infra.task_manager.progress import NullProgressReporter
 
     class Options(BaseModel):
         model: OpenAIChatConfig
@@ -514,7 +598,7 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
     class Probe(EvolutionPipeline[Options]):
         config_type = Options
 
-        async def evolve(self, request, *, reporter=None):
+        async def evolve(self, request):
             received.append((self.config.model.api_key, request.run_id))
             return AlgoSkillEvolveResult(
                 skill_id=request.skill_ref,
@@ -582,17 +666,17 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
     config.service.evolution_pipelines["probe"].config = worker_options
     restored = await create_service(config)
     try:
-        record = TaskDataService(restored.backends["database"]).get("p1", submitted.task_id)
+        record = await TaskDataService(restored.backends["database"]).get("p1", submitted.task_id)
         assert record.payload["pipeline"]["config"]["model"]["api_key"] == "submitted-test-key"
-        result = await restored.execute_task(record.spec(), NullProgressReporter())
+        result = await restored.execute_task(record.spec())
         assert received == [("submitted-test-key", result["run_id"])]
         assert result["run_id"].startswith("evolve_")
         audit = restored.backends["observability"]
-        run = audit.get_run("p1", result["run_id"])
+        run = await audit.get_run("p1", result["run_id"])
         assert run.status == "completed"
         assert run.base_version_id == registered.skill_version_id
         assert run.published_version_id == "version"
-        assert any(span.name == "algorithm.evolve" for span in audit.spans("p1", result["run_id"]))
+        assert any(span.name == "algorithm.evolve" for span in (await audit.spans("p1", result["run_id"])))
         assert closed == ["submitted-test-key", "submitted-test-key"]
     finally:
         await restored.close()
@@ -604,7 +688,7 @@ async def test_local_queue_limits_execution_and_cleans_cancelled_submissions():
     started = asyncio.Event()
     calls = []
 
-    async def handler(spec, progress):
+    async def handler(spec):
         calls.append(spec.task_id)
         started.set()
         await asyncio.Event().wait()
@@ -647,11 +731,11 @@ async def test_kafka_consumer_and_recovery_share_slots_without_early_claims(tmp_
     from types import SimpleNamespace
 
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'queue.db'}"))
-    SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
+    (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
     store = TaskDataService(database)
     for task_id in ("consumer", "expired", "overflow"):
-        store.create(TaskSpec(task_id=task_id, project_id="p1", kind="test", payload={}))
-    store.claim("expired", lease_seconds=0)
+        (await store.create(TaskSpec(task_id=task_id, project_id="p1", kind="test", payload={})))
+    (await store.claim("expired", lease_seconds=0))
     started = asyncio.Queue()
     release = asyncio.Event()
     overflow_done = asyncio.Event()
@@ -659,7 +743,7 @@ async def test_kafka_consumer_and_recovery_share_slots_without_early_claims(tmp_
     peak = 0
     calls = []
 
-    async def handler(spec, progress):
+    async def handler(spec):
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
@@ -690,7 +774,7 @@ async def test_kafka_consumer_and_recovery_share_slots_without_early_claims(tmp_
             pass
 
     class Producer:
-        async def send(self, topic, value, *, key):
+        async def send(self, topic, value, *, key, headers):
             messages.put_nowait(json.loads(value)["task_id"])
             future = asyncio.get_running_loop().create_future()
             future.set_result(None)
@@ -721,8 +805,8 @@ async def test_kafka_consumer_and_recovery_share_slots_without_early_claims(tmp_
         messages.put_nowait("overflow")
         for _ in range(4):
             await asyncio.wait_for(committed.get(), 1)
-        assert store.get("p1", "expired").attempt == 1
-        assert store.get("p1", "overflow").attempt == 0
+        assert (await store.get("p1", "expired")).attempt == 1
+        assert (await store.get("p1", "overflow")).attempt == 0
         assert calls == ["consumer"]
         assert started.empty()
         release.set()
@@ -734,23 +818,23 @@ async def test_kafka_consumer_and_recovery_share_slots_without_early_claims(tmp_
         assert calls == ["consumer", "expired", "overflow"]
     finally:
         await manager.close()
-        database.close()
+        (await database.close())
 
 
 @pytest.mark.asyncio
 async def test_kafka_failed_claims_release_slots_and_close_leaves_work_recoverable(tmp_path):
     """Missing and terminal tasks cannot consume slots or advance queued leases."""
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'claims.db'}"))
-    SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
+    (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
     store = TaskDataService(database)
     for task_id in ("done", "running", "queued"):
-        store.create(TaskSpec(task_id=task_id, project_id="p1", kind="test", payload={}))
-    _, token = store.claim("done")
-    store.finish("done", token, result={})
+        (await store.create(TaskSpec(task_id=task_id, project_id="p1", kind="test", payload={})))
+    _, token = await store.claim("done")
+    (await store.finish("done", token, result={}))
     started = asyncio.Event()
     calls = []
 
-    async def handler(spec, progress):
+    async def handler(spec):
         calls.append(spec.task_id)
         started.set()
         await asyncio.Event().wait()
@@ -769,13 +853,13 @@ async def test_kafka_failed_claims_release_slots_and_close_leaves_work_recoverab
             assert await manager._dispatch(task_id)
         await asyncio.wait_for(started.wait(), 1)
         assert calls == ["running"]
-        assert store.get("p1", "queued").attempt == 0
+        assert (await store.get("p1", "queued")).attempt == 0
         await manager.close()
-        assert store.get("p1", "running").status == TaskStatus.RUNNING
-        assert store.get("p1", "queued").status == TaskStatus.QUEUED
-        assert store.get("p1", "queued").attempt == 0
+        assert (await store.get("p1", "running")).status == TaskStatus.RUNNING
+        assert (await store.get("p1", "queued")).status == TaskStatus.QUEUED
+        assert (await store.get("p1", "queued")).attempt == 0
         with pytest.raises(RuntimeError, match="closed"):
             await manager._dispatch("new")
     finally:
         await manager.close()
-        database.close()
+        (await database.close())

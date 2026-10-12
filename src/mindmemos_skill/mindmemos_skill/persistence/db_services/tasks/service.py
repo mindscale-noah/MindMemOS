@@ -1,19 +1,21 @@
 """Durable Skill task state on the service's existing database."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_, select
 
 from ....infra.database import Database
 from ....infra.database.typing import Filter
-from ....infra.task_manager.typing import ProgressEvent, TaskSpec, TaskStatus
-from ...constants import SKILL_TASK_PROGRESS_TABLE, SKILL_TASKS_TABLE
-from .typing import TaskProgressRecord, TaskRecord
+from ....infra.task_manager.typing import TaskSpec, TaskStatus
+from ....logging.typing import TaskLog
+from ...constants import SKILL_TASK_LOGS_TABLE, SKILL_TASKS_TABLE
+from .typing import TaskRecord
 
 
 class TaskDataService:
-    """Perform atomic claims and progress writes without holding a long transaction."""
+    """Perform atomic task state changes without holding a long transaction."""
 
     def __init__(self, database: Database):
         """Borrow the already configured Skill database.
@@ -24,7 +26,53 @@ class TaskDataService:
         self.database = database
         self._tasks = database.tables.get(SKILL_TASKS_TABLE).table
 
-    def create(self, spec: TaskSpec) -> TaskRecord:
+    async def append_log(self, record: dict[str, Any]) -> None:
+        """Append one sanitized log without changing task status or progress.
+
+        Args:
+            record: log_id, project_id, task_id, attempt, occurred_at and sanitized
+                payload supplied by the task logging scope.
+        """
+        async with self.database.transaction() as database:
+            # Serialize writers for this task so pagination never skips a late commit.
+            async with database._connect() as connection:
+                owner = (
+                    await connection.execute(
+                        select(self._tasks.c.task_id)
+                        .where(self._tasks.c.task_id == record["task_id"])
+                        .where(self._tasks.c.project_id == record["project_id"])
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if owner is None:
+                    raise ValueError("Task log does not belong to an existing project-owned task")
+            await database.insert(SKILL_TASK_LOGS_TABLE, [record])
+
+    async def logs(self, project_id: str, task_id: str, *, after: int = 0, limit: int = 100) -> list[TaskLog]:
+        """Read historical logs within the authorized project.
+
+        Args:
+            project_id: Authorized owning project.
+            task_id: Durable task identity.
+            after: Last observed committed log sequence, or zero for the first page.
+            limit: Maximum number of records, ordered by their committed sequence.
+
+        Returns:
+            Rows containing identity, attempt, timestamp and sanitized payload.
+        """
+        rows = await self.database.select(
+            SKILL_TASK_LOGS_TABLE,
+            filters=[
+                Filter(field="project_id", value=project_id),
+                Filter(field="task_id", value=task_id),
+                Filter(field="sequence", op="gt", value=after),
+            ],
+            order_by=["sequence"],
+            limit=limit,
+        )
+        return [TaskLog.model_validate(row) for row in rows]
+
+    async def create(self, spec: TaskSpec) -> TaskRecord:
         """Persist an authorized request before any Kafka notification.
 
         Args:
@@ -41,10 +89,10 @@ class TaskDataService:
             created_at=now,
             updated_at=now,
         )
-        self.database.insert(SKILL_TASKS_TABLE, [record.model_dump(mode="python")])
+        (await self.database.insert(SKILL_TASKS_TABLE, [record.model_dump(mode="python")]))
         return record
 
-    def get(self, project_id: str, task_id: str) -> TaskRecord | None:
+    async def get(self, project_id: str, task_id: str) -> TaskRecord | None:
         """Read a task only inside its project scope.
 
         Args:
@@ -54,10 +102,12 @@ class TaskDataService:
         Returns:
             Stored task or None when absent from the project.
         """
-        rows = self.database.select(SKILL_TASKS_TABLE, filters={"project_id": project_id, "task_id": task_id}, limit=1)
+        rows = await self.database.select(
+            SKILL_TASKS_TABLE, filters={"project_id": project_id, "task_id": task_id}, limit=1
+        )
         return TaskRecord.model_validate(rows[0]) if rows else None
 
-    def load(self, task_id: str) -> TaskRecord | None:
+    async def load(self, task_id: str) -> TaskRecord | None:
         """Load a task for the trusted worker from its opaque identity.
 
         Args:
@@ -66,10 +116,10 @@ class TaskDataService:
         Returns:
             Stored task or None when the notification is invalid.
         """
-        row = self.database.get(SKILL_TASKS_TABLE, task_id)
+        row = await self.database.get(SKILL_TASKS_TABLE, task_id)
         return TaskRecord.model_validate(row) if row else None
 
-    def due(self, *, limit: int = 100) -> list[TaskRecord]:
+    async def due(self, *, limit: int = 100) -> list[TaskRecord]:
         """List queued tasks requiring another best-effort notification.
 
         Args:
@@ -78,7 +128,7 @@ class TaskDataService:
         Returns:
             Queued tasks whose next notification deadline has elapsed.
         """
-        rows = self.database.select(
+        rows = await self.database.select(
             SKILL_TASKS_TABLE,
             filters=[
                 Filter(field="status", value=TaskStatus.QUEUED),
@@ -89,7 +139,7 @@ class TaskDataService:
         )
         return [TaskRecord.model_validate(row) for row in rows]
 
-    def expired(self, *, limit: int = 100) -> list[TaskRecord]:
+    async def expired(self, *, limit: int = 100) -> list[TaskRecord]:
         """List running tasks whose owning worker no longer holds a live lease.
 
         Args:
@@ -98,7 +148,7 @@ class TaskDataService:
         Returns:
             Potential recovery candidates, rechecked atomically by claim.
         """
-        rows = self.database.select(
+        rows = await self.database.select(
             SKILL_TASKS_TABLE,
             filters=[
                 Filter(field="status", value=TaskStatus.RUNNING),
@@ -109,20 +159,38 @@ class TaskDataService:
         )
         return [TaskRecord.model_validate(row) for row in rows]
 
-    def defer_notification(self, task_id: str, *, seconds: int = 30) -> None:
+    async def counts(self) -> dict[str, dict[str, int]]:
+        """Read exact database task counts per project for queue diagnostics.
+
+        Returns:
+            Project IDs mapped to status names and the current number of tasks.
+        """
+        statement = select(self._tasks.c.project_id, self._tasks.c.status, func.count()).group_by(
+            self._tasks.c.project_id, self._tasks.c.status
+        )
+        async with self.database._connect() as connection:
+            rows = (await connection.execute(statement)).all()
+        result: dict[str, dict[str, int]] = {}
+        for project_id, status, count in rows:
+            result.setdefault(project_id, {})[status] = count
+        return result
+
+    async def defer_notification(self, task_id: str, *, seconds: int = 30) -> None:
         """Delay another notification; an unconfirmed send remains retryable.
 
         Args:
             task_id: Queued task identity.
             seconds: Delay before the next recovery scan republishes it.
         """
-        self.database.update(
-            SKILL_TASKS_TABLE,
-            {"next_notify_at": datetime.now(UTC) + timedelta(seconds=seconds)},
-            filters={"task_id": task_id, "status": TaskStatus.QUEUED},
+        (
+            await self.database.update(
+                SKILL_TASKS_TABLE,
+                {"next_notify_at": datetime.now(UTC) + timedelta(seconds=seconds)},
+                filters={"task_id": task_id, "status": TaskStatus.QUEUED},
+            )
         )
 
-    def claim(self, task_id: str, *, lease_seconds: int = 120) -> tuple[TaskRecord, str] | None:
+    async def claim(self, task_id: str, *, lease_seconds: int = 120) -> tuple[TaskRecord, str] | None:
         """Atomically claim a queued or expired task for one physical attempt.
 
         Args:
@@ -152,14 +220,16 @@ class TaskDataService:
                 lease_token=token,
                 lease_expires_at=now + timedelta(seconds=lease_seconds),
                 updated_at=now,
+                started_at=now,
+                finished_at=None,
             )
             .returning(*self._tasks.c)
         )
-        with self.database._connect() as connection:
-            row = connection.execute(statement).mappings().first()
+        async with self.database._connect() as connection:
+            row = (await connection.execute(statement)).mappings().first()
         return (TaskRecord.model_validate(row), token) if row else None
 
-    def heartbeat(self, task_id: str, token: str, *, lease_seconds: int = 120) -> bool:
+    async def heartbeat(self, task_id: str, token: str, *, lease_seconds: int = 120) -> bool:
         """Renew only the still-owned running attempt.
 
         Args:
@@ -172,83 +242,18 @@ class TaskDataService:
         """
         now = datetime.now(UTC)
         return bool(
-            self.database.update(
-                SKILL_TASKS_TABLE,
-                {"lease_expires_at": now + timedelta(seconds=lease_seconds)},
-                filters={"task_id": task_id, "lease_token": token, "status": TaskStatus.RUNNING},
-            )
-        )
-
-    def append_progress(self, task_id: str, token: str, event: ProgressEvent) -> str:
-        """Commit progress only for the current physical attempt.
-
-        Args:
-            task_id: Stable task identity.
-            token: Current worker fencing token.
-            event: Validated non-sensitive progress summary.
-
-        Returns:
-            Task-scoped event ID suitable for logging correlation.
-
-        Raises:
-            RuntimeError: This worker has lost its task lease.
-        """
-        with self.database.transaction() as database:
-            statement = (
-                self._tasks.update()
-                .where(self._tasks.c.task_id == task_id)
-                .where(self._tasks.c.lease_token == token)
-                .where(self._tasks.c.status == TaskStatus.RUNNING)
-                .values(
-                    progress=event.model_dump(mode="json"),
-                    progress_seq=self._tasks.c.progress_seq + 1,
-                    updated_at=datetime.now(UTC),
+            (
+                await self.database.update(
+                    SKILL_TASKS_TABLE,
+                    {"lease_expires_at": now + timedelta(seconds=lease_seconds)},
+                    filters={"task_id": task_id, "lease_token": token, "status": TaskStatus.RUNNING},
                 )
-                .returning(self._tasks.c.project_id, self._tasks.c.progress_seq, self._tasks.c.attempt)
             )
-            with database._connect() as connection:
-                row = connection.execute(statement).first()
-            if row is None:
-                raise RuntimeError("Task lease was lost before progress could be recorded")
-            project_id, sequence, attempt = row
-            record = TaskProgressRecord(
-                project_id=project_id,
-                task_id=task_id,
-                sequence=sequence,
-                attempt=attempt,
-                event=event.model_dump(mode="json"),
-                occurred_at=event.occurred_at,
-            )
-            database.insert(SKILL_TASK_PROGRESS_TABLE, [record.model_dump(mode="python")])
-        return f"{task_id}:{sequence}"
-
-    def events(self, project_id: str, task_id: str, *, after: int = 0, limit: int = 100) -> list[ProgressEvent]:
-        """Read a bounded page of progress within the owning project.
-
-        Args:
-            project_id: Authorized project identity.
-            task_id: Stable task identity.
-            after: Last seen one-based progress sequence.
-            limit: Maximum events in the returned page.
-
-        Returns:
-            Validated progress events in sequence order.
-        """
-        rows = self.database.select(
-            SKILL_TASK_PROGRESS_TABLE,
-            filters=[
-                Filter(field="project_id", value=project_id),
-                Filter(field="task_id", value=task_id),
-                Filter(field="sequence", op="gt", value=after),
-            ],
-            order_by=["sequence"],
-            limit=limit,
         )
-        return [
-            ProgressEvent.model_validate(row["event"]).model_copy(update={"sequence": row["sequence"]}) for row in rows
-        ]
 
-    def finish(self, task_id: str, token: str, *, result: dict | None = None, error_type: str | None = None) -> bool:
+    async def finish(
+        self, task_id: str, token: str, *, result: dict | None = None, error_type: str | None = None
+    ) -> bool:
         """Commit one terminal result only from the current fenced attempt.
 
         Args:
@@ -262,17 +267,21 @@ class TaskDataService:
         """
         if (result is None) == (error_type is None):
             raise ValueError("Supply exactly one of result or error_type")
+        now = datetime.now(UTC)
         return bool(
-            self.database.update(
-                SKILL_TASKS_TABLE,
-                {
-                    "status": TaskStatus.FAILED if error_type else TaskStatus.SUCCEEDED,
-                    "result": result,
-                    "error_type": error_type,
-                    "lease_token": None,
-                    "lease_expires_at": None,
-                    "updated_at": datetime.now(UTC),
-                },
-                filters={"task_id": task_id, "lease_token": token, "status": TaskStatus.RUNNING},
+            (
+                await self.database.update(
+                    SKILL_TASKS_TABLE,
+                    {
+                        "finished_at": now,
+                        "status": TaskStatus.FAILED if error_type else TaskStatus.SUCCEEDED,
+                        "result": result,
+                        "error_type": error_type,
+                        "lease_token": None,
+                        "lease_expires_at": None,
+                        "updated_at": now,
+                    },
+                    filters={"task_id": task_id, "lease_token": token, "status": TaskStatus.RUNNING},
+                )
             )
         )

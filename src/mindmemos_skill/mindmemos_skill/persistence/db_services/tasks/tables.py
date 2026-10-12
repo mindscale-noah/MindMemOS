@@ -1,12 +1,13 @@
-"""Task and progress tables in the existing Skill database."""
+"""Task state and log tables in the existing Skill database."""
 
 from sqlalchemy import JSON, Column, ForeignKeyConstraint, Index, Integer, MetaData, Table, Text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from ....infra.database import TableSpec
 from ....infra.database.typing import UTCDateTime
-from ...constants import SKILL_TASK_PROGRESS_TABLE, SKILL_TASKS_TABLE
-from .typing import TaskProgressRecord, TaskRecord
+from ....logging.typing import TaskLogRecord
+from ...constants import SKILL_TASK_LOGS_TABLE, SKILL_TASKS_TABLE
+from .typing import TaskRecord
 
 
 def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
@@ -16,7 +17,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         metadata: Shared business table metadata.
 
     Returns:
-        Task and progress registrations.
+        Task and log registrations.
     """
     json_type = JSON().with_variant(JSONB(), "postgresql")
     tasks = Table(
@@ -26,9 +27,11 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         Column("project_id", Text, nullable=False, comment="Project owning the task."),
         Column("kind", Text, nullable=False, comment="Trusted handler identity."),
         Column("payload", json_type, nullable=False, comment="Immutable request with explicit configuration."),
+        Column("trace_context", json_type, nullable=False, comment="Submission W3C propagation headers."),
+        Column("request_id", Text, comment="Original submission request identity."),
+        Column("started_at", UTCDateTime(), comment="Current attempt start time."),
+        Column("finished_at", UTCDateTime(), comment="Terminal result commit time."),
         Column("status", Text, nullable=False, comment="Current task lifecycle state."),
-        Column("progress", json_type, comment="Most recent validated progress event."),
-        Column("progress_seq", Integer, nullable=False, comment="Last allocated event sequence."),
         Column("result", json_type, comment="Successful business result."),
         Column("error_type", Text, comment="Exception type without sensitive text."),
         Column("attempt", Integer, nullable=False, comment="Number of physical attempts."),
@@ -41,19 +44,20 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         Index("skill_tasks_dispatch_idx", "status", "next_notify_at"),
         Index("skill_tasks_lease_idx", "status", "lease_expires_at"),
     )
-    events = Table(
-        SKILL_TASK_PROGRESS_TABLE,
+    logs = Table(
+        SKILL_TASK_LOGS_TABLE,
         metadata,
-        Column("project_id", Text, primary_key=True, comment="Project owning the event."),
-        Column("task_id", Text, primary_key=True, comment="Task owning the event."),
-        Column("sequence", Integer, primary_key=True, comment="One-based event order."),
+        Column("sequence", Integer, primary_key=True, autoincrement=True, comment="Increasing pagination cursor."),
+        Column("log_id", Text, nullable=False, unique=True, comment="Unique immutable log identity."),
+        Column("project_id", Text, nullable=False, comment="Authorized owning project."),
+        Column("task_id", Text, nullable=False, comment="Durable task identity."),
         Column("attempt", Integer, nullable=False, comment="Physical execution attempt."),
-        Column("event", json_type, nullable=False, comment="Validated progress payload."),
-        Column("occurred_at", UTCDateTime(), nullable=False, comment="Progress report time."),
+        Column("occurred_at", UTCDateTime(), nullable=False, comment="Original Python log timestamp."),
+        Column("payload", json_type, nullable=False, comment="Sanitized message, body, traceback and correlation."),
         ForeignKeyConstraint(["task_id"], [f"{SKILL_TASKS_TABLE}.task_id"]),
-        Index("skill_task_progress_recent_idx", "project_id", "task_id", "sequence"),
+        Index("skill_task_logs_recent_idx", "project_id", "task_id", "sequence"),
     )
     return (
+        TableSpec(name=SKILL_TASK_LOGS_TABLE, table=logs, insert_model=TaskLogRecord),
         TableSpec(name=SKILL_TASKS_TABLE, table=tasks, insert_model=TaskRecord),
-        TableSpec(name=SKILL_TASK_PROGRESS_TABLE, table=events, insert_model=TaskProgressRecord),
     )

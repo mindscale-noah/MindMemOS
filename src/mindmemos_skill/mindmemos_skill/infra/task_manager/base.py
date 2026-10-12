@@ -1,12 +1,9 @@
 """Common task-manager contract for local and durable execution."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
 
-from .progress import ProgressReporter
-from .typing import ProgressEvent, TaskSnapshot, TaskSpec
-
-TaskHandler = Callable[[TaskSpec, ProgressReporter], Awaitable[dict]]
+from ...logging.typing import TaskLog
+from .typing import TaskSnapshot, TaskSpec
 
 
 class TaskManager(ABC):
@@ -21,8 +18,8 @@ class TaskManager(ABC):
         """Read a project-owned task or return None."""
 
     @abstractmethod
-    async def events(self, project_id: str, task_id: str, *, after: int = 0) -> list[ProgressEvent]:
-        """Read algorithm-selected progress after the given sequence."""
+    async def logs(self, project_id: str, task_id: str, *, after: int = 0) -> list[TaskLog]:
+        """Read task logs after the given committed sequence."""
 
     @abstractmethod
     async def close(self) -> None:

@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from ....infra.task_manager.typing import ProgressEvent, TaskSnapshot, TaskSpec, TaskStatus
+from ....infra.task_manager.typing import TaskSnapshot, TaskSpec, TaskStatus
 
 
 class TaskRecord(BaseModel):
@@ -25,14 +25,20 @@ class TaskRecord(BaseModel):
     payload: dict[str, Any]
     """Immutable request with explicit configuration needed after process restart."""
 
+    trace_context: dict[str, str] = Field(default_factory=dict)
+    """Submission W3C headers used for publication and restored worker spans."""
+
+    request_id: str | None = None
+    """Original HTTP or Python submission identity."""
+
+    started_at: AwareDatetime | None = None
+    """Start of the current physical attempt."""
+
+    finished_at: AwareDatetime | None = None
+    """Final result commit time; absent while recovery remains possible."""
+
     status: TaskStatus
     """Current task lifecycle state."""
-
-    progress: dict[str, Any] | None = None
-    """Latest validated progress event for fast reads."""
-
-    progress_seq: int = Field(default=0, ge=0)
-    """Last allocated progress sequence."""
 
     result: dict[str, Any] | None = None
     """Final successful result when available."""
@@ -60,7 +66,14 @@ class TaskRecord(BaseModel):
 
     def spec(self) -> TaskSpec:
         """Return the immutable work sent to the handler."""
-        return TaskSpec(task_id=self.task_id, project_id=self.project_id, kind=self.kind, payload=self.payload)
+        return TaskSpec(
+            task_id=self.task_id,
+            project_id=self.project_id,
+            kind=self.kind,
+            payload=self.payload,
+            trace_context=self.trace_context,
+            request_id=self.request_id,
+        )
 
     def snapshot(self) -> TaskSnapshot:
         """Return a transport-independent task view."""
@@ -69,37 +82,10 @@ class TaskRecord(BaseModel):
             project_id=self.project_id,
             kind=self.kind,
             status=self.status,
-            progress=(
-                ProgressEvent.model_validate(self.progress).model_copy(update={"sequence": self.progress_seq})
-                if self.progress is not None
-                else None
-            ),
             result=self.result,
             error_type=self.error_type,
             attempt=self.attempt,
+            accepted_at=self.created_at,
+            started_at=self.started_at,
+            finished_at=self.finished_at,
         )
-
-
-class TaskProgressRecord(BaseModel):
-    """One ordered progress boundary committed by a leased worker."""
-
-    model_config = ConfigDict(extra="forbid")
-    """Reject unknown stored fields."""
-
-    project_id: str
-    """Owning project identity."""
-
-    task_id: str
-    """Owning task identity."""
-
-    sequence: int = Field(ge=1)
-    """One-based order within the task."""
-
-    attempt: int = Field(ge=1)
-    """Physical attempt that reported the event."""
-
-    event: dict[str, Any]
-    """Validated stage, message, count and timestamp."""
-
-    occurred_at: AwareDatetime
-    """UTC time of the progress report."""

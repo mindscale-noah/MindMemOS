@@ -6,7 +6,7 @@ import sys
 
 import pytest
 from mindmemos_skill.logging import config, configure_logging, get_logger
-from mindmemos_skill.logging.otel import attach_run_logs, detach_run_logs
+from mindmemos_skill.logging.otel import attach_logs, detach_logs
 from opentelemetry.sdk._logs import LoggerProvider, LogRecordProcessor
 
 
@@ -37,7 +37,7 @@ def test_console_and_file_output(tmp_path, capsys):
 
     console = capsys.readouterr().err
     assert path.read_text(encoding="utf-8") == console
-    assert "INFO [mindmemos_skill.algos] Unicode: \u4f60\u597d" in console
+    assert "[INFO] [mindmemos_skill.algos] | Unicode: \u4f60\u597d" in console
     assert "filtered message" not in console
     assert "Traceback" in console
     assert "RuntimeError: example failure" in console
@@ -120,7 +120,7 @@ def test_otel_bridge_keeps_console_level_independent(capsys):
 
     provider = LoggerProvider(shutdown_on_exit=False)
     provider.add_log_record_processor(CaptureLogs())
-    handler = attach_run_logs(provider, context=lambda: {"algorithm.run_id": "run"}, capture_level="debug")
+    handler = attach_logs(provider, context=lambda: {"algorithm.run_id": "run"}, capture_level="debug")
     try:
         configure_logging(level="INFO")
         get_logger("algos").debug("debug event")
@@ -128,7 +128,7 @@ def test_otel_bridge_keeps_console_level_independent(capsys):
         assert observed[0].attributes["algorithm.run_id"] == "run"
         assert "debug event" not in capsys.readouterr().err
     finally:
-        detach_run_logs(handler)
+        detach_logs(handler)
         provider.shutdown()
 
 

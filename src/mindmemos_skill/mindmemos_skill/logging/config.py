@@ -3,40 +3,43 @@
 import logging
 from pathlib import Path
 
+from .records import ContextFormatter, RecordFilter
+
 _handlers: list[logging.Handler] = []
-_otel_handlers: list[logging.Handler] = []
-_level_without_otel: int | None = None
+_capture_handlers: list[logging.Handler] = []
+_level_without_capture: int | None = None
 
 
-def attach_otel_handler(handler: logging.Handler) -> None:
-    """Forward package logs to an OTel handler without changing console filtering.
+def attach_capture_handler(handler: logging.Handler) -> None:
+    """Forward package logs to a capture handler without changing console filtering.
 
     Args:
-        handler: Run-scoped OpenTelemetry logging handler.
+        handler: Task or OpenTelemetry logging handler.
     """
-    global _level_without_otel
+    global _level_without_capture
     logger = get_logger()
-    if not _otel_handlers:
-        _level_without_otel = logger.level
+    if not _capture_handlers:
+        _level_without_capture = logger.level
+    handler.addFilter(RecordFilter())
     logger.addHandler(handler)
-    _otel_handlers.append(handler)
+    _capture_handlers.append(handler)
     logger.setLevel(logging.DEBUG)
 
 
-def detach_otel_handler(handler: logging.Handler) -> None:
-    """Remove one OTel handler and restore the configured package level.
+def detach_capture_handler(handler: logging.Handler) -> None:
+    """Remove one capture handler and restore the configured package level.
 
     Args:
-        handler: Previously attached OpenTelemetry logging handler.
+        handler: Previously attached capture handler.
     """
-    global _level_without_otel
+    global _level_without_capture
     logger = get_logger()
     logger.removeHandler(handler)
-    _otel_handlers.remove(handler)
+    _capture_handlers.remove(handler)
     handler.close()
-    if not _otel_handlers:
-        logger.setLevel(_level_without_otel if _level_without_otel is not None else logging.NOTSET)
-        _level_without_otel = None
+    if not _capture_handlers:
+        logger.setLevel(_level_without_capture if _level_without_capture is not None else logging.NOTSET)
+        _level_without_capture = None
 
 
 def get_logger(name: str = "mindmemos_skill") -> logging.Logger:
@@ -78,7 +81,7 @@ def configure_logging(*, level: str | int = "INFO", log_file: str | Path | None 
     if not isinstance(level, int):
         raise ValueError("level must be a logging level name or integer")
 
-    formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    formatter = ContextFormatter()
     handlers: list[logging.Handler] = []
     if log_file is not None:
         path = Path(log_file).expanduser()
@@ -86,6 +89,7 @@ def configure_logging(*, level: str | int = "INFO", log_file: str | Path | None 
         handlers.append(logging.FileHandler(path, mode="a", encoding="utf-8"))
     handlers.append(logging.StreamHandler())
     for handler in handlers:
+        handler.addFilter(RecordFilter())
         handler.setFormatter(formatter)
         handler.setLevel(level)
 
@@ -97,9 +101,9 @@ def configure_logging(*, level: str | int = "INFO", log_file: str | Path | None 
     for handler in handlers:
         logger.addHandler(handler)
     _handlers.extend(handlers)
-    global _level_without_otel
-    if _otel_handlers:
-        _level_without_otel = level
-    logger.setLevel(logging.DEBUG if _otel_handlers else level)
+    global _level_without_capture
+    if _capture_handlers:
+        _level_without_capture = level
+    logger.setLevel(logging.DEBUG if _capture_handlers else level)
     logger.propagate = False
     return logger
