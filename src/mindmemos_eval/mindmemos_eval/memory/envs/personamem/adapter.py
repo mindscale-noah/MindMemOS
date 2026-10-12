@@ -84,7 +84,6 @@ class PersonaMemAdapter:
             max_build_concurrency=runner.max_conv_concurrency,
             max_qa_concurrency=runner.max_qa_concurrency,
             add=runner.add,
-            score=runner.score,
             show_progress=runner.show_progress,
         )
         print(run.format_report())
