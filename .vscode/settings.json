@@ -11,5 +11,8 @@
     "./config/mindmemos_eval/skill_evaluation/evaluation.schema.json": [
       "config/mindmemos_eval/skill_evaluation/*.yaml"
     ]
-  }
+  },
+  "python.analysis.exclude": [
+    "**/output/"
+  ]
 }
