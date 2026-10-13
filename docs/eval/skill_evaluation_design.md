@@ -162,7 +162,7 @@ SearchQA 纳入同一批量自动下载流程。eval 只检查本次需要的数
 ```text
 Makefile
 scripts/
-  
+
   dev/download.py                # 单个/全部下载、校验、认证及错误汇总 + 环境变量名称CONSTANT
   dev/init.py                        # 复制明确的配置模板并打印操作提示
 
