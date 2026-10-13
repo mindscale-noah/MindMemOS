@@ -245,7 +245,7 @@ def skill_document(
         path: Original Skill YAML, anchoring home and authentication file paths.
         plan: Shared dependency plan to extend with enabled Skill dependencies.
         host: API listen address, checked against the authentication policy.
-        async_tasks: Enable Kafka submission and consumption; false disables task management.
+        async_tasks: Select Kafka submission and consumption; false selects local task execution.
         otel: Enable OTLP while retaining any configured SQL audit backend.
 
     Returns:
@@ -274,7 +274,8 @@ def skill_document(
         service["task_manager"].update(mode="kafka", bootstrap_servers=servers, worker=True)
         _kafka(plan, servers)
     else:
-        service.pop("task_manager", None)
+        service["task_manager"] = service.get("task_manager") or {}
+        service["task_manager"]["mode"] = "local"
     observability = config.service.observability
     if observability:
         if observability.backend and isinstance(observability.backend.config, PostgresConfig):

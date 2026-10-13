@@ -206,6 +206,7 @@ def _summary(args: argparse.Namespace, urls: dict[str, str], plan: DependencyPla
         [
             f"  Kafka tasks:     {'ENABLED' if args.async_tasks else 'DISABLED'}",
             f"  Skill consumer:  {'ENABLED' if args.skill and args.async_tasks else 'DISABLED'}",
+            f"  Skill tasks:     {('kafka' if args.async_tasks else 'local') if args.skill else 'DISABLED'}",
             f"  OTel monitoring: {'ENABLED' if args.otel else 'DISABLED'}",
             (
                 "  Containers to start: "
