@@ -5,6 +5,7 @@ from typing import Annotated, Final, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ....agents import OpenAIChatConfig
+from ....agents.config import AgentConfig
 
 ALGORITHM_VERSION: Final[int] = 2
 """Version of the Skill-Forest algorithm and its persisted output contract."""
@@ -23,7 +24,7 @@ class SkillForestTrainerConfig(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid", frozen=True)
     """Reject unsupported strategies and freeze the run configuration."""
 
-    optimizer: ForestOptimizerConfig
+    optimizer: Annotated[ForestOptimizerConfig, AgentConfig(allowed=("openai_chat",), namespace="skill_forest")]
     """Shared transport for reflection, patch aggregation and Skill synthesis."""
 
     ensemble_strategy: Literal["select", "hierarchical_merge"] = "select"

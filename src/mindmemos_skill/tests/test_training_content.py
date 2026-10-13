@@ -10,6 +10,7 @@ from mindmemos_skill.envs.data import RewardData
 from mindmemos_skill.skill import Skill, SkillContent, SkillSet
 from pydantic import BaseModel
 
+from .agent_testing import agent_config
 from .test_treeskill import Router
 
 
@@ -26,7 +27,7 @@ async def test_runtime_restores_standard_crlf_source_without_loading_provider(tm
         calls.append(config)
         return router
 
-    monkeypatch.setattr("mindmemos_skill.algos.train.treeskill.treeskill.OpenAIChatAgent", provider)
+    monkeypatch.setattr("mindmemos_skill.agents.Agent.from_config", provider)
     snapshot = skill.snapshot()
     restored = load_runtime_skill(snapshot)
     restored.export(tmp_path / "source")
@@ -123,7 +124,7 @@ def test_environment_install_preserves_task_inputs_and_rejects_symlinks(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_forest_merge_keeps_standard_header_and_binary_resources(tmp_path):
+async def test_forest_merge_keeps_standard_header_and_binary_resources(monkeypatch, tmp_path):
     from mindmemos_skill.algos.train.skill_forest import SkillForestTrainer
     from mindmemos_skill.algos.train.skill_forest.tree import apply_patch
     from mindmemos_skill.algos.train.skill_forest.typing import Patch
@@ -134,7 +135,9 @@ async def test_forest_merge_keeps_standard_header_and_binary_resources(tmp_path)
     source = Skill(SkillContent(content=header + "# Rules\r\nOriginal.\r\n", resources={"raw.bin": b"\x00\xff"}))
     snapshot = source.snapshot()
     assert apply_patch(source, Patch(edits=[])).snapshot() == snapshot
-    trainer = SkillForestTrainer(config(ensemble_strategy="hierarchical_merge"), agent_factory=FakeOptimizer())
+    trainer = SkillForestTrainer(
+        agent_config(monkeypatch, FakeOptimizer(), config(ensemble_strategy="hierarchical_merge"))
+    )
     selected = await trainer.train(
         skill=source, env=FakeEnvironment(), train_samples=samples(), validation_samples=[], work_dir=tmp_path
     )

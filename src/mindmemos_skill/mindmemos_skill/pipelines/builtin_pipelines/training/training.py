@@ -1,6 +1,7 @@
 """Configured Skill training and held-out evaluation."""
 
 from pathlib import Path
+from time import perf_counter
 from uuid import NAMESPACE_URL, uuid5
 
 from filelock import AsyncFileLock
@@ -117,7 +118,7 @@ class ConfiguredTrainingPipeline(TrainingPipeline[TrainingPipelineConfig]):
                 published = await store.algorithm_publication(request.project_id, run_id, input_hash)
                 if published is not None:
                     return self._result(request, published, run_id)
-                base = await store.version_by_id(request.project_id, request.init_skill_version_id)
+                base = await store.get(request.init_skill_version_id)
                 owner = await store.resolve_family(request.project_id, base.skill_id)
                 if root.exists() and any(root.iterdir()) and not (root / "request.json").exists():
                     raise ValueError("Training directory has no business input record; use a new work_dir")
@@ -149,6 +150,7 @@ class ConfiguredTrainingPipeline(TrainingPipeline[TrainingPipelineConfig]):
                             }
                         },
                     )
+                    evaluation_started = perf_counter()
                     with stage("evaluate"):
                         evaluation = await evaluate_skill(
                             skill=selected,
@@ -158,6 +160,27 @@ class ConfiguredTrainingPipeline(TrainingPipeline[TrainingPipelineConfig]):
                             concurrency=self.config.evaluation_concurrency,
                             stage_name=f"skill_forest.{name}" if isinstance(trainer, SkillForestTrainer) else None,
                         )
+                    held_out = read_json(root / name / "results.json")["tasks"]
+                    known_usage = all(item["usage"] for item in held_out)
+                    durations = [item["duration_s"] for item in held_out]
+                    report = report or {"algorithm": self.config.trainer.class_name}
+                    report.setdefault("evaluations", {})[name] = {
+                        **evaluation,
+                        "errors": 0,
+                        "wall_seconds": perf_counter() - evaluation_started,
+                        "task_seconds": sum(durations) if all(value is not None for value in durations) else None,
+                        "input_tokens": sum(item["usage"].get("input_tokens", 0) for item in held_out)
+                        if known_usage
+                        else None,
+                        "output_tokens": sum(item["usage"].get("output_tokens", 0) for item in held_out)
+                        if known_usage
+                        else None,
+                        "total_tokens": sum(item["usage"].get("total_tokens", 0) for item in held_out)
+                        if known_usage
+                        else None,
+                        "trajectory_file": str(root / name / "trajectories.jsonl"),
+                    }
+                    write_json(root / name / "report.json", report["evaluations"][name])
                     if isinstance(trainer, SkillForestTrainer):
                         result_path = root / "train" / "result.json"
                         result_data = read_json(result_path)

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from mindmemos_skill.agents import Agent as RegisteredAgent
 from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillConfig
 from mindmemos_skill.api.typing import RegisterRequest, SkillPipelineRequest, StructuredSkillInfo
 from mindmemos_skill.common.json import read_json
@@ -193,7 +194,7 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
             )
             FakeAgent.calls = []
             pipeline = service.backends["evolution_pipelines.simple"]
-            pipeline.evolver.agent_factory = FakeAgent
+            monkeypatch.setattr(RegisteredAgent, "from_config", FakeAgent)
             caplog.set_level("INFO", logger="mindmemos_skill")
             caplog.clear()
             request = SkillPipelineRequest(
@@ -264,7 +265,7 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
             with pytest.raises(SkillConflictError, match="different inputs"):
                 await service.run_evolution(request.model_copy(update={"auto_accept": False}))
             with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
-                published = await scoped.skills.version_by_id("project", result.version_id)
+                published = await scoped.skills.get(result.version_id)
                 assert (await scoped.trajectories.counts(first.skill_version_id)).model_dump() == {
                     "total": 4,
                     "consumed": 2,
@@ -338,7 +339,7 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
                 )
             )
             with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
-                assert (await scoped.skills.version_by_id("project", inactive.version_id)).parent_version_ids == [
+                assert (await scoped.skills.get(inactive.version_id)).parent_version_ids == [
                     result.version_id
                 ]
                 assert (
@@ -357,7 +358,7 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
                 )
             )
             with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
-                assert (await scoped.skills.version_by_id("project", branch.version_id)).parent_version_ids == [
+                assert (await scoped.skills.get(branch.version_id)).parent_version_ids == [
                     first.skill_version_id
                 ]
                 assert (
@@ -377,7 +378,7 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
                     self.calls.append(messages)
                     return SimpleNamespace(output='{"reasoning":"No supported changes","edits":[]}')
 
-            pipeline.evolver.agent_factory = NoChangeAgent
+            monkeypatch.setattr(RegisteredAgent, "from_config", NoChangeAgent)
             unchanged_request = SkillPipelineRequest(
                 project_id="project", skill_ref=first.skill_id, pipeline="simple", run_id="evolve_" + uuid4().hex
             )
@@ -397,7 +398,7 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
             no_change_calls = len(FakeAgent.calls)
             assert await service.run_evolution(unchanged_request) == unchanged
             assert len(FakeAgent.calls) == no_change_calls
-            pipeline.evolver.agent_factory = FakeAgent
+            monkeypatch.setattr(RegisteredAgent, "from_config", FakeAgent)
 
             original_commit = SkillDataService.commit
             original_algorithm_commit = SkillDataService.commit_algorithm

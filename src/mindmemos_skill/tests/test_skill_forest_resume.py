@@ -8,6 +8,7 @@ from mindmemos_skill.algos.train.skill_forest import SkillForestTrainer
 from mindmemos_skill.algos.train.skill_forest import trainer as trainer_module
 from mindmemos_skill.common.json import read_jsonl
 
+from .agent_testing import agent_config
 from .test_skill_forest import FakeEnvironment, FakeOptimizer, config, initial_skill, samples
 
 
@@ -31,7 +32,7 @@ def candidate_dir(root):
 async def test_patch_applied_before_interruption_is_reused(tmp_path, monkeypatch):
     """A committed Skill snapshot survives while its validation restarts."""
     optimizer, env = FakeOptimizer(), FakeEnvironment()
-    trainer = SkillForestTrainer(small_config(), agent_factory=optimizer)
+    trainer = SkillForestTrainer(agent_config(monkeypatch, optimizer, small_config()))
     original = trainer_module.write_node
     interrupted = False
 
@@ -57,7 +58,7 @@ async def test_patch_applied_before_interruption_is_reused(tmp_path, monkeypatch
     assert (tmp_path / "result.json").exists()
 
 
-async def test_partial_validation_restarts_from_first_task(tmp_path):
+async def test_partial_validation_restarts_from_first_task(monkeypatch, tmp_path):
     """A partial JSONL audit does not become a per-task recovery cache."""
 
     class InterruptedEnvironment(FakeEnvironment):
@@ -77,7 +78,7 @@ async def test_partial_validation_restarts_from_first_task(tmp_path):
 
     env = InterruptedEnvironment()
     optimizer = FakeOptimizer()
-    trainer = SkillForestTrainer(small_config(), agent_factory=optimizer)
+    trainer = SkillForestTrainer(agent_config(monkeypatch, optimizer, small_config()))
     with pytest.raises(ExceptionGroup):
         (await execute(tmp_path, trainer, env))
     first_task = env.candidate_calls[0]
@@ -92,16 +93,16 @@ async def test_partial_validation_restarts_from_first_task(tmp_path):
     assert all("trajectory" in row["result"] for row in rows)
 
 
-async def test_resume_rejects_changed_inputs_and_corrupt_nodes(tmp_path):
+async def test_resume_rejects_changed_inputs_and_corrupt_nodes(monkeypatch, tmp_path):
     """A matching final result is reusable; mismatched inputs fail before calls."""
     env, optimizer = FakeEnvironment(), FakeOptimizer()
-    trainer = SkillForestTrainer(small_config(), agent_factory=optimizer)
+    trainer = SkillForestTrainer(agent_config(monkeypatch, optimizer, small_config()))
     selected = await execute(tmp_path, trainer, env)
     before = len(env.calls), len(optimizer.messages)
     assert (await execute(tmp_path, trainer, env)).source.content_hash == selected.source.content_hash
     assert (len(env.calls), len(optimizer.messages)) == before
 
-    changed = SkillForestTrainer(small_config(seed=99), agent_factory=optimizer)
+    changed = SkillForestTrainer(agent_config(monkeypatch, optimizer, small_config(seed=99)))
     with pytest.raises(ValueError, match="identity mismatch"):
         (await execute(tmp_path, changed, env))
     assert (len(env.calls), len(optimizer.messages)) == before
@@ -115,11 +116,11 @@ async def test_resume_rejects_changed_inputs_and_corrupt_nodes(tmp_path):
         (await execute(tmp_path, trainer, env))
 
 
-async def test_config_snapshot_masks_credentials_and_still_supports_recovery(tmp_path):
+async def test_config_snapshot_masks_credentials_and_still_supports_recovery(monkeypatch, tmp_path):
     """Disk snapshots are redacted while recovery still checks the runtime inputs."""
     settings = small_config()
     settings.optimizer.api_key = "forest-private-key"
-    trainer = SkillForestTrainer(settings, agent_factory=FakeOptimizer())
+    trainer = SkillForestTrainer(agent_config(monkeypatch, FakeOptimizer(), settings))
     env = FakeEnvironment()
     await execute(tmp_path, trainer, env)
     saved = json.loads((tmp_path / "config.json").read_text())
@@ -132,7 +133,7 @@ async def test_config_snapshot_masks_credentials_and_still_supports_recovery(tmp
     changed = settings.model_copy(deep=True)
     changed.optimizer.api_key = "different-key"
     with pytest.raises(ValueError, match="identity mismatch"):
-        await execute(tmp_path, SkillForestTrainer(changed, agent_factory=FakeOptimizer()), env)
+        await execute(tmp_path, SkillForestTrainer(agent_config(monkeypatch, FakeOptimizer(), changed)), env)
 
 
 async def test_legacy_directory_is_not_silently_imported(tmp_path):
@@ -143,7 +144,7 @@ async def test_legacy_directory_is_not_silently_imported(tmp_path):
 
 
 @pytest.mark.parametrize("cleanup", [True, False])
-async def test_workspace_cleanup_is_configurable(tmp_path, cleanup):
+async def test_workspace_cleanup_is_configurable(monkeypatch, tmp_path, cleanup):
     """Completed task workspaces are removed by default and retained on request."""
 
     class FileEnvironment(FakeEnvironment):
@@ -156,7 +157,7 @@ async def test_workspace_cleanup_is_configurable(tmp_path, cleanup):
     (
         await execute(
             tmp_path,
-            SkillForestTrainer(small_config(cleanup_workspaces=cleanup), agent_factory=FakeOptimizer()),
+            SkillForestTrainer(agent_config(monkeypatch, FakeOptimizer(), small_config(cleanup_workspaces=cleanup))),
             FileEnvironment(),
         )
     )
@@ -164,10 +165,10 @@ async def test_workspace_cleanup_is_configurable(tmp_path, cleanup):
     assert bool(artifacts) is not cleanup
 
 
-async def test_selection_failure_restarts_selection_without_reexpanding(tmp_path):
+async def test_selection_failure_restarts_selection_without_reexpanding(monkeypatch, tmp_path):
     """Committed parent expansions survive a failed final selection stage."""
     env, optimizer = FakeEnvironment(), FakeOptimizer()
-    trainer = SkillForestTrainer(small_config(), agent_factory=optimizer)
+    trainer = SkillForestTrainer(agent_config(monkeypatch, optimizer, small_config()))
     original = trainer._ensemble
     interrupted = False
 

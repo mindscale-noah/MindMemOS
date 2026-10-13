@@ -1,5 +1,6 @@
 """Evaluate a frozen Skill with reusable, independently audited task results."""
 
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -86,6 +87,21 @@ async def evaluate_skill(
             )
             for position, (sample, result) in enumerate(zip(samples, results, strict=True))
         ]
+    )
+    (directory / "trajectories.jsonl").write_text(
+        "".join(
+            json.dumps(
+                {
+                    "task_id": sample.task.id,
+                    "task": sample.task.model_dump(mode="json"),
+                    "result": result.model_dump(mode="json"),
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+            for sample, result in zip(samples, results, strict=True)
+        ),
+        encoding="utf-8",
     )
     write_json(directory / "results.json", index)
     write_json(directory / "summary.json", summary)

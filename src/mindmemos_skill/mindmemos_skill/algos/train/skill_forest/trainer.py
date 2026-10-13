@@ -10,7 +10,6 @@ from typing import Literal
 from filelock import AsyncFileLock
 from pydantic import JsonValue
 
-from ....agents import OpenAIChatAgent
 from ....common.checkpoint import fingerprint
 from ....common.json import read_json, read_jsonl, write_json
 from ....common.secrets import redact_credentials
@@ -30,7 +29,6 @@ from .generation import InvalidPatchError, generate_patch
 from .runtime import ForestRuntime, parallel
 from .tree import apply_patch, cannot_improve, expansion_wave, mean_score, novelty, split_tasks, tree_winners
 from .typing import (
-    AgentFactory,
     EnsembleCandidate,
     Node,
     NodeCheckpoint,
@@ -51,15 +49,13 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
     config_type = SkillForestTrainerConfig
     """Configuration model used by the shared algorithm registry."""
 
-    def __init__(self, config: SkillForestTrainerConfig, *, agent_factory: AgentFactory = OpenAIChatAgent) -> None:
+    def __init__(self, config: SkillForestTrainerConfig) -> None:
         """Bind a validated run configuration without starting physical work.
 
         Args:
             config: Forest training controls.
-            agent_factory: Optional optimizer constructor for offline tests.
         """
         super().__init__(config.model_copy(deep=True))
-        self.agent_factory = agent_factory
 
     def create_splits(self, task_ids: Sequence[str]) -> list[TreeSplit]:
         """Create one deterministic train and validation partition per tree.
@@ -214,7 +210,7 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
             if result.get("status") != "completed":
                 raise ValueError("Skill-Forest result is incomplete")
             return load_skill(result["selected_skill"])
-        runtime = ForestRuntime(self.config, agent_factory=self.agent_factory, work_dir=root, env_adapter=env_adapter)
+        runtime = ForestRuntime(self.config, work_dir=root, env_adapter=env_adapter)
         started = perf_counter()
         try:
             stages = {}

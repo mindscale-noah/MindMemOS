@@ -49,6 +49,8 @@ from mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_mode.policy 
 )
 from mindmemos_skill.envs.builtin_envs.spreadsheetbench.text_action_mode.reference_reward import compare_workbooks
 
+from .agent_testing import agent_config
+
 
 class ScriptedAgent(OpenAIChatAgent):
     def __init__(self, responses: list[str]) -> None:
@@ -76,30 +78,35 @@ class FailingAgent(OpenAIChatAgent):
         raise RuntimeError(self.message)
 
 
-def make_stage_trainer(agent, **options):
+def make_stage_trainer(agent, monkeypatch, **options):
     def factory(config):
         configured = copy.copy(agent)
         configured.config = config
         return configured
 
     return TreeSkillTrainer(
-        TreeSkillTrainerConfig(optimizer=agent.config, router=agent.config, **options), agent_factory=factory
+        agent_config(
+            monkeypatch, factory, TreeSkillTrainerConfig(optimizer=agent.config, router=agent.config, **options)
+        )
     )
 
 
-async def run_localization(tree, records, *, agent, concurrency, temperature, max_tokens):
+async def run_localization(tree, records, *, agent, concurrency, temperature, max_tokens, monkeypatch):
     trainer = make_stage_trainer(
         agent,
         localization_concurrency=concurrency,
         localization_temperature=temperature,
         localization_max_tokens=max_tokens,
+        monkeypatch=monkeypatch,
     )
     with TemporaryDirectory() as directory:
         return await trainer._localize(tree, records, Path(directory))
 
 
-async def run_fusion(tree, evidence, *, agent, temperature, max_tokens, audit_dir=None):
-    trainer = make_stage_trainer(agent, fusion_temperature=temperature, fusion_max_tokens=max_tokens)
+async def run_fusion(tree, evidence, *, agent, temperature, max_tokens, audit_dir=None, monkeypatch):
+    trainer = make_stage_trainer(
+        agent, fusion_temperature=temperature, fusion_max_tokens=max_tokens, monkeypatch=monkeypatch
+    )
     if audit_dir is not None:
         return await trainer._fuse(tree, evidence, audit_dir)
     with TemporaryDirectory() as directory:
@@ -314,7 +321,9 @@ Write formulas carefully.
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("max_tokens", "retry_tokens"), [(2048, 4096), (16384, 16384)])
-async def test_treeskill_locator_retries_with_bounded_budget_and_keeps_valid_items(max_tokens, retry_tokens) -> None:
+async def test_treeskill_locator_retries_with_bounded_budget_and_keeps_valid_items(
+    monkeypatch, max_tokens, retry_tokens
+) -> None:
     tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
     record = TrajectoryAnalysisRecord(
         instance_id="trajectory-1",
@@ -362,7 +371,7 @@ async def test_treeskill_locator_retries_with_bounded_budget_and_keeps_valid_ite
     )
 
     located, failures = await run_localization(
-        tree, [record], agent=model, concurrency=1, temperature=0.0, max_tokens=max_tokens
+        tree, [record], agent=model, concurrency=1, temperature=0.0, max_tokens=max_tokens, monkeypatch=monkeypatch
     )
 
     assert [item.evidence_id for item in located] == ["e1"]
@@ -375,7 +384,9 @@ async def test_treeskill_locator_retries_with_bounded_budget_and_keeps_valid_ite
 
 
 @pytest.mark.asyncio
-async def test_treeskill_locator_and_fuser_record_failed_items_without_aborting() -> None:
+async def test_treeskill_locator_and_fuser_record_failed_items_without_aborting(
+    monkeypatch,
+) -> None:
     tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
     record = TrajectoryAnalysisRecord(
         instance_id="trajectory-1",
@@ -385,7 +396,7 @@ async def test_treeskill_locator_and_fuser_record_failed_items_without_aborting(
     )
     locator_model = FailingAgent()
     located, failures = await run_localization(
-        tree, [record], agent=locator_model, concurrency=16, temperature=0.0, max_tokens=2048
+        tree, [record], agent=locator_model, concurrency=16, temperature=0.0, max_tokens=2048, monkeypatch=monkeypatch
     )
     assert not located and len(failures) == 1
     assert "endpoint unavailable" in failures[0].error
@@ -406,6 +417,7 @@ async def test_treeskill_locator_and_fuser_record_failed_items_without_aborting(
         agent=model,
         temperature=0.0,
         max_tokens=4096,
+        monkeypatch=monkeypatch,
     )
     assert final == tree and not edits and len(failures) == 1
     assert "endpoint unavailable" in failures[0].error
@@ -456,7 +468,9 @@ def test_spreadsheetbench_text_action_evaluator_supports_whole_column_ranges(tmp
 
 
 @pytest.mark.asyncio
-async def test_node_fusion_rejects_analysis_artifacts_in_updates_and_new_subtrees() -> None:
+async def test_node_fusion_rejects_analysis_artifacts_in_updates_and_new_subtrees(
+    monkeypatch,
+) -> None:
     tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
     model = ScriptedAgent(
         [
@@ -500,7 +514,9 @@ async def test_node_fusion_rejects_analysis_artifacts_in_updates_and_new_subtree
         )
     ]
 
-    final_tree, edits, failures = await run_fusion(tree, evidence, agent=model, temperature=0.0, max_tokens=4096)
+    final_tree, edits, failures = await run_fusion(
+        tree, evidence, agent=model, temperature=0.0, max_tokens=4096, monkeypatch=monkeypatch
+    )
 
     assert final_tree.full_content == tree.full_content
     assert failures == []
@@ -531,7 +547,7 @@ async def test_node_fusion_rejects_analysis_artifacts_in_updates_and_new_subtree
         [{"operation": " UPDATE ", "content": "x", "rationale": "Update"}],
     ],
 )
-async def test_invalid_fusion_response_is_a_failure_without_applying_edits(edits):
+async def test_invalid_fusion_response_is_a_failure_without_applying_edits(monkeypatch, edits):
     tree = parse_skill_markdown("# Workbook\nInspect first.\n")
     model = ScriptedAgent([json.dumps({"rationale": "Proposed change", "edits": edits})] * 2)
     evidence = [
@@ -544,14 +560,16 @@ async def test_invalid_fusion_response_is_a_failure_without_applying_edits(edits
             rationale="Relevant",
         )
     ]
-    final, applied, failures = await run_fusion(tree, evidence, agent=model, temperature=0, max_tokens=4096)
+    final, applied, failures = await run_fusion(
+        tree, evidence, agent=model, temperature=0, max_tokens=4096, monkeypatch=monkeypatch
+    )
     assert final == tree and applied == [] and len(failures) == 1
     assert len(model.calls) == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_child", [False, True])
-async def test_fusion_applies_update_before_child_and_preserves_partial_success(tmp_path, invalid_child):
+async def test_fusion_applies_update_before_child_and_preserves_partial_success(monkeypatch, tmp_path, invalid_child):
     tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
     child = {
         "heading": "## Verification",
@@ -592,7 +610,7 @@ async def test_fusion_applies_update_before_child_and_preserves_partial_success(
         )
     ]
     final, edits, failures = await run_fusion(
-        tree, evidence, agent=model, temperature=0.0, max_tokens=4096, audit_dir=tmp_path
+        tree, evidence, agent=model, temperature=0.0, max_tokens=4096, audit_dir=tmp_path, monkeypatch=monkeypatch
     )
     assert failures == []
     assert [edit.operation for edit in edits] == ["update_node", "create_child"]
@@ -606,7 +624,9 @@ async def test_fusion_applies_update_before_child_and_preserves_partial_success(
 
 
 @pytest.mark.asyncio
-async def test_truncated_fusion_response_remains_a_failure_after_one_retry():
+async def test_truncated_fusion_response_remains_a_failure_after_one_retry(
+    monkeypatch,
+):
     tree = parse_skill_markdown("# Workbook\n\nInspect first.\n")
     model = ScriptedAgent(['{"edits": [{"operation": "update_node", "content": "unfinished'] * 2)
     evidence = [
@@ -619,7 +639,9 @@ async def test_truncated_fusion_response_remains_a_failure_after_one_retry():
             rationale="Relevant.",
         )
     ]
-    final, edits, failures = await run_fusion(tree, evidence, agent=model, temperature=0.0, max_tokens=4096)
+    final, edits, failures = await run_fusion(
+        tree, evidence, agent=model, temperature=0.0, max_tokens=4096, monkeypatch=monkeypatch
+    )
     assert final == tree
     assert edits == []
     assert len(failures) == 1

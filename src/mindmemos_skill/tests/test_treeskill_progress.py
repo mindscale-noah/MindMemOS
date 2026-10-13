@@ -3,6 +3,7 @@
 import asyncio
 import io
 import logging
+import re
 
 import pytest
 from mindmemos_skill.algos.train.treeskill.trainer import sample_tasks
@@ -14,6 +15,42 @@ from mindmemos_skill.logging.tasks import async_task_log_reporter
 from . import treeskill_smoke as smoke
 from .test_treeskill_trainer_recovery import source_skill
 from .test_treeskill_training import make_sample
+
+
+@pytest.mark.parametrize("task_count", [0, 2])
+async def test_sampling_progress_counts_repeats_and_wall_time(tmp_path, monkeypatch, task_count):
+    from mindmemos_skill.algos.train.treeskill import trainer
+
+    elapsed = 100.0
+    rows = []
+    monkeypatch.setattr(trainer, "perf_counter", lambda: elapsed)
+
+    class Environment(smoke.SmokeEnvironment):
+        async def _run(self, **kwargs):
+            nonlocal elapsed
+            elapsed += 2.5
+            return await super()._run(**kwargs)
+
+    async def sink(row):
+        rows.append(row)
+
+    async with async_task_log_reporter(sink, project_id="test", task_id="training", attempt=1):
+        await sample_tasks(
+            env=Environment(smoke.SmokeConfig()),
+            skill=source_skill(),
+            samples=[make_sample(str(number)) for number in range(task_count)],
+            directory=tmp_path,
+            repeats=2,
+            concurrency=1,
+        )
+    messages = [row["payload"]["message"] for row in rows]
+    items = [message for message in messages if "item.completed" in message]
+    total = task_count * 2
+    assert len(items) == total
+    for number, message in enumerate(items, 1):
+        assert f"completed={number}/{total} | progress={number / total:.1%} | elapsed={number * 2.5:.1f}s" in message
+    final = next(message for message in messages if "] completed" in message)
+    assert f"completed={total}/{total} | progress=100.0% | elapsed={total * 2.5:.1f}s" in final
 
 
 @pytest.mark.asyncio
@@ -64,6 +101,16 @@ async def test_live_rollout_errors_recovery_and_console_match(tmp_path):
         messages = [row["payload"]["message"] for row in rows]
         assert any("reused=" in message for message in messages)
         assert any("sample_id=slow" in message for message in messages)
+        items = [message for message in messages if "item.completed" in message]
+        assert len(items) == 6
+        for batch in (items[:3], items[3:]):
+            for number, message in enumerate(batch, 1):
+                assert f"completed={number}/3 | progress={number / 3:.1%}" in message
+            elapsed = [float(re.search(r"elapsed=(\d+\.\d+)s", message).group(1)) for message in batch]
+            assert elapsed == sorted(elapsed)
+        assert all("reused=True" in message for message in items[3:] if "sample_id=error" not in message)
+        assert sum("completed=0/3 | progress=0.0% | elapsed=0.0s" in message for message in messages) == 2
+        assert sum("completed=3/3 | progress=100.0%" in message for message in messages) == 4
         text = console.getvalue()
         assert all(message in text for message in messages)
         assert "project_id=test task_id=training attempt=1" in text
@@ -73,14 +120,14 @@ async def test_live_rollout_errors_recovery_and_console_match(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_smoke_stage_metrics_match_persisted_artifacts(tmp_path):
+async def test_smoke_stage_metrics_match_persisted_artifacts(monkeypatch, tmp_path):
     rows = []
 
     async def sink(row):
         rows.append(row)
 
     async with async_task_log_reporter(sink, project_id="test", task_id="training", attempt=1):
-        summary = await smoke.run_smoke(tmp_path / "experiment")
+        summary = await smoke.run_smoke(tmp_path / "experiment", monkeypatch=monkeypatch)
     messages = [row["payload"]["message"] for row in rows]
     assert any(
         "[treeskill.train.analysis] progress" in message and "extracted_items=1" in message for message in messages

@@ -14,6 +14,7 @@ from mindmemos_skill.common.json import read_json, write_json
 from mindmemos_skill.skill import Skill, SkillContent
 
 from . import treeskill_smoke as smoke
+from .agent_testing import agent_config
 from .test_treeskill_training import make_sample
 
 
@@ -29,7 +30,7 @@ def source_skill():
 
 
 @pytest.mark.asyncio
-async def test_interrupted_localization_reuses_structured_analysis_and_rollout(tmp_path):
+async def test_interrupted_localization_reuses_structured_analysis_and_rollout(monkeypatch, tmp_path):
     calls = Counter()
     interrupted = False
 
@@ -44,7 +45,9 @@ async def test_interrupted_localization_reuses_structured_analysis_and_rollout(t
             return await super().run_messages(messages=messages, tools=tools, response_format=response_format)
 
     config = OpenAIChatConfig(model="offline", api_key="recovery-private-key")
-    trainer = TreeSkillTrainer(TreeSkillTrainerConfig(optimizer=config, router=config), agent_factory=Agent)
+    trainer = TreeSkillTrainer(
+        agent_config(monkeypatch, Agent, TreeSkillTrainerConfig(optimizer=config, router=config))
+    )
     env = smoke.SmokeEnvironment(smoke.SmokeConfig())
     kwargs = dict(skill=source_skill(), env=env, train_samples=[make_sample("train")], work_dir=tmp_path)
     with pytest.raises(asyncio.CancelledError):
@@ -81,7 +84,7 @@ def lessons():
 
 
 @pytest.mark.asyncio
-async def test_fusion_resume_preserves_new_child_ids_and_never_applies_prefix_twice(tmp_path):
+async def test_fusion_resume_preserves_new_child_ids_and_never_applies_prefix_twice(monkeypatch, tmp_path):
     calls = []
     interrupted = False
 
@@ -106,7 +109,9 @@ async def test_fusion_resume_preserves_new_child_ids_and_never_applies_prefix_tw
             return AgentResult(output=json.dumps({"rationale": "Improve", "edits": edits}))
 
     config = OpenAIChatConfig(model="offline")
-    trainer = TreeSkillTrainer(TreeSkillTrainerConfig(optimizer=config, router=config), agent_factory=Agent)
+    trainer = TreeSkillTrainer(
+        agent_config(monkeypatch, Agent, TreeSkillTrainerConfig(optimizer=config, router=config))
+    )
     initial = parse_skill_markdown("# Workbook\nInspect.\n## Edit\nSave.\n")
     with pytest.raises(asyncio.CancelledError):
         await trainer._fuse(initial, lessons(), tmp_path)
@@ -125,7 +130,7 @@ async def test_fusion_resume_preserves_new_child_ids_and_never_applies_prefix_tw
 
 
 @pytest.mark.asyncio
-async def test_failed_fusion_retries_item_and_recomputes_uncommitted_suffix(tmp_path):
+async def test_failed_fusion_retries_item_and_recomputes_uncommitted_suffix(monkeypatch, tmp_path):
     calls = 0
 
     class Agent(OpenAIChatAgent):
@@ -139,7 +144,9 @@ async def test_failed_fusion_retries_item_and_recomputes_uncommitted_suffix(tmp_
             )
 
     config = OpenAIChatConfig(model="offline")
-    trainer = TreeSkillTrainer(TreeSkillTrainerConfig(optimizer=config, router=config), agent_factory=Agent)
+    trainer = TreeSkillTrainer(
+        agent_config(monkeypatch, Agent, TreeSkillTrainerConfig(optimizer=config, router=config))
+    )
     tree = parse_skill_markdown("# Workbook\nInspect.\n## Edit\nSave.\n")
     _, _, failures = await trainer._fuse(tree, lessons(), tmp_path)
     assert len(failures) == 1 and calls == 2
@@ -165,16 +172,20 @@ async def test_patch_write_failure_propagates_and_never_commits_node(tmp_path, m
 
     monkeypatch.setattr(module, "record_patch", fail_write)
     config = OpenAIChatConfig(model="offline")
-    trainer = TreeSkillTrainer(TreeSkillTrainerConfig(optimizer=config, router=config), agent_factory=Agent)
+    trainer = TreeSkillTrainer(
+        agent_config(monkeypatch, Agent, TreeSkillTrainerConfig(optimizer=config, router=config))
+    )
     with pytest.raises(OSError, match="disk full"):
         await trainer._fuse(parse_skill_markdown("# Workbook\nInspect.\n"), lessons()[:1], tmp_path)
     assert not list((tmp_path / "items/fusion").glob("*/completed.json"))
 
 
 @pytest.mark.asyncio
-async def test_corrupt_checkpoint_is_rejected_before_reusing_completed_training(tmp_path):
+async def test_corrupt_checkpoint_is_rejected_before_reusing_completed_training(monkeypatch, tmp_path):
     config = OpenAIChatConfig(model="offline")
-    trainer = TreeSkillTrainer(TreeSkillTrainerConfig(optimizer=config, router=config), agent_factory=smoke.SmokeAgent)
+    trainer = TreeSkillTrainer(
+        agent_config(monkeypatch, smoke.SmokeAgent, TreeSkillTrainerConfig(optimizer=config, router=config))
+    )
     kwargs = dict(
         skill=source_skill(),
         env=smoke.SmokeEnvironment(smoke.SmokeConfig()),
@@ -191,7 +202,7 @@ async def test_corrupt_checkpoint_is_rejected_before_reusing_completed_training(
 
 
 @pytest.mark.asyncio
-async def test_localization_reuses_independent_success_and_invalidates_changed_inputs(tmp_path):
+async def test_localization_reuses_independent_success_and_invalidates_changed_inputs(monkeypatch, tmp_path):
     from mindmemos_skill.algos.train.treeskill.typing import AnalysisItem, TrajectoryAnalysisRecord
 
     calls = Counter()
@@ -221,7 +232,9 @@ async def test_localization_reuses_independent_success_and_invalidates_changed_i
 
     config = OpenAIChatConfig(model="offline")
     trainer = TreeSkillTrainer(
-        TreeSkillTrainerConfig(optimizer=config, router=config, localization_concurrency=1), agent_factory=Agent
+        agent_config(
+            monkeypatch, Agent, TreeSkillTrainerConfig(optimizer=config, router=config, localization_concurrency=1)
+        )
     )
     tree = parse_skill_markdown("# Workbook\nInspect.\n")
     analyses = [
@@ -247,7 +260,7 @@ async def test_localization_reuses_independent_success_and_invalidates_changed_i
 
 
 @pytest.mark.asyncio
-async def test_direct_agent_keeps_parser_retries_and_aggregates_usage_once(tmp_path):
+async def test_direct_agent_keeps_parser_retries_and_aggregates_usage_once(monkeypatch, tmp_path):
     analysis_calls = 0
 
     class Agent(smoke.SmokeAgent):
@@ -262,7 +275,9 @@ async def test_direct_agent_keeps_parser_retries_and_aggregates_usage_once(tmp_p
             return await super().run_messages(messages=messages, tools=tools, response_format=response_format)
 
     config = OpenAIChatConfig(model="offline", parse_max_attempts=2)
-    trainer = TreeSkillTrainer(TreeSkillTrainerConfig(optimizer=config, router=config), agent_factory=Agent)
+    trainer = TreeSkillTrainer(
+        agent_config(monkeypatch, Agent, TreeSkillTrainerConfig(optimizer=config, router=config))
+    )
     await trainer.train(
         skill=source_skill(),
         env=smoke.SmokeEnvironment(smoke.SmokeConfig()),

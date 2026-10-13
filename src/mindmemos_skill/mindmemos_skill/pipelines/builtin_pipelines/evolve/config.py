@@ -2,7 +2,7 @@
 
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 from ...config import PipelineComponentConfig
 
@@ -49,8 +49,18 @@ class SimpleEvolutionPipelineConfig(BaseModel):
     """Candidate-pool and sampling settings; omitted collector arguments use function defaults."""
 
     @model_validator(mode="after")
-    def validate_evolver(self) -> Self:
-        """Reject a non-evolution algorithm and validate its model settings."""
+    def validate_evolver(self, info: ValidationInfo) -> Self:
+        """Reject a non-evolution algorithm and validate its model settings.
+
+        Args:
+            info: Validation context carrying the service-local Agent catalog.
+
+        Returns:
+            This pipeline with concrete algorithm-owned options.
+
+        Raises:
+            ValueError: The selected algorithm is not an evolver or its options are invalid.
+        """
         from ....algos import Algorithm
         from ....algos.evolve.base import SkillEvolver
         from ....persistence.db_services.skills.typing import VersionNaming
@@ -59,5 +69,5 @@ class SimpleEvolutionPipelineConfig(BaseModel):
         if not issubclass(selected, SkillEvolver):
             raise ValueError("evolver must select a SkillEvolver")
         VersionNaming(algorithm=self.evolver.class_name.replace("_", "-"))
-        self.evolver.config = selected.config_type.model_validate(self.evolver.config)
+        self.evolver.config = selected.config_type.model_validate(self.evolver.config, context=info.context)
         return self

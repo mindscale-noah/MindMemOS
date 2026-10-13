@@ -10,7 +10,7 @@ from typing import Any, TypeVar
 
 from pydantic import JsonValue
 
-from ....agents import OpenAIChatAgent
+from ....agents import Agent
 from ....envs.base import Environment
 from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult
@@ -19,7 +19,6 @@ from ....skill import Skill, SkillSet
 from .config import SkillForestTrainerConfig
 from .env_adapter import SkillForestEnvAdapter
 from .scheduler import RolloutScheduler
-from .typing import AgentFactory
 
 logger = get_logger(__name__)
 
@@ -33,7 +32,6 @@ class ForestRuntime:
         self,
         config: SkillForestTrainerConfig,
         *,
-        agent_factory: AgentFactory = OpenAIChatAgent,
         work_dir: Path | None = None,
         env_adapter: SkillForestEnvAdapter | None = None,
         resume: bool = False,
@@ -42,7 +40,6 @@ class ForestRuntime:
 
         Args:
             config: Forest-wide execution limits and workspace policy.
-            agent_factory: Optimizer constructor, replaceable in offline tests.
             work_dir: Run directory retained for callers of the public runtime.
             env_adapter: Run-local adapter selected from the environment; defaults to generic for standalone use.
             resume: Accepted for compatibility; individual calls are never cached.
@@ -54,7 +51,6 @@ class ForestRuntime:
             self.env_adapter = env_adapter
         else:
             self.env_adapter = SkillForestEnvAdapter.build("generic", {})
-        self.agent_factory = agent_factory
         self.metrics = {
             "model_calls": 0,
             "model_errors": 0,
@@ -139,7 +135,7 @@ class ForestRuntime:
         """
         logger.info("[skill_forest.optimizer] started")
         async with self.model_slots:
-            agent = self.agent_factory(self.config.optimizer)
+            agent = Agent.from_config(self.config.optimizer)
             self.metrics["model_calls"] += 1
             try:
                 result = await agent.run(messages=messages)

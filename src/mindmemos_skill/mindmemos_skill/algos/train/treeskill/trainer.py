@@ -16,7 +16,7 @@ from uuid import uuid4
 from filelock import AsyncFileLock
 from pydantic import JsonValue
 
-from ....agents import OpenAIChatAgent, OpenAIChatConfig
+from ....agents import Agent
 from ....common.asyncio import map_bounded
 from ....common.checkpoint import boundary, fingerprint, read_boundary
 from ....common.json import write_json
@@ -104,13 +104,16 @@ async def sample_tasks(
     Returns:
         Completed physical trajectories and explicit failed-slot records.
     """
+    started = perf_counter()
+    slots = [(index, sample, repeat) for index, sample in enumerate(samples) for repeat in range(repeats)]
+    completed = 0
     logger.info(
         f"[{stage_name}] started | tasks={len(samples)} | repeats={repeats} | concurrency={concurrency}"
         f" | skill_chars={len(skill.content)} | scored=0 | success_count=0 | accuracy=None"
+        f" | completed=0/{len(slots)} | progress=0.0% | elapsed=0.0s"
     )
     reused_slots: set[str] = set()
     routed_lengths: dict[str, int] = {}
-    slots = [(index, sample, repeat) for index, sample in enumerate(samples) for repeat in range(repeats)]
 
     async def execute_slot(
         slot: tuple[int, DataSample, int],
@@ -208,12 +211,15 @@ async def sample_tasks(
         slot: tuple[int, DataSample, int],
     ) -> tuple[TrainingRollout | None, dict[str, JsonValue] | None]:
         """Report each completed slot before the batch drains."""
+        nonlocal completed
         index, sample, repeat = slot
         identifier = f"task-{index:06d}-sample-{repeat:03d}"
         record, failure = await execute_slot(slot)
-        logger.log(
-            logging.WARNING if failure else logging.INFO,
+        completed += 1
+        logger.info(
             f"[{stage_name}] item.completed | sample_id={sample.task.id} repeat={repeat}"
+            f" | completed={completed}/{len(slots)} | progress={completed / len(slots):.1%}"
+            f" | elapsed={perf_counter() - started:.1f}s"
             f" | success={record.result.reward.success if record else None} reused={identifier in reused_slots}"
             f" | error={failure['error'] if failure else None}",
         )
@@ -242,6 +248,7 @@ async def sample_tasks(
         f"[{stage_name}] completed | scored={report['completed']} errors={len(failures)}"
         f" accuracy={report['success_rate']} reused={len(reused_slots)}"
         f" | mean_score={report['mean_score']} rollout_duration={report['rollout_duration_s']:.1f}s"
+        f" | completed={completed}/{len(slots)} | progress=100.0% | elapsed={perf_counter() - started:.1f}s"
     )
     if routed_lengths:
         lengths = list(routed_lengths.values())
@@ -262,17 +269,13 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
     def __init__(
         self,
         config: TreeSkillTrainerConfig,
-        *,
-        agent_factory: Callable[[OpenAIChatConfig], OpenAIChatAgent] = OpenAIChatAgent,
     ) -> None:
         """Configure training without constructing models or accessing storage.
 
         Args:
             config: One-round protocol settings.
-            agent_factory: Model transport constructor for injection and offline testing.
         """
         super().__init__(config.model_copy(deep=True))
-        self.agent_factory = agent_factory
 
     async def train(
         self,
@@ -359,7 +362,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         if completed is not None:
             return TreeSkill.from_snapshot(
                 SkillSnapshot.model_validate(completed["skill"]),
-                router=self.agent_factory(
+                router=Agent.from_config(
                     self.config.router.model_copy(
                         update={
                             "temperature": self.config.routing_temperature,
@@ -457,8 +460,8 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             analyzer = env_adapter.create_analyzer(
                 TreeSkillAnalysisRuntime(
                     config=config,
-                    agent=self.agent_factory(analysis_config),
-                    failure_agent=self.agent_factory(failure_config),
+                    agent=Agent.from_config(analysis_config),
+                    failure_agent=Agent.from_config(failure_config),
                 )
             )
             start = perf_counter()
@@ -531,7 +534,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
                 ),
             ),
             source=initial.with_content(current.full_content).source if changed else initial.source,
-            router=self.agent_factory(router_config),
+            router=Agent.from_config(router_config),
         )
 
     async def _analyze(
@@ -608,7 +611,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         """Own localization concurrency, retries across runs and item checkpoints."""
         logger.info(f"[treeskill.train.localization] started | concurrency={self.config.localization_concurrency}")
         agents = tuple(
-            self.agent_factory(
+            Agent.from_config(
                 self.config.optimizer.model_copy(
                     update={
                         "temperature": self.config.localization_temperature,
@@ -673,7 +676,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         targets = sorted(
             grouped, key=lambda key: (-len(tree.node_by_id[key].heading_path), tree.node_by_id[key].source_line)
         )
-        agent = self.agent_factory(
+        agent = Agent.from_config(
             self.config.optimizer.model_copy(
                 update={
                     "temperature": self.config.fusion_temperature,

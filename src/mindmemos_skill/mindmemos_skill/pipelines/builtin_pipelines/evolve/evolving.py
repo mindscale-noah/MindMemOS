@@ -79,7 +79,7 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                     payload={"owner": owner.model_dump(mode="json"), "base_version_id": base.version_id},
                 )
             owner = SkillRecord.model_validate(saved["owner"])
-            base = await store.version_by_id(request.project_id, saved["base_version_id"])
+            base = await store.get(saved["base_version_id"])
             candidate_path = directory / "candidate.json"
             if candidate_path.exists():
                 snapshot = SkillSnapshot.model_validate(read_json(candidate_path))

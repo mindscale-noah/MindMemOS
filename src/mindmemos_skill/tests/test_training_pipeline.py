@@ -1,9 +1,11 @@
 """Offline service training, automatic recovery, and durable publication checks."""
 
 import asyncio
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from mindmemos_skill.agents import Agent as RegisteredAgent
 from mindmemos_skill.algos.train.skill_forest import SkillForestTrainer
 from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillTrainer
 from mindmemos_skill.api.typing import CommitRequest, RegisterRequest, ShowRequest, StructuredSkillInfo, TrainingRequest
@@ -54,7 +56,7 @@ async def setup_service(tmp_path, monkeypatch):
     monkeypatch.setattr(OfflineEnvironment, "instances", [])
     monkeypatch.setattr(Environment, "_registry", dict(Environment._registry))
     Environment.register("training_offline")(OfflineEnvironment)
-    model = make_trainer().config.model_dump(mode="json")
+    model = make_trainer(monkeypatch=monkeypatch).config.model_dump(mode="json")
     config = ServiceConfig.model_validate(
         {
             "home": tmp_path / "home",
@@ -94,9 +96,16 @@ async def setup_service(tmp_path, monkeypatch):
                 ),
             )
         )
-    for name in config.training_pipelines:
-        pipeline = service.backends[f"training_pipelines.{name}"]
-        pipeline.trainer.agent_factory = smoke.SmokeAgent if name == "treeskill" else FakeOptimizer()
+    from mindmemos_skill.algos.train.skill_forest.config import ForestOptimizerConfig
+
+    forest_optimizer = FakeOptimizer()
+    monkeypatch.setattr(
+        RegisteredAgent,
+        "from_config",
+        lambda options: (
+            forest_optimizer(options) if isinstance(options, ForestOptimizerConfig) else smoke.SmokeAgent(options)
+        ),
+    )
     with service.request_principal("test-user"):
         yield service, initial, source, config
     await service.close()
@@ -136,14 +145,19 @@ async def test_pipeline_uses_call_environment(setup_service, tmp_path):
     assert OfflineEnvironment.instances == [selected_environment]
 
 
-def test_training_config_rejects_initial_environment():
+def test_training_config_rejects_initial_environment(
+    monkeypatch,
+):
     """The configured training pipeline never owns an environment."""
     from mindmemos_skill.pipelines.builtin_pipelines.training.config import TrainingPipelineConfig
 
     with pytest.raises(ValidationError, match="environment"):
         TrainingPipelineConfig.model_validate(
             {
-                "trainer": {"class_name": "treeskill", "config": make_trainer().config.model_dump(mode="json")},
+                "trainer": {
+                    "class_name": "treeskill",
+                    "config": make_trainer(monkeypatch=monkeypatch).config.model_dump(mode="json"),
+                },
                 "environment": {"class_name": "training_offline"},
             }
         )
@@ -160,6 +174,11 @@ async def test_service_selects_trainer_and_publishes_once(setup_service, tmp_pat
     version = (await service.show_skill(ShowRequest(project_id="project", skill_id=result.skill_id))).version
     assert version.parent_version_ids == [initial.skill_version_id]
     assert version.version_label.endswith(algorithm.replace("_", "-"))
+    evaluation = version.metadata["algorithm_report"]["evaluations"]["test"]
+    assert evaluation["count"] == 1 and evaluation["errors"] == 0
+    assert evaluation["wall_seconds"] >= 0
+    assert evaluation["total_tokens"] is None
+    assert Path(evaluation["trajectory_file"]).is_file()
     if algorithm == "skill_forest":
         local_result = read_json(tmp_path / algorithm / "train" / "result.json")
         assert local_result["validation"]["count"] == 1
@@ -286,7 +305,7 @@ async def test_commit_acknowledgement_loss_and_concurrent_parent(setup_service, 
 async def test_treeskill_automatically_recovers_without_repeating_calls(tmp_path, monkeypatch, point):
     from mindmemos_skill.algos.train.treeskill import trainer as module
 
-    trainer = make_trainer()
+    trainer = make_trainer(monkeypatch=monkeypatch)
     env = OfflineEnvironment(OfflineConfig())
     source = Skill(
         source=SkillContent(
@@ -384,7 +403,7 @@ def test_service_example_config_is_valid():
     path = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/dev.example.yaml"
     config = read_skill_config(path).service
     assert config.repository_pipeline.class_name == "repository"
-    assert set(config.training_pipelines) == {"treeskill", "skill_forest"}
+    assert set(config.training_pipelines) == {"treeskill", "skill_forest", "treeskill_mindmemos_eval"}
     assert "training_environments" not in config.model_fields
     assert set(config.evolution_pipelines) == {"simple"}
 

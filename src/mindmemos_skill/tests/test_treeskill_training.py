@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 import pytest
+from mindmemos_skill.agents import Agent as RegisteredAgent
 from mindmemos_skill.agents import AgentResult, OpenAIChatAgent, OpenAIChatConfig
 from mindmemos_skill.algos.train.treeskill import TreeSkillTrainer, TreeSkillTrainerConfig
 from mindmemos_skill.algos.train.treeskill.env_specific.spreadsheetbench_text_action import (
@@ -31,11 +32,14 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from . import treeskill_smoke as smoke
+from .agent_testing import agent_config
 
 
-def make_trainer():
+def make_trainer(*, monkeypatch):
     model = OpenAIChatConfig(model="offline", api_key="explicit-test-key")
-    return TreeSkillTrainer(TreeSkillTrainerConfig(optimizer=model, router=model), agent_factory=smoke.SmokeAgent)
+    return TreeSkillTrainer(
+        agent_config(monkeypatch, smoke.SmokeAgent, TreeSkillTrainerConfig(optimizer=model, router=model))
+    )
 
 
 def make_sample(identifier):
@@ -70,9 +74,9 @@ async def test_routed_empty_selection_accepts_a_standard_initial_skill(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_smoke_preserves_patch_history_and_only_tests_final_skill(tmp_path):
+async def test_smoke_preserves_patch_history_and_only_tests_final_skill(monkeypatch, tmp_path):
     root = tmp_path / "run"
-    summary = await smoke.run_smoke(root)
+    summary = await smoke.run_smoke(root, monkeypatch=monkeypatch)
     assert summary["test"]["completed"] == 1
     assert summary["training"]["input_trajectories"] == 1
     patch = next((root / "training/patches").glob("*/patch.json"))
@@ -100,8 +104,8 @@ async def test_smoke_preserves_patch_history_and_only_tests_final_skill(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_empty_test_and_val_do_not_evaluate_or_route(tmp_path):
-    trainer = make_trainer()
+async def test_empty_test_and_val_do_not_evaluate_or_route(monkeypatch, tmp_path):
+    trainer = make_trainer(monkeypatch=monkeypatch)
     root = tmp_path / "empty-test"
     await run_experiment(
         trainer=trainer,
@@ -138,10 +142,10 @@ async def test_empty_test_and_val_do_not_evaluate_or_route(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_overlap_is_rejected_before_any_rollout(tmp_path):
+async def test_overlap_is_rejected_before_any_rollout(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="Duplicate task ID"):
         await run_experiment(
-            trainer=make_trainer(),
+            trainer=make_trainer(monkeypatch=monkeypatch),
             skill=Skill(
                 source=SkillContent(
                     content="# X\nx", name="test-skill", description="Task instructions", standard_format=False
@@ -156,14 +160,14 @@ async def test_overlap_is_rejected_before_any_rollout(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_collection_failures_are_not_zero_score_evidence(tmp_path):
+async def test_collection_failures_are_not_zero_score_evidence(monkeypatch, tmp_path):
     class FailingEnvironment(smoke.SmokeEnvironment):
         async def _run(self, **kwargs):
             raise RuntimeError("execution failed")
 
     root = tmp_path / "failed"
     await run_experiment(
-        trainer=make_trainer(),
+        trainer=make_trainer(monkeypatch=monkeypatch),
         skill=Skill(
             source=SkillContent(
                 content="# X\nx", name="test-skill", description="Task instructions", standard_format=False
@@ -219,7 +223,7 @@ class ScriptedAgent(OpenAIChatAgent):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case_directory", ["", "1"])
 async def test_reference_failure_analysis_requires_pass_and_keeps_gold_out_of_policy_workspace(
-    tmp_path, case_directory
+    monkeypatch, tmp_path, case_directory
 ):
     sample = spreadsheet_sample(tmp_path)
     work = tmp_path / "rollout"
@@ -260,7 +264,7 @@ async def test_reference_failure_analysis_requires_pass_and_keeps_gold_out_of_po
         TreeSkillSpreadsheetBenchReferenceEnvAdapter,
     )
 
-    trainer = make_trainer()
+    trainer = make_trainer(monkeypatch=monkeypatch)
     adapter = TreeSkillSpreadsheetBenchReferenceEnvAdapter()
     records, failures = await trainer._analyze(
         [TraceEvidence(trajectory_id="train-1", task_id="sheet", transcript="", score=0)],
@@ -341,7 +345,7 @@ async def test_reference_policy_uses_original_messages_and_private_scoring(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_mixed_collection_failure_skips_only_that_data(tmp_path):
+async def test_mixed_collection_failure_skips_only_that_data(monkeypatch, tmp_path):
     class MixedEnvironment(smoke.SmokeEnvironment):
         async def _run(self, *, task, **kwargs):
             if task.id == "bad":
@@ -350,7 +354,7 @@ async def test_mixed_collection_failure_skips_only_that_data(tmp_path):
 
     root = tmp_path / "mixed"
     final = await run_experiment(
-        trainer=make_trainer(),
+        trainer=make_trainer(monkeypatch=monkeypatch),
         skill=Skill(
             source=SkillContent(
                 content="# Workflow\nSave the output.\n",
@@ -376,7 +380,7 @@ async def test_mixed_collection_failure_skips_only_that_data(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reference_analysis_request_failure_does_not_cancel_other_records(tmp_path):
+async def test_reference_analysis_request_failure_does_not_cancel_other_records(monkeypatch, tmp_path):
     class MixedAgent(OpenAIChatAgent):
         async def run_messages(self, *, messages, tools=None, response_format=None):
             if "FAIL_PROVIDER" in messages[-1]["content"]:
@@ -406,7 +410,7 @@ async def test_reference_analysis_request_failure_does_not_cancel_other_records(
     )
     from mindmemos_skill.algos.train.treeskill.env_adapter import TreeSkillEnvAdapter
 
-    records, failures = await make_trainer()._analyze(
+    records, failures = await make_trainer(monkeypatch=monkeypatch)._analyze(
         evidence, list(trajectories.values()), analyzer, TreeSkillEnvAdapter(), tmp_path / "analysis"
     )
     assert [record.instance_id for record in records] == ["good"]
@@ -415,15 +419,15 @@ async def test_reference_analysis_request_failure_does_not_cancel_other_records(
 
 
 @pytest.mark.asyncio
-async def test_router_provider_failure_uses_full_skill_reference_fallback(tmp_path):
+async def test_router_provider_failure_uses_full_skill_reference_fallback(monkeypatch, tmp_path):
     class FailingRouter(smoke.SmokeAgent):
         async def run_messages(self, *, messages, **kwargs):
             if messages[-1]["content"].startswith("Route"):
                 raise RuntimeError("Router unavailable")
             return await super().run_messages(messages=messages, **kwargs)
 
-    trainer = make_trainer()
-    trainer.agent_factory = FailingRouter
+    trainer = make_trainer(monkeypatch=monkeypatch)
+    monkeypatch.setattr(RegisteredAgent, "from_config", FailingRouter)
     root = tmp_path / "router-failure"
     await run_experiment(
         trainer=trainer,
@@ -468,10 +472,10 @@ async def test_transactional_recalculation_preserves_literal_workbook(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_trained_snapshot_preserves_explicit_credentials(tmp_path):
+async def test_trained_snapshot_preserves_explicit_credentials(monkeypatch, tmp_path):
     from mindmemos_skill.algos.train.treeskill import TreeSkill
 
-    trainer = make_trainer()
+    trainer = make_trainer(monkeypatch=monkeypatch)
     final = await trainer.train(
         skill=Skill(
             source=SkillContent(
@@ -517,7 +521,7 @@ def test_text_action_config_uses_explicit_stagnation_option():
 
 
 @pytest.mark.asyncio
-async def test_internal_stages_correlate_with_training_and_held_out_test(tmp_path, caplog):
+async def test_internal_stages_correlate_with_training_and_held_out_test(monkeypatch, tmp_path, caplog):
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -528,7 +532,7 @@ async def test_internal_stages_correlate_with_training_and_held_out_test(tmp_pat
             bind_tracer(tracer),
             tracer.start_as_current_span("algorithm.train") as parent,
         ):
-            summary = await smoke.run_smoke(tmp_path / "staged")
+            summary = await smoke.run_smoke(tmp_path / "staged", monkeypatch=monkeypatch)
         spans = [span for span in exporter.get_finished_spans() if span.name.startswith("treeskill.")]
         assert [span.name for span in spans] == [
             "treeskill.rollout",
@@ -564,7 +568,7 @@ async def test_rollout_stage_records_uncaught_failure_and_stops_later_stages(tmp
     try:
         with caplog.at_level(logging.INFO), bind_tracer(provider.get_tracer("treeskill-test")):
             with pytest.raises(RuntimeError, match="Collection infrastructure failed"):
-                await smoke.run_smoke(tmp_path / "failed-stage")
+                await smoke.run_smoke(tmp_path / "failed-stage", monkeypatch=monkeypatch)
         spans = exporter.get_finished_spans()
         assert [span.name for span in spans] == ["treeskill.rollout"]
         assert spans[0].status.status_code.name == "ERROR"
@@ -577,7 +581,7 @@ async def test_rollout_stage_records_uncaught_failure_and_stops_later_stages(tmp
         provider.shutdown()
 
 
-async def test_training_router_applies_reference_budget_to_actual_requests(tmp_path):
+async def test_training_router_applies_reference_budget_to_actual_requests(monkeypatch, tmp_path):
     observed = []
 
     class CaptureAgent(smoke.SmokeAgent):
@@ -586,8 +590,8 @@ async def test_training_router_applies_reference_budget_to_actual_requests(tmp_p
                 observed.append((self.config.temperature, self.config.max_completion_tokens))
             return await super().run_messages(**kwargs)
 
-    trainer = make_trainer()
-    trainer.agent_factory = CaptureAgent
+    trainer = make_trainer(monkeypatch=monkeypatch)
+    monkeypatch.setattr(RegisteredAgent, "from_config", CaptureAgent)
     source = Skill(
         source=SkillContent(
             content="# Workflow\nSave the output.\n", name="test", description="Test", standard_format=False
