@@ -13,7 +13,6 @@ from ..infra import Infrastructure
 from ..infra.database import Database, Scope
 from ..infra.task_manager import LocalTaskManager
 from ..infra.task_manager.kafka import KafkaTaskManager
-from ..persistence.db_services.tasks import TaskDataService
 from ..persistence.observability import AlgorithmAuditPersistence
 from ..persistence.store import SkillPersistence
 from ..pipelines import Pipeline
@@ -97,7 +96,7 @@ async def _assemble_service(
             database_spec = config.persistence.database
             database = Infrastructure.build(database_spec.class_name, database_spec.config)
             backends["database"] = database
-            persistence = SkillPersistence(config.persistence.config, database=database, require_session=True)
+            persistence = SkillPersistence(config.persistence.config, database=database)
             backends["persistence"] = persistence
         if (
             "observability" not in disabled
@@ -118,6 +117,8 @@ async def _assemble_service(
             otlp_timeout=otlp.timeout if otlp is not None else 5.0,
         )
         if observability_database is not None:
+            if persistence is not None:
+                persistence.attach_audit_database(observability_database)
             backends["observability"] = observability
 
         def build_pipeline(path: str, spec: ImplementationConfig) -> Pipeline:
@@ -169,7 +170,7 @@ async def _assemble_service(
                 )
             else:
                 manager = KafkaTaskManager(
-                    store=TaskDataService(database),
+                    store=persistence.task_worker(),
                     bootstrap_servers=config.task_manager.bootstrap_servers,
                     topic=config.task_manager.topic,
                     group_id=config.task_manager.group_id,

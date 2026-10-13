@@ -10,6 +10,18 @@
 Service 在执行训练时通过 `Environment.build()` 创建环境，再传给 Pipeline。
 Python 服务入口可等待训练完成；配置任务管理器后，也可提交后台任务。FastAPI 训练路由提交后台任务。
 
+算法的 Agent 由配置选择，并通过统一的 `Agent.from_config()` 创建。TreeSkill、Skill-Forest 和
+SimpleEvolver 的构造函数只接收算法配置，不再接收 `agent_factory`。SkillManage 的 Chat 也使用同一创建入口，
+Embedding 使用 `EmbeddingModel.from_config()`，算法不接收模型实例。每次调用创建独立实例。
+算法字段的 `AgentConfig(allowed=...)` 同时校验命名引用和内联配置；这三个算法目前仍只允许
+`openai_chat`。命名引用从 `service.agents` 解析，解析后的配置保留 `class_name`，序列化后也能独立创建 Agent。
+
+内联配置使用 `class_name` 指定实现，例如 `optimizer: {class_name: openai_chat, model: YOUR_MODEL}`。
+字段只允许一种实现时，可以省略 `class_name`；允许多种实现时必须明确指定。凭据、服务地址和其他参数
+仍由对应 Agent 的配置模型校验。Python 中可直接调用 `Agent.from_config(OpenAIChatConfig(...))`；
+自定义 Agent 配置继承 `AgentConnectionConfig`，并保留匹配其注册名称的 `class_name`。
+离线测试在测试范围内替换统一创建入口或底层调用，不通过算法构造参数切换 Agent。
+
 ## 调用与数据划分
 
 ```python

@@ -8,6 +8,8 @@ from time import monotonic
 from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
+from mindmemos_skill.infra.database import Scope
+
 from ...logging import get_logger, log_context
 from ...logging.tasks import async_task_log_reporter
 from ...logging.tracing import bind_tracer, get_tracer, log_failure
@@ -252,12 +254,12 @@ class KafkaTaskManager(TaskManager):
 
     async def get(self, project_id: str, task_id: str) -> TaskSnapshot | None:
         """Read a task from the existing project-owned database."""
-        record = await self._store.get(project_id, task_id)
+        record = await self._store.scoped(Scope(fields={"project_id": project_id})).get(task_id)
         return record.snapshot() if record is not None else None
 
     async def logs(self, project_id: str, task_id: str, *, after: int = 0) -> list[TaskLog]:
         """Read correlated task logs committed to the existing database."""
-        return await self._store.logs(project_id, task_id, after=after)
+        return await self._store.scoped(Scope(fields={"project_id": project_id})).logs(task_id, after=after)
 
     async def _scan(self) -> None:
         """Republish queued tasks and reclaim expired work after process failure."""

@@ -3,8 +3,82 @@
 import html
 import json
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+
+class _TableMarkdownParser(HTMLParser):
+    """Collect cell text in the original row order without adding HTML layout spacing."""
+
+    def __init__(self) -> None:
+        """Initialize one independent table parse."""
+        super().__init__(convert_charrefs=True)
+        self.rows: list[list[str]] = []
+        self._row: list[str] | None = None
+        self._cell: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "tr":
+            self._row = []
+        elif tag.lower() in {"td", "th"} and self._row is not None:
+            self._cell = []
+
+    def handle_data(self, data: str) -> None:
+        """Append text emitted inside the current cell."""
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized_tag = tag.lower()
+        if normalized_tag in {"td", "th"} and self._cell is not None and self._row is not None:
+            cell = re.sub(r"\s+", " ", "".join(self._cell)).strip()
+            self._row.append(cell)
+            self._cell = None
+        elif normalized_tag == "tr" and self._row is not None:
+            if any(cell for cell in self._row):
+                self.rows.append(self._row)
+            self._row = None
+            self._cell = None
+
+
+def _escape_markdown_cell(value: str) -> str:
+    return str(value).replace("\n", " ").replace("|", "\\|").strip()
+
+
+def _html_table_to_markdown(raw_html: str) -> str:
+    """Preserve released cell order and pad ragged rows to a shared width."""
+    parser = _TableMarkdownParser()
+    try:
+        parser.feed(raw_html)
+    except Exception:  # noqa: BLE001
+        parser.rows = []
+    rows = parser.rows
+    if not rows:
+        text = re.sub(r"(?is)<[^>]+>", " ", raw_html)
+        return re.sub(r"\s+", " ", html.unescape(text)).strip()
+    width = max(len(row) for row in rows)
+    normalized_rows = [row + [""] * (width - len(row)) for row in rows]
+    header = normalized_rows[0]
+    body = normalized_rows[1:]
+    lines = [
+        "| " + " | ".join(_escape_markdown_cell(cell) for cell in header) + " |",
+        "| " + " | ".join(["---"] * width) + " |",
+    ]
+    lines.extend("| " + " | ".join(_escape_markdown_cell(cell) for cell in row) + " |" for row in body)
+    return "\n".join(lines)
+
+
+def _render_parsed_content(content: str) -> str:
+    """Normalize public prose or reproduce the legacy table representation."""
+    text = content.strip()
+    if not text:
+        return ""
+    if "<table" in text.lower():
+        return _html_table_to_markdown(text)
+    text = html.unescape(text)
+    text = re.sub(r"\r\n?", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def oracle_pages(root: Path, files: list[str], urls: list[str]) -> str:
@@ -43,10 +117,7 @@ def oracle_pages(root: Path, files: list[str], urls: list[str]) -> str:
             content = element.get("content", "")
             if str(number) not in page_ids or not isinstance(content, str) or not content.strip():
                 continue
-            content = re.sub(r"</t[dh]>\s*", " | ", content, flags=re.IGNORECASE)
-            content = re.sub(r"</(?:tr|p|div)>|<br\s*/?>", "\n", content, flags=re.IGNORECASE)
-            content = html.unescape(re.sub(r"<[^>]+>", "", content))
-            sections.append(re.sub(r"\n{3,}", "\n\n", content).strip())
+            sections.append(_render_parsed_content(content))
         text = "\n\n".join(sections).strip()
         if not text:
             continue
@@ -61,6 +132,6 @@ def oracle_pages(root: Path, files: list[str], urls: list[str]) -> str:
     if not blocks:
         return ""
     return (
-        "The following content is pre-parsed from the oracle OfficeQA source page(s). Treat it as primary document evidence.\n\n"
+        "The following content is pre-parsed from the oracle OfficeQA source page(s). Treat it as primary document evidence and combine it with local document tool evidence when useful.\n\n"
         + "\n\n".join(blocks)
     )

@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Self
 
-from ....agents import OpenAIChatAgent
+from ....agents import Agent, OpenAIChatAgent
 from ....common.json import extract_json_object
 from ....envs.typing import Task
 from ....logging import get_logger
@@ -160,7 +160,7 @@ class TreeSkill(Skill):
         messages = self.env_adapter.build_routing_messages(
             TreeSkillRoutingContext(task=task, tree=tree_prompt_payload(tree))
         )
-        router = self.router if self.router is not None else OpenAIChatAgent(self.config.router)
+        router = self.router if self.router is not None else Agent.from_config(self.config.router)
         response = None
         try:
             response = await router.run(messages=messages)

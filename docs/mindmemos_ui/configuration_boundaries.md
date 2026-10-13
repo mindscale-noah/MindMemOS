@@ -59,11 +59,7 @@ Memory 配置仅包含 Memory 服务连接字段。字段名参考当前 SDK；�
 | 模型角色 `optimizer`、`router`、`failure_optimizer`，管理算法的 `embedding`、`chat` | 服务端组装管理 | 用部署连接构造各角色；允许显式使用不同模型，不能暗中改变角色 | 当前算法配置就地嵌套模型对象；建议组装函数负责填充，不要求新增全局资源引用框架 |
 | 模型网络超时、重试、退避、Embedding `batch_size` | 连接适配层默认，部署者高级覆盖 | 默认来自各模型配置类；供应商限制不同可覆盖 | 传输参数，与算法生成策略分开；避免多层重试相乘 |
 | 生成策略：温度、token 限制、推理预算、`top_p`、seed、stop 等 | 算法 / Agent 适配层 | 使用相应算法协议默认值；实验 YAML 可显式覆盖 | `OpenAIChatConfig` 及算法角色配置；模型能力不支持时明确校验，不静默替换 |
-| 响应解析、工具参数策略、结构化输出、解析重试、供应商扩展 | Agent 适配层 | 与调用协议匹配，不放普通用户配置 | `response_validation`、`response_format`、`parse_*`、`invalid_tool_arguments`、`extra_body` 等 |
-| 图管理阶段 `build_scene`、`llm_linking`、`query_rewrite`、`mode` | 算法开发者 | 当前前三者 true，mode 为 `unified_ppr`；高级部署可选择经验证的组合 | `SkillManageConfig`；启用 LLM linking/rewrite 必须有 chat 配置 |
-| 图检索 `dependency_match_threshold`、`seed_top_k`、`score_threshold` | 算法开发者 | 当前默认 0.5、20、-1；仅高级调优 | `SkillManageConfig`，不放连接页 |
-| 图传播 `damping`、`max_iter`、`tolerance` | 算法开发者 | 当前默认 0.2、50、1e-6；其中 damping 在当前实现表示重启概率 | `SkillManageConfig`；语义与默认值由算法维护 |
-| 图输入限制 `max_input_chars`、`llm_batch_size` | 算法默认，部署者设资源边界 | 当前 1,000,000、32；允许部署级覆盖 | `SkillManageConfig`；客户端不得突破服务端限制 |
+| 响应解析、工具参数策略、结构化输出、解析重试、供应商扩展 | Agent 适配层 | 与调用协议匹配，不放普通用户配置 | `response_format`、`parse_*`、`invalid_tool_arguments`、`extra_body` 等 |
 | TreeSkill `samples_per_task`、`min_trajectories`、`max_trajectories` | 算法默认，实验者高级覆盖 | 当前 1、1、1000；最小值不能超过最大值 | `TreeSkillTrainerConfig` |
 | TreeSkill `rollout_concurrency`、`analysis_concurrency`、`localization_concurrency` | 算法提供默认，部署者限定资源 | 当前 8、16、16；部署应按容量配置，不能直接把算法默认当全服务安全容量 | `TreeSkillTrainerConfig`；全服务队列/并发上限需独立实现 |
 | TreeSkill `analysis_max_turns`、`shell_timeout_seconds`、`transcript_max_chars` | 算法 / 执行环境管理 | 当前 20、120 秒、20000；实验可显式覆盖 | 训练配置；服务端执行限制仍为上界 |
@@ -126,7 +122,6 @@ Memory 配置仅包含 Memory 服务连接字段。字段名参考当前 SDK；�
 - [UI SDK 可编辑字段](../../src/mindmemos_ui/mindmemos_ui/config.py)、[UI 本地服务组装](../../src/mindmemos_ui/mindmemos_ui/app.py)。
 - [服务配置契约](../../src/mindmemos_skill/mindmemos_skill/config/config.py)、[工厂](../../src/mindmemos_skill/mindmemos_skill/api/factory.py)、[FastAPI 入口](../../src/mindmemos_skill/mindmemos_skill/api/entries/fastapi.py)。
 - [数据库配置](../../src/mindmemos_skill/mindmemos_skill/infra/database/config.py)、[Chat 配置](../../src/mindmemos_skill/mindmemos_skill/agents/buitin_agents/openai_chat/config.py)、[模型连接与 ENV](../../src/mindmemos_skill/mindmemos_skill/agents/config.py)、[Embedding 配置](../../src/mindmemos_skill/mindmemos_skill/infra/embedding/config.py)。
-- [图管理算法配置](../../src/mindmemos_skill/mindmemos_skill/algos/manage/skill_manage/config.py)、[TreeSkill 配置](../../src/mindmemos_skill/mindmemos_skill/algos/train/treeskill/config.py)、[执行环境配置](../../src/mindmemos_skill/mindmemos_skill/infra/execution/config.py)。
 - [训练请求](../../src/mindmemos_skill/mindmemos_skill/api/typing.py)、[训练 Pipeline 边界](../../src/mindmemos_skill/mindmemos_skill/pipelines/train.py)。
 
 
@@ -160,3 +155,5 @@ experiment_dir: experiments
 Skill FastAPI 通过 `MINDMEMOS_SKILL_CONFIG_PATH` 选择完整服务 YAML。YAML 中的 `service.home` 决定服务数据目录；`fastapi.auth` 决定鉴权，none 模式必填 `default_project_id`。SDK/UI HOME 只决定客户端设置及配置库的位置，不自动决定服务的数据目录。此配置页不自动启动服务。
 
 `SkillServiceClient(home)` 读取该 HOME 的 Skill 连接文件；其 `train()` / `evolve()` 使用 6 小时默认 HTTP 超时、零自动重试，并在实验目录留下单次调用日志和响应输出。HTTP 失败或超时的日志状态为 failed_or_unknown，不能据此宣称远端算法未执行或已停止。服务端内部的详细算法日志仍由服务端运行目录负责，客户端日志不冒充完整服务端日志。
+
+图算法接口已改造，旧具体 manage 算法与其配置已清理。当前仅查询已发布图，建图、推荐和成员增删等待完整算法接入；详见 [图管理接口](../mindmemos_skill/skill_manage.md)。

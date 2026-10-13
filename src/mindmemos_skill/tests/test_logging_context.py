@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from mindmemos_skill.infra.database import Scope
 from mindmemos_skill.infra.database.builtin_backends.sqlite import SQLiteDatabase
 from mindmemos_skill.infra.database.config import SQLiteConfig
 from mindmemos_skill.infra.task_manager import TaskSpec
@@ -10,7 +11,7 @@ from mindmemos_skill.logging import config, configure_logging, get_logger, log_c
 from mindmemos_skill.logging.otel import attach_logs, detach_logs
 from mindmemos_skill.logging.tasks import async_task_log_reporter
 from mindmemos_skill.persistence.config import SkillPersistenceConfig
-from mindmemos_skill.persistence.db_services.tasks import TaskDataService
+from mindmemos_skill.persistence.db_services.tasks import TaskWorkerService
 from mindmemos_skill.persistence.store import SkillPersistence
 from opentelemetry.sdk._logs import LoggerProvider, LogRecordProcessor
 from opentelemetry.sdk.trace import TracerProvider
@@ -44,7 +45,7 @@ async def test_same_log_reaches_console_database_and_otel_without_run(tmp_path, 
 
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'logs.db'}"))
     await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
-    store = TaskDataService(database)
+    store = TaskWorkerService(database)
     await store.create(TaskSpec(project_id="p", task_id="t", kind="skill.train", payload={}))
     provider = LoggerProvider(shutdown_on_exit=False)
     provider.add_log_record_processor(Capture())
@@ -61,7 +62,7 @@ async def test_same_log_reaches_console_database_and_otel_without_run(tmp_path, 
                         "failed token=private", extra={"event_body": {"api_key": "credential", "input": "x" * 40000}}
                     )
         console = capsys.readouterr().err
-        rows = await store.logs("p", "t")
+        rows = await store.scoped(Scope(fields={"project_id": "p"})).logs("t")
         assert len(rows) == len(observed) == 1
         payload = rows[0].payload
         assert rows[0].attempt == 2
@@ -76,10 +77,10 @@ async def test_same_log_reaches_console_database_and_otel_without_run(tmp_path, 
             assert "hidden" not in text and "private" not in text and "credential" not in text
             assert "[REDACTED]" in text
         assert "truncated" in console
-        assert await store.logs("other", "t") == []
+        assert await store.scoped(Scope(fields={"project_id": "other"})).logs("t") == []
         get_logger().info("outside task")
         assert len(observed) == 2
-        assert len(await store.logs("p", "t")) == 1
+        assert len(await store.scoped(Scope(fields={"project_id": "p"})).logs("t")) == 1
     finally:
         detach_logs(handler)
         provider.shutdown()
@@ -126,7 +127,7 @@ async def test_worker_logs_survive_database_reopen(tmp_path):
     path = tmp_path / "worker.db"
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{path}"))
     await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
-    store = TaskDataService(database)
+    store = TaskWorkerService(database)
     await store.create(TaskSpec(project_id="p", task_id="worker", kind="skill.train", payload={}))
 
     async def handler(spec):
@@ -142,7 +143,7 @@ async def test_worker_logs_survive_database_reopen(tmp_path):
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{path}"))
     try:
         await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
-        rows = await TaskDataService(database).logs("p", "worker")
+        rows = await TaskWorkerService(database).scoped(Scope(fields={"project_id": "p"})).logs("worker")
         assert any(row.payload["message"] == "ordinary algorithm log" for row in rows)
         assert all(row.attempt == 1 for row in rows)
         assert any("ValueError" in (row.payload["traceback"] or "") for row in rows)
@@ -183,7 +184,7 @@ async def test_recovered_attempt_keeps_logs_and_paginates_after_reopen(tmp_path)
     path = tmp_path / "recovery.db"
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{path}"))
     await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
-    store = TaskDataService(database)
+    store = TaskWorkerService(database)
     await store.create(TaskSpec(project_id="p", task_id="recover", kind="skill.train", payload={}))
     ready = asyncio.Event()
     interrupted = True
@@ -203,7 +204,7 @@ async def test_recovered_attempt_keeps_logs_and_paginates_after_reopen(tmp_path)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        first = await store.logs("p", "recover")
+        first = await store.scoped(Scope(fields={"project_id": "p"})).logs("recover")
         assert first and all(row.attempt == 1 for row in first)
         assert any(row.payload["message"].split(" | ", 1)[0] == "first attempt" for row in first)
         await database.update(
@@ -213,7 +214,7 @@ async def test_recovered_attempt_keeps_logs_and_paginates_after_reopen(tmp_path)
         )
         interrupted = False
         await manager._execute("recover")
-        snapshot = (await store.get("p", "recover")).snapshot()
+        snapshot = (await store.scoped(Scope(fields={"project_id": "p"})).get("recover")).snapshot()
         assert snapshot.attempt == 2 and snapshot.status == "succeeded"
         assert "progress" not in snapshot.model_dump()
     finally:
@@ -222,10 +223,10 @@ async def test_recovered_attempt_keeps_logs_and_paginates_after_reopen(tmp_path)
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{path}"))
     try:
         await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
-        store = TaskDataService(database)
+        store = TaskWorkerService(database)
         rows = []
         cursor = 0
-        while page := await store.logs("p", "recover", after=cursor, limit=1):
+        while page := await store.scoped(Scope(fields={"project_id": "p"})).logs("recover", after=cursor, limit=1):
             assert page[0].sequence > cursor
             rows.extend(page)
             cursor = page[0].sequence
@@ -234,7 +235,7 @@ async def test_recovered_attempt_keeps_logs_and_paginates_after_reopen(tmp_path)
         ]
         assert [row.attempt for row in messages] == [1, 2]
         assert [row.payload["message"].split(" | ", 1)[0] for row in messages] == ["first attempt", "second attempt"]
-        assert await store.logs("p", "recover", after=cursor) == []
-        assert await store.logs("other", "recover") == []
+        assert await store.scoped(Scope(fields={"project_id": "p"})).logs("recover", after=cursor) == []
+        assert await store.scoped(Scope(fields={"project_id": "other"})).logs("recover") == []
     finally:
         await database.close()

@@ -77,16 +77,13 @@
       }
     },
     "searchqa": {
-      "kind": "manual",
-      "url": "https://github.com/nyu-dl/dl4ir-searchQA",
-      "download_page": "https://drive.google.com/drive/u/2/folders/1kBkQGooNyG0h8waaOJpgdGtOnlb1S649",
-      "revision": "Official release; imported archive SHA-256 recorded locally."
-    },
-    "docvqa": {
-      "kind": "manual",
-      "url": "https://www.docvqa.org/datasets/docvqa",
-      "download_page": "https://rrc.cvc.uab.es/?ch=17&com=downloads",
-      "revision": "Single Document VQA (2020); imported archive SHA-256 recorded locally."
+      "kind": "huggingface",
+      "url": "https://huggingface.co/datasets/lucadiliello/searchqa",
+      "repo": "lucadiliello/searchqa",
+      "revision": "c1a979068ba118d85467179b704031d113d689cc",
+      "files": [
+        "data/*.parquet"
+      ]
     }
   },
   "memory": {

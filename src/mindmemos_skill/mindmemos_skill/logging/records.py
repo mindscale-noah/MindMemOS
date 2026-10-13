@@ -95,6 +95,9 @@ class ContextFormatter(logging.Formatter):
             "trace_id",
             "span_id",
         )
+        # Retain correlation on records, but display it only when the algorithm starts.
+        if record.__dict__.get("run_id") is not None and record.getMessage().split(" | ", 1)[0] != "algorithm.run.started":
+            fields = tuple(key for key in fields if key not in {"run_id", "request_id"})
         context = " ".join(f"{key}={record.__dict__[key]}" for key in fields if record.__dict__.get(key) is not None)
         text = f"[{timestamp}] [{record.levelname}] [{record.name}]"
         if context:

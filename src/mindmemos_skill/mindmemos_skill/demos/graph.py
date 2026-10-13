@@ -1,12 +1,14 @@
 """Publish deterministic demo graphs using the real graph storage contract."""
 
 from time import sleep
-from uuid import uuid4
+from uuid import UUID
 
-from ..api.typing import OrganizeRequest, OrganizeResult, RecommendRequest, RecommendResult
+from mindmemos_skill.common.ids import generate_id
+
+from ..api.typing import GraphRecommendationScore, OrganizeRequest, OrganizeResult, RecommendRequest, RecommendResult
 from ..logging import get_logger
-from ..persistence.db_services.skill_management.typing import SkillGraphEdgeRecord
-from ..persistence.db_services.skill_management.writer import SkillGraphStore, graph_digest
+from ..persistence.db_services.graphs.typing import GraphNodeType, SkillGraphEdgeRecord
+from ..persistence.db_services.graphs.writer import SkillGraphStore, graph_digest
 from ..pipelines import Pipeline
 from ..pipelines.builtin_pipelines.manage.graph_manage import GraphManagePipeline
 from .config import DemoGraphConfig
@@ -47,30 +49,43 @@ class DemoGraphPipeline(GraphManagePipeline):
         Returns:
             Exact member versions ranked without embedding or model calls.
         """
+        if request.strategy != "graph":
+            raise NotImplementedError("Demo graphs do not support vector retrieval")
         return await self._recommend(RecommendRequest.model_validate(request))
 
     async def _recommend(self, request: RecommendRequest) -> RecommendResult:
         """Restore a pinned snapshot and return deterministically ranked members."""
-        graph = await self._queries(request.project_id).graph(request.graph_id)
+        graph = await self.graphs.get_graph(request.graph_id)
         store = SkillGraphStore(
             self.persistence.database,
-            project_id=request.project_id,
-            graph_id=graph["graph_id"],
+            graph_id=graph.graph_id,
             actor_id="demo-recommend",
             version_ids={},
         )
-        snapshot_id = request.graph_version_id or graph["current_version_id"]
+        snapshot_id = request.graph_version_id or graph.current_version_id
         nodes, _, _ = await store.load(snapshot_id)
         words = set(request.task.lower().split())
         members = sorted(
-            (node for node in nodes if node.node_type == "skill"),
+            (node for node in nodes if node.node_type == GraphNodeType.SKILL),
             key=lambda node: (-len(words & set((node.name + " " + node.description).lower().split())), node.node_id),
         )
+        selected = members[: request.top_k]
+        versions = [await self.persistence.skills.get(node.skill_version_id) for node in selected]
         return RecommendResult(
-            skills=[
-                (await self.persistence.skills.version_by_id(request.project_id, node.skill_version_id))
-                for node in members[: request.top_k]
-            ]
+            skills=versions,
+            graph_version_id=snapshot_id,
+            strategy="graph",
+            score_type="graph_components",
+            scores=[
+                GraphRecommendationScore(
+                    skill_version_id=version.version_id,
+                    ppr_score=0,
+                    scene_boost=0,
+                    graph_score=0,
+                    rerank_score=len(words & set((node.name + " " + node.description).lower().split())),
+                )
+                for version, node in zip(versions, selected, strict=True)
+            ],
         )
 
     async def _organize(self, request: OrganizeRequest) -> OrganizeResult:
@@ -78,13 +93,13 @@ class DemoGraphPipeline(GraphManagePipeline):
         if request.graph_id is not None:
             if request.alias is not None:
                 raise ValueError("An existing graph cannot receive a new alias")
-            graph = await self._queries(request.project_id).graph(request.graph_id)
-            graph_id, alias = graph["graph_id"], graph["alias"]
+            graph = await self.graphs.get_graph(request.graph_id)
+            graph_id, alias = graph.graph_id, graph.alias
         else:
-            graph_id, alias = f"skg-{uuid4().hex}", request.alias
+            graph_id, alias = generate_id("skg-"), request.alias
         versions, skills = {}, {}
         for reference in request.skill_refs:
-            owner, version = await self.persistence.skills.resolve(request.project_id, reference)
+            owner, version = await self.persistence.skills.resolve(reference)
             if owner.skill_id in versions:
                 raise ValueError("Only one version per Skill family may be organized")
             versions[owner.skill_id] = version.version_id
@@ -92,7 +107,6 @@ class DemoGraphPipeline(GraphManagePipeline):
             sleep(self.config.delay_seconds)
         store = SkillGraphStore(
             self.persistence.database,
-            project_id=request.project_id,
             graph_id=graph_id,
             alias=alias,
             actor_id=request.agent_id or request.user_id or "demo",
@@ -100,7 +114,7 @@ class DemoGraphPipeline(GraphManagePipeline):
             message=request.commit_message,
         )
         await store.validate_skills(skills)
-        snapshot_id = uuid4()
+        snapshot_id = generate_id("skgv-")
         nodes = [
             store.bind_node(
                 snapshot_id,
@@ -120,7 +134,7 @@ class DemoGraphPipeline(GraphManagePipeline):
                 project_id=request.project_id,
                 graph_id=graph_id,
                 graph_version_id=snapshot_id,
-                edge_id=uuid4(),
+                edge_id=UUID(generate_id()),
                 source_node_id=left.node_id,
                 target_node_id=right.node_id,
                 edge_type="flow",

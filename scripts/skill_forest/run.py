@@ -20,7 +20,7 @@ from mindmemos_sdk.skills.typing import (
     TrainingSplitRequest,
 )
 from mindmemos_sdk.transport import AsyncHttpTransport
-from mindmemos_skill.agents import OpenAIChatConfig
+from mindmemos_skill.agents import AgentCatalog, OpenAIChatConfig
 from mindmemos_skill.algos.train.skill_forest.config import SkillForestTrainerConfig
 from mindmemos_skill.common.json import append_jsonl
 from mindmemos_skill.envs.data import Data
@@ -37,7 +37,9 @@ async def _run(args: argparse.Namespace) -> None:
     trainer = profile["config"]["trainer"]
     if trainer["class_name"] != "skill_forest":
         raise ValueError("The skill_forest profile must select the skill_forest trainer")
-    forest = SkillForestTrainerConfig.model_validate(trainer["config"])
+    forest = SkillForestTrainerConfig.model_validate(
+        trainer["config"], context=AgentCatalog(agents=document["service"].get("agents", {}))
+    )
     agent = OpenAIChatConfig(
         api_key=forest.optimizer.api_key,
         base_url=forest.optimizer.base_url,

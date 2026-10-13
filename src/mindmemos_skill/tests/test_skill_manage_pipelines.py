@@ -1,12 +1,22 @@
-"""Service-level organization and recommendation over pinned Skill versions."""
+"""Graph interface, topology, and cleanup contracts before algorithm integration."""
+
+from uuid import uuid4
 
 import pytest
-from mindmemos_skill.api.typing import CommitRequest, OrganizeRequest, RecommendRequest, RegisterRequest
-from mindmemos_skill.errors import GraphNotFoundError
+from fastapi.testclient import TestClient
+from mindmemos_skill.algos import Algorithm
+from mindmemos_skill.api.entries.fastapi import create_app
+from mindmemos_skill.api.typing import (
+    AddGraphMembersRequest,
+    OrganizeRequest,
+    RecommendRequest,
+    RegisterRequest,
+)
 from mindmemos_skill.infra.database import Scope
-from mindmemos_skill.infra.embedding import OpenAIEmbeddingClient
-from mindmemos_skill.pipelines import GraphManagePipeline, ManagePipeline
+from mindmemos_skill.persistence.db_services.graphs.typing import GraphNodeType, SkillGraphEdgeRecord
+from mindmemos_skill.persistence.db_services.graphs.writer import SkillGraphStore
 from mindmemos_skill.skill import Skill, SkillContent
+from pydantic import ValidationError
 
 from mindmemos_skill import create_service
 
@@ -15,179 +25,186 @@ from .skill_sources import register_detail, structured
 
 
 def service_config(path):
-    """Configure one management pipeline without external model calls."""
-    algorithm = {
-        "embedding": {"model": "test", "base_url": "http://test.invalid/v1", "dimensions": 3},
-        "build_scene": False,
-        "llm_linking": False,
-        "query_rewrite": False,
-        "mode": "skill_only",
-    }
+    """Configure graph queries without any concrete algorithm or model settings."""
     return deployment_config(
         {
             "home": path.parent / "home",
             "persistence": {"database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{path}"}}},
             "repository_pipeline": {"class_name": "repository"},
-            "manage_pipeline": {"class_name": "graph_manage", "config": {"algorithm": algorithm}},
-        },
-        "project",
-    )
-
-
-@pytest.mark.asyncio
-async def test_skill_set_queries_without_algorithm(tmp_path):
-    """Read Skill Sets through the management pipeline without model settings."""
-    config = deployment_config(
-        {
-            "home": tmp_path / "home",
-            "persistence": {
-                "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'queries.db'}"}}
-            },
             "manage_pipeline": {"class_name": "graph_manage"},
         },
         "project",
     )
-    async with await create_service(config) as service:
-        assert await service.list_skill_sets() == []
-        assert await service.list_skill_set_snapshots("missing") == []
-        with pytest.raises(NotImplementedError, match="algorithm configuration"):
-            await service.organize_skills(OrganizeRequest(project_id="project", alias="graph", skill_refs=[]))
 
 
-@pytest.mark.asyncio
-async def test_manage_pipelines_publish_reuse_and_restore_pinned_scope(tmp_path, monkeypatch, caplog):
-    """Persist explicit versions and keep old recommendations pinned after republishing."""
+async def seed_topology(service):
+    """Publish a real Skill/Scene fixture without calling a graph algorithm."""
+    source = Skill(SkillContent(content="---\nname: csv\ndescription: CSV processing\n---\nRead rows"))
+    detail = await register_detail(
+        service,
+        RegisterRequest(
+            project_id="project",
+            skill=structured(source.snapshot()),
+        ),
+    )
+    version = detail.version
+    with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as persistence:
+        store = SkillGraphStore(
+            persistence.database,
+            graph_id="skg-fixture",
+            alias="fixture",
+            actor_id="test",
+            version_ids={version.skill_id: version.version_id},
+        )
+        await store.validate_skills({version.skill_id: source})
+        snapshot_id = "skgv-" + uuid4().hex
+        skill_node = store.bind_node(snapshot_id, version.skill_id, {"node_id": "skill-node", "name": "csv"})
+        scene_node = store.bind_node(
+            snapshot_id,
+            version.skill_id,
+            {
+                "node_id": "scene-node",
+                "node_type": GraphNodeType.SCENE,
+                "owner_node_id": "skill-node",
+                "name": "Read CSV",
+                "description": "Load the source rows",
+            },
+        )
+        edge = SkillGraphEdgeRecord(
+            project_id="project",
+            graph_id="skg-fixture",
+            graph_version_id=snapshot_id,
+            edge_id=uuid4(),
+            source_node_id="scene-node",
+            target_node_id="skill-node",
+            edge_type="containment",
+            metadata={"condition": "File exists", "evidence": "Source instructions"},
+        )
+        await store.publish(
+            snapshot_id, request_hash="a" * 64, nodes=[skill_node, scene_node], edges=[edge], metadata={}
+        )
+    return snapshot_id
 
-    async def embed(self, texts):
-        return [[1.0, 0.0, 0.0] if "csv" in text.lower() else [0.0, 1.0, 0.0] for text in texts]
 
-    monkeypatch.setattr(OpenAIEmbeddingClient, "embed", embed)
-    config = service_config(tmp_path / "manage.db")
-    async with await create_service(config) as service:
-        assert isinstance(service.backends["manage_pipeline"], GraphManagePipeline)
-        assert sum(isinstance(backend, ManagePipeline) for backend in service.backends.values()) == 1
-        versions = []
-        for name, description in (("csv", "Parse CSV tables"), ("images", "Draw pictures")):
-            source = Skill(
-                SkillContent(
-                    content=f"---\nname: {name}\ndescription: {description}\n---\n{description}",
-                    name="test-skill",
-                    description="Test instructions",
-                    standard_format=False,
+async def test_graph_queries_include_scenes_and_preserve_history(tmp_path):
+    async with await create_service(service_config(tmp_path / "graphs.db")) as service:
+        assert await service.list_graph() == []
+        snapshot_id = await seed_topology(service)
+        topology = await service.get_graph_snapshot("fixture", snapshot_id)
+        preview = await service.preview_graph(snapshot_id)
+        assert preview == topology
+        assert {node["node_type"] for node in topology["nodes"]} == {GraphNodeType.SKILL, GraphNodeType.SCENE}
+        scene = next(node for node in topology["nodes"] if node["node_type"] == GraphNodeType.SCENE)
+        assert scene["owner_node_id"] == "skill-node"
+        assert scene["skill_version_id"] == topology["nodes"][0]["skill_version_id"]
+        assert topology["edges"][0]["condition"] == "File exists"
+        assert "embedding" not in str(topology)
+        assert len(await service.list_graph_snapshots("fixture")) == 1
+        with pytest.raises(ValueError, match="default project"):
+            await service.preview_graph("fixture", "foreign")
+        with TestClient(create_app(service)) as client:
+            response = client.post("/v1/skills/graphs/preview", json={"graph_ref": "fixture"})
+            assert response.status_code == 200, response.text
+            assert response.json()["data"]["graph_version_id"] == snapshot_id
+        # The HTTP app owns and closes the service.
+
+
+async def test_graph_algorithm_registered_and_missing_models_reported(tmp_path):
+    async with await create_service(service_config(tmp_path / "unavailable.db")) as service:
+        assert "skill_manage" in Algorithm.registered_types()
+        with pytest.raises(ValueError, match="algorithm settings"):
+            await service.organize_skills(OrganizeRequest(project_id="project", skill_refs=[]))
+        assert await service.list_graph() == []
+
+
+@pytest.mark.parametrize("updates", [{"skill_refs": []}, {"skill_refs": ["s", "s"]}, {"base_revision": 1}])
+def test_member_requests_reject_invalid_batches_and_old_protocol(updates):
+    with pytest.raises(ValidationError):
+        AddGraphMembersRequest.model_validate(
+            {"project_id": "project", "graph_ref": "g", "skill_refs": ["s"], **updates}
+        )
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"include_scenes": True},
+        {"strategy": "vector", "include_scenes": "false"},
+        {"strategy": "vector", "include_scenes": 1},
+        {"top_k": True},
+        {"top_k": "5"},
+        {"top_k": 1.5},
+        {"top_k": 0},
+        {"top_k": -1},
+        {"diagnostics": True},
+        {"task": " "},
+        {"strategy": "vector", "task": " "},
+    ],
+)
+def test_recommendation_request_validates_strategy(updates):
+    with pytest.raises(ValidationError):
+        RecommendRequest.model_validate({"project_id": "project", "graph_id": "g", "task": "rows", **updates})
+
+
+async def test_http_member_routes_forward_scope_and_reject_legacy_fields(tmp_path, monkeypatch):
+    from mindmemos_skill.api.typing import OrganizeResult
+
+    service = await create_service(service_config(tmp_path / "http.db"))
+    captured = []
+
+    async def add(request):
+        captured.append(request)
+        return OrganizeResult(graph_id="skg-test", graph_version_id="skgv-" + uuid4().hex, skill_version_ids=["v1"])
+
+    monkeypatch.setattr(service._manage_pipeline, "add_graph_members", add)
+    with TestClient(create_app(service)) as client:
+        body = {"graph_ref": "g", "skill_refs": ["s"], "force_extract_scene": True}
+        response = client.post("/v1/skills/graphs/members/add", json=body)
+        assert response.status_code == 200, response.text
+        assert captured[0].project_id == "project" and captured[0].force_extract_scene
+        for extra in ({"project_id": "other"}, {"request_id": "old"}, {"base_revision": 1}):
+            assert client.post("/v1/skills/graphs/members/add", json=body | extra).status_code == 422
+        response = client.post("/v1/skills/graphs/members/remove", json={"graph_ref": "g", "skill_refs": ["s"]})
+        assert response.status_code == 404, response.text
+
+
+async def test_vector_options_and_core_scores_cross_http_boundary(tmp_path, monkeypatch):
+    from mindmemos_skill.api.typing import RecommendResult, VectorRecommendationScore
+
+    service = await create_service(service_config(tmp_path / "recommend.db"))
+    snapshot_id = await seed_topology(service)
+    topology = await service.get_graph_snapshot("fixture", snapshot_id)
+    version = await service.get_skill_version(topology["nodes"][0]["skill_version_id"])
+    captured = []
+
+    async def recommend(request):
+        captured.append(request)
+        return RecommendResult(
+            skills=[version],
+            graph_version_id=request.graph_version_id,
+            strategy="vector",
+            score_type="cosine_similarity",
+            include_scenes=request.include_scenes,
+            scores=[
+                VectorRecommendationScore(
+                    skill_version_id=version.version_id,
+                    similarity=0.75,
+                    node_id="scene-node",
+                    node_type=GraphNodeType.SCENE,
                 )
-            ).snapshot()
-            detail = await register_detail(
-                service, RegisterRequest(skill=structured(source, name=name), project_id=service.default_project_id)
-            )
-            versions.append(detail.version.version_id)
-        historical = await service.get_skill_version(versions[0])
-        newer = await service.commit_skill(
-            CommitRequest(
-                skill=structured(
-                    Skill(
-                        SkillContent(
-                            content="# Updated CSV workflow",
-                            name="test-skill",
-                            description="Test instructions",
-                            standard_format=False,
-                        )
-                    ).snapshot()
-                ),
-                skill_id=historical.skill_id,
-                project_id=service.default_project_id,
-            )
+            ],
         )
-        assert newer.skill.active_version_id != versions[0]
-        request = OrganizeRequest(project_id="project", alias="collection", skill_refs=versions)
-        caplog.set_level("INFO", logger="mindmemos_skill")
-        caplog.clear()
-        first = await service.organize_skills(request)
-        assert [
-            record.event_body["stage"] for record in caplog.records if record.getMessage() == "algorithm.progress"
-        ] == ["organize", "organized"]
-        request = request.model_copy(update={"graph_id": first.graph_id, "alias": None})
-        assert (await service.organize_skills(request)).graph_version_id == first.graph_version_id
-        skill_sets = await service.list_skill_sets()
-        assert [(item["skill_set_id"], item["mode"]) for item in skill_sets] == [(first.graph_id, "graph")]
-        snapshots = await service.list_skill_set_snapshots("collection")
-        assert snapshots[0]["snapshot_id"] == f"skgv-{first.graph_version_id.hex}"
-        assert snapshots[0]["request_hash"] is not None
-        assert skill_sets[0]["current_version_id"] == f"skgv-{first.graph_version_id.hex}"
-        snapshot = await service.get_skill_set_snapshot("collection", first.graph_version_id)
-        assert snapshot["mode"] == "graph"
-        assert {node["skill_version_id"] for node in snapshot["nodes"]} == set(versions)
-        assert (await service.get_skill_version(versions[0])).version_id == versions[0]
-        assert len(await service.list_skill_versions(historical.skill_id)) == 2
-        with service.repository.persistence.session(Scope(fields={"project_id": "project"})):
-            with pytest.raises(PermissionError, match="active scope"):
-                await service.repository.list_skill_versions("another", snapshot["nodes"][0]["skill_id"])
-        selected = await service.recommend_skills(
-            RecommendRequest(
-                project_id="project",
-                graph_id="collection",
-                graph_version_id=first.graph_version_id,
-                task="Parse CSV records",
-                top_k=1,
-            )
-        )
-        assert [version.version_id for version in selected.skills] == [versions[0]]
-        second = await service.organize_skills(request.model_copy(update={"skill_refs": [versions[1]]}))
-        assert second.graph_version_id != first.graph_version_id
 
-    async with await create_service(config) as reopened:
-        previous = await reopened.recommend_skills(
-            RecommendRequest(
-                project_id="project",
-                graph_id="collection",
-                graph_version_id=first.graph_version_id,
-                task="Parse CSV records",
-                top_k=1,
-            )
-        )
-        assert [version.version_id for version in previous.skills] == [versions[0]]
-        current = await reopened.recommend_skills(
-            RecommendRequest(
-                project_id="project",
-                graph_id="collection",
-                graph_version_id=second.graph_version_id,
-                task="Parse CSV records",
-                top_k=1,
-            )
-        )
-        assert [version.version_id for version in current.skills] == [versions[1]]
-        assert {item["snapshot_id"] for item in await reopened.list_skill_set_snapshots("collection")} == {
-            f"skgv-{first.graph_version_id.hex}",
-            f"skgv-{second.graph_version_id.hex}",
-        }
-        assert await reopened.list_skill_set_snapshots("missing") == []
-        with pytest.raises(GraphNotFoundError, match="Graph not found"):
-            await reopened.get_skill_set_snapshot("missing", first.graph_version_id)
-        with pytest.raises(ValueError, match="default project"):
-            await reopened.list_skill_sets("another")
-        with pytest.raises(ValueError, match="default project"):
-            await reopened.get_skill_set_snapshot("collection", first.graph_version_id, "another")
-        with pytest.raises(ValueError, match="default project"):
-            await reopened.recommend_skills(
-                RecommendRequest(
-                    project_id="another",
-                    graph_id="collection",
-                    graph_version_id=first.graph_version_id,
-                    task="CSV",
-                )
-            )
-
-
-@pytest.mark.asyncio
-async def test_manage_pipeline_preflight_rejects_missing_store_and_wrong_family(tmp_path):
-    """Fail invalid assembly before creating any persistence or model resource."""
-    config = service_config(tmp_path / "unused.db")
-    with pytest.raises(ValueError, match="global persistence"):
-        await create_service(config.service.model_copy(update={"persistence": None}))
-    with pytest.raises(ValueError, match="ManagePipeline"):
-        await create_service(
-            config.service.model_copy(
-                update={
-                    "manage_pipeline": config.service.manage_pipeline.model_copy(update={"class_name": "repository"})
-                }
-            )
-        )
+    monkeypatch.setattr(service._manage_pipeline, "recommend", recommend)
+    with TestClient(create_app(service)) as client:
+        body = {"graph_ref": "fixture", "query": "Read rows", "strategy": "vector", "include_scenes": True}
+        response = client.post("/v1/skills/algos/recommend", json=body)
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["graph_version_id"] == snapshot_id
+        assert data["scores"][0]["similarity"] == 0.75
+        assert data["skills"][0]["version_id"] == data["scores"][0]["skill_version_id"]
+        assert captured[0].task == "Read rows" and captured[0].include_scenes
+        assert captured[0].graph_version_id == snapshot_id
+        assert client.post("/v1/skills/algos/recommend", json=body | {"strategy": "graph"}).status_code == 422
+        assert client.post("/v1/skills/algos/recommend", json=body | {"diagnostics": True}).status_code == 422

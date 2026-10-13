@@ -14,7 +14,7 @@ def create_persistence(database: Database) -> SkillPersistence:
     Returns:
         Services sharing the same database and transaction boundary.
     """
-    return Persistence.build("skill", {}, database=database, require_session=False)
+    return Persistence.build("skill", {}, database=database)
 
 
 async def ensure_collection(persistence: SkillPersistence) -> None:
@@ -23,4 +23,4 @@ async def ensure_collection(persistence: SkillPersistence) -> None:
     Args:
         persistence: Assembled data services whose collections should exist.
     """
-    await persistence.database.create_tables()
+    await persistence.initialize_storage()

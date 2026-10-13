@@ -10,7 +10,6 @@ from typing import Literal
 from filelock import AsyncFileLock
 from pydantic import JsonValue
 
-from ....agents import OpenAIChatAgent
 from ....common.checkpoint import fingerprint
 from ....common.json import read_json, read_jsonl, write_json
 from ....common.secrets import redact_credentials
@@ -21,7 +20,7 @@ from ....logging import get_logger, log_context
 from ....skill import Skill
 from ...base import Algorithm
 from ..base import SkillTrainer
-from ..recovery import implementation_identity, sample_identity
+from ..recovery import sample_identity
 from .checkpoint import load_node, load_skill, node_directory, read_node, read_node_file, write_node
 from .config import ALGORITHM_VERSION, SkillForestTrainerConfig
 from .env_adapter import SkillForestEnvAdapter
@@ -30,7 +29,6 @@ from .generation import InvalidPatchError, generate_patch
 from .runtime import ForestRuntime, parallel
 from .tree import apply_patch, cannot_improve, expansion_wave, mean_score, novelty, split_tasks, tree_winners
 from .typing import (
-    AgentFactory,
     EnsembleCandidate,
     Node,
     NodeCheckpoint,
@@ -51,15 +49,13 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
     config_type = SkillForestTrainerConfig
     """Configuration model used by the shared algorithm registry."""
 
-    def __init__(self, config: SkillForestTrainerConfig, *, agent_factory: AgentFactory = OpenAIChatAgent) -> None:
+    def __init__(self, config: SkillForestTrainerConfig) -> None:
         """Bind a validated run configuration without starting physical work.
 
         Args:
             config: Forest training controls.
-            agent_factory: Optional optimizer constructor for offline tests.
         """
         super().__init__(config.model_copy(deep=True))
-        self.agent_factory = agent_factory
 
     def create_splits(self, task_ids: Sequence[str]) -> list[TreeSplit]:
         """Create one deterministic train and validation partition per tree.
@@ -152,10 +148,12 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
         if len(external_ids) != len(set(external_ids)) or samples.keys() & set(external_ids):
             raise ValueError("External validation IDs must be unique and disjoint from training")
         splits = self.create_splits(list(samples))
-        config = self.config.model_dump(mode="json")
+        config = redact_credentials(self.config.model_dump(mode="json"), preserve_execution_settings=True)
         environment = {
             "class": f"{type(env).__module__}.{type(env).__qualname__}",
-            "config": env.config.model_dump(mode="json") if isinstance(env, Environment) else None,
+            "config": redact_credentials(env.config.model_dump(mode="json"), preserve_execution_settings=True)
+            if isinstance(env, Environment)
+            else None,
         }
         adapter_identity = {
             "class": f"{type(env_adapter).__module__}.{type(env_adapter).__qualname__}",
@@ -163,7 +161,6 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
         }
         identity = fingerprint(
             {
-                "implementation": implementation_identity(self, env),
                 "config": config,
                 "adapter": adapter_identity,
                 "skill": skill.snapshot().model_dump(mode="json"),
@@ -214,7 +211,7 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
             if result.get("status") != "completed":
                 raise ValueError("Skill-Forest result is incomplete")
             return load_skill(result["selected_skill"])
-        runtime = ForestRuntime(self.config, agent_factory=self.agent_factory, work_dir=root, env_adapter=env_adapter)
+        runtime = ForestRuntime(self.config, work_dir=root, env_adapter=env_adapter)
         started = perf_counter()
         try:
             stages = {}

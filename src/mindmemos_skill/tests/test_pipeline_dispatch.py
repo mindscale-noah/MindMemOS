@@ -138,10 +138,13 @@ async def test_repository_uses_shared_store_and_scoped_version_lookup(tmp_path, 
             Scope(fields={"project_id": service.default_project_id})
         ) as scoped:
             store = scoped.skills
-            assert (await store.resolve_family(service.default_project_id, "example")).skill_id == item.skill.skill_id
-            assert (await store.version_by_id(service.default_project_id, item.version.version_id)) == item.version
+            assert (await store.resolve_family("example")).skill_id == item.skill.skill_id
+            assert (await store.get(item.version.version_id)) == item.version
             with pytest.raises(SkillNotFoundError):
-                (await store.version_by_id("another-project", item.version.version_id))
+                await store.get("missing-version")
+        with service.backends["persistence"].session(Scope(fields={"project_id": "another-project"})) as scoped:
+            with pytest.raises(SkillNotFoundError):
+                await scoped.skills.get(item.version.version_id)
         request = ListRequest(project_id=service.default_project_id)
         calls = []
         original = service.repository.list_skills

@@ -57,9 +57,11 @@ export function Graphs({
       const latest = [...rows].sort((a, b) =>
         b.created_at.localeCompare(a.created_at),
       )[0];
-      setSnapshot(latest.graph_version_id);
+      const head = graphs.value?.find((item) => item.graph_id === graph)?.current_version_id;
+      const current = rows.find((item) => item.graph_version_id === head);
+      setSnapshot((current || latest).graph_version_id);
     }
-  }, [snapshots.value]);
+  }, [snapshots.value, graphs.value, graph]);
   const nodes = connected && graph && snapshot ? data.value?.nodes || [] : [];
   const edges = useMemo(
     () =>
@@ -164,8 +166,8 @@ export function Graphs({
         <>
           <div className="toolbar">
             <input
-              placeholder="Find Skill"
-              aria-label="Find Skill"
+              placeholder="Find Skill or Scene"
+              aria-label="Find Skill or Scene"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -204,7 +206,7 @@ export function Graphs({
                 open({
                   source: "graph",
                   id: selected.skill_id,
-                  name: selected.name,
+                  name: selected.skill_name || selected.name,
                   version: selected.skill_version_id,
                 })
               }
@@ -216,7 +218,7 @@ export function Graphs({
           {data.loading || graphs.loading || snapshots.loading
             ? "Loading…"
             : !graphs.value?.length
-              ? "No SkillSets"
+              ? "No graphs"
               : !graph
                 ? "Select a graph"
                 : "This graph has no nodes"}

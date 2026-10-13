@@ -8,7 +8,7 @@ from pathlib import Path
 from time import perf_counter
 
 import yaml
-from mindmemos_skill.agents import OpenAIChatAgent
+from mindmemos_skill.agents import AgentCatalog, OpenAIChatAgent
 from mindmemos_skill.algos.train.treeskill import TreeSkillTrainer, TreeSkillTrainerConfig
 from mindmemos_skill.algos.train.treeskill.artifacts import score_report
 from mindmemos_skill.algos.train.treeskill.trainer import sample_tasks
@@ -45,7 +45,9 @@ async def run(args: argparse.Namespace) -> None:
     root = args.output.resolve()
     document = yaml.safe_load(args.service_config.read_text())
     pipeline = document["service"]["training_pipelines"]["treeskill"]["config"]
-    config = TreeSkillTrainerConfig.model_validate(pipeline["trainer"]["config"])
+    config = TreeSkillTrainerConfig.model_validate(
+        pipeline["trainer"]["config"], context=AgentCatalog(agents=document["service"].get("agents", {}))
+    )
     # The upstream policy uses instruct decoding with its own temperature and stop.
     policy = (config.failure_optimizer or config.optimizer).model_copy(
         update={"temperature": 0.7, "stop": ["Observation:"]}

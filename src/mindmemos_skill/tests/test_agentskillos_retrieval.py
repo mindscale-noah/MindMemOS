@@ -1,8 +1,5 @@
 import json
 import math
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 from mindmemos_skill.envs.builtin_envs.agentskillos import (
@@ -78,39 +75,3 @@ def test_invalid_datasets_fail(tmp_path, kind):
         config.relevance_path.write_text(json.dumps(contents))
     with pytest.raises(ValueError):
         AgentSkillOSRetrievalData(config).load()
-
-
-def test_cli_baseline_and_no_overwrite(tmp_path):
-    config = sources(tmp_path)
-    rankings = tmp_path / "rankings.json"
-    rankings.write_text('{"q1":["alpha","beta"]}')
-    output = tmp_path / "report.json"
-    script = Path(__file__).resolve().parents[3] / "scripts" / "agentskillos" / "evaluate.py"
-    command = [
-        sys.executable,
-        str(script),
-        "--tasks",
-        str(config.tasks_path),
-        "--relevance",
-        str(config.relevance_path),
-        "--rankings",
-        str(rankings),
-        "--baseline",
-        str(rankings),
-        "--protocol",
-        "legacy_replay",
-        "--output",
-        str(output),
-    ]
-    subprocess.run(command, check=True, capture_output=True, text=True)
-    report = json.loads(output.read_text())
-    assert report["task_count"] == 1
-    assert all(value == 0 for value in report["delta"].values())
-    assert report["legacy_top_k_overlap"]["@3"] == pytest.approx(2 / 3)
-    before = output.read_bytes()
-    assert subprocess.run(command, capture_output=True).returncode != 0
-    assert output.read_bytes() == before
-    rankings.write_text('{"wrong":["alpha"]}')
-    output.unlink()
-    assert subprocess.run(command, capture_output=True).returncode != 0
-    assert not output.exists()

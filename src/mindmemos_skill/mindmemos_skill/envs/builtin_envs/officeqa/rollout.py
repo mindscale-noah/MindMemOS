@@ -53,10 +53,12 @@ class OfficeQAEnvironment(Environment[OfficeQAConfig]):
             for name in task.documents
             if any(name == hint or Path(name).stem == Path(hint).stem for hint in task.source_files)
         ]
+        candidates = list(dict.fromkeys(candidates))
         files = "\n".join(f"- {name}" for name in candidates[:20]) or "- none resolved"
-        user = f"## Question\n{task.instruction}\n\n## Candidate Files\n{files}"
+        user = f"## Question\n{task.instruction}"
         if task.oracle_context:
             user += f"\n\n## Oracle Parsed Pages\n{task.oracle_context}"
+        user += f"\n\n## Candidate Files\n{files}"
         if task.source_docs:
             user += "\n\n## Source Hints\n" + "\n".join(f"- {hint}" for hint in task.source_docs)
         (workspace / "system.md").write_text(system, encoding="utf-8")

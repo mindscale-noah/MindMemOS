@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from mindmemos_skill.agents import OpenAIChatConfig
 from mindmemos_skill.algos import Algorithm, SkillTrainer
 from mindmemos_skill.algos.evolve.base import SkillEvolver
 from mindmemos_skill.algos.train.skill_forest.config import SkillForestTrainerConfig
@@ -20,8 +21,8 @@ EXAMPLE = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/dev.exam
 """Public deployment example used to verify real nested component definitions."""
 
 
-def test_deployment_example_explicitly_covers_all_pipeline_fields():
-    """Detect missing pipeline implementations and omitted nested configuration fields."""
+def test_deployment_example_covers_pipeline_fields_and_nondefault_agent_options():
+    """Detect missing pipelines and ensure omitted Agent options match their defaults."""
     value = yaml.safe_load(EXAMPLE.read_text())
     deployment = load_skill_config(EXAMPLE.read_text())
     service = value["service"]
@@ -47,26 +48,15 @@ def test_deployment_example_explicitly_covers_all_pipeline_fields():
 
     def assert_fields_explicit(actual, complete, path):
         """Compare nested mappings with the validated model including its defaults."""
+        if isinstance(actual, str) and isinstance(complete, dict) and actual in service["agents"]:
+            actual = service["agents"][actual]["config"]
         if isinstance(complete, dict):
             assert isinstance(actual, dict), path
             if "model" in complete and "max_completion_tokens" in complete:
-                optional_chat_fields = {
-                    "top_p",
-                    "presence_penalty",
-                    "seed",
-                    "stop",
-                    "response_format",
-                    "extra_body",
-                    "response_validation",
-                    "strip_thinking",
-                    "retry_policy",
-                    "retry_wait",
-                    "retry_waits_s",
-                    "invalid_tool_arguments",
-                    "parse_max_attempts",
-                    "parse_retry_mode",
-                }
-                assert complete.keys() - actual.keys() <= optional_chat_fields, path
+                for key in complete.keys() - actual.keys():
+                    field = OpenAIChatConfig.model_fields[key]
+                    assert not field.is_required(), f"{path}.{key}"
+                    assert complete[key] == field.get_default(call_default_factory=True), f"{path}.{key}"
                 complete = {key: value for key, value in complete.items() if key in actual}
             assert actual.keys() == complete.keys(), path
             for key, nested in complete.items():
@@ -93,8 +83,9 @@ def test_preflight_retains_original_models_and_preserves_nested_credentials():
     """Retain actual algorithm models and preserve explicit settings through serialization and reconstruction."""
     value = yaml.safe_load(EXAMPLE.read_text())
     options = value["service"]["training_pipelines"]["skill_forest"]["config"]["trainer"]["config"]
-    options["optimizer"]["api_key"] = "schema-test-secret"
-    options["optimizer"]["base_url"] = "https://test.invalid/v1"
+    preset = value["service"]["agents"][options["optimizer"]]["config"]
+    preset["api_key"] = "schema-test-secret"
+    preset["base_url"] = "https://test.invalid/v1"
     deployment = load_skill_config(yaml.safe_dump(value))
     pipeline = deployment.service.training_pipelines["skill_forest"].config
     assert type(pipeline) is TrainingPipelineConfig

@@ -208,7 +208,7 @@ async def test_persistence_does_not_implicitly_enable_repository(tmp_path):
     try:
         await service.initialize_storage()
         with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
-            assert (await scoped.skills.list_skills("project", limit=10, offset=0)) == []
+            assert (await scoped.skills.list_skills(limit=10, offset=0)) == []
         with pytest.raises(NotImplementedError):
             service.repository
     finally:

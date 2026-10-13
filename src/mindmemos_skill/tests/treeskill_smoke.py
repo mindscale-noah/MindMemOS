@@ -12,6 +12,8 @@ from mindmemos_skill.envs.data import DataSample, RewardData
 from mindmemos_skill.skill import Skill, SkillContent
 from pydantic import BaseModel
 
+from .agent_testing import agent_config
+
 
 class SmokeConfig(BaseModel):
     """No external settings are needed for the offline environment."""
@@ -81,7 +83,7 @@ class SmokeAgent(OpenAIChatAgent):
         )
 
 
-async def run_smoke(output_dir: Path):
+async def run_smoke(output_dir: Path, *, monkeypatch):
     """Run the full offline training and held-out test flow.
 
     Args:
@@ -92,7 +94,9 @@ async def run_smoke(output_dir: Path):
     """
     model = OpenAIChatConfig(model="offline-smoke", temperature=0, api_key=None)
     trainer = TreeSkillTrainer(
-        TreeSkillTrainerConfig(optimizer=model, router=model, rollout_concurrency=2), agent_factory=SmokeAgent
+        agent_config(
+            monkeypatch, SmokeAgent, TreeSkillTrainerConfig(optimizer=model, router=model, rollout_concurrency=2)
+        )
     )
     samples = [
         DataSample(task=Task(id=name, instruction="Save and verify the output"), reward_data=RewardData())

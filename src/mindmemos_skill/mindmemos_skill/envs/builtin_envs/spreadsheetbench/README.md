@@ -4,7 +4,7 @@ Official source: [SpreadsheetBench Verified 400](https://huggingface.co/datasets
 from the repository root with Python 3.12 or 3.13:
 
 ```bash
-uv run python scripts/download_datasets.py download --benchmark skill --dataset spreadsheetbench
+uv run python scripts/download_datasets.py download skill --name spreadsheetbench
 ```
 
 The Hugging Face downloads require `huggingface_hub` in the Python environment.
@@ -46,7 +46,7 @@ illustrate the format; use the provided file with the official dataset.
 ```python
 import asyncio
 from pathlib import Path
-from uuid import uuid4
+from mindmemos_skill.common.ids import generate_id
 
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.data import Data
@@ -81,7 +81,7 @@ env = Environment.build("spreadsheetbench_tool_calling", {
 async def main():
     """Run one test task and print its rollout result."""
     sample = splits["test"][0]
-    work_dir = root / "output/env_examples/spreadsheetbench" / uuid4().hex
+    work_dir = root / "output/env_examples/spreadsheetbench" / generate_id()
     result = await env.rollout(
         task=sample.task,
         reward_data=sample.reward_data,
@@ -99,7 +99,7 @@ asyncio.run(main())
 ```python
 import asyncio
 from pathlib import Path
-from uuid import uuid4
+from mindmemos_skill.common.ids import generate_id
 
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.data import Data
@@ -134,7 +134,7 @@ env = Environment.build("spreadsheetbench_text_action", config)
 async def main():
     """Run one text-action task using the configured LibreOffice runtime."""
     sample = splits["test"][0]
-    work_dir = root / "output/env_examples/spreadsheetbench_text_action" / uuid4().hex
+    work_dir = root / "output/env_examples/spreadsheetbench_text_action" / generate_id()
     result = await env.rollout(
         task=sample.task,
         reward_data=sample.reward_data,

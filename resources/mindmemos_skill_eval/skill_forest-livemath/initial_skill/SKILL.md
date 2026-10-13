@@ -1,3 +1,8 @@
+---
+name: skill-forest-livemath
+description: Initial instructions for the livemath benchmark.
+---
+
 # Live Mathematical MCQ Heuristics
 
 ## Option Comparison

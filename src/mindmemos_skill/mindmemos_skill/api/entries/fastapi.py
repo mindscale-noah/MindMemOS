@@ -8,9 +8,10 @@ from inspect import isawaitable
 from ipaddress import ip_address
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import UUID, uuid4
 
 from dotenv import load_dotenv
+
+from mindmemos_skill.common.ids import generate_id
 
 from ...common.time_utils import utcnow
 from ...config.config import FastAPIConfig
@@ -34,6 +35,7 @@ from ..factory import create_service
 from ..service import SkillService
 from ..typing import (
     ActiveRequest,
+    AddGraphMembersRequest,
     CommitRequest,
     DiffRequest,
     HistoryRequest,
@@ -41,6 +43,7 @@ from ..typing import (
     OrganizeRequest,
     RecommendRequest,
     RegisterRequest,
+    RemoveGraphMembersRequest,
     ReportTrajectoryRequest,
     SetMetaRequest,
     ShowRequest,
@@ -56,6 +59,7 @@ from ..typing import (
 )
 from .typing import (
     ActivateHttpRequest,
+    AddGraphMembersHttpRequest,
     CommitHttpRequest,
     DeleteHttpRequest,
     DiffHttpRequest,
@@ -71,6 +75,7 @@ from .typing import (
     OrganizeHttpRequest,
     RecommendHttpRequest,
     RegisterHttpRequest,
+    RemoveGraphMembersHttpRequest,
     ServiceFactory,
     ShowHttpRequest,
     SkillResolveHttpRequest,
@@ -127,35 +132,21 @@ def _version_data(version) -> dict:
     }
 
 
-def _legacy_graph_data(skill_set: dict, *, include_graph_id: bool = True) -> dict:
-    """Keep existing graph HTTP payloads stable over the Skill Set service."""
-    result = dict(skill_set)
-    result.pop("mode")
-    skill_set_id = result.pop("skill_set_id")
-    if include_graph_id:
-        result["graph_id"] = skill_set_id
-    if "snapshot_id" in result:
-        result["graph_version_id"] = result.pop("snapshot_id")
-    return result
-
-
 async def _selected_graph_version(
     service: MindMemOSSkill, graph_ref: str, version_ref: str | None, project_id: str
-) -> tuple[str, UUID]:
+) -> tuple[str, str]:
     """Resolve a public graph and its pinned version for an existing operation."""
     graph = await service.resolve_graph(graph_ref, project_id)
     if version_ref is None:
         selected = graph["graph_version_id"]
-        if selected is None:
-            raise ValueError("Graph has no published version")
-    elif version_ref.startswith("skgv-"):
+    else:
         version = await service.resolve_graph(version_ref, project_id)
         if version["graph_id"] != graph["graph_id"]:
             raise ValueError("Graph version does not belong to the selected graph")
         selected = version["graph_version_id"]
-    else:
-        return graph["graph_id"], UUID(version_ref)
-    return graph["graph_id"], UUID(selected.removeprefix("skgv-"))
+    if selected is None:
+        raise ValueError("Graph has no published version")
+    return graph["graph_id"], selected
 
 
 def _encode_cursor(cursor: ListCursor | TrajectoryListCursor | HistoryCursor) -> str:
@@ -257,7 +248,7 @@ def create_app(
     async def assign_request_id(request: Request, call_next):
         """Assign a request ID even when body validation fails."""
         if not request.scope.get("state", {}).get("request_id"):
-            request.state.request_id = f"req_{uuid4().hex}"
+            request.state.request_id = generate_id("req_")
         if policy.auth.mode == "none":
             server = request.scope.get("server")
             if server is not None:
@@ -848,8 +839,43 @@ def create_app(
         except NotImplementedError as exc:
             raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
         data = result.model_dump(mode="json")
-        data["graph_version_id"] = f"skgv-{result.graph_version_id.hex}"
         return envelope(request, data)
+
+    @app.post("/v1/skills/graphs/members/add")
+    async def add_graph_members(
+        request: Request,
+        body: AddGraphMembersHttpRequest,
+        identity: SkillHttpIdentity = Depends(require("skill:write")),
+    ):
+        """Add a batch of new families using the authenticated project."""
+        result = await service.add_graph_members(
+            AddGraphMembersRequest(project_id=identity.project_id, user_id=identity.actor_id, **body.model_dump())
+        )
+        data = result.model_dump(mode="json")
+        return envelope(request, data)
+
+    @app.post("/v1/skills/graphs/members/remove")
+    async def remove_graph_members(
+        request: Request,
+        body: RemoveGraphMembersHttpRequest,
+        identity: SkillHttpIdentity = Depends(require("skill:write")),
+    ):
+        """Remove members while retaining their canonical Skill versions."""
+        result = await service.remove_graph_members(
+            RemoveGraphMembersRequest(project_id=identity.project_id, user_id=identity.actor_id, **body.model_dump())
+        )
+        data = result.model_dump(mode="json")
+        return envelope(request, data)
+
+    @app.post("/v1/skills/graphs/preview")
+    async def preview_graph(
+        request: Request,
+        body: GraphResolveHttpRequest,
+        identity: SkillHttpIdentity = Depends(require("skill:read")),
+    ):
+        """Read published topology without extracting Scenes or writing data."""
+        item = await service.preview_graph(body.graph_ref, identity.project_id)
+        return envelope(request, item)
 
     @app.post("/v1/skills/graph-resolve")
     async def graph_resolve(
@@ -869,8 +895,8 @@ def create_app(
     @app.post("/v1/skills/graphs/list")
     async def list_graphs(request: Request, identity: SkillHttpIdentity = Depends(require("skill:read"))):
         """List organization graphs in the credential's project."""
-        items = await service.list_skill_sets(identity.project_id)
-        return envelope(request, {"items": [_legacy_graph_data(item) for item in items]})
+        items = await service.list_graph(identity.project_id)
+        return envelope(request, {"items": items})
 
     @app.post("/v1/skills/graphs/snapshots")
     async def graph_snapshots(
@@ -879,8 +905,8 @@ def create_app(
         identity: SkillHttpIdentity = Depends(require("skill:read")),
     ):
         """List immutable snapshots and revisions of one project-owned graph."""
-        items = await service.list_skill_set_snapshots(body.graph_id, identity.project_id)
-        return envelope(request, {"items": [_legacy_graph_data(item) for item in items]})
+        items = await service.list_graph_snapshots(body.graph_id, identity.project_id)
+        return envelope(request, {"items": items})
 
     @app.post("/v1/skills/graphs/snapshot")
     async def graph_snapshot(
@@ -892,8 +918,8 @@ def create_app(
         graph_id, version_id = await _selected_graph_version(
             service, body.graph_id, body.graph_version_id, identity.project_id
         )
-        item = await service.get_skill_set_snapshot(graph_id, version_id, identity.project_id)
-        return envelope(request, _legacy_graph_data(item, include_graph_id=False))
+        item = await service.get_graph_snapshot(graph_id, version_id, identity.project_id)
+        return envelope(request, item)
 
     @app.post("/v1/skills/algos/recommend")
     async def recommend(
@@ -911,11 +937,14 @@ def create_app(
                     graph_version_id=version_id,
                     task=body.query,
                     top_k=body.top_k or 5,
+                    strategy=body.strategy,
+                    include_scenes=body.include_scenes,
                 )
             )
         except NotImplementedError as exc:
             raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
-        return envelope(request, result)
+        data = result.model_dump(mode="json")
+        return envelope(request, data)
 
     @app.post("/v1/skills/algos/evolve", status_code=202)
     async def evolve(

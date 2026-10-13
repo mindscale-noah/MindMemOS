@@ -6,13 +6,11 @@ from typing import Any, Literal, Protocol, Self, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
-from ....agents.typing import AgentResult
 from ....envs.base import Environment
 from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult, Task
 from ....skill import Skill
 from ....skill.typing import SkillSnapshot
-from .config import ForestOptimizerConfig
 
 
 class RankingResponse(BaseModel):
@@ -277,24 +275,6 @@ class SkillForestSkillMergeContext(BaseModel):
     right_score: float
     """Second candidate's score on the same pool."""
 
-
-class OptimizerAgent(Protocol):
-    """Synchronous optimizer interface used by the bounded model transport."""
-
-    async def run(self, *, messages: list[dict[str, str]]) -> AgentResult:
-        """Generate an optimizer response.
-
-        Args:
-            messages: Complete system and user request.
-
-        Returns:
-            Text response and recorded model usage.
-        """
-        ...
-
-
-AgentFactory = Callable[[ForestOptimizerConfig], OptimizerAgent]
-"""Construct one optimizer using the validated transport settings."""
 
 EvidenceBatch = Sequence[tuple[DataSample, RolloutResult]]
 """Ordered task and result pairs sharing the same success outcome."""

@@ -15,6 +15,8 @@ from mindmemos_skill.envs.builtin_envs.livemath.typing import LiveMathTask
 from mindmemos_skill.envs.data import DataSample, RewardData
 from mindmemos_skill.skill import Skill, SkillContent
 
+from .agent_testing import agent_config
+
 
 @pytest.mark.parametrize("name", BUILTIN_ADAPTER_NAMES)
 def test_registered_environment_name_selects_builtin_and_logs(name, caplog):
@@ -84,14 +86,17 @@ async def test_same_trainer_uses_run_adapter_for_reflection_and_synthesis(tmp_pa
 
     monkeypatch.setattr(SkillForestEnvAdapter, "build_skill_merge_messages", capture_merge)
     trainer = SkillForestTrainer(
-        SkillForestTrainerConfig(
-            optimizer={"model": "offline"},
-            num_trees=2,
-            expansion_budget=2,
-            candidates_per_node=1,
-            ensemble_strategy="hierarchical_merge",
+        agent_config(
+            monkeypatch,
+            Optimizer,
+            SkillForestTrainerConfig(
+                optimizer={"model": "offline"},
+                num_trees=2,
+                expansion_budget=2,
+                candidates_per_node=1,
+                ensemble_strategy="hierarchical_merge",
+            ),
         ),
-        agent_factory=Optimizer,
     )
     skill = Skill(
         source=SkillContent(

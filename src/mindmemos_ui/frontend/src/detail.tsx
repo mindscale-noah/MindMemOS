@@ -157,7 +157,20 @@ export function Content({ version }: { version: Ref }) {
       {data.loading ? (
         <Empty>Loading…</Empty>
       ) : (
-        data.value && <BundleBrowser content={data.value} />
+        data.value && <>
+          {Object.entries(data.value.evaluations || {}).map(([phase, result]) => (
+            <section key={phase} className="panel">
+              <h3>{phase === "test" ? "Test evaluation" : "Validation evaluation"}</h3>
+              <table><thead><tr><th>Tasks</th><th>Success rate</th><th>Execution errors</th><th>Total tokens</th><th>Elapsed seconds</th></tr></thead>
+                <tbody><tr><td>{result.count}</td><td>{result.success_rate === null ? "Unknown" : `${(result.success_rate * 100).toFixed(2)}%`}</td>
+                  <td>{result.errors}</td><td>{result.total_tokens?.toLocaleString() ?? "Unknown"}</td>
+                  <td>{result.wall_seconds?.toFixed(2) ?? "Unknown"}</td></tr></tbody></table>
+              <p>Input tokens: {result.input_tokens?.toLocaleString() ?? "Unknown"} · Output tokens: {result.output_tokens?.toLocaleString() ?? "Unknown"}</p>
+              <p>Trajectory JSONL: <code>{result.trajectory_file}</code></p>
+            </section>
+          ))}
+          <BundleBrowser content={data.value} />
+        </>
       )}
     </DynamicSkill>
   );

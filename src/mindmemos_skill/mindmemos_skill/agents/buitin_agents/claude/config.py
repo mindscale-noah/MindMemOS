@@ -1,5 +1,7 @@
 """Settings for the Claude harness."""
 
+from typing import Literal
+
 from pydantic import Field
 
 from ..config import CLIConfig
@@ -7,6 +9,9 @@ from ..config import CLIConfig
 
 class ClaudeConfig(CLIConfig):
     """Configure the installed Claude executable."""
+
+    class_name: Literal["claude"] = "claude"
+    """Registered backend used to construct this Agent from configuration."""
 
     cli_path: str = Field(default="claude", min_length=1)
     """Executable name or path."""

@@ -9,7 +9,7 @@ from .....agents.typing import AgentResult, ToolTurn
 from .....infra.execution import ExecutionConfig
 from ..config import SpreadsheetBenchToolCallingConfig
 from ..typing import SpreadsheetContext, SpreadsheetObservation
-from .prompts import SYSTEM_PROMPT
+from .prompts import CACHED_VALUE_GUIDANCE, SYSTEM_PROMPT
 from .tools import TOOLS, run_tool
 
 
@@ -38,7 +38,9 @@ def system_prompt(context: SpreadsheetContext, config: SpreadsheetBenchToolCalli
     Returns:
         Initial system message.
     """
-    system = SYSTEM_PROMPT
+    system = SYSTEM_PROMPT.format(
+        cached_value_guidance="" if config.transactional_recalculation else CACHED_VALUE_GUIDANCE
+    )
     if config.skill_loading_mode == "system_prompt" and context.skill_text.strip():
         system += f"\n\n## Skill\n{context.skill_text.strip()}"
     elif context.skill_text.strip():

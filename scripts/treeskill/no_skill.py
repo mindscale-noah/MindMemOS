@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 import yaml
-from mindmemos_skill.agents import OpenAIChatAgent, OpenAIChatConfig
+from mindmemos_skill.agents import AgentCatalog, OpenAIChatAgent, OpenAIChatConfig
 from mindmemos_skill.algos.train.recovery import sample_identity
 from mindmemos_skill.algos.train.treeskill import TreeSkillTrainerConfig
 from mindmemos_skill.algos.train.treeskill.artifacts import score_report
@@ -37,7 +37,8 @@ def load_policy(reference: Path, service_config: Path) -> OpenAIChatConfig:
     config = TreeSkillTrainerConfig.model_validate(read_json(reference / "training/config.json")["algorithm"])
     document = yaml.safe_load(service_config.read_text(encoding="utf-8"))
     local = TreeSkillTrainerConfig.model_validate(
-        document["service"]["training_pipelines"]["treeskill"]["config"]["trainer"]["config"]
+        document["service"]["training_pipelines"]["treeskill"]["config"]["trainer"]["config"],
+        context=AgentCatalog(agents=document["service"].get("agents", {})),
     )
     connection = local.failure_optimizer or local.optimizer
     connection.require_connection()

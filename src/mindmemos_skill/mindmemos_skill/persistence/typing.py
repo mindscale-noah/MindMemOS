@@ -10,6 +10,13 @@ class RecordModel(BaseModel):
     """Prevent accidental field reassignment after validation."""
 
 
+class TransactionState(BaseModel):
+    """Remember a failed repository operation until the shared transaction exits."""
+
+    failed: bool = False
+    """Whether an operation failed, including an exception caught by its caller."""
+
+
 class TrajectoryCounts(BaseModel):
     """Counts of stored attempts for one exact Skill version."""
 

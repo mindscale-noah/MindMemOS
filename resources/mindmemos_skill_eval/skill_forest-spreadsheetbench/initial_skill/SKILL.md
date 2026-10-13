@@ -1,3 +1,8 @@
+---
+name: skill-forest-spreadsheetbench
+description: Initial instructions for the spreadsheetbench benchmark.
+---
+
 # Spreadsheet Manipulation Skill (xlsx)
 
 ## Overview

@@ -165,7 +165,7 @@ async def test_cloud_service_requires_authorization_and_closes_graph_capability(
             await service.list_skills(ListRequest(project_id="one"))
         with service.request_principal("one"):
             assert await service.list_skills(ListRequest(project_id="one")) == []
-            assert await service.list_skill_sets("one") == []
+            assert await service.list_graph("one") == []
             with pytest.raises(PermissionError, match="access denied"):
                 await service.list_skills(ListRequest(project_id="two"))
         with service.request_principal("extra"):
@@ -175,7 +175,7 @@ async def test_cloud_service_requires_authorization_and_closes_graph_capability(
             with pytest.raises(PermissionError, match="scope fields"):
                 await service.list_skills(ListRequest(project_id="one"))
         with pytest.raises(PermissionError, match="authorization is required"):
-            await service.list_skill_sets("one")
+            await service.list_graph("one")
         with pytest.raises(RuntimeError, match="session is required"):
             service.repository.persistence.skills
         with TestClient(

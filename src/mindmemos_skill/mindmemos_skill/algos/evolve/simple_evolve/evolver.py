@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import Sequence
 
-from ....agents import OpenAIChatAgent
+from ....agents import Agent
 from ....common.json import parse_model
 from ....skill import Skill
 from ...base import Algorithm
@@ -23,16 +23,6 @@ class SimpleSkillEvolver(SkillEvolver[SimpleEvolverConfig]):
 
     config_type = SimpleEvolverConfig
     """Model settings and bounded prompt/patch limits."""
-
-    def __init__(self, config: SimpleEvolverConfig, *, agent_factory=OpenAIChatAgent):
-        """Create a detached optimizer from validated settings.
-
-        Args:
-            config: Complete model and patch settings.
-            agent_factory: Injectable model constructor for verification.
-        """
-        super().__init__(config)
-        self.agent_factory = agent_factory
 
     async def evolve(self, *, skill: Skill, trajectories: Sequence[SkillTrajectory]) -> Skill:
         """Extract batch patches, merge pairwise, and apply the final patch.
@@ -72,7 +62,7 @@ class SimpleSkillEvolver(SkillEvolver[SimpleEvolverConfig]):
 
         async def propose(prompt, payload):
             async with semaphore:
-                agent = self.agent_factory(self.config.optimizer)
+                agent = Agent.from_config(self.config.optimizer)
                 response = await agent.run(
                     messages=[
                         {"role": "system", "content": prompt},

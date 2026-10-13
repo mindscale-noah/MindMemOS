@@ -23,6 +23,8 @@ from mindmemos_skill.envs.typing import Reward, RolloutResult, Task
 from mindmemos_skill.skill import Skill, SkillContent
 from pydantic import ValidationError
 
+from .agent_testing import agent_config
+
 
 class PrivateAnswer(RewardData):
     """Private input that must never reach the optimizer."""
@@ -149,14 +151,14 @@ def samples(count=6):
     ]
 
 
-async def run_training(tmp_path, settings=None, env=None, optimizer=None):
+async def run_training(tmp_path, settings=None, env=None, optimizer=None, *, monkeypatch):
     """Run a complete trainer with deterministic local doubles."""
     settings = settings or config()
     env = env or FakeEnvironment()
     optimizer = optimizer or FakeOptimizer()
     skill = initial_skill()
     before = skill.snapshot()
-    result = await SkillForestTrainer(settings, agent_factory=optimizer).train(
+    result = await SkillForestTrainer(agent_config(monkeypatch, optimizer, settings)).train(
         skill=skill,
         env=env,
         train_samples=samples(),
@@ -222,9 +224,9 @@ def test_global_priority_and_tree_winners():
 
 
 @pytest.mark.parametrize("shared_train,shared_validation", [(True, True), (False, True), (False, False)])
-async def test_complete_select_global_caps_and_root_sharing(tmp_path, shared_train, shared_validation):
+async def test_complete_select_global_caps_and_root_sharing(monkeypatch, tmp_path, shared_train, shared_validation):
     settings = config(root_share_train_trajectory=shared_train, root_share_validation=shared_validation)
-    result, env, optimizer = await run_training(tmp_path, settings)
+    result, env, optimizer = await run_training(tmp_path, settings, monkeypatch=monkeypatch)
     assert "improved" in result.content
     assert 1 < env.peak <= settings.rollout_concurrency
     assert 1 < optimizer.peak <= settings.model_concurrency
@@ -261,9 +263,12 @@ async def test_complete_select_global_caps_and_root_sharing(tmp_path, shared_tra
     assert optimizer.merges == 0
 
 
-async def test_merge_does_not_gate_low_scoring_synthesized_skills(tmp_path):
+async def test_merge_does_not_gate_low_scoring_synthesized_skills(monkeypatch, tmp_path):
     result, env, optimizer = await run_training(
-        tmp_path, config(ensemble_strategy="hierarchical_merge"), env=FakeEnvironment(merge_pass=False)
+        tmp_path,
+        config(ensemble_strategy="hierarchical_merge"),
+        env=FakeEnvironment(merge_pass=False),
+        monkeypatch=monkeypatch,
     )
     assert "synthesized" in result.content
     assert optimizer.merges == 2
@@ -273,11 +278,14 @@ async def test_merge_does_not_gate_low_scoring_synthesized_skills(tmp_path):
 
 
 @pytest.mark.parametrize("malformed", [False, True])
-async def test_no_winner_is_explicit_failure_not_root_fallback(tmp_path, malformed):
+async def test_no_winner_is_explicit_failure_not_root_fallback(monkeypatch, tmp_path, malformed):
     with pytest.raises(RuntimeError, match="No positive-gain"):
         (
             await run_training(
-                tmp_path, env=FakeEnvironment(candidate_pass=False), optimizer=FakeOptimizer(malformed=malformed)
+                tmp_path,
+                env=FakeEnvironment(candidate_pass=False),
+                optimizer=FakeOptimizer(malformed=malformed),
+                monkeypatch=monkeypatch,
             )
         )
     assert (tmp_path / "config.json").exists()
@@ -286,25 +294,25 @@ async def test_no_winner_is_explicit_failure_not_root_fallback(tmp_path, malform
 
 
 @pytest.mark.parametrize("source", ["env", "model"])
-async def test_failure_is_audited_without_retry_or_zero_score(tmp_path, source):
+async def test_failure_is_audited_without_retry_or_zero_score(monkeypatch, tmp_path, source):
     env = FakeEnvironment(fail=source == "env")
     optimizer = FakeOptimizer(fail=source == "model")
     with pytest.raises(RuntimeError if source == "env" else ExceptionGroup):
-        (await run_training(tmp_path, env=env, optimizer=optimizer))
+        (await run_training(tmp_path, env=env, optimizer=optimizer, monkeypatch=monkeypatch))
     assert env.active == optimizer.active == 0
     assert (tmp_path / "config.json").exists()
     assert not (tmp_path / "result.json").exists()
     assert not list(tmp_path.rglob("call.json"))
 
 
-async def test_reject_nonempty_run_directory(tmp_path):
+async def test_reject_nonempty_run_directory(monkeypatch, tmp_path):
     (tmp_path / "existing.txt").write_text("preserve")
     with pytest.raises(ValueError, match="legacy"):
-        (await run_training(tmp_path))
+        (await run_training(tmp_path, monkeypatch=monkeypatch))
     assert (tmp_path / "existing.txt").read_text() == "preserve"
 
 
-async def test_real_environment_rollout_contract(tmp_path):
+async def test_real_environment_rollout_contract(monkeypatch, tmp_path):
     from mindmemos_skill.envs.base import Environment
     from pydantic import BaseModel
 
@@ -322,7 +330,14 @@ async def test_real_environment_rollout_contract(tmp_path):
                 output="local", trajectory=[], reward=Reward(score=float(passed), success=passed, detail="")
             )
 
-    (await run_training(tmp_path, config(num_trees=1, expansion_budget=1), env=LocalEnvironment(LocalConfig())))
+    (
+        await run_training(
+            tmp_path,
+            config(num_trees=1, expansion_budget=1),
+            env=LocalEnvironment(LocalConfig()),
+            monkeypatch=monkeypatch,
+        )
+    )
     from mindmemos_skill.common.json import read_jsonl
 
     result_data = json.loads((tmp_path / "result.json").read_text())
@@ -333,7 +348,7 @@ async def test_real_environment_rollout_contract(tmp_path):
     assert not list(tmp_path.rglob("audit/result.json"))
 
 
-async def test_multiple_depths_respect_global_expansion_budget(tmp_path):
+async def test_multiple_depths_respect_global_expansion_budget(monkeypatch, tmp_path):
     class ProgressiveEnvironment(FakeEnvironment):
         async def rollout(self, **kwargs):
             result = await super().rollout(**kwargs)
@@ -343,7 +358,11 @@ async def test_multiple_depths_respect_global_expansion_budget(tmp_path):
             passed = depth >= 2 or depth == 1 and task_index % 2 == 0
             return result.model_copy(update={"reward": Reward(score=float(passed), success=passed, detail="")})
 
-    (await run_training(tmp_path, config(expansion_budget=4, max_depth=2), env=ProgressiveEnvironment()))
+    (
+        await run_training(
+            tmp_path, config(expansion_budget=4, max_depth=2), env=ProgressiveEnvironment(), monkeypatch=monkeypatch
+        )
+    )
     forest = json.loads((tmp_path / "result.json").read_text())["training"]["forest"]
     assert forest["expansions"] == 4
     assert max(node["depth"] for node in forest["nodes"]) == 2
@@ -356,9 +375,11 @@ async def test_multiple_depths_respect_global_expansion_budget(tmp_path):
     )
 
 
-async def test_early_rejection_reduces_calls_without_changing_winner(tmp_path):
-    early, early_env, _ = await run_training(tmp_path / "early", config(expansion_budget=6))
-    full, full_env, _ = await run_training(tmp_path / "full", config(expansion_budget=6, early_rejection=False))
+async def test_early_rejection_reduces_calls_without_changing_winner(monkeypatch, tmp_path):
+    early, early_env, _ = await run_training(tmp_path / "early", config(expansion_budget=6), monkeypatch=monkeypatch)
+    full, full_env, _ = await run_training(
+        tmp_path / "full", config(expansion_budget=6, early_rejection=False), monkeypatch=monkeypatch
+    )
     assert early.content == full.content
     assert len(early_env.calls) < len(full_env.calls)
     decisions = [json.loads(path.read_text()) for path in (tmp_path / "early").glob("trees/tree-*/node-*/node.json")]
@@ -440,7 +461,7 @@ def test_obsolete_validation_microbatch_size_is_rejected():
         config(validation_microbatch_size=0)
 
 
-async def test_select_breaks_score_ties_by_paper_novelty(tmp_path):
+async def test_select_breaks_score_ties_by_paper_novelty(monkeypatch, tmp_path):
     from mindmemos_skill.algos.train.skill_forest.runtime import ForestRuntime
 
     initial = initial_skill()
@@ -459,7 +480,7 @@ async def test_select_breaks_score_ties_by_paper_novelty(tmp_path):
     settings = config()
 
     async def evaluate():
-        runtime = ForestRuntime(settings, agent_factory=FakeOptimizer())
+        runtime = ForestRuntime(agent_config(monkeypatch, FakeOptimizer(), settings))
         try:
             return await SkillForestTrainer(settings)._ensemble(
                 initial,
@@ -475,7 +496,7 @@ async def test_select_breaks_score_ties_by_paper_novelty(tmp_path):
     assert (await evaluate())[0].content == winners[1].skill.content
 
 
-async def test_merge_filters_only_initial_winners(tmp_path):
+async def test_merge_filters_only_initial_winners(monkeypatch, tmp_path):
     from mindmemos_skill.algos.train.skill_forest.runtime import ForestRuntime
 
     initial = initial_skill()
@@ -495,7 +516,7 @@ async def test_merge_filters_only_initial_winners(tmp_path):
     optimizer = FakeOptimizer()
 
     async def evaluate():
-        runtime = ForestRuntime(settings, agent_factory=optimizer)
+        runtime = ForestRuntime(agent_config(monkeypatch, optimizer, settings))
         try:
             return await SkillForestTrainer(settings)._ensemble(
                 initial,
@@ -512,11 +533,11 @@ async def test_merge_filters_only_initial_winners(tmp_path):
     assert optimizer.merges == 1
 
 
-async def test_cancellation_drains_started_rollouts(tmp_path):
+async def test_cancellation_drains_started_rollouts(monkeypatch, tmp_path):
     env = FakeEnvironment()
 
     async def cancel():
-        trainer = SkillForestTrainer(config(), agent_factory=FakeOptimizer())
+        trainer = SkillForestTrainer(agent_config(monkeypatch, FakeOptimizer(), config()))
         task = asyncio.create_task(
             trainer.train(
                 skill=initial_skill(), env=env, train_samples=samples(), validation_samples=[], work_dir=tmp_path
@@ -580,7 +601,7 @@ def test_prompt_text_and_structured_requests():
     assert skill_merge_user("# Left\nRules.\n", "# Left\nRules.\n", 0.75, 0.5) == golden["identical_skill_merge_user"]
 
 
-async def test_minibatch_reflection_preserves_evidence_and_outcome_groups(tmp_path):
+async def test_minibatch_reflection_preserves_evidence_and_outcome_groups(monkeypatch, tmp_path):
     from mindmemos_skill.algos.train.skill_forest.generation import generate_patch
     from mindmemos_skill.algos.train.skill_forest.prompts import load_prompt
     from mindmemos_skill.algos.train.skill_forest.runtime import ForestRuntime
@@ -605,7 +626,7 @@ async def test_minibatch_reflection_preserves_evidence_and_outcome_groups(tmp_pa
     ]
 
     async def generate():
-        runtime = ForestRuntime(settings, agent_factory=optimizer)
+        runtime = ForestRuntime(agent_config(monkeypatch, optimizer, settings))
         try:
             return await generate_patch(
                 skill=initial_skill(), samples=tasks, results=results, runtime=runtime, directory=tmp_path, seed=42
@@ -650,11 +671,11 @@ async def test_reflection_rejects_unpaired_results_before_model_calls(tmp_path):
         )
 
 
-async def test_config_and_node_records_use_the_compact_layout(tmp_path):
+async def test_config_and_node_records_use_the_compact_layout(monkeypatch, tmp_path):
     """Run identity, Skill snapshots and trajectories use only their owners."""
     settings = config()
     settings.optimizer.api_key = "forest-test-key"
-    (await run_training(tmp_path, settings=settings))
+    (await run_training(tmp_path, settings=settings, monkeypatch=monkeypatch))
     configuration = json.loads((tmp_path / "config.json").read_text())
     assert configuration["schema_version"] == ALGORITHM_VERSION
     result = json.loads((tmp_path / "result.json").read_text())

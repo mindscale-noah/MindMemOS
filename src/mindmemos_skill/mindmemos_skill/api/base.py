@@ -3,7 +3,6 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
-from uuid import UUID
 
 from ..infra.task_manager import TaskSnapshot
 from ..logging.typing import TaskLog
@@ -13,6 +12,7 @@ from ..registry import Registrable
 from ..skill.typing import DiffResult
 from .typing import (
     ActiveRequest,
+    AddGraphMembersRequest,
     AlgoSkillEvolveResult,
     CommitFromLocalRequest,
     CommitRequest,
@@ -28,6 +28,7 @@ from .typing import (
     RegisterFromLocalRequest,
     RegisterRequest,
     RegisterResult,
+    RemoveGraphMembersRequest,
     ReportTrajectoryRequest,
     SetMetaRequest,
     ShowRequest,
@@ -78,7 +79,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def list_skill_sets(self, project_id: str | None = None) -> list[dict]:
+    async def list_graph(self, project_id: str | None = None) -> list[dict]:
         """List authorized Skill Sets and their publication pointers.
 
         Args:
@@ -90,11 +91,11 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def list_skill_set_snapshots(self, skill_set_id: str, project_id: str | None = None) -> list[dict]:
-        """List one Skill Set's immutable snapshots and publication revisions.
+    async def list_graph_snapshots(self, graph_id: str, project_id: str | None = None) -> list[dict]:
+        """List one graph's immutable snapshots and publication revisions.
 
         Args:
-            skill_set_id: Exact project-local Skill Set identity.
+            graph_id: Exact project-local graph identity.
             project_id: Explicit project, or the configured default project when omitted.
 
         Returns:
@@ -103,11 +104,11 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_skill_set_snapshot(self, skill_set_id: str, snapshot_id: UUID, project_id: str | None = None) -> dict:
-        """Read one immutable Skill Set snapshot.
+    async def get_graph_snapshot(self, graph_id: str, snapshot_id: str, project_id: str | None = None) -> dict:
+        """Read one immutable graph snapshot.
 
         Args:
-            skill_set_id: Exact project-local Skill Set identity.
+            graph_id: Exact project-local graph identity.
             snapshot_id: Immutable snapshot identity.
             project_id: Explicit project, or the configured default project when omitted.
 
@@ -161,6 +162,40 @@ class MindMemOSSkill(ABC):
 
         Returns:
             Ordered exact Skill version identities.
+        """
+        raise NotImplementedError
+
+    async def add_graph_members(self, request: AddGraphMembersRequest) -> OrganizeResult:
+        """Add new families to an existing graph.
+
+        Args:
+            request: Authorized graph reference and nonempty member batch.
+
+        Returns:
+            Published graph snapshot and its complete member versions.
+        """
+        raise NotImplementedError
+
+    async def remove_graph_members(self, request: RemoveGraphMembersRequest) -> OrganizeResult:
+        """Remove families while preserving canonical Skills and graph history.
+
+        Args:
+            request: Authorized graph reference and nonempty member batch.
+
+        Returns:
+            Published graph snapshot and remaining member versions.
+        """
+        raise NotImplementedError
+
+    async def preview_graph(self, graph_ref: str, project_id: str | None = None) -> dict:
+        """Read the complete published topology selected by a graph reference.
+
+        Args:
+            graph_ref: Graph family, alias, or immutable snapshot reference.
+            project_id: Authorized project or configured default.
+
+        Returns:
+            Snapshot identity, Skill/Scene nodes, and their relations.
         """
         raise NotImplementedError
 

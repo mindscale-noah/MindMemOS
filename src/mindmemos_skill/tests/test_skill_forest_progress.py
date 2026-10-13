@@ -112,14 +112,14 @@ async def test_scheduler_failure_never_becomes_zero_score(tmp_path):
         await scheduler.close()
 
 
-async def test_training_summary_and_candidate_metrics(tmp_path):
+async def test_training_summary_and_candidate_metrics(monkeypatch, tmp_path):
     rows = []
 
     async def sink(row):
         rows.append(row)
 
     async with async_task_log_reporter(sink, project_id="p", task_id="forest", attempt=1):
-        await run_training(tmp_path, settings=config(num_trees=1, expansion_budget=1))
+        await run_training(tmp_path, settings=config(num_trees=1, expansion_budget=1), monkeypatch=monkeypatch)
     messages = [row["payload"]["message"] for row in rows]
     final = next(message for message in reversed(messages) if "[skill_forest.training] completed" in message)
     report = read_json(tmp_path / "result.json")

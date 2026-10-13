@@ -14,6 +14,8 @@ from mindmemos_skill.envs.typing import Reward, RolloutResult, Task
 from mindmemos_skill.skill import Skill, SkillContent
 from pydantic import ValidationError
 
+from .agent_testing import agent_config
+
 
 class RankingOptimizer:
     """Return a four-edit reflection and a controlled ranking response."""
@@ -38,7 +40,7 @@ class RankingOptimizer:
         )
 
 
-async def run_generation(directory, response, *, depth=0, trainer_entry=False, **options):
+async def run_generation(directory, response, *, depth=0, trainer_entry=False, monkeypatch, **options):
     """Exercise real generation, adapter and audited model transport offline."""
     settings = SkillForestTrainerConfig(optimizer={"model": "offline"}, **options)
     optimizer = RankingOptimizer(response)
@@ -53,10 +55,10 @@ async def run_generation(directory, response, *, depth=0, trainer_entry=False, *
     )
 
     async def generate():
-        runtime = ForestRuntime(settings, agent_factory=optimizer)
+        runtime = ForestRuntime(agent_config(monkeypatch, optimizer, settings))
         try:
             if trainer_entry:
-                trainer = SkillForestTrainer(settings, agent_factory=optimizer)
+                trainer = SkillForestTrainer(agent_config(monkeypatch, optimizer, settings))
                 return await trainer._generate_patch(
                     SimpleNamespace(id="parent", skill=skill, depth=depth),
                     0,
@@ -82,13 +84,14 @@ async def run_generation(directory, response, *, depth=0, trainer_entry=False, *
 
 
 @pytest.mark.parametrize("depth,budget", [(0, 3), (1, 2), (2, 1), (5, 1)])
-async def test_ranking_respects_depth_order_without_stage_files(tmp_path, depth, budget):
+async def test_ranking_respects_depth_order_without_stage_files(monkeypatch, tmp_path, depth, budget):
     patch, optimizer = await run_generation(
         tmp_path,
         '{"selected_indices": [3, 3, -1, 99, 2, 1, 0]}',
         depth=depth,
         trainer_entry=True,
         ranking_edit_budgets=(3, 2, 1),
+        monkeypatch=monkeypatch,
     )
     assert [edit.content for edit in patch.edits] == [f"Rule {i}" for i in [3, 2, 1][:budget]]
     assert len(optimizer.messages) == 2
@@ -97,8 +100,10 @@ async def test_ranking_respects_depth_order_without_stage_files(tmp_path, depth,
 
 
 @pytest.mark.parametrize("options", [{}, {"ranking_enabled": False, "ranking_edit_budgets": (1,)}])
-async def test_ranking_skips_within_budget_or_when_disabled(tmp_path, options):
-    patch, optimizer = await run_generation(tmp_path, RuntimeError("Ranking must not run"), **options)
+async def test_ranking_skips_within_budget_or_when_disabled(monkeypatch, tmp_path, options):
+    patch, optimizer = await run_generation(
+        tmp_path, RuntimeError("Ranking must not run"), **options, monkeypatch=monkeypatch
+    )
     assert len(patch.edits) == 4
     assert len(optimizer.messages) == 1
     assert not list(tmp_path.rglob("*.json"))
@@ -114,15 +119,19 @@ async def test_ranking_skips_within_budget_or_when_disabled(tmp_path, options):
         '{"selected_indices": [1.5]}',
     ],
 )
-async def test_invalid_ranking_fails_proposal_without_truncation(tmp_path, response):
+async def test_invalid_ranking_fails_proposal_without_truncation(monkeypatch, tmp_path, response):
     with pytest.raises(InvalidPatchError):
-        (await run_generation(tmp_path, response, ranking_edit_budgets=(2,)))
+        (await run_generation(tmp_path, response, ranking_edit_budgets=(2,), monkeypatch=monkeypatch))
     assert not list(tmp_path.rglob("*.json"))
 
 
-async def test_ranking_provider_failure_is_not_an_invalid_patch(tmp_path):
+async def test_ranking_provider_failure_is_not_an_invalid_patch(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="provider offline"):
-        (await run_generation(tmp_path, RuntimeError("provider offline"), ranking_edit_budgets=(2,)))
+        (
+            await run_generation(
+                tmp_path, RuntimeError("provider offline"), ranking_edit_budgets=(2,), monkeypatch=monkeypatch
+            )
+        )
     assert not list(tmp_path.rglob("*.json"))
 
 
@@ -157,7 +166,7 @@ def test_ranking_budgets_require_nonempty_positive_limits(budgets):
         SkillForestTrainerConfig(optimizer={"model": "offline"}, ranking_edit_budgets=budgets)
 
 
-async def test_ranking_selects_from_final_merged_pool(tmp_path):
+async def test_ranking_selects_from_final_merged_pool(monkeypatch, tmp_path):
     class MergeOptimizer(RankingOptimizer):
         async def run(self, *, messages):
             if messages[1]["content"].startswith("## Current Skill"):
@@ -179,7 +188,7 @@ async def test_ranking_selects_from_final_merged_pool(tmp_path):
     ]
 
     async def generate():
-        runtime = ForestRuntime(settings, agent_factory=optimizer)
+        runtime = ForestRuntime(agent_config(monkeypatch, optimizer, settings))
         try:
             return await generate_patch(
                 skill=Skill(

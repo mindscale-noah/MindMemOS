@@ -1,17 +1,23 @@
-"""Bounded batches of validated AsyncOpenAI-compatible embeddings."""
+"""Concurrent batches of validated AsyncOpenAI-compatible embeddings."""
 
+import asyncio
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from ..database.vector import Vector
+from .base import EmbeddingModel
 from .config import OpenAIEmbeddingConfig
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 
-class OpenAIEmbeddingClient:
+@EmbeddingModel.register("openai_embedding")
+class OpenAIEmbeddingClient(EmbeddingModel[OpenAIEmbeddingConfig]):
     """Construct transports lazily and preserve the ownership of injected clients."""
+
+    config_type = OpenAIEmbeddingConfig
+    """Configuration model validated by the shared embedding registry."""
 
     def __init__(self, config: OpenAIEmbeddingConfig, *, client: "AsyncOpenAI | None" = None):
         """Retain settings without opening a connection.
@@ -20,7 +26,7 @@ class OpenAIEmbeddingClient:
             config: Explicit model, endpoint, vector shape, and batching settings.
             client: Borrowed SDK client for testing or caller-managed transport.
         """
-        self.config = config.model_copy(deep=True)
+        super().__init__(config.model_copy(deep=True))
         self._client = client
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
@@ -53,12 +59,12 @@ class OpenAIEmbeddingClient:
             return await self._embed(client, texts)
 
     async def _embed(self, client: "AsyncOpenAI", texts: Sequence[str]) -> list[list[float]]:
-        """Validate each response before appending its ordered vectors."""
-        vectors = []
+        """Run all batches concurrently and flatten validated vectors in input order."""
         validator = Vector(self.config.dimensions)
-        for start in range(0, len(texts), self.config.batch_size):
-            batch = list(texts[start : start + self.config.batch_size])
-            options = {"dimensions": self.config.dimensions} if self.config.send_dimensions else {}
+        options = {"dimensions": self.config.dimensions} if self.config.send_dimensions else {}
+
+        async def embed_batch(batch: list[str]) -> list[list[float]]:
+            """Request and validate the vectors for one input batch."""
             try:
                 response = await client.embeddings.create(
                     model=self.config.model, input=batch, encoding_format="float", **options
@@ -68,5 +74,17 @@ class OpenAIEmbeddingClient:
             entries = sorted(response.data, key=lambda entry: entry.index)
             if [entry.index for entry in entries] != list(range(len(batch))):
                 raise ValueError("Embedding response indices must match the input batch")
-            vectors.extend(validator.validate(entry.embedding) for entry in entries)
-        return vectors
+            return [validator.validate(entry.embedding) for entry in entries]
+
+        tasks = [
+            asyncio.create_task(embed_batch(list(texts[start : start + self.config.batch_size])))
+            for start in range(0, len(texts), self.config.batch_size)
+        ]
+        try:
+            batches = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        return [vector for batch in batches for vector in batch]

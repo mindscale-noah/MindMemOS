@@ -31,7 +31,7 @@ Codex Agent 读取输入并生成实际产物 → 官方评分器检查产物 �
 
 ```bash
 .venv/bin/python scripts/agentskillos/download.py --output data/agentskillos/source
-uv pip install --python .venv/bin/python -e 'src/mindmemos_skill[agentskillos]'
+uv pip install --python .venv/bin/python -e 'src/mindmemos_skill'
 ```
 
 下载脚本固定官方 Git revision `c3cfae10ea34a13973c461273ad9c5cc4aa907fe`，稀疏拉取 `benchmark/`，
@@ -46,45 +46,9 @@ uv pip install --python .venv/bin/python -e 'src/mindmemos_skill[agentskillos]'
 由执行机器及选定 Skill 提供；安装评分依赖并不等于所有任务的产物生成依赖均已安装。
 运行涉及模型调用，应在明确端点、模型、范围和预算后启动。
 
-## Python 接入 skill_manage
+## 图算法接入状态
 
-```python
-import asyncio
-from pathlib import Path
-from mindmemos_skill.envs import Environment
-from mindmemos_skill.envs.data import Data
-from mindmemos_skill.algos.manage.skill_manage import SkillManageSkillSet
-from mindmemos_skill.envs.builtin_envs.agentskillos.reward import summarize_results
-
-source = Path("data/agentskillos/source")
-data = Data.build("agentskillos", {"benchmark_root": source})
-samples = data.load()
-env = Environment.build("agentskillos", {
-    "benchmark_root": source,
-    "agent": {"model": "YOUR_MODEL", "timeout_s": 1800},
-})
-# manager is the existing SkillManageAlgorithm with bound store and model settings.
-# skills maps the manager's member IDs to the corresponding source Skill objects.
-selection = SkillManageSkillSet(skills, algorithm=manager, limit=5, max_concurrency=1)
-results, errors = {}, {}
-for index, sample in enumerate(samples):
-    try:
-        results[sample.task.id] = asyncio.run(env.rollout(
-            sample.task, Path("outputs/agentskillos/run-001") / f"task-{index:04d}",
-            reward_data=sample.reward_data, skill_set=selection,
-        ))
-    except Exception as exc:
-        errors[sample.task.id] = f"{type(exc).__name__}: {exc}"
-summary = summarize_results(results, errors)
-print(summary)
-```
-
-构造 `manager` 及绑定版本的方法见 [skill_manage.md](skill_manage.md)。环境不改动 Skill 管理器、数据库或商用云服务。
-SkillSet 的选择顺序保持不变，逐个调用 `Skill.export()` 导出完整内容及资源到 `.agents/skills/<name>/`，不合并多个 Skill。
-
-执行数量由 `SkillManageSkillSet.limit` 决定，不再要求注入 50 个 Skill。
-诊断指标反映**实际选中并注入的列表**：只注入 5 个时，Recall@10/20/50 都只能看到这 5 个。
-若要单独比较完整 Top-50 召回，使用下面的独立检索工具，不改变任务主 reward。
+旧 SkillManageAlgorithm 与专属 SkillSet 已清理。AgentSkillOS 环境继续支持通用 SkillSet；新图算法接入前不提供旧算法示例。
 
 ## 批量运行入口
 

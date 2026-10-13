@@ -1,4 +1,4 @@
-"""Memory evaluation toolkit."""
+"""MindMemOS evaluation package and existing Memory toolkit exports."""
 
 from mindmemos_eval.memory.envs.locomo import (
     LocomoAdapter,
@@ -152,14 +152,6 @@ from .memory.scorer import (
     Scorer,
     ScoreResult,
 )
-from .skills.agents import ReactAgentTools, SkillSet
-from .skills.envs.spreadsheetbench import (
-    SpreadsheetBenchCase,
-    SpreadsheetBenchCaseResult,
-    SpreadsheetBenchEnv,
-    SpreadsheetBenchRunResult,
-    compare_workbooks,
-)
 
 __all__ = [
     "LLMClient",
@@ -273,13 +265,6 @@ __all__ = [
     "generate_project_keys",
     "merge_keys_into_file",
     "remove_keys_from_file",
-    "SpreadsheetBenchEnv",
-    "SpreadsheetBenchCase",
-    "SpreadsheetBenchCaseResult",
-    "SpreadsheetBenchRunResult",
-    "compare_workbooks",
-    "SkillSet",
-    "ReactAgentTools",
     "PERSONAMEM_EVO_HF_DATASET",
     "CompletionResult",
     "PersonaMemEvoAnswer",

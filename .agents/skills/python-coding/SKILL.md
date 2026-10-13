@@ -87,29 +87,28 @@ description: 编写、修改、重构或审查 Python 代码时使用，落实�
 ### 环境变量名称常量
 
 - **代码中读取 `.env` 或进程环境时，环境变量名称必须定义为字符串常量并统一引用，禁止在读取位置直接硬编码变量名字符串。** 此规则覆盖 `os.getenv()`、`os.environ`、dotenv 解析结果的键访问，以及配置框架的环境变量别名等映射。
-- 常量集中放在职责对应的公共 `constants.py` 中；已有明确的公共常量模块时复用它。同一个环境变量名只维护一份定义，所有调用方导入使用，不在各文件重复定义。
+- **只在一个文件中使用的环境变量名称常量，直接定义在该文件的模块级作用域内，不为它单独创建 `constant.py`。** 按实际引用范围放置，不为未来可能的复用提前提取。
+- **只有同一个环境变量名称常量需要被多个文件引用时，才在这些文件的最小公共目录下创建或复用 `constant.py`，由各调用方导入。** 最小公共目录是包含所有引用文件的最近共同祖先目录，不将局部共享常量提升到更高层级。同一个环境变量名只维护一份定义，不在各文件重复定义。
 - 常量采用 `UPPER_SNAKE_CASE` 命名，可用 `Final[str]` 标注。常量保存的是**环境变量名**，不是环境变量的值；不要把读取出的值缓存成模块级常量，除非业务明确需要启动时快照。
 - 重命名环境变量时，同步更新常量定义、所有引用、`.env`、`.env.example` 及相关测试和文档，遵循上述隐私值处理规则。环境文件中的键仍按其文件格式书写，不用 Python 常量表达式替代。
 
-```python
-# constants.py
-from typing import Final
-
-DEFAULT_CONFIG_ENV: Final[str] = "DEFAULT_CONFIG"
-"""Environment variable specifying the default configuration file path."""
-```
+单文件使用时，在使用文件内定义：
 
 ```python
 # config.py
 import os
+from typing import Final
 
-from .constants import DEFAULT_CONFIG_ENV
+DEFAULT_CONFIG_ENV: Final[str] = "DEFAULT_CONFIG"
+"""Environment variable specifying the default configuration file path."""
 
 
 def get_default_config_path() -> str | None:
     """Return the configured default file path, or None when unset."""
     return os.getenv(DEFAULT_CONFIG_ENV)
 ```
+
+多个文件需要引用 `DEFAULT_CONFIG_ENV` 时，再将定义移到它们最小公共目录下的 `constant.py`，并更新各文件的导入。例如，`settings/config.py` 和 `settings/loader.py` 共用时，定义放在 `settings/constant.py`，两者均使用 `from .constant import DEFAULT_CONFIG_ENV`。
 
 ### 数据库表名常量
 
@@ -211,6 +210,12 @@ class ExecutionInfo(BaseModel):
 - 把属性名或方法名提取成字符串常量不能替代这条要求。环境变量名称常量规则针对外部环境的字符串键；代码内部已知字段、方法和类型关系仍应直接表达，确保重命名可追踪、类型检查可发现遗漏。
 - 需要按业务名称选择实现或操作时，使用显式注册表，把业务名称映射到直接引用的类或可调用对象，不把字符串当成属性名或方法名反射。注册加载清单中的模块路径属于导入声明，不用于反射读取配置或方法。
 - 对真正以任意键表示的外部 JSON、映射数据，按数据协议访问键；对于具有固定结构的配置或业务数据，先校验成明确的数据模型，再通过属性访问。不要为了方便而把固定结构退化成动态字典。
+
+## 日志规范
+
+- **记录规模和结果，不只记录阶段。** 按用户要求打印必要的关键信息。如果用户没有明确要求，打印关键输入、输出的统计信息，不需要统计耗时，但尽量保证日志输出自带时间戳。
+- **解释关键执行路径。** 缓存命中、结果复用、阶段跳过、重试和降级，应记录采用的路径及原因，让人能判断任务为什么这样执行。
+- **统计含义必须准确。** 区分输入、完成、复用和产出的数量；字段名明确统计对象。成功、失败、取消和部分完成不得混淆，不为补日志额外查询或计算。
 
 ## 实施与检查
 

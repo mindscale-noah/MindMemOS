@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,10 +10,11 @@ from mindmemos_sdk.client import MindMemOSClient
 from mindmemos_sdk.config import SDKConfig
 from mindmemos_sdk.skills import cli as skill_cli
 from mindmemos_sdk.transport import HttpTransport
+from mindmemos_skill.algos.manage.skill_manage.extraction import SceneExtractor
 from mindmemos_skill.api.entries.fastapi import create_app
 from mindmemos_skill.api.service import SkillService
 from mindmemos_skill.config.config import FastAPIConfig
-from mindmemos_skill.infra.embedding import OpenAIEmbeddingClient
+from mindmemos_skill.scene.typing import ProvidedSceneRecord
 
 from mindmemos_sdk import cli
 from mindmemos_skill import HttpAuthConfig, ServiceConfig, SkillConfig, create_service
@@ -24,10 +26,6 @@ CONTENT = "---\nname: cli-demo\ndescription: CLI integration example\n---\n# Ini
 def cli_server(tmp_path, monkeypatch, capsys):
     """Connect CLI commands to an isolated real service through its HTTP app."""
 
-    async def embed(self, texts):
-        return [[1.0, 0.0, 0.0] for _ in texts]
-
-    monkeypatch.setattr(OpenAIEmbeddingClient, "embed", embed)
     service_config = ServiceConfig.model_validate(
         {
             "home": tmp_path / "home",
@@ -39,11 +37,9 @@ def cli_server(tmp_path, monkeypatch, capsys):
                 "class_name": "graph_manage",
                 "config": {
                     "algorithm": {
-                        "embedding": {"model": "test", "base_url": "http://test.invalid/v1", "dimensions": 3},
-                        "build_scene": False,
+                        "embedding": {"model": "fake", "base_url": "https://example.invalid", "dimensions": 3},
+                        "chat": {"model": "fake"},
                         "llm_linking": False,
-                        "query_rewrite": False,
-                        "mode": "skill_only",
                     }
                 },
             },
@@ -57,6 +53,27 @@ def cli_server(tmp_path, monkeypatch, capsys):
             )
         )
     )
+    record = ProvidedSceneRecord.model_validate(
+        json.loads(
+            (Path(__file__).resolve().parents[2] / "src/mindmemos_skill/tests/fixtures/scene_graph_d0.json").read_text()
+        )["build_input"]["provided"][0]["record"]
+    )
+
+    async def extract(self, document):
+        return record.model_copy(deep=True)
+
+    monkeypatch.setattr(SceneExtractor, "extract", extract)
+    pipeline = service._manage_pipeline
+
+    class Embeddings:
+        config = pipeline.config.algorithm.embedding
+
+        async def embed(self, texts):
+            return [[1.0, 0.2, 0.1] for _ in texts]
+
+    from mindmemos_skill.infra.embedding import EmbeddingModel
+
+    monkeypatch.setattr(EmbeddingModel, "from_config", lambda config: Embeddings())
     config = SDKConfig()
     monkeypatch.setattr(skill_cli.ConfigManager, "load", lambda self: config)
     with TestClient(
@@ -135,7 +152,7 @@ def test_cli_nonstandard_registration_preserves_api_defaults(cli_server):
         "name": "custom",
         "description": "Custom instructions",
     }
-    result = cli_server("register-structured", "--json", json.dumps(source))
+    result = cli_server("register", "--json-skill", json.dumps(source))
     shown = cli_server("show", result["skill_version_id"])
     assert shown["version"]["version_label"] == "v1.0.0"
     assert shown["skill"]["alias"] is None
@@ -145,7 +162,7 @@ def test_cli_nonstandard_registration_preserves_api_defaults(cli_server):
 def test_cli_graph_snapshots_and_pinned_recommendations(cli_server):
     run = cli_server
     source = {"content": "---\nname: csv\ndescription: CSV processing\n---\nUse CSV tooling\n"}
-    skill = run("register-structured", "--json", json.dumps(source), "--alias", "csv")
+    skill = run("register", "--json-skill", json.dumps(source), "--alias", "csv")
     graph = run("graph", "publish", "--alias", "tools", "--skill", skill["skill_version_id"])
     graph_id = graph["graph_id"]
     first = run("graph", "resolve", "tools")["graph_version_id"]
@@ -161,6 +178,38 @@ def test_cli_graph_snapshots_and_pinned_recommendations(cli_server):
     published = run("graph", "publish", "--graph-id", graph_id, "--all-skills")
     assert published["skill_version_ids"] == [skill["skill_version_id"]]
     assert run("graph", "resolve", graph_id)["graph_version_id"] == published["graph_version_id"]
+
+
+def test_cli_json_commit_preserves_content_and_replaces_resources(cli_server):
+    run = cli_server
+    initial = run("register", "--json-skill", json.dumps({"content": CONTENT, "resources": {"old.bin": "AP8="}}))
+    first = initial["skill_version_id"]
+    source = {
+        "content": "Updated custom source\r\n",
+        "name": "cli-demo",
+        "description": "Updated instructions",
+        "standard_format": False,
+        "resources": {"new.bin": "AQI="},
+        "commit_message": "Replace complete source",
+        "version_bump": "minor",
+    }
+    second = run("commit", first, "--json-skill", json.dumps(source))
+    shown = run("show", second["skill_version_id"])["version"]
+    assert shown["content"] == source["content"]
+    assert shown["resources"] == source["resources"]
+    assert shown["parent_skill_version_ids"] == [first]
+    assert shown["commit_message"] == source["commit_message"]
+    assert shown["version_label"] == "v1.1.0"
+    assert run("resolve", initial["skill_id"])["skill_version_id"] == first
+    cleared = run(
+        "commit",
+        second["skill_version_id"],
+        "--json-skill",
+        json.dumps({"content": CONTENT, "commit_message": "Clear resources"}),
+        "--activate",
+    )
+    assert run("show", cleared["skill_version_id"])["version"]["resources"] == {}
+    assert run("resolve", initial["skill_id"])["skill_version_id"] == cleared["skill_version_id"]
 
 
 def test_cli_async_endpoints_and_text_progress(cli_server, monkeypatch):
@@ -197,7 +246,7 @@ def test_cli_async_endpoints_and_text_progress(cli_server, monkeypatch):
     monkeypatch.setattr(SkillService, "submit_training", submit_training)
     monkeypatch.setattr(SkillService, "task_status", task_status)
     monkeypatch.setattr(SkillService, "task_progress", task_progress)
-    registered = run("register-structured", "--json", json.dumps({"content": CONTENT}), "--alias", "async")
+    registered = run("register", "--json-skill", json.dumps({"content": CONTENT}), "--alias", "async")
     assert run("evolve", "async")["status"] == "queued"
     assert submissions[-1]["auto_accept"] is False
     sample = {"task": {"id": "t1", "instruction": "Do the task"}, "reward_data": {}}

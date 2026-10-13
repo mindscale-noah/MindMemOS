@@ -17,7 +17,6 @@ async def test_unlimited_repository_list_and_history(tmp_path):
                 registered.append(
                     (
                         await session.skills.register(
-                            project_id="project",
                             name=name,
                             alias=None,
                             source=None,
@@ -28,9 +27,9 @@ async def test_unlimited_repository_list_and_history(tmp_path):
                         )
                     )
                 )
-            families = await session.skills.list_skills("project", limit=None, offset=0)
+            families = await session.skills.list_skills(limit=None, offset=0)
             assert [family.name for family in families] == ["A", "B", "C"]
-            assert len((await session.skills.list_skills("project", limit=2, offset=0))) == 2
+            assert len((await session.skills.list_skills(limit=2, offset=0))) == 2
             assert len((await session.skills.history(registered[0], limit=None, offset=0))) == 1
             assert (await session.skills.history(registered[0], limit=0, offset=0)) == []
     finally:

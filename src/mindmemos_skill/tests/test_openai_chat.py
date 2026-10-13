@@ -95,7 +95,6 @@ async def test_agent_request_modes(monkeypatch, mode):
             max_completion_tokens=16384,
             reasoning_effort="medium",
             temperature=None,
-            response_validation="content",
         )
     else:
         thinking = mode == "bash_only_thinking"
@@ -112,7 +111,6 @@ async def test_agent_request_modes(monkeypatch, mode):
                 "chat_template_kwargs": {"enable_thinking": thinking},
             },
             strip_thinking=True,
-            response_validation="content",
         )
     config = config.model_copy(update={"api_key": "test-key", "base_url": "https://unit-test.invalid/v1"})
     requests = []

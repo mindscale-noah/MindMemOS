@@ -25,6 +25,29 @@ TRAJECTORY = {
 }
 
 
+def test_task_log_displays_algorithm_ids_only_at_start(capsys):
+    event = {
+        "project_id": "p",
+        "task_id": "t",
+        "attempt": 1,
+        "payload": {
+            "run_id": "run-a",
+            "request_id": "request-a",
+            "node_id": "node-a",
+            "message": "algorithm.run.started | algorithm=treeskill",
+        },
+    }
+    skill_cli._print_task_log(event)
+    for message in ("sampling progress", "sample failed", "algorithm.run.completed"):
+        event["payload"]["message"] = message
+        skill_cli._print_task_log(event)
+    text = capsys.readouterr().out
+    assert text.count("run_id=run-a") == text.count("request_id=request-a") == 1
+    assert text.count("node_id=node-a") == text.count("task_id=t") == 4
+    assert event["payload"]["run_id"] == "run-a"
+    assert event["payload"]["request_id"] == "request-a"
+
+
 @pytest.fixture
 def remote(monkeypatch):
     """Use real SDK serialization over recorded in-memory HTTP responses."""
@@ -85,7 +108,7 @@ def remote(monkeypatch):
 @pytest.mark.parametrize(
     ("arguments", "route"),
     [
-        (["register-structured", "--json", json.dumps(SOURCE)], "register"),
+        (["register", "--json-skill", json.dumps(SOURCE)], "register"),
         (["list", "--filter", '{"name":"demo*"}'], "list"),
         (["show", "skv-a"], "show"),
         (["resolve", "a"], "skill-resolve"),
@@ -136,6 +159,88 @@ def test_remote_commands(remote, capsys, arguments, route):
     assert not output.err
     assert remote[-1][0] == route
     assert all("cursor" not in body for _, body, _ in remote)
+
+
+@pytest.mark.parametrize("resources", [{}, {"asset.bin": "AP8="}])
+def test_json_registration_and_commit_preserve_complete_input(remote, resources):
+    source = {
+        **SOURCE,
+        "content": "custom\r\n",
+        "resources": resources,
+        "metadata": {"category": "example"},
+        "commit_version": "v2.3.4",
+        "commit_message": "Publish complete source",
+    }
+    assert cli.main(["skill", "register", "--json-skill", json.dumps(source), "--alias", "custom"]) == 0
+    assert remote[-1][1] == {"skill": source, "alias": "custom"}
+    assert cli.main(["skill", "commit", "skv-a", "--json-skill", json.dumps(source), "--activate"]) == 0
+    assert remote[-1][1] == {
+        "skill_id": "sk-a",
+        "skill": source,
+        "base_version_id": "skv-a",
+        "active": True,
+        "inherit_resources": False,
+    }
+
+
+def test_json_commit_defaults_replace_resources_and_keep_activation_opt_in(remote):
+    source = {"content": CONTENT, "commit_message": "Update", "version_bump": "minor"}
+    assert cli.main(["skill", "commit", "a", "--json-skill", json.dumps(source)]) == 0
+    assert remote[-1][1]["skill"] == source
+    assert remote[-1][1]["inherit_resources"] is False
+    assert remote[-1][1]["active"] is False
+
+
+@pytest.mark.parametrize(
+    ("command", "options"),
+    [
+        ("register", ["--version", "v0.0.1"]),
+        ("register", ["--message", "Initial registration"]),
+        ("register", ["--metadata-json", "{}"]),
+        ("register", ["--include", "**/*"]),
+        ("register", ["--exclude", "**/.env"]),
+        ("commit", ["--message", "Change"]),
+        ("commit", ["--version", "v2.0.0"]),
+        ("commit", ["--bump", "patch"]),
+        ("commit", ["--resources-dir", "/unused"]),
+        ("commit", ["--clear-resources"]),
+    ],
+)
+def test_json_input_rejects_local_options_before_remote_calls(remote, capsys, command, options):
+    arguments = ["skill", command]
+    if command == "commit":
+        arguments.append("a")
+    arguments.extend(["--json-skill", json.dumps({**SOURCE, "commit_message": "Change"}), *options])
+    assert cli.main(arguments) == 2
+    assert not remote
+    assert json.loads(capsys.readouterr().err)["code"] == "invalid_argument"
+
+
+@pytest.mark.parametrize("message", [None, "", "   "])
+def test_commit_requires_message_from_selected_input(remote, capsys, message):
+    source = {**SOURCE, "commit_message": message}
+    assert cli.main(["skill", "commit", "a", "--json-skill", json.dumps(source)]) == 2
+    local = ["skill", "commit", "a", "--from", "/unused"]
+    if message is not None:
+        local.extend(["--message", message])
+    assert cli.main(local) == 2
+    assert not remote
+    capsys.readouterr()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"content": "missing frontmatter", "commit_message": "Change"},
+        {**SOURCE, "commit_message": "Change", "resources": {"../escape": "AA=="}},
+        {**SOURCE, "commit_message": "Change", "resources": {"asset.bin": "invalid"}},
+        {**SOURCE, "commit_message": "Change", "unknown": True},
+    ],
+)
+def test_invalid_json_commit_fails_before_resolving_target(remote, capsys, source):
+    assert cli.main(["skill", "commit", "a", "--json-skill", json.dumps(source)]) == 2
+    assert not remote
+    capsys.readouterr()
 
 
 def test_selection_defaults_and_pinned_requests(remote):
@@ -190,16 +295,24 @@ def test_source_registration_commit_and_export(remote, tmp_path, capsys):
         ["history", "a", "--cursor", "token"],
         ["trajectory", "list", "a", "--cursor", "token"],
         ["diff", "a", "--to", "b"],
-        ["register-structured", "--json", "[1]"],
+        ["register", "--json-skill", "[1]"],
+        ["register"],
+        ["register", "/unused", "--json-skill", json.dumps(SOURCE)],
+        ["register-structured", "--json", json.dumps(SOURCE)],
+        ["register", "--json", json.dumps(SOURCE)],
+        ["commit", "a"],
+        ["commit", "a", "--from", "/unused", "--json-skill", json.dumps(SOURCE)],
+        ["commit", "a", "--json-skill", "[1]"],
     ],
 )
-def test_invalid_syntax_is_json(arguments, capsys):
+def test_invalid_syntax_is_json(arguments, capsys, remote):
     with pytest.raises(SystemExit) as caught:
         cli.main(["skill", *arguments])
     assert caught.value.code == 2
     output = capsys.readouterr()
     assert not output.out
     assert json.loads(output.err)["code"] == "invalid_argument"
+    assert not remote
 
 
 def test_duplicate_filter_wrong_family_and_cancellation(remote, capsys, monkeypatch):
@@ -311,7 +424,7 @@ def test_trajectory_report_file_and_stdin(remote, tmp_path, monkeypatch):
 
 
 def test_invalid_structured_content_and_training_split_fail_before_submission(remote, capsys):
-    assert cli.main(["skill", "register-structured", "--json", '{"content":"missing frontmatter"}']) == 2
+    assert cli.main(["skill", "register", "--json-skill", '{"content":"missing frontmatter"}']) == 2
     assert not remote
     assert (
         cli.main(

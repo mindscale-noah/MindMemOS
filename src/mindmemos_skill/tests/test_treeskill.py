@@ -209,7 +209,7 @@ async def test_assemble_returns_complete_skill_and_environment_uses_that_object(
 async def test_restore_and_export_defer_router_until_assembly(tmp_path):
     source, router = make_skill('{"selected_subtree_ids":["003"]}')
     snapshot = source.snapshot()
-    with patch("mindmemos_skill.algos.train.treeskill.treeskill.OpenAIChatAgent", return_value=router) as factory:
+    with patch("mindmemos_skill.agents.Agent.from_config", return_value=router) as factory:
         restored = TreeSkill.from_snapshot(snapshot)
         restored.export(tmp_path / "exported")
         assert restored.snapshot() == snapshot

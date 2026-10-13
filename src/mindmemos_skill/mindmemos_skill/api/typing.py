@@ -1,7 +1,6 @@
 """Transport-independent inputs and results of Skill service operations."""
 
 from typing import Annotated, Literal, Self
-from uuid import UUID
 
 from pydantic import (
     AwareDatetime,
@@ -23,6 +22,7 @@ from mindmemos_skill.skill.typing import parse_skill_header
 from ..envs.config import EnvironmentConfig
 from ..envs.data.typing import DataSample, SplitManifest
 from ..persistence import SkillRecord, SkillVersionRecord
+from ..persistence.db_services.graphs.typing import GraphNodeType
 
 Nonempty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -707,54 +707,179 @@ class SkillDetail(BaseModel):
 
 
 class OrganizeRequest(RequestAuth):
-    """Select exact project-owned Skill versions for one graph publication."""
+    """Select project-owned Skill versions for a complete graph publication."""
 
     skill_refs: list[Nonempty]
-    """list of skill refs，所有可以被skill version resovlve的信息都可以"""
+    """Family or version references resolved once before construction."""
 
     graph_id: Nonempty | None = None
-    """如果为none，则新创建一个图，如果不是，则挂在以前的图下面作为一个新的版本"""
+    """Existing graph identity; None creates a new graph."""
 
     alias: Nonempty | None = None
-    """不指定graph_id时，可以创建alias；复用旧图不可以创建alias"""
+    """Alias for a new graph; cannot rename an existing graph."""
 
     commit_message: Nonempty | None = None
-    """创建这个图的提交信息"""
+    """Explanation recorded with the published snapshot."""
+
+    force_extract_scene: bool = Field(default=False, strict=True)
+    """Refresh Scene data even when the selected version has a valid cache."""
+
+
+class GraphMembersRequest(RequestAuth):
+    """Select a nonempty batch of members in an existing graph."""
+
+    graph_ref: Nonempty
+    """Project-owned graph family identity or alias, excluding snapshot references."""
+
+    skill_refs: list[Nonempty] = Field(min_length=1)
+    """Skill family or version references; repeated families are invalid."""
+
+    commit_message: Nonempty | None = None
+    """Explanation recorded with the new snapshot."""
+
+    @model_validator(mode="after")
+    def validate_members(self):
+        """Reject duplicate references before resolving their canonical families."""
+        if len(self.skill_refs) != len(set(self.skill_refs)):
+            raise ValueError("Skill references must be unique")
+        return self
+
+
+class AddGraphMembersRequest(GraphMembersRequest):
+    """Add new families without replacing any existing graph member."""
+
+    force_extract_scene: bool = Field(default=False, strict=True)
+    """Refresh Scene data for new members even when cached data is valid."""
+
+
+class RemoveGraphMembersRequest(GraphMembersRequest):
+    """Remove selected families without deleting their canonical Skills."""
 
 
 class OrganizeResult(BaseModel):
-    """Identify the immutable graph published for an explicit version scope."""
+    """Identify the published graph and its complete immutable member scope."""
 
     graph_id: Nonempty
-    """Logical graph identity within the project."""
+    """Public graph family identity."""
 
-    graph_version_id: UUID
-    """Immutable graph snapshot available for later recommendation."""
+    graph_version_id: Nonempty
+    """Immutable snapshot created or reused by the operation."""
 
     skill_version_ids: list[Nonempty]
-    """Exact input versions in caller order."""
+    """Exact versions of all members in the resulting graph."""
 
 
 class RecommendRequest(RequestAuth):
-    """Select one immutable organized graph for a public task."""
+    """Retrieve Skills from one pinned graph using a public instruction."""
 
     graph_id: Nonempty
-    """Logical graph identity within the selected project."""
+    """Project-owned graph identity."""
 
-    graph_version_id: UUID | None = None
-    """Pinned graph snapshot; omission selects and pins the current graph head."""
+    graph_version_id: Nonempty | None = None
+    """Immutable snapshot; None pins the current graph head."""
 
     task: str = Field(min_length=1)
-    """Public task used for retrieval; no private reward data is accepted."""
+    """Public instruction used for retrieval."""
 
     top_k: int = Field(default=5, ge=1, strict=True)
-    """Maximum number of recommended Skill versions."""
+    """Maximum number of unique Skill versions to return."""
+
+    strategy: Literal["graph", "vector"] = "graph"
+    """Graph propagation or direct cosine-similarity retrieval."""
+
+    include_scenes: bool = Field(default=False, strict=True)
+    """Vector-only option allowing Scene nodes to contribute owner matches."""
+
+    @model_validator(mode="after")
+    def validate_strategy(self):
+        """Reject vector-only options in graph mode and empty query text."""
+        if self.strategy == "graph" and self.include_scenes:
+            raise ValueError("include_scenes requires the vector strategy")
+        if not self.task.strip():
+            raise ValueError("Task instruction must not be blank")
+        return self
+
+
+class GraphRecommendationScore(BaseModel):
+    """Core graph score components for one exact Skill version."""
+
+    skill_version_id: Nonempty
+    """Exact selected version corresponding to the result's Skill list."""
+
+    ppr_score: float = Field(ge=0, le=1, allow_inf_nan=False)
+    """Normalized Skill-node PageRank mass."""
+
+    scene_boost: float = Field(ge=0, allow_inf_nan=False)
+    """Weighted contribution from child Scene nodes."""
+
+    graph_score: float = Field(ge=0, allow_inf_nan=False)
+    """Skill PageRank mass plus the Scene contribution."""
+
+    rerank_score: float = Field(ge=0, allow_inf_nan=False)
+    """Final field-based score used to order graph candidates."""
+
+    @model_validator(mode="after")
+    def validate_total(self):
+        """Require the graph total to match its two components."""
+        from math import isclose
+
+        if not isclose(self.graph_score, self.ppr_score + self.scene_boost, rel_tol=1e-12, abs_tol=1e-12):
+            raise ValueError("graph_score must equal ppr_score plus scene_boost")
+        return self
+
+
+class VectorRecommendationScore(BaseModel):
+    """Winning cosine-similarity node for one exact Skill version."""
+
+    skill_version_id: Nonempty
+    """Exact selected owner version."""
+
+    similarity: float = Field(ge=-1, le=1, allow_inf_nan=False)
+    """Cosine similarity of the best matching node for this owner."""
+
+    node_id: Nonempty
+    """Winning Skill or Scene node within the pinned snapshot."""
+
+    node_type: GraphNodeType
+    """Type of the winning node."""
 
 
 class RecommendResult(BaseModel):
-    """Ordered Skill versions selected from one pinned graph snapshot."""
+    """Selected versions and strategy-specific scores from one immutable snapshot."""
 
     skills: list[SkillVersionRecord]
+    """Selected versions in descending score order."""
+
+    graph_version_id: Nonempty
+    """Snapshot actually used throughout the query."""
+
+    strategy: Literal["graph", "vector"]
+    """Retrieval strategy determining the score meaning."""
+
+    score_type: Literal["graph_components", "cosine_similarity"]
+    """Explicit score units; graph scores are not cosine similarities."""
+
+    scores: list[GraphRecommendationScore] | list[VectorRecommendationScore]
+    """Core scores in exactly the same order as skills."""
+
+    include_scenes: bool = False
+    """Whether vector retrieval searched Scene nodes."""
+
+    @model_validator(mode="after")
+    def validate_scores(self):
+        """Keep score types, version identities, and result order consistent."""
+        graph = self.strategy == "graph"
+        expected_type = GraphRecommendationScore if graph else VectorRecommendationScore
+        expected_units = "graph_components" if graph else "cosine_similarity"
+        if self.score_type != expected_units or (graph and self.include_scenes):
+            raise ValueError("Score semantics differ from the retrieval strategy")
+        if any(not isinstance(score, expected_type) for score in self.scores):
+            raise ValueError("Score fields differ from the retrieval strategy")
+        if [score.skill_version_id for score in self.scores] != [skill.version_id for skill in self.skills]:
+            raise ValueError("Scores must match selected versions in order")
+        if len({skill.version_id for skill in self.skills}) != len(self.skills):
+            raise ValueError("Recommended versions must be unique")
+        return self
 
 
 class SkillPageRequest(RequestAuth):

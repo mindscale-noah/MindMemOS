@@ -1,3 +1,7 @@
+# MindMemOS
+
+**为 AI Agent 提供长期记忆与可管理、可训练、可演化的 Skill。**
+
 <p align="center">
   <img src="./assets/mindmemos-readme-hero.png" alt="MindMemOS Memory For AI Agents">
 </p>
@@ -39,7 +43,7 @@
 </p>
 
 <p align="center">
-  精准记忆用户与任务上下文，跨 Agent 迁移复用；在持续交互中演化记忆，自动沉淀 Skills，并联动文件知识系统，让经验真正成为能力。
+  保存和检索用户与任务上下文，跨 Agent 复用记忆；管理 Skill 版本，基于任务与执行轨迹训练和改进 Skill。
 </p>
 
 > ⭐ **GitHub Star 后自动升级 Pro 额度会员。**
@@ -55,16 +59,27 @@
 
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。
 - **记忆系统可自主演化**：通过 schema learning、dreaming、feedback 持续优化记忆质量，自动学习高频记忆点、离线巩固合并记忆，并从交互纠错中反向优化 add/search 流程。
-- **记忆与 Skills 联动**：经验记忆可以沉淀为 skill candidates；skills 的执行结果、失败轨迹和用户反馈也会回流到记忆系统，推动 skills 持续演进。
+- **独立 Skill 服务**：注册和管理 Skill 版本，保存执行轨迹，配置 TreeSkill、Skill-Forest 等训练流程，并基于轨迹演化新版本。支持 Python Service 直接调用和 FastAPI 部署；训练与演化需要显式调用及对应的模型、数据和环境配置。
+- **本机 Web 工作台**：通过 SDK 连接 Memory 和 Skill 服务，查看、搜索和编辑记忆，管理 Skill 版本、查看图谱、预览动态 Skill，并编辑服务连接配置。图谱查询、历史快照和软删除可用；建图、推荐和成员增删仍待完整算法接入。
 - **插件集成能力**：支持通过插件将 MindMemOS 接入不同 Agent 与工作流，在交互前检索并注入相关记忆、回合结束后自动写回对话，当前已提供 [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) 和 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，并持续扩展更多集成。
 
-<p align="center">
-  <img src="./assets/mindmemos-benchmark-overview.png" alt="MindMemOS 基准测试结果概览">
-</p>
+### 项目组成与服务关系
+
+| 包 | 提供的能力 | 使用方式 |
+| --- | --- | --- |
+| `src/mindmemos` | 记忆写入、检索、查询、修改、删除、反馈与巩固（dreaming） | Memory HTTP API |
+| `src/mindmemos_skill` | Skill 注册、版本管理、轨迹保存、训练与演化，已发布图的查询和管理 | Python Service、本地 CLI 或 Skill HTTP API |
+| `src/mindmemos_sdk` | 调用 Memory 与 Skill API，管理连接和凭据 | Python SDK 与 `mindmemos` CLI |
+| `src/mindmemos_eval` | Memory 和 Skill 测评，汇总评分、耗时与模型用量 | `mindmemos-eval` 与评测配置 |
+| `src/mindmemos_ui` | Memory 与 Skill 的本机 Web 工作台 | 浏览器访问 UI，UI 后端通过 SDK 调用服务 |
+
+Memory 与 Skill 各自管理业务数据，可分别部署。默认本地部署中，Memory 使用 Qdrant 和 Neo4j，Skill 使用独立 PostgreSQL；直接使用 Skill Python Service 时也可配置 SQLite。两个 API 可共享 Kafka 和监控设施，UI 通过 SDK 访问业务数据。
+
+相较 MindMemOS 1.0，当前仓库扩展了 Skill 训练、演化和版本管理，提供独立 Skill 服务与 UI，并支持通过 `.env` 分发模型配置、按需关闭 Kafka 和监控。完整服务关系见[部署指南](docs/deploy/instruction_ZH.md)。
 
 ## 🚀 快速开始
 
-MindMemOS 有**两种部署方式**（官方云服务、本地自部署）和**三种接入方式**（HTTP 接口、Python SDK / CLI、Agent 插件），可以任意组合，服务端与客户端是同一套协议：
+Memory 可通过官方云服务或本地自部署使用，支持 HTTP、Python SDK / CLI 和 Agent 插件接入。下表是 Memory 的连接地址；本地独立 Skill API 默认使用 `http://127.0.0.1:8001`，在 SDK 中单独配置。
 
 | 接入方式 | 用途 | 云端 base_url | 本地 base_url |
 | :--- | :--- | :--- | :--- |
@@ -73,7 +88,7 @@ MindMemOS 有**两种部署方式**（官方云服务、本地自部署）和**�
 | [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) | Agent 自动写入/召回记忆 | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
 | [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) | Agent 自动写入/召回记忆（dsh） | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
 
-想省去部署直接体验，可以先用官方云服务（在 [官网](https://mindmemos.cn) 申请 API key）；需要私有化或离线使用，按下面的本地部署启动。
+想直接体验记忆功能，可在[官网](https://mindmemos.cn)申请云服务 API key。需要自部署时按下文启动；只使用 Skill 时可单独部署 Skill API，或按[Skill 本地使用指南](docs/skill/user-guide.md)直接调用 Python Service。模型、数据集及环境依赖需按使用场景准备。
 
 ### 1. 本地部署
 
@@ -81,14 +96,16 @@ MindMemOS 使用 `uv` 管理依赖和执行本地命令。详细配置方法可�
 
 #### 1.1 准备配置文件
 
-首次使用时，复制以下配置文件：
+安装 workspace 依赖，创建 `.env` 并填写模型连接参数，再初始化配置。已有 `.env` 时跳过复制步骤：
 
 ```bash
+uv sync --all-packages --extra postgres --extra kafka
 cp .env.example .env
-cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
-cp config/mindmemos_skill/dev.example.yaml config/mindmemos_skill/dev.yaml
-cp config/presets/local.project.example.yaml config/presets/local.project.yaml
+# 编辑 .env，填写 Chat、Embedding 和可选 Rerank 配置
+make init
 ```
+
+可提前在 `.env` 中设置 Chat、Embedding、Rerank 的 API key、Base URL 和模型名；`make init` 会覆盖 `config/` 下所有实际配置中的对应字段，Embedding 还需填写输出维度。未填写的字段由用户在配置中补充。变量名和覆盖规则见[初始化 & 填写配置文件](docs/deploy/instruction_ZH.md#12-初始化--填写配置文件)。
 
 启动前，按以下清单补充配置：
 
@@ -102,11 +119,19 @@ cp config/presets/local.project.example.yaml config/presets/local.project.yaml
 
 #### 1.2 启动与管理命令
 
-先安装 `uv` 并启动 Docker 引擎；首次开发可运行 `make setup` 准备依赖。Makefile 的 Python 入口统一通过 `uv run` 执行。
+需要 Python 3.11–3.13、Git、Make、uv 和运行中的 Docker 引擎；构建 UI 还需 Node.js/npm。首次使用 Memory 和 UI 时先准备资源：
+
+```bash
+uv run --no-sync python scripts/install_nlp_assets.py
+uv run --no-sync python scripts/check_nlp_assets.py
+make ui-build
+```
+
+`make dev` 不会自动构建 UI。Skill 默认安装包含内置环境的 Python 依赖；实际训练还可能需要数据集、Agent 程序和系统工具，详见[环境说明](docs/mindmemos_skill/benchmark_environments.md)。
 
 ```bash
 make dev                                # Memory + Skill + UI，全部功能
-make dev FEATURE=core                    # 核心功能，不开启异步任务与 OTel
+make dev FEATURE=core                    # Memory 同步、Skill 本地异步；关闭 Kafka 和 OTel
 make dev FEATURE=async                   # 核心 + 异步任务，不开启 OTel
 make dev SERVICE=memory                  # Memory + UI，全部功能
 make dev SERVICE=skill FEATURE=core      # Skill + UI，核心功能
@@ -129,7 +154,7 @@ make dev PLAN=1                          # 只校验并预览启动计划
 | 参数 | 取值与默认行为 |
 | --- | --- |
 | `SERVICE` | 默认 `all`（Memory + Skill）；可选 `memory`、`skill` |
-| `FEATURE` | 默认 `all`（核心 + 异步任务 + OTel）；`core` 仅核心；`async` 核心 + 异步任务 |
+| `FEATURE` | 默认 `all`（Kafka 异步任务 + OTel）；`core` 关闭 Kafka 和 OTel，Memory 仅同步、Skill 使用本地异步任务；`async` 启用 Kafka，关闭 OTel |
 | `UI=0` / `UI=1` | 覆盖 `dev` 或 `api` 的 UI 开关；`docker` 不支持开启 UI |
 | `PLAN=1` | 校验并预览启动计划，不启动服务或写入 SDK 配置 |
 | `API_PORT` / `SKILL_PORT` / `UI_PORT` | 覆盖端口，默认分别为 `8000` / `8001` / `8765` |
@@ -156,6 +181,16 @@ make api SERVICE=skill FEATURE=async UI=1
 | Memory | <http://127.0.0.1:8000> | <http://127.0.0.1:8000/docs> |
 | Skill | <http://127.0.0.1:8001> | <http://127.0.0.1:8001/docs> |
 | UI | <http://127.0.0.1:8765> | — |
+
+检查服务是否响应：
+
+```bash
+curl -f http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1:8001/health
+make status
+```
+
+健康检查通过后，再执行一次业务请求验证模型连接。仅启动一个服务时，只检查对应地址。
 
 `Ctrl+C` 结束当前启动的 API/UI，保留容器。`make stop` 同时停止本工作区受管理的应用和当前 Compose 项目的容器；手动启动的应用需自行结束。切换到较少功能时，已有额外容器不会自动停止，需要完整切换时先运行 `make stop`。
 
@@ -205,10 +240,10 @@ curl -sS -X POST "$BASE_URL/v1/memory/add" \
 curl -sS -X POST "$BASE_URL/v1/memory/search" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"query": "用户喜欢喝什么咖啡？", "top_k": 3}'
+  -d '{"query": "用户喜欢喝什么咖啡？", "user_id": "u_123", "top_k": 5}'
 ```
 
-PowerShell 等其他环境 / 语言的 HTTP 调用格式，以及其余接口（get / list / delete / update / feedback / dreaming / skills 等）都见 [API 文档](https://mindmemos.cn/api-docs)。
+检索时显式填写 `user_id` 可限定到同一用户；HTTP 省略该字段时查询整个项目。过滤条件、重排、token 预算与返回格式见[接口使用指南](docs/interfaces/usage_ZH.md)，其余 Memory 接口见 [API 文档](https://mindmemos.cn/#/api-docs)。
 
 #### 2.2 配置 SDK
 
@@ -218,11 +253,21 @@ PowerShell 等其他环境 / 语言的 HTTP 调用格式，以及其余接口（
 pip install mindmemos-sdk
 ```
 
-运行认证命令，依次配置服务地址、API key 和默认用户：
+运行认证命令，选择官方服务或自部署（custom），按提示填写地址、API key 和默认用户：
 
 ```bash
 mindmemos auth
 ```
+
+连接本地两个独立 API 时，可先指定地址，再交互输入凭据：
+
+```bash
+mindmemos auth --service-type custom \
+  --memory-base-url http://127.0.0.1:8000 \
+  --skill-base-url http://127.0.0.1:8001
+```
+
+填写独立 Skill 地址时还需填写它的 API key；Skill 地址留空时复用 Memory 的地址和凭据。SDK 分别解析两项连接，更多说明见[SDK 文档](src/mindmemos_sdk/README.md)。
 
 | 配置项 | 本地服务 | 云端服务 |
 | :--- | :--- | :--- |
@@ -284,21 +329,9 @@ with MindMemOSClient() as client:
         print(memory.id, memory.memory)
 ```
 
-触发已注册 Skill 的云端演进：
+Skill 的注册、版本提交和演化使用独立的请求模型。演化基于确定版本与已保存轨迹，返回后台任务；调用示例见[SDK 文档](src/mindmemos_sdk/README.md)，Python Service 训练与自定义环境见[Skill 本地使用指南](docs/skill/user-guide.md)。
 
-```python
-from mindmemos_sdk import MindMemOSClient
-
-with MindMemOSClient() as client:
-    result = client.skills.evolve("my-skill", mode="sync")
-
-    print("evolved:", result.evolved)
-    print("pending:", result.pending_count)
-    print("threshold:", result.threshold)
-    print("new versions:", result.new_version_ids)
-```
-
-本地服务与云端服务使用同一套 SDK 调用逻辑，切换时只需重新配置 `base_url` 和对应的 API key。
+切换部署时，通过 `mindmemos auth` 更新对应服务的连接和凭据。
 
 #### 2.4 通过 CLI 调用
 
@@ -309,7 +342,9 @@ mindmemos memory add --content "我喜欢喝冰美式"
 mindmemos memory search "咖啡偏好" --top-k 5
 ```
 
-`memory` 子命令还支持 get / update / delete / feedback / dreaming，`skill` 子命令支持 register / list / evolve / push / pull / history 等，完整命令、参数与故障排查见 [CLI 使用说明](docs/cli/instruction_ZH.md)。
+CLI 省略 `--user-id` 时使用 SDK 配置的默认用户。需要与 HTTP 示例一致时，添加 `--user-id u_123`。检索参数和输出见[接口使用指南](docs/interfaces/usage_ZH.md)。
+
+`memory` 子命令还支持 get / update / delete / feedback / dreaming；`skill` 子命令支持 register / commit / export / history / diff / activate，以及 train / evolve / task / trajectory / graph。当前命令以 `mindmemos skill --help` 为准，完整说明见 [SDK 文档](src/mindmemos_sdk/README.md)和 [CLI 使用说明](docs/cli/instruction_ZH.md)。
 
 #### 2.5 OpenClaw 插件
 
@@ -409,10 +444,10 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 skill 和 memory 共用下载入口（Python 3.12+；Hugging Face 来源需安装 `huggingface_hub`）：
 
 ```bash
-python scripts/download_datasets.py list --benchmark memory
-python scripts/download_datasets.py list --benchmark skill
-python scripts/download_datasets.py download --benchmark memory --dataset locomo
-python scripts/download_datasets.py download --benchmark skill --dataset spreadsheetbench
+python scripts/download_datasets.py list memory
+python scripts/download_datasets.py list skill
+python scripts/download_datasets.py download memory --name locomo
+python scripts/download_datasets.py download skill --name spreadsheetbench
 ```
 
 memory 包括 `locomo`、`personamem`（v1）、`memoryagentbench`（官方四个数据分区）和
@@ -468,21 +503,35 @@ memory 包括 `locomo`、`personamem`（v1）、`memoryagentbench`（官方四�
 | MindMemOS-MindVanilla              | 0.900 | — | 0.190 | — |
 | **MindMemOS-MindVanilla + Dreaming** | 0.920 | 23.5% | 0.250 | 21.5% |
 
-### 🧠 Skill 自演进：SpreadsheetBench-Verified
+### Skill Benchmark（结果待发布）
 
-- **评测基准**：[SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz)，SpreadsheetBench 的 400 题 verified 子集，覆盖多种真实 spreadsheet 操作任务。
+当前 Skill 服务尚无可发布的完整 benchmark 结果。已提供 LiveMath、ALFWorld、SpreadsheetBench、SearchQA 和 OfficeQA 的统一 Skill-Forest 测评入口，使用固定数据划分比较 `no_skill`、`initial_skill` 和 `trained_skill`；这里暂不展示成功率、耗时或 token 对比。
 
-| Method | Success Rate | Time / Task (s) | Agent Tokens | Evolve Tokens |
-| :----- | :----------: | :-------------: | :----------: | :-----------: |
-| No-skill | 51.3% ± 0.8% | 11.227 | 10.4M | - |
-| Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
-| **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
-| **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
+准备依赖、模型配置和数据后，可先执行冒烟测试：
+
+```bash
+uv run --no-sync python scripts/download_datasets.py download skill --name livemath
+uv run --no-sync mindmemos-eval skill run --smoke
+```
+
+模型与并发配置位于 `config/mindmemos_eval/dev.yaml`，由 `make init` 创建。Skill 测评使用进程内隔离的本地 Service，无需启动 Memory API 或 Skill HTTP API。冒烟测试只检查小规模流程，不能作为正式效果结论；完整测评命令、环境依赖和报告说明见[评测指南](docs/eval/README_ZH.md#skill-forest-五基准测评)。
+
+## 文档导航
+
+| 想做什么 | 文档 |
+| --- | --- |
+| 部署服务、填写模型配置、选择启动范围 | [部署指南](docs/deploy/instruction_ZH.md) |
+| 了解 Memory 检索的 HTTP / CLI 参数和返回结果 | [接口使用指南](docs/interfaces/usage_ZH.md) |
+| 使用完整 CLI、配置连接与排查问题 | [CLI 使用说明](docs/cli/instruction_ZH.md) |
+| 接入 Python SDK 与独立 Skill API | [SDK 文档](src/mindmemos_sdk/README.md) |
+| 本地管理、训练和演化 Skill，接入自定义环境 | [Skill 本地使用指南](docs/skill/user-guide.md) |
+| 使用本机 Web 工作台 | [UI 使用说明](docs/mindmemos_ui/usage.md) |
+| 下载数据、复现 Memory 或 Skill 测评 | [评测指南](docs/eval/README_ZH.md) |
 
 ## 🗺️ Coming Features
 
-- **Lite 模式**：以低依赖、可替换、易嵌入为设计理念，将数据库后端、异步任务和日志存储解耦为灵活的轻量组件，支持 in-memory 调用与简化部署。
-- **Skills 系统**：治理庞杂冗余的 skills 并智能分发；根据真实使用持续演化优化；从用户高频场景自动合成新 skills，并通过离线推演不断打磨。
+- **轻量部署继续完善**：在已有按需关闭 Kafka / OTel、Skill 本地异步任务和 SQLite 后端的基础上，继续减少依赖并完善嵌入式使用。
+- **Skill 图组织与推荐**：接入完整建图、推荐和成员维护算法，完善大规模 Skill 库的组织与分发。
 - **文件系统记忆**：将散落在本地文件、文档、项目产物和 Agent 输出中的零碎知识结构化管理，构建可检索、可关联的文件知识对象或知识图谱，帮助 Agent 更好完成用户任务。
 - **Agent 集成**：继续增强对代码 Agent、OpenClaw、Codex 风格工作流和长期运行多 Agent 系统的支持。
 

@@ -12,7 +12,7 @@ export
 RUN = $(UV) run python -m scripts.dev.run
 OPTION = --service "$(SERVICE)" --feature "$(FEATURE)" --ui "$(UI)" $(if $(filter 1,$(PLAN)),--plan)
 
-.PHONY: help dev docker api ui status stop clean setup hook format lint ui-build profile
+.PHONY: help init dev docker api ui status stop clean setup hook format lint ui-build profile
 
 help: ## Show commands and common options (default)
 	@printf '%s\n' 'Usage: make <command> [SERVICE=all|memory|skill] [FEATURE=core|async]' 'Default: all services and all features; dev includes UI.' ''
@@ -41,6 +41,9 @@ clean: ## Stop services and delete Docker volumes after confirmation
 	@$(RUN) clean
 
 # Development tools do not start applications.
+init: ## Copy missing configurations and apply optional .env model settings
+	@$(UV) run --no-sync python -m scripts.dev.init
+
 setup: ## Sync dependencies, install hooks, and prepare NLP assets
 	$(UV) sync
 	$(UV) run pre-commit install --install-hooks

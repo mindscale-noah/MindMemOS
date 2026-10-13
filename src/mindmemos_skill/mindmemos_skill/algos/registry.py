@@ -3,9 +3,9 @@
 from importlib import import_module
 
 _BUILTIN_MODULES = (
+    ".manage.skill_manage.algorithm",
     ".train.treeskill.trainer",
     ".train.skill_forest.trainer",
-    ".manage.skill_manage.algorithm",
     ".evolve.simple_evolve.evolver",
 )
 """Modules whose decorators register supported algorithm implementations."""

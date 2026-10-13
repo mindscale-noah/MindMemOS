@@ -83,7 +83,6 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         request = RegisterRequest.model_validate(request)
         snapshot = self._snapshot(request.skill)
         record = await self.persistence.skills.register(
-            project_id=self._scope(request.project_id),
             name=snapshot.name,
             alias=request.alias,
             source=request.skill.commit_source,
@@ -129,7 +128,6 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = ListRequest.model_validate(request)
         return await self.persistence.skills.list_skills(
-            self._scope(request.project_id),
             limit=request.limit,
             offset=request.cursor.offset,
             snapshot_at=request.cursor.snapshot_at,
@@ -148,7 +146,6 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = ReportTrajectoryRequest.model_validate(request)
         return await self.persistence.trajectories.report(
-            project_id=self._scope(request.project_id),
             skill_version_id=request.skill_version_id,
             user_id=request.user_id,
             agent_id=request.agent_id,
@@ -270,10 +267,10 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         request = ShowRequest.model_validate(request)
         store = self.persistence.skills
         if request.skill_id is None:
-            version = await store.version_by_id(self._scope(request.project_id), request.version_id)
-            record = await store.resolve_family(self._scope(request.project_id), version.skill_id)
+            version = await store.get(request.version_id)
+            record = await store.resolve_family(version.skill_id)
         else:
-            record = await store.resolve_family(self._scope(request.project_id), request.skill_id)
+            record = await store.resolve_family(request.skill_id)
             version = await store.version(record, request.version_id)
         return SkillDetail(skill=record, version=version)
 
@@ -287,7 +284,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         Returns:
             Owning family and selected version.
         """
-        skill, version = await self.persistence.skills.resolve(self._scope(project_id), reference)
+        skill, version = await self.persistence.skills.resolve(reference)
         return SkillDetail(skill=skill, version=version)
 
     async def resolve_skill_version(self, request: VersionResolveRequest) -> VersionResolution:
@@ -302,13 +299,12 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         request = VersionResolveRequest.model_validate(request)
         store = self.persistence.skills
         version = await store.resolve_version_hash(
-            request.project_id,
             request.content_hash,
             skill_hash=request.skill_hash,
             skill_id=request.skill_id,
             version_id=request.skill_version_id,
         )
-        family = await store.resolve_family(request.project_id, version.skill_id)
+        family = await store.resolve_family(version.skill_id)
         return VersionResolution(
             skill_id=version.skill_id,
             skill_version_id=version.version_id,
@@ -320,17 +316,16 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             is_active=family.active_version_id == version.version_id,
         )
 
-    async def get_skill_version(self, project_id: str, version_id: str) -> SkillVersionRecord:
+    async def get_skill_version(self, version_id: str) -> SkillVersionRecord:
         """Read one exact Skill version in the authorized project.
 
         Args:
-            project_id: Authorized project identity.
             version_id: Exact immutable Skill version identity.
 
         Returns:
             The project-owned version record.
         """
-        return await self.persistence.skills.version_by_id(self._scope(project_id), version_id)
+        return await self.persistence.skills.get(version_id)
 
     async def list_skill_versions(self, project_id: str, skill_id: str) -> list[SkillVersionRecord]:
         """Read the complete history of an exact project-owned Skill family.
@@ -384,7 +379,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = CommitRequest.model_validate(request)
         store = self.persistence.skills
-        record = await store.resolve_family(self._scope(request.project_id), request.skill_id)
+        record = await store.resolve_family(request.skill_id)
         parent = await store.version(record, request.base_version_id)
         snapshot = self._snapshot(
             request.skill,
@@ -404,7 +399,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             metadata=request.skill.metadata,
             commit_source=request.skill.commit_source,
         )
-        version = await store.version_by_id(request.project_id, version_id)
+        version = await store.get(version_id)
         return SkillDetail(skill=updated, version=version)
 
     async def commit_from_local(self, request: CommitFromLocalRequest) -> SkillDetail:
@@ -440,7 +435,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         request = HistoryRequest.model_validate(request)
         store = self.persistence.skills
         return await store.history(
-            await store.resolve_family(self._scope(request.project_id), request.skill_id),
+            await store.resolve_family(request.skill_id),
             limit=request.limit,
             offset=request.cursor.offset,
             snapshot_at=request.cursor.snapshot_at,
@@ -460,7 +455,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         Raises:
             SkillVersionNotFoundError: Version does not belong to the requested family.
         """
-        owner = await self.persistence.skills.resolve_family(request.project_id, request.skill_id)
+        owner = await self.persistence.skills.resolve_family(request.skill_id)
         rows = await self.persistence.database.select(
             SKILL_VERSIONS_TABLE,
             filters={"skill_id": owner.skill_id, "version_id": request.version_id},
@@ -479,12 +474,12 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = DiffRequest.model_validate(request)
         store = self.persistence.skills
-        target = await store.version_by_id(request.project_id, request.to_version_id)
+        target = await store.get(request.to_version_id)
         if request.from_version_id is None:
-            family = await store.resolve_family(request.project_id, target.skill_id)
+            family = await store.resolve_family(target.skill_id)
             source = await store.version(family)
         else:
-            source = await store.version_by_id(request.project_id, request.from_version_id)
+            source = await store.get(request.from_version_id)
         return compare_versions(source, target)
 
     async def active_skill(self, request: ActiveRequest) -> SkillRecord:
@@ -495,8 +490,8 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = ActiveRequest.model_validate(request)
         store = self.persistence.skills
-        version = await store.version_by_id(request.project_id, request.version_id)
-        family = await store.resolve_family(request.project_id, version.skill_id)
+        version = await store.get(request.version_id)
+        family = await store.resolve_family(version.skill_id)
         if request.expected_active_version_id is not None:
             family = family.model_copy(update={"active_version_id": request.expected_active_version_id})
         return await store.activate(family, version.version_id)
@@ -510,7 +505,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         request = SetMetaRequest.model_validate(request)
         store = self.persistence.skills
         return await store.set_meta(
-            await store.resolve_family(self._scope(request.project_id), request.skill_id),
+            await store.resolve_family(request.skill_id),
             name=request.name,
             alias=request.alias,
             clear_alias=request.clear_alias,
@@ -525,7 +520,7 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = SkillRequest.model_validate(request)
         store = self.persistence.skills
-        await store.delete(await store.resolve_family(self._scope(request.project_id), request.skill_ref))
+        await store.delete(await store.resolve_family(request.skill_ref))
 
     @staticmethod
     def _local_source(info: FileSkillInfo) -> StructuredSkillInfo:

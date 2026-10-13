@@ -11,6 +11,8 @@ from mindmemos_skill.algos.evolve.typing import SkillTrajectory
 from mindmemos_skill.envs.typing import Reward, Task
 from mindmemos_skill.skill import Skill, SkillContent
 
+from .agent_testing import agent_config
+
 
 def make_skill():
     """Create a detached Skill with an auxiliary resource."""
@@ -26,7 +28,9 @@ def make_skill():
 
 
 @pytest.mark.asyncio
-async def test_parallel_batches_and_pairwise_merge():
+async def test_parallel_batches_and_pairwise_merge(
+    monkeypatch,
+):
     """Forty traces produce five extraction calls and four merges against one base."""
     skill = make_skill()
     calls = []
@@ -70,7 +74,7 @@ async def test_parallel_batches_and_pairwise_merge():
         for index in range(40)
     ]
     evolver = SimpleSkillEvolver(
-        SimpleEvolverConfig(optimizer={"model": "offline"}, concurrency=2), agent_factory=Agent
+        agent_config(monkeypatch, Agent, SimpleEvolverConfig(optimizer={"model": "offline"}, concurrency=2))
     )
     result = await evolver.evolve(skill=skill, trajectories=traces)
     extracts = [call for call in calls if "executions" in call]
@@ -135,7 +139,7 @@ def test_assistant_tool_arguments_are_clipped():
         ({"edits": [{"op": "append", "content": "x"}] * 6}, "max_edits"),
     ],
 )
-async def test_invalid_patch_is_rejected(response, match):
+async def test_invalid_patch_is_rejected(monkeypatch, response, match):
     """Reject invalid exact targets and excess edits before publication."""
 
     class Agent:
@@ -145,7 +149,7 @@ async def test_invalid_patch_is_rejected(response, match):
         async def run(self, *, messages):
             return SimpleNamespace(output=json.dumps(response))
 
-    evolver = SimpleSkillEvolver(SimpleEvolverConfig(optimizer={"model": "offline"}), agent_factory=Agent)
+    evolver = SimpleSkillEvolver(agent_config(monkeypatch, Agent, SimpleEvolverConfig(optimizer={"model": "offline"})))
     with pytest.raises(ValueError, match=match):
         await evolver.evolve(
             skill=make_skill(),

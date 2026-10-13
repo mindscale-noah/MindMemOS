@@ -39,6 +39,8 @@ from mindmemos_skill.envs.data import DataSample, RewardData
 from mindmemos_skill.skill import Skill, SkillContent
 from pydantic import ValidationError
 
+from .agent_testing import agent_config
+
 
 class CustomForestConfig(SkillForestEnvAdapterConfig):
     """Test a user extension with one additional option."""
@@ -129,7 +131,7 @@ TreeSkillEnvAdapter.build('spreadsheetbench_text_action', {})
 
 
 @pytest.mark.asyncio
-async def test_forest_custom_renderer_reaches_actual_model_transport(tmp_path):
+async def test_forest_custom_renderer_reaches_actual_model_transport(monkeypatch, tmp_path):
     calls = []
 
     class Agent:
@@ -144,7 +146,7 @@ async def test_forest_custom_renderer_reaches_actual_model_transport(tmp_path):
     adapter = SkillForestEnvAdapter.build(
         "adapter_contract_test", {"prefix": "CUSTOM", "analyst_success": "CUSTOM SYSTEM"}
     )
-    runtime = ForestRuntime(config, agent_factory=Agent, env_adapter=adapter)
+    runtime = ForestRuntime(agent_config(monkeypatch, Agent, config), env_adapter=adapter)
     try:
         await generate_patch(
             skill=Skill(
@@ -322,11 +324,11 @@ def test_missing_user_adapter_does_not_silently_fallback_on_restore():
 
 
 @pytest.mark.asyncio
-async def test_trainer_propagates_automatic_generic_adapter_to_final_skill(tmp_path):
+async def test_trainer_propagates_automatic_generic_adapter_to_final_skill(monkeypatch, tmp_path):
     from . import treeskill_smoke as smoke
 
     config = TreeSkillTrainerConfig(optimizer={"model": "offline"}, router={"model": "offline"})
-    trainer = TreeSkillTrainer(config, agent_factory=smoke.SmokeAgent)
+    trainer = TreeSkillTrainer(agent_config(monkeypatch, smoke.SmokeAgent, config))
     final = await trainer.train(
         skill=Skill(
             source=SkillContent(
@@ -417,11 +419,14 @@ async def test_automatically_selected_analyzer_factory_is_used_by_trainer(tmp_pa
             raise AssertionError("The custom analyzer must not invoke the default model")
 
     trainer = TreeSkillTrainer(
-        TreeSkillTrainerConfig(
-            optimizer={"model": "offline"},
-            router={"model": "offline"},
+        agent_config(
+            monkeypatch,
+            NoCallAgent,
+            TreeSkillTrainerConfig(
+                optimizer={"model": "offline"},
+                router={"model": "offline"},
+            ),
         ),
-        agent_factory=NoCallAgent,
     )
     final = await trainer.train(
         skill=Skill(

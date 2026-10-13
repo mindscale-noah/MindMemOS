@@ -13,9 +13,7 @@ def _openpyxl():
     try:
         import openpyxl
     except ImportError as exc:
-        raise ImportError(
-            "SpreadsheetBench requires the mindmemos-skill[spreadsheetbench] optional dependency"
-        ) from exc
+        raise ImportError("SpreadsheetBench requires openpyxl from the default mindmemos-skill dependencies") from exc
     return openpyxl
 
 

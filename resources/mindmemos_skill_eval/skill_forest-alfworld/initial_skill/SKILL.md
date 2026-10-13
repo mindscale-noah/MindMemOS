@@ -1,3 +1,8 @@
+---
+name: skill-forest-alfworld
+description: Initial instructions for the alfworld benchmark.
+---
+
 # ALFWorld Embodied Agent Skill
 
 ## Overview

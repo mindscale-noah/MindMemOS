@@ -1,8 +1,11 @@
 """Options for the built-in trajectory reflection evolver."""
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from ....agents import OpenAIChatConfig
+from ....agents.config import AgentConfig
 
 
 class SimpleEvolverConfig(BaseModel):
@@ -11,7 +14,7 @@ class SimpleEvolverConfig(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unsupported evolution options."""
 
-    optimizer: OpenAIChatConfig
+    optimizer: Annotated[OpenAIChatConfig, AgentConfig(allowed=("openai_chat",), namespace="simple_evolve")]
     """OpenAI-compatible model used for patch extraction and merging."""
 
     batch_size: int = Field(default=8, ge=1, le=40)

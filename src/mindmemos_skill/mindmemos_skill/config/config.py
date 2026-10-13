@@ -17,6 +17,7 @@ from pydantic import (
     model_validator,
 )
 
+from ..agents.config import AgentDefinition, AgentName
 from ..persistence.config import SkillPersistenceConfig
 from ..registry.config import serialize_options
 
@@ -204,6 +205,9 @@ class ServiceConfig(BaseModel):
 
     home: Path
     """Service data root; YAML-relative paths resolve against the configuration directory."""
+
+    agents: dict[AgentName, AgentDefinition] = Field(default_factory=dict)
+    """Algorithm-scoped Agent presets named <algo>_<llm_name>, resolved before constructing pipelines."""
 
     persistence: PersistenceConfig | None = None
     """Single global store; omission leaves storage unavailable."""

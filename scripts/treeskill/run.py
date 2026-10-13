@@ -23,6 +23,7 @@ from mindmemos_sdk.skills.typing import (
     TrainingSplitRequest,
 )
 from mindmemos_sdk.transport import AsyncHttpTransport
+from mindmemos_skill.agents import AgentCatalog
 from mindmemos_skill.algos.train.treeskill import TreeSkillTrainerConfig
 from mindmemos_skill.common.checkpoint import boundary, fingerprint
 from mindmemos_skill.common.json import append_jsonl, read_json, read_jsonl, write_json
@@ -165,7 +166,9 @@ async def _run(args: argparse.Namespace) -> None:
     root = args.output.resolve()
     document = yaml.safe_load(args.service_config.read_text(encoding="utf-8"))
     pipeline = document["service"]["training_pipelines"]["treeskill"]["config"]
-    algorithm = TreeSkillTrainerConfig.model_validate(pipeline["trainer"]["config"])
+    algorithm = TreeSkillTrainerConfig.model_validate(
+        pipeline["trainer"]["config"], context=AgentCatalog(agents=document["service"].get("agents", {}))
+    )
     policy = (algorithm.failure_optimizer or algorithm.optimizer).model_copy(
         update={"temperature": 0.7, "stop": ["Observation:"]}
     )

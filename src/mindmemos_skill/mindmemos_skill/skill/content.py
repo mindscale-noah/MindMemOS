@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import PurePosixPath
 
+from pydantic import JsonValue
+
 _HASH_SCHEMA = "mindmemos-skill-v1"
 
 
@@ -100,3 +102,43 @@ def skill_hash(content: str, resources: dict[str, bytes]) -> str:
     }
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def read_frontmatter(content: str) -> dict[str, JsonValue]:
+    """Read YAML frontmatter without requiring standard Skill display fields.
+
+    Args:
+        content: Source document beginning with a YAML frontmatter block.
+
+    Returns:
+        Validated JSON-compatible frontmatter fields.
+
+    Raises:
+        ValueError: The document lacks a block or contains duplicate YAML keys.
+    """
+    import re
+
+    import yaml
+    from pydantic import TypeAdapter
+
+    class StrictLoader(yaml.SafeLoader):
+        """Reject duplicate fields in portable frontmatter."""
+
+    def mapping(loader, node):
+        result = {}
+        for key_node, value_node in node.value:
+            key = loader.construct_object(key_node)
+            if key in result:
+                raise ValueError("Frontmatter contains duplicate keys")
+            result[key] = loader.construct_object(value_node)
+        return result
+
+    StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+    match = re.match(r"^---\s*\n(.*?)\n---\s*\n?", content.replace("\r\n", "\n"), re.DOTALL)
+    if match is None:
+        raise ValueError("Skill document requires YAML frontmatter")
+    try:
+        values = yaml.load(match.group(1), Loader=StrictLoader)
+    except yaml.YAMLError as error:
+        raise ValueError("Skill frontmatter is invalid YAML") from error
+    return TypeAdapter(dict[str, JsonValue]).validate_python(values or {})

@@ -3,7 +3,8 @@
 import json
 from pathlib import Path
 from tempfile import mkdtemp
-from uuid import uuid4
+
+from mindmemos_skill.common.ids import generate_id
 
 from ....agents.buitin_agents.codex.agent import CodexAgent
 from ....infra.execution import execute
@@ -86,7 +87,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
 
     async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Prepare public materials, execute native tools, then privately score artifacts."""
-        from ....algos.manage.skill_manage.parsing import extract_frontmatter
+        from ....skill.content import read_frontmatter
 
         if not isinstance(task, AgentSkillOSTask) or not isinstance(reward_data, AgentSkillOSRewardData):
             raise TypeError("AgentSkillOS requires official task and private evaluator data")
@@ -97,7 +98,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
             raise ValueError("Public task and private official definition must match")
         ranking = []
         for skill in skills:
-            metadata, _ = extract_frontmatter(skill.content, version_id="")
+            metadata = read_frontmatter(skill.content)
             ranking.append(metadata.get("name"))
         ranking = Ranking(skill_ids=ranking).skill_ids
         for name in ranking:
@@ -118,7 +119,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
         for name, skill in zip(ranking, skills, strict=True):
             skill.export(attempt / ".agents" / "skills" / name)
         audit = workspace.parent / "audit"
-        identifier = uuid4().hex
+        identifier = generate_id()
         task_path = audit / f"official-task-{identifier}.json"
         report_path = audit / f"official-score-{identifier}.json"
         task_path.write_text(json.dumps(reward_data.task_config, ensure_ascii=False), encoding="utf-8")

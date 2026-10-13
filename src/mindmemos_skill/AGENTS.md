@@ -89,7 +89,7 @@
 - `create_persistence(database)` 只组装服务并登记表，数据库由调用方持有并关闭；`ensure_collection()` 显式创建缺失表，不承担已有数据库迁移。独立 Skill 服务不提供旧库迁移；按根目录约定处理不兼容本地数据库。
 - `version_id` 只用于内部关联和审计；`version_label` 是同项目、同 Skill 内唯一且创建后不变的展示别名。用户标签格式为 `v主.次.修订`；算法发布由 pipeline 传固定 `algorithm` 标识，持久层分配递增修订号与算法尾缀，禁止算法自行拼接标签或用展示顺序代替父子谱系。
 - Skill 版本身份、源内容和多父谱系与 rollout 物理执行记录分开。轨迹以 `trajectory_id` 标识，以 `(rollout_id, attempt_no)` 区分重试；新增记录不覆盖历史。
-- `algos/manage/skill_manage/` 提供基于现有图表的组织与推荐；算法专属 SkillSet 不解释 Skill 版本。外围调度通过 `SkillGraphStore` 提供同项目版本绑定，发布服务核验完整快照并原子提交图和向量，保留历史。Scene 来自调用方显式记录，不由 LLM 生成。新增模型连边和查询改写使用显式配置及可注入客户端；模型失败明确抛出。图管理范围见 `docs/mindmemos_skill/skill_manage.md`，不得将 Python 算法入口描述为已接通 UI 或商用云服务。
+- skill_manage 通过 graph_manage Pipeline 接入完整 Scene 图构建、推荐和批量成员操作，保留 SkillManager / SkillSet 通用协议。Pipeline 负责精确版本及 Scene 缓存，算法只使用捕获输入；scene_data 仅保存在精确 Skill 版本 metadata，按严格 schema version 和完整语义校验复用。图家族仅使用 graph_id，发布沿用不可变快照和数据库图头冲突检查，不引入旧 revision/request_id 协议。
 
 ## 代码与验证
 
@@ -103,15 +103,15 @@
 - 配置定义放在对应模块的 `config.py`，其他数据结构与类型定义放在 `typing.py`；按需创建文件。
 - 已知字段和方法使用直接访问，不用字符串反射替代。
 - 子模块内部优先使用相对导入，特别是本包的 `logging`，避免与标准库混淆。
-- 本包使用 Python >=3.11,<3.14，依赖与可选依赖维护在本包 `pyproject.toml`。目前未加入根 uv workspace，不假定根环境同步会自动安装本包及所有可选依赖。
+- 本包使用 Python >=3.11,<3.14，属于根 uv workspace；依赖与可选依赖维护在本包 `pyproject.toml`。FastAPI 和所有内置 env 的 Python 依赖包含在主依赖中，仅保留 `postgres`、`kafka` 两个可选分组。根环境同步安装所选包的主依赖，不自动安装可选分组。
 - 修改后运行与改动相关的检查。本包测试位于 `src/mindmemos_skill/tests/`；按改动选择测试，不为纯文档更新启动完整业务测试或模型调用。
 - 接口和打包改动验证导入、抽象契约及打包；环境、Skill 与持久化改动优先验证恢复一致性、私有数据边界、源对象不变性及历史记录保留等行为。
 - 不在未获要求时启动模型调用或昂贵实验。
 
 ## Pipeline 调用边界
 
-- Service 不创建 Skill 数据服务或公开原始 database；所有业务操作委托给 pipeline。Skill Set 查询通过 `service.list_skill_sets()`、`service.list_skill_set_snapshots()` 和 `service.get_skill_set_snapshot()` 在已授权项目内执行。
-- `SkillPersistence.skills` 是统一的 Skill 身份、版本及快照访问入口；`resolve(project_id, reference)` 解析 Skill 家族或版本 ID、别名及唯一前缀，返回所属家族与选定版本；只需要家族记录的内部调用使用 `resolve_family(project_id, reference)`。`version_by_id(project_id, version_id)` 按精确版本加载并校验项目。事务及版本冲突检测留在 persistence。
+- Service 不创建 Skill 数据服务或公开原始 database；所有业务操作委托给 pipeline。Skill Set 查询通过 `service.list_graph()`、`service.list_graph_snapshots()` 和 `service.get_graph_snapshot()` 在已授权项目内执行。
+- `SkillPersistence.skills` 是统一的 Skill 身份、版本及快照访问入口；`resolve(project_id, reference)` 解析 Skill 家族或版本 ID、别名及唯一前缀，返回所属家族与选定版本；只需要家族记录的内部调用使用 `resolve_family(project_id, reference)`。`get(version_id)` 在当前 session 的项目范围内加载精确版本，版本不存在或所属家族已删除时抛出 `SkillNotFoundError`；项目隔离由 `ScopedDatabase` 统一执行。事务及版本冲突检测留在 persistence。
 - TrainingRequest 传入 tasks、split、work_dir 和必填 init_skill_version_id、algo、env 配置；env 复用环境自己的 config_type，不接受 skill_ref。train 必填，val/test 可缺省；test 只评估已选定候选，不进入 trainer。具体训练和演进 pipeline 未实现时仍返回明确的未实现错误。
 
 - Pipeline 的业务接口、仓库与图查询接口、`close()` 均为异步；Service 与 `create_service()` 沿调用链使用 `await`。`SkillTrainer.train()`、`SkillEvolver.evolve()`、`Environment.rollout()` 和 `SkillSet.assemble()` 同样异步。仅进程入口创建事件循环，不在 pipeline 或训练主流程内使用 `asyncio.run()`；数据库事务、Agent、Embedding、具体环境 `_run()` 和单个 Skill 的组装均使用原生异步接口，逐层 `await`；禁止通过 `to_thread`、`run_in_executor` 或线程池包装同步业务接口。外部 CLI 和只有同步 API 的第三方模拟器使用异步子进程通信。纯计算、配置校验及本地快照文件处理保留普通函数。

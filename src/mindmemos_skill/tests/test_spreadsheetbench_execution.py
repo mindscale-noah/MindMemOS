@@ -55,3 +55,32 @@ async def test_protocol_selects_packaged_requirements_and_fixed_name(tmp_path, m
         config = await prepare_execution(protocol)
         assert config.python_command == [str(tmp_path / "envs" / f"spreadsheetbench_{protocol}" / "bin/python")]
     assert calls[0][1] != calls[1][1]
+
+
+@pytest.mark.parametrize("recalculation", [False, True])
+def test_native_prompt_matches_cached_value_grading(recalculation, tmp_path):
+    """Only cached-value grading instructs the model to avoid unevaluated formulas."""
+    from mindmemos_skill.agents import OpenAIChatConfig
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.config import SpreadsheetBenchToolCallingConfig
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.tool_call_mode.workspace_tools import system_prompt
+    from mindmemos_skill.envs.builtin_envs.spreadsheetbench.typing import (
+        SpreadsheetBenchTask,
+        SpreadsheetContext,
+        WorkbookInput,
+    )
+
+    config = SpreadsheetBenchToolCallingConfig(
+        agent=OpenAIChatConfig(model="offline"), transactional_recalculation=recalculation
+    )
+    context = SpreadsheetContext(
+        task=SpreadsheetBenchTask(
+            id="fixture", instruction="Compute totals", cases=[WorkbookInput(number="1", path=tmp_path / "input.xlsx")]
+        ),
+        directory=tmp_path,
+        skill_directory=tmp_path / "skills",
+        skill_text="",
+        tools=[],
+    )
+    prompt = system_prompt(context, config)
+    assert ("Write the final computed values into the target cells" in prompt) is (not recalculation)
+    assert ("no formula recalculation" in prompt) is (not recalculation)

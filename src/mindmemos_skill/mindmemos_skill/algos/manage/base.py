@@ -7,6 +7,7 @@ from ...envs.typing import Task
 from ...registry.base import ConfigT
 from ...skill import Skill
 from ..base import Algorithm
+from .typing import GeneratedGraph
 
 
 class SkillManager(Algorithm[ConfigT], ABC):
@@ -19,8 +20,8 @@ class SkillManager(Algorithm[ConfigT], ABC):
     """
 
     @abstractmethod
-    async def organize(self, *, skills: Mapping[str, Skill]) -> None:
-        """Replace the current scope and build its organization.
+    async def organize(self, *, skills: Mapping[str, Skill]) -> GeneratedGraph:
+        """Generate the complete selected scope for separate publication.
 
         Args:
             skills: Complete mapping of caller-owned IDs to skill snapshots.
@@ -28,11 +29,15 @@ class SkillManager(Algorithm[ConfigT], ABC):
                 Implementations must retain their own mapping and must not mutate
                 the supplied skills. Repeated calls replace, rather than extend,
                 the previous scope. Database operations must stay in this scope.
+                This step must not publish a version or change the graph head.
+
+        Returns:
+            Complete generated graph data awaiting publication by the caller.
         """
 
     @abstractmethod
     async def recommend(self, *, task: Task, limit: int = 5) -> list[str]:
-        """Recommend only skills from the most recently organized scope.
+        """Recommend only skills from the most recently loaded published scope.
 
         Args:
             task: Current task used to select relevant skills.
@@ -43,6 +48,6 @@ class SkillManager(Algorithm[ConfigT], ABC):
             Every ID must belong to the current scope; an empty scope returns [].
 
         Raises:
-            RuntimeError: No scope has been organized, or its latest build failed.
+            RuntimeError: No published scope has been loaded.
             ValueError: The recommendation limit is invalid.
         """

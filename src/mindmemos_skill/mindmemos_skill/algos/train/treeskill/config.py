@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ....agents.buitin_agents.openai_chat.config import OpenAIChatConfig
+from ....agents.config import AgentConfig
 from ..config import EnvAdapterSelection
 from .typing import AnnotationMode
 
@@ -21,7 +24,7 @@ class TreeSkillConfig(BaseModel):
     tree_metadata: dict = Field(default_factory=dict)
     """Verified topology and identity ledger for reference routing; contains no instructions."""
 
-    router: OpenAIChatConfig
+    router: Annotated[OpenAIChatConfig, AgentConfig(allowed=("openai_chat",), namespace="treeskill")]
     """Router model settings, including generation limits and provider retries."""
 
 
@@ -32,10 +35,12 @@ class TreeSkillTrainerConfig(BaseModel):
     """Reject misspelled settings and freeze the experiment protocol."""
 
     # Training models
-    optimizer: OpenAIChatConfig
+    optimizer: Annotated[OpenAIChatConfig, AgentConfig(allowed=("openai_chat",), namespace="treeskill")]
     """Model transport shared by analysis, localization and fusion."""
 
-    failure_optimizer: OpenAIChatConfig | None = None
+    failure_optimizer: (
+        Annotated[OpenAIChatConfig, AgentConfig(allowed=("openai_chat",), namespace="treeskill")] | None
+    ) = None
     """Reference failure-analysis model; None reuses optimizer settings."""
 
     # Trajectory collection
@@ -98,7 +103,7 @@ class TreeSkillTrainerConfig(BaseModel):
     """Completion budget for each node fusion."""
 
     # Task-time routing
-    router: OpenAIChatConfig
+    router: Annotated[OpenAIChatConfig, AgentConfig(allowed=("openai_chat",), namespace="treeskill")]
     """Task-time routing model for the final Skill."""
 
     routing_temperature: float = Field(default=0.0, ge=0)

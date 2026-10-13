@@ -16,8 +16,6 @@ from mindmemos_skill.envs.builtin_envs.agentskillos import (
     AgentSkillOSTask,
 )
 from mindmemos_skill.envs.data import Data
-from mindmemos_skill.persistence.constants import SKILLS_TABLE
-from mindmemos_skill.persistence.db_services.skills.typing import SkillRecord
 from mindmemos_skill.skill import Skill, SkillContent, SkillSet
 
 SOURCE = Path(__file__).resolve().parents[3] / "data/agentskillos/source"
@@ -255,77 +253,6 @@ async def test_evaluator_exception_is_not_a_scored_zero(config, tmp_path):
     with pytest.raises(RuntimeError, match="Evaluator error"):
         (await env.rollout(task, tmp_path / "run", reward_data=private))
     assert not (tmp_path / "run/audit/result.json").exists()
-
-
-async def test_skill_manage_to_execution_to_official_reward(config, tmp_path):
-    from mindmemos_skill.algos.manage.skill_manage import SkillManageAlgorithm, SkillManageConfig, SkillManageSkillSet
-    from mindmemos_skill.infra.database import SQLiteConfig, SQLiteDatabase
-    from mindmemos_skill.infra.embedding import OpenAIEmbeddingConfig
-    from mindmemos_skill.persistence import SkillVersionRecord, create_persistence, ensure_collection
-    from mindmemos_skill.persistence.db_services.skill_management.writer import SkillGraphStore
-
-    class Embeddings:
-        def __init__(self, settings):
-            self.config = settings
-            self.calls = []
-
-        async def embed(self, texts):
-            self.calls.extend(texts)
-            return [[1.0, 0.0] for _ in texts]
-
-    task, private = sample(tmp_path)
-    database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'graph.db'}"))
-    try:
-        persistence = create_persistence(database)
-        (await ensure_collection(persistence))
-        skills = skill_set().skills
-        for name, source in skills.items():
-            (
-                await persistence.skills.add_skill(
-                    source,
-                    SkillVersionRecord(
-                        project_id="eval",
-                        skill_id=name,
-                        version_id=f"v-{name}",
-                        **source.snapshot().model_dump(),
-                    ),
-                )
-            )
-            (
-                await database.insert(
-                    SKILLS_TABLE,
-                    [
-                        SkillRecord(
-                            project_id="eval", skill_id=name, name=name, active_version_id=f"v-{name}"
-                        ).model_dump()
-                    ],
-                )
-            )
-        store = SkillGraphStore(
-            database,
-            project_id="eval",
-            graph_id="eval",
-            actor_id="test",
-            version_ids={name: f"v-{name}" for name in skills},
-        )
-        settings = SkillManageConfig(
-            embedding=OpenAIEmbeddingConfig(model="test", base_url="http://test.invalid/v1", dimensions=2),
-            build_scene=False,
-            llm_linking=False,
-            query_rewrite=False,
-            mode="skill_only",
-            seed_top_k=5,
-        )
-        embeddings = Embeddings(settings.embedding)
-        algorithm = SkillManageAlgorithm(settings, store=store, embedding_model=embeddings)
-        selection = SkillManageSkillSet(skills, algorithm=algorithm, limit=5, max_concurrency=1)
-        env = AgentSkillOSEnvironment(config, agent=Executor(config.agent, {"answer": 42}))
-        result = await env.rollout(task, tmp_path / "run", reward_data=private, skill_set=selection)
-        assert result.reward.score == 1
-        assert json.loads(result.reward.detail)["retrieval"]["ranked_skill_ids"] == ["alpha"]
-        assert embeddings.calls[-1] == task.instruction
-    finally:
-        (await database.close())
 
 
 def test_batch_cli_actual_official_task_and_resume(config, tmp_path):

@@ -1,3 +1,8 @@
+---
+name: skill-forest-officeqa
+description: Initial instructions for the officeqa benchmark.
+---
+
 # OfficeQA Skill
 
 ## Retrieval Discipline

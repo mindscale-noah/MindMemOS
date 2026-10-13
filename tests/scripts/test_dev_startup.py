@@ -175,6 +175,30 @@ def test_telemetry_does_not_pull_in_disabled_kafka(tmp_path):
     assert plan.services == {"otel-collector", "clickhouse", "grafana"}
 
 
+@pytest.mark.parametrize("mode", [None, "local", "kafka"])
+def test_skill_core_uses_local_tasks_and_preserves_limits(tmp_path, mode):
+    source = _skill(tmp_path)
+    data = yaml.safe_load(source.read_text())
+    if mode is not None:
+        data["service"]["task_manager"] = {
+            "mode": mode,
+            "bootstrap_servers": "localhost:9092",
+            "max_concurrency": 7,
+            "max_buffered": 23,
+        }
+        _write(source, data)
+    original = source.read_bytes()
+    plan = DependencyPlan()
+    document = skill_document(source, plan, "127.0.0.1", async_tasks=False)
+    runtime = run._write_config(tmp_path, "runtime", document)
+    config = read_skill_config(runtime)
+    assert config.service.task_manager.mode == "local"
+    assert config.service.task_manager.max_concurrency == (7 if mode else 2)
+    assert config.service.task_manager.max_buffered == (23 if mode else 1000)
+    assert not plan.services
+    assert source.read_bytes() == original
+
+
 def test_external_endpoints_never_provision_local_containers(tmp_path, monkeypatch):
     source = _skill(tmp_path, postgres=True, kafka=True, otlp=True)
     data = yaml.safe_load(source.read_text())
@@ -296,12 +320,12 @@ def test_feature_presets_override_yaml_and_preserve_task_options(tmp_path, async
     document = skill_document(source, plan, "127.0.0.1", async_tasks=async_tasks, otel=otel)
     runtime = run._write_config(tmp_path, "runtime", document)
     config = read_skill_config(runtime)
-    assert (config.service.task_manager is not None) == async_tasks
+    assert config.service.task_manager is not None
+    assert config.service.task_manager.mode == ("kafka" if async_tasks else "local")
+    assert config.service.task_manager.topic == "custom.jobs"
+    assert config.service.task_manager.max_concurrency == 3
     if async_tasks:
         assert config.service.task_manager.worker is True
-        assert config.service.task_manager.mode == "kafka"
-        assert config.service.task_manager.topic == "custom.jobs"
-        assert config.service.task_manager.max_concurrency == 3
     assert config.service.observability.backend.class_name == "sqlite"
     assert (config.service.observability.otlp is not None) == otel
     finish_plan(plan)
@@ -522,14 +546,16 @@ def test_service_feature_matrix_selects_expected_containers(tmp_path, service, f
     plan = DependencyPlan()
     expected = set()
     if service in {"all", "memory"}:
-        memory_document(
+        memory = memory_document(
             _write(tmp_path / "memory.yaml", {}), plan, async_tasks=feature != "core", otel=feature == "all"
         )
+        assert memory["kafka"]["enabled"] is (feature != "core")
         expected.update({"qdrant", "neo4j"})
     if service in {"all", "skill"}:
-        skill_document(
+        skill = skill_document(
             _skill(tmp_path, postgres=True), plan, "127.0.0.1", async_tasks=feature != "core", otel=feature == "all"
         )
+        assert skill["service"]["task_manager"]["mode"] == ("local" if feature == "core" else "kafka")
         expected.add("skill-postgres")
     if feature != "core":
         expected.update({"kafka", "kafka-ui"})

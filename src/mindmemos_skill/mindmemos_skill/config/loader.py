@@ -7,6 +7,7 @@ import yaml
 from dotenv import load_dotenv
 from sqlalchemy.engine import URL
 
+from ..agents.config import AgentCatalog
 from ..infra import Infrastructure
 from ..infra.database import Database
 from ..infra.database.config import SQLiteConfig
@@ -15,12 +16,12 @@ from ..pipelines.builtin_pipelines.repository.repository import RepositoryPipeli
 from .config import ImplementationConfig, ServiceConfig, SkillConfig
 
 
-def _validate_pipeline(spec: ImplementationConfig, family: type[Pipeline]) -> None:
+def _validate_pipeline(spec: ImplementationConfig, family: type[Pipeline], agents: AgentCatalog) -> None:
     """Validate a pipeline's family, typed options and fixed persistence injection."""
     implementation = Pipeline.resolve(spec.class_name)
     if not issubclass(implementation, family):
         raise ValueError(f"Pipeline {spec.class_name!r} must implement {family.__name__}")
-    spec.config = implementation.config_type.model_validate(spec.config)
+    spec.config = implementation.config_type.model_validate(spec.config, context=agents)
     try:
         signature(implementation).bind(None, persistence=None)
     except TypeError as exc:
@@ -70,6 +71,7 @@ def validate_service_config(config: ServiceConfig) -> None:
     Args:
         config: Service definition to preflight.
     """
+    agents = AgentCatalog(agents=config.agents)
     if config.persistence is not None:
         database_spec = config.persistence.database
         database_type = Infrastructure.resolve(database_spec.class_name)
@@ -92,17 +94,17 @@ def validate_service_config(config: ServiceConfig) -> None:
     if "repository" not in config.disabled_services and config.repository_pipeline is not None:
         if config.persistence is None:
             raise ValueError("repository_pipeline requires global persistence")
-        _validate_pipeline(config.repository_pipeline, RepositoryPipeline)
+        _validate_pipeline(config.repository_pipeline, RepositoryPipeline, agents)
     if "manage" not in config.disabled_services and config.manage_pipeline is not None:
         if config.persistence is None:
             raise ValueError("manage_pipeline requires global persistence")
-        _validate_pipeline(config.manage_pipeline, ManagePipeline)
+        _validate_pipeline(config.manage_pipeline, ManagePipeline, agents)
     if "training" not in config.disabled_services:
         for spec in config.training_pipelines.values():
-            _validate_pipeline(spec, TrainingPipeline)
+            _validate_pipeline(spec, TrainingPipeline, agents)
     if "evolution" not in config.disabled_services:
         for spec in config.evolution_pipelines.values():
-            _validate_pipeline(spec, EvolutionPipeline)
+            _validate_pipeline(spec, EvolutionPipeline, agents)
 
 
 def resolve_service_config(config: ServiceConfig) -> ServiceConfig:

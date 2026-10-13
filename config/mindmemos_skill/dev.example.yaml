@@ -1,8 +1,9 @@
 # Skill execution uses async model, database, and subprocess APIs end to end.
 # Complete built-in Skill service configuration; copy to dev.yaml before starting.
-# All fields of the selected implementations are explicit, including optional defaults.
+# Agent presets omit default options except timeout_s and max_retries.
+# Connection placeholders remain where dev.yaml supplies local credentials.
 # Within each config: connections/behavior/concurrency first, advanced tuning/audit last.
-# Fill api_key and base_url in every enabled chat block before model calls.
+# Fill api_key and base_url in each enabled service.agents preset before model calls.
 # Replace the embedding model, endpoint and dimensions with values from your provider.
 # Each pipeline block is independent: comment out the whole block when not needed.
 # Keep training_pipelines: {} / evolution_pipelines: {} if removing all their children;
@@ -20,6 +21,79 @@
 service:
   home: ../../data/mindmemos_skill
   disabled_services: []
+  # Algorithm-owned Agent presets; references use <algo>_<llm_name>.
+  agents:
+    skill_forest_gpt_5_4_mini:
+      class_name: openai_chat
+      config:
+        class_name: openai_chat
+        model: gpt-5.4-mini
+        reasoning_effort: medium
+        api_key: null
+        base_url: null
+        max_completion_tokens: 16384
+        timeout_s: 180.0
+        max_retries: 3
+    treeskill_qwen3_5_thinking:
+      class_name: openai_chat
+      config:
+        class_name: openai_chat
+        model: qwen3.5-9b
+        api_key: null
+        base_url: null
+        max_completion_tokens: 16384
+        temperature: 1.0
+        timeout_s: 1800.0
+        max_retries: 3
+        top_p: 0.95
+        presence_penalty: 1.5
+        seed: 41
+        extra_body:
+          top_k: 20
+          min_p: 0.0
+          repetition_penalty: 1.0
+          chat_template_kwargs:
+            enable_thinking: true
+    treeskill_qwen3_5_fast:
+      class_name: openai_chat
+      config:
+        class_name: openai_chat
+        model: qwen3.5-9b
+        api_key: null
+        base_url: null
+        max_completion_tokens: 16384
+        temperature: 1.0
+        timeout_s: 600.0
+        max_retries: 3
+        top_p: 1.0
+        presence_penalty: 2.0
+        seed: 41
+        extra_body:
+          top_k: 40
+          min_p: 0.0
+          repetition_penalty: 1.0
+          chat_template_kwargs:
+            enable_thinking: false
+    simple_evolve_gpt_5_4_mini:
+      class_name: openai_chat
+      config:
+        class_name: openai_chat
+        model: gpt-5.4-mini
+        api_key: null
+        base_url: null
+        timeout_s: 180.0
+        max_retries: 3
+
+    skill_manage_deepseek_v4_flash:
+      class_name: openai_chat
+      config:
+        class_name: openai_chat
+        model: deepseek-v4-flash
+        max_completion_tokens: 32768
+        timeout_s: 1200.0
+        sdk_max_retries: 0
+        base_url: https://api.openai.com/v1
+        api_key: null
   persistence:
     config:
       prefixed_ids: true
@@ -27,7 +101,7 @@ service:
       class_name: postgres
       config:
         url: postgresql+psycopg://mindmemos_skill:mindmemos_dev_password@localhost:55432/mindmemos_skill
-        pool_size: 5
+        pool_size: 20
         max_overflow: 10
         pool_timeout: 30.0
 
@@ -37,65 +111,65 @@ service:
     config: {}
 
   # Graph queries, organization and recommendation. Comment out this block to disable all.
-  # Set algorithm: null for queries only; organization/recommendation require algorithm.
+  # Supply model credentials for construction and recommendation; stored queries need no model calls.
   manage_pipeline:
     class_name: graph_manage
     config:
+      scene_concurrency: 4
       algorithm:
         embedding:
-          model: YOUR_EMBEDDING_MODEL
-          base_url: https://YOUR_EMBEDDING_ENDPOINT/v1
+          class_name: openai_embedding
+          model: qwen3-embedding-4b
+          base_url: https://api.openai.com/v1
           api_key: null
-          dimensions: 1536
+          dimensions: 2560
           send_dimensions: false
           batch_size: 64
-          timeout_s: 180.0
+          timeout_s: 180
           max_retries: 3
-        chat:
-          model: gpt-5.4-mini
-          api_key: null
-          base_url: null
-          max_completion_tokens: 4096
-          temperature: null
-          reasoning_effort: null
-          timeout_s: 180.0
-          max_retries: 3
-          retry_initial_wait_s: 1.0
-          retry_max_wait_s: 60.0
-          top_p: null
-          presence_penalty: null
-          seed: null
-          stop: []
-          response_format: null
-          extra_body: {}
-          response_validation: strict
-          strip_thinking: false
-          retry_policy: transient
-          retry_wait: exponential
-          retry_waits_s:
-          - 5.0
-          - 10.0
-          - 30.0
-          invalid_tool_arguments: error
-          parse_max_attempts: 3
-          parse_retry_mode: direct
-        llm_linking: true
-        query_rewrite: true
+        embedding_profile: null
+        chat: skill_manage_deepseek_v4_flash
         build_scene: true
-        mode: unified_ppr
-        seed_top_k: 20
-        score_threshold: -1.0
-        dependency_match_threshold: 0.5
+        scene_flow_weight: 0.3
+        llm_linking: true
+        scene_llm_linking: false
+        query_rewrite: false
+        enrich_skill: false
+        enrichment_concurrency: 4
+        enrichment_failure: error
+        mode: separate
+        scene_ppr: true
+        fusion_lambda: 0.5
+        scene_count_damp: 0
+        scene_uniqueness: 0
+        dependency_filter: none
+        dependency_hub_fraction: 0.05
+        dependency_top_k: 10
+        skill_candidates: 20
+        scene_candidates: 20
+        skill_seeds: 5
+        scene_seeds: 5
+        alpha: 0.5
+        aggregation: max
+        score_threshold: -1
         damping: 0.2
         max_iter: 50
-        tolerance: 1.0e-06
+        tolerance: 0.000001
         max_input_chars: 1000000
         llm_batch_size: 32
-      prefixed_graph_ids: true
+        joint_linking:
+          candidate_strategy: rrf
+          dense_candidates: 20
+          lexical_candidates: 20
+          io_candidates: 20
+          max_candidates: 20
+          model_candidates: 8
+          relation_weighting: type_confidence
+          relation_validation: strict
+          dependency_match_threshold: 0.6
 
   # Select a named trainer through TrainingRequest.algo; comment out either child independently.
   training_pipelines:
-
     # Skill-Forest: expansion_budget is global and must be at least num_trees.
     skill_forest:
       class_name: training
@@ -103,18 +177,7 @@ service:
         trainer:
           class_name: skill_forest
           config:
-            optimizer:
-              model: gpt-5.4-mini
-              api_key: null
-              base_url: null
-              max_completion_tokens: 16384
-              temperature: null
-              reasoning_effort: null
-              timeout_s: 180.0
-              max_retries: 3
-              retry_initial_wait_s: 1.0
-              retry_max_wait_s: 60.0
-
+            optimizer: skill_forest_gpt_5_4_mini
             ensemble_strategy: select
             num_trees: 7
             train_ratio: 0.5
@@ -150,72 +213,8 @@ service:
         trainer:
           class_name: treeskill
           config:
-            optimizer:
-              model: qwen3.5-9b
-              api_key: null
-              base_url: null
-              max_completion_tokens: 16384
-              temperature: 1.0
-              reasoning_effort: null
-              timeout_s: 1800.0
-              max_retries: 3
-              retry_initial_wait_s: 1.0
-              retry_max_wait_s: 60.0
-              top_p: 0.95
-              presence_penalty: 1.5
-              seed: 41
-              stop: []
-              response_format: null
-              extra_body: &id001
-                top_k: 20
-                min_p: 0.0
-                repetition_penalty: 1.0
-                chat_template_kwargs:
-                  enable_thinking: true
-              response_validation: content
-              strip_thinking: false
-              retry_policy: transient
-              retry_wait: exponential
-              retry_waits_s:
-              - 5.0
-              - 10.0
-              - 30.0
-              invalid_tool_arguments: error
-              parse_max_attempts: 3
-              parse_retry_mode: direct
-            failure_optimizer:
-              model: qwen3.5-9b
-              api_key: null
-              base_url: null
-              max_completion_tokens: 16384
-              temperature: 1.0
-              reasoning_effort: null
-              timeout_s: 600.0
-              max_retries: 3
-              retry_initial_wait_s: 1.0
-              retry_max_wait_s: 60.0
-              top_p: 1.0
-              presence_penalty: 2.0
-              seed: 41
-              stop: []
-              response_format: null
-              extra_body:
-                top_k: 40
-                min_p: 0.0
-                repetition_penalty: 1.0
-                chat_template_kwargs:
-                  enable_thinking: false
-              response_validation: content
-              strip_thinking: false
-              retry_policy: transient
-              retry_wait: exponential
-              retry_waits_s:
-              - 5.0
-              - 10.0
-              - 30.0
-              invalid_tool_arguments: error
-              parse_max_attempts: 3
-              parse_retry_mode: direct
+            optimizer: treeskill_qwen3_5_thinking
+            failure_optimizer: treeskill_qwen3_5_fast
             samples_per_task: 1
             rollout_concurrency: 32
             min_trajectories: 1
@@ -234,39 +233,7 @@ service:
             localization_max_tokens: 16384
             fusion_temperature: 0.0
             fusion_max_tokens: 16384
-            router:
-              model: qwen3.5-9b
-              api_key: null
-              base_url: null
-              max_completion_tokens: 16384
-              temperature: 1.0
-              reasoning_effort: null
-              timeout_s: 600.0
-              max_retries: 3
-              retry_initial_wait_s: 1.0
-              retry_max_wait_s: 60.0
-              top_p: 1.0
-              presence_penalty: 2.0
-              seed: 41
-              stop: []
-              response_format: null
-              extra_body:
-                top_k: 40
-                min_p: 0.0
-                repetition_penalty: 1.0
-                chat_template_kwargs:
-                  enable_thinking: false
-              response_validation: content
-              strip_thinking: false
-              retry_policy: transient
-              retry_wait: exponential
-              retry_waits_s:
-              - 5.0
-              - 10.0
-              - 30.0
-              invalid_tool_arguments: error
-              parse_max_attempts: 3
-              parse_retry_mode: direct
+            router: treeskill_qwen3_5_fast
             routing_temperature: 0.0
             routing_max_tokens: 16384
             algorithm_version: '1'
@@ -279,34 +246,7 @@ service:
         evolver:
           class_name: simple_evolve
           config:
-            optimizer:
-              model: gpt-5.4-mini
-              api_key: null
-              base_url: null
-              max_completion_tokens: 4096
-              temperature: null
-              reasoning_effort: null
-              timeout_s: 180.0
-              max_retries: 3
-              retry_initial_wait_s: 1.0
-              retry_max_wait_s: 60.0
-              top_p: null
-              presence_penalty: null
-              seed: null
-              stop: []
-              response_format: null
-              extra_body: {}
-              response_validation: strict
-              strip_thinking: false
-              retry_policy: transient
-              retry_wait: exponential
-              retry_waits_s:
-              - 5.0
-              - 10.0
-              - 30.0
-              invalid_tool_arguments: error
-              parse_max_attempts: 3
-              parse_retry_mode: direct
+            optimizer: simple_evolve_gpt_5_4_mini
             batch_size: 8
             concurrency: 5
             user_message_chars: 60000
@@ -338,7 +278,7 @@ service:
       class_name: postgres
       config:
         url: postgresql+psycopg://mindmemos_skill:mindmemos_dev_password@localhost:55432/mindmemos_skill
-        pool_size: 5
+        pool_size: 20
         max_overflow: 10
         pool_timeout: 30.0
     otlp:

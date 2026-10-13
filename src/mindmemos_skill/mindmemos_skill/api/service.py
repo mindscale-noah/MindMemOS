@@ -8,7 +8,8 @@ from fnmatch import fnmatchcase
 from functools import wraps
 from inspect import isawaitable, signature
 from typing import Any, TypeVar
-from uuid import UUID, uuid4
+
+from mindmemos_skill.common.ids import generate_id
 
 from ..common.checkpoint import fingerprint
 from ..config.config import FastAPIConfig, ServiceName
@@ -32,6 +33,7 @@ from ..skill.typing import DiffResult
 from .base import MindMemOSSkill
 from .typing import (
     ActiveRequest,
+    AddGraphMembersRequest,
     AlgoSkillEvolveResult,
     CommitFromLocalRequest,
     CommitRequest,
@@ -48,6 +50,7 @@ from .typing import (
     RegisterFromLocalRequest,
     RegisterRequest,
     RegisterResult,
+    RemoveGraphMembersRequest,
     ReportTrajectoryRequest,
     RequestAuth,
     SetMetaRequest,
@@ -108,7 +111,7 @@ def _service_call(function):
         with (
             bind_tracer(self._observability.telemetry.tracer),
             log_context(
-                request_id=_context.get().get("request_id") or f"req_{uuid4().hex}",
+                request_id=_context.get().get("request_id") or generate_id("req_"),
                 project_id=project_id,
                 service_name="mindmemos-skill",
             ),
@@ -232,7 +235,7 @@ class SkillService(MindMemOSSkill):
         if self._observability.database is None:
             raise NotImplementedError("Observability is not configured")
         scope = await self._authorized_scope(project_id)
-        return await self._observability.get_run(scope.require("project_id"), run_id)
+        return await self._observability.queries(scope).get_run(run_id)
 
     @_service_call
     async def algorithm_spans(
@@ -252,7 +255,7 @@ class SkillService(MindMemOSSkill):
         if self._observability.database is None:
             raise NotImplementedError("Observability is not configured")
         scope = await self._authorized_scope(project_id)
-        return await self._observability.spans(scope.require("project_id"), run_id, limit=limit, offset=offset)
+        return await self._observability.queries(scope).spans(run_id, limit=limit, offset=offset)
 
     @_service_call
     async def algorithm_logs(
@@ -272,7 +275,7 @@ class SkillService(MindMemOSSkill):
         if self._observability.database is None:
             raise NotImplementedError("Observability is not configured")
         scope = await self._authorized_scope(project_id)
-        return await self._observability.logs(scope.require("project_id"), run_id, limit=limit, offset=offset)
+        return await self._observability.queries(scope).logs(run_id, limit=limit, offset=offset)
 
     @contextmanager
     def request_principal(self, principal: object):
@@ -322,8 +325,9 @@ class SkillService(MindMemOSSkill):
         """Run one pipeline call within a request-scoped persistence handle."""
         scope = await self._authorized_scope(project_id)
         if self._persistence is None:
-            return await operation(*args, **kwargs)
-        with self._persistence.session(scope):
+            with self._observability.session(scope):
+                return await operation(*args, **kwargs)
+        with self._persistence.session(scope), self._observability.session(scope):
             return await operation(*args, **kwargs)
 
     def attach_task_manager(self, manager: TaskManager) -> None:
@@ -352,7 +356,7 @@ class SkillService(MindMemOSSkill):
         await self._authorized_scope(request.project_id)
         payload = request.model_dump(mode="json")
         spec = TaskSpec(
-            task_id=uuid4().hex,
+            task_id=generate_id(),
             project_id=request.project_id,
             kind="skill.train",
             payload={
@@ -394,12 +398,12 @@ class SkillService(MindMemOSSkill):
         async def prepare() -> SkillPipelineRequest:
             """Resolve the exact baseline within the authorized storage session."""
             try:
-                version = await self._persistence.skills.version_by_id(project_id, version_id)
+                version = await self._persistence.skills.get(version_id)
             except SkillNotFoundError as exc:
                 raise SkillVersionNotFoundError("Skill version not found in this project") from exc
             return SkillPipelineRequest(
                 pipeline=pipeline_name,
-                run_id="evolve_" + uuid4().hex,
+                run_id=generate_id("evolve_"),
                 project_id=project_id,
                 skill_ref=version.skill_id,
                 base_version_id=version.version_id,
@@ -408,7 +412,7 @@ class SkillService(MindMemOSSkill):
 
         request = await self._execute(project_id, prepare)
         spec = TaskSpec(
-            task_id=uuid4().hex,
+            task_id=generate_id(),
             project_id=project_id,
             kind="skill.evolve",
             payload={
@@ -479,7 +483,10 @@ class SkillService(MindMemOSSkill):
             raise ValueError("Task payload project differs from its owner")
         if self._persistence is None:
             raise RuntimeError("Skill task worker requires persistence")
-        with self._persistence.session(Scope(fields={"project_id": spec.project_id})):
+        with (
+            self._persistence.session(Scope(fields={"project_id": spec.project_id})),
+            self._observability.session(Scope(fields={"project_id": spec.project_id})),
+        ):
             if spec.kind == "skill.train":
                 result = await self._run_training(request)
             else:
@@ -509,19 +516,19 @@ class SkillService(MindMemOSSkill):
         return request.model_copy(update={"project_id": self._project_id(request.project_id)})
 
     @_service_call
-    async def list_skill_sets(self, project_id: str | None = None) -> list[dict]:
-        """List Skill Sets in the authorized project.
+    async def list_graph(self, project_id: str | None = None) -> list[dict]:
+        """List graphs in the authorized project.
 
         Args:
             project_id: Explicit project, or the configured default project when omitted.
 
         Returns:
-            Project-owned Skill Set records and publication pointers.
+            Project-owned graph records and publication pointers.
         """
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         project_id = self._project_id(project_id)
-        return await self._execute(project_id, self._manage_pipeline.list_skill_sets, project_id)
+        return await self._execute(project_id, self._manage_pipeline.list_graph)
 
     @_service_call
     async def resolve_graph(self, reference: str, project_id: str | None = None) -> dict:
@@ -537,7 +544,7 @@ class SkillService(MindMemOSSkill):
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         project_id = self._project_id(project_id)
-        return await self._execute(project_id, self._manage_pipeline.resolve_graph, project_id, reference)
+        return await self._execute(project_id, self._manage_pipeline.resolve_graph, reference)
 
     @_service_call
     async def delete_graph(self, reference: str, project_id: str | None = None) -> None:
@@ -550,7 +557,7 @@ class SkillService(MindMemOSSkill):
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         project_id = self._project_id(project_id)
-        await self._execute(project_id, self._manage_pipeline.delete_graph, project_id, reference)
+        await self._execute(project_id, self._manage_pipeline.delete_graph, reference)
 
     @_service_call
     async def resolve_skill_reference(self, reference: str, project_id: str | None = None) -> SkillDetail:
@@ -567,11 +574,11 @@ class SkillService(MindMemOSSkill):
         return await self._execute(project_id, self.repository.resolve_skill_reference, project_id, reference)
 
     @_service_call
-    async def list_skill_set_snapshots(self, skill_set_id: str, project_id: str | None = None) -> list[dict]:
-        """List immutable snapshots and revisions of one Skill Set.
+    async def list_graph_snapshots(self, graph_id: str, project_id: str | None = None) -> list[dict]:
+        """List immutable snapshots and revisions of one graph.
 
         Args:
-            skill_set_id: Exact project-local Skill Set identity.
+            graph_id: Exact project-local graph identity.
             project_id: Explicit project, or the configured default project when omitted.
 
         Returns:
@@ -580,14 +587,14 @@ class SkillService(MindMemOSSkill):
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         project_id = self._project_id(project_id)
-        return await self._execute(project_id, self._manage_pipeline.list_skill_set_snapshots, project_id, skill_set_id)
+        return await self._execute(project_id, self._manage_pipeline.list_graph_snapshots, graph_id)
 
     @_service_call
-    async def get_skill_set_snapshot(self, skill_set_id: str, snapshot_id: UUID, project_id: str | None = None) -> dict:
-        """Read one Skill Set snapshot in the authorized project.
+    async def get_graph_snapshot(self, graph_id: str, snapshot_id: str, project_id: str | None = None) -> dict:
+        """Read one graph snapshot in the authorized project.
 
         Args:
-            skill_set_id: Exact project-local Skill Set identity.
+            graph_id: Exact project-local graph identity.
             snapshot_id: Immutable snapshot identity.
             project_id: Explicit project, or the configured default project when omitted.
 
@@ -597,9 +604,7 @@ class SkillService(MindMemOSSkill):
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         project_id = self._project_id(project_id)
-        return await self._execute(
-            project_id, self._manage_pipeline.get_skill_set_snapshot, project_id, skill_set_id, snapshot_id
-        )
+        return await self._execute(project_id, self._manage_pipeline.get_graph_snapshot, graph_id, snapshot_id)
 
     @_service_call
     async def get_skill_version(self, version_id: str, project_id: str | None = None) -> SkillVersionRecord:
@@ -613,7 +618,7 @@ class SkillService(MindMemOSSkill):
             The project-owned Skill version record.
         """
         project_id = self._project_id(project_id)
-        return await self._execute(project_id, self.repository.get_skill_version, project_id, version_id)
+        return await self._execute(project_id, self.repository.get_skill_version, version_id)
 
     @_service_call
     async def list_skill_versions(self, skill_id: str, project_id: str | None = None) -> list[SkillVersionRecord]:
@@ -658,6 +663,52 @@ class SkillService(MindMemOSSkill):
             raise NotImplementedError("Management pipeline is not configured")
         scoped = self._scoped(RecommendRequest.model_validate(request))
         return await self._execute(scoped.project_id, self._manage_pipeline.recommend, scoped)
+
+    @_service_call
+    async def add_graph_members(self, request: AddGraphMembersRequest) -> OrganizeResult:
+        """Authorize and add new families to an existing graph.
+
+        Args:
+            request: Graph reference and new Skill family or version references.
+
+        Returns:
+            Published snapshot and complete final member versions.
+        """
+        if self._manage_pipeline is None:
+            raise NotImplementedError("Management pipeline is not configured")
+        scoped = self._scoped(AddGraphMembersRequest.model_validate(request))
+        return await self._execute(scoped.project_id, self._manage_pipeline.add_graph_members, scoped)
+
+    @_service_call
+    async def remove_graph_members(self, request: RemoveGraphMembersRequest) -> OrganizeResult:
+        """Authorize and remove families without deleting canonical Skills.
+
+        Args:
+            request: Graph reference and Skill family or version references.
+
+        Returns:
+            Published snapshot and remaining member versions.
+        """
+        if self._manage_pipeline is None:
+            raise NotImplementedError("Management pipeline is not configured")
+        scoped = self._scoped(RemoveGraphMembersRequest.model_validate(request))
+        return await self._execute(scoped.project_id, self._manage_pipeline.remove_graph_members, scoped)
+
+    @_service_call
+    async def preview_graph(self, graph_ref: str, project_id: str | None = None) -> dict:
+        """Read a published graph's complete topology without model calls.
+
+        Args:
+            graph_ref: Family, alias, or immutable graph snapshot reference.
+            project_id: Explicit project or configured default.
+
+        Returns:
+            Pinned snapshot identity, Skill/Scene nodes, and relations.
+        """
+        if self._manage_pipeline is None:
+            raise NotImplementedError("Management pipeline is not configured")
+        project_id = self._project_id(project_id)
+        return await self._execute(project_id, self._manage_pipeline.preview_graph, graph_ref)
 
     @_service_call
     async def register_skill(self, request: RegisterRequest) -> RegisterResult:
@@ -814,7 +865,10 @@ class SkillService(MindMemOSSkill):
         result = await self._execute(request.project_id, self.repository.trajectory_statistics, request)
         algorithms = list(self._evolution_pipelines)
         algorithms.extend(Pipeline.name_for(type(pipeline)) for pipeline in self._evolution_pipelines.values())
-        latest = await self._observability.latest_evolution(request.project_id, request.version_id, algorithms)
+        latest = None
+        if self._observability.database is not None:
+            scope = await self._authorized_scope(request.project_id)
+            latest = await self._observability.queries(scope).latest_evolution(request.version_id, algorithms)
         if latest is not None:
             result = result.model_copy(update={"last_evolved_at": latest})
         return result
@@ -972,21 +1026,18 @@ class SkillService(MindMemOSSkill):
         """Record direct and worker evolution attempts through the shared audit sink."""
         if self._persistence is None:
             return await pipeline.evolve(request)
-        request = request.model_copy(update={"run_id": request.run_id or "evolve_" + uuid4().hex})
+        request = request.model_copy(update={"run_id": request.run_id or generate_id("evolve_")})
         previous = (
-            (await self._observability.get_run(request.project_id, request.run_id))
-            if self._observability.database is not None
-            else None
+            (await self._observability.get_run(request.run_id)) if self._observability.database is not None else None
         )
         if previous is not None:
             base_version_id = previous.base_version_id
         else:
-            owner = await self._persistence.skills.resolve_family(request.project_id, request.skill_ref)
+            owner = await self._persistence.skills.resolve_family(request.skill_ref)
             base = await self._persistence.skills.version(owner, request.base_version_id)
             base_version_id = base.version_id
 
         async with self._observability.trace_run(
-            project_id=request.project_id,
             run_id=request.run_id,
             algorithm=request.pipeline or Pipeline.name_for(type(pipeline)),
             base_version_id=base_version_id,
@@ -1024,7 +1075,6 @@ class SkillService(MindMemOSSkill):
         run_id = training_run_id(request.project_id, request.work_dir)
 
         async with self._observability.trace_run(
-            project_id=request.project_id,
             run_id=run_id,
             algorithm=request.algo or next(iter(self._training_pipelines)),
             base_version_id=request.init_skill_version_id,

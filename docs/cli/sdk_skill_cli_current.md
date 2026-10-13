@@ -14,12 +14,12 @@ mindmemos --help
 
 以下命令均已接入 CLI。表中的 SDK 方法在 `SkillClient` 和 `AsyncSkillClient` 中均存在；HTTP 路径统一以 `/v1/skills/` 开头。CLI 负责引用解析、组合调用、本地输入与默认 JSON 输出。
 
-最后一列给出对应 FastAPI 接口的 JSON 输入；多次调用按“解析 → 读取/提交”列出。示例中的精确 ID 应替换为前序响应或实际已有对象的 ID。除 `task progress` 输出纯文本外，其他 Skill CLI 命令默认输出 JSON，不需要输出格式开关。认证放在请求头，确认开关和本机文件路径不进入请求体；`register-structured --json` 接收结构化输入，包装为请求体的 `skill`。`task progress` 的 `after` 单独放在 URL 查询参数。Graph 推荐同时列出 HTTP 支持的精确快照格式与当前 SDK 可构造的格式。
+最后一列给出对应 FastAPI 接口的 JSON 输入；多次调用按“解析 → 读取/提交”列出。示例中的精确 ID 应替换为前序响应或实际已有对象的 ID。除 `task progress` 输出纯文本外，其他 Skill CLI 命令默认输出 JSON，不需要输出格式开关。认证放在请求头，确认开关和本机文件路径不进入请求体；`register --json-skill` 接收结构化输入，包装为请求体的 `skill`。`task progress` 的 `after` 单独放在 URL 查询参数。Graph 推荐同时列出 HTTP 支持的精确快照格式与当前 SDK 可构造的格式。
 
 | 命令 | 当前 SDK 方法 | 当前 HTTP 接口 | 实现边界 | FastAPI JSON 输入（请求体示例） |
 | --- | --- | --- | --- | --- |
-| `skill register` | `register()` | `POST /v1/skills/register` | 标准目录注册；自动资源收集和 include/exclude 筛选待 CLI 实现 | `{"alias":"demo-skill","skill":{"content":"---\nname: demo-skill\ndescription: Example skill\n---\n# Demo\n","commit_version":"v0.0.1","commit_message":"Initial registration","resources":{},"metadata":{}}}` |
-| `skill register-structured` | `register()` | `POST /v1/skills/register` | 已实现 StructuredSkillInfo JSON 输入和非标准内容校验 | `{"alias":"custom-skill","skill":{"content":"Follow the supplied task instructions.","name":"custom-skill","description":"Nonstandard instruction document","standard_format":false,"resources":{},"metadata":{},"commit_version":"v0.0.1","commit_message":"Initial registration"}}` |
+| `skill register` | `register()` | `POST /v1/skills/register` | 标准目录注册；自动资源收集和 include/exclude 筛选已实现 | `{"alias":"demo-skill","skill":{"content":"---\nname: demo-skill\ndescription: Example skill\n---\n# Demo\n","commit_version":"v0.0.1","commit_message":"Initial registration","resources":{},"metadata":{}}}` |
+| `skill register --json-skill` | `register()` | `POST /v1/skills/register` | 已实现 StructuredSkillInfo JSON 输入和非标准内容校验 | `{"alias":"custom-skill","skill":{"content":"Follow the supplied task instructions.","name":"custom-skill","description":"Nonstandard instruction document","standard_format":false,"resources":{},"metadata":{},"commit_version":"v0.0.1","commit_message":"Initial registration"}}` |
 | `skill list` | `list()` | `POST /v1/skills/list` | 已实现家族过滤与 cursor 分页；CLI 使用 `--filter`，不提供 cursor 参数 | `{"filters":{"name":"demo-*"},"limit":20}` |
 | `skill show` | `skill_resolve()`、`show()` | `POST /v1/skills/skill-resolve` → `show` | 已实现引用解析、精确版本读取与 JSON 输出 | 解析：`{"skill_ref":"demo-skill"}`<br>读取：`{"skill_id":"sk-family-id","skill_version_id":"skv-version-id"}` |
 | `skill resolve` | `skill_resolve()` | `POST /v1/skills/skill-resolve` | 已实现，Skill 返回 `is_active` | `{"skill_ref":"demo-skill"}` |
@@ -80,7 +80,7 @@ mindmemos auth --service-type custom \
 | --- | --- | --- | --- |
 | `SKILL_REF` | alias、家族 ID/唯一前缀、版本 ID/唯一前缀 | 无 | `skill-resolve` 选择当前或精确历史版本 |
 | `GRAPH_REF` | alias、Graph ID/唯一前缀、快照 ID/唯一前缀 | 无 | `graph-resolve` 选择当前发布或精确历史快照 |
-| `--json` | JSON 字符串，仅 `register-structured` | 必填，无默认值 | 接收 StructuredSkillInfo 并包装为 `skill`；用于输入 |
+| `--json-skill` | JSON 字符串，用于 register / commit | 与路径二选一 | 接收完整 StructuredSkillInfo 并包装为 `skill`；禁止混用路径或路径专属选项 |
 | `--yes` / `-y` | 布尔开关 | `False` | 删除默认询问确认，回车取消；不进入请求体 |
 
 所有接收 `SKILL_REF` 的命令统一先调用 `skill-resolve`：alias、家族 ID 或唯一家族前缀没有指定明确版本，选择当前生效（激活）版本；版本 ID 或唯一版本前缀选择给定版本。CLI 使用解析返回的家族和版本 ID；`activate` 另外要求通过 `--version` 或 `--version-id` 明确指定激活目标，详见第 9.3 节。歧义引用报错，不自动选择候选。历史查询、信息更新和删除作用于所属家族；提交使用选定版本作为父版本；轨迹列表按选定版本过滤。服务端仍负责最终项目归属与权限校验。
@@ -158,37 +158,37 @@ mindmemos skill register ./demo-skill \
 
 返回包含 `skill_id`、`skill_version_id` 和版本标签等信息。注册生成家族与初始当前版本，不维护客户端注册表。
 
-### 5.2 `skill register-structured`：直接输入 StructuredSkillInfo
+### 5.2 `skill register --json-skill`：直接输入 StructuredSkillInfo
 
 命令语法：
 
 ```text
-mindmemos skill register-structured --json STRUCTURED_SKILL_INFO_JSON [--alias ALIAS]
+mindmemos skill register --json-skill STRUCTURED_SKILL_INFO_JSON [--alias ALIAS]
 ```
 
 接口同样为 `POST /v1/skills/register`，复用当前 SDK 的 `register(RegisterRequest(...))`。该命令直接接收第 4 节定义的 `StructuredSkillInfo` 对象，支持设置 `standard_format=false` 注册非标准正文；也支持传入标准内容。
 
 | 参数 | 类型 / 取值 | 必填 | CLI 默认值 | 请求体字段 / 行为 |
 | --- | --- | --- | --- | --- |
-| `--json` | 单个 JSON 对象字符串 | 是 | 无 | 解析为 StructuredSkillInfo，整体包装为请求体的 `skill` |
+| `--json-skill` | 单个 JSON 对象字符串 | 是 | 无 | 解析为 StructuredSkillInfo，整体包装为请求体的 `skill` |
 | `--alias` | 非空字符串 | 否 | `None` | 请求体顶层 `alias`，省略时不自动使用 name |
 
-`--json` 的值是 StructuredSkillInfo 本身，不带外层 `skill` 或 `alias`。提供非标准 Skill 时，必须显式设置 `standard_format=false` 并填写 `name`、`description`；省略 standard_format 时使用模型默认 true 并校验标准 frontmatter。
+`--json-skill` 的值是 StructuredSkillInfo 本身，不带外层 `skill` 或 `alias`。提供非标准 Skill 时，必须显式设置 `standard_format=false` 并填写 `name`、`description`；省略 standard_format 时使用模型默认 true 并校验标准 frontmatter。
 
 执行步骤：
 
-1. 解析 `--json`，要求顶层为单个对象，并用当前 SDK 的 `StructuredSkillInfo` 校验；未知字段、非法 JSON 或资源编码/路径错误在上传前报错。
+1. 解析 `--json-skill`，要求顶层为单个对象，并用当前 SDK 的 `StructuredSkillInfo` 校验；未知字段、非法 JSON 或资源编码/路径错误在上传前报错。
 2. 按当前服务端规则校验内容与显示信息：标准内容校验 frontmatter，非标准内容要求显式 name/description。CLI 已在请求前完成内容校验；服务端保留最终校验。
-3. resources 由 JSON 直接提供，相对路径对应标准 Base64 原始字节。该命令不读取本地资源目录，因此没有 SOURCE、include/exclude 或 resources-dir 参数。
+3. resources 由 JSON 直接提供，相对路径对应标准 Base64 原始字节。JSON 模式不读取本地资源目录，禁止同时提供 SOURCE、--include、--exclude、--version、--message 或 --metadata-json；完整内容和提交信息只能由 JSON 提供。
 4. 保留 JSON 中的正文、资源和提交信息，按模型/服务端默认值处理省略字段：resources/metadata 为 `{}`、commit_message/commit_version 为 `None`、version_bump 为 patch、commit_source 为 user。不套用目录注册的别名、v0.0.1 或 Initial registration 默认值；commit_version 省略时由 API 分配初始 v1.0.0。
-5. 将对象包装为 `RegisterRequest(skill=..., alias=...)`，调用现有 register 接口，默认输出返回的 data JSON，包含家族与版本标识。`--json` 在此命令中专用于输入。
+5. 将对象包装为 `RegisterRequest(skill=..., alias=...)`，调用现有 register 接口，默认输出返回的 data JSON，包含家族与版本标识。`--json-skill` 在此命令中专用于输入。
 
 非标准 Skill 的 CLI 输入示例：
 
 ```bash
-mindmemos skill register-structured \
+mindmemos skill register \
   --alias custom-skill \
-  --json '{"content":"Follow the supplied task instructions.","name":"custom-skill","description":"Nonstandard instruction document","standard_format":false,"resources":{},"metadata":{},"commit_version":"v0.0.1","commit_message":"Initial registration"}'
+  --json-skill '{"content":"Follow the supplied task instructions.","name":"custom-skill","description":"Nonstandard instruction document","standard_format":false,"resources":{},"metadata":{},"commit_version":"v0.0.1","commit_message":"Initial registration"}'
 ```
 
 对应的 FastAPI JSON 输入为：
@@ -323,7 +323,8 @@ mindmemos skill export skv-version-id --to ./exported-skill --overwrite
 ## 8. `skill commit`
 
 ```text
-mindmemos skill commit SKILL_REF --from SOURCE --message TEXT [选项]
+mindmemos skill commit SKILL_REF --from SOURCE --message TEXT [路径选项] [--activate]
+mindmemos skill commit SKILL_REF --json-skill STRUCTURED_SKILL_INFO_JSON [--activate]
 ```
 
 接口：解析 `SKILL_REF` 后，调用 `POST /v1/skills/commit`。
@@ -331,15 +332,18 @@ mindmemos skill commit SKILL_REF --from SOURCE --message TEXT [选项]
 | 参数 | 类型 / 取值 | 必填 | CLI 默认值 | 请求体字段 / 行为 |
 | --- | --- | --- | --- | --- |
 | `SKILL_REF` | 家族或版本引用 | 是 | 无 | 解析出所属家族 `skill_id` 和选定版本 |
-| `--from` | 目录或 `SKILL.md` | 是 | 无 | 本地读取 `skill.content` |
-| `--message` | 非空字符串 | 是 | 无 | `skill.commit_message`；非空是 CLI 设计要求，不是当前 HTTP 要求 |
+| `--from` | 目录或 `SKILL.md` | 二选一 | 无 | 本地读取 `skill.content`，与 --json-skill 严格互斥 |
+| `--json-skill` | 完整 JSON 对象 | 二选一 | 无 | 提供完整 StructuredSkillInfo，与 --from 严格互斥 |
+| `--message` | 非空字符串 | 路径模式必填 | 无 | `skill.commit_message`；JSON 模式在对象中提供非空 commit_message |
 | `--version` | 版本标签 | 否 | `None` | `skill.commit_version`，与 `--bump` 互斥 |
 | `--bump` | `patch` / `minor` / `major` | 否 | `patch` | `skill.version_bump`；显式标签时不发送自定义 bump |
 | `--resources-dir` | 目录 | 否 | `None` | 替换资源，发送编码后的 `skill.resources`，`inherit_resources=false` |
 | `--clear-resources` | 布尔开关 | 否 | `False` | 清空资源，发送 `{}` 且 `inherit_resources=false` |
 | `--activate` | 布尔开关 | 否 | `False` | CLI 显式发送 `active=false`，指定后为 true |
 
-资源目录和清空开关互斥。都不传时，CLI 保持旧版本资源，因此必须显式发送 `inherit_resources=true`。当前 SDK/API 默认 `inherit_resources=False`、`active=True`，不能依靠字段省略来实现 CLI 默认行为。
+路径模式的资源目录和清空开关互斥。都不传时，CLI 保持旧版本资源，因此必须显式发送 `inherit_resources=true`。当前 SDK/API 默认 `inherit_resources=False`、`active=True`，不能依靠字段省略来实现 CLI 默认行为。
+
+JSON 模式拒绝 `--message`、`--version`、`--bump`、`--resources-dir` 和 `--clear-resources`，不合并命令行字段与 JSON。JSON 中的 resources 完整替换父版本资源；省略或 `{}` 表示清空，始终发送 `inherit_resources=false`。提交说明从 JSON 的非空 `commit_message` 读取。两种模式默认不激活新版本，均可使用 `--activate`。
 
 CLI 将解析选定的版本作为 `base_version_id`。该字段表示新版本的父版本；当前实现允许从历史父版本建分支，不能将它描述为客户端读取后到提交之间的严格当前版本比较锁。服务端激活写入有自身的并发校验。
 
@@ -702,7 +706,7 @@ HTTP 与 SDK `RecommendRequest` 均支持以下精确快照请求，CLI 显式�
 | 行为 | 约定 |
 | --- | --- |
 | 默认输出 | 成功结果在 stdout 输出 JSON；普通 API 操作输出 data，不需要格式开关 |
-| `register-structured --json` | 仅接收 StructuredSkillInfo 输入，不控制输出格式 |
+| `register --json-skill` | 仅接收 StructuredSkillInfo 输入，不控制输出格式 |
 | `task progress` / `task progress --follow` | 纯文本，每行 `[时间戳] [name] message` |
 | 交互确认 | 提示写入 stderr，避免混入 stdout 的结果 JSON |
 | 错误输出 | 在 stderr 输出 JSON，包含错误码、说明和可用的 request_id，不输出凭据 |

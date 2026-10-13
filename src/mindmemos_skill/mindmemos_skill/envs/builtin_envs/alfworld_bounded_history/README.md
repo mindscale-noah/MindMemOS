@@ -4,7 +4,7 @@ Official source: [ALFWorld](https://github.com/alfworld/alfworld#download-data).
 from the repository root with Python 3.12 or 3.13:
 
 ```bash
-uv run python scripts/download_datasets.py download --benchmark skill --dataset alfworld
+uv run python scripts/download_datasets.py download skill --name alfworld
 ```
 
 The default destination is `data/mindmemos_skill/alfworld/`. The script uses the sources and pinned versions in
@@ -55,7 +55,7 @@ Each execution uses a new work directory and makes real model calls.
 ```python
 import asyncio
 from pathlib import Path
-from uuid import uuid4
+from mindmemos_skill.common.ids import generate_id
 
 import yaml
 
@@ -98,7 +98,7 @@ env = Environment.build("alfworld_bounded_history", {
 async def main():
     """Run one test task and print its rollout result."""
     sample = splits["test"][0]
-    work_dir = root / "output/env_examples/alfworld_bounded_history" / uuid4().hex
+    work_dir = root / "output/env_examples/alfworld_bounded_history" / generate_id()
     result = await env.rollout(
         task=sample.task,
         reward_data=sample.reward_data,

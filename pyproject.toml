@@ -6,6 +6,7 @@ authors = [
 ]
 requires-python = ">=3.11,<3.14"
 dependencies = [
+    "gdown>=6.4.2",
     "mindmemos",
     "mindmemos-eval",
     "mindmemos-sdk",

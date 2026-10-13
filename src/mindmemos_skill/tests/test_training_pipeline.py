@@ -1,9 +1,11 @@
 """Offline service training, automatic recovery, and durable publication checks."""
 
 import asyncio
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from mindmemos_skill.agents import Agent as RegisteredAgent
 from mindmemos_skill.algos.train.skill_forest import SkillForestTrainer
 from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillTrainer
 from mindmemos_skill.api.typing import CommitRequest, RegisterRequest, ShowRequest, StructuredSkillInfo, TrainingRequest
@@ -54,7 +56,7 @@ async def setup_service(tmp_path, monkeypatch):
     monkeypatch.setattr(OfflineEnvironment, "instances", [])
     monkeypatch.setattr(Environment, "_registry", dict(Environment._registry))
     Environment.register("training_offline")(OfflineEnvironment)
-    model = make_trainer().config.model_dump(mode="json")
+    model = make_trainer(monkeypatch=monkeypatch).config.model_dump(mode="json")
     config = ServiceConfig.model_validate(
         {
             "home": tmp_path / "home",
@@ -94,9 +96,16 @@ async def setup_service(tmp_path, monkeypatch):
                 ),
             )
         )
-    for name in config.training_pipelines:
-        pipeline = service.backends[f"training_pipelines.{name}"]
-        pipeline.trainer.agent_factory = smoke.SmokeAgent if name == "treeskill" else FakeOptimizer()
+    from mindmemos_skill.algos.train.skill_forest.config import ForestOptimizerConfig
+
+    forest_optimizer = FakeOptimizer()
+    monkeypatch.setattr(
+        RegisteredAgent,
+        "from_config",
+        lambda options: (
+            forest_optimizer(options) if isinstance(options, ForestOptimizerConfig) else smoke.SmokeAgent(options)
+        ),
+    )
     with service.request_principal("test-user"):
         yield service, initial, source, config
     await service.close()
@@ -119,7 +128,7 @@ def request_for(tmp_path, initial, algorithm):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_uses_call_environment(setup_service, tmp_path):
+async def test_pipeline_uses_call_environment(setup_service, tmp_path, monkeypatch):
     """Pass the selected environment to training and held-out evaluation."""
     service, initial, _, _ = setup_service
     pipeline = service.backends["training_pipelines.treeskill"]
@@ -130,20 +139,30 @@ async def test_pipeline_uses_call_environment(setup_service, tmp_path):
         _ = pipeline.environment
     with pytest.raises(TypeError, match="env"):
         await pipeline.train(request)
+
+    async def reject_owner_reload(*args, **kwargs):
+        pytest.fail("Training must reuse the owner read with its base version")
+
+    monkeypatch.setattr(SkillDataService, "resolve_family", reject_owner_reload)
     with pipeline.persistence.session(Scope(fields={"project_id": "project"})):
         await pipeline.train(request, env=selected_environment)
     assert selected_environment.calls[-2:] == ["val", "test"]
     assert OfflineEnvironment.instances == [selected_environment]
 
 
-def test_training_config_rejects_initial_environment():
+def test_training_config_rejects_initial_environment(
+    monkeypatch,
+):
     """The configured training pipeline never owns an environment."""
     from mindmemos_skill.pipelines.builtin_pipelines.training.config import TrainingPipelineConfig
 
     with pytest.raises(ValidationError, match="environment"):
         TrainingPipelineConfig.model_validate(
             {
-                "trainer": {"class_name": "treeskill", "config": make_trainer().config.model_dump(mode="json")},
+                "trainer": {
+                    "class_name": "treeskill",
+                    "config": make_trainer(monkeypatch=monkeypatch).config.model_dump(mode="json"),
+                },
                 "environment": {"class_name": "training_offline"},
             }
         )
@@ -160,6 +179,11 @@ async def test_service_selects_trainer_and_publishes_once(setup_service, tmp_pat
     version = (await service.show_skill(ShowRequest(project_id="project", skill_id=result.skill_id))).version
     assert version.parent_version_ids == [initial.skill_version_id]
     assert version.version_label.endswith(algorithm.replace("_", "-"))
+    evaluation = version.metadata["algorithm_report"]["evaluations"]["test"]
+    assert evaluation["count"] == 1 and evaluation["errors"] == 0
+    assert evaluation["wall_seconds"] >= 0
+    assert evaluation["total_tokens"] is None
+    assert Path(evaluation["trajectory_file"]).is_file()
     if algorithm == "skill_forest":
         local_result = read_json(tmp_path / algorithm / "train" / "result.json")
         assert local_result["validation"]["count"] == 1
@@ -286,7 +310,7 @@ async def test_commit_acknowledgement_loss_and_concurrent_parent(setup_service, 
 async def test_treeskill_automatically_recovers_without_repeating_calls(tmp_path, monkeypatch, point):
     from mindmemos_skill.algos.train.treeskill import trainer as module
 
-    trainer = make_trainer()
+    trainer = make_trainer(monkeypatch=monkeypatch)
     env = OfflineEnvironment(OfflineConfig())
     source = Skill(
         source=SkillContent(
@@ -410,3 +434,112 @@ async def test_cancelled_async_workers_finish_cleanup_before_return():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert finished == [1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("algorithm", ["treeskill", "skill_forest"])
+async def test_config_hash_gates_training_and_snapshot_is_written_once(setup_service, tmp_path, monkeypatch, algorithm):
+    """Check one sanitized configuration hash before entering the trainer."""
+    from mindmemos_skill.pipelines.builtin_pipelines.training import training as module
+
+    service, initial, _, _ = setup_service
+    request = request_for(tmp_path, initial, algorithm)
+    pipeline = service.backends[f"training_pipelines.{algorithm}"]
+    pipeline.trainer.config.optimizer.api_key = "first-private-key"
+    calls = 0
+    hashes = 0
+    original_fingerprint = module.fingerprint
+
+    def count_hash(config):
+        nonlocal hashes
+        hashes += 1
+        return original_fingerprint(config)
+
+    async def stop_training(**kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("training entered")
+
+    def reject_file_scan(*args):
+        raise AssertionError("Pipeline must not scan input files")
+
+    monkeypatch.setattr(module, "fingerprint", count_hash)
+    monkeypatch.setattr(pipeline.trainer, "train", stop_training)
+    monkeypatch.setattr(OfflineEnvironment, "input_identity", reject_file_scan)
+    with pytest.raises(RuntimeError, match="training entered"):
+        await service.run_training(request)
+    path = tmp_path / algorithm / "config.json"
+    saved = path.read_bytes()
+    modified_at = path.stat().st_mtime_ns
+    assert b"first-private-key" not in saved
+    assert read_json(path)["config"]["trainer"]["config"]["optimizer"]["api_key"] == "[REDACTED]"
+    assert not (path.parent / "request.json").exists()
+    assert hashes == calls == 1
+
+    pipeline.trainer.config.optimizer.api_key = "replacement-private-key"
+    with pytest.raises(RuntimeError, match="training entered"):
+        await service.run_training(request)
+    assert hashes == calls == 2
+    assert path.read_bytes() == saved
+    assert path.stat().st_mtime_ns == modified_at
+
+    pipeline.trainer.config.optimizer.model = "different-model"
+    with pytest.raises(SkillConflictError, match="different inputs"):
+        await service.run_training(request)
+    assert hashes == 3
+    assert calls == 2
+    assert path.read_bytes() == saved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_costs", [False, True])
+async def test_final_evaluation_reports_costs_and_reuses_results(tmp_path, monkeypatch, missing_costs):
+    """Preserve known and unknown execution costs across checkpoint reuse."""
+    from datetime import UTC, datetime, timedelta
+
+    from mindmemos_skill.pipelines.builtin_pipelines.training.evaluation import evaluate_skill
+
+    env = OfflineEnvironment(OfflineConfig())
+    skill = Skill(
+        source=SkillContent(content="Save output.", name="cost-test", description="Offline", standard_format=False)
+    )
+    samples = [DataSample(task=Task(id=str(index), instruction="Save"), reward_data=RewardData()) for index in range(2)]
+    calls = []
+
+    async def rollout(**kwargs):
+        task = kwargs["task"]
+        calls.append(task.id)
+        unknown = missing_costs and task.id == "1"
+        started = datetime(2026, 10, 13, tzinfo=UTC)
+        return RolloutResult(
+            output="Saved",
+            trajectory=[{"role": "assistant", "content": "Saved output"}],
+            reward=Reward(score=float(task.id == "0"), success=task.id == "0", detail="offline"),
+            started_at=None if unknown else started,
+            finished_at=None if unknown else started + timedelta(seconds=2.5),
+            duration_s=None if unknown else 2.5,
+            usage={} if unknown else {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+        )
+
+    monkeypatch.setattr(env, "rollout", rollout)
+
+    async def evaluate():
+        return await evaluate_skill(skill=skill, env=env, samples=samples, directory=tmp_path, concurrency=2)
+
+    first = await evaluate()
+    second = await evaluate()
+    assert calls == ["0", "1"]
+    assert first.summary.model_dump() == {"count": 2, "success_rate": 0.5, "mean_score": 0.5}
+    assert first.tasks == second.tasks
+    expected_costs = {
+        "task_seconds": None if missing_costs else 5.0,
+        "input_tokens": None if missing_costs else 6,
+        "output_tokens": None if missing_costs else 8,
+        "total_tokens": None if missing_costs else 14,
+    }
+    for result in (first, second):
+        assert result.report.model_dump(include=set(expected_costs)) == expected_costs
+        assert result.report.wall_seconds >= 0
+    assert read_json(tmp_path / "summary.json") == second.summary.model_dump(mode="json")
+    assert read_json(tmp_path / "report.json") == second.report.model_dump(mode="json")
+    assert read_json(tmp_path / "results.json")["tasks"] == [task.model_dump(mode="json") for task in second.tasks]

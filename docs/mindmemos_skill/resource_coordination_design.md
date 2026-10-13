@@ -42,6 +42,6 @@ trace2skill、skilltree、skill-forest 均按“固定 Skill + 固定轨迹/任�
 
 ## 6. 模块边界
 
-persistence/db_services/skill_management/ 定义四张核心图表及其记录类型，并实现图查询、发布和旧库迁移。顶层 persistence 负责工厂、初始化与注册；infra 只提供连接、事务和存储类型，不放业务表。
+persistence/db_services/graphs/ 定义四张核心图表及其记录类型，并实现图查询、发布和旧库迁移。顶层 persistence 负责工厂、初始化与注册；infra 只提供连接、事务和存储类型，不放业务表。
 
 本轮不创建 coordination 模块，不修改商用 mindmemos 云表。服务初始化会自动迁移旧图头；低层 `ensure_collection` 仍只创建缺失表，不能代替升级入口。

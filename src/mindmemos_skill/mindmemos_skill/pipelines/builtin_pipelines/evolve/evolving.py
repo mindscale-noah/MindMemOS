@@ -2,19 +2,22 @@
 
 import random
 from pathlib import Path
-from uuid import uuid4
 
 from filelock import AsyncFileLock
+
+from mindmemos_skill.common.ids import generate_id
 
 from ....algos import Algorithm
 from ....algos.evolve.typing import SkillTrajectory
 from ....api.typing import AlgoSkillEvolveResult, SkillPipelineRequest
-from ....common.checkpoint import boundary, fingerprint
+from ....common.checkpoint import fingerprint
 from ....common.json import read_json, write_json
+from ....common.secrets import redact_credentials
 from ....common.skill_runtime import load_runtime_skill
 from ....common.skill_versions import snapshot_from_version
 from ....common.trajectories import collect_skill_trajectories
 from ....envs.typing import Reward, Task
+from ....errors import SkillConflictError
 from ....logging import get_logger, stage
 from ....persistence import SkillRecord, TrajectoryRecord
 from ....persistence.store import SkillPersistence
@@ -58,34 +61,51 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
             SkillConflictError: The current selection changed before publication.
         """
         request = SkillPipelineRequest.model_validate(request)
-        run_id = request.run_id or "evolve_" + uuid4().hex
+        run_id = request.run_id or generate_id("evolve_")
         root = Path(self.config.work_dir).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
         directory = root / run_id
-        identity = {"request": request.model_dump(mode="json"), "config": self.config.model_dump(mode="json")}
-        input_hash = fingerprint(identity)
+        config = redact_credentials(
+            {
+                "request": request.model_dump(mode="json", exclude={"run_id"}),
+                "evolver": {
+                    "class_name": self.config.evolver.class_name,
+                    "config": self.evolver.config.model_dump(mode="json"),
+                },
+                "traj_collect": self.config.traj_collect.model_dump(mode="json"),
+            },
+            preserve_execution_settings=True,
+        )
+        config_hash = fingerprint(config)
         store = self.persistence.skills
         async with AsyncFileLock(str(root / f".{run_id}.lock"), run_in_executor=False):
-            published = await store.algorithm_publication(request.project_id, run_id, input_hash, operation="evolution")
+            config_path = directory / "config.json"
+            if config_path.exists():
+                if read_json(config_path)["config_hash"] != config_hash:
+                    raise SkillConflictError("Evolution run was configured with different inputs")
+            else:
+                if directory.exists() and any(directory.iterdir()):
+                    raise ValueError("Evolution directory has no config.json; use a new run_id")
+                write_json(config_path, {"run_id": run_id, "config_hash": config_hash, "config": config})
+            published = await store.algorithm_publication(run_id, config_hash, operation="evolution")
             if published is not None:
                 return self._result(published, run_id)
-            saved = boundary(directory / "request.json", identity)
-            if saved is None:
-                owner = await store.resolve_family(request.project_id, request.skill_ref)
+            request_path = directory / "request.json"
+            if request_path.exists():
+                saved = read_json(request_path)
+                owner = SkillRecord.model_validate(saved["owner"])
+                base = await store.get(saved["base_version_id"])
+            else:
+                owner = await store.resolve_family(request.skill_ref)
                 base = await store.version(owner, request.base_version_id)
-                saved = boundary(
-                    directory / "request.json",
-                    identity,
-                    payload={"owner": owner.model_dump(mode="json"), "base_version_id": base.version_id},
-                )
-            owner = SkillRecord.model_validate(saved["owner"])
-            base = await store.version_by_id(request.project_id, saved["base_version_id"])
+                saved = {"owner": owner.model_dump(mode="json"), "base_version_id": base.version_id}
+                write_json(request_path, saved)
             candidate_path = directory / "candidate.json"
             if candidate_path.exists():
                 snapshot = SkillSnapshot.model_validate(read_json(candidate_path))
             else:
                 with stage("evolve.prepare"):
-                    trajectories = await self._evidence(request, owner, base, directory, input_hash)
+                    trajectories = await self._evidence(request, owner, base, directory)
                 with stage("evolve.evolving"):
                     candidate = await self.evolver.evolve(
                         skill=load_runtime_skill(snapshot_from_version(base)), trajectories=trajectories
@@ -96,9 +116,10 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                     "algorithm.progress",
                     extra={"event_body": {"stage": "evolved", "message": "Skill candidate created"}},
                 )
-            evidence = boundary(directory / "evidence.json", input_hash)
-            if evidence is None:
+            evidence_path = directory / "evidence.json"
+            if not evidence_path.exists():
                 raise ValueError("Evolution candidate requires its sampled evidence checkpoint")
+            evidence = read_json(evidence_path)
             await self.persistence.trajectories.mark_consumed(
                 base.version_id, [item["record"]["trajectory_id"] for item in evidence["samples"]], run_id
             )
@@ -122,7 +143,7 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                     owner,
                     snapshot,
                     run_id=run_id,
-                    input_hash=input_hash,
+                    input_hash=config_hash,
                     operation="evolution",
                     algorithm=self.config.evolver.class_name.replace("_", "-"),
                     commit_source=self.config.evolver.class_name,
@@ -149,11 +170,11 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
             skill_hash=version.skill_hash,
         )
 
-    async def _evidence(self, request, owner, base, directory, input_hash):
+    async def _evidence(self, request, owner, base, directory):
         """Reuse the exact sampled records after an interrupted model call."""
         evidence_path = directory / "evidence.json"
-        saved = boundary(evidence_path, input_hash)
-        if saved is not None:
+        if evidence_path.exists():
+            saved = read_json(evidence_path)
             sample = [
                 (TrajectoryRecord.model_validate(item["record"]), item["version_id"]) for item in saved["samples"]
             ]
@@ -189,10 +210,9 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                 if self.config.traj_collect.seed is None
                 else random.Random(self.config.traj_collect.seed).sample(eligible, self.config.traj_collect.sample_size)
             )
-            boundary(
+            write_json(
                 evidence_path,
-                input_hash,
-                payload={
+                {
                     "samples": [
                         {"record": record.model_dump(mode="json"), "version_id": version_id}
                         for record, version_id in sample
@@ -210,7 +230,6 @@ class SimpleEvolutionPipeline(EvolutionPipeline[SimpleEvolutionPipelineConfig]):
                     "eligible_trajectory_count": len(eligible),
                     "sampled_trajectory_count": len(sample),
                     "sampled_trajectory_ids": [record.trajectory_id for record, _ in sample],
-                    "config": self.config.model_dump(mode="json"),
                 },
             )
         get_logger(__name__).info(

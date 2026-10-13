@@ -4,7 +4,7 @@ Official source: [LiveMathematicianBench](https://huggingface.co/datasets/LiveMa
 from the repository root with Python 3.12 or 3.13:
 
 ```bash
-uv run python scripts/download_datasets.py download --benchmark skill --dataset livemath
+uv run python scripts/download_datasets.py download skill --name livemath
 ```
 
 The Hugging Face downloads require `huggingface_hub` in the Python environment.
@@ -47,7 +47,7 @@ Each execution uses a new work directory and makes real model calls.
 ```python
 import asyncio
 from pathlib import Path
-from uuid import uuid4
+from mindmemos_skill.common.ids import generate_id
 
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.data import Data
@@ -75,7 +75,7 @@ env = Environment.build("livemath", {"agent": agent})
 async def main():
     """Run one test task and print its rollout result."""
     sample = splits["test"][0]
-    work_dir = root / "output/env_examples/livemath" / uuid4().hex
+    work_dir = root / "output/env_examples/livemath" / generate_id()
     result = await env.rollout(
         task=sample.task,
         reward_data=sample.reward_data,
