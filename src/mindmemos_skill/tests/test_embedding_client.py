@@ -1,5 +1,6 @@
 """Embedding transport validation using the SDK with a local mock transport."""
 
+import asyncio
 import json
 
 import httpx
@@ -40,8 +41,93 @@ async def test_batches_indices_and_borrowed_client_lifecycle():
         assert (await client.embed([])) == []
         assert not calls
         assert (await client.embed(["a", "b", "c"])) == [[1, 1], [2, 1], [1, 1]]
-        assert [payload["input"] for payload in calls] == [["a", "b"], ["c"]]
+        assert sorted(payload["input"] for payload in calls) == [["a", "b"], ["c"]]
         assert all(payload["dimensions"] == 2 and payload["encoding_format"] == "float" for payload in calls)
+        assert not sdk.is_closed()
+
+
+async def test_embedding_batches_overlap_and_preserve_input_order():
+    """Start every batch before completion and retain order despite late responses."""
+    active = 0
+    peak = 0
+    all_started = asyncio.Event()
+    last_completed = asyncio.Event()
+    completed = []
+
+    async def handle_batch(request):
+        nonlocal active, peak
+        texts = json.loads(request.content)["input"]
+        active += 1
+        peak = max(peak, active)
+        if active == 3:
+            all_started.set()
+        try:
+            await all_started.wait()
+            if texts[0] != "5":
+                await last_completed.wait()
+            completed.append(texts[0])
+            last_completed.set()
+            return httpx.Response(
+                200,
+                json={"data": [{"index": i, "embedding": [float(text), 1]} for i, text in enumerate(texts)]},
+            )
+        finally:
+            active -= 1
+
+    async with AsyncOpenAI(
+        api_key="test",
+        base_url="http://test.invalid/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle_batch)),
+    ) as sdk:
+        vectors = await asyncio.wait_for(
+            OpenAIEmbeddingClient(config(), client=sdk).embed(["1", "2", "3", "4", "5"]), timeout=5
+        )
+        assert peak == 3 and active == 0
+        assert completed[0] == "5"
+        assert vectors == [[float(index), 1] for index in range(1, 6)]
+        assert not sdk.is_closed()
+
+
+@pytest.mark.parametrize("failure", ["transport", "validation", "cancel"])
+async def test_embedding_failure_or_cancellation_drains_pending_batches(failure):
+    """Cancel sibling requests before returning errors or caller cancellation."""
+    pending_started = asyncio.Event()
+    pending_cancelled = asyncio.Event()
+
+    async def handle_batch(request):
+        texts = json.loads(request.content)["input"]
+        if texts[0] == "pending":
+            pending_started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                pending_cancelled.set()
+                raise
+        await pending_started.wait()
+        if failure == "cancel":
+            await asyncio.Future()
+        if failure == "transport":
+            raise httpx.ConnectError("Controlled failure", request=request)
+        return httpx.Response(200, json={"data": []})
+
+    async with AsyncOpenAI(
+        api_key="test",
+        base_url="http://test.invalid/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle_batch)),
+    ) as sdk:
+        task = asyncio.create_task(OpenAIEmbeddingClient(config(), client=sdk).embed(["fail", "other", "pending"]))
+        if failure == "cancel":
+            await asyncio.wait_for(pending_started.wait(), timeout=5)
+            task.cancel()
+        expected_error = {
+            "transport": RuntimeError,
+            "validation": ValueError,
+            "cancel": asyncio.CancelledError,
+        }[failure]
+        with pytest.raises(expected_error):
+            await asyncio.wait_for(task, timeout=5)
+        assert pending_cancelled.is_set()
         assert not sdk.is_closed()
 
 

@@ -40,7 +40,7 @@ class OpenAIEmbeddingConfig(EmbeddingConfig):
     """Send the dimensions request parameter only when supported by the provider."""
 
     batch_size: int = Field(default=64, gt=0, strict=True)
-    """Maximum number of input texts in each sequential request."""
+    """Maximum number of input texts in each concurrent batch request."""
 
     timeout_s: float = Field(default=180, gt=0, allow_inf_nan=False)
     """Timeout in seconds for each request attempt."""
