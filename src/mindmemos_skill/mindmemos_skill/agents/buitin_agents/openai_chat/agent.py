@@ -343,16 +343,9 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             raise RuntimeError("The model returned no choices")
         choice = response.choices[0]
         tool_calls = choice.message.tool_calls or []
-        valid_finish = choice.finish_reason == "stop" or (tools and tool_calls and choice.finish_reason == "tool_calls")
-        if self.config.response_validation == "strict" and (
-            not valid_finish or choice.message.refusal or (tool_calls and not tools)
-        ):
-            raise RuntimeError(f"The model did not return a complete text response: {choice.finish_reason}")
         output = choice.message.content or ""
         if self.config.strip_thinking and "</think>" in output:
             output = output.split("</think>")[1].strip()
-        if self.config.response_validation == "strict" and not output.strip() and not tool_calls:
-            raise RuntimeError("The model returned empty text")
         usage = response.usage.model_dump(mode="json") if response.usage is not None else {}
         if usage:
             usage["input_tokens"] = usage.pop("prompt_tokens")

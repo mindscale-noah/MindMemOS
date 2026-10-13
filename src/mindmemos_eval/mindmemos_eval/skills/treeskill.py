@@ -38,9 +38,15 @@ from .typing import CaseResult, EnvTestSummary, TaskTrajectory
 
 
 def _protocol(value):
-    """Ignore only connection credentials when comparing recorded execution settings."""
+    """Compare execution settings with historical OpenAI agent defaults restored."""
     if isinstance(value, dict):
-        return {key: _protocol(child) for key, child in value.items() if key not in {"api_key", "base_url"}}
+        if "model" in value and "timeout_s" in value:
+            value = {"class_name": "openai_chat", "sdk_max_retries": 0, **value}
+        return {
+            key: _protocol(child)
+            for key, child in value.items()
+            if key not in {"api_key", "base_url"} and not (key == "response_validation" and child == "content")
+        }
     if isinstance(value, list):
         return [_protocol(child) for child in value]
     return value
@@ -56,6 +62,9 @@ def _reference_algorithm(reference: Path, optimizer_model: str) -> dict:
             algorithm[role]["model"] = optimizer_model if role == "optimizer" else manifest["model"]
     if algorithm["router"]["model"] == "[REDACTED]":
         algorithm["router"]["model"] = router["model"]
+    for role in ("optimizer", "failure_optimizer", "router"):
+        if algorithm[role].get("response_validation") == "content":
+            algorithm[role].pop("response_validation")
     return algorithm
 
 

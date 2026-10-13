@@ -198,21 +198,72 @@ async def test_sdk_payload_usage_and_incomplete_output(monkeypatch, finish_reaso
     agent = OpenAIChatAgent(
         OpenAIChatConfig(model="test-model", api_key="test-key", base_url="https://unit-test.invalid/v1")
     )
-    if finish_reason == "length":
-        with pytest.raises(RuntimeError, match="complete text response"):
-            (await agent.run(system="system", user="question"))
-    else:
-        result = await agent.run(system="system", user="question")
-        assert result.usage["total_tokens"] == 14
-        assert result.usage["input_tokens"] == 10
-        assert result.usage["output_tokens"] == 4
-        assert "prompt_tokens" not in result.usage
-        assert result.trajectory[:2] == [
-            {"role": "system", "content": "system"},
-            {"role": "user", "content": "question"},
-        ]
-        assert result.trajectory[-1]["model"] == "test-model"
-        assert result.trajectory[-1]["response_id"] == "test-response"
+    result = await agent.run(system="system", user="question")
+    assert result.output == "<answer>A</answer>"
+    assert result.usage["total_tokens"] == 14
+    assert result.usage["input_tokens"] == 10
+    assert result.usage["output_tokens"] == 4
+    assert "prompt_tokens" not in result.usage
+    assert result.trajectory[:2] == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "question"},
+    ]
+    assert result.trajectory[-1]["model"] == "test-model"
+    assert result.trajectory[-1]["response_id"] == "test-response"
     assert len(requests) == 1
     assert "tools" not in requests[0]
     assert requests[0]["messages"] == [{"role": "system", "content": "system"}, {"role": "user", "content": "question"}]
+
+
+@pytest.mark.parametrize("output_kind", ["answer", "unfinished", "empty"])
+async def test_truncated_response_reaches_live_math_scoring(monkeypatch, data, tmp_path, output_kind):
+    """Score provider text even when the response exhausted its completion budget."""
+    import openai
+
+    sample = data.load()[0]
+    outputs = {
+        "answer": f"<answer>{sample.reward_data.correct_choice.label}</answer>\nUnfinished explanation",
+        "unfinished": "Still working through the proof",
+        "empty": "",
+    }
+    content = outputs[output_kind]
+
+    def respond(request):
+        return httpx.Response(
+            200,
+            json={
+                "id": "truncated-response",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "test-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "length",
+                        "message": {"role": "assistant", "content": content},
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        openai,
+        "DefaultAsyncHttpxClient",
+        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    env = LiveMathEnvironment(
+        LiveMathConfig(
+            agent=OpenAIChatConfig(
+                model="test-model",
+                api_key="test-key",
+                base_url="https://unit-test.invalid/v1",
+            )
+        )
+    )
+    result = await env.rollout(
+        task=sample.task,
+        reward_data=sample.reward_data,
+        work_dir=tmp_path / output_kind,
+    )
+    assert result.output == content
+    assert result.reward.success is (output_kind == "answer")

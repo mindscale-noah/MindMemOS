@@ -52,9 +52,6 @@ class OpenAIChatConfig(AgentConnectionConfig):
     extra_body: dict[str, JsonValue] = Field(default_factory=dict)
     """Provider-specific body extensions, such as chat_template_kwargs."""
 
-    response_validation: Literal["strict", "content"] = "strict"
-    """Require complete nonempty responses, or accept provider content as returned."""
-
     strip_thinking: bool = False
     """Remove an embedded thinking prefix before parsing the model response."""
 

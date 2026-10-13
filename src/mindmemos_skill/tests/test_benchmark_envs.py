@@ -550,8 +550,10 @@ async def test_agent_tool_call_sdk_boundary(monkeypatch):
     assert result.output == ""
     assert result.trajectory[-1]["tool_calls"][0]["id"] == "call-1"
     assert payloads[0]["tools"] == tools
-    with pytest.raises(RuntimeError):
-        (await agent.run_messages(messages=messages))
+    result_without_tools = await agent.run_messages(messages=messages)
+    assert result_without_tools.output == ""
+    assert result_without_tools.trajectory[-1]["tool_calls"][0]["id"] == "call-1"
+    assert "tools" not in payloads[1]
 
 
 async def test_spreadsheet_native_skill_tool(spreadsheet, tmp_path, monkeypatch):

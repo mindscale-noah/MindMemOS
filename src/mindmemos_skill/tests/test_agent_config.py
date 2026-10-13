@@ -26,7 +26,10 @@ def test_presets_expand_through_all_algorithm_and_pipeline_boundaries():
     assert tree.failure_optimizer == tree.router == service.agents["treeskill_qwen3_5_fast"].config
     assert forest.optimizer.model == service.agents["skill_forest_gpt_5_4_mini"].config.model
     assert evolution.optimizer == service.agents["simple_evolve_gpt_5_4_mini"].config
-    assert service.manage_pipeline.config.algorithm.chat == service.agents["skill_manage_gpt_4o_mini"].config
+    assert (
+        service.manage_pipeline.config.algorithm.chat
+        == service.agents[raw["service"]["manage_pipeline"]["config"]["algorithm"]["chat"]].config
+    )
     assert tree.failure_optimizer is not tree.router
     tree.failure_optimizer.extra_body["demo_mutation"] = True
     assert "demo_mutation" not in tree.router.extra_body

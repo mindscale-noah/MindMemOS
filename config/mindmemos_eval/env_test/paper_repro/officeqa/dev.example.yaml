@@ -9,7 +9,6 @@ environment:
       max_completion_tokens: 16384
       max_retries: 10
       timeout_s: 600
-      response_validation: content
       retry_policy: all
       retry_max_wait_s: 30
     max_tool_turns: 24
