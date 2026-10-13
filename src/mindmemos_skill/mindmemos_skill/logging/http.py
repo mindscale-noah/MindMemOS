@@ -5,11 +5,12 @@ import json
 from collections.abc import Callable
 from time import perf_counter
 from urllib.parse import parse_qs
-from uuid import uuid4
 
 from opentelemetry.trace import Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from mindmemos_skill.common.ids import generate_id
 
 from .config import get_logger
 from .context import log_context
@@ -55,7 +56,7 @@ class RequestLoggingMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        request_id = f"req_{uuid4().hex}"
+        request_id = generate_id("req_")
         scope.setdefault("state", {})["request_id"] = request_id
         headers = {key.decode("latin1").lower(): value.decode("latin1") for key, value in scope.get("headers", [])}
         request_data, response_data = bytearray(), bytearray()

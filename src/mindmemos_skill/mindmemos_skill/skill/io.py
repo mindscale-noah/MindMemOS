@@ -4,7 +4,8 @@ import os
 import shutil
 from pathlib import Path
 from tempfile import mkdtemp
-from uuid import uuid4
+
+from mindmemos_skill.common.ids import generate_id
 
 from .typing import SkillContent
 
@@ -66,7 +67,7 @@ def export_skill(source: SkillContent, directory: str | Path, *, overwrite: bool
         raise ValueError("Export destination exists and is not empty")
     target.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(mkdtemp(prefix=f".{target.name}-export-", dir=target.parent))
-    backup = target.parent / f".{target.name}-backup-{uuid4().hex}"
+    backup = target.parent / f".{target.name}-backup-{generate_id()}"
     try:
         files = {"SKILL.md": source.content.encode("utf-8"), **source.resources}
         for name, content in files.items():

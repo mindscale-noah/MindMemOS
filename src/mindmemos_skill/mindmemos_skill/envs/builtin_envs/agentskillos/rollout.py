@@ -3,7 +3,8 @@
 import json
 from pathlib import Path
 from tempfile import mkdtemp
-from uuid import uuid4
+
+from mindmemos_skill.common.ids import generate_id
 
 from ....agents.buitin_agents.codex.agent import CodexAgent
 from ....infra.execution import execute
@@ -118,7 +119,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
         for name, skill in zip(ranking, skills, strict=True):
             skill.export(attempt / ".agents" / "skills" / name)
         audit = workspace.parent / "audit"
-        identifier = uuid4().hex
+        identifier = generate_id()
         task_path = audit / f"official-task-{identifier}.json"
         report_path = audit / f"official-score-{identifier}.json"
         task_path.write_text(json.dumps(reward_data.task_config, ensure_ascii=False), encoding="utf-8")

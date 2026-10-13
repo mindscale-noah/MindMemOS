@@ -9,7 +9,8 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
+
+from mindmemos_skill.common.ids import generate_id
 
 from .config import attach_capture_handler, detach_capture_handler
 from .context import log_context
@@ -73,7 +74,7 @@ async def async_task_log_reporter(
                 traceback=record.exc_text,
             )
             row = dict(
-                log_id=uuid4().hex,
+                log_id=generate_id(),
                 project_id=project_id,
                 task_id=task_id,
                 attempt=attempt,

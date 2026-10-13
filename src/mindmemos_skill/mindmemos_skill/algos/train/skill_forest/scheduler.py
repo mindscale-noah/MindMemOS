@@ -7,9 +7,10 @@ from collections.abc import Callable, Sequence
 from contextvars import copy_context
 from pathlib import Path
 from time import perf_counter
-from uuid import uuid4
 
 from pydantic import JsonValue
+
+from mindmemos_skill.common.ids import generate_id
 
 from ....common.json import append_jsonl
 from ....envs.base import Environment
@@ -95,7 +96,7 @@ class RolloutScheduler:
         self.closed = False
         self.started_at = perf_counter()
         self.sequence = 0
-        self.session_id = uuid4().hex
+        self.session_id = generate_id()
 
     @staticmethod
     def _log_failure(group: RolloutGroup) -> None:
