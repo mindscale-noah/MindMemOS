@@ -7,6 +7,7 @@ models:
     reasoning_effort: medium
     max_completion_tokens: 16384
   optimizer:
+    reasoning_effort: medium
     model: gpt-5.4-mini
     api_key: null
     base_url: null
@@ -17,10 +18,10 @@ skill_forest:
   max_depth: 3
   expansion_budget: 30
   seed: 42
-  expansion_concurrency: 4
-  rollout_concurrency: 4
-  model_concurrency: 4
-evaluation_concurrency: 4
+  expansion_concurrency: 40
+  rollout_concurrency: 40
+  model_concurrency: 40
+evaluation_concurrency: 40
 environments:
   livemath: {}
   searchqa:
