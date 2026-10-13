@@ -4,7 +4,7 @@ Official source: [SpreadsheetBench Verified 400](https://huggingface.co/datasets
 from the repository root with Python 3.12 or 3.13:
 
 ```bash
-uv run python scripts/download_datasets.py download --benchmark skill --dataset spreadsheetbench
+uv run python scripts/download_datasets.py download skill --name spreadsheetbench
 ```
 
 The Hugging Face downloads require `huggingface_hub` in the Python environment.

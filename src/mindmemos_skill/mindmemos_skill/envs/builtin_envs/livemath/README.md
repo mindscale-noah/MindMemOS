@@ -4,7 +4,7 @@ Official source: [LiveMathematicianBench](https://huggingface.co/datasets/LiveMa
 from the repository root with Python 3.12 or 3.13:
 
 ```bash
-uv run python scripts/download_datasets.py download --benchmark skill --dataset livemath
+uv run python scripts/download_datasets.py download skill --name livemath
 ```
 
 The Hugging Face downloads require `huggingface_hub` in the Python environment.

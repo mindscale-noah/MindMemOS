@@ -47,7 +47,7 @@ print(result.reward.detail)
 
 ## SpreadsheetBench 执行依赖
 
-安装 `mindmemos-skill[spreadsheetbench]`。本地运行能力统一放在 `mindmemos_skill.infra.execution`，两个表格环境直接复用，其他 env 也可使用，不依赖 Docker。
+安装 `mindmemos-skill`，默认包含 SpreadsheetBench 的 Python 依赖。本地运行能力统一放在 `mindmemos_skill.infra.execution`，两个表格环境直接复用，其他 env 也可使用，不依赖 Docker。
 
 `Environment.build(...)` 初始化环境时，自动准备对应协议的 Python 3.13 虚拟环境并预装依赖。首次准备需要系统中有 `uv`。环境放在 MindMemOS home 下，目录名与解释器路径由 Python 代码固定选择，无需在文本 Action 或环境配置中传入 `execution`：
 
@@ -86,7 +86,7 @@ Python 工具依赖与公式重算依赖分开准备：评分器的 Python 代�
 
 ## ALFWorld
 
-安装 `mindmemos-skill[alfworld]`，准备官方数据和配置。将官方 YAML 解析后的字典传入 `simulator`，完整设置进入 rollout identity。数据 manifest 指向具体 `gamefile`；每次 rollout 独立创建、reset、step 并在 `finally` 中关闭 simulator。`history_length` 控制 prompt 中最近的 observation/action 数量，完整 trajectory 仍会保留。
+安装 `mindmemos-skill`，默认包含 ALFWorld 的 Python 依赖；另行准备官方数据和配置。将官方 YAML 解析后的字典传入 `simulator`，完整设置进入 rollout identity。数据 manifest 指向具体 `gamefile`；每次 rollout 独立创建、reset、step 并在 `finally` 中关闭 simulator。`history_length` 控制 prompt 中最近的 observation/action 数量，完整 trajectory 仍会保留。
 
 模型或基础设施异常直接向上传播，不沿用旧代码把 provider error 转成 `look` 动作继续计分的做法。有效模型响应缺少 action tag 时，仍保留参考实现的 `look` fallback。
 
@@ -288,10 +288,10 @@ HiTab 和 WikiTQ 的历史清单对应转换后的 XLSX；官方下载保留原�
 
 ```bash
 python -m pip install huggingface_hub
-python scripts/download_datasets.py list --benchmark skill
-python scripts/download_datasets.py download --benchmark skill --dataset spreadsheetbench
-python scripts/download_datasets.py download --benchmark skill --dataset spreadsheetbench --verify-only
-python scripts/download_datasets.py download --benchmark skill --dataset hitab --data-root /path/to/data
+python scripts/download_datasets.py list skill
+python scripts/download_datasets.py download skill --name spreadsheetbench
+python scripts/download_datasets.py download skill --name spreadsheetbench --verify-only
+python scripts/download_datasets.py download skill --name hitab --data-root /path/to/data
 ```
 
 | benchmark | 官方来源 | 下载后格式 |
@@ -303,24 +303,29 @@ python scripts/download_datasets.py download --benchmark skill --dataset hitab -
 | alfworld | alfworld/alfworld releases | 全部文本游戏与逻辑文件，保留发布目录结构 |
 | hitab | microsoft/HiTab | 固定版本的官方仓库内容，保留 `data/` 等目录 |
 | wikitq | ppasupat/WikiTableQuestions | 固定版本的官方仓库内容，保留 `csv/`、`data/` 等目录 |
-| searchqa | nyu-dl/dl4ir-searchQA README 链接的 Google Drive | 从官方入口取得压缩包后导入 |
-| docvqa | DocVQA 官方网站链接的 RRC portal | 登录官网下载 Single Document VQA 压缩包后导入 |
+| searchqa | lucadiliello/searchqa（Hugging Face） | 固定 revision 的 `data/*.parquet` |
 
-SearchQA 的官方入口是 Google Drive，DocVQA 需要 RRC 登录；脚本不回退到第三方 Hugging Face
-整理版。取得官方压缩包后可执行（多个包重复传参）：
+SearchQA 使用与原实验一致的 `lucadiliello/searchqa`，版本固定在下载来源清单中。
+评测按 `key` 筛选固定 split，保留源数据中的上下文和答案，不需要映射资源。
 
 ```bash
-python scripts/download_datasets.py download --benchmark skill --dataset searchqa --source-archive /path/to/SearchQA.zip
-python scripts/download_datasets.py download --benchmark skill --dataset docvqa --source-archive /path/to/train.tar.gz --source-archive /path/to/val.tar.gz
+uv run --no-sync python scripts/download_datasets.py download skill --name searchqa
 ```
 
-OfficeQA 如需访问许可，通过 `HF_TOKEN` 或 Hugging Face 已有登录状态认证。
+下载全部受支持的 Skill 数据集：
+
+```bash
+uv run --no-sync python scripts/download_datasets.py download skill --all
+```
+
+DocVQA 不再列入下载器支持范围。OfficeQA 等 Hugging Face 数据如需访问许可，
+在仓库 `.env` 设置 `HF_TOKEN`，并在数据集页面申请或接受访问权限。
 Hugging Face 和 GitHub 来源锁定 revision；ALFWorld 锁定发布版本。
-官方手动下载包没有统一不可变 revision，导入时记录压缩包 SHA-256。
+Google Drive 文件 ID 固定，但内容不是不可变 revision；下载内容使用本地 receipt 校验。
 每个目录的 `download_receipt.json` 记录来源、归档哈希和本地文件校验和；它用于检查后续
 本地文件是否变化，不冒充发布方提供的校验和。仅在下载、解压完成后发布目标目录。
 已有目录仅校验，不覆盖或静默更新版本；更换来源版本时指定新的 `--data-root`。
-`--offline` 只允许 Hugging Face 缓存或本地官方压缩包，直接 URL 的首次下载需要联网。
+`--offline` 允许 Hugging Face 缓存和已完成的本地数据校验，Google Drive 或直接 URL 的首次下载需要联网。
 
 下载结果不生成或下载 `splits.json`，不抽样、不排除演化用例，也不转换为算法专属格式。
 运行环境时按上表中的官方路径配置 data loader；需要格式转换的数据集应另行准备转换步骤。

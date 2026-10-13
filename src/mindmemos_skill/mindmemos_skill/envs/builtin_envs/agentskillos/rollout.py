@@ -86,7 +86,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
 
     async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
         """Prepare public materials, execute native tools, then privately score artifacts."""
-        from ....algos.manage.skill_manage.parsing import extract_frontmatter
+        from ....skill.content import read_frontmatter
 
         if not isinstance(task, AgentSkillOSTask) or not isinstance(reward_data, AgentSkillOSRewardData):
             raise TypeError("AgentSkillOS requires official task and private evaluator data")
@@ -97,7 +97,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
             raise ValueError("Public task and private official definition must match")
         ranking = []
         for skill in skills:
-            metadata, _ = extract_frontmatter(skill.content, version_id="")
+            metadata = read_frontmatter(skill.content)
             ranking.append(metadata.get("name"))
         ranking = Ranking(skill_ids=ranking).skill_ids
         for name in ranking:

@@ -4,7 +4,7 @@ Official source: [OfficeQA](https://huggingface.co/datasets/databricks/officeqa)
 from the repository root with Python 3.12 or 3.13:
 
 ```bash
-uv run python scripts/download_datasets.py download --benchmark skill --dataset officeqa
+uv run python scripts/download_datasets.py download skill --name officeqa
 ```
 
 The Hugging Face downloads require `huggingface_hub` in the Python environment.

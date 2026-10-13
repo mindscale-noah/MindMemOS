@@ -5,11 +5,14 @@ import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from .python_compat import patch_textworld_locals
+
 
 def create_simulator(config: dict, gamefile: Path, seed: int):
     """Initialize only the requested game using the supplied upstream settings."""
     from alfworld.agents.environment import get_environment
 
+    patch_textworld_locals()
     environment_class = get_environment(config["env"]["type"])
 
     class SelectedGame(environment_class):

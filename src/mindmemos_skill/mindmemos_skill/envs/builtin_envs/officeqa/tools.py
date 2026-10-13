@@ -9,7 +9,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "glob",
-            "description": "Find public document files by pattern.",
+            "description": "Find candidate local document files by filename or relative-path glob pattern.",
             "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]},
         },
     },
@@ -17,7 +17,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read",
-            "description": "Read public text by line window.",
+            "description": "Read a local text document excerpt by path and line window.",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}, "start": {"type": "integer"}, "limit": {"type": "integer"}},
@@ -29,11 +29,11 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "grep",
-            "description": "Search a public text file for a literal pattern.",
+            "description": "Search a local text document for a literal pattern and return matching lines.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string"}, "pattern": {"type": "string"}},
-                "required": ["path", "pattern"],
+                "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
+                "required": ["pattern", "path"],
             },
         },
     },

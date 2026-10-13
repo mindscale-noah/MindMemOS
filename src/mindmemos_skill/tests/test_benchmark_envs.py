@@ -927,3 +927,11 @@ def test_spreadsheet_protocols_share_lifecycle_without_inheriting_each_other():
     assert native._run is textual._run
     assert native._interact is textual._interact
     assert native.config_type is not textual.config_type
+
+
+def test_officeqa_table_rendering_preserves_columns_and_literal_pipes():
+    """Oracle evidence keeps missing cells and escapes pipes instead of shifting columns."""
+    from mindmemos_skill.envs.builtin_envs.officeqa.documents import _render_parsed_content
+
+    table = "<table><tr><th>Month</th><th>Value</th></tr><tr><td>May</td></tr><tr><td>June | July</td><td><b>42</b></td></tr></table>"
+    assert _render_parsed_content(table) == "| Month | Value |\n| --- | --- |\n| May |  |\n| June \\| July | 42 |"

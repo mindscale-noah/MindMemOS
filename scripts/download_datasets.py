@@ -4,12 +4,21 @@
 import argparse
 import hashlib
 import json
+import os
 import shutil
+import sys
 import tarfile
 import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+if __package__:
+    from .constants import HF_TOKEN
+else:
+    from constants import HF_TOKEN
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT / "config/presets/dataset_download_sources.json"
@@ -62,23 +71,40 @@ def _extract(source, destination):
             archive.extractall(destination, filter="data")
 
 
-def _materialize(meta, destination, offline, source_archives):
+def _materialize(meta, destination, offline):
     """Acquire official data without selecting or modifying experiment cases."""
     archive_hashes = {}
     with tempfile.TemporaryDirectory() as temporary:
         temporary = Path(temporary)
         if meta["kind"] == "huggingface":
             from huggingface_hub import snapshot_download
+            from huggingface_hub.errors import GatedRepoError, HfHubHTTPError
 
-            source = Path(
-                snapshot_download(
-                    repo_id=meta["repo"],
-                    repo_type="dataset",
-                    revision=meta["revision"],
-                    allow_patterns=meta["files"],
-                    local_files_only=offline,
+            try:
+                source = Path(
+                    snapshot_download(
+                        repo_id=meta["repo"],
+                        repo_type="dataset",
+                        revision=meta["revision"],
+                        allow_patterns=meta["files"],
+                        local_files_only=offline,
+                        token=os.getenv(HF_TOKEN) or None,
+                    )
                 )
-            )
+            except GatedRepoError as error:
+                raise RuntimeError(
+                    f"Cannot access gated dataset {meta['repo']}. Set HF_TOKEN in {ROOT / '.env'} "
+                    f"and request or accept dataset access at {meta['url']}, then retry."
+                ) from error
+            except HfHubHTTPError as error:
+                status = error.response.status_code if error.response is not None else None
+                if status in (401, 403):
+                    raise RuntimeError(
+                        f"Hugging Face access denied ({status}) for {meta['repo']}. "
+                        f"Set or update HF_TOKEN in {ROOT / '.env'} and check dataset permissions "
+                        f"at {meta['url']}, then retry the same uv download command."
+                    ) from error
+                raise RuntimeError(f"Hugging Face request failed for {meta['repo']} (HTTP {status}).") from error
             for pattern in meta["files"]:
                 paths = sorted(source.glob(pattern))
                 if not paths:
@@ -91,15 +117,6 @@ def _materialize(meta, destination, offline, source_archives):
                         target = destination / path.relative_to(source)
                         target.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(path, target)
-        elif meta["kind"] == "manual":
-            if not source_archives:
-                raise ValueError(
-                    f"Download the official archives from {meta['download_page']} "
-                    "(DocVQA requires RRC login), then pass --source-archive for each archive."
-                )
-            for path in source_archives:
-                archive_hashes[path.name] = _hash(path)
-                _extract(path, destination)
         else:
             if offline:
                 raise ValueError("Official archive downloads require network access; use --verify-only for local data.")
@@ -135,56 +152,75 @@ def _verify(meta, destination):
     print(f"Verified {destination.name}: {len(actual)} files", flush=True)
 
 
-def main():
-    """Download a dataset or verify its existing payload."""
-    sources = _read(SOURCES)
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("list", "download"))
-    parser.add_argument("--benchmark", choices=sorted(sources), required=True, help="Benchmark group.")
-    parser.add_argument("--dataset", help="Dataset name within the selected benchmark group.")
-    parser.add_argument("--data-root", type=Path, help="Default: data/mindmemos_<benchmark>.")
-    parser.add_argument("--verify-only", action="store_true")
-    parser.add_argument("--offline", action="store_true", help="Use cached Hugging Face files or local archives only.")
-    parser.add_argument(
-        "--source-archive",
-        type=Path,
-        action="append",
-        default=[],
-        help="Official SearchQA or DocVQA archive; repeat for multiple archives.",
-    )
-    args = parser.parse_args()
-    datasets = sources[args.benchmark]
-    if args.dataset and args.dataset not in datasets:
-        parser.error(f"Unknown dataset {args.dataset!r} for {args.benchmark}; choose from: {', '.join(datasets)}")
-    if args.action == "list":
-        for name, meta in datasets.items():
-            print(f"{name}: {meta.get('download_page', meta['url'])} [{meta['kind']}]")
-        return
-    if not args.dataset:
-        parser.error("download requires --dataset; use list to view available datasets.")
-    meta = datasets[args.dataset]
-    if args.data_root is None:
-        args.data_root = ROOT / f"data/mindmemos_{args.benchmark}"
-    if args.source_archive and meta["kind"] != "manual":
-        parser.error("--source-archive is only supported for SearchQA and DocVQA.")
-    destination = args.data_root / args.dataset
-    if args.verify_only or destination.exists():
+def _download(meta, destination, offline, verify_only):
+    """Verify an existing payload or publish a complete staged download."""
+    if verify_only or destination.exists():
         _verify(meta, destination)
-        return
-    args.data_root.mkdir(parents=True, exist_ok=True)
-    # Stage on the destination filesystem and publish only complete payloads.
-    with tempfile.TemporaryDirectory(dir=args.data_root, prefix=".download-") as temporary:
+        return "Verified"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=destination.parent, prefix=".download-") as temporary:
         staged = Path(temporary) / "payload"
         staged.mkdir()
-        archives = _materialize(meta, staged, args.offline, args.source_archive)
+        archives = _materialize(meta, staged, offline)
         checksums = _checksums(staged)
         if not checksums:
             raise ValueError("The official source produced an empty payload.")
         _write(staged / RECEIPT, {"source": meta, "archives": archives, "checksums": checksums})
         _verify(meta, staged)
         staged.rename(destination)
-    print(f"Downloaded {args.benchmark}/{args.dataset} to {destination}")
+    print(f"Downloaded to {destination}", flush=True)
+    return "Downloaded"
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Download or verify official datasets in one benchmark group.
+
+    Args:
+        argv: Command arguments, or None to read process arguments.
+
+    Returns:
+        Zero when all selected datasets succeed, or one when any fails.
+        Invalid arguments exit with code two through argparse.
+    """
+    sources = _read(SOURCES)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=("list", "download"))
+    parser.add_argument("group", choices=sorted(sources), help="Benchmark group.")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--name", help="Dataset name within the selected group.")
+    selection.add_argument("--all", action="store_true", help="Download every dataset in this group.")
+    parser.add_argument("--data-root", type=Path, help="Default: data/mindmemos_<group>.")
+    parser.add_argument("--verify-only", action="store_true", help="Verify local payloads without downloading.")
+    parser.add_argument("--offline", action="store_true", help="Use cached Hugging Face files or verify local data.")
+    args = parser.parse_args(argv)
+    datasets = sources[args.group]
+    if args.action == "list":
+        if args.name or args.all or args.verify_only or args.offline or args.data_root:
+            parser.error("list accepts only a benchmark group")
+        for name, meta in datasets.items():
+            print(f"{name}: {meta.get('download_page', meta['url'])} [{meta['kind']}]")
+        return 0
+    if not args.name and not args.all:
+        parser.error("download requires --name DATASET or --all")
+    if args.name and args.name not in datasets:
+        parser.error(f"Unknown dataset {args.name!r} for {args.group}; choose from: {', '.join(datasets)}")
+    load_dotenv(ROOT / ".env", override=False, interpolate=False)
+    data_root = args.data_root or ROOT / f"data/mindmemos_{args.group}"
+    selected = datasets if args.all else {args.name: datasets[args.name]}
+    outcomes = []
+    for name, meta in selected.items():
+        print(f"\nDownloading {args.group}/{name}...", flush=True)
+        try:
+            status = _download(meta, data_root / name, args.offline, args.verify_only)
+        except Exception as error:
+            status = "Failed"
+            print(f"Failed {args.group}/{name}: {error}", file=sys.stderr, flush=True)
+        outcomes.append((name, status))
+    print("\nDataset                 Result")
+    for name, status in outcomes:
+        print(f"{name:<23} {status}")
+    return 1 if any(status == "Failed" for _, status in outcomes) else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

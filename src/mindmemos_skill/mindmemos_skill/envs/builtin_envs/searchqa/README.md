@@ -1,23 +1,14 @@
 ## 1. Official Dataset
 
-Official source: [SearchQA](https://github.com/nyu-dl/dl4ir-searchQA). Run the project download script
-from the repository root with Python 3.12 or 3.13:
+Evaluation source: [lucadiliello/searchqa](https://huggingface.co/datasets/lucadiliello/searchqa),
+pinned to revision `c1a979068ba118d85467179b704031d113d689cc`.
 
 ```bash
-uv run python scripts/download_datasets.py download --benchmark skill --dataset searchqa --source-archive /absolute/path/to/SearchQA.zip
+uv run --no-sync python scripts/download_datasets.py download skill --name searchqa
 ```
 
-The default destination is `data/mindmemos_skill/searchqa/`. The script uses the sources and pinned versions in
-`config/presets/dataset_download_sources.json`.
-
-First obtain the official archive from the [upstream Google Drive release](https://drive.google.com/drive/u/2/folders/1kBkQGooNyG0h8waaOJpgdGtOnlb1S649).
-Replace the archive argument with its local path; repeat `--source-archive` when
-importing multiple archives in the same invocation. The script imports and
-extracts archives; it does not convert raw crawler or TSV files. The example
-below requires JSON records with `id`, `question`, `context`, and `answers`
-(a list of strings), preserving the IDs in our split file. Raw releases lacking
-these fields need conversion before this loader can use them; the project does
-not currently provide that conversion.
+The source Parquet files are stored under `data/mindmemos_skill/searchqa/data/`.
+The download receipt records the pinned source and verifies the local files.
 
 ## 2. Split File Format and Provided Paths
 
@@ -28,7 +19,7 @@ resources/mindmemos_skill_eval/skill_forest-searchqa/data_splits/splits.json
 ```
 
 The split file is a UTF-8 JSON object mapping nonblank split names to ordered
-lists of string task IDs. For example:
+lists of native HF `key` values as task IDs. For example:
 
 ```json
 {"train": ["task-1"], "val": ["task-2"], "test": ["task-3"]}
@@ -61,31 +52,22 @@ from mindmemos_skill.envs.data import Data
 root = Path.cwd()
 
 import json
+import pyarrow.parquet as parquet
 
-# Locate the JSON release with the normalized fields required by this loader.
-required = {"id", "question", "context", "answers"}
-records = {}
-for path in sorted((root / "data/mindmemos_skill/searchqa").rglob("*.json")):
-    if path.name == "download_receipt.json":
-        continue
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(payload, dict):
-        payload = [payload] if "id" in payload else payload.get("data", list(payload.values()))
-    if not isinstance(payload, list):
-        continue
-    for row in payload:
-        if isinstance(row, dict) and required <= row.keys():
-            identifier = str(row["id"])
-            if identifier in records and records[identifier] != row:
-                raise ValueError(f"Conflicting SearchQA records for {identifier}")
-            records[identifier] = row
-if not records:
-    raise ValueError("The archive must contain JSON records with id, question, context, and answers")
+split_file = root / "resources/mindmemos_skill_eval/skill_forest-searchqa/data_splits/splits.json"
+manifest = json.loads(split_file.read_text())
+wanted = {identifier for ids in manifest.values() for identifier in ids}
+records = []
+for path in sorted((root / "data/mindmemos_skill/searchqa/data").glob("*.parquet")):
+    for batch in parquet.ParquetFile(path).iter_batches(columns=["key", "question", "context", "answers"]):
+        for row in batch.to_pylist():
+            if row["key"] in wanted:
+                records.append({"id": row["key"], "question": row["question"],
+                                "context": row["context"], "answers": row["answers"]})
 
-# Keep generated loader input separate from the verified download payload.
 prepared = root / "output/env_examples/searchqa/items.json"
 prepared.parent.mkdir(parents=True, exist_ok=True)
-prepared.write_text(json.dumps(list(records.values())), encoding="utf-8")
+prepared.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
 data = Data.build("searchqa", {"data_path": prepared})
 samples = data.load()
 split_file = root / "resources/mindmemos_skill_eval/skill_forest-searchqa/data_splits/splits.json"
