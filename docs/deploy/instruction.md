@@ -1,314 +1,278 @@
-# MindMemOS Deployment & Configuration Guide
+# MindMemOS deployment guide
 
-<p align="center">
-  <strong><a href="instruction.md">English</a></strong>
-  &nbsp;&nbsp;│&nbsp;&nbsp;
-  <strong><a href="instruction_ZH.md">简体中文</a></strong>
-</p>
+English | [简体中文](instruction_ZH.md)
 
-## 1. Overview
+This guide starts local services from the repository root. Python services run on the host. Docker Compose manages databases and monitoring components.
+`make dev` manages service processes in the foreground. This guide does not configure public access, a reverse proxy, or a background system service.
 
-MindMemOS uses a `uv workspace` to manage three core Python packages, organized into server, client, and evaluation layers:
+## 1. Start all features with `make dev`
 
-```text
-Applications / Agents ──────────────┐
-Agent Plugins ───── CLI ─────────────┼──> mindmemos_sdk ── HTTP ──> mindmemos
-mindmemos_eval ──────────────────────┘
-```
+The default command starts Memory API, Skill API, and UI. It also enables Kafka tasks and OTLP monitoring.
+The launcher selects local containers from the configured connection addresses. Remote connections do not cause the launcher to create those containers.
 
-- `mindmemos` is the core server-side algorithm package. It provides FastAPI endpoints, memory and Skill workflows, model calls, data persistence, and asynchronous tasks.
-- `mindmemos_sdk` provides the Python SDK and CLI for applications and plugins. It calls `mindmemos` over HTTP without depending on server internals.
-- `mindmemos_eval` is an independent evaluation package. It uses `mindmemos_sdk` to call the service, load datasets, run evaluations, and aggregate results.
+### 1.1 Prepare software and Python dependencies
 
-The main runtime-related directories are:
+Prepare these tools:
 
-```text
-.
-├── src/
-│   ├── mindmemos/          # Core server package
-│   ├── mindmemos_sdk/      # Python SDK and mindmemos CLI
-│   └── mindmemos_eval/     # Benchmark evaluation tools
-├── config/
-│   ├── mindmemos/          # Server runtime and authentication configuration
-│   ├── mindmemos_eval/     # Evaluation task configuration
-│   └── presets/            # Algorithm preset resources
-├── dockers/                # Qdrant, Neo4j, Kafka, and observability components
-├── plugins/                # Agent plugin integrations
-├── Makefile                # Entry points for local services and dependencies
-└── pyproject.toml          # uv workspace and development dependencies
-```
+- Git, Make, and uv.
+- Python 3.11–3.13. The repository selects 3.13 through `.python-version` by default.
+- Docker and Docker Compose. Start the Docker engine.
+- Node.js and npm for the UI build.
+- System build tools. Some ALFWorld dependencies require native compilation.
 
-The primary configuration entry points are:
+On macOS ARM64, the TextWorld build mounts and unmounts an Inform7 installer image. Allow the installation process to do these operations.
+The project includes a runtime patch for TextWorld 1.7.0 on Python 3.13.
 
-| Scope | Configuration File | Description |
-| --- | --- | --- |
-| `mindmemos` | `.env` | Docker dependencies, service ports, and connection addresses. |
-| `mindmemos` | `config/mindmemos/dev.yaml` | Server models, databases, pipelines, and runtime configuration. |
-| `mindmemos` | `config/mindmemos/api_keys.yaml` | API keys, `project_id`, memory algorithms, and access permissions. |
-| `mindmemos` | `config/presets/*.json` | Memory algorithm presets. |
-| `mindmemos_sdk` | `~/.mindmemos/settings.json` | SDK and CLI connection information and default user. |
-| `mindmemos_eval` | `config/mindmemos_eval/*/*.yaml` | Evaluation models, datasets, concurrency, and algorithm configuration. |
-
-## 2. Minimal Startup Flow
+Install dependencies from the repository root:
 
 ```bash
-cp .env.example .env
-cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
-cp config/mindmemos_skill/dev.example.yaml config/mindmemos_skill/dev.yaml
+uv sync --all-packages --extra postgres --extra kafka
+```
 
-# Edit .env and config/mindmemos/dev.yaml, then start the service.
-make setup
+The root `uv.lock` manages workspace dependencies. All Python services use the root `.venv`.
+Skill includes FastAPI and Python packages for its built-in environments in the default dependencies. Only `postgres` and `kafka` are optional extras.
+The Skill example selects PostgreSQL. All features require Kafka, so this command includes both extras.
+
+### 1.2 Initialize local configuration
+
+Run this command:
+
+```bash
+make init
+```
+
+Initialization copies `.example` templates to missing local files. Existing files are not recopied. It then applies nonempty model settings from `.env` to all actual YAML configurations under `config/`, including existing files, Memory/Skill services, training, and evaluation. `.example.yaml` templates retain public example values.
+
+To share model connections, create `.env`, fill the optional settings below, and initialize:
+
+```bash
+cp .env.example .env  # Only when .env does not exist
+# Edit .env and fill the optional model settings below
+make init
+```
+
+| Model type | API key | Base URL | Model name | Output dimensions |
+| --- | --- | --- | --- | --- |
+| Chat | `MINDMEMOS_CHAT_API_KEY` | `MINDMEMOS_CHAT_BASE_URL` | `MINDMEMOS_CHAT_MODEL` | — |
+| Embedding | `MINDMEMOS_EMBEDDING_API_KEY` | `MINDMEMOS_EMBEDDING_BASE_URL` | `MINDMEMOS_EMBEDDING_MODEL` | `MINDMEMOS_EMBEDDING_DIMENSIONS` |
+| Rerank | `MINDMEMOS_RERANK_API_KEY` | `MINDMEMOS_RERANK_BASE_URL` | `MINDMEMOS_RERANK_MODEL` | — |
+
+Each nonempty setting replaces its corresponding fields. Empty or undefined settings preserve the YAML values; fill them manually in `config/`. Any Embedding setting requires a positive integer dimension. Initialization updates every embedding `dimensions` field and Qdrant `vector_size`. Base URLs are copied verbatim into `base_url` or `api_base`; provide the complete rerank endpoint required by your provider.
+
+Run `make init` again after editing `.env` to replace all corresponding fields with the new values. Chat settings apply to every chat model block, including training optimizers, routers, and evaluation targets. To use different models, edit the YAML files after initialization and avoid overwriting them again with shared `.env` settings. Initialization retains YAML comments, other settings, and local connections, and does not print model credentials.
+
+Check these deployment files:
+
+| File | Required settings |
+| --- | --- |
+| `.env` | Database addresses, ports, passwords, and monitoring connections |
+| `config/mindmemos/dev.yaml` | Chat, Embedding, and Rerank model names, API keys, and addresses |
+| `config/mindmemos_skill/dev.yaml` | Storage connections and model connections for enabled management, training, and evolution pipelines |
+| `config/presets/local.project.yaml` | Project IDs, service API keys, permissions, and the default project |
+
+`make init` also creates evaluation configuration files. Service startup does not require an evaluation run.
+
+Check these conditions when you configure models:
+
+1. Match the Memory embedding dimensions to `database.qdrant.vector_size`.
+2. Set the connection parameters in each enabled Skill model block.
+3. Configure local service API keys separately from model provider API keys.
+4. Give the default project these permissions: `memory:read`, `memory:write`, `skill:read`, and `skill:write`.
+5. Preserve existing project IDs to retain access to existing data.
+
+The default launcher reads all local projects. It creates temporary authentication files for both APIs.
+`default_project` selects the project for UI. `PROJECT=<name>` changes this selection without restricting the projects accepted by the APIs.
+The default UI configuration directory is `.mindmemos` in the repository root.
+
+Additional dependencies:
+
+- `HF_TOKEN`: The access token used by the dataset downloader for gated or private Hugging Face datasets. Sign in to Hugging Face, create a token with read access to the target dataset in [Access Tokens](https://huggingface.co/settings/tokens), and put its full value in `.env`, for example `HF_TOKEN=hf_...`. For gated datasets, first accept the terms or request access on the dataset page; a token alone does not grant dataset access. Leave it empty for public datasets that allow anonymous downloads. See the [Hugging Face token documentation](https://huggingface.co/docs/hub/security-tokens).
+- `SPREADSHEETBENCH_SOFFICE_PATH`: The absolute path to the LibreOffice `soffice` executable, used to recalculate workbooks and save cached formula results when SpreadsheetBench formula recalculation is enabled. Set an executable file path, not an installation directory. Tasks only need it when they use recalculation.
+
+Install LibreOffice: on macOS, download the installer for your processor architecture from the [LibreOffice website](https://www.libreoffice.org/installation-instructions/) and install the application in `/Applications`. On Ubuntu/Debian, run `sudo apt update && sudo apt install libreoffice-calc`.
+
+Then set the actual executable path in `.env`, for example:
+
+```dotenv
+# macOS
+SPREADSHEETBENCH_SOFFICE_PATH=/Applications/LibreOffice.app/Contents/MacOS/soffice
+# Common Linux path (use this instead of the macOS setting)
+# SPREADSHEETBENCH_SOFFICE_PATH=/usr/bin/soffice
+```
+
+On Linux, use `command -v soffice` to find the path. Run `"<absolute path to soffice>" --version` and confirm that it prints the LibreOffice version. If the variable is empty, the program searches for a packaged LibreOffice runtime, `soffice` on PATH, and common installation paths. An explicit absolute path does not require adding `soffice` to PATH.
+
+### 1.3 Prepare NLP and UI resources
+
+After you prepare configuration files, install and check NLP models:
+
+```bash
+uv run --no-sync python scripts/install_nlp_assets.py
+uv run --no-sync python scripts/check_nlp_assets.py
+```
+
+The installer reads spaCy model names from Memory configuration.
+Build the UI:
+
+```bash
+make ui-build
+```
+
+`make dev` does not build the UI. The UI page may fail to open if frontend resources are missing.
+Before SpreadsheetBench tasks that require formula recalculation, install and configure LibreOffice as described in section 1.2.
+Prepare datasets and external evaluators separately. Service startup does not download all benchmark data.
+
+### 1.4 Check the plan and start services
+
+Preserve the selected dependencies in the current terminal:
+
+```bash
+export UV_NO_SYNC=1
+make dev PLAN=1
+```
+
+`UV_NO_SYNC=1` tells the Makefile's `uv run` to use the synchronized environment.
+Repeat the synchronization command in section 1.1 after dependency declarations change.
+`make setup` synchronizes dependencies, installs Git hooks, and prepares NLP models. After that command, synchronize the required extras again.
+
+`PLAN=1` checks configuration and shows the startup plan. It does not start containers or APIs, or test external connections and model calls.
+After you check the plan, start services:
+
+```bash
 make dev
 ```
 
-`config/mindmemos_skill/dev.example.yaml` is the single Skill deployment template. `make dev` and `make dev SERVICE=skill` read the user-owned `dev.yaml`; if it is missing, startup stops before Docker dependencies and asks you to copy the example.
-
-Default addresses:
-
-- FastAPI: `http://127.0.0.1:8000`
-- API Docs: `http://127.0.0.1:8000/docs`
-- Qdrant: `http://localhost:6333`
-- Neo4j Browser: `http://localhost:7474`
-
-`make dev` starts Memory and Skill with the `full` dependency tier by default. Select another combination with:
+This command is equivalent to:
 
 ```bash
-make dev SERVICE=memory                         # Memory only
-make dev SERVICE=skill                       # Skill only
-make dev FEATURE=async   # Kafka and background workers
-make dev FEATURE=core    # Only core Docker dependencies
+make dev SERVICE=all FEATURE=all UI=1
 ```
 
-Stop local dependencies:
+With local example connections, the command starts these components:
+
+| Category | Components |
+| --- | --- |
+| Python services | Memory API, Skill API, UI |
+| Memory storage | Qdrant, Neo4j |
+| Skill storage | PostgreSQL, selected by Skill database configuration |
+| Asynchronous tasks | Kafka, Kafka UI, and the Skill task worker |
+| Monitoring | OpenTelemetry Collector, ClickHouse, Grafana, Kafka Exporter |
+
+The launcher waits for dependency ports and application health checks. Wait for `Development services ready` before you access services.
+
+### 1.5 Check services and stop them
+
+These addresses use default ports. If you change ports, use the addresses in the startup plan.
+
+| Service | Address |
+| --- | --- |
+| Memory health check | `http://127.0.0.1:8000/healthz` |
+| Memory API documentation | `http://127.0.0.1:8000/docs` |
+| Skill health check | `http://127.0.0.1:8001/health` |
+| Skill API documentation | `http://127.0.0.1:8001/docs` |
+| UI | `http://127.0.0.1:8765` |
+| Kafka UI | `http://127.0.0.1:8080` |
+| Grafana | `http://127.0.0.1:3000` |
+
+Check health from another terminal:
 
 ```bash
-make stop
+curl -f http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1:8001/health
+UV_NO_SYNC=1 make status
 ```
 
-## 3. Required Environment Variables
+A successful health check means the service responds. Send a business request with the configured model to check its connection.
+Use these stop commands:
 
-Configuration file selection:
+| Action | Result |
+| --- | --- |
+| Press `Ctrl+C` in the foreground terminal | Stop this session's APIs and UI, but keep containers running |
+| `UV_NO_SYNC=1 make stop` | Stop managed workspace applications and containers in the current Compose project, but preserve data |
+| `UV_NO_SYNC=1 make clean` | After confirmation, delete Docker volumes in the current Compose project and their data |
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `MINDMEMOS_CONFIG_NAME` | Selects the configuration name; `dev` reads `config/mindmemos/dev.yaml`. | `dev` |
-| `MINDMEMOS_CONFIG_PATH` | Specifies a configuration file path directly; takes precedence over `MINDMEMOS_CONFIG_NAME` when set. | Empty |
+Use `make stop` for normal shutdown. `make clean` deletes database data. Do not use it for a normal restart.
 
-Qdrant:
+## 2. Deploy core features
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `MINDMEMOS_QDRANT_URL` | HTTP address used by FastAPI to access Qdrant. | `http://localhost:6333` |
-| `MINDMEMOS_QDRANT_HTTP_PORT` | Qdrant HTTP port exposed by Docker. | `6333` |
-| `MINDMEMOS_QDRANT_GRPC_PORT` | Qdrant gRPC port exposed by Docker; also overrides `database.qdrant.grpc_port` in the configuration. | `6334` |
-| `MINDMEMOS_QDRANT_PREFER_GRPC` | Whether the Qdrant client prefers gRPC. | `false` |
-| `MINDMEMOS_QDRANT_API_KEY` | Qdrant API key; can be left empty for an unauthenticated local setup. | Empty |
-| `MINDMEMOS_GRAFANA_QDRANT_URL` | HTTP address used by the Grafana container to access Qdrant. | `http://qdrant:6333` |
+Complete sections 1.1–1.3 first. Then select the services and features you need.
+This section retains `UV_NO_SYNC=1` and uses the service configuration you prepared.
 
-Neo4j:
+### 2.1 Select services and features
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `MINDMEMOS_NEO4J_URI` | Bolt address used by FastAPI to access Neo4j. | `bolt://localhost:7687` |
-| `MINDMEMOS_NEO4J_HTTP_PORT` | Neo4j Browser port exposed by Docker. | `7474` |
-| `MINDMEMOS_NEO4J_BOLT_PORT` | Neo4j Bolt port exposed by Docker. | `7687` |
-| `MINDMEMOS_NEO4J_USERNAME` | Neo4j username; also used as the username in Docker `NEO4J_AUTH`. | `neo4j` |
-| `MINDMEMOS_NEO4J_PASSWORD` | Neo4j password; also used as the password in Docker `NEO4J_AUTH`. | `mindmemos_dev_password` |
+| Parameter | Value | Memory | Skill |
+| --- | --- | --- | --- |
+| `SERVICE` | `all` | Start Memory API | Start Skill API |
+| `SERVICE` | `memory` | Start Memory API | Do not start Skill API |
+| `SERVICE` | `skill` | Do not start Memory API | Start Skill API |
+| `FEATURE` | `core` | Enable synchronous features; disable Kafka tasks and OTLP export | Enable synchronous features and local asynchronous task management; disable Kafka and OTLP export |
+| `FEATURE` | `async` | Enable synchronous features and Kafka tasks; disable OTLP export | Enable synchronous features and Kafka task management; disable OTLP export |
+| `FEATURE` | `all` | Enable synchronous features, Kafka tasks, and OTLP export | Enable synchronous features, Kafka task management, and OTLP export |
+| `UI` | `0`, `1` | Disable or enable the shared UI; `make dev` enables it by default | Disable or enable the shared UI; `make dev` enables it by default |
 
-Optional dependencies:
+Changing `FEATURE` does not modify the original YAML files in `config/`. The launcher generates temporary YAML files for the services to read at startup. These files are located at `mindmemos-dev-<random characters>/memory.yaml` and `mindmemos-dev-<random characters>/skill.yaml` under the operating system's temporary directory. The paths change on each launch, and the directory is cleaned up when the launcher exits.
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS` | Kafka address; the service starts consumers/producers only when `kafka.enabled=true` in the configuration. | `localhost:9092` |
-| `MINDMEMOS_TELEMETRY_ENDPOINT` | OTel HTTP endpoint; telemetry is reported only when `telemetry.enabled=true` in the configuration. | `http://localhost:4318` |
-| `MINDMEMOS_CLICKHOUSE_USER` / `MINDMEMOS_CLICKHOUSE_PASSWORD` / `MINDMEMOS_CLICKHOUSE_DB` | ClickHouse/Grafana observability data configuration. | See `.env.example` |
-| `MINDMEMOS_SKILL_POSTGRES_PORT` | Host port for Skill pgvector in Skill and combined modes. | `55432` |
+`FEATURE` makes these changes to the runtime configuration:
 
-API bind address:
+- `core`: Disable Kafka and OTLP monitoring data export. Memory supports synchronous interfaces only, while Skill uses Python's native asynchronous task management.
+- `async`: Enable Kafka asynchronous tasks and disable OTLP monitoring data export.
+- `all`: Enable Kafka asynchronous tasks and OTLP monitoring data export. Use Grafana dashboards to monitor Memory and Skill service logs.
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `MINDMEMOS_API_HOST` | Host used by `make dev` / `make api` to start FastAPI. | `127.0.0.1` |
-| `MINDMEMOS_API_PORT` | Port used by `make dev` / `make api` to start FastAPI. | `8000` |
-
-## 4. Docker
-
-Start Memory dependencies for the selected tier with:
+Use one of these commands:
 
 ```bash
-make docker SERVICE=memory
+# Both APIs and UI; synchronous Memory features and local asynchronous Skill tasks.
+make dev SERVICE=all FEATURE=core
+
+# Only Memory API, without UI.
+make dev SERVICE=memory FEATURE=core UI=0
+
+# Only Skill API, without UI.
+make dev SERVICE=skill FEATURE=core UI=0
+
+# Both APIs and asynchronous tasks, without OTLP monitoring.
+make dev SERVICE=all FEATURE=async
 ```
 
-`make docker SERVICE=memory` defaults to all dependencies. Add `FEATURE=core` for core databases or `FEATURE=async` for core databases and Kafka. It does not start APIs or UI; external dependencies are not provisioned locally. See [Docker usage](../../dockers/README.md).
+Run one startup command at a time. Run `make stop` before you change the scope.
+A smaller scope does not stop extra containers from an earlier startup.
 
-Core services in Docker Compose:
+### 2.2 Start containers, APIs, and UI separately
 
-- `qdrant`: stores memory/entity/source vectors and payloads.
-- `neo4j`: stores graph relationships.
-- `kafka`: asynchronous task queue; selected by `FEATURE`.
-- `clickhouse` + `otel-collector` + `grafana`: observability stack; use `FEATURE=core` or `FEATURE=async` to disable it.
+Start containers required for synchronous features:
 
-For local deployment, the port variables in `.env` must align with the connection addresses in `config/mindmemos/dev.yaml`. At startup, environment variables also override the following configuration fields:
-
-- `database.qdrant.url`
-- `database.qdrant.api_key`
-- `database.qdrant.grpc_port`
-- `database.qdrant.prefer_grpc`
-- `database.neo4j.uri`
-- `database.neo4j.username`
-- `database.neo4j.password`
-- `kafka.bootstrap_servers`
-- `telemetry.telemetry_endpoint`
-
-## 5. LLM Configuration
-
-LLMs are used for memory extraction, schema processing, dreaming, and other generation tasks. Configure `chat_model_router`:
-
-```yaml
-chat_model_router:
-  routing_strategy: simple-shuffle
-  endpoints:
-    - model: openai/gpt-4.1-mini
-      api_key: your-api-key
-      api_base: https://your-base-url/v1
-      timeout: 1200
-      temperature: 0.0
-      num_retries: 3
-      extra_body: {}
+```bash
+make docker SERVICE=all FEATURE=core
 ```
 
-Notes:
+Then start the APIs:
 
-- `model` uses LiteLLM-style model names. OpenAI-compatible endpoints usually use `openai/<model-name>`.
-- `api_base` should include `/v1`, unless your provider explicitly documents a different format.
-- Do not commit `api_key`; keep it in the uncommitted local `config/mindmemos/dev.yaml`.
-- Multiple endpoints can be configured, and the router dispatches according to `routing_strategy`.
-
-## 6. Embedding Configuration
-
-Embedding must be configured. At startup, the service validates that the embedding output dimension matches the Qdrant vector dimension.
-
-```yaml
-embed_model_router:
-  routing_strategy: simple-shuffle
-  endpoints:
-    - model: openai/qwen3-embedding-4b
-      api_key: your-api-key
-      api_base: https://your-base-url/v1
-      timeout: 600
-      num_retries: 3
-      dimensions: 2560
-      extra_body: {}
-
-database:
-  qdrant:
-    vector_size: 2560
-    semantic_vector_name: semantic
-    bm25_vector_name: bm25
+```bash
+make api SERVICE=all FEATURE=core
 ```
 
-Key points:
+Finally, start the UI in another terminal:
 
-- `database.qdrant.vector_size` must equal the actual output dimension of the embedding model.
-- If the embedding model supports custom dimensions, `dimensions` and `vector_size` must also match.
-- If a Qdrant collection has already been created with an old dimension, changing `vector_size` alone will not migrate it. For local development, run `make clean` to clear the volume and rebuild.
-
-## 7. Rerank Configuration (Optional)
-
-Rerank improves search precision by reranking retrieval candidates, but it is not required for service startup. Without an external rerank endpoint, basic add/search still works; the code uses existing recall results or fallback logic.
-
-Configure an external reranker when needed:
-
-```yaml
-rerank_model_router:
-  routing_strategy: simple-shuffle
-  endpoints:
-    - model: openai/qwen3-reranker-4b
-      api_key: your-api-key
-      api_base: https://your-base-url/v1
-      timeout: 600
-      num_retries: 3
-
-algo_config:
-  search:
-    rerank:
-      enabled: true
-      max_query_length: 100
-      max_doc_length: 5000
-      max_batch_size: 20
-      max_concurrent_batches: 1
-      request_timeout: 5.0
-    vanilla:
-      use_reranker: true
-    schema_search:
-      entity:
-        use_reranker: true
+```bash
+make ui
 ```
 
-When not using an external reranker:
+### 2.3 Use existing infrastructure or change ports
 
-```yaml
-rerank_model_router:
-  routing_strategy: simple-shuffle
-  endpoints: []
+Set existing database, Kafka, and OTLP addresses in service YAML or `.env`.
+The launcher creates containers only for localhost or loopback addresses. It does not create remote services.
+After external dependencies become available, use `make api` for the selected APIs.
 
-algo_config:
-  search:
-    rerank:
-      enabled: false
-    vanilla:
-      use_reranker: false
-    schema_search:
-      entity:
-        use_reranker: false
+Example startup parameters:
+
+```bash
+make dev FEATURE=core API_PORT=8100 SKILL_PORT=8101 UI_PORT=8865
+make dev FEATURE=core MEMORY_CONFIG=/absolute/path/memory.yaml SKILL_CONFIG=/absolute/path/skill.yaml
 ```
 
-`rerank` is an optional enhancement. For production, stabilize Docker, LLM, and Embedding first, then add rerank.
+These are separate examples. Select one command for each startup.
+`UI_HOME` selects the UI's SDK configuration directory. `PROJECT_CONFIG` selects the local project configuration file.
+`API_RELOAD=1` enables development reload for Memory API. `SKILL_RELOAD=1` enables it for Skill API.
 
-## 8. Memory Algorithm Version (v1 / v2)
-
-Schema memory extraction has two selectable flows via `algo_config.add.schema.version`:
-
-- `v2` (default): rule-based graph fusion, fewer LLM calls per episode.
-- `v1`: develop-compatible LLM-heavy flow, for baseline comparison and rollback.
-
-Set it in the base config for a deployment-wide default (takes effect after a
-restart), or in a project's API-key override config to pin one project (project
-overrides win and apply to that project's next add request — no restart). Storage
-is compatible in both directions: same collections and payload schema, v2 reads
-and updates v1 data and vice versa, mixed histories are safe. Output carries a
-`mem_extract_version` label (`schema_add` / `schema_add_v1`) so the producing flow
-stays distinguishable. v1 remains available for baseline comparison and rollback
-until v2 is validated on the LoCoMo/PersonaMem benchmarks.
-
-## 9. Authentication Configuration
-
-Local setup uses API keys by default:
-
-```yaml
-auth:
-  mode: api_key
-  api_key_file: api_keys.yaml
-```
-
-`api_key_file` is resolved relative to the configuration file directory, so by default it points to `config/mindmemos/api_keys.yaml`. The local example includes:
-
-- `dev-api-key-001`: vanilla memory
-- `dev-api-key-002`: schema memory
-
-Use this header when calling APIs:
-
-```text
-Authorization: Bearer <api_key>
-```
-
-## 10. Minimal Checklist
-
-Before starting, confirm at least the following:
-
-- Qdrant and Neo4j ports in `.env` do not conflict with services already running locally.
-- `config/mindmemos/dev.yaml` exists.
-- `chat_model_router.endpoints[0].api_key` / `api_base` / `model` are valid.
-- `embed_model_router.endpoints[0].api_key` / `api_base` / `model` are valid.
-- `database.qdrant.vector_size` equals the embedding output dimension.
-- If rerank is not needed, `rerank_model_router.endpoints` can remain empty and the related `use_reranker` flags should be disabled.
+The default launcher uses local project authentication. Set `SERVICE_AUTH=1` to retain authentication policies from service YAML.
+In that mode, configure UI service addresses and credentials separately. The launcher does not configure them automatically.

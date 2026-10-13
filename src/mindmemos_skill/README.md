@@ -60,7 +60,7 @@ The base class provides persistence, not a model backend or task evaluator.
 The built-in [LiveMath environment](mindmemos_skill/envs/builtin_envs/livemath/README.md)
 loads official local monthly JSON, uses the shared split API, runs one
 OpenAI-compatible chat call with optional static or dynamic Skill instances, and evaluates the
-choice locally. Install the `livemath` optional dependencies to run the model.
+choice locally. Its Python dependencies are included in the default installation.
 It exposes only public prompts to the model and keeps private scoring in audit/.
 
 `Reward` requires `score` (finite number), `success` (boolean), and `detail`
@@ -143,7 +143,26 @@ import mindmemos_skill
 ```
 
 The distribution name is `mindmemos-skill`; the Python import name is `mindmemos_skill`.
-The package is not yet registered in the repository's uv workspace.
+The default installation includes FastAPI and the Python dependencies of all built-in environments.
+Only `postgres` and `kafka` remain optional extras; install both with
+`uv pip install -e './src/mindmemos_skill[postgres,kafka]'`.
+SpreadsheetBench still prepares isolated execution environments using uv. LibreOffice,
+benchmark datasets, external evaluator sources, and agent executables must be prepared separately.
+ALFWorld depends on TextWorld, which may require a native source build. On macOS ARM64,
+the build must be allowed to mount and unmount the Inform7 installer image. Installation
+in a temporary Python 3.12 environment and one text-game reset/step succeeded after allowing
+that operation; a restricted build failed at image mounting. Default wheel installation
+with a fresh uv installation, empty virtual environment, and separate cache also passed
+on macOS ARM64 with Python 3.13.13. Checks covered CLI/imports, document creation,
+SQLite/vector loading, both managed spreadsheet runtimes, and an ALFWorld worker reset/step.
+System build tools and existing benchmark data were used; other platforms and full
+model training were not tested.
+Python 3.13 installation also succeeded. The ALFWorld simulator worker applies a
+compatibility patch only for TextWorld 1.7.0 on Python 3.13 and newer: expression
+evaluation receives an explicit namespace instead of relying on `locals().update()`.
+The same text-game reset and step passed on Python 3.12 and patched Python 3.13,
+with identical observations, available actions, score, and completion flag.
+The package is a member of the repository's uv workspace.
 
 ## Package layout
 
@@ -240,6 +259,8 @@ Both inputs produce the same `SkillService` implementing `MindMemOSSkill`. The c
 
 Configuration contains one `persistence` with an inline `database`, an optional `repository_pipeline`, and named `training_pipelines` / `evolution_pipelines` mappings containing complete definitions. See the [default configuration](../../config/mindmemos_skill/dev.example.yaml) and [assembly contract](../../docs/mindmemos_skill/central_repository_api.md).
 
+Algorithms construct Agents through `Agent.from_config()` using validated settings that retain the registered `class_name`. Inline settings and named presets both follow the field's backend whitelist. TreeSkill, Skill-Forest, and SimpleEvolver accept only their algorithm config; their constructors no longer accept `agent_factory`. Inline fields allowing several backends require an explicit `class_name`.
+
 Each pipeline owns its nested algorithm, environment and agent settings. Repeated configuration creates independent components; there are no global resource references. The factory constructs one `SkillPersistence` and passes it to every pipeline through the fixed `persistence` keyword. Pipeline constructors accept `config` and `persistence`; their `config_type` models validate nested settings, and the implementation constructs local components through their existing registries.
 
 Import extensions explicitly before assembly. The factory validates pipeline capabilities, options and constructor signatures before constructing the database. It does not infer or synthesize repository pipelines. Pipelines validate their own internal implementation choices and must never pass persistence into trainers or evolvers.
@@ -250,10 +271,10 @@ Run `.venv/bin/python -m pytest src/mindmemos_skill/tests -q` from the repositor
 
 ## FastAPI access
 
-Install the optional HTTP dependencies and start the server from the repository root:
+FastAPI is included in the default installation. Start the server from the repository root:
 
 ```bash
-uv pip install -e './src/mindmemos_skill[fastapi]'
+uv pip install -e './src/mindmemos_skill'
 cp config/mindmemos_skill/dev.example.yaml config/mindmemos_skill/dev.yaml
 make dev SERVICE=skill
 ```
