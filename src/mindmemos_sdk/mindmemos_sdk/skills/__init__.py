@@ -6,6 +6,7 @@ from .config import EnvironmentConfig
 from .content import content_hash, decode_resources, encode_resources, skill_hash
 from .typing import (
     ActivateRequest,
+    AddGraphMembersRequest,
     CommitRequest,
     DeleteRequest,
     DiffRequest,
@@ -18,6 +19,7 @@ from .typing import (
     OrganizeRequest,
     RecommendRequest,
     RegisterRequest,
+    RemoveGraphMembersRequest,
     ShowRequest,
     SkillResolveRequest,
     StructuredSkillInfo,
@@ -36,6 +38,8 @@ from .typing import (
 __all__ = [
     "EnvironmentConfig",
     "ActivateRequest",
+    "AddGraphMembersRequest",
+    "RemoveGraphMembersRequest",
     "AsyncSkillClient",
     "CommitRequest",
     "DeleteRequest",

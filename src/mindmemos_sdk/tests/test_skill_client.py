@@ -10,6 +10,7 @@ from mindmemos_sdk.config.models import AuthConfig, MemoryServiceConfig, SDKConf
 from mindmemos_sdk.errors import ApiError, TransportError
 from mindmemos_sdk.skills import (
     ActivateRequest,
+    AddGraphMembersRequest,
     AsyncSkillClient,
     CommitRequest,
     DeleteRequest,
@@ -23,6 +24,7 @@ from mindmemos_sdk.skills import (
     OrganizeRequest,
     RecommendRequest,
     RegisterRequest,
+    RemoveGraphMembersRequest,
     ShowRequest,
     SkillClient,
     SkillResolveRequest,
@@ -42,6 +44,19 @@ from mindmemos_sdk.skills.core import SkillRoute
 from mindmemos_sdk.transport import AsyncHttpTransport, HttpTransport
 
 REQUESTS = [
+    (
+        SkillClient.add_graph_members,
+        AsyncSkillClient.add_graph_members,
+        AddGraphMembersRequest(graph_ref="g", skill_refs=["s"], force_extract_scene=True),
+        "graphs/members/add",
+    ),
+    (
+        SkillClient.remove_graph_members,
+        AsyncSkillClient.remove_graph_members,
+        RemoveGraphMembersRequest(graph_ref="g", skill_refs=["s"]),
+        "graphs/members/remove",
+    ),
+    (SkillClient.preview_graph, AsyncSkillClient.preview_graph, GraphResolveRequest(graph_ref="g"), "graphs/preview"),
     (
         SkillClient.trajectory_statistics,
         AsyncSkillClient.trajectory_statistics,

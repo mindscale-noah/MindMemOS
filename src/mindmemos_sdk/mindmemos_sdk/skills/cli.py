@@ -20,6 +20,9 @@ from .client import SkillClient
 from .config import EnvironmentConfig
 from .typing import (
     ActivateRequest,
+    AddGraphMembersRequest,
+    CLICommitInput,
+    CLIRegisterInput,
     CLISkillInfo,
     CLITrainingRequest,
     CommitRequest,
@@ -34,6 +37,7 @@ from .typing import (
     OrganizeRequest,
     RecommendRequest,
     RegisterRequest,
+    RemoveGraphMembersRequest,
     ShowRequest,
     SkillResolveRequest,
     TaskProgressRequest,
@@ -87,17 +91,18 @@ def add_skill_commands(subparsers: argparse._SubParsersAction) -> None:
         parser.set_defaults(handler=run_skill_command, skill_handler=handler)
         return parser
 
-    register = command("register", _register, "Register a standard local Skill directory.")
-    register.add_argument("source")
+    register = command("register", _register, "Register a local Skill or StructuredSkillInfo JSON.")
+    register.allow_abbrev = False
+    register.description = "Supply exactly one local path or --json-skill; local options cannot be used with JSON."
+    source = register.add_mutually_exclusive_group(required=True)
+    source.add_argument("source", nargs="?", help="Local Skill directory or SKILL.md; exclusive with --json-skill.")
+    source.add_argument("--json-skill", type=_json_object, help="Complete StructuredSkillInfo JSON object.")
     register.add_argument("--alias")
-    register.add_argument("--version", default="v0.0.1")
-    register.add_argument("--message", default="Initial registration")
-    register.add_argument("--metadata-json", type=_json_object, default={})
-    register.add_argument("--include")
-    register.add_argument("--exclude")
-    structured = command("register-structured", _register_structured, "Register StructuredSkillInfo JSON.")
-    structured.add_argument("--json", dest="skill_json", type=_json_object, required=True)
-    structured.add_argument("--alias")
+    register.add_argument("--version", help="Local source only; defaults to v0.0.1.")
+    register.add_argument("--message", help="Local source only; defaults to Initial registration.")
+    register.add_argument("--metadata-json", type=_json_object, help="Local source metadata only.")
+    register.add_argument("--include", help="Local resource inclusion patterns only.")
+    register.add_argument("--exclude", help="Local resource exclusion patterns only.")
     listing = command("list", _list, "Filter Skill family summaries.")
     listing.add_argument("--filter", type=_json_object, default={})
     listing.add_argument("--name")
@@ -112,15 +117,19 @@ def add_skill_commands(subparsers: argparse._SubParsersAction) -> None:
             parser.add_argument("--to", required=True)
             parser.add_argument("--overwrite", action="store_true")
     commit = command("commit", _commit, "Publish a child of the selected Skill version.")
+    commit.allow_abbrev = False
+    commit.description = "Supply exactly one --from or --json-skill; JSON must include a nonempty commit_message."
     commit.add_argument("skill_ref")
-    commit.add_argument("--from", dest="source", required=True)
-    commit.add_argument("--message", required=True)
+    source = commit.add_mutually_exclusive_group(required=True)
+    source.add_argument("--from", dest="source", help="Local Skill directory or SKILL.md.")
+    source.add_argument("--json-skill", type=_json_object, help="Complete StructuredSkillInfo JSON object.")
+    commit.add_argument("--message", help="Required for local sources; use commit_message in JSON mode.")
     labeling = commit.add_mutually_exclusive_group()
-    labeling.add_argument("--version")
-    labeling.add_argument("--bump", choices=("patch", "minor", "major"))
+    labeling.add_argument("--version", help="Local source version label only.")
+    labeling.add_argument("--bump", choices=("patch", "minor", "major"), help="Local source version increment only.")
     resources = commit.add_mutually_exclusive_group()
-    resources.add_argument("--resources-dir")
-    resources.add_argument("--clear-resources", action="store_true")
+    resources.add_argument("--resources-dir", help="Local replacement resource directory only.")
+    resources.add_argument("--clear-resources", action="store_true", help="Clear resources in local source mode only.")
     commit.add_argument("--activate", action="store_true")
     history = command("history", _history, "Read the owning family's version history.")
     history.add_argument("skill_ref")
@@ -206,7 +215,12 @@ def _add_graph_commands(commands):
     root = commands.add_parser("graph", help="Publish and query Skill graphs.")
     nested = root.add_subparsers(dest="graph_command", required=True)
     _nested(nested, "graph", "list", _graph_list)
-    for name, handler in (("resolve", _graph_resolve), ("history", _graph_history), ("show", _graph_show)):
+    for name, handler in (
+        ("resolve", _graph_resolve),
+        ("history", _graph_history),
+        ("show", _graph_show),
+        ("preview", _graph_preview),
+    ):
         parser = _nested(nested, "graph", name, handler)
         parser.add_argument("graph_ref")
     publish = _nested(nested, "graph", "publish", _graph_publish)
@@ -218,10 +232,20 @@ def _add_graph_commands(commands):
     members.add_argument("--all-skills", action="store_true")
     members.add_argument("--empty", action="store_true")
     publish.add_argument("--message")
+    publish.add_argument("--force-extract-scene", action="store_true")
+    for name, handler in (("add", _graph_add), ("remove", _graph_remove)):
+        members_parser = _nested(nested, "graph", name, handler)
+        members_parser.add_argument("graph_ref")
+        members_parser.add_argument("--skill", action="append", required=True)
+        members_parser.add_argument("--message")
+        if name == "add":
+            members_parser.add_argument("--force-extract-scene", action="store_true")
     recommend = _nested(nested, "graph", "recommend", _graph_recommend)
     recommend.add_argument("task")
     recommend.add_argument("--by", required=True)
     recommend.add_argument("--top-k", type=_positive, default=5)
+    recommend.add_argument("--strategy", choices=("graph", "vector"), default="graph")
+    recommend.add_argument("--include-scenes", action="store_true")
 
 
 def _print_json(data, *, stream=None):
@@ -280,24 +304,29 @@ def _read(client, selection):
 
 
 def _register(client, args):
-    """Register a standard source with automatically selected resources."""
-    root, content, frontmatter = read_source(args.source)
+    """Register one complete JSON input or a standard local source."""
+    source = CLIRegisterInput(
+        source=args.source,
+        json_skill=args.json_skill,
+        version=args.version,
+        message=args.message,
+        metadata_json=args.metadata_json,
+        include=args.include,
+        exclude=args.exclude,
+    )
+    if source.json_skill is not None:
+        return client.register(RegisterRequest(skill=source.json_skill, alias=args.alias))
+    root, content, frontmatter = read_source(source.source)
     skill = CLISkillInfo(
         content=content,
-        resources=collect_resources(root, args.include, args.exclude),
-        commit_version=args.version,
-        commit_message=args.message,
-        metadata=args.metadata_json,
+        resources=collect_resources(root, source.include, source.exclude),
+        commit_version=source.version if source.version is not None else "v0.0.1",
+        commit_message=source.message if source.message is not None else "Initial registration",
+        metadata=source.metadata_json if source.metadata_json is not None else {},
     )
     return client.register(
         RegisterRequest(alias=args.alias if args.alias is not None else frontmatter["name"], skill=skill)
     )
-
-
-def _register_structured(client, args):
-    """Register direct structured JSON without directory-specific defaults."""
-    skill = CLISkillInfo.model_validate(args.skill_json)
-    return client.register(RegisterRequest(skill=skill, alias=args.alias))
 
 
 def _list(client, args):
@@ -331,17 +360,29 @@ def _export(client, args):
 
 
 def _commit(client, args):
-    """Commit a local document as a child of the resolved version."""
-    if not args.message.strip():
-        raise ValueError("Commit message cannot be empty")
-    _, content, _ = read_source(args.source)
-    resources = collect_resources(Path(args.resources_dir)) if args.resources_dir else {}
-    skill = CLISkillInfo(
-        content=content,
-        resources=resources,
-        commit_message=args.message,
-        **({"commit_version": args.version} if args.version else {"version_bump": args.bump or "patch"}),
+    """Commit one complete source as a child of the resolved version."""
+    source = CLICommitInput(
+        source=args.source,
+        json_skill=args.json_skill,
+        message=args.message,
+        version=args.version,
+        bump=args.bump,
+        resources_dir=args.resources_dir,
+        clear_resources=args.clear_resources,
     )
+    if source.json_skill is not None:
+        skill = source.json_skill
+        inherit_resources = False
+    else:
+        _, content, _ = read_source(source.source)
+        resources = collect_resources(Path(source.resources_dir)) if source.resources_dir else {}
+        skill = CLISkillInfo(
+            content=content,
+            resources=resources,
+            commit_message=source.message,
+            **({"commit_version": source.version} if source.version else {"version_bump": source.bump or "patch"}),
+        )
+        inherit_resources = not (source.resources_dir or source.clear_resources)
     selected = _selection(client, args.skill_ref)
     return client.commit(
         CommitRequest(
@@ -349,7 +390,7 @@ def _commit(client, args):
             skill=skill,
             base_version_id=selected["skill_version_id"],
             active=args.activate,
-            inherit_resources=not (args.resources_dir or args.clear_resources),
+            inherit_resources=inherit_resources,
         )
     )
 
@@ -470,6 +511,9 @@ def _print_task_log(event):
             for key in ("run_id", "tree_id", "parent_id", "node_id", "group_id", "request_id", "trace_id", "span_id")
         }
     )
+    if payload.get("run_id") is not None and payload.get("message", "").split(" | ", 1)[0] != "algorithm.run.started":
+        fields.pop("run_id", None)
+        fields.pop("request_id", None)
     identity = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
     prefix = f"[{timestamp}] [{payload.get('level', 'INFO')}] [{payload.get('name', '-')}]"
     print(f"{prefix}{f' | {identity}' if identity else ''} | {payload.get('message', '')}", flush=True)
@@ -570,6 +614,30 @@ def _graph_show(client, args):
     )
 
 
+def _graph_preview(client, args):
+    """Read a published graph through the shared preview endpoint."""
+    return client.preview_graph(GraphResolveRequest(graph_ref=args.graph_ref))
+
+
+def _graph_add(client, args):
+    """Add explicitly selected families to a graph."""
+    return client.add_graph_members(
+        AddGraphMembersRequest(
+            graph_ref=args.graph_ref,
+            skill_refs=args.skill,
+            commit_message=args.message,
+            force_extract_scene=args.force_extract_scene,
+        )
+    )
+
+
+def _graph_remove(client, args):
+    """Remove explicitly selected families from a graph."""
+    return client.remove_graph_members(
+        RemoveGraphMembersRequest(graph_ref=args.graph_ref, skill_refs=args.skill, commit_message=args.message)
+    )
+
+
 def _graph_publish(client, args):
     """Resolve members to exact versions and publish a graph snapshot."""
     references = args.skill or []
@@ -593,7 +661,7 @@ def _graph_publish(client, args):
         fields["alias"] = args.alias
     if args.message is not None:
         fields["commit_message"] = args.message
-    return client.organize(OrganizeRequest(skill_refs=versions, **fields))
+    return client.organize(OrganizeRequest(skill_refs=versions, force_extract_scene=args.force_extract_scene, **fields))
 
 
 def _graph_recommend(client, args):
@@ -607,5 +675,7 @@ def _graph_recommend(client, args):
             graph_version_id=selected["graph_version_id"],
             query=args.task,
             top_k=args.top_k,
+            strategy=args.strategy,
+            include_scenes=args.include_scenes,
         )
     )

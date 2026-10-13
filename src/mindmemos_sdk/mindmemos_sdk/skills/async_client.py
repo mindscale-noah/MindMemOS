@@ -6,6 +6,7 @@ from ..transport import AsyncHttpTransport
 from .core import SkillCore, SkillRoute
 from .typing import (
     ActivateRequest,
+    AddGraphMembersRequest,
     CommitRequest,
     DeleteRequest,
     DiffRequest,
@@ -18,6 +19,7 @@ from .typing import (
     OrganizeRequest,
     RecommendRequest,
     RegisterRequest,
+    RemoveGraphMembersRequest,
     ShowRequest,
     SkillData,
     SkillRequestBody,
@@ -247,6 +249,39 @@ class AsyncSkillClient:
             Deletion confirmation.
         """
         return await self._post(SkillRoute.GRAPH_DELETE, request)
+
+    async def add_graph_members(self, request: AddGraphMembersRequest) -> SkillData:
+        """Add new families without replacing existing members.
+
+        Args:
+            request: Graph reference, new members, and Scene refresh policy.
+
+        Returns:
+            Published snapshot and its complete member versions.
+        """
+        return await self._post(SkillRoute.GRAPH_MEMBERS_ADD, request)
+
+    async def remove_graph_members(self, request: RemoveGraphMembersRequest) -> SkillData:
+        """Remove members without deleting their canonical Skill versions.
+
+        Args:
+            request: Graph reference and member batch.
+
+        Returns:
+            Published snapshot and its remaining member versions.
+        """
+        return await self._post(SkillRoute.GRAPH_MEMBERS_REMOVE, request)
+
+    async def preview_graph(self, request: GraphResolveRequest) -> SkillData:
+        """Read the published topology selected by a graph reference.
+
+        Args:
+            request: Graph family, alias, or immutable snapshot reference.
+
+        Returns:
+            Skill/Scene nodes, relations, and snapshot identity.
+        """
+        return await self._post(SkillRoute.GRAPH_PREVIEW, request)
 
     async def list_graphs(self) -> SkillData:
         """List graphs owned by the authenticated project.

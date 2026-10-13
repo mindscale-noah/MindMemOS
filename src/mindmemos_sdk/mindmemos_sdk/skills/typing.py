@@ -315,6 +315,9 @@ class OrganizeRequest(SkillRequestBody):
     commit_message: str | None = None
     """Explanation stored with the graph publication."""
 
+    force_extract_scene: bool = Field(default=False, strict=True)
+    """Refresh version Scene data even when the saved cache is valid."""
+
 
 class GraphResolveRequest(SkillRequestBody):
     """Resolve a project-scoped graph reference."""
@@ -334,6 +337,51 @@ class RecommendRequest(GraphResolveRequest):
 
     top_k: int | None = None
     """Maximum number of recommendations when supplied."""
+
+    strategy: Literal["graph", "vector"] = "graph"
+    """Graph propagation or direct vector similarity."""
+
+    include_scenes: bool = Field(default=False, strict=True)
+    """Vector-only option matching Scene nodes as well as Skill nodes."""
+
+    @model_validator(mode="after")
+    def validate_strategy(self):
+        """Reject vector-only options in graph mode and blank instructions."""
+        if self.strategy == "graph" and self.include_scenes:
+            raise ValueError("include_scenes requires the vector strategy")
+        if not self.query.strip():
+            raise ValueError("Query must not be blank")
+        return self
+
+
+class GraphMembersRequest(GraphResolveRequest):
+    """Select a nonempty batch of Skill references in an existing graph."""
+
+    skill_refs: list[str] = Field(min_length=1)
+    """Family or version references; duplicate families are invalid."""
+
+    commit_message: str | None = None
+    """Explanation stored with the new snapshot."""
+
+    @model_validator(mode="after")
+    def validate_members(self):
+        """Reject blank or repeated references before making a business call."""
+        if any(not reference.strip() for reference in self.skill_refs):
+            raise ValueError("Skill references must not be blank")
+        if len(self.skill_refs) != len(set(self.skill_refs)):
+            raise ValueError("Skill references must be unique")
+        return self
+
+
+class AddGraphMembersRequest(GraphMembersRequest):
+    """Add new families without replacing existing graph members."""
+
+    force_extract_scene: bool = Field(default=False, strict=True)
+    """Refresh Scene data for the newly selected versions."""
+
+
+class RemoveGraphMembersRequest(GraphMembersRequest):
+    """Remove graph members without deleting canonical Skill versions."""
 
 
 class EvolveRequest(SkillRequestBody):
@@ -421,6 +469,88 @@ class CLISkillInfo(StructuredSkillInfo):
                 raise ValueError("Skill description differs from frontmatter")
         elif not self.name or not self.name.strip() or not self.description or not self.description.strip():
             raise ValueError("Nonstandard Skills require nonempty name and description")
+        return self
+
+
+class CLIRegisterInput(SkillRequestBody):
+    """Keep local registration options separate from a complete JSON Skill."""
+
+    source: str | None = None
+    """Local directory or SKILL.md path; mutually exclusive with json_skill."""
+
+    json_skill: CLISkillInfo | None = None
+    """Complete structured input without local file or metadata overrides."""
+
+    version: str | None = None
+    """Local initial label; omission uses v0.0.1."""
+
+    message: str | None = None
+    """Local publication explanation; omission uses Initial registration."""
+
+    metadata_json: dict[str, JsonValue] | None = None
+    """Local publication metadata; omission uses an empty mapping."""
+
+    include: str | None = None
+    """Local resource inclusion patterns."""
+
+    exclude: str | None = None
+    """Local resource exclusion patterns."""
+
+    @model_validator(mode="after")
+    def validate_input_mode(self):
+        """Require exactly one source and reject overrides of JSON content."""
+        if (self.source is None) == (self.json_skill is None):
+            raise ValueError("Supply either a local path or --json-skill")
+        if self.json_skill is not None and any(
+            value is not None for value in (self.version, self.message, self.metadata_json, self.include, self.exclude)
+        ):
+            raise ValueError("--json-skill cannot be combined with local registration options")
+        return self
+
+
+class CLICommitInput(SkillRequestBody):
+    """Validate a complete JSON commit or a local source with publication options."""
+
+    source: str | None = None
+    """Local directory or SKILL.md path; mutually exclusive with json_skill."""
+
+    json_skill: CLISkillInfo | None = None
+    """Complete replacement source, resources, and publication metadata."""
+
+    message: str | None = None
+    """Required publication explanation for local sources."""
+
+    version: str | None = None
+    """Explicit local version label; mutually exclusive with bump."""
+
+    bump: Literal["patch", "minor", "major"] | None = None
+    """Local automatic version increment; omission uses patch."""
+
+    resources_dir: str | None = None
+    """Local replacement resource directory; omission inherits parent resources."""
+
+    clear_resources: bool = False
+    """Explicitly clear local resources instead of inheriting them."""
+
+    @model_validator(mode="after")
+    def validate_input_mode(self):
+        """Reject mixed inputs and require the selected source's commit message."""
+        if (self.source is None) == (self.json_skill is None):
+            raise ValueError("Supply either --from or --json-skill")
+        if self.json_skill is not None:
+            if self.clear_resources or any(
+                value is not None for value in (self.message, self.version, self.bump, self.resources_dir)
+            ):
+                raise ValueError("--json-skill cannot be combined with local commit options")
+            message = self.json_skill.commit_message
+        else:
+            if self.version is not None and self.bump is not None:
+                raise ValueError("--version and --bump are mutually exclusive")
+            if self.resources_dir is not None and self.clear_resources:
+                raise ValueError("--resources-dir and --clear-resources are mutually exclusive")
+            message = self.message
+        if message is None or not message.strip():
+            raise ValueError("Supply a nonempty --message for local sources or commit_message in --json-skill")
         return self
 
 
