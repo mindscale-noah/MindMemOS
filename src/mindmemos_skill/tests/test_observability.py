@@ -114,6 +114,7 @@ async def test_task_progress_excludes_routine_calls_but_otel_retains_them(audit)
     assert len(task_calls) == 1
     assert task_calls[0]["payload"]["level"] == "ERROR"
     assert any(row["payload"]["message"].startswith("algorithm.progress | ") for row in rows)
+    assert all(row["payload"]["run_id"] == "task-run" for row in rows)
     otel_calls = [log for log in await audit.logs("project", "task-run") if log.name == "agent.call"]
     assert [log.body["status"] for log in otel_calls] == ["completed", "failed"]
     call_span = next(span for span in await audit.spans("project", "task-run") if span.name == "algorithm.agent.call")

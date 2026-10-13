@@ -5,6 +5,8 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter, create_model
 
+from ..agents import Agent
+from ..agents.config import AgentName
 from ..algos import Algorithm, SkillEvolver, SkillTrainer
 from ..api.typing import TrainingRequest
 from ..envs import Environment
@@ -100,6 +102,7 @@ def skill_config_schema() -> dict[str, Any]:
     service = create_model(
         "ServiceEditorConfig",
         __base__=ServiceConfig,
+        agents=_field(ServiceConfig, "agents", dict[AgentName, _choice(Agent, Agent)]),
         persistence=_field(ServiceConfig, "persistence", persistence | None),
         observability=_field(ServiceConfig, "observability", observability | None),
         repository_pipeline=_field(ServiceConfig, "repository_pipeline", _choice(Pipeline, RepositoryPipeline) | None),

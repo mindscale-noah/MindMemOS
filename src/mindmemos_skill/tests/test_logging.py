@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 import pytest
-from mindmemos_skill.logging import config, configure_logging, get_logger
+from mindmemos_skill.logging import config, configure_logging, get_logger, log_context
 from mindmemos_skill.logging.otel import attach_logs, detach_logs
 from opentelemetry.sdk._logs import LoggerProvider, LogRecordProcessor
 
@@ -55,6 +55,22 @@ def test_reconfiguration_appends_without_duplicates(tmp_path, capsys):
     assert text.count("first record") == 1
     assert text.count("second record") == 1
     assert capsys.readouterr().err.count("second record") == 1
+
+
+@pytest.mark.parametrize("algorithm", ["treeskill", "skill_forest", "simple_evolution"])
+def test_algorithm_ids_only_appear_at_start(algorithm, tmp_path, capsys):
+    path = tmp_path / "algorithm.log"
+    configure_logging(log_file=path)
+    logger = get_logger(f"algos.{algorithm}")
+    with log_context(request_id="request-a", run_id="run-a", task_id="task-a"):
+        logger.info("algorithm.run.started", extra={"event_body": {"algorithm": algorithm}})
+        logger.info("sampling progress")
+        logger.error("sample failed")
+        logger.info("algorithm.run.completed")
+    text = capsys.readouterr().err
+    assert path.read_text() == text
+    assert text.count("run_id=run-a") == text.count("request_id=request-a") == 1
+    assert text.count("task_id=task-a") == 4
 
 
 def test_switching_files_and_disabling_file_output(tmp_path, capsys):

@@ -21,21 +21,24 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0,<2.1",
     "aiosqlite>=0.21,<1",
     "sqlite-vec>=0.1.6,<0.2",
+    "fastapi>=0.136.1",
+    "uvicorn>=0.47.0",
+    "python-pptx>=1,<2",
+    "python-docx>=1,<2",
+    "PyMuPDF>=1.24,<2",
+    "jsonschema>=4,<5",
+    "pdfplumber>=0.11,<1",
+    "openpyxl>=3.1,<4",
+    "pandas>=2,<3",
+    "alfworld>=0.4,<0.5",
 ]
 
 [project.scripts]
 mindmemos-skill = "mindmemos_skill.cli:main"
 
 [project.optional-dependencies]
-agentskillos = [
-    "python-pptx>=1,<2", "python-docx>=1,<2", "PyMuPDF>=1.24,<2",
-    "jsonschema>=4,<5", "pdfplumber>=0.11,<1", "openpyxl>=3.1,<4",
-]
-spreadsheetbench = ["openpyxl>=3.1,<4", "pandas>=2,<3"]
-alfworld = ["alfworld>=0.4,<0.5"]
 postgres = ["psycopg[binary]>=3.2,<4", "pgvector>=0.3,<1"]
 kafka = ["aiokafka>=0.14,<1"]
-fastapi = ["fastapi>=0.136.1", "httpx>=0.28.1", "uvicorn>=0.47.0"]
 
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]

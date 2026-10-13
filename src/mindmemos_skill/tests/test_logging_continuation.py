@@ -258,7 +258,7 @@ async def test_python_service_calls_bind_project_without_http(tmp_path, caplog, 
                     await service.list_skills(payload)
             else:
                 assert await service.list_skills(payload) == []
-            assert await service.list_skill_sets("project") == []
+            assert await service.list_graph("project") == []
         assert all(span.attributes.get("project_id") == "project" for span in spans)
         records = [record for record in caplog.records if record.msg in {"traced call", "traced call failed"}]
         assert records

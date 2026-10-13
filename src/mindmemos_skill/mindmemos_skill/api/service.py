@@ -32,6 +32,7 @@ from ..skill.typing import DiffResult
 from .base import MindMemOSSkill
 from .typing import (
     ActiveRequest,
+    AddGraphMembersRequest,
     AlgoSkillEvolveResult,
     CommitFromLocalRequest,
     CommitRequest,
@@ -48,6 +49,7 @@ from .typing import (
     RegisterFromLocalRequest,
     RegisterRequest,
     RegisterResult,
+    RemoveGraphMembersRequest,
     ReportTrajectoryRequest,
     RequestAuth,
     SetMetaRequest,
@@ -394,7 +396,7 @@ class SkillService(MindMemOSSkill):
         async def prepare() -> SkillPipelineRequest:
             """Resolve the exact baseline within the authorized storage session."""
             try:
-                version = await self._persistence.skills.version_by_id(project_id, version_id)
+                version = await self._persistence.skills.get(version_id)
             except SkillNotFoundError as exc:
                 raise SkillVersionNotFoundError("Skill version not found in this project") from exc
             return SkillPipelineRequest(
@@ -509,19 +511,19 @@ class SkillService(MindMemOSSkill):
         return request.model_copy(update={"project_id": self._project_id(request.project_id)})
 
     @_service_call
-    async def list_skill_sets(self, project_id: str | None = None) -> list[dict]:
-        """List Skill Sets in the authorized project.
+    async def list_graph(self, project_id: str | None = None) -> list[dict]:
+        """List graphs in the authorized project.
 
         Args:
             project_id: Explicit project, or the configured default project when omitted.
 
         Returns:
-            Project-owned Skill Set records and publication pointers.
+            Project-owned graph records and publication pointers.
         """
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         project_id = self._project_id(project_id)
-        return await self._execute(project_id, self._manage_pipeline.list_skill_sets, project_id)
+        return await self._execute(project_id, self._manage_pipeline.list_graph, project_id)
 
     @_service_call
     async def resolve_graph(self, reference: str, project_id: str | None = None) -> dict:
@@ -567,11 +569,11 @@ class SkillService(MindMemOSSkill):
         return await self._execute(project_id, self.repository.resolve_skill_reference, project_id, reference)
 
     @_service_call
-    async def list_skill_set_snapshots(self, skill_set_id: str, project_id: str | None = None) -> list[dict]:
-        """List immutable snapshots and revisions of one Skill Set.
+    async def list_graph_snapshots(self, graph_id: str, project_id: str | None = None) -> list[dict]:
+        """List immutable snapshots and revisions of one graph.
 
         Args:
-            skill_set_id: Exact project-local Skill Set identity.
+            graph_id: Exact project-local graph identity.
             project_id: Explicit project, or the configured default project when omitted.
 
         Returns:
@@ -580,14 +582,14 @@ class SkillService(MindMemOSSkill):
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         project_id = self._project_id(project_id)
-        return await self._execute(project_id, self._manage_pipeline.list_skill_set_snapshots, project_id, skill_set_id)
+        return await self._execute(project_id, self._manage_pipeline.list_graph_snapshots, project_id, graph_id)
 
     @_service_call
-    async def get_skill_set_snapshot(self, skill_set_id: str, snapshot_id: UUID, project_id: str | None = None) -> dict:
-        """Read one Skill Set snapshot in the authorized project.
+    async def get_graph_snapshot(self, graph_id: str, snapshot_id: UUID, project_id: str | None = None) -> dict:
+        """Read one graph snapshot in the authorized project.
 
         Args:
-            skill_set_id: Exact project-local Skill Set identity.
+            graph_id: Exact project-local graph identity.
             snapshot_id: Immutable snapshot identity.
             project_id: Explicit project, or the configured default project when omitted.
 
@@ -598,7 +600,7 @@ class SkillService(MindMemOSSkill):
             raise NotImplementedError("Management pipeline is not configured")
         project_id = self._project_id(project_id)
         return await self._execute(
-            project_id, self._manage_pipeline.get_skill_set_snapshot, project_id, skill_set_id, snapshot_id
+            project_id, self._manage_pipeline.get_graph_snapshot, project_id, graph_id, snapshot_id
         )
 
     @_service_call
@@ -613,7 +615,7 @@ class SkillService(MindMemOSSkill):
             The project-owned Skill version record.
         """
         project_id = self._project_id(project_id)
-        return await self._execute(project_id, self.repository.get_skill_version, project_id, version_id)
+        return await self._execute(project_id, self.repository.get_skill_version, version_id)
 
     @_service_call
     async def list_skill_versions(self, skill_id: str, project_id: str | None = None) -> list[SkillVersionRecord]:
@@ -658,6 +660,52 @@ class SkillService(MindMemOSSkill):
             raise NotImplementedError("Management pipeline is not configured")
         scoped = self._scoped(RecommendRequest.model_validate(request))
         return await self._execute(scoped.project_id, self._manage_pipeline.recommend, scoped)
+
+    @_service_call
+    async def add_graph_members(self, request: AddGraphMembersRequest) -> OrganizeResult:
+        """Authorize and add new families to an existing graph.
+
+        Args:
+            request: Graph reference and new Skill family or version references.
+
+        Returns:
+            Published snapshot and complete final member versions.
+        """
+        if self._manage_pipeline is None:
+            raise NotImplementedError("Management pipeline is not configured")
+        scoped = self._scoped(AddGraphMembersRequest.model_validate(request))
+        return await self._execute(scoped.project_id, self._manage_pipeline.add_graph_members, scoped)
+
+    @_service_call
+    async def remove_graph_members(self, request: RemoveGraphMembersRequest) -> OrganizeResult:
+        """Authorize and remove families without deleting canonical Skills.
+
+        Args:
+            request: Graph reference and Skill family or version references.
+
+        Returns:
+            Published snapshot and remaining member versions.
+        """
+        if self._manage_pipeline is None:
+            raise NotImplementedError("Management pipeline is not configured")
+        scoped = self._scoped(RemoveGraphMembersRequest.model_validate(request))
+        return await self._execute(scoped.project_id, self._manage_pipeline.remove_graph_members, scoped)
+
+    @_service_call
+    async def preview_graph(self, graph_ref: str, project_id: str | None = None) -> dict:
+        """Read a published graph's complete topology without model calls.
+
+        Args:
+            graph_ref: Family, alias, or immutable graph snapshot reference.
+            project_id: Explicit project or configured default.
+
+        Returns:
+            Pinned snapshot identity, Skill/Scene nodes, and relations.
+        """
+        if self._manage_pipeline is None:
+            raise NotImplementedError("Management pipeline is not configured")
+        project_id = self._project_id(project_id)
+        return await self._execute(project_id, self._manage_pipeline.preview_graph, project_id, graph_ref)
 
     @_service_call
     async def register_skill(self, request: RegisterRequest) -> RegisterResult:

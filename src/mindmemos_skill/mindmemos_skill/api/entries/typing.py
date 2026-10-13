@@ -377,6 +377,9 @@ class OrganizeHttpRequest(HttpRequest):
     commit_message: str | None = None
     """Explanation stored with the publication."""
 
+    force_extract_scene: bool = Field(default=False, strict=True)
+    """Refresh version Scene data even when the saved cache is valid."""
+
 
 class GraphResolveHttpRequest(HttpRequest):
     """Resolve a project-scoped graph ID, alias, or unique ID prefix."""
@@ -410,6 +413,51 @@ class RecommendHttpRequest(GraphResolveHttpRequest):
 
     top_k: int | None = Field(default=None, ge=1)
     """Maximum recommended Skill versions, subject to project policy."""
+
+    strategy: Literal["graph", "vector"] = "graph"
+    """Graph propagation or direct vector similarity."""
+
+    include_scenes: bool = Field(default=False, strict=True)
+    """Vector-only option matching Scene nodes as well as Skill nodes."""
+
+    @model_validator(mode="after")
+    def validate_strategy(self):
+        """Reject vector-only options in graph mode and blank instructions."""
+        if self.strategy == "graph" and self.include_scenes:
+            raise ValueError("include_scenes requires the vector strategy")
+        if not self.query.strip():
+            raise ValueError("Query must not be blank")
+        return self
+
+
+class GraphMembersHttpRequest(GraphResolveHttpRequest):
+    """Select a nonempty batch of Skill references in an existing graph."""
+
+    skill_refs: list[str] = Field(min_length=1)
+    """Family or version references; duplicate families are invalid."""
+
+    commit_message: str | None = None
+    """Explanation stored with the new snapshot."""
+
+    @model_validator(mode="after")
+    def validate_members(self):
+        """Reject blank or repeated references before making a business call."""
+        if any(not reference.strip() for reference in self.skill_refs):
+            raise ValueError("Skill references must not be blank")
+        if len(self.skill_refs) != len(set(self.skill_refs)):
+            raise ValueError("Skill references must be unique")
+        return self
+
+
+class AddGraphMembersHttpRequest(GraphMembersHttpRequest):
+    """Add new families without replacing existing graph members."""
+
+    force_extract_scene: bool = Field(default=False, strict=True)
+    """Refresh Scene data for the newly selected versions."""
+
+
+class RemoveGraphMembersHttpRequest(GraphMembersHttpRequest):
+    """Remove graph members without deleting canonical Skill versions."""
 
 
 class EvolveHttpRequest(HttpRequest):

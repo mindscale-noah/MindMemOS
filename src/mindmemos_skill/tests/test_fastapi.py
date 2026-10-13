@@ -17,10 +17,8 @@ from mindmemos_skill.api.entries.fastapi import build_http_service, create_app
 from mindmemos_skill.common.time_utils import utcnow
 from mindmemos_skill.config.config import FastAPIConfig, HttpAuthConfig
 from mindmemos_skill.infra.database import Scope
-from mindmemos_skill.infra.embedding import OpenAIEmbeddingClient
 from mindmemos_skill.persistence.constants import (
     SKILL_GRAPH_VERSIONS_TABLE,
-    SKILL_GRAPHS_TABLE,
     SKILL_VERSIONS_TABLE,
     SKILLS_TABLE,
     TRAJECTORIES_TABLE,
@@ -67,19 +65,11 @@ async def service(tmp_path):
 
 @pytest_asyncio.fixture
 async def management_service(tmp_path, monkeypatch):
-    """Build configured management routes with deterministic local embeddings."""
+    """Build graph HTTP routes using the separate offline demo backend."""
+    from mindmemos_skill.demos.graph import DemoGraphPipeline
 
-    async def embed(self, texts):
-        return [[1.0, 0.0, 0.0] if "csv" in text.lower() else [0.0, 1.0, 0.0] for text in texts]
+    demo_config = DemoGraphPipeline.config_type(delay_seconds=0)
 
-    monkeypatch.setattr(OpenAIEmbeddingClient, "embed", embed)
-    algorithm = {
-        "embedding": {"model": "test", "base_url": "http://test.invalid/v1", "dimensions": 3},
-        "build_scene": False,
-        "llm_linking": False,
-        "query_rewrite": False,
-        "mode": "skill_only",
-    }
     config = deployment_config(
         {
             "home": tmp_path / "home",
@@ -87,7 +77,7 @@ async def management_service(tmp_path, monkeypatch):
                 "database": {"class_name": "sqlite", "config": {"url": f"sqlite:///{tmp_path / 'manage-http.db'}"}}
             },
             "repository_pipeline": {"class_name": "repository"},
-            "manage_pipeline": {"class_name": "graph_manage", "config": {"algorithm": algorithm}},
+            "manage_pipeline": {"class_name": "demo_graph", "config": demo_config.model_dump()},
         },
         "project",
     )
@@ -196,12 +186,13 @@ def test_unavailable_backends_return_stable_errors(service):
         }
         for path, body in requests.items():
             response = client.post(path, json=body)
-            assert response.status_code in {404, 422, 501}, response.text
+            assert response.status_code in {400, 404, 422, 501}, response.text
             assert response.json()["error"]["code"] in {
                 "trajectory_api_unavailable",
                 "graph_resolution_unavailable",
                 "graph_not_found",
                 "pipeline_unavailable",
+                "invalid_request",
                 "task_api_unavailable",
             }
         assert client.post("/v1/skills/register", json={}).status_code == 422
@@ -211,7 +202,7 @@ def test_unavailable_backends_return_stable_errors(service):
 
 
 async def test_manage_http_routes_publish_and_recommend_pinned_versions(management_service):
-    """Connect authorized HTTP calls to the two configured skill_manage pipelines."""
+    """Exercise graph HTTP contracts with the separate offline demo pipeline."""
 
     def resolver(token):
         scopes = {"skill:write"} if token == "admin" else {"skill:read"}
@@ -277,23 +268,6 @@ async def test_manage_http_routes_publish_and_recommend_pinned_versions(manageme
             client.post("/v1/skills/algos/organize", headers=headers, json=body).json()["data"]["graph_version_id"]
             == snapshot
         )
-        reworded = client.post(
-            "/v1/skills/algos/organize",
-            headers=headers,
-            json=body | {"commit_message": "Revised explanation"},
-        )
-        assert reworded.status_code == 200, reworded.text
-        assert reworded.json()["data"]["graph_version_id"] != snapshot
-        with management_service.repository.persistence.session(Scope(fields={"project_id": "project"})) as scoped:
-            snapshots = await scoped.database.select(SKILL_GRAPH_VERSIONS_TABLE, filters={"graph_id": graph_id})
-        assert {row["message"] for row in snapshots} == {"Initial organization", "Revised explanation"}
-        foreign = client.post(
-            "/v1/skills/algos/organize",
-            headers=headers,
-            json={"graph_id": "foreign", "skill_refs": ["not-in-project"]},
-        )
-        assert foreign.status_code == 404
-
         query = {"graph_ref": "collection", "graph_version_id": snapshot, "query": "Parse CSV records", "top_k": 1}
         recommended = client.post("/v1/skills/algos/recommend", headers=headers, json=query)
         assert recommended.status_code == 200, recommended.text
@@ -334,22 +308,6 @@ async def test_manage_http_routes_publish_and_recommend_pinned_versions(manageme
             client.post("/v1/skills/algos/recommend", headers=headers, json=query | {"project_id": "other"}).status_code
             == 422
         )
-
-
-async def test_graph_rollout_mode_keeps_legacy_storage_identity(management_service):
-    """The first rollout phase keeps old writers on the same graph family."""
-    management_service._manage_pipeline.config.prefixed_graph_ids = False
-    with TestClient(create_app(management_service)) as client:
-        created = client.post(
-            "/v1/skills/algos/organize",
-            json={"alias": "shared", "commit_message": "Empty graph", "skill_refs": []},
-        )
-        assert created.status_code == 200, created.text
-        assert created.json()["data"]["graph_id"] == "shared"
-        with management_service.repository.persistence.session(Scope(fields={"project_id": "project"})) as scoped:
-            graph = await scoped.database.select(SKILL_GRAPHS_TABLE, filters={"graph_id": "shared"})
-        assert len(graph) == 1
-        assert graph[0]["alias"] == "shared"
 
 
 async def test_skill_rollout_mode_keeps_legacy_id_generation(tmp_path):

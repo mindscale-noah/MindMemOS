@@ -143,7 +143,7 @@ async def test_inactive_commit_keeps_captured_parent_after_active_moves(service)
             active=False,
             version_id=version_id,
         )
-        child = await store.skills.version_by_id("p", version_id)
+        child = await store.skills.get(version_id)
     assert family.active_version_id == current.version.version_id
     assert child.parent_version_ids == [first.version.version_id]
 
