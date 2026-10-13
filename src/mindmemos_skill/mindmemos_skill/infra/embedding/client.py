@@ -4,14 +4,19 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from ..database.vector import Vector
+from .base import EmbeddingModel
 from .config import OpenAIEmbeddingConfig
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 
-class OpenAIEmbeddingClient:
+@EmbeddingModel.register("openai_embedding")
+class OpenAIEmbeddingClient(EmbeddingModel[OpenAIEmbeddingConfig]):
     """Construct transports lazily and preserve the ownership of injected clients."""
+
+    config_type = OpenAIEmbeddingConfig
+    """Configuration model validated by the shared embedding registry."""
 
     def __init__(self, config: OpenAIEmbeddingConfig, *, client: "AsyncOpenAI | None" = None):
         """Retain settings without opening a connection.
@@ -20,7 +25,7 @@ class OpenAIEmbeddingClient:
             config: Explicit model, endpoint, vector shape, and batching settings.
             client: Borrowed SDK client for testing or caller-managed transport.
         """
-        self.config = config.model_copy(deep=True)
+        super().__init__(config.model_copy(deep=True))
         self._client = client
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:

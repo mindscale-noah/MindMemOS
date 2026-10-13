@@ -1,13 +1,28 @@
 """Explicit OpenAI-compatible embedding connection and batching settings."""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class OpenAIEmbeddingConfig(BaseModel):
+class EmbeddingConfig(BaseModel):
+    """Identify a registered embedding backend without constructing resources."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid", frozen=True, hide_input_in_errors=True)
+    """Reject unknown settings and keep validated backend identity immutable."""
+
+    class_name: str = Field(min_length=1)
+    """Registered embedding implementation used by the shared creation entry point."""
+
+
+class OpenAIEmbeddingConfig(EmbeddingConfig):
     """Configure embeddings without selecting an implicit model or endpoint."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid", frozen=True, hide_input_in_errors=True)
     """Reject unknown settings and omit credentials from validation errors."""
+
+    class_name: Literal["openai_embedding"] = "openai_embedding"
+    """Registered OpenAI-compatible embedding implementation."""
 
     model: str = Field(min_length=1)
     """Provider model or deployment name."""

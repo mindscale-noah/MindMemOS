@@ -68,3 +68,62 @@ async def test_invalid_provider_response_is_rejected(data):
     ) as sdk:
         with pytest.raises(ValueError):
             (await OpenAIEmbeddingClient(config(), client=sdk).embed(["text"]))
+
+
+def test_embedding_registry_constructs_independent_lazy_backends():
+    from mindmemos_skill.infra.embedding import EmbeddingModel
+
+    settings = config()
+    restored = OpenAIEmbeddingConfig.model_validate_json(settings.model_dump_json())
+    first = EmbeddingModel.from_config(restored)
+    second = EmbeddingModel.from_config(restored)
+    assert isinstance(first, OpenAIEmbeddingClient)
+    assert first is not second
+    assert first.config == settings
+    assert first.config is not settings
+    assert first._client is None
+
+
+def test_embedding_registry_uses_explicit_identity_for_custom_backends(monkeypatch):
+    from mindmemos_skill.infra.embedding import EmbeddingConfig, EmbeddingModel
+
+    monkeypatch.setattr(EmbeddingModel, "_registry", EmbeddingModel.registered_types())
+
+    @EmbeddingModel.register("test_embedding")
+    class CustomEmbedding(EmbeddingModel[EmbeddingConfig]):
+        """Exercise configuration-driven construction without provider access."""
+
+        config_type = EmbeddingConfig
+        """Explicit backend identity for the offline implementation."""
+
+        async def embed(self, texts):
+            return [[1.0] for _ in texts]
+
+    settings = EmbeddingConfig(class_name="test_embedding")
+    assert type(EmbeddingModel.from_config(settings)) is CustomEmbedding
+    with pytest.raises(ValueError, match="Unknown EmbeddingModel"):
+        EmbeddingModel.from_config(EmbeddingConfig(class_name="missing"))
+
+
+def test_embedding_backend_identity_is_validated_by_the_config():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="class_name"):
+        config(class_name="unsupported_embedding")
+
+
+def test_builtin_embedding_registration_loads_in_a_fresh_process():
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from mindmemos_skill.infra.embedding import EmbeddingModel; "
+            "assert 'openai_embedding' in EmbeddingModel.registered_types()",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

@@ -324,8 +324,8 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             api_key=api_key,
             base_url=self.config.base_url,
             timeout=self.config.timeout_s,
-            # Tenacity owns retries so the configured limit counts physical requests.
-            max_retries=0,
+            # Preserve explicit SDK retries independently of the outer retry policy.
+            max_retries=self.config.sdk_max_retries,
             http_client=DefaultAsyncHttpxClient(trust_env=False),
         ) as client:
 
