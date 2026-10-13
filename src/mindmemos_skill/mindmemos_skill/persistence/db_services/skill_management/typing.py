@@ -28,9 +28,6 @@ class GraphScopeRecord(RecordModel):
 class SkillGraphRecord(GraphScopeRecord):
     """Graph identity and its current publication pointer."""
 
-    public_id: str | None = None
-    """Stable graph identity exposed to callers."""
-
     alias: str | None = None
     """Project-unique exact graph shortcut."""
 

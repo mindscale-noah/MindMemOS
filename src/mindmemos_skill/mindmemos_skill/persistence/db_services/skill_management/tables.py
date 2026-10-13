@@ -84,7 +84,6 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         SKILL_GRAPHS_TABLE,
         metadata,
         *_scope(),
-        Column("public_id", Text, nullable=True, comment="Stable prefixed graph identity."),
         Column("alias", Text, nullable=True, comment="Project-unique graph shortcut."),
         Column("name", Text, nullable=False, comment="Human-readable graph name."),
         Column("description", Text, nullable=True, comment="Optional purpose of the graph."),

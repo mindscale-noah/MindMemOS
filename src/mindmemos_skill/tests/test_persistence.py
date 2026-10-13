@@ -94,6 +94,28 @@ async def test_skill_source_roundtrip_preserves_metadata(store):
     assert (await store.skills.get_skill("missing")) is None
 
 
+async def test_exact_version_get_requires_visible_family(store):
+    """Missing versions, orphan versions, and deleted families are unavailable."""
+    record = version()
+    with pytest.raises(SkillNotFoundError):
+        await store.skills.get(record.version_id)
+    await store.skills.add(record)
+    with pytest.raises(SkillNotFoundError):
+        await store.skills.get(record.version_id)
+    assert await store.skills.get_skill(record.version_id) is None
+    family = central_skill(record)
+    await store.database.insert(SKILLS_TABLE, [family.model_dump()])
+    assert await store.skills.get(record.version_id) == record
+    await store.database.update(
+        SKILLS_TABLE,
+        {"is_deleted": True},
+        filters={"project_id": family.project_id, "skill_id": family.skill_id},
+    )
+    with pytest.raises(SkillNotFoundError):
+        await store.skills.get(record.version_id)
+    assert await store.skills.get_skill(record.version_id) is None
+
+
 def trajectory(trajectory_id="t1", rollout_id="r1"):
     return TrajectoryRecord(
         project_id="local-project",
@@ -410,7 +432,8 @@ async def test_central_alias_scope_and_registration_rollback(store):
         async with store.database.transaction() as database:
             (await database.insert(SKILL_VERSIONS_TABLE, [duplicate.model_dump()]))
             (await database.insert(SKILLS_TABLE, [central_skill(duplicate, alias="example").model_dump()]))
-    assert (await store.skills.get(duplicate.version_id)) is None
+    with pytest.raises(SkillNotFoundError):
+        await store.skills.get(duplicate.version_id)
     other = version("third-v").model_copy(update={"project_id": "another-project"})
     (await store.skills.add(other))
     (await store.database.insert(SKILLS_TABLE, [central_skill(other, alias="example").model_dump()]))

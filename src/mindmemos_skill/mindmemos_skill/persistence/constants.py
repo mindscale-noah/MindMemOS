@@ -38,9 +38,6 @@ SKILL_GRAPH_NODES_TABLE: Final[str] = "skill_graph_nodes_v1"
 SKILL_GRAPH_EDGES_TABLE: Final[str] = "skill_graph_edges_v1"
 """Directed relationships between nodes in a graph snapshot."""
 
-SKILL_GRAPH_REVISIONS_TABLE: Final[str] = "skill_graph_revisions_v1"
-"""Legacy publications retained only while older deployments may use them."""
-
 SKILL_TASKS_TABLE: Final[str] = "skill_tasks_v1"
 """Durable Skill execution requests and their latest state."""
 

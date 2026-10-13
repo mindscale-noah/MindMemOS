@@ -79,7 +79,7 @@ async def test_graph_resolve_rejects_ambiguous_family_and_version_prefixes(datab
                 SKILL_GRAPHS_TABLE,
                 [
                     SkillGraphRecord(
-                        project_id="p1", graph_id=graph_id, public_id=f"skg-aa{suffix}", alias=graph_id, name=graph_id
+                        project_id="p1", graph_id=f"skg-aa{suffix}", alias=graph_id, name=graph_id
                     ).model_dump()
                 ],
             )
@@ -90,7 +90,7 @@ async def test_graph_resolve_rejects_ambiguous_family_and_version_prefixes(datab
                 [
                     SkillGraphVersionRecord(
                         project_id="p1",
-                        graph_id=graph_id,
+                        graph_id=f"skg-aa{suffix}",
                         graph_version_id=snapshot,
                         public_version_id=f"skgv-{snapshot.hex}",
                     ).model_dump()

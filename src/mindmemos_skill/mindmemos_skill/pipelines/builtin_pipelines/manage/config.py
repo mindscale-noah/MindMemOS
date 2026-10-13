@@ -1,18 +1,18 @@
-"""Skill management pipeline configuration."""
+"""Configuration for graph construction and pinned retrieval."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from ....algos.manage.skill_manage import SkillManageConfig
+from ....algos.manage.skill_manage.config import SkillManageConfig
 
 
 class GraphManagePipelineConfig(BaseModel):
-    """Configure graph publication and recommendation when requested."""
+    """Configure the original Scene graph algorithm and project queries."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
-    """Reject settings outside the algorithm contract."""
+    """Reject obsolete graph identity and publication options."""
 
     algorithm: SkillManageConfig | None = None
-    """Graph algorithm settings; None enables only Skill Set queries."""
+    """Explicit model and algorithm settings; None enables only stored topology queries."""
 
-    prefixed_graph_ids: bool = True
-    """Generate prefixed graph storage IDs; disable while legacy writers remain active."""
+    scene_concurrency: int = Field(default=4, ge=1)
+    """Maximum concurrent Skill Scene cache reads, extractions and writes per request."""

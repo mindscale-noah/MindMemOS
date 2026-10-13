@@ -2,9 +2,20 @@
 
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictInt,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from ....common.time_utils import utcnow
+from ....scene.typing import ProvidedSceneRecord
 from ....skill import SkillSnapshot
 from ...typing import RecordModel
 from .versions import ALGORITHM_PATTERN, USER_VERSION_PATTERN
@@ -219,3 +230,28 @@ class VersionNaming(BaseModel):
         if self.algorithm is not None and self.version_bump != "patch":
             raise ValueError("Algorithm publications increment the patch component")
         return self
+
+
+SCENE_SCHEMA_VERSION = 1
+"""Only supported persisted Scene format."""
+
+
+class SceneData(BaseModel):
+    """Version-owned validated Scene cache."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject undeclared cache fields."""
+
+    schema_version: StrictInt = SCENE_SCHEMA_VERSION
+    """Strict format version; strings and booleans are invalid."""
+
+    record: ProvidedSceneRecord
+    """Complete original source-grounded Scene and logic-step semantics."""
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema(cls, value):
+        """Reject unsupported cache versions without conversion."""
+        if value != SCENE_SCHEMA_VERSION:
+            raise ValueError("Unsupported Scene schema version")
+        return value

@@ -3,7 +3,7 @@
 from time import sleep
 from uuid import uuid4
 
-from ..api.typing import OrganizeRequest, OrganizeResult, RecommendRequest, RecommendResult
+from ..api.typing import GraphRecommendationScore, OrganizeRequest, OrganizeResult, RecommendRequest, RecommendResult
 from ..logging import get_logger
 from ..persistence.db_services.skill_management.typing import SkillGraphEdgeRecord
 from ..persistence.db_services.skill_management.writer import SkillGraphStore, graph_digest
@@ -47,6 +47,8 @@ class DemoGraphPipeline(GraphManagePipeline):
         Returns:
             Exact member versions ranked without embedding or model calls.
         """
+        if request.strategy != "graph":
+            raise NotImplementedError("Demo graphs do not support vector retrieval")
         return await self._recommend(RecommendRequest.model_validate(request))
 
     async def _recommend(self, request: RecommendRequest) -> RecommendResult:
@@ -66,11 +68,23 @@ class DemoGraphPipeline(GraphManagePipeline):
             (node for node in nodes if node.node_type == "skill"),
             key=lambda node: (-len(words & set((node.name + " " + node.description).lower().split())), node.node_id),
         )
+        selected = members[: request.top_k]
+        versions = [await self.persistence.skills.get(node.skill_version_id) for node in selected]
         return RecommendResult(
-            skills=[
-                (await self.persistence.skills.version_by_id(request.project_id, node.skill_version_id))
-                for node in members[: request.top_k]
-            ]
+            skills=versions,
+            graph_version_id=snapshot_id,
+            strategy="graph",
+            score_type="graph_components",
+            scores=[
+                GraphRecommendationScore(
+                    skill_version_id=version.version_id,
+                    ppr_score=0,
+                    scene_boost=0,
+                    graph_score=0,
+                    rerank_score=len(words & set((node.name + " " + node.description).lower().split())),
+                )
+                for version, node in zip(versions, selected, strict=True)
+            ],
         )
 
     async def _organize(self, request: OrganizeRequest) -> OrganizeResult:

@@ -66,7 +66,16 @@ def extract_frontmatter(content: str, *, version_id: str) -> tuple[dict[str, Any
         raw_frontmatter = match.group(1)
         body = content[match.end() :].strip()
     else:
-        raise invalid_skill_document(version_id=version_id, reason="missing frontmatter")
+        # Canonical Skill bundles strip the leading '---' delimiters. Fall back
+        # to treating the leading YAML block (up to the first blank line + body)
+        # as frontmatter so the same parser accepts both forms.
+        first_blank = re.search(r"\n\s*\n", content)
+        if first_blank is None or first_blank.start() == 0:
+            raise invalid_skill_document(version_id=version_id, reason="missing frontmatter")
+        raw_frontmatter = content[: first_blank.start()]
+        body = content[first_blank.end() :].strip()
+        if not raw_frontmatter.strip():
+            raise invalid_skill_document(version_id=version_id, reason="missing frontmatter")
     try:
         frontmatter = yaml.load(raw_frontmatter, Loader=StrictYamlLoader) or {}
     except yaml.YAMLError as exc:
@@ -206,7 +215,7 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
 def parse_skill_document(
     content: str,
     *,
-    source_path: str = "",
+    skill_id: str,
     version_id: str = "",
     snippet_chars: int = 800,
     max_chars: int = 1_000_000,
@@ -220,10 +229,13 @@ def parse_skill_document(
 
     Args:
         content: Canonical Skill document text.
-        source_path: Caller-supplied source identifier; no file is read.
+        skill_id: Database Skill family ID resolved by the caller.
         version_id: Optional source identity used in parsing errors.
         snippet_chars: Maximum rendered snippet length.
         max_chars: Maximum accepted or rendered character count.
+
+    Returns:
+        Parsed document fields with the caller-supplied database Skill ID.
     """
 
     if len(content) > max_chars:
@@ -311,7 +323,6 @@ def parse_skill_document(
         "name": name,
         "description": description,
         "one_line_capability": one_line_capability,
-        "source_path": source_path,
         "body": body,
         "inputs": inputs,
         "outputs": outputs,
@@ -322,7 +333,7 @@ def parse_skill_document(
         "allowed_tools": allowed_tools,
         "metadata": metadata,
         "rendered_snippet": rendered_snippet,
-        "skill_id": source_path or name,
+        "skill_id": skill_id,
     }
 
 

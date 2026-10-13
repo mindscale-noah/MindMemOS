@@ -1,133 +1,83 @@
-# Skill Manage 图推荐与动态 SkillSet
+# 图管理与 Skill 推荐
 
-## 服务 Pipeline
+`graph_manage` 提供完整的 Skill/Scene 图构建、批量成员增删、图排序和纯向量推荐。Service → Pipeline → `skill_manage` 算法 → 异步模型与图存储组成调用链。Pipeline 固定授权项目和精确 Skill 版本，读取或提取 Scene；算法保留原实现的文档语义解析、语义补全、联合候选连边、图排序及提示词。
 
-服务通过单个 `manage_pipeline` 配置管理能力，内置注册名为 `graph_manage`。它同时负责组织、推荐和 Skill Set 查询，借用服务的 `SkillPersistence`。`algorithm` 使用 `SkillManageConfig` 的字段；推荐时配置必须与目标图快照的非密钥算法设置一致。不配置 `algorithm` 时仍可查询 Skill Set，组织与推荐调用会报未实现。Service 提供 `list_skill_sets()`、`list_skill_set_snapshots()` 和 `get_skill_set_snapshot()`；当前存储表示的 `mode` 为 `graph`。
+## 配置与启动条件
 
-例如在 `service` 配置内定义一个入口（实际部署时填写可用的 embedding 模型地址和凭据）：
+在 `config/mindmemos_skill/dev.yaml` 的 `service.manage_pipeline.config.algorithm` 中填写 Embedding 配置，并通过 `chat` 引用 `service.agents` 中的 `skill_manage_*` 命名配置；也可直接填写内联 Chat 配置。`dev.example.yaml` 提供相同字段结构；其中公开的模型名称和端点是配置示例，复现实验时须使用原实验的模型、端点、维度及生成参数。凭据不能写入共享示例文件。
 
-```yaml
-manage_pipeline:
-  class_name: graph_manage
-  config:
-    algorithm:
-      embedding:
-        model: your-embedding-model
-        base_url: http://127.0.0.1:8000/v1
-        dimensions: 1536
-      build_scene: false
-      llm_linking: false
-      query_rewrite: false
+算法构造只接收 `config` 和 Pipeline 提供的 `store`、`provided`，不再接收 `chat_model` 或 `embedding_model`。
+Chat 由 `Agent.from_config(config.chat)` 创建，命名引用和内联配置都遵守 `openai_chat` 白名单。
+Embedding 由 `EmbeddingModel.from_config(config.embedding)` 创建；当前配置的 `class_name` 为
+`openai_embedding`，省略时使用该默认值。两类创建入口复用统一注册机制，每次创建独立实例，构造时不发起模型请求。
+离线测试替换对应的统一创建入口或底层调用。
+
+`algorithm: null` 允许查询、预览和删除已存储图；构建和推荐需要明确的算法模型配置。缓存缺失或强制刷新时需要 Chat。纯向量推荐只调用 Embedding，不进行查询改写、词法融合、PPR 或字段重排。图管理调用是原生异步业务调用，不提供训练任务的后台恢复协议。
+
+`build_scene=false` 保留原算法只构建 Skill 节点的选项；此时普通构建跳过 Scene 提取，显式 force 仍可刷新版本缓存，但不会把 Scene 加入图中。算法默认 `mode=separate`，保留 `skill_only`、`unified_ppr`、`separate`、`fuse`，以及独立的候选预算、种子预算、Scene PPR、依赖边过滤和联合连边选项。图排序的默认值、提示词和数值计算由原算法夹具及冻结基准验证。Chat 的结构修复次数、反馈方式和 SDK/外层重试参数均可配置。
+
+## 接口与使用
+
+以下 HTTP 路径均为 POST。项目身份由服务的认证上下文确定，不由 HTTP 请求选择。
+
+| Service 接口 | HTTP 路径 | 功能 |
+| --- | --- | --- |
+| organize_skills | /v1/skills/algos/organize | 提交完整最终成员集合，构建或复用快照 |
+| recommend_skills | /v1/skills/algos/recommend | 查询固定快照的 graph/vector 推荐及核心评分 |
+| add_graph_members | /v1/skills/graphs/members/add | 批量添加未在图内的 Skill 家族 |
+| remove_graph_members | /v1/skills/graphs/members/remove | 按家族批量移除成员，保留原 Skill 和历史快照 |
+| preview_graph | /v1/skills/graphs/preview | 只读预览完整拓扑 |
+| list_graph | /v1/skills/graphs/list | 列出项目内未删除图 |
+| list_graph_snapshots | /v1/skills/graphs/snapshots | 列出图的不可变快照 |
+| get_graph_snapshot | /v1/skills/graphs/snapshot | 读取指定快照的 Skill/Scene 节点和边 |
+| resolve_graph | /v1/skills/graph-resolve | 解析 ID、唯一前缀、alias 或快照引用 |
+| delete_graph | /v1/skills/graphs/delete | 软删除整图 |
+
+同步和异步 SDK 提供 `add_graph_members`、`remove_graph_members`、`preview_graph`，保留原有 `organize`、`recommend`、`list_graphs`、`graph_snapshots`、`graph_snapshot` 和 `delete_graph` 方法名。
+
+```sh
+mindmemos skill graph publish --alias example --skill skill-ref --force-extract-scene
+mindmemos skill graph add example --skill another-skill
+mindmemos skill graph remove example --skill another-skill
+mindmemos skill graph preview example
+mindmemos skill graph recommend "Read CSV rows" --by example --strategy vector --include-scenes
 ```
 
-`service.organize_skills(OrganizeRequest(...))` 接收 `graph_id`、`actor_id`、完整的 `skill_version_ids` 列表、可选的 `message` 和按 Skill 家族 ID 映射的可选 `scene_records`。服务先确认项目授权，再按精确版本读取已保存 Skill；同一图内每个家族只允许一个版本。`message` 保存于新建图版本。同一输入、说明和配置的重试复用已保存快照；说明变化会形成新快照并将其设为当前生效版本。
+建图接受 `skill_refs`、可选 `graph_id`、`alias`、`commit_message` 及 `force_extract_scene=false`。修改已有图不能同时改 alias。成员操作使用 `graph_ref` 和非空 `skill_refs`；add 可刷新新增成员的 Scene。重复引用、不同引用指向同一家族、add 已有成员或 remove 不存在成员，均拒绝整批操作。成员版本替换通过 organize 提交完整最终集合。可移除最后一个成员并发布空图。历史快照引用不能作为成员修改目标。
 
-`service.recommend_skills(RecommendRequest(...))` 接收 `graph_id`、可选的不可变 `graph_version_id`、公开 `Task` 和正整数 `limit`。省略快照 ID 时，在请求开始读取并固定当前图头。它从该快照恢复 `skill_manage` 的成员范围，校验版本所属项目、Skill 内容与算法配置，再调用推荐算法，按排名返回精确 `skill_version_ids`。显式指定旧快照的请求不随图头变化。Pipeline、存储、Embedding 和模型操作均采用原生异步接口，调用者逐层使用 `await`。
+## Scene 缓存与快照
 
-HTTP 入口也已接通这两条异步 Pipeline：
+完整 Scene、逻辑步骤、条件转移及归属关系只在精确版本的 `metadata.scene_data` 中缓存。`schema_version` 必须是当前支持的严格整数，字符串和布尔值不合法。结构或语义校验失败、未知版本、缺失缓存都会重新提取；`force_extract_scene=true` 即使缓存有效也先提取。
 
-| 接口 | 请求字段 | 成功结果 | 权限 |
-| --- | --- | --- | --- |
-| `POST /v1/skills/algos/organize` | `alias` 或 `graph_id`、完整 `skill_version_ids`，可选 `message`、`scene_records` | `200`，含 `graph_version_id` 和输入版本 ID | `skill:write` |
-| `POST /v1/skills/algos/recommend` | `graph_ref`（当前实现按精确 `graph_id` 解释）、`query`，可选 `graph_version_id`、`top_k` | `200`，含有序的精确 `skill_version_ids` | `skill:read` |
+新提取结果经相同模型校验后，仅合并更新 `scene_data`，保留其他 metadata。提取失败不覆盖旧缓存；权限和数据库失败直接报错。合法缓存可独立提交，后续建图失败不改变图头。普通读取、推荐、preview 和历史查询不提取 Scene。
 
-HTTP 身份提供项目边界与构图记录的 actor ID；请求体不接受项目 ID。当前 `alias` 直接用作精确 `graph_id`，尚无独立别名身份或前缀解析。组织完成才返回成功，不提交后台任务；`graph-resolve` 仍是占位能力。现有目标架构文档中的异步组织任务、可省略版本集合、独立 alias 身份及更完整的图引用解析尚未实现，不能把这版同步接口视为那些目标能力已经上线。
+成员操作捕获已有成员的快照节点和归属/条件流程边，add 只获取新增成员的 Scene。刷新版本缓存不会改变历史拓扑。图快照只持久化用于构建和查询的语义节点、关系与必要的构建身份，不另存完整 Scene 缓存或逻辑步骤副本。启用语义补全时，快照保留补全前的 Skill 节点字段；成员变更恢复这些字段，再按原算法补全，避免把上次的补全结果当成原始字段。
 
-`algos/manage/skill_manage/` 提供注册名为 `skill_manage` 的 `SkillManageAlgorithm` 和算法专属 `SkillManageSkillSet`。集合仅管理调用方传入的成员及组装并发，不解析版本 ID，不自动注册 Skill。外围调度负责选择版本并构造 `SkillGraphStore`；持久化层核验传入 Skill 的完整快照与已保存版本一致。
+构建输入包含固定的精确版本、实际 Scene 内容身份、构建配置和模型/模板身份。同一图的相同有效输入复用 ready 快照；成员顺序、查询选项、提交说明不改变构建身份。强制提取后结果相同，也允许复用。成员版本、Scene 内容或有效构建配置改变时重新构建。
 
-## 使用方式
+模型工作在事务外执行，完整结果在短事务中原子发布。数据库检查构建前捕获的图头；冲突报错，不覆盖其他成员操作。快照 `request_hash` 的同图唯一约束防止重复发布相同构建，但不承诺所有并发请求都只调用一次模型。不新增旧发布 revision、request_id、lease 或业务请求去重协议。
 
-```python
-import asyncio
+## 推荐评分与拓扑
 
-from mindmemos_skill.agents import OpenAIChatConfig
-from mindmemos_skill.algos.manage.skill_manage import (
-    SceneRecord,
-    SkillManageAlgorithm,
-    SkillManageConfig,
-    SkillManageSkillSet,
-)
-from mindmemos_skill.infra.embedding import OpenAIEmbeddingConfig
-from mindmemos_skill.persistence.db_services.skill_management.writer import SkillGraphStore
+Service 的 `task` 保持字符串，HTTP/SDK 继续使用 `query`。`strategy` 默认 `graph`，`include_scenes` 默认 `false`。`graph + include_scenes=true` 被拒绝；图排序是否使用 Scene 由算法 mode 等配置决定。空白查询被拒绝，不接受 diagnostics。
 
-# These objects and immutable version IDs are selected by the outer scheduler.
-skills = {"csv": csv_skill, "report": report_skill}
-store = SkillGraphStore(
-    persistence.database,
-    project_id=project_id,
-    graph_id="task-skills",
-    actor_id=actor_id,
-    version_ids={"csv": csv_version_id, "report": report_version_id},
-)
-config = SkillManageConfig(
-    embedding=OpenAIEmbeddingConfig(
-        model=embedding_model_name,
-        base_url=embedding_base_url,
-        api_key=embedding_api_key,
-        dimensions=embedding_dimensions,
-    ),
-    chat=OpenAIChatConfig(
-        model=chat_model_name,
-        base_url=chat_base_url,
-        api_key=chat_api_key,
-    ),
-    build_scene=True,
-    llm_linking=True,
-    query_rewrite=True,
-    mode="unified_ppr",
-)
-scenes = {
-    "csv": SceneRecord.model_validate({
-        "scenes": [{
-            "scene_id": "parse",
-            "scene_name": "Parse tabular data",
-            "scene_goal": "Parse CSV rows into structured records",
-            "next_scene_rules": [],
-        }],
-    }),
-}
-algorithm = SkillManageAlgorithm(config, store=store, scene_records=scenes)
-skill_set = SkillManageSkillSet(
-    skills, algorithm=algorithm, limit=5, max_concurrency=4,
-)
-result = asyncio.run(env.rollout(
-    task, work_dir, reward_data=reward_data, skill_set=skill_set,
-))
-```
+`vector + include_scenes=false` 只检索 Skill 节点；`true` 同时检索 Skill/Scene，按所属 Skill 归并，选择最相似节点。查询向量仅来自去除首尾空白的 instruction。结果包含实际快照 `graph_version_id`、策略、评分类型、有序 `skills` 与一一对应的 `scores`。返回接口仅映射最多 `top_k` 条结果；原算法内部的向量分页流程保留。
 
-构造算法、集合和客户端不发起模型调用，也不读写数据库。首次 `select(task)` 校验外围版本绑定，然后构建或复用图；`assemble(task)` 在选择后调用选中成员自己的组装方法。每个集合使用独立的管理算法实例。省略 `skill_set` 仍为 baseline。
+| 策略 | 分数字段 | 含义 |
+| --- | --- | --- |
+| graph | ppr_score | Skill 节点的 PPR 质量 |
+| graph | scene_boost | 原算法计算的子 Scene 贡献 |
+| graph | graph_score | ppr_score 与 scene_boost 的总和 |
+| graph | rerank_score | 图候选截断后的字段重排分数，用于最终排序 |
+| vector | similarity | 命中节点的余弦相似度 |
+| vector | node_id / node_type | 所属 Skill 的最佳命中节点及 Skill/Scene 类型 |
 
-数据库由外围创建、初始化和关闭。算法不关闭借用的数据库或注入客户端。`embedding_model=` 接受带有匹配 `config` 和异步 `embed(texts)` 的实现；`chat_model=` 接受带有匹配配置及异步 `run(...)` 的聊天实现，可复用现有 OpenAIChatAgent。SDK 传输测试可通过 `OpenAIEmbeddingClient(config, client=...)` 注入客户端。
+这些图分数不能解释成统一概率。空图也返回实际快照及所选策略，Skill 和分数列表为空。
 
-## 构图与检索
-
-- **严格解析**：保留来源的 frontmatter/name 要求、重复 YAML 键检查和内容大小限制。纯 Markdown 不自动补字段；描述遵循来源规则从描述字段或正文提取。
-- **成员身份**：图索引使用集合 Skill ID 的无歧义编码；Scene ID 在其成员范围内编码。名称只参与文本匹配与展示，同名成员不会覆盖。
-- **规则依赖边**：按输出与输入字段重叠度生成有向依赖。保留来源分词、阈值及双向评分规则。
-- **LLM 连边**：以有界候选对批次推断 semantic、workflow、alternative 边，保存解释；输出必须引用当前批次中的节点，禁止自环、越界关系及非法权重。规则依赖边不被覆盖。请求串行执行，每批最多 `llm_batch_size` 对；全量候选对数量为 N(N-1)/2。
-- **Scene**：只使用调用方显式提供的 SSL 记录，映射键为集合 Skill ID。保留扩展元数据，支持字符串形式或含 `next_scene_id` 的流转规则；拒绝重复 ID、自环和悬空目标。Skill→Scene 为 containment 边，Scene→Scene 为 flow 边。缺失记录不会触发生成；启用功能时无场景需显式传 `{}`。
-- **Embedding**：Skill 和 Scene 均生成带标签的文本，并持久化文本哈希与向量。客户端按配置分批，验证响应顺序、数量、维度、有限性与非零向量。模型和地址必须显式配置；不默认发起付费调用。
-- **Query rewrite**：从完整公开 Task 提取 goal、task_name、domain、operations、artifacts、constraints、keywords，改写结果同时用于查询向量和字段重排。关闭时使用来源的确定性查询解析。
-- **推荐**：数据库在指定项目、图和不可变快照内执行余弦搜索，以向量排名播种 PPR，然后按来源字段权重重排。`skill_only` 只使用 Skill 节点；`unified_ppr` 使用联合图，将 Scene 的 PPR 分数归并到所属 Skill，返回唯一的集合成员 ID。Scene 不作为独立 Skill 注入。
-
-目前对外提供这两个有实际执行语义的检索模式，不暴露来源中尚未实现不同执行逻辑的 `separate` / `fuse` 模式名称。Scene 联合传播、模型连边和改写属于此次补齐实现；来源基准对照覆盖原有解析和 PPR 数值，不代表新增模型步骤与其他 GOS 实现等价。
-
-模型、解析或存储错误明确抛出，不静默切换为其他策略。失败构建会使该管理器不可推荐，直至后续成功组织；已经发布的历史快照仍保留。
-
-## 持久化与恢复
-
-当前使用 `skill_graphs_v1`、`skill_graph_versions_v1`、`skill_graph_nodes_v1`、`skill_graph_edges_v1` 四张核心表。每张图由 `current_version_id` 指向当前生效快照，不保存新的发布 revision。独立 Skill 服务不提供旧图表迁移或滚动部署桥接；当前结构详见 [图存储结构](graph_storage_schema.md)。
-
-外围必须提供同项目的精确版本绑定，且每个成员对应不同版本，以符合已有图节点唯一约束。算法只能处理显式成员，不通过数据库扩大候选范围。现有 Skill 数据、版本谱系、展示标签和中心仓当前版本指针不改变。
-
-先在事务外完成解析、模型推理和向量校验，再在单次事务内写入完整图快照、节点、边并更新 `current_version_id`。并发发布锁定同一图的写入行；相同输入和配置按请求哈希幂等复用，跨项目和跨图隔离。失败或中断回滚本次图发布，不产生部分可见快照；重试可以重建。不同输入生成新快照，保留旧快照与节点。模型调用发生于事务前，未完成发布的重试可能重复模型费用。
-
-重新打开数据库后可复用已保存图与向量。读取时检查节点/边数量、向量数及完整内容哈希；损坏明确报错。单次推荐固定使用已加载的 graph_version_id，不随当前 head 切换。
-
-Environment 的恢复机制不变：相同输入直接复用已保存的选择和组装结果，不重新推荐或调用模型。集合配置快照保存选择参数和非敏感模型配置，不保存 API key。
-
-部署时使用已有正常初始化的 Skill 数据库，再部署此包。已有只有读图服务的调用方仍可读取新发布的 Skill 节点；UI 的图查询接口仍只展示 Skill 级视图。撤回本次代码不会删除新快照或旧数据。自动云服务迁移、后台任务、图 GC 和 UI Scene 展示不在本次接入范围。
+preview 与指定快照详情返回相同拓扑：Skill/Scene 类型、所属家族和精确版本、owner_node_id、核心语义，以及边类型、权重、条件和证据。结果不包含 embedding 数组或完整逻辑步骤。UI 区分归属、条件流程和依赖边；Scene 详情可以打开所属 Skill 的精确版本。UI 默认按图当前指针选择快照，不以创建时间判断当前发布内容；复用较早的历史快照时也能正确显示。
 
 ## 验证边界
 
-测试使用真实本地 SQLite、数据库余弦搜索和模型替身，覆盖同名节点、Scene 召回、规则/模型关系、改写、重载、并发幂等、事务中断、历史保留、项目隔离和 Environment 恢复。Embedding 客户端通过本地模拟 HTTP 传输验证真实 SDK 协议，没有付费请求。PostgreSQL 使用现有通用数据库接口，但需实际 PostgreSQL 服务才能验证其运行结果。
+`src/mindmemos_skill/tests/fixtures/scene_graph_parity.json` 冻结原实现的提示词、参数默认值和四种排序模式分数；相关测试同时覆盖原数值验收夹具、候选预算、缓存、成员操作、构建复用、历史拓扑和发布冲突。SDK/CLI/UI 契约通过各模块测试验证。
+
+离线模型夹具可验证迁移后的调用载荷、校验、评分与流程。使用真实模型复现实验还需要原模型配置、相同数据和生成设置；离线通过不等于线上效果已复现。

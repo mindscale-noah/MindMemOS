@@ -353,7 +353,7 @@ class TrajectoryDataService:
         """
         async with self.database.transaction() as transaction:
             try:
-                version = await SkillDataService(transaction).version_by_id(project_id, skill_version_id)
+                version = await SkillDataService(transaction).get(skill_version_id)
             except SkillNotFoundError as exc:
                 raise SkillVersionNotFoundError("Skill version not found in this project") from exc
             received_at = utcnow()

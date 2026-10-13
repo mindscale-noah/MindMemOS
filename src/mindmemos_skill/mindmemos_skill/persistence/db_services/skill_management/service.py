@@ -71,13 +71,13 @@ class GraphQueryService:
             Project-owned stored graph row.
         """
         graphs = await self.list_graphs()
-        matches = [item for item in graphs if reference in (item["graph_id"], item.get("alias"), item.get("public_id"))]
+        matches = [item for item in graphs if reference in (item["graph_id"], item.get("alias"))]
         if matches and reference.startswith("skg-"):
-            prefix_matches = [item for item in graphs if (item["public_id"]).startswith(reference)]
+            prefix_matches = [item for item in graphs if (item["graph_id"]).startswith(reference)]
             if any(item["graph_id"] != matches[0]["graph_id"] for item in prefix_matches):
                 raise GraphConflictError("Reference matches a graph alias and another ID prefix")
         if not matches and reference.startswith("skg-") and len(reference) > 4:
-            matches = [item for item in graphs if (item["public_id"]).startswith(reference)]
+            matches = [item for item in graphs if (item["graph_id"]).startswith(reference)]
         if len(matches) != 1:
             if not matches:
                 raise GraphNotFoundError("Graph not found")
@@ -132,12 +132,12 @@ class GraphQueryService:
             if current is not None:
                 selected = await self._rows(SKILL_GRAPH_VERSIONS_TABLE, graph_id=graph["graph_id"])
                 version = next((item for item in selected if item["graph_version_id"] == current), None)
-        public_id = graph["public_id"]
+        graph_id = graph["graph_id"]
         public_version_id = None
         if version is not None:
             public_version_id = version.get("public_version_id") or f"skgv-{version['graph_version_id'].hex}"
         return {
-            "graph_id": public_id,
+            "graph_id": graph_id,
             "graph_version_id": public_version_id,
             "alias": graph.get("alias") or graph["graph_id"],
             "is_current": version is not None and version["graph_version_id"] == graph["current_version_id"],
@@ -167,29 +167,48 @@ class GraphQueryService:
         scope = {"graph_id": graph_id, "graph_version_id": snapshot_id}
         if not (await self._rows(SKILL_GRAPH_VERSIONS_TABLE, **scope)):
             raise ValueError("Graph snapshot not found")
-        nodes = await self._rows(SKILL_GRAPH_NODES_TABLE, **scope, node_type="skill")
+        nodes = await self._rows(SKILL_GRAPH_NODES_TABLE, **scope)
+        by_id = {node["node_id"]: node for node in nodes}
         result = []
         for node in nodes:
-            try:
-                skill = await self.version(node["skill_version_id"])
-            except ValueError:
-                continue
+            owner = node if node["node_type"] == "skill" else by_id.get(node["owner_node_id"])
+            if owner is None or owner["node_type"] != "skill":
+                raise ValueError("Scene owner is missing from the graph snapshot")
+            skill = await self.version(owner["skill_version_id"])
             result.append(
                 {
                     "node_id": node["node_id"],
-                    "skill_version_id": node["skill_version_id"],
+                    "node_type": node["node_type"],
+                    "owner_node_id": node["owner_node_id"],
+                    "skill_version_id": owner["skill_version_id"],
                     "skill_id": skill.skill_id,
-                    "name": skill.name,
+                    "skill_name": skill.name,
+                    "name": skill.name if node["node_type"] == "skill" else node["name"],
                     "version_label": skill.version_label,
                     "status": skill.status,
+                    "description": node["description"],
+                    "one_line_capability": node["one_line_capability"],
+                    "inputs": node["inputs"],
+                    "outputs": node["outputs"],
+                    "domain_tags": node["domain_tags"],
+                    "tooling": node["tooling"],
+                    "scene_metadata": {
+                        key: node["metadata"][key]
+                        for key in ("scene_id", "scene_type", "entry_conditions", "exit_conditions")
+                        if key in node["metadata"]
+                    },
                 }
             )
         ids = {node["node_id"] for node in result}
-        edges = [
-            e
-            for e in (await self._rows(SKILL_GRAPH_EDGES_TABLE, **scope))
-            if e["source_node_id"] in ids and e["target_node_id"] in ids
-        ]
+        edges = []
+        for edge in await self._rows(SKILL_GRAPH_EDGES_TABLE, **scope):
+            if edge["source_node_id"] not in ids or edge["target_node_id"] not in ids:
+                raise ValueError("Graph edge references a node outside its snapshot")
+            item = {key: edge[key] for key in ("edge_id", "source_node_id", "target_node_id", "edge_type", "weight")}
+            for key in ("condition", "evidence"):
+                if key in edge["metadata"]:
+                    item[key] = edge["metadata"][key]
+            edges.append(item)
         return {"nodes": result, "edges": edges, "graph_version_id": str(snapshot_id)}
 
     async def version(self, version_id: str) -> SkillVersionRecord:
