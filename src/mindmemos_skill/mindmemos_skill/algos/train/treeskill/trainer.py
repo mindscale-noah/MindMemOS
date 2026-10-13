@@ -11,15 +11,17 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Final
 from urllib.parse import quote
-from uuid import uuid4
 
 from filelock import AsyncFileLock
 from pydantic import JsonValue
+
+from mindmemos_skill.common.ids import generate_id
 
 from ....agents import Agent
 from ....common.asyncio import map_bounded
 from ....common.checkpoint import boundary, fingerprint, read_boundary
 from ....common.json import write_json
+from ....common.secrets import redact_credentials
 from ....envs import Environment
 from ....envs.data import DataSample
 from ....envs.data.typing import SplitManifest
@@ -28,7 +30,7 @@ from ....skill import Skill, SkillContent, SkillSet, SkillSnapshot
 from ...base import Algorithm
 from ..base import SkillTrainer
 from ..config import EnvAdapterSelection
-from ..recovery import implementation_identity, sample_identity
+from ..recovery import sample_identity
 from .artifacts import (
     experiment_config,
     model_usage,
@@ -130,7 +132,7 @@ async def sample_tasks(
         identity = {
             "task": sample_identity(sample, env),
             "skill": skill.snapshot().model_dump(mode="json"),
-            "environment": env.config.model_dump(mode="json"),
+            "environment": redact_credentials(env.config.model_dump(mode="json"), preserve_execution_settings=True),
         }
         saved = boundary(checkpoint, identity)
         if saved is not None:
@@ -341,8 +343,9 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             raise ValueError("External validation IDs must be unique and disjoint from training")
         identity = {
             "recovery_protocol": 2,
-            "implementation": implementation_identity(self, env),
-            "config": {"algorithm": self.config.model_dump(mode="json")},
+            "config": {
+                "algorithm": redact_credentials(self.config.model_dump(mode="json"), preserve_execution_settings=True)
+            },
             "adapter": {
                 "class_name": TreeSkillEnvAdapter.name_for(type(env_adapter)),
                 "config": env_adapter.config.model_dump(mode="json"),
@@ -350,7 +353,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
             "skill": skill.snapshot().model_dump(mode="json"),
             "train": [sample_identity(sample, env) for sample in train_samples],
             "validation": [sample_identity(sample, env) for sample in validation_samples],
-            "environment": env.config.model_dump(mode="json"),
+            "environment": redact_credentials(env.config.model_dump(mode="json"), preserve_execution_settings=True),
         }
         manifest = root / "recovery_manifest.json"
         if root.exists() and any(root.iterdir()) and not manifest.exists():
@@ -372,8 +375,8 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
                 ),
             )
         start = perf_counter()
-        config = experiment_config(self.config)
-        write_json(root / "config.json", config)
+        if not (root / "config.json").exists():
+            write_json(root / "config.json", experiment_config(self.config))
         summary = {
             "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat(),
@@ -686,7 +689,7 @@ class TreeSkillTrainer(SkillTrainer[TreeSkillTrainerConfig]):
         )
         patches = root / "patches"
         if patches.exists():
-            archived = root / "superseded_patches" / uuid4().hex
+            archived = root / "superseded_patches" / generate_id()
             archived.parent.mkdir(parents=True, exist_ok=True)
             patches.replace(archived)
         current, edits, failures = tree, [], []
@@ -751,7 +754,7 @@ def _load_item(directory: Path, identity: dict) -> dict | None:
     if checkpoint.exists():
         saved = read_boundary(checkpoint)
         if saved.identity != fingerprint(identity):
-            archived = directory / f"superseded-{uuid4().hex}.json"
+            archived = directory / f"superseded-{generate_id()}.json"
             checkpoint.replace(archived)
             return None
         return saved.payload

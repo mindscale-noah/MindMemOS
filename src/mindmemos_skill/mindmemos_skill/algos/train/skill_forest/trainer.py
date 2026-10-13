@@ -20,7 +20,7 @@ from ....logging import get_logger, log_context
 from ....skill import Skill
 from ...base import Algorithm
 from ..base import SkillTrainer
-from ..recovery import implementation_identity, sample_identity
+from ..recovery import sample_identity
 from .checkpoint import load_node, load_skill, node_directory, read_node, read_node_file, write_node
 from .config import ALGORITHM_VERSION, SkillForestTrainerConfig
 from .env_adapter import SkillForestEnvAdapter
@@ -148,10 +148,12 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
         if len(external_ids) != len(set(external_ids)) or samples.keys() & set(external_ids):
             raise ValueError("External validation IDs must be unique and disjoint from training")
         splits = self.create_splits(list(samples))
-        config = self.config.model_dump(mode="json")
+        config = redact_credentials(self.config.model_dump(mode="json"), preserve_execution_settings=True)
         environment = {
             "class": f"{type(env).__module__}.{type(env).__qualname__}",
-            "config": env.config.model_dump(mode="json") if isinstance(env, Environment) else None,
+            "config": redact_credentials(env.config.model_dump(mode="json"), preserve_execution_settings=True)
+            if isinstance(env, Environment)
+            else None,
         }
         adapter_identity = {
             "class": f"{type(env_adapter).__module__}.{type(env_adapter).__qualname__}",
@@ -159,7 +161,6 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
         }
         identity = fingerprint(
             {
-                "implementation": implementation_identity(self, env),
                 "config": config,
                 "adapter": adapter_identity,
                 "skill": skill.snapshot().model_dump(mode="json"),

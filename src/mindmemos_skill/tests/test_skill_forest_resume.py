@@ -117,7 +117,7 @@ async def test_resume_rejects_changed_inputs_and_corrupt_nodes(monkeypatch, tmp_
 
 
 async def test_config_snapshot_masks_credentials_and_still_supports_recovery(monkeypatch, tmp_path):
-    """Disk snapshots are redacted while recovery still checks the runtime inputs."""
+    """Credential rotation preserves recovery without exposing keys on disk."""
     settings = small_config()
     settings.optimizer.api_key = "forest-private-key"
     trainer = SkillForestTrainer(agent_config(monkeypatch, FakeOptimizer(), settings))
@@ -132,6 +132,9 @@ async def test_config_snapshot_masks_credentials_and_still_supports_recovery(mon
     assert len(env.calls) == before
     changed = settings.model_copy(deep=True)
     changed.optimizer.api_key = "different-key"
+    await execute(tmp_path, SkillForestTrainer(agent_config(monkeypatch, FakeOptimizer(), changed)), env)
+    assert len(env.calls) == before
+    changed.optimizer.model = "different-model"
     with pytest.raises(ValueError, match="identity mismatch"):
         await execute(tmp_path, SkillForestTrainer(agent_config(monkeypatch, FakeOptimizer(), changed)), env)
 
