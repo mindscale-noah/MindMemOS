@@ -138,7 +138,7 @@ async def test_repository_uses_shared_store_and_scoped_version_lookup(tmp_path, 
             Scope(fields={"project_id": service.default_project_id})
         ) as scoped:
             store = scoped.skills
-            assert (await store.resolve_family(service.default_project_id, "example")).skill_id == item.skill.skill_id
+            assert (await store.resolve_family("example")).skill_id == item.skill.skill_id
             assert (await store.get(item.version.version_id)) == item.version
             with pytest.raises(SkillNotFoundError):
                 await store.get("missing-version")

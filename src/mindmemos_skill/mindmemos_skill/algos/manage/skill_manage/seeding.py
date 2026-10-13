@@ -2,16 +2,15 @@
 
 import re
 
-from ....persistence.db_services.skill_management.typing import SkillGraphNodeRecord
+from ....persistence.db_services.graphs.typing import SkillGraphNodeRecord
 from .linking import signature_tokens
 from .query import query_values
 from .typing import DerivedNodeMetadata, QuerySchema, RetrievalCandidate, RetrievalSeed
 
 
-def _scripts(node):
+def _extract_node_scripts(node, metadata: DerivedNodeMetadata):
     """Use only script paths explicitly present in persisted public fields."""
     text = "\n".join([node.rendered_snippet, *node.tooling, *node.example_tasks])
-    metadata = DerivedNodeMetadata.model_validate(node.metadata)
     if metadata.local_scripts:
         return list(metadata.local_scripts)
     return re.findall(r"[A-Za-z0-9_./-]+\.(?:py|sh|bash|js|ts)\b", text)
@@ -63,39 +62,52 @@ def field_score(schema: QuerySchema, node: SkillGraphNodeRecord, graph_score=0.0
     Returns:
         Nonnegative field score including graph evidence and optional rank bonus.
     """
+    return _prepare_field_scorer(schema)(node, graph_score, rank)
+
+
+def _prepare_field_scorer(schema: QuerySchema):
+    """Prepare query features once while preserving score addition order."""
     values = query_values(schema)
     tokens = signature_tokens(values)
-    scripts = _scripts(node)
-    metadata = DerivedNodeMetadata.model_validate(node.metadata)
-    fields = [
-        ([node.name], 1.25),
-        ([node.one_line_capability, node.description, metadata.intent_signature], 0.9),
-        (node.domain_tags, 1.15),
-        ([*node.tooling, *metadata.external_dependencies, *metadata.allowed_tools, *metadata.compatibility], 0.95),
-        (node.inputs + node.outputs, 0.75),
-        (node.example_tasks, 0.8),
-        (scripts, 0.6),
-    ]
-    score = graph_score + sum(
-        weight * len(tokens & signature_tokens(texts)) / max(len(tokens), 1) for texts, weight in fields
-    )
-    # Unlike the historical self-match, a task label needs candidate evidence.
     task_tokens = signature_tokens([schema.task_name]) if schema.task_name else set()
-    score += 0.35 * len(task_tokens & signature_tokens(node_values(node))) / max(len(task_tokens), 1)
-    name = re.sub(r"[^\w]+", " ", node.name.casefold()).strip()
     text = " " + re.sub(r"[^\w]+", " ", "\n".join(values).casefold()).strip() + " "
-    if name and f" {name} " in text:
-        score += 1.2
     artifacts = signature_tokens(schema.artifacts)
-    script_tokens = signature_tokens(scripts)
-    score += 0.9 * len(artifacts & script_tokens) / max(min(len(artifacts), len(script_tokens)), 1)
-    if scripts:
-        score += 0.08
-    if signature_tokens(schema.domain) & signature_tokens(node.domain_tags):
-        score += 0.35
-    if rank is not None:
-        score += 0.2 / rank
-    return score
+    domain_tokens = signature_tokens(schema.domain)
+
+    def score_node_fields(node, graph_score=0.0, rank=None, *, node_tokens: set[str] | None = None):
+        """Score one node using this query's prepared features and optional node tokens."""
+        metadata = DerivedNodeMetadata.model_validate(node.metadata)
+        scripts = _extract_node_scripts(node, metadata)
+        fields = [
+            ([node.name], 1.25),
+            ([node.one_line_capability, node.description, metadata.intent_signature], 0.9),
+            (node.domain_tags, 1.15),
+            ([*node.tooling, *metadata.external_dependencies, *metadata.allowed_tools, *metadata.compatibility], 0.95),
+            (node.inputs + node.outputs, 0.75),
+            (node.example_tasks, 0.8),
+            (scripts, 0.6),
+        ]
+        score = graph_score + sum(
+            weight * len(tokens & signature_tokens(texts)) / max(len(tokens), 1) for texts, weight in fields
+        )
+        # Unlike the historical self-match, a task label needs candidate evidence.
+        if node_tokens is None:
+            node_tokens = signature_tokens(node_values(node))
+        score += 0.35 * len(task_tokens & node_tokens) / max(len(task_tokens), 1)
+        name = re.sub(r"[^\w]+", " ", node.name.casefold()).strip()
+        if name and f" {name} " in text:
+            score += 1.2
+        script_tokens = signature_tokens(scripts)
+        score += 0.9 * len(artifacts & script_tokens) / max(min(len(artifacts), len(script_tokens)), 1)
+        if scripts:
+            score += 0.08
+        if domain_tokens & signature_tokens(node.domain_tags):
+            score += 0.35
+        if rank is not None:
+            score += 0.2 / rank
+        return score
+
+    return score_node_fields
 
 
 def select_seeds(
@@ -133,17 +145,19 @@ def select_seeds(
     dense = sorted(distances, key=lambda key: (distances[key], key))[:candidates]
     dense_ranks = {key: rank for rank, key in enumerate(dense, 1)}
     tokens = signature_tokens(query_values(schema))
+    score_node_fields = _prepare_field_scorer(schema)
     lexical = []
     for node in nodes:
-        overlap = len(tokens & signature_tokens(node_values(node)))
+        node_tokens = signature_tokens(node_values(node))
+        overlap = len(tokens & node_tokens)
         if overlap:
-            lexical.append((node.node_id, overlap / len(tokens) + field_score(schema, node)))
+            lexical.append((node.node_id, overlap / len(tokens) + score_node_fields(node, node_tokens=node_tokens)))
     lexical.sort(key=lambda item: (-item[1], item[0]))
     lexical_ranks = {key: rank for rank, (key, _) in enumerate(lexical[:candidates], 1)}
     fused = []
     for key in dense_ranks.keys() | lexical_ranks.keys():
         dr, lr = dense_ranks.get(key), lexical_ranks.get(key)
-        score = field_score(schema, by_id[key], 1 / dr if dr else 0, dr)
+        score = score_node_fields(by_id[key], 1 / dr if dr else 0, dr)
         score += 0.15 / lr if lr else 0
         score += 0.1 if dr and lr else 0
         fused.append((key, score, dr, lr))

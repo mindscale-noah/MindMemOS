@@ -12,7 +12,7 @@ from mindmemos_skill.api.typing import AlgoSkillEvolveResult, TrainingRequest
 from mindmemos_skill.config.config import ServiceConfig
 from mindmemos_skill.envs import Task
 from mindmemos_skill.envs.data import DataSample, RewardData
-from mindmemos_skill.infra.database import SQLiteConfig, SQLiteDatabase
+from mindmemos_skill.infra.database import Scope, SQLiteConfig, SQLiteDatabase
 from mindmemos_skill.logging import get_logger
 from mindmemos_skill.logging.tasks import async_task_log_reporter
 from mindmemos_skill.persistence.observability import AlgorithmAuditPersistence, get_log_context
@@ -56,23 +56,24 @@ async def test_agent_spans_are_tree_children_and_debug_is_separate(audit):
     """Preserve the call tree, usage, project scope, and optional debug payload."""
     config = OpenAIChatConfig(model="offline")
     agent = OpenAIChatAgent(config, model=FakeTransport(config))
-    async with audit.trace_run(project_id="project", run_id="run", algorithm="forest", base_version_id="v0") as session:
-        result = await agent.run(messages=[{"role": "user", "content": "secret prompt"}])
-        session.published_version_id = "v1"
+    with audit.session(Scope(fields={"project_id": "project"})):
+        async with audit.trace_run(run_id="run", algorithm="forest", base_version_id="v0") as session:
+            result = await agent.run(messages=[{"role": "user", "content": "secret prompt"}])
+            session.published_version_id = "v1"
     assert result.output == "saved"
-    run = await audit.get_run("project", "run")
+    run = await audit.queries(Scope(fields={"project_id": "project"})).get_run("run")
     assert run.status == "completed" and run.audit_status == "complete"
     assert run.published_version_id == "v1"
-    assert (await audit.get_run("other", "run")) is None
-    root, call = await audit.spans("project", "run")
+    assert (await audit.queries(Scope(fields={"project_id": "other"})).get_run("run")) is None
+    root, call = await audit.queries(Scope(fields={"project_id": "project"})).spans("run")
     assert root.name == "algorithm.train" and root.parent_span_id is None
     assert call.parent_span_id == root.span_id and call.trace_id == root.trace_id
     assert root.resource["service.name"] == "mindmemos-skill"
     assert call.attributes["gen_ai.usage.input_tokens"] == 3
     assert call.attributes["algorithm.capture_level"] == audit.capture_level
     assert "secret prompt" not in str([root.attributes, call.attributes])
-    assert (await audit.spans("other", "run")) == []
-    logs = await audit.logs("project", "run")
+    assert (await audit.queries(Scope(fields={"project_id": "other"})).spans("run")) == []
+    logs = await audit.queries(Scope(fields={"project_id": "project"})).logs("run")
     assert [item.name for item in logs] == [
         "algorithm.run.started",
         "agent.call",
@@ -101,23 +102,32 @@ async def test_task_progress_excludes_routine_calls_but_otel_retains_them(audit)
     config = OpenAIChatConfig(model="offline")
     agent = OpenAIChatAgent(config, model=FakeTransport(config))
     async with async_task_log_reporter(append, project_id="project", task_id="task", attempt=1):
-        async with audit.trace_run(project_id="project", run_id="task-run", algorithm="forest", base_version_id="v0"):
-            await agent.run(messages=[{"role": "user", "content": "test"}])
-            get_logger("algorithm.stage").info(
-                "algorithm.progress", extra={"event_body": {"stage": "evaluation", "done": 1}}
-            )
-            get_logger("agents.test").error(
-                "agent.call", extra={"event_body": {"status": "failed", "error_type": "RuntimeError"}}
-            )
+        with audit.session(Scope(fields={"project_id": "project"})):
+            async with audit.trace_run(run_id="task-run", algorithm="forest", base_version_id="v0"):
+                await agent.run(messages=[{"role": "user", "content": "test"}])
+                get_logger("algorithm.stage").info(
+                    "algorithm.progress", extra={"event_body": {"stage": "evaluation", "done": 1}}
+                )
+                get_logger("agents.test").error(
+                    "agent.call", extra={"event_body": {"status": "failed", "error_type": "RuntimeError"}}
+                )
 
     task_calls = [row for row in rows if row["payload"]["message"].startswith("agent.call | ")]
     assert len(task_calls) == 1
     assert task_calls[0]["payload"]["level"] == "ERROR"
     assert any(row["payload"]["message"].startswith("algorithm.progress | ") for row in rows)
     assert all(row["payload"]["run_id"] == "task-run" for row in rows)
-    otel_calls = [log for log in await audit.logs("project", "task-run") if log.name == "agent.call"]
+    otel_calls = [
+        log
+        for log in await audit.queries(Scope(fields={"project_id": "project"})).logs("task-run")
+        if log.name == "agent.call"
+    ]
     assert [log.body["status"] for log in otel_calls] == ["completed", "failed"]
-    call_span = next(span for span in await audit.spans("project", "task-run") if span.name == "algorithm.agent.call")
+    call_span = next(
+        span
+        for span in await audit.queries(Scope(fields={"project_id": "project"})).spans("task-run")
+        if span.name == "algorithm.agent.call"
+    )
     assert otel_calls[0].span_id == call_span.span_id
     assert call_span.attributes["gen_ai.usage.total_tokens"] == 5
 
@@ -126,15 +136,22 @@ async def test_python_logging_is_forwarded_to_current_otel_trace(audit):
     """Ordinary package logs reach the same run and span without direct OTel calls."""
     logger = get_logger("algorithm.stage")
     logger.info("outside run")
-    async with audit.trace_run(
-        project_id="project", run_id="logging", algorithm="forest", base_version_id="v0"
-    ) as session:
-        with session.span("algorithm.stage"):
-            logger.info("stage ready")
-            logger.warning("stage warning")
-            logger.debug("stage detail")
-    stage = next(item for item in (await audit.spans("project", "logging")) if item.name == "algorithm.stage")
-    logs = [item for item in (await audit.logs("project", "logging")) if item.name == "python.log"]
+    with audit.session(Scope(fields={"project_id": "project"})):
+        async with audit.trace_run(run_id="logging", algorithm="forest", base_version_id="v0") as session:
+            with session.span("algorithm.stage"):
+                logger.info("stage ready")
+                logger.warning("stage warning")
+                logger.debug("stage detail")
+    stage = next(
+        item
+        for item in (await audit.queries(Scope(fields={"project_id": "project"})).spans("logging"))
+        if item.name == "algorithm.stage"
+    )
+    logs = [
+        item
+        for item in (await audit.queries(Scope(fields={"project_id": "project"})).logs("logging"))
+        if item.name == "python.log"
+    ]
     assert [item.body["message"] for item in logs] == [
         "stage ready",
         "stage warning",
@@ -149,18 +166,24 @@ async def test_parallel_service_handlers_only_capture_their_own_run(audit, tmp_p
     other = AlgorithmAuditPersistence(database)
     (await other.initialize_storage())
     try:
-        async with audit.trace_run(project_id="project", run_id="first", algorithm="forest", base_version_id="v0"):
-            get_logger("algorithm.stage").info("first only")
-        async with other.trace_run(project_id="project", run_id="second", algorithm="forest", base_version_id="v0"):
-            get_logger("algorithm.stage").info("second only")
+        with audit.session(Scope(fields={"project_id": "project"})):
+            async with audit.trace_run(run_id="first", algorithm="forest", base_version_id="v0"):
+                get_logger("algorithm.stage").info("first only")
+        with other.session(Scope(fields={"project_id": "project"})):
+            async with other.trace_run(run_id="second", algorithm="forest", base_version_id="v0"):
+                get_logger("algorithm.stage").info("second only")
         assert [
-            item.body["message"] for item in (await audit.logs("project", "first")) if item.name == "python.log"
+            item.body["message"]
+            for item in (await audit.queries(Scope(fields={"project_id": "project"})).logs("first"))
+            if item.name == "python.log"
         ] == ["first only"]
         assert [
-            item.body["message"] for item in (await other.logs("project", "second")) if item.name == "python.log"
+            item.body["message"]
+            for item in (await other.queries(Scope(fields={"project_id": "project"})).logs("second"))
+            if item.name == "python.log"
         ] == ["second only"]
-        assert (await audit.logs("project", "second")) == []
-        assert (await other.logs("project", "first")) == []
+        assert (await audit.queries(Scope(fields={"project_id": "project"})).logs("second")) == []
+        assert (await other.queries(Scope(fields={"project_id": "project"})).logs("first")) == []
     finally:
         (await other.close())
         (await database.close())
@@ -169,50 +192,58 @@ async def test_parallel_service_handlers_only_capture_their_own_run(audit, tmp_p
 async def test_failure_and_recovery_link(audit):
     """A recovery attempt keeps run identity and links to the previous trace."""
     with pytest.raises(RuntimeError, match="offline failure"):
-        async with audit.trace_run(project_id="project", run_id="recover", algorithm="forest", base_version_id="v0"):
-            raise RuntimeError("offline failure")
-    first = await audit.get_run("project", "recover")
+        with audit.session(Scope(fields={"project_id": "project"})):
+            async with audit.trace_run(run_id="recover", algorithm="forest", base_version_id="v0"):
+                raise RuntimeError("offline failure")
+    first = await audit.queries(Scope(fields={"project_id": "project"})).get_run("recover")
     assert first.status == "failed" and first.error_type == "RuntimeError"
-    async with audit.trace_run(project_id="project", run_id="recover", algorithm="forest", base_version_id="v0"):
-        pass
-    second = await audit.get_run("project", "recover")
+    with audit.session(Scope(fields={"project_id": "project"})):
+        async with audit.trace_run(run_id="recover", algorithm="forest", base_version_id="v0"):
+            pass
+    second = await audit.queries(Scope(fields={"project_id": "project"})).get_run("recover")
     assert second.status == "completed" and second.trace_id != first.trace_id
-    roots = [span for span in (await audit.spans("project", "recover")) if span.name == "algorithm.train"]
+    roots = [
+        span
+        for span in (await audit.queries(Scope(fields={"project_id": "project"})).spans("recover"))
+        if span.name == "algorithm.train"
+    ]
     assert len(roots) == 2
     assert roots[1].links[0]["trace_id"] == first.trace_id
     with pytest.raises(ValueError, match="identity conflicts"):
-        async with audit.trace_run(project_id="project", run_id="recover", algorithm="other", base_version_id="v0"):
-            pass
+        with audit.session(Scope(fields={"project_id": "project"})):
+            async with audit.trace_run(run_id="recover", algorithm="other", base_version_id="v0"):
+                pass
 
 
 async def test_failed_replay_keeps_previous_publication(audit):
     """A later failed attempt cannot erase the already published version reference."""
-    async with audit.trace_run(
-        project_id="project", run_id="published", algorithm="forest", base_version_id="v0"
-    ) as session:
-        session.published_version_id = "v1"
+    with audit.session(Scope(fields={"project_id": "project"})):
+        async with audit.trace_run(run_id="published", algorithm="forest", base_version_id="v0") as session:
+            session.published_version_id = "v1"
     with pytest.raises(RuntimeError, match="replay failed"):
-        async with audit.trace_run(project_id="project", run_id="published", algorithm="forest", base_version_id="v0"):
-            raise RuntimeError("replay failed")
-    run = await audit.get_run("project", "published")
+        with audit.session(Scope(fields={"project_id": "project"})):
+            async with audit.trace_run(run_id="published", algorithm="forest", base_version_id="v0"):
+                raise RuntimeError("replay failed")
+    run = await audit.queries(Scope(fields={"project_id": "project"})).get_run("published")
     assert run.status == "failed" and run.published_version_id == "v1"
 
 
 async def test_span_write_failure_marks_audit_incomplete(audit, monkeypatch):
     """A dropped span is visible in run state instead of silently claiming completeness."""
-    original = audit.database.upsert
+    original = audit.database.insert
 
     def fail_span(table, records, **kwargs):
         if table == OBSERVABILITY_SPANS_TABLE:
             raise OSError("span storage unavailable")
         return original(table, records, **kwargs)
 
-    monkeypatch.setattr(audit.database, "upsert", fail_span)
-    async with audit.trace_run(project_id="project", run_id="drop", algorithm="forest", base_version_id="v0"):
-        pass
-    run = await audit.get_run("project", "drop")
+    monkeypatch.setattr(audit.database, "insert", fail_span)
+    with audit.session(Scope(fields={"project_id": "project"})):
+        async with audit.trace_run(run_id="drop", algorithm="forest", base_version_id="v0"):
+            pass
+    run = await audit.queries(Scope(fields={"project_id": "project"})).get_run("drop")
     assert run.status == "completed" and run.audit_status == "incomplete"
-    assert (await audit.spans("project", "drop")) == []
+    assert (await audit.queries(Scope(fields={"project_id": "project"})).spans("drop")) == []
 
 
 async def test_log_write_failure_marks_audit_incomplete(audit, monkeypatch):
@@ -225,11 +256,12 @@ async def test_log_write_failure_marks_audit_incomplete(audit, monkeypatch):
         return original(table, records, **kwargs)
 
     monkeypatch.setattr(audit.database, "insert", fail_log)
-    async with audit.trace_run(project_id="project", run_id="drop-log", algorithm="forest", base_version_id="v0"):
-        pass
-    run = await audit.get_run("project", "drop-log")
+    with audit.session(Scope(fields={"project_id": "project"})):
+        async with audit.trace_run(run_id="drop-log", algorithm="forest", base_version_id="v0"):
+            pass
+    run = await audit.queries(Scope(fields={"project_id": "project"})).get_run("drop-log")
     assert run.status == "completed" and run.audit_status == "incomplete"
-    assert (await audit.logs("project", "drop-log")) == []
+    assert (await audit.queries(Scope(fields={"project_id": "project"})).logs("drop-log")) == []
 
 
 async def test_async_tasks_keep_the_run_trace(audit):
@@ -241,9 +273,10 @@ async def test_async_tasks_keep_the_run_trace(audit):
         with session.span("algorithm.worker", {"algorithm.task_index": index}):
             return index
 
-    async with audit.trace_run(project_id="project", run_id="threads", algorithm="forest", base_version_id="v0"):
-        assert await asyncio.gather(*(work(index) for index in range(4))) == [0, 1, 2, 3]
-    spans = await audit.spans("project", "threads")
+    with audit.session(Scope(fields={"project_id": "project"})):
+        async with audit.trace_run(run_id="threads", algorithm="forest", base_version_id="v0"):
+            assert await asyncio.gather(*(work(index) for index in range(4))) == [0, 1, 2, 3]
+    spans = await audit.queries(Scope(fields={"project_id": "project"})).spans("threads")
     root = next(span for span in spans if span.parent_span_id is None)
     workers = [span for span in spans if span.name == "algorithm.worker"]
     assert len(workers) == 4
@@ -296,13 +329,19 @@ async def test_otlp_exports_logs_and_spans_with_optional_sql_audit(tmp_path, wit
         )
         try:
             (await store.initialize_storage())
-            async with store.trace_run(
-                project_id="project", run_id="otlp", algorithm="forest", base_version_id="v0", operation=operation
-            ):
-                get_logger("otlp_probe").info("probe ready")
+            with store.session(Scope(fields={"project_id": "project"})):
+                async with store.trace_run(
+                    run_id="otlp", algorithm="forest", base_version_id="v0", operation=operation
+                ):
+                    get_logger("otlp_probe").info("probe ready")
             if database is not None:
-                assert (await store.get_run("project", "otlp")).status == "completed"
-                assert any(log.body.get("message") == "probe ready" for log in (await store.logs("project", "otlp")))
+                assert (
+                    await store.queries(Scope(fields={"project_id": "project"})).get_run("otlp")
+                ).status == "completed"
+                assert any(
+                    log.body.get("message") == "probe ready"
+                    for log in (await store.queries(Scope(fields={"project_id": "project"})).logs("otlp"))
+                )
         finally:
             (await store.close())
     finally:
@@ -547,9 +586,13 @@ async def test_latest_evolution_is_scoped_and_excludes_training(audit):
                 ],
             )
         )
-    assert (await audit.latest_evolution("project", "v1", ["simple", "simple_evolve"])) == start + timedelta(hours=1)
-    assert (await audit.latest_evolution("project", "missing", ["simple"])) is None
-    assert (await audit.latest_evolution("project", "v1", [])) is None
+    assert (
+        await audit.queries(Scope(fields={"project_id": "project"})).latest_evolution("v1", ["simple", "simple_evolve"])
+    ) == start + timedelta(hours=1)
+    assert (
+        await audit.queries(Scope(fields={"project_id": "project"})).latest_evolution("missing", ["simple"])
+    ) is None
+    assert (await audit.queries(Scope(fields={"project_id": "project"})).latest_evolution("v1", [])) is None
 
 
 async def test_traced_function_uses_run_owned_provider(audit):
@@ -561,15 +604,36 @@ async def test_traced_function_uses_run_owned_provider(audit):
         get_logger(__name__).info("Evaluation started")
         return {"score": 0.9}
 
-    async with audit.trace_run(project_id="project", run_id="decorated", algorithm="forest", base_version_id="v0"):
-        assert await evaluate() == {"score": 0.9}
-    spans = await audit.spans("project", "decorated")
+    with audit.session(Scope(fields={"project_id": "project"})):
+        async with audit.trace_run(run_id="decorated", algorithm="forest", base_version_id="v0"):
+            assert await evaluate() == {"score": 0.9}
+    spans = await audit.queries(Scope(fields={"project_id": "project"})).spans("decorated")
     root = next(span for span in spans if span.parent_span_id is None)
     child = next(span for span in spans if span.name == "evaluation")
     assert child.parent_span_id == root.span_id
     assert child.trace_id == root.trace_id
-    logs = await audit.logs("project", "decorated")
+    logs = await audit.queries(Scope(fields={"project_id": "project"})).logs("decorated")
     completion = next(log for log in logs if log.name == "traced call")
     assert completion.span_id == child.span_id
     assert completion.body["status"] == "succeeded"
     assert completion.body["duration_ms"] >= 0
+
+
+async def test_concurrent_audit_runs_capture_their_own_scope(audit):
+    """Concurrent runs and delayed writes retain their authorized project."""
+
+    async def capture(project):
+        with audit.session(Scope(fields={"project_id": project})):
+            async with audit.trace_run(run_id="shared", algorithm="forest", base_version_id="v0"):
+                await asyncio.sleep(0)
+                get_logger("scope_probe").info(project)
+
+    await asyncio.gather(capture("one"), capture("two"))
+    for project in ("one", "two"):
+        queries = audit.queries(Scope(fields={"project_id": project}))
+        assert (await queries.get_run("shared")).project_id == project
+        assert all(span.project_id == project for span in await queries.spans("shared"))
+        assert [log.body["message"] for log in await queries.logs("shared") if log.name == "python.log"] == [project]
+    with pytest.raises(RuntimeError, match="session is required"):
+        async with audit.trace_run(run_id="unscoped", algorithm="forest", base_version_id="v0"):
+            pass

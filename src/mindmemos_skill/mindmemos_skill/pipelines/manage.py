@@ -1,7 +1,6 @@
 """Shared contract for graph management pipelines."""
 
 from abc import ABC, abstractmethod
-from uuid import UUID
 
 from ..api.typing import (
     AddGraphMembersRequest,
@@ -11,19 +10,20 @@ from ..api.typing import (
     RecommendResult,
     RemoveGraphMembersRequest,
 )
+from ..persistence.db_services.graphs.typing import GraphResolution
 from ..registry.base import ConfigT
 from .base import Pipeline
+from .typing import GraphListItem, GraphSnapshotListItem, GraphTopology
 
 
 class ManagePipeline(Pipeline[ConfigT], ABC):
     """Organize, recommend, and query project-owned graphs."""
 
     @abstractmethod
-    async def resolve_graph(self, project_id: str, reference: str) -> dict:
+    async def resolve_graph(self, reference: str) -> GraphResolution:
         """Resolve a project-owned graph family or immutable snapshot.
 
         Args:
-            project_id: Authorized project identity.
             reference: Alias or unique prefixed graph identity.
 
         Returns:
@@ -53,22 +53,18 @@ class ManagePipeline(Pipeline[ConfigT], ABC):
         """
 
     @abstractmethod
-    async def list_graph(self, project_id: str) -> list[dict]:
+    async def list_graph(self) -> list[GraphListItem]:
         """List project-owned graphs.
-
-        Args:
-            project_id: Authorized project identity.
 
         Returns:
             Graph records and publication pointers.
         """
 
     @abstractmethod
-    async def list_graph_snapshots(self, project_id: str, graph_id: str) -> list[dict]:
+    async def list_graph_snapshots(self, graph_id: str) -> list[GraphSnapshotListItem]:
         """List immutable snapshots of one graph.
 
         Args:
-            project_id: Authorized project identity.
             graph_id: Exact project-local graph identity.
 
         Returns:
@@ -76,11 +72,10 @@ class ManagePipeline(Pipeline[ConfigT], ABC):
         """
 
     @abstractmethod
-    async def get_graph_snapshot(self, project_id: str, graph_id: str, snapshot_id: UUID) -> dict:
+    async def get_graph_snapshot(self, graph_id: str, snapshot_id: str) -> GraphTopology:
         """Read one immutable graph snapshot.
 
         Args:
-            project_id: Authorized project identity.
             graph_id: Exact project-local graph identity.
             snapshot_id: Immutable snapshot identity.
 
@@ -110,11 +105,10 @@ class ManagePipeline(Pipeline[ConfigT], ABC):
         """
         raise NotImplementedError("Graph member removal is not implemented")
 
-    async def preview_graph(self, project_id: str, graph_ref: str) -> dict:
+    async def preview_graph(self, graph_ref: str) -> GraphTopology:
         """Resolve and read an immutable published topology.
 
         Args:
-            project_id: Authorized project identity.
             graph_ref: Graph family or snapshot reference.
 
         Returns:

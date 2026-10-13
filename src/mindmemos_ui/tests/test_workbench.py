@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from mindmemos_sdk.config import ConfigManager
 from mindmemos_sdk.errors import ApiError
 from mindmemos_sdk.memory.models import MemoryPageResult, MemorySearchHit, SearchResult
-from mindmemos_skill.errors import GraphNotFoundError
+from mindmemos_skill.errors import GraphNotFoundError, SkillNotFoundError
 from mindmemos_skill.skill import content_hash, skill_hash
 from mindmemos_ui.app import create_app
 
@@ -215,7 +215,7 @@ def test_memories_page_uses_read_only_sdk_list_and_search(client, monkeypatch):
 
 
 async def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
-    from mindmemos_skill.infra.database import SQLiteConfig, SQLiteDatabase
+    from mindmemos_skill.infra.database import Scope, SQLiteConfig, SQLiteDatabase
     from mindmemos_skill.persistence import create_persistence, ensure_collection
     from mindmemos_skill.persistence.constants import (
         SKILL_GRAPH_EDGES_TABLE,
@@ -225,8 +225,7 @@ async def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
         SKILL_VERSIONS_TABLE,
         SKILLS_TABLE,
     )
-    from mindmemos_skill.persistence.db_services.skill_management.service import GraphQueryService
-    from mindmemos_skill.persistence.db_services.skill_management.typing import (
+    from mindmemos_skill.persistence.db_services.graphs.typing import (
         SkillGraphEdgeRecord,
         SkillGraphNodeRecord,
         SkillGraphRecord,
@@ -238,7 +237,7 @@ async def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
     try:
         store = create_persistence(db)
         await ensure_collection(store)
-        snapshot = uuid4()
+        snapshot = "skgv-" + uuid4().hex
         scope = {"project_id": "project-a", "graph_id": "g"}
         await db.insert(SKILL_GRAPHS_TABLE, [SkillGraphRecord(**scope, name="Graph A").model_dump()])
         await db.insert(
@@ -281,17 +280,17 @@ async def test_graph_queries_resolve_versions_and_isolate_projects(tmp_path):
             edge_type="flow",
         )
         await db.insert(SKILL_GRAPH_EDGES_TABLE, [edge.model_dump()])
-        service = GraphQueryService(db, "project-a")
-        result = await service.snapshot("g", snapshot)
-        assert len(result["nodes"]) == 2
-        assert result["nodes"][0]["skill_version_id"] == "version-1"
-        assert result["edges"][0]["edge_type"] == "flow"
-        other = GraphQueryService(db, "project-b")
-        assert await other.list_graphs() == []
-        with pytest.raises(GraphNotFoundError):
-            await other.snapshot("g", snapshot)
-        with pytest.raises(ValueError, match="Skill version not found"):
-            await other.version("version-1")
+        with store.session(Scope(fields={"project_id": "project-a"})) as repositories:
+            result = await repositories.graphs.snapshot("g", snapshot)
+            assert len(result["nodes"]) == 2
+            assert result["nodes"][0]["skill_version_id"] == "version-1"
+            assert result["edges"][0]["edge_type"] == "flow"
+        with store.session(Scope(fields={"project_id": "project-b"})) as repositories:
+            assert await repositories.graphs.list_graphs() == []
+            with pytest.raises(GraphNotFoundError):
+                await repositories.graphs.snapshot("g", snapshot)
+            with pytest.raises(SkillNotFoundError):
+                await repositories.skills.get("version-1")
     finally:
         await db.close()
 

@@ -4,20 +4,32 @@ import json
 from dataclasses import dataclass
 from math import isclose
 from typing import Annotated, Literal, Protocol
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from typing_extensions import NotRequired, TypedDict
 
 from ....agents import OpenAIChatConfig
 from ....agents.typing import AgentResult
-from ....persistence.db_services.skill_management.typing import (
+from ....persistence.db_services.graphs.typing import (
+    GraphNodeType,
     Nonempty,
     SkillGraphEdgeRecord,
     SkillGraphNodeRecord,
 )
-from ....persistence.db_services.skill_management.writer import graph_digest
+from ....persistence.db_services.graphs.writer import graph_digest
 from ....scene.typing import SceneContractModel
 from .config import EmbeddingProfile
+from .constant import (
+    METADATA_ALLOWED_TOOLS,
+    METADATA_COMPATIBILITY,
+    METADATA_EDGES,
+    METADATA_EMBEDDING,
+    METADATA_EXTERNAL_DEPENDENCIES,
+    METADATA_INTENT_SIGNATURE,
+    METADATA_KEY,
+    METADATA_LOCAL_SCRIPTS,
+    SCENE_GRAPH_REPRESENTATION_VERSION,
+)
 
 EnrichmentText = Annotated[str, Field(max_length=1000)]
 EnrichmentItems = Annotated[tuple[EnrichmentText, ...], Field(max_length=20)]
@@ -133,7 +145,7 @@ class DerivedEdgeMetadata(SceneContractModel):
 class SceneGraphContent(SceneContractModel):
     """Logical graph content independent of physical UUIDs and publication history."""
 
-    profile: Literal["scene_graph_v2"] = "scene_graph_v2"
+    profile: str = SCENE_GRAPH_REPRESENTATION_VERSION
     """Schema and algorithm interpretation, never inferred from old graph edges."""
 
     embedding: EmbeddingProfile
@@ -148,6 +160,8 @@ class SceneGraphContent(SceneContractModel):
     @model_validator(mode="after")
     def validate_content(self):
         """Validate scope, ownership and allowlisted persistence attributes."""
+        if self.profile != SCENE_GRAPH_REPRESENTATION_VERSION:
+            raise ValueError("Graph profile must match the current representation version")
         nodes = {node.node_id: node for node in self.nodes}
         if len(nodes) != len(self.nodes):
             raise ValueError("Graph node IDs must be unique")
@@ -161,15 +175,15 @@ class SceneGraphContent(SceneContractModel):
         for node in self.nodes:
             derived = metadata[node.node_id]
             expected_id = (
-                ["skill", derived.collection_skill_id]
-                if node.node_type == "skill"
-                else ["scene", derived.collection_skill_id, derived.scene_id]
+                [GraphNodeType.SKILL, derived.collection_skill_id]
+                if node.node_type == GraphNodeType.SKILL
+                else [GraphNodeType.SCENE, derived.collection_skill_id, derived.scene_id]
             )
             if node.node_id != json.dumps(expected_id, ensure_ascii=False, separators=(",", ":")):
                 raise ValueError("Node identity must use the canonical member and local Scene encoding")
             if node.embedding is None or len(node.embedding) != self.embedding.dimensions:
                 raise ValueError("Every node requires a vector matching the embedding profile")
-            if node.node_type == "skill":
+            if node.node_type == GraphNodeType.SKILL:
                 if (
                     derived.scene_id is not None
                     or derived.family_id in families
@@ -184,7 +198,7 @@ class SceneGraphContent(SceneContractModel):
                 versions.add(node.skill_version_id)
             else:
                 owner = nodes.get(node.owner_node_id)
-                if owner is None or owner.node_type != "skill" or derived.scene_id is None:
+                if owner is None or owner.node_type != GraphNodeType.SKILL or derived.scene_id is None:
                     raise ValueError("Scene nodes require a Skill owner in the same snapshot")
                 parent = metadata[owner.node_id]
                 if (derived.collection_skill_id, derived.family_id) != (parent.collection_skill_id, parent.family_id):
@@ -200,11 +214,12 @@ class SceneGraphContent(SceneContractModel):
             logical_edges.add(key)
             source, target = nodes[edge.source_node_id], nodes[edge.target_node_id]
             if edge.edge_type == "containment" and not (
-                source.node_type == "scene" and source.owner_node_id == target.node_id
+                source.node_type == GraphNodeType.SCENE and source.owner_node_id == target.node_id
             ):
                 raise ValueError("Containment must point from a Scene to its owning Skill")
             if edge.edge_type == "flow" and not (
-                source.node_type == target.node_type == "scene" and source.owner_node_id == target.owner_node_id
+                source.node_type == target.node_type == GraphNodeType.SCENE
+                and source.owner_node_id == target.owner_node_id
             ):
                 raise ValueError("Flow must connect Scenes of the same Skill")
             if edge.edge_type == "dependency" and (
@@ -218,21 +233,27 @@ class SceneGraphContent(SceneContractModel):
         nodes = [node.model_dump(mode="json", exclude={"graph_version_id"}) for node in self.nodes]
         edges = [edge.model_dump(mode="json", exclude={"graph_version_id", "edge_id"}) for edge in self.edges]
         for node in nodes:
-            original = node["metadata"]
+            original = node[METADATA_KEY]
             normalized = DerivedNodeMetadata.model_validate(original).model_dump(mode="json")
             # Preserve the exact historical normalization of pre-v3 logical content.
-            for key in ("intent_signature", "local_scripts", "external_dependencies", "compatibility", "allowed_tools"):
+            for key in (
+                METADATA_INTENT_SIGNATURE,
+                METADATA_LOCAL_SCRIPTS,
+                METADATA_EXTERNAL_DEPENDENCIES,
+                METADATA_COMPATIBILITY,
+                METADATA_ALLOWED_TOOLS,
+            ):
                 if key not in original:
                     normalized.pop(key)
-            node["metadata"] = normalized
+            node[METADATA_KEY] = normalized
         for edge in edges:
-            edge["metadata"] = DerivedEdgeMetadata.model_validate(edge["metadata"]).model_dump(mode="json")
+            edge[METADATA_KEY] = DerivedEdgeMetadata.model_validate(edge[METADATA_KEY]).model_dump(mode="json")
         return graph_digest(
             {
                 "profile": self.profile,
-                "embedding": self.embedding.model_dump(mode="json"),
+                METADATA_EMBEDDING: self.embedding.model_dump(mode="json"),
                 "nodes": sorted(nodes, key=lambda node: node["node_id"]),
-                "edges": sorted(
+                METADATA_EDGES: sorted(
                     edges, key=lambda edge: (edge["source_node_id"], edge["target_node_id"], edge["edge_type"])
                 ),
             }
@@ -332,7 +353,7 @@ class RetrievalCandidate(SceneContractModel):
     node_id: Nonempty
     """Candidate identity in the pinned graph, without node content or metadata."""
 
-    node_type: Literal["skill", "scene"]
+    node_type: GraphNodeType
     """Independent candidate route to which this node belongs."""
 
     dense_rank: int | None = Field(default=None, gt=0)
@@ -357,7 +378,7 @@ class SceneGraphVectorScore(SceneContractModel):
     node_id: Nonempty
     """Best matching Skill or Scene node in this pinned snapshot."""
 
-    node_type: Literal["skill", "scene"]
+    node_type: GraphNodeType
     """Whether the winning vector belongs to the Skill or one of its Scenes."""
 
     skill_version_id: Nonempty | None = None
@@ -379,7 +400,7 @@ class SceneGraphVectorRetrieval(SceneContractModel):
     score_type: Literal["cosine_similarity"] = "cosine_similarity"
     """Each score's similarity is one minus cosine distance, with larger values ranked first."""
 
-    snapshot_id: UUID
+    snapshot_id: str
     """Immutable snapshot containing every returned vector and member."""
 
     scores: tuple[SceneGraphVectorScore, ...] = ()
@@ -404,7 +425,7 @@ class SceneGraphRetrieval(SceneContractModel):
     score_type: Literal["graph_components"] = "graph_components"
     """Scores expose graph and reranking components, not cosine similarities."""
 
-    snapshot_id: UUID
+    snapshot_id: str
     """Immutable graph queried, independent of later changes to the graph head."""
 
     scores: tuple[SceneGraphScore, ...] = ()
@@ -466,7 +487,7 @@ class OrganizedGraph:
     request_hash: str
     """Fingerprint of source membership and construction settings."""
 
-    snapshot_id: UUID
+    snapshot_id: str
     """Pinned persisted graph content identity."""
 
     nodes: list[SkillGraphNodeRecord]
@@ -486,3 +507,95 @@ class OrganizedGraph:
 
     skill_versions: dict[str, str] | None = None
     """Exact owner version projection for pure vector queries; None on full graphs."""
+
+
+class JointEdgeDraft(TypedDict):
+    """Structural or semantic edge before storage identities are attached."""
+
+    source: str
+    """Source node identity within the graph being built."""
+
+    target: str
+    """Target node identity within the graph being built."""
+
+    type: Literal["dependency", "containment", "flow", "semantic", "workflow", "alternative"]
+    """Relationship category used together with endpoints for deduplication."""
+
+    weight: float
+    """Effective relationship strength, including model confidence when applicable."""
+
+    description: NotRequired[str]
+    """Evidence produced by dependency matching or relation inference."""
+
+    evidence: NotRequired[str]
+    """Stored evidence carried by reused structural edges."""
+
+    condition: NotRequired[str]
+    """Scene transition condition; absent or empty for unconditional edges."""
+
+    confidence: NotRequired[float | None]
+    """Model confidence when present; None for deterministic structural edges."""
+
+
+class JointRepresentation(BaseModel):
+    """Nodes and structural edges prepared before enrichment and linking."""
+
+    nodes: list[SkillGraphNodeRecord]
+    """Skill and Scene nodes in deterministic member order."""
+
+    structural_edges: list[JointEdgeDraft]
+    """Containment and flow edges owned by individual members."""
+
+    reused_members: set[str]
+    """Member identities whose captured nodes should skip enrichment."""
+
+
+class JointLinkResult(BaseModel):
+    """Final graph edges and the measured relation candidate count."""
+
+    edges: list[SkillGraphEdgeRecord]
+    """Deduplicated edge records bound to the new snapshot."""
+
+    candidate_pairs: int
+    """Number of unique unordered node pairs selected for model inference."""
+
+
+class InferredEdge(TypedDict):
+    """Accepted model relation before graph storage identities are attached."""
+
+    source: str
+    """Source node identity from the supplied candidate pair."""
+
+    target: str
+    """Target node identity from the supplied candidate pair."""
+
+    type: Literal["dependency", "semantic", "workflow", "alternative"]
+    """Accepted relationship category."""
+
+    weight: float
+    """Relationship strength multiplied by model confidence."""
+
+    confidence: float
+    """Model confidence for the accepted relationship."""
+
+    description: str
+    """Source-grounded evidence returned by the model."""
+
+
+class BuildSettings(TypedDict):
+    """Persisted construction inputs used for graph reuse and restoration."""
+
+    representation: str
+    """Stored graph representation version."""
+
+    config: dict[str, JsonValue]
+    """Serialized build options and embedding profile, excluding query options and secrets."""
+
+    linking_version: str
+    """Candidate selection and relationship construction version."""
+
+    enrichment: dict[str, str] | None
+    """Prompt and schema hashes when enrichment is enabled; otherwise None."""
+
+    scenes: dict[str, str]
+    """Canonical Skill IDs mapped to their captured Scene content digests."""

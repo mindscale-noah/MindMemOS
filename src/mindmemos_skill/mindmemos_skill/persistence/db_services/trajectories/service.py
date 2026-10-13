@@ -4,12 +4,15 @@ import hashlib
 import json
 from datetime import UTC, datetime, time, timedelta
 from typing import overload
-from uuid import uuid4
 from zoneinfo import ZoneInfo
+
+from mindmemos_skill.common.ids import generate_id
 
 from ....common.time_utils import utcnow
 from ....errors import SkillNotFoundError, SkillVersionNotFoundError
 from ....infra.database import Database, Filter
+from ....infra.database.scoped import ScopedDatabase
+from ...access import _project_id_from_database
 from ...constants import TRAJECTORIES_TABLE, TRAJECTORY_CONSUMPTIONS_TABLE
 from ...typing import TrajectoryCounts
 from ..skills.service import SkillDataService
@@ -19,6 +22,7 @@ from .typing import (
     TrajectoryRecord,
     TrajectoryStatistics,
     TrajectorySummary,
+    TrajectoryWrite,
 )
 
 DEFAULT_REPORTED_FIELDS = (
@@ -42,14 +46,21 @@ class TrajectoryDataService:
         database: Infra database with trajectory tables registered.
     """
 
-    def __init__(self, database: Database):
-        self.database = database
+    def __init__(self, database: Database | ScopedDatabase, *, skills: SkillDataService | None = None):
+        """Borrow trajectory storage and an optional granted Skill reader.
 
-    async def add(self, record: TrajectoryRecord) -> None:
+        Args:
+            database: Active repository or explicit maintenance database handle.
+            skills: Session-owned read-only dependency for exact version visibility.
+        """
+        self.database = database
+        self.skills = skills
+
+    async def add(self, record: TrajectoryWrite) -> None:
         """Insert a rollout attempt without overwriting existing evidence.
 
         Args:
-            record: Complete trajectory to store.
+            record: Trajectory input; the active scope supplies its project.
         """
         (await self.database.insert(TRAJECTORIES_TABLE, [record.model_dump(mode="python")]))
 
@@ -325,7 +336,6 @@ class TrajectoryDataService:
     async def report(
         self,
         *,
-        project_id: str,
         skill_version_id: str,
         user_id: str | None,
         agent_id: str | None,
@@ -338,7 +348,6 @@ class TrajectoryDataService:
         """Convert a sparse Harness report into the shared trajectory record.
 
         Args:
-            project_id: Authorized project owning the report.
             skill_version_id: Exact version loaded during execution.
             user_id: Business user supplied by the Harness, or None when omitted.
             agent_id: Agent supplied by the Harness, or None when omitted.
@@ -351,13 +360,18 @@ class TrajectoryDataService:
         Returns:
             Persisted physical attempt with generated task and trajectory IDs.
         """
+        project_id = _project_id_from_database(self.database)
         async with self.database.transaction() as transaction:
             try:
-                version = await SkillDataService(transaction).get(skill_version_id)
+                if self.skills is None:
+                    version = await SkillDataService(transaction).get(skill_version_id)
+                else:
+                    with transaction.dependency(self.skills.database) as database:
+                        version = await SkillDataService(database).get(skill_version_id)
             except SkillNotFoundError as exc:
                 raise SkillVersionNotFoundError("Skill version not found in this project") from exc
             received_at = utcnow()
-            trajectory_id = str(uuid4())
+            trajectory_id = generate_id(hyphenated=True)
             system_prompt = next(
                 (_message_text(message["content"]) for message in messages if message["role"] == "system"), None
             )
@@ -370,7 +384,7 @@ class TrajectoryDataService:
                 trajectory_id=trajectory_id,
                 trajectory_hash=hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
                 source="reported",
-                task_id=str(uuid4()),
+                task_id=generate_id(hyphenated=True),
                 rollout_id=trajectory_id,
                 task_instruction=user_prompt,
                 task_system_prompt=system_prompt,

@@ -1,7 +1,6 @@
 """Transport-independent inputs and results of Skill service operations."""
 
 from typing import Annotated, Literal, Self
-from uuid import UUID
 
 from pydantic import (
     AwareDatetime,
@@ -23,6 +22,7 @@ from mindmemos_skill.skill.typing import parse_skill_header
 from ..envs.config import EnvironmentConfig
 from ..envs.data.typing import DataSample, SplitManifest
 from ..persistence import SkillRecord, SkillVersionRecord
+from ..persistence.db_services.graphs.typing import GraphNodeType
 
 Nonempty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -762,7 +762,7 @@ class OrganizeResult(BaseModel):
     graph_id: Nonempty
     """Public graph family identity."""
 
-    graph_version_id: UUID
+    graph_version_id: Nonempty
     """Immutable snapshot created or reused by the operation."""
 
     skill_version_ids: list[Nonempty]
@@ -775,7 +775,7 @@ class RecommendRequest(RequestAuth):
     graph_id: Nonempty
     """Project-owned graph identity."""
 
-    graph_version_id: UUID | None = None
+    graph_version_id: Nonempty | None = None
     """Immutable snapshot; None pins the current graph head."""
 
     task: str = Field(min_length=1)
@@ -840,7 +840,7 @@ class VectorRecommendationScore(BaseModel):
     node_id: Nonempty
     """Winning Skill or Scene node within the pinned snapshot."""
 
-    node_type: Literal["skill", "scene"]
+    node_type: GraphNodeType
     """Type of the winning node."""
 
 
@@ -850,7 +850,7 @@ class RecommendResult(BaseModel):
     skills: list[SkillVersionRecord]
     """Selected versions in descending score order."""
 
-    graph_version_id: UUID
+    graph_version_id: Nonempty
     """Snapshot actually used throughout the query."""
 
     strategy: Literal["graph", "vector"]

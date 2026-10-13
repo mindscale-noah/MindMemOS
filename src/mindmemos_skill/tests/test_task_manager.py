@@ -9,13 +9,14 @@ from mindmemos_skill.api.factory import create_service
 from mindmemos_skill.api.typing import RegisterRequest, StructuredSkillInfo, TrainingRequest
 from mindmemos_skill.envs import Environment, Task
 from mindmemos_skill.envs.data import RewardData
+from mindmemos_skill.infra.database import Scope
 from mindmemos_skill.infra.database.builtin_backends.sqlite import SQLiteDatabase
 from mindmemos_skill.infra.database.config import SQLiteConfig
 from mindmemos_skill.infra.task_manager import LocalTaskManager, TaskSpec, TaskStatus
 from mindmemos_skill.infra.task_manager.kafka import KafkaTaskManager
 from mindmemos_skill.logging import get_logger
 from mindmemos_skill.persistence.config import SkillPersistenceConfig
-from mindmemos_skill.persistence.db_services.tasks import TaskDataService
+from mindmemos_skill.persistence.db_services.tasks import TaskWorkerService
 from mindmemos_skill.persistence.store import SkillPersistence
 from mindmemos_skill.pipelines import AlgoSkillEvolveResult, EvolutionPipeline, Pipeline, TrainingPipeline
 from pydantic import BaseModel
@@ -60,7 +61,7 @@ async def test_kafka_failure_diagnostics_survive_storage_reopen(tmp_path):
     path = tmp_path / "failure.db"
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{path}"))
     await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
-    store = TaskDataService(database)
+    store = TaskWorkerService(database)
 
     async def handler(spec):
         raise ValueError("Training configuration changed after task submission")
@@ -76,10 +77,10 @@ async def test_kafka_failure_diagnostics_survive_storage_reopen(tmp_path):
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{path}"))
     try:
         await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
-        record = await TaskDataService(database).get("p1", spec.task_id)
+        record = await TaskWorkerService(database).scoped(Scope(fields={"project_id": "p1"})).get(spec.task_id)
         snapshot = record.snapshot()
         assert snapshot.status == TaskStatus.FAILED
-        logs = await TaskDataService(database).logs("p1", spec.task_id)
+        logs = await TaskWorkerService(database).scoped(Scope(fields={"project_id": "p1"})).logs(spec.task_id)
         failure = next(log for log in logs if log.payload["traceback"])
         assert "ValueError: Training configuration changed" in failure.payload["traceback"]
         assert failure.payload["body"]["stage"] == "failed"
@@ -411,7 +412,7 @@ async def test_task_tables_reopen_and_reclaim_expired_attempt(tmp_path):
     async def open_store():
         database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{path}"))
         (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
-        return database, TaskDataService(database)
+        return database, TaskWorkerService(database)
 
     database, store = await open_store()
     spec = TaskSpec(task_id="cloud-1", project_id="p1", kind="skill.train", payload={"work_dir": "shared"})
@@ -428,8 +429,8 @@ async def test_task_tables_reopen_and_reclaim_expired_attempt(tmp_path):
     (await database.close())
 
     database, store = await open_store()
-    assert (await store.get("p2", spec.task_id)) is None
-    assert (await store.get("p1", spec.task_id)).attempt == 2
+    assert (await store.scoped(Scope(fields={"project_id": "p2"})).get(spec.task_id)) is None
+    assert (await store.scoped(Scope(fields={"project_id": "p1"})).get(spec.task_id)).attempt == 2
     (await database.close())
 
 
@@ -438,7 +439,7 @@ async def test_kafka_submission_never_waits_for_broker_confirmation(tmp_path):
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'skill.db'}"))
     (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
     manager = KafkaTaskManager(
-        store=TaskDataService(database), bootstrap_servers="unused:9092", topic="skill.train.jobs", group_id="skill"
+        store=TaskWorkerService(database), bootstrap_servers="unused:9092", topic="skill.train.jobs", group_id="skill"
     )
     confirmation = asyncio.get_running_loop().create_future()
 
@@ -464,7 +465,7 @@ async def test_kafka_submission_never_waits_for_broker_confirmation(tmp_path):
 async def test_kafka_recovery_republishes_unconfirmed_database_task(tmp_path):
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'skill.db'}"))
     (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
-    store = TaskDataService(database)
+    store = TaskWorkerService(database)
     spec = TaskSpec(task_id="recover-1", project_id="p1", kind="skill.train", payload={})
     (await store.create(spec))
     calls = []
@@ -491,7 +492,7 @@ async def test_kafka_recovery_republishes_unconfirmed_database_task(tmp_path):
                 break
             await asyncio.sleep(0.01)
         assert calls == [b"recover-1"]
-        assert (await store.get("p1", spec.task_id)).status == TaskStatus.QUEUED
+        assert (await store.scoped(Scope(fields={"project_id": "p1"})).get(spec.task_id)).status == TaskStatus.QUEUED
     finally:
         scanning.cancel()
         await asyncio.gather(scanning, return_exceptions=True)
@@ -502,7 +503,7 @@ async def test_kafka_recovery_republishes_unconfirmed_database_task(tmp_path):
 async def test_kafka_disconnected_submission_remains_recoverable(tmp_path):
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'skill.db'}"))
     (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
-    store = TaskDataService(database)
+    store = TaskWorkerService(database)
     manager = KafkaTaskManager(store=store, bootstrap_servers="unused:9092", topic="skill.train.jobs", group_id="skill")
     manager._started = True
     spec = TaskSpec(task_id="disconnected-1", project_id="p1", kind="skill.train", payload={})
@@ -564,7 +565,7 @@ async def test_background_training_preserves_keys_after_database_reopen(tmp_path
     service = await create_service(config)
     database = service.backends["database"]
     manager = KafkaTaskManager(
-        store=TaskDataService(database), bootstrap_servers="unused", topic="test", group_id="test"
+        store=TaskWorkerService(database), bootstrap_servers="unused", topic="test", group_id="test"
     )
     manager._started = True
     service.attach_task_manager(manager)
@@ -575,7 +576,11 @@ async def test_background_training_preserves_keys_after_database_reopen(tmp_path
     await service.close()
     restored = await create_service(config)
     try:
-        record = await TaskDataService(restored.backends["database"]).get("p1", submitted.task_id)
+        record = (
+            await TaskWorkerService(restored.backends["database"])
+            .scoped(Scope(fields={"project_id": "p1"}))
+            .get(submitted.task_id)
+        )
         assert record.payload["request"]["env"]["config"]["agent"]["api_key"] == "environment-test-key"
         await restored.execute_task(record.spec())
         assert received == [("environment-test-key", "algorithm-test-key")]
@@ -641,7 +646,7 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
     )
     service = await create_service(config)
     manager = KafkaTaskManager(
-        store=TaskDataService(service.backends["database"]),
+        store=TaskWorkerService(service.backends["database"]),
         bootstrap_servers="unused",
         topic="test",
         group_id="test",
@@ -666,17 +671,24 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
     config.service.evolution_pipelines["probe"].config = worker_options
     restored = await create_service(config)
     try:
-        record = await TaskDataService(restored.backends["database"]).get("p1", submitted.task_id)
+        record = (
+            await TaskWorkerService(restored.backends["database"])
+            .scoped(Scope(fields={"project_id": "p1"}))
+            .get(submitted.task_id)
+        )
         assert record.payload["pipeline"]["config"]["model"]["api_key"] == "submitted-test-key"
         result = await restored.execute_task(record.spec())
         assert received == [("submitted-test-key", result["run_id"])]
         assert result["run_id"].startswith("evolve_")
         audit = restored.backends["observability"]
-        run = await audit.get_run("p1", result["run_id"])
+        run = await audit.queries(Scope(fields={"project_id": "p1"})).get_run(result["run_id"])
         assert run.status == "completed"
         assert run.base_version_id == registered.skill_version_id
         assert run.published_version_id == "version"
-        assert any(span.name == "algorithm.evolve" for span in (await audit.spans("p1", result["run_id"])))
+        assert any(
+            span.name == "algorithm.evolve"
+            for span in (await audit.queries(Scope(fields={"project_id": "p1"})).spans(result["run_id"]))
+        )
         assert closed == ["submitted-test-key", "submitted-test-key"]
     finally:
         await restored.close()
@@ -732,7 +744,7 @@ async def test_kafka_consumer_and_recovery_share_slots_without_early_claims(tmp_
 
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'queue.db'}"))
     (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
-    store = TaskDataService(database)
+    store = TaskWorkerService(database)
     for task_id in ("consumer", "expired", "overflow"):
         (await store.create(TaskSpec(task_id=task_id, project_id="p1", kind="test", payload={})))
     (await store.claim("expired", lease_seconds=0))
@@ -805,8 +817,8 @@ async def test_kafka_consumer_and_recovery_share_slots_without_early_claims(tmp_
         messages.put_nowait("overflow")
         for _ in range(4):
             await asyncio.wait_for(committed.get(), 1)
-        assert (await store.get("p1", "expired")).attempt == 1
-        assert (await store.get("p1", "overflow")).attempt == 0
+        assert (await store.scoped(Scope(fields={"project_id": "p1"})).get("expired")).attempt == 1
+        assert (await store.scoped(Scope(fields={"project_id": "p1"})).get("overflow")).attempt == 0
         assert calls == ["consumer"]
         assert started.empty()
         release.set()
@@ -826,7 +838,7 @@ async def test_kafka_failed_claims_release_slots_and_close_leaves_work_recoverab
     """Missing and terminal tasks cannot consume slots or advance queued leases."""
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'claims.db'}"))
     (await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage())
-    store = TaskDataService(database)
+    store = TaskWorkerService(database)
     for task_id in ("done", "running", "queued"):
         (await store.create(TaskSpec(task_id=task_id, project_id="p1", kind="test", payload={})))
     _, token = await store.claim("done")
@@ -853,11 +865,11 @@ async def test_kafka_failed_claims_release_slots_and_close_leaves_work_recoverab
             assert await manager._dispatch(task_id)
         await asyncio.wait_for(started.wait(), 1)
         assert calls == ["running"]
-        assert (await store.get("p1", "queued")).attempt == 0
+        assert (await store.scoped(Scope(fields={"project_id": "p1"})).get("queued")).attempt == 0
         await manager.close()
-        assert (await store.get("p1", "running")).status == TaskStatus.RUNNING
-        assert (await store.get("p1", "queued")).status == TaskStatus.QUEUED
-        assert (await store.get("p1", "queued")).attempt == 0
+        assert (await store.scoped(Scope(fields={"project_id": "p1"})).get("running")).status == TaskStatus.RUNNING
+        assert (await store.scoped(Scope(fields={"project_id": "p1"})).get("queued")).status == TaskStatus.QUEUED
+        assert (await store.scoped(Scope(fields={"project_id": "p1"})).get("queued")).attempt == 0
         with pytest.raises(RuntimeError, match="closed"):
             await manager._dispatch("new")
     finally:

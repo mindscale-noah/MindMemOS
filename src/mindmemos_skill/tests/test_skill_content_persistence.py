@@ -241,7 +241,19 @@ async def test_invalid_local_commit_preserves_version_count_and_default(service,
         )
     with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as session:
         assert (await session.database.count(SKILL_VERSIONS_TABLE)) == 1
-        family = await session.skills.resolve_family("p", registered.skill_id)
+        family = await session.skills.resolve_family(registered.skill_id)
         assert family.active_version_id == registered.skill_version_id
         history = await session.skills.history(family, limit=None, offset=0)
         assert history[0].skill_hash == registered.skill_hash
+
+
+def test_yaml_dates_preserve_source_and_use_json_metadata():
+    """YAML date values become ISO strings without modifying the source document."""
+    from mindmemos_skill.skill.typing import SkillContent, parse_skill_header
+
+    content = "---\nname: dated-skill\ndescription: Example\ncreated: 2025-12-16\nmetadata:\n  updated: 2026-10-13T08:00:00Z\n---\n# Instructions\n"
+    source = SkillContent(content=content)
+    assert source.content == content
+    _, _, metadata = parse_skill_header(content)
+    assert metadata["created"] == "2025-12-16"
+    assert metadata["metadata"]["updated"] == "2026-10-13T08:00:00Z"

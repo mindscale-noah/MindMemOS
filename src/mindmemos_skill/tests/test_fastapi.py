@@ -640,7 +640,7 @@ async def test_history_and_trajectory_pages_select_only_summary_fields(service, 
         )
 
         with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
-            skill = await store.skills.resolve_family("project", skill_id)
+            skill = await store.skills.resolve_family(skill_id)
             custom_history = await store.skills.history(skill, limit=1, offset=0, fields=["version_id", "content"])
             custom_attempts = await store.trajectories.list_reported(
                 skill_id,

@@ -59,7 +59,7 @@ Memory 配置仅包含 Memory 服务连接字段。字段名参考当前 SDK；�
 | 模型角色 `optimizer`、`router`、`failure_optimizer`，管理算法的 `embedding`、`chat` | 服务端组装管理 | 用部署连接构造各角色；允许显式使用不同模型，不能暗中改变角色 | 当前算法配置就地嵌套模型对象；建议组装函数负责填充，不要求新增全局资源引用框架 |
 | 模型网络超时、重试、退避、Embedding `batch_size` | 连接适配层默认，部署者高级覆盖 | 默认来自各模型配置类；供应商限制不同可覆盖 | 传输参数，与算法生成策略分开；避免多层重试相乘 |
 | 生成策略：温度、token 限制、推理预算、`top_p`、seed、stop 等 | 算法 / Agent 适配层 | 使用相应算法协议默认值；实验 YAML 可显式覆盖 | `OpenAIChatConfig` 及算法角色配置；模型能力不支持时明确校验，不静默替换 |
-| 响应解析、工具参数策略、结构化输出、解析重试、供应商扩展 | Agent 适配层 | 与调用协议匹配，不放普通用户配置 | `response_validation`、`response_format`、`parse_*`、`invalid_tool_arguments`、`extra_body` 等 |
+| 响应解析、工具参数策略、结构化输出、解析重试、供应商扩展 | Agent 适配层 | 与调用协议匹配，不放普通用户配置 | `response_format`、`parse_*`、`invalid_tool_arguments`、`extra_body` 等 |
 | TreeSkill `samples_per_task`、`min_trajectories`、`max_trajectories` | 算法默认，实验者高级覆盖 | 当前 1、1、1000；最小值不能超过最大值 | `TreeSkillTrainerConfig` |
 | TreeSkill `rollout_concurrency`、`analysis_concurrency`、`localization_concurrency` | 算法提供默认，部署者限定资源 | 当前 8、16、16；部署应按容量配置，不能直接把算法默认当全服务安全容量 | `TreeSkillTrainerConfig`；全服务队列/并发上限需独立实现 |
 | TreeSkill `analysis_max_turns`、`shell_timeout_seconds`、`transcript_max_chars` | 算法 / 执行环境管理 | 当前 20、120 秒、20000；实验可显式覆盖 | 训练配置；服务端执行限制仍为上界 |

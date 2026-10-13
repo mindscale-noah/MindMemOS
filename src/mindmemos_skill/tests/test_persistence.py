@@ -5,6 +5,7 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 from mindmemos_skill.errors import SkillAliasConflictError, SkillConflictError, SkillNotFoundError
 from mindmemos_skill.infra.database import Scope, SQLiteConfig, SQLiteDatabase
+from mindmemos_skill.infra.database.scoped import ScopedDatabase
 from mindmemos_skill.persistence import (
     SkillRecord,
     SkillVersionRecord,
@@ -25,6 +26,7 @@ from mindmemos_skill.persistence.constants import (
     TRAJECTORIES_TABLE,
     TRAJECTORY_CONSUMPTIONS_TABLE,
 )
+from mindmemos_skill.persistence.db_services.skills.service import SkillDataService
 from mindmemos_skill.skill import SkillContent, SkillSnapshot
 from sqlalchemy import event
 from sqlalchemy.dialects import postgresql
@@ -38,7 +40,8 @@ async def store(tmp_path):
     persistence = create_persistence(database)
     (await ensure_collection(persistence))
     try:
-        yield persistence
+        with persistence.maintenance():
+            yield persistence
     finally:
         (await database.close())
 
@@ -232,7 +235,8 @@ async def test_core_only_and_no_global_registry_state(tmp_path):
         }
         assert len(build_persistence_tables().values()) == 10
         (await ensure_collection(persistence))
-        (await persistence.skills.add(version()))
+        with persistence.maintenance():
+            await persistence.skills.add(version())
     finally:
         (await database.close())
 
@@ -262,16 +266,16 @@ async def test_service_factory_assembles_borrowed_data_services(tmp_path):
     try:
         persistence = service.backends["persistence"]
         with pytest.raises(RuntimeError, match="session is required"):
-            (await persistence.skills.add(version()))
+            await persistence.skills.add(version())
         with pytest.raises(ValueError, match="project_id"):
             with persistence.session(Scope(fields={"agent_id": "agent"})):
                 pass
         with persistence.session(Scope(fields={"project_id": "local-project", "agent_id": "agent"})) as scoped:
             with pytest.raises(ValueError, match="agent_id"):
-                (await scoped.skills.list_skills("local-project", limit=10, offset=0))
+                (await scoped.skills.list_skills(limit=10, offset=0))
         with persistence.session(Scope(fields={"project_id": "local-project", "user_id": "user"})) as scoped:
             with pytest.raises(ValueError, match="user_id"):
-                (await scoped.skills.list_skills("local-project", limit=10, offset=0))
+                (await scoped.skills.list_skills(limit=10, offset=0))
         with pytest.raises(ValueError, match="unexpected"):
             with persistence.session(Scope(fields={"project_id": "local-project", "dataset_id": "dataset"})):
                 pass
@@ -316,6 +320,7 @@ def central_skill(version_record, *, alias=None):
 
 async def test_resolve_keeps_all_prefix_candidates_and_literal_matching(store):
     skill_ids = ["sk_one", "sk_two", "sk_%literal", "skXfalse", "SK_upper"]
+    queries = SkillDataService(ScopedDatabase(store.database, Scope(fields={"project_id": "local-project"})))
     versions = [version(f"local-v{i}", skill_id) for i, skill_id in enumerate(skill_ids)]
     (await store.database.insert(SKILL_VERSIONS_TABLE, [record.model_dump() for record in versions]))
     (
@@ -333,45 +338,49 @@ async def test_resolve_keeps_all_prefix_candidates_and_literal_matching(store):
 
     event.listen(store.database.engine.sync_engine, "before_cursor_execute", count_select)
     try:
-        assert (await store.skills.resolve_family("local-project", "sk_one")).skill_id == "sk_one"
+        assert (await queries.resolve_family("sk_one")).skill_id == "sk_one"
     finally:
         event.remove(store.database.engine.sync_engine, "before_cursor_execute", count_select)
     assert len(statements) == 1
-    assert (await store.skills.resolve_family("local-project", "alias-1")).skill_id == "sk_two"
-    assert (await store.skills.resolve_family("local-project", "sk_%")).skill_id == "sk_%literal"
+    assert (await queries.resolve_family("alias-1")).skill_id == "sk_two"
+    assert (await queries.resolve_family("sk_%")).skill_id == "sk_%literal"
     with pytest.raises(SkillConflictError, match="Ambiguous") as conflict:
-        (await store.skills.resolve_family("local-project", "sk_"))
+        (await queries.resolve_family("sk_"))
     for skill_id in skill_ids[:3]:
         assert skill_id in str(conflict.value)
     assert "skXfalse" not in str(conflict.value)
     assert "SK_upper" not in str(conflict.value)
+    other = SkillDataService(ScopedDatabase(store.database, Scope(fields={"project_id": "other-project"})))
     with pytest.raises(SkillNotFoundError):
-        (await store.skills.resolve_family("other-project", "sk_one"))
+        (await other.resolve_family("sk_one"))
 
     (await store.database.update(SKILLS_TABLE, {"alias": "sk_one"}, filters={"skill_id": "sk_two"}))
     with pytest.raises(SkillAliasConflictError):
-        (await store.skills.resolve_family("local-project", "sk_one"))
+        (await queries.resolve_family("sk_one"))
 
 
 async def test_resolve_selects_current_family_version_or_unique_historical_prefix(store):
     """Family references follow the head while version references stay pinned."""
+    queries = SkillDataService(ScopedDatabase(store.database, Scope(fields={"project_id": "local-project"})))
     first = version("skv-aaa", "sk-family")
     second = version("skv-aab", "sk-family")
     (await store.database.insert(SKILL_VERSIONS_TABLE, [first.model_dump(), second.model_dump()]))
     (await store.database.insert(SKILLS_TABLE, [central_skill(first, alias="shortcut").model_dump()]))
-    family, current = await store.skills.resolve("local-project", "shortcut")
+    family, current = await queries.resolve("shortcut")
     assert family.skill_id == "sk-family"
     assert current.version_id == "skv-aaa"
-    assert (await store.skills.resolve("local-project", "sk-f"))[1].version_id == "skv-aaa"
-    assert (await store.skills.resolve("local-project", "skv-aab"))[1].version_id == "skv-aab"
+    assert (await queries.resolve("sk-f"))[1].version_id == "skv-aaa"
+    assert (await queries.resolve("skv-aab"))[1].version_id == "skv-aab"
     with pytest.raises(SkillConflictError, match="Ambiguous"):
-        (await store.skills.resolve("local-project", "skv-aa"))
+        (await queries.resolve("skv-aa"))
+    other = SkillDataService(ScopedDatabase(store.database, Scope(fields={"project_id": "other-project"})))
     with pytest.raises(SkillNotFoundError):
-        (await store.skills.resolve("other-project", "skv-aaa"))
+        (await other.resolve("skv-aaa"))
 
 
 async def test_algorithm_publication_finds_legacy_deterministic_id_after_rollout(store):
     """A retried old training run does not publish a second prefixed version."""
+    queries = SkillDataService(ScopedDatabase(store.database, Scope(fields={"project_id": "local-project"})))
     run_id = "run-1"
     input_hash = "input-1"
     legacy_id = "v_" + uuid5(NAMESPACE_URL, f"training:local-project:{run_id}").hex
@@ -380,7 +389,7 @@ async def test_algorithm_publication_finds_legacy_deterministic_id_after_rollout
     )
     (await store.database.insert(SKILL_VERSIONS_TABLE, [record.model_dump()]))
     (await store.database.insert(SKILLS_TABLE, [central_skill(record).model_dump()]))
-    assert (await store.skills.algorithm_publication("local-project", run_id, input_hash)).version_id == legacy_id
+    assert (await queries.algorithm_publication(run_id, input_hash)).version_id == legacy_id
 
 
 async def test_central_skill_switch_preserves_history_and_checks_owner(store):

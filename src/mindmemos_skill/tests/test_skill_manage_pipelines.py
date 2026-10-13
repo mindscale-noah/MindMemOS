@@ -13,8 +13,8 @@ from mindmemos_skill.api.typing import (
     RegisterRequest,
 )
 from mindmemos_skill.infra.database import Scope
-from mindmemos_skill.persistence.db_services.skill_management.typing import SkillGraphEdgeRecord
-from mindmemos_skill.persistence.db_services.skill_management.writer import SkillGraphStore
+from mindmemos_skill.persistence.db_services.graphs.typing import GraphNodeType, SkillGraphEdgeRecord
+from mindmemos_skill.persistence.db_services.graphs.writer import SkillGraphStore
 from mindmemos_skill.skill import Skill, SkillContent
 from pydantic import ValidationError
 
@@ -51,21 +51,20 @@ async def seed_topology(service):
     with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as persistence:
         store = SkillGraphStore(
             persistence.database,
-            project_id="project",
             graph_id="skg-fixture",
             alias="fixture",
             actor_id="test",
             version_ids={version.skill_id: version.version_id},
         )
         await store.validate_skills({version.skill_id: source})
-        snapshot_id = uuid4()
+        snapshot_id = "skgv-" + uuid4().hex
         skill_node = store.bind_node(snapshot_id, version.skill_id, {"node_id": "skill-node", "name": "csv"})
         scene_node = store.bind_node(
             snapshot_id,
             version.skill_id,
             {
                 "node_id": "scene-node",
-                "node_type": "scene",
+                "node_type": GraphNodeType.SCENE,
                 "owner_node_id": "skill-node",
                 "name": "Read CSV",
                 "description": "Load the source rows",
@@ -92,10 +91,10 @@ async def test_graph_queries_include_scenes_and_preserve_history(tmp_path):
         assert await service.list_graph() == []
         snapshot_id = await seed_topology(service)
         topology = await service.get_graph_snapshot("fixture", snapshot_id)
-        preview = await service.preview_graph(f"skgv-{snapshot_id.hex}")
+        preview = await service.preview_graph(snapshot_id)
         assert preview == topology
-        assert {node["node_type"] for node in topology["nodes"]} == {"skill", "scene"}
-        scene = next(node for node in topology["nodes"] if node["node_type"] == "scene")
+        assert {node["node_type"] for node in topology["nodes"]} == {GraphNodeType.SKILL, GraphNodeType.SCENE}
+        scene = next(node for node in topology["nodes"] if node["node_type"] == GraphNodeType.SCENE)
         assert scene["owner_node_id"] == "skill-node"
         assert scene["skill_version_id"] == topology["nodes"][0]["skill_version_id"]
         assert topology["edges"][0]["condition"] == "File exists"
@@ -106,14 +105,14 @@ async def test_graph_queries_include_scenes_and_preserve_history(tmp_path):
         with TestClient(create_app(service)) as client:
             response = client.post("/v1/skills/graphs/preview", json={"graph_ref": "fixture"})
             assert response.status_code == 200, response.text
-            assert response.json()["data"]["graph_version_id"] == f"skgv-{snapshot_id.hex}"
+            assert response.json()["data"]["graph_version_id"] == snapshot_id
         # The HTTP app owns and closes the service.
 
 
 async def test_graph_algorithm_registered_and_missing_models_reported(tmp_path):
     async with await create_service(service_config(tmp_path / "unavailable.db")) as service:
         assert "skill_manage" in Algorithm.registered_types()
-        with pytest.raises(ValueError, match="model settings"):
+        with pytest.raises(ValueError, match="algorithm settings"):
             await service.organize_skills(OrganizeRequest(project_id="project", skill_refs=[]))
         assert await service.list_graph() == []
 
@@ -126,7 +125,22 @@ def test_member_requests_reject_invalid_batches_and_old_protocol(updates):
         )
 
 
-@pytest.mark.parametrize("updates", [{"include_scenes": True}, {"diagnostics": True}, {"task": " "}])
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"include_scenes": True},
+        {"strategy": "vector", "include_scenes": "false"},
+        {"strategy": "vector", "include_scenes": 1},
+        {"top_k": True},
+        {"top_k": "5"},
+        {"top_k": 1.5},
+        {"top_k": 0},
+        {"top_k": -1},
+        {"diagnostics": True},
+        {"task": " "},
+        {"strategy": "vector", "task": " "},
+    ],
+)
 def test_recommendation_request_validates_strategy(updates):
     with pytest.raises(ValidationError):
         RecommendRequest.model_validate({"project_id": "project", "graph_id": "g", "task": "rows", **updates})
@@ -140,7 +154,7 @@ async def test_http_member_routes_forward_scope_and_reject_legacy_fields(tmp_pat
 
     async def add(request):
         captured.append(request)
-        return OrganizeResult(graph_id="skg-test", graph_version_id=uuid4(), skill_version_ids=["v1"])
+        return OrganizeResult(graph_id="skg-test", graph_version_id="skgv-" + uuid4().hex, skill_version_ids=["v1"])
 
     monkeypatch.setattr(service._manage_pipeline, "add_graph_members", add)
     with TestClient(create_app(service)) as client:
@@ -173,7 +187,10 @@ async def test_vector_options_and_core_scores_cross_http_boundary(tmp_path, monk
             include_scenes=request.include_scenes,
             scores=[
                 VectorRecommendationScore(
-                    skill_version_id=version.version_id, similarity=0.75, node_id="scene-node", node_type="scene"
+                    skill_version_id=version.version_id,
+                    similarity=0.75,
+                    node_id="scene-node",
+                    node_type=GraphNodeType.SCENE,
                 )
             ],
         )
@@ -184,7 +201,7 @@ async def test_vector_options_and_core_scores_cross_http_boundary(tmp_path, monk
         response = client.post("/v1/skills/algos/recommend", json=body)
         assert response.status_code == 200, response.text
         data = response.json()["data"]
-        assert data["graph_version_id"] == f"skgv-{snapshot_id.hex}"
+        assert data["graph_version_id"] == snapshot_id
         assert data["scores"][0]["similarity"] == 0.75
         assert data["skills"][0]["version_id"] == data["scores"][0]["skill_version_id"]
         assert captured[0].task == "Read rows" and captured[0].include_scenes

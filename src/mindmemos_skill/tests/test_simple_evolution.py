@@ -16,6 +16,7 @@ from mindmemos_skill.errors import SkillConflictError
 from mindmemos_skill.infra.database import Scope
 from mindmemos_skill.persistence import TrajectoryRecord
 from mindmemos_skill.persistence.db_services.skills import SkillDataService
+from mindmemos_skill.pipelines.builtin_pipelines.evolve import evolving as evolution_module
 from mindmemos_skill.skill import Skill, SkillContent
 
 from mindmemos_skill import ServiceConfig, create_service
@@ -99,7 +100,7 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
             now = datetime.now(UTC)
             with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
                 if dynamic:
-                    owner = await scoped.skills.resolve_family("project", first.skill_id)
+                    owner = await scoped.skills.resolve_family(first.skill_id)
                     version = await scoped.skills.commit(owner, original, message="Dynamic source")
                     first = first.model_copy(update={"skill_version_id": version.active_version_id})
                 for index in range(3):
@@ -194,6 +195,7 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
             )
             FakeAgent.calls = []
             pipeline = service.backends["evolution_pipelines.simple"]
+            pipeline.evolver.config.optimizer.api_key = "evolution-private-key"
             monkeypatch.setattr(RegisteredAgent, "from_config", FakeAgent)
             caplog.set_level("INFO", logger="mindmemos_skill")
             caplog.clear()
@@ -205,6 +207,15 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
             )
             commit = SkillDataService.commit_algorithm
             evolve = pipeline.evolver.evolve
+            get_version = SkillDataService.get
+            base_reads = []
+
+            async def track_base_reads(store, version_id):
+                if version_id == first.skill_version_id:
+                    base_reads.append(version_id)
+                return await get_version(store, version_id)
+
+            monkeypatch.setattr(SkillDataService, "get", track_base_reads)
             if interruption == "model":
 
                 async def interrupted_model(**kwargs):
@@ -222,12 +233,21 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
             if interruption:
                 with pytest.raises(RuntimeError, match="Simulated"):
                     await service.run_evolution(request)
+                assert base_reads == []
                 with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
                     counts = await scoped.trajectories.counts(first.skill_version_id)
                     expected = 0 if interruption == "model" else 2
                     assert counts.model_dump() == {"total": 4, "consumed": expected, "unconsumed": 4 - expected}
                 evidence_path = tmp_path / "runs" / request.run_id / "evidence.json"
                 evidence_before = evidence_path.read_bytes()
+                config_path = evidence_path.parent / "config.json"
+                config_before = config_path.read_bytes()
+                config_modified_at = config_path.stat().st_mtime_ns
+                with monkeypatch.context() as changed:
+                    changed.setattr(pipeline.evolver.config.optimizer, "model", "different-model")
+                    with pytest.raises(SkillConflictError, match="different inputs"):
+                        await service.run_evolution(request)
+                pipeline.evolver.config.optimizer.api_key = "replacement-private-key"
                 monkeypatch.setattr(SkillDataService, "commit_algorithm", commit)
                 monkeypatch.setattr(pipeline.evolver, "evolve", evolve)
                 # A resumed run must not query or resample historical evidence.
@@ -238,8 +258,11 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
                     )
                     result = await service.run_evolution(request)
                 assert evidence_path.read_bytes() == evidence_before
+                assert config_path.read_bytes() == config_before
+                assert config_path.stat().st_mtime_ns == config_modified_at
             else:
                 result = await service.run_evolution(request)
+                assert base_reads == []
                 assert [
                     record.event_body["stage"]
                     for record in caplog.records
@@ -251,17 +274,54 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
                     "published",
                 ]
             calls = len(FakeAgent.calls)
-            assert await service.run_evolution(request) == result
+            config_path = tmp_path / "runs" / result.run_id / "config.json"
+            config_before = config_path.read_bytes()
+            config_modified_at = config_path.stat().st_mtime_ns
+            saved_config = read_json(config_path)
+            assert saved_config["config"]["evolver"]["config"]["optimizer"]["api_key"] == "[REDACTED]"
+            assert saved_config["config"]["evolver"]["config"]["optimizer"]["model"] == "offline"
+            assert "config" not in read_json(config_path.parent / "input.json")
+            assert "digest" not in read_json(config_path.parent / "evidence.json")
+            assert "identity" not in read_json(config_path.parent / "request.json")
+            assert b"evolution-private-key" not in config_before
+            assert b"replacement-private-key" not in config_before
+            pipeline.evolver.config.optimizer.api_key = "another-private-key"
+            hashes = []
+            original_fingerprint = evolution_module.fingerprint
+
+            def count_hash(config):
+                hashes.append(config)
+                return original_fingerprint(config)
+
+            with monkeypatch.context() as replay:
+                replay.setattr(evolution_module, "fingerprint", count_hash)
+                assert await service.run_evolution(request) == result
+            assert len(hashes) == 1
+            assert config_path.read_bytes() == config_before
+            assert config_path.stat().st_mtime_ns == config_modified_at
             assert len(FakeAgent.calls) == calls == 1
             audit = service.backends["observability"]
-            run = await audit.get_run("project", request.run_id)
+            run = await audit.queries(Scope(fields={"project_id": "project"})).get_run(request.run_id)
             assert run.status == "completed"
             assert run.base_version_id == first.skill_version_id
             assert run.published_version_id == result.version_id
-            roots = [span for span in (await audit.spans("project", request.run_id)) if span.name == "algorithm.evolve"]
-            assert len(roots) == (3 if interruption else 2)
+            roots = [
+                span
+                for span in (await audit.queries(Scope(fields={"project_id": "project"})).spans(request.run_id))
+                if span.name == "algorithm.evolve"
+            ]
+            assert len(roots) == (4 if interruption else 2)
             assert any(span.links for span in roots)
-            assert any(log.name == "algorithm.run.completed" for log in (await audit.logs("project", request.run_id)))
+            assert any(
+                log.name == "algorithm.run.completed"
+                for log in (await audit.queries(Scope(fields={"project_id": "project"})).logs(request.run_id))
+            )
+            with monkeypatch.context() as changed:
+                changed.setattr(pipeline.evolver.config.optimizer, "model", "different-model")
+                with pytest.raises(SkillConflictError, match="different inputs"):
+                    await service.run_evolution(request)
+            assert len(FakeAgent.calls) == calls
+            assert config_path.read_bytes() == config_before
             with pytest.raises(SkillConflictError, match="different inputs"):
                 await service.run_evolution(request.model_copy(update={"auto_accept": False}))
             with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
@@ -339,12 +399,8 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
                 )
             )
             with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
-                assert (await scoped.skills.get(inactive.version_id)).parent_version_ids == [
-                    result.version_id
-                ]
-                assert (
-                    await scoped.skills.resolve_family("project", first.skill_id)
-                ).active_version_id == result.version_id
+                assert (await scoped.skills.get(inactive.version_id)).parent_version_ids == [result.version_id]
+                assert (await scoped.skills.resolve_family(first.skill_id)).active_version_id == result.version_id
             evidence = json.loads(FakeAgent.calls[-1][1]["content"])
             assert evidence["skill"] == result.content
             assert all(item["skills_used"][first.skill_id] == result.content for item in evidence["executions"])
@@ -358,18 +414,12 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
                 )
             )
             with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
-                assert (await scoped.skills.get(branch.version_id)).parent_version_ids == [
-                    first.skill_version_id
-                ]
-                assert (
-                    await scoped.skills.resolve_family("project", first.skill_id)
-                ).active_version_id == branch.version_id
+                assert (await scoped.skills.get(branch.version_id)).parent_version_ids == [first.skill_version_id]
+                assert (await scoped.skills.resolve_family(first.skill_id)).active_version_id == branch.version_id
 
             assert await service.run_evolution(request) == result
             with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
-                assert (
-                    await scoped.skills.resolve_family("project", first.skill_id)
-                ).active_version_id == branch.version_id
+                assert (await scoped.skills.resolve_family(first.skill_id)).active_version_id == branch.version_id
 
             (await add_version_traces(branch.version_id, "branch-trace"))
 
@@ -427,9 +477,7 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
             assert len(pending) == 1
             assert (pending[0] / "candidate.json").is_file()
             with service.backends["persistence"].session(Scope(fields={"project_id": "project"})) as scoped:
-                assert (
-                    await scoped.skills.resolve_family("project", first.skill_id)
-                ).active_version_id == competing_versions[0]
+                assert (await scoped.skills.resolve_family(first.skill_id)).active_version_id == competing_versions[0]
     finally:
         await service.close()
 

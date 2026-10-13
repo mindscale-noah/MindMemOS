@@ -8,9 +8,10 @@ from inspect import isawaitable
 from ipaddress import ip_address
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import UUID, uuid4
 
 from dotenv import load_dotenv
+
+from mindmemos_skill.common.ids import generate_id
 
 from ...common.time_utils import utcnow
 from ...config.config import FastAPIConfig
@@ -133,21 +134,19 @@ def _version_data(version) -> dict:
 
 async def _selected_graph_version(
     service: MindMemOSSkill, graph_ref: str, version_ref: str | None, project_id: str
-) -> tuple[str, UUID]:
+) -> tuple[str, str]:
     """Resolve a public graph and its pinned version for an existing operation."""
     graph = await service.resolve_graph(graph_ref, project_id)
     if version_ref is None:
         selected = graph["graph_version_id"]
-        if selected is None:
-            raise ValueError("Graph has no published version")
-    elif version_ref.startswith("skgv-"):
+    else:
         version = await service.resolve_graph(version_ref, project_id)
         if version["graph_id"] != graph["graph_id"]:
             raise ValueError("Graph version does not belong to the selected graph")
         selected = version["graph_version_id"]
-    else:
-        return graph["graph_id"], UUID(version_ref)
-    return graph["graph_id"], UUID(selected.removeprefix("skgv-"))
+    if selected is None:
+        raise ValueError("Graph has no published version")
+    return graph["graph_id"], selected
 
 
 def _encode_cursor(cursor: ListCursor | TrajectoryListCursor | HistoryCursor) -> str:
@@ -249,7 +248,7 @@ def create_app(
     async def assign_request_id(request: Request, call_next):
         """Assign a request ID even when body validation fails."""
         if not request.scope.get("state", {}).get("request_id"):
-            request.state.request_id = f"req_{uuid4().hex}"
+            request.state.request_id = generate_id("req_")
         if policy.auth.mode == "none":
             server = request.scope.get("server")
             if server is not None:
@@ -840,7 +839,6 @@ def create_app(
         except NotImplementedError as exc:
             raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
         data = result.model_dump(mode="json")
-        data["graph_version_id"] = f"skgv-{result.graph_version_id.hex}"
         return envelope(request, data)
 
     @app.post("/v1/skills/graphs/members/add")
@@ -854,7 +852,6 @@ def create_app(
             AddGraphMembersRequest(project_id=identity.project_id, user_id=identity.actor_id, **body.model_dump())
         )
         data = result.model_dump(mode="json")
-        data["graph_version_id"] = f"skgv-{result.graph_version_id.hex}"
         return envelope(request, data)
 
     @app.post("/v1/skills/graphs/members/remove")
@@ -868,7 +865,6 @@ def create_app(
             RemoveGraphMembersRequest(project_id=identity.project_id, user_id=identity.actor_id, **body.model_dump())
         )
         data = result.model_dump(mode="json")
-        data["graph_version_id"] = f"skgv-{result.graph_version_id.hex}"
         return envelope(request, data)
 
     @app.post("/v1/skills/graphs/preview")
@@ -948,7 +944,6 @@ def create_app(
         except NotImplementedError as exc:
             raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
         data = result.model_dump(mode="json")
-        data["graph_version_id"] = f"skgv-{result.graph_version_id.hex}"
         return envelope(request, data)
 
     @app.post("/v1/skills/algos/evolve", status_code=202)

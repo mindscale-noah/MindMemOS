@@ -4,6 +4,13 @@ from collections import Counter
 from collections.abc import Mapping
 from math import exp, isfinite, log
 
+from ....persistence.db_services.graphs.typing import GraphNodeType
+from .constant import (
+    METADATA_COLLECTION_SKILL_ID,
+    METADATA_EXAMPLE_TASKS,
+    METADATA_FAMILY_ID,
+    METADATA_TOOLING,
+)
 from .edge_filters import filter_edges
 from .linking import signature_tokens
 from .query import query_schema_values
@@ -58,9 +65,9 @@ def rerank_skill_score(
         0.9,
     )
     score += _field_bonus(query_tokens, _as_list(node.get("domain_tags")), 1.15)
-    score += _field_bonus(query_tokens, _as_list(node.get("tooling")), 0.95)
+    score += _field_bonus(query_tokens, _as_list(node.get(METADATA_TOOLING)), 0.95)
     score += _field_bonus(query_tokens, _as_list(node.get("inputs")) + _as_list(node.get("outputs")), 0.75)
-    score += _field_bonus(query_tokens, _as_list(node.get("example_tasks")), 0.8)
+    score += _field_bonus(query_tokens, _as_list(node.get(METADATA_EXAMPLE_TASKS)), 0.8)
     if semantic_rank is not None:
         score += 0.2 / float(semantic_rank)
     return score
@@ -153,8 +160,8 @@ def rank_joint(nodes, edges, seeds, schema, *, config, limit, walk_weights=None)
         Skill-only score components in final order; no valid seeds produce no results.
     """
     edges = filter_edges(nodes, edges, config)
-    skills = [node for node in nodes if node.node_type == "skill"]
-    scenes = [node for node in nodes if node.node_type == "scene"]
+    skills = [node for node in nodes if node.node_type == GraphNodeType.SKILL]
+    scenes = [node for node in nodes if node.node_type == GraphNodeType.SCENE]
     skill_ids = {node.node_id for node in skills}
     scene_ids = {node.node_id for node in scenes}
     skill_weights = _normalize({seed.node_id: seed.weight for seed in seeds if seed.node_id in skill_ids})
@@ -203,11 +210,11 @@ def rank_joint(nodes, edges, seeds, schema, *, config, limit, walk_weights=None)
             boost = config.alpha * aggregate
         own = scores[node.node_id]
         graph.append((node, own, boost, own + boost))
-    graph.sort(key=lambda item: (-item[3], str(item[0].metadata["collection_skill_id"])))
+    graph.sort(key=lambda item: (-item[3], str(item[0].metadata[METADATA_COLLECTION_SKILL_ID])))
     fused_ranks = {seed.node_id: seed.fused_rank for seed in seeds if seed.node_id in skill_ids}
     results = [
         SceneGraphScore(
-            member_id=node.metadata["collection_skill_id"],
+            member_id=node.metadata[METADATA_COLLECTION_SKILL_ID],
             ppr_score=own,
             scene_boost=boost,
             graph_score=total,
@@ -231,7 +238,7 @@ def _suppress_scenes(scenes, edges, weights, config):
     degree = Counter()
     for edge in edges:
         left, right = by_id.get(edge.source_node_id), by_id.get(edge.target_node_id)
-        if left and right and left.metadata["family_id"] != right.metadata["family_id"]:
+        if left and right and left.metadata[METADATA_FAMILY_ID] != right.metadata[METADATA_FAMILY_ID]:
             degree.update((left.node_id, right.node_id))
     return {
         key: weight

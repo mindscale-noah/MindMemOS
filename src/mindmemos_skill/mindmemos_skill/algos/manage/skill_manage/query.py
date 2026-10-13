@@ -5,6 +5,9 @@ import re
 from collections.abc import Mapping
 
 from ....envs.typing import Task
+from .constant import (
+    METADATA_DOMAIN,
+)
 from .linking import signature_tokens
 from .typing import QuerySchema
 
@@ -152,7 +155,7 @@ def fallback_query_schema(query: str) -> dict[str, list[str] | str]:
     return {
         "goal": normalized_query,
         "task_name": extract_task_name(normalized_query),
-        "domain": [],
+        METADATA_DOMAIN: [],
         "operations": [],
         "artifacts": artifacts,
         "constraints": [],
@@ -170,7 +173,7 @@ def query_schema_values(query_schema: Mapping[str, object]) -> list[str]:
         Nonempty serialized legacy field values in canonical order.
     """
     values: list[str] = []
-    for key in ("goal", "task_name", "domain", "operations", "artifacts", "constraints", "keywords"):
+    for key in ("goal", "task_name", METADATA_DOMAIN, "operations", "artifacts", "constraints", "keywords"):
         raw = query_schema.get(key, [])
         if isinstance(raw, str):
             values.append(raw)

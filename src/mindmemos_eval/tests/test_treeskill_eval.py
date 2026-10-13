@@ -204,3 +204,11 @@ def test_other_registered_environment_prepares_without_reference(tmp_path, capsy
     }
     assert skill.source.name == "math"
     assert "no reference score guarantee" in capsys.readouterr().out
+
+
+def test_reference_protocol_restores_agent_defaults_without_ignoring_model_drift():
+    recorded = {"model": "qwen", "timeout_s": 600.0, "response_validation": "content"}
+    current = {"model": "qwen", "timeout_s": 600.0, "class_name": "openai_chat", "sdk_max_retries": 0}
+    assert treeskill._protocol(recorded) == treeskill._protocol(current)
+    assert treeskill._protocol(recorded) != treeskill._protocol({**current, "model": "different"})
+    assert treeskill._protocol({**recorded, "response_validation": "strict"}) != treeskill._protocol(current)

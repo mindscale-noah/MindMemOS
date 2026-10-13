@@ -12,6 +12,7 @@ from mindmemos_skill.algos.manage.skill_manage.config import (
 )
 from mindmemos_skill.algos.manage.skill_manage.retrieval import rank_joint
 from mindmemos_skill.algos.manage.skill_manage.typing import QuerySchema, RetrievalSeed, SceneGraphContent
+from mindmemos_skill.persistence.db_services.graphs.typing import GraphNodeType
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BASELINE = json.loads((FIXTURES / "scene_graph_parity.json").read_text())
@@ -71,7 +72,7 @@ async def test_original_complete_build_and_model_payloads(case, monkeypatch):
     """Compare native async build output with the original synchronous method output."""
     from mindmemos_skill.agents import AgentResult
     from mindmemos_skill.algos.manage.skill_manage.algorithm import SkillManageAlgorithm
-    from mindmemos_skill.persistence.db_services.skill_management.typing import SkillGraphNodeRecord
+    from mindmemos_skill.persistence.db_services.graphs.typing import SkillGraphNodeRecord
     from mindmemos_skill.scene.typing import ProvidedSceneRecord
     from mindmemos_skill.skill import Skill, SkillContent
 
@@ -84,7 +85,8 @@ async def test_original_complete_build_and_model_payloads(case, monkeypatch):
     )
 
     class Store:
-        scope = {"project_id": "parity-project", "graph_id": "skg-parity"}
+        graph_id = "skg-parity"
+        scope = {"project_id": "parity-project", "graph_id": graph_id}
 
         async def resolve_families(self, keys):
             return {key: key for key in keys}
@@ -93,14 +95,11 @@ async def test_original_complete_build_and_model_payloads(case, monkeypatch):
             return SkillGraphNodeRecord(
                 **self.scope,
                 graph_version_id=snapshot,
-                skill_version_id=f"version-{key}" if values.get("node_type", "skill") == "skill" else None,
+                skill_version_id=f"version-{key}"
+                if values.get("node_type", GraphNodeType.SKILL) == GraphNodeType.SKILL
+                else None,
                 **values,
             )
-
-        async def publish(self, snapshot, **values):
-            self.nodes = values["nodes"]
-            self.edges = values["edges"]
-            return snapshot
 
     class Embeddings:
         def __init__(self):
@@ -145,13 +144,13 @@ async def test_original_complete_build_and_model_payloads(case, monkeypatch):
         store=store,
         provided={key: ProvidedSceneRecord.model_validate(record) for key, record in BUILD_BASELINE["records"].items()},
     )
-    await algorithm._build_joint(
+    generated = await algorithm._build_joint(
         {key: Skill(SkillContent(content=document)) for key, document in BUILD_BASELINE["documents"].items()},
         "a" * 64,
         None,
     )
-    assert [node.model_dump(mode="json", exclude={"graph_version_id"}) for node in store.nodes] == case["nodes"]
-    assert [edge.model_dump(mode="json", exclude={"graph_version_id", "edge_id"}) for edge in store.edges] == case[
+    assert [node.model_dump(mode="json", exclude={"graph_version_id"}) for node in generated.nodes] == case["nodes"]
+    assert [edge.model_dump(mode="json", exclude={"graph_version_id", "edge_id"}) for edge in generated.edges] == case[
         "edges"
     ]
     assert embeddings.calls == case["embedding_calls"]

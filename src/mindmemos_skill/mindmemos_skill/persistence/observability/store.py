@@ -6,14 +6,16 @@ from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any, Literal
-from uuid import uuid4
 
 from opentelemetry import trace
 from opentelemetry.sdk._logs import ReadWriteLogRecord
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import Link, SpanContext, Status, StatusCode, TraceFlags
 
-from ...infra.database import Database, Filter, TableRegistry
+from mindmemos_skill.common.ids import generate_id
+
+from ...infra.database import Database, Scope, TableRegistry
+from ...infra.database.scoped import ScopedDatabase
 from ...infra.observability import OpenTelemetryRecorder, serialize_log, serialize_span
 from ...logging import get_logger, log_context
 from ...logging.otel import attach_logs, detach_logs
@@ -28,16 +30,19 @@ _active_session: ContextVar["AuditSession | None"] = ContextVar("skill_audit_ses
 class AuditSession:
     """Carry run identity and an OTel tracer through async and worker contexts."""
 
-    def __init__(
-        self, store: "AlgorithmAuditPersistence", project_id: str, run_id: str, level: Literal["info", "debug"]
-    ):
+    def __init__(self, store: "AlgorithmAuditPersistence", scope: Scope, run_id: str, level: Literal["info", "debug"]):
         self.store = store
-        self.project_id = project_id
+        self.scope = scope
         self.run_id = run_id
         self.level = level
         self.export_failed = False
         self.published_version_id: str | None = None
         self.pending: set[asyncio.Task[None]] = set()
+
+    @property
+    def project_id(self) -> str:
+        """Return the project captured for this run and delayed writes."""
+        return self.scope.require("project_id")
 
     @contextmanager
     def span(self, name: str, attributes: Mapping[str, str | int | float | bool] | None = None) -> Iterator[Any]:
@@ -80,6 +85,7 @@ class AlgorithmAuditPersistence:
         otlp_timeout: float = 5.0,
     ) -> None:
         self.database = database
+        self._scope: ContextVar[Scope | None] = ContextVar("audit_project_scope", default=None)
         self.capture_level = capture_level
         if database is not None:
             additions = build_tables()
@@ -109,6 +115,30 @@ class AlgorithmAuditPersistence:
         self._closed = False
         self._write_lock = asyncio.Lock()
 
+    @contextmanager
+    def session(self, scope: Scope) -> Iterator["AlgorithmAuditPersistence"]:
+        """Bind an authorized project to queries and run capture in this context."""
+        from ..store import validate_skill_scope
+
+        validate_skill_scope(scope)
+        if self._closed:
+            raise RuntimeError("Audit persistence is closed")
+        token = self._scope.set(scope)
+        try:
+            yield self
+        finally:
+            self._scope.reset(token)
+
+    @property
+    def scope(self) -> Scope:
+        """Require an active audit scope before accessing project data."""
+        if self._closed:
+            raise RuntimeError("Audit persistence is closed")
+        scope = self._scope.get()
+        if scope is None:
+            raise RuntimeError("An audit project session is required")
+        return scope
+
     async def initialize_storage(self) -> None:
         """Create missing observability tables without changing existing tables."""
         if self.database is not None:
@@ -124,12 +154,11 @@ class AlgorithmAuditPersistence:
 
     @asynccontextmanager
     async def trace_run(
-        self, *, project_id: str, run_id: str, algorithm: str, base_version_id: str, operation: str = "train"
+        self, *, run_id: str, algorithm: str, base_version_id: str, operation: str = "train"
     ) -> AsyncIterator[AuditSession]:
         """Record one algorithm attempt with a root span and durable run status.
 
         Args:
-            project_id: Repository scope of the input Skill.
             run_id: Stable identity shared across recovery attempts.
             algorithm: Configured training pipeline or trainer name.
             base_version_id: Input Skill version.
@@ -138,12 +167,15 @@ class AlgorithmAuditPersistence:
         Yields:
             Active session used by nested Agent calls.
         """
-        previous = (await self.get_run(project_id, run_id)) if self.database is not None else None
+        scope = self.scope
+        project_id = scope.require("project_id")
+        database = ScopedDatabase(self.database, scope) if self.database is not None else None
+        previous = (await self.get_run(run_id)) if self.database is not None else None
         if previous is not None and (previous.algorithm != algorithm or previous.base_version_id != base_version_id):
             raise ValueError("Run identity conflicts with its existing audit record")
         prior_roots = (
             (
-                await self.database.select(
+                await database.select(
                     OBSERVABILITY_SPANS_TABLE,
                     filters={"project_id": project_id, "run_id": run_id, "name": f"algorithm.{operation}"},
                     order_by=["-started_at"],
@@ -166,7 +198,7 @@ class AlgorithmAuditPersistence:
                     )
                 )
             )
-        session = AuditSession(self, project_id, run_id, self.capture_level)
+        session = AuditSession(self, scope, run_id, self.capture_level)
         session.export_failed = previous is not None and previous.audit_status == "incomplete"
         session.published_version_id = previous.published_version_id if previous is not None else None
         token = _active_session.set(session)
@@ -189,7 +221,7 @@ class AlgorithmAuditPersistence:
                 started = datetime.now(UTC)
                 if self.database is not None:
                     (
-                        await self.database.upsert(
+                        await database.upsert(
                             OBSERVABILITY_RUNS_TABLE,
                             [
                                 AuditRun(
@@ -252,7 +284,7 @@ class AlgorithmAuditPersistence:
             _active_session.reset(token)
             if self.database is not None:
                 (
-                    await self.database.update(
+                    await database.update(
                         OBSERVABILITY_RUNS_TABLE,
                         {
                             "status": "running" if interrupted else "failed" if error_type else "completed",
@@ -279,7 +311,10 @@ class AlgorithmAuditPersistence:
             **payload,
         )
         self._enqueue(
-            session, lambda: self.database.upsert(OBSERVABILITY_SPANS_TABLE, [record.model_dump(mode="python")])
+            session,
+            lambda: ScopedDatabase(self.database, session.scope).insert(
+                OBSERVABILITY_SPANS_TABLE, [record.model_dump(mode="python")]
+            ),
         )
 
     def _enqueue(self, session: AuditSession, operation: Callable[[], Awaitable[int]]) -> None:
@@ -313,7 +348,7 @@ class AlgorithmAuditPersistence:
             return
         body = payload["body"]
         record = AuditLog(
-            event_id=uuid4().hex,
+            event_id=generate_id(),
             project_id=session.project_id,
             run_id=session.run_id,
             trace_id=payload["trace_id"],
@@ -324,14 +359,47 @@ class AlgorithmAuditPersistence:
             body=body if isinstance(body, dict) else {"value": body},
         )
         self._enqueue(
-            session, lambda: self.database.insert(OBSERVABILITY_LOGS_TABLE, [record.model_dump(mode="python")])
+            session,
+            lambda: ScopedDatabase(self.database, session.scope).insert(
+                OBSERVABILITY_LOGS_TABLE, [record.model_dump(mode="python")]
+            ),
         )
 
-    async def get_run(self, project_id: str, run_id: str) -> AuditRun | None:
+    def queries(self, scope: Scope):
+        """Bind audit queries to an explicitly authorized scope."""
+        from ..access import RepositoryDatabase
+        from ..db_services.audit.service import AuditDataService
+        from ..store import validate_skill_scope
+
+        validate_skill_scope(scope)
+        if self._closed or self.database is None:
+            raise RuntimeError("Audit database is unavailable")
+        return AuditDataService(
+            RepositoryDatabase(
+                ScopedDatabase(self.database, scope),
+                tables=frozenset(),
+                read_tables=frozenset({OBSERVABILITY_RUNS_TABLE, OBSERVABILITY_SPANS_TABLE, OBSERVABILITY_LOGS_TABLE}),
+            )
+        )
+
+    @contextmanager
+    def _queries(self):
+        """Borrow a scope-bound audit reader without retaining a request lease."""
+        from ..access import RepositoryDatabase
+        from ..db_services.audit.service import AuditDataService
+
+        with self.database.scoped(self.scope) as database:
+            reader = RepositoryDatabase(
+                database,
+                tables=frozenset(),
+                read_tables=frozenset({OBSERVABILITY_RUNS_TABLE, OBSERVABILITY_SPANS_TABLE, OBSERVABILITY_LOGS_TABLE}),
+            )
+            yield AuditDataService(reader)
+
+    async def get_run(self, run_id: str) -> AuditRun | None:
         """Read a run only within its project scope.
 
         Args:
-            project_id: Required repository scope.
             run_id: Exact run identity.
 
         Returns:
@@ -339,40 +407,28 @@ class AlgorithmAuditPersistence:
         """
         if self.database is None:
             return None
-        row = await self.database.get(OBSERVABILITY_RUNS_TABLE, {"project_id": project_id, "run_id": run_id})
-        return AuditRun.model_validate(row) if row is not None else None
+        with self._queries() as queries:
+            return await queries.get_run(run_id)
 
-    async def latest_evolution(self, project_id: str, version_id: str, algorithms: list[str]) -> datetime | None:
+    async def latest_evolution(self, version_id: str, algorithms: list[str]) -> datetime | None:
         """Read the latest indexed evolution start without loading audit payloads.
 
         Args:
-            project_id: Authorized project identity.
             version_id: Exact evolution input version.
             algorithms: Configured evolution aliases and implementation names.
 
         Returns:
             Latest start time, or None without a matching run.
         """
-        if self.database is None or not algorithms:
+        if self.database is None:
             return None
-        rows = await self.database.select(
-            OBSERVABILITY_RUNS_TABLE,
-            filters=[
-                Filter(field="project_id", value=project_id),
-                Filter(field="base_version_id", value=version_id),
-                Filter(field="algorithm", op="in", value=algorithms),
-            ],
-            fields=["started_at"],
-            order_by=["-started_at"],
-            limit=1,
-        )
-        return rows[0]["started_at"] if rows else None
+        with self._queries() as queries:
+            return await queries.latest_evolution(version_id, algorithms)
 
-    async def spans(self, project_id: str, run_id: str, *, limit: int = 500, offset: int = 0) -> list[AuditSpan]:
+    async def spans(self, run_id: str, *, limit: int = 500, offset: int = 0) -> list[AuditSpan]:
         """Read one stable page of a run's completed trace tree.
 
         Args:
-            project_id: Required repository scope.
             run_id: Exact run identity.
             limit: Maximum returned spans.
             offset: Number of previous spans to skip.
@@ -384,20 +440,13 @@ class AlgorithmAuditPersistence:
             raise ValueError("Invalid observability page")
         if self.database is None:
             return []
-        rows = await self.database.select(
-            OBSERVABILITY_SPANS_TABLE,
-            filters={"project_id": project_id, "run_id": run_id},
-            order_by=["started_at", "span_id"],
-            limit=limit,
-            offset=offset,
-        )
-        return [AuditSpan.model_validate(row) for row in rows]
+        with self._queries() as queries:
+            return await queries.spans(run_id, limit=limit, offset=offset)
 
-    async def logs(self, project_id: str, run_id: str, *, limit: int = 200, offset: int = 0) -> list[AuditLog]:
+    async def logs(self, run_id: str, *, limit: int = 200, offset: int = 0) -> list[AuditLog]:
         """Read one stable page of trace-correlated audit logs.
 
         Args:
-            project_id: Required repository scope.
             run_id: Exact run identity.
             limit: Maximum returned logs.
             offset: Number of previous logs to skip.
@@ -409,14 +458,8 @@ class AlgorithmAuditPersistence:
             raise ValueError("Invalid observability page")
         if self.database is None:
             return []
-        rows = await self.database.select(
-            OBSERVABILITY_LOGS_TABLE,
-            filters={"project_id": project_id, "run_id": run_id},
-            order_by=["occurred_at", "event_id"],
-            limit=limit,
-            offset=offset,
-        )
-        return [AuditLog.model_validate(row) for row in rows]
+        with self._queries() as queries:
+            return await queries.logs(run_id, limit=limit, offset=offset)
 
 
 def get_log_context() -> AuditSession | None:

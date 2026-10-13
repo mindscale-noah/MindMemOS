@@ -3,7 +3,6 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
-from uuid import UUID
 
 from ..infra.task_manager import TaskSnapshot
 from ..logging.typing import TaskLog
@@ -105,7 +104,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_graph_snapshot(self, graph_id: str, snapshot_id: UUID, project_id: str | None = None) -> dict:
+    async def get_graph_snapshot(self, graph_id: str, snapshot_id: str, project_id: str | None = None) -> dict:
         """Read one immutable graph snapshot.
 
         Args:

@@ -28,6 +28,7 @@ service:
       config:
         class_name: openai_chat
         model: gpt-5.4-mini
+        reasoning_effort: medium
         api_key: null
         base_url: null
         max_completion_tokens: 16384
@@ -53,7 +54,6 @@ service:
           repetition_penalty: 1.0
           chat_template_kwargs:
             enable_thinking: true
-        response_validation: content
     treeskill_qwen3_5_fast:
       class_name: openai_chat
       config:
@@ -74,7 +74,6 @@ service:
           repetition_penalty: 1.0
           chat_template_kwargs:
             enable_thinking: false
-        response_validation: content
     simple_evolve_gpt_5_4_mini:
       class_name: openai_chat
       config:
@@ -85,11 +84,13 @@ service:
         timeout_s: 180.0
         max_retries: 3
 
-    skill_manage_gpt_4o_mini:
+    skill_manage_deepseek_v4_flash:
       class_name: openai_chat
       config:
         class_name: openai_chat
-        model: gpt-4o-mini
+        model: deepseek-v4-flash
+        max_completion_tokens: 32768
+        timeout_s: 1200.0
         sdk_max_retries: 0
         base_url: https://api.openai.com/v1
         api_key: null
@@ -100,7 +101,7 @@ service:
       class_name: postgres
       config:
         url: postgresql+psycopg://mindmemos_skill:mindmemos_dev_password@localhost:55432/mindmemos_skill
-        pool_size: 5
+        pool_size: 20
         max_overflow: 10
         pool_timeout: 30.0
 
@@ -118,21 +119,23 @@ service:
       algorithm:
         embedding:
           class_name: openai_embedding
-          model: text-embedding-3-small
+          model: qwen3-embedding-4b
           base_url: https://api.openai.com/v1
           api_key: null
-          dimensions: 1536
+          dimensions: 2560
           send_dimensions: false
           batch_size: 64
           timeout_s: 180
           max_retries: 3
         embedding_profile: null
-        chat: skill_manage_gpt_4o_mini
+        chat: skill_manage_deepseek_v4_flash
         build_scene: true
+        scene_flow_weight: 0.3
         llm_linking: true
         scene_llm_linking: false
         query_rewrite: false
         enrich_skill: false
+        enrichment_concurrency: 4
         enrichment_failure: error
         mode: separate
         scene_ppr: true
@@ -167,135 +170,6 @@ service:
 
   # Select a named trainer through TrainingRequest.algo; comment out either child independently.
   training_pipelines:
-    treeskill_mindmemos_eval:
-      class_name: training
-      config:
-        trainer:
-          class_name: treeskill
-          config:
-            optimizer:
-              api_key: null
-              base_url: null
-              model: qwen3.5-35b-a3b
-              timeout_s: 1800.0
-              max_retries: 3
-              retry_initial_wait_s: 1.0
-              retry_max_wait_s: 60.0
-              max_completion_tokens: 16384
-              temperature: 1.0
-              reasoning_effort: null
-              top_p: 0.95
-              presence_penalty: 1.5
-              seed: 41
-              stop: []
-              extra_body:
-                top_k: 20
-                min_p: 0.0
-                repetition_penalty: 1.0
-                chat_template_kwargs:
-                  enable_thinking: true
-              response_validation: content
-              strip_thinking: false
-              retry_policy: transient
-              retry_wait: exponential
-              retry_waits_s:
-              - 5.0
-              - 10.0
-              - 30.0
-              invalid_tool_arguments: error
-              response_format: null
-              parse_max_attempts: 3
-              parse_retry_mode: direct
-            failure_optimizer:
-              api_key: null
-              base_url: null
-              model: qwen3.5-35b-a3b
-              timeout_s: 600.0
-              max_retries: 3
-              retry_initial_wait_s: 1.0
-              retry_max_wait_s: 60.0
-              max_completion_tokens: 16384
-              temperature: 1.0
-              reasoning_effort: null
-              top_p: 1.0
-              presence_penalty: 2.0
-              seed: 41
-              stop: []
-              extra_body:
-                top_k: 40
-                min_p: 0.0
-                repetition_penalty: 1.0
-                chat_template_kwargs:
-                  enable_thinking: false
-              response_validation: content
-              strip_thinking: false
-              retry_policy: transient
-              retry_wait: exponential
-              retry_waits_s:
-              - 5.0
-              - 10.0
-              - 30.0
-              invalid_tool_arguments: error
-              response_format: null
-              parse_max_attempts: 3
-              parse_retry_mode: direct
-            samples_per_task: 1
-            rollout_concurrency: 32
-            min_trajectories: 1
-            max_trajectories: 200
-            annotation_mode: required
-            require_skill_match: true
-            success_score_threshold: 1.0
-            analysis_concurrency: 32
-            analysis_temperature: 1.0
-            analysis_max_tokens: 16384
-            analysis_max_turns: 100
-            shell_timeout_seconds: 120
-            transcript_max_chars: 20000
-            localization_concurrency: 32
-            localization_temperature: 0.0
-            localization_max_tokens: 16384
-            fusion_temperature: 0.0
-            fusion_max_tokens: 16384
-            router:
-              api_key: null
-              base_url: null
-              model: qwen3.5-35b-a3b
-              timeout_s: 600.0
-              max_retries: 3
-              retry_initial_wait_s: 1.0
-              retry_max_wait_s: 60.0
-              max_completion_tokens: 16384
-              temperature: 1.0
-              reasoning_effort: null
-              top_p: 1.0
-              presence_penalty: 2.0
-              seed: 41
-              stop: []
-              extra_body:
-                top_k: 40
-                min_p: 0.0
-                repetition_penalty: 1.0
-                chat_template_kwargs:
-                  enable_thinking: false
-              response_validation: content
-              strip_thinking: false
-              retry_policy: transient
-              retry_wait: exponential
-              retry_waits_s:
-              - 5.0
-              - 10.0
-              - 30.0
-              invalid_tool_arguments: error
-              response_format: null
-              parse_max_attempts: 3
-              parse_retry_mode: direct
-            routing_temperature: 0.0
-            routing_max_tokens: 16384
-            algorithm_version: '1'
-            prompt_version: treeskill-v1
-        evaluation_concurrency: 32
-
     # Skill-Forest: expansion_budget is global and must be at least num_trees.
     skill_forest:
       class_name: training
@@ -404,7 +278,7 @@ service:
       class_name: postgres
       config:
         url: postgresql+psycopg://mindmemos_skill:mindmemos_dev_password@localhost:55432/mindmemos_skill
-        pool_size: 5
+        pool_size: 20
         max_overflow: 10
         pool_timeout: 30.0
     otlp:

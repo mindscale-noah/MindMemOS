@@ -1,7 +1,6 @@
 """Model candidate budgets preserve type scope and exclude existing dependencies."""
 
 from collections import Counter
-from uuid import UUID
 
 from mindmemos_skill.algos.manage.skill_manage.algorithm import node_id
 from mindmemos_skill.algos.manage.skill_manage.config import JointLinkingConfig
@@ -12,7 +11,7 @@ from mindmemos_skill.algos.manage.skill_manage.linking import (
     joint_model_candidates,
 )
 from mindmemos_skill.algos.manage.skill_manage.typing import DerivedNodeMetadata
-from mindmemos_skill.persistence.db_services.skill_management.typing import SkillGraphNodeRecord
+from mindmemos_skill.persistence.db_services.graphs.typing import GraphNodeType, SkillGraphNodeRecord
 
 
 def _node(member_index, scene_index=None, *, inputs=(), outputs=()):
@@ -22,9 +21,9 @@ def _node(member_index, scene_index=None, *, inputs=(), outputs=()):
     return SkillGraphNodeRecord(
         project_id="candidate-test",
         graph_id="model-candidates",
-        graph_version_id=UUID(int=1),
+        graph_version_id="skgv-" + "0" * 31 + "1",
         node_id=node_id(member, scene),
-        node_type="skill" if scene is None else "scene",
+        node_type=GraphNodeType.SKILL if scene is None else GraphNodeType.SCENE,
         skill_version_id=f"version-{member}" if scene is None else None,
         owner_node_id=node_id(member) if scene is not None else None,
         name=scene or member,
@@ -46,13 +45,13 @@ def test_scene_crowding_cannot_consume_the_skill_model_candidate_budget():
     by_id = {node.node_id: node for node in nodes}
     config = JointLinkingConfig(dense_candidates=64, lexical_candidates=0, io_candidates=0, max_candidates=1)
     unscoped = joint_candidates(nodes, vectors, config)
-    assert all(by_id[unscoped[skill.node_id][0]].node_type == "scene" for skill in skills)
+    assert all(by_id[unscoped[skill.node_id][0]].node_type == GraphNodeType.SCENE for skill in skills)
 
     scoped = joint_model_candidates(
         nodes, vectors, config, skill_linking=True, scene_linking=False, dependency_pairs=set()
     )
     assert set(scoped) == {skill.node_id for skill in skills}
-    assert all(len(targets) == 1 and by_id[targets[0]].node_type == "skill" for targets in scoped.values())
+    assert all(len(targets) == 1 and by_id[targets[0]].node_type == GraphNodeType.SKILL for targets in scoped.values())
     assert scoped == joint_model_candidates(
         list(reversed(nodes)),
         list(reversed(vectors)),
@@ -70,12 +69,12 @@ def test_scene_only_model_candidates_cover_joint_targets_without_skill_sources()
     selected = joint_model_candidates(
         nodes, [[1, 0, 0] for _ in nodes], config, skill_linking=False, scene_linking=True, dependency_pairs=set()
     )
-    assert set(selected) == {node.node_id for node in nodes if node.node_type == "scene"}
+    assert set(selected) == {node.node_id for node in nodes if node.node_type == GraphNodeType.SCENE}
     assert all(len(targets) == 4 for targets in selected.values())
     pairs = list(joint_candidate_pairs(nodes, selected))
     assert {tuple(sorted((left.node_type, right.node_type))) for left, right in pairs} == {
-        ("scene", "scene"),
-        ("scene", "skill"),
+        (GraphNodeType.SCENE, GraphNodeType.SCENE),
+        (GraphNodeType.SCENE, GraphNodeType.SKILL),
     }
     assert all(
         by_id[source].metadata["family_id"] != by_id[target].metadata["family_id"]

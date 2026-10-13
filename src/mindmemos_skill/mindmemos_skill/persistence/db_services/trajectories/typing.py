@@ -54,11 +54,8 @@ class TrajectoryConsumption(RecordModel):
     """Time the successful use was recorded."""
 
 
-class TrajectoryRecord(RecordModel):
-    """Complete insertable record for trajectories."""
-
-    project_id: str = Field(min_length=1)
-    """Project that owns this physical trajectory attempt."""
+class TrajectoryWrite(RecordModel):
+    """Trajectory input whose project is supplied by the repository scope."""
 
     trajectory_id: str = Field(min_length=1)
     """Local identity of one physical rollout attempt."""
@@ -172,6 +169,13 @@ class TrajectoryRecord(RecordModel):
         if self.source == "reported" and not all((self.skill_id, self.skill_version_id, self.received_at)):
             raise ValueError("Reported trajectories require a Skill version and receipt time")
         return self
+
+
+class TrajectoryRecord(TrajectoryWrite):
+    """Complete persisted record with its project ownership."""
+
+    project_id: str = Field(min_length=1)
+    """Project that owns this physical trajectory attempt."""
 
 
 class TrajectorySummary(RecordModel):

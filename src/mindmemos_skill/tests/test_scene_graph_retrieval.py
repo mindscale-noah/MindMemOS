@@ -4,9 +4,10 @@ import json
 from fractions import Fraction
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-from mindmemos_skill.algos.manage.skill_manage.algorithm import node_id
+from mindmemos_skill.algos.manage.skill_manage.algorithm import SkillManageAlgorithm, node_id
 from mindmemos_skill.algos.manage.skill_manage.config import EmbeddingProfile, SkillManageConfig
 from mindmemos_skill.algos.manage.skill_manage.query import normalize_query, public_task_text, query_text
 from mindmemos_skill.algos.manage.skill_manage.retrieval import pagerank, rank_joint
@@ -14,6 +15,7 @@ from mindmemos_skill.algos.manage.skill_manage.seeding import balance_seeds, fie
 from mindmemos_skill.algos.manage.skill_manage.typing import QuerySchema, RetrievalSeed, SceneGraphContent
 from mindmemos_skill.envs.typing import Task
 from mindmemos_skill.infra.embedding import OpenAIEmbeddingConfig
+from mindmemos_skill.persistence.db_services.graphs.typing import GraphNodeType
 from pydantic import ValidationError
 
 
@@ -45,7 +47,7 @@ def neutral_skills(content):
             }
         )
         for node in content.nodes
-        if node.node_type == "skill"
+        if node.node_type == GraphNodeType.SKILL
     ]
 
 
@@ -71,6 +73,84 @@ def hit(node, distance=0):
         distance: Reported cosine distance.
     """
     return SimpleNamespace(record={"node_id": node}, distance=distance)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "owners,include_scenes,tied,expected_offsets",
+    [
+        (list(range(100)), False, False, [0]),
+        ([0, 1], False, False, [0]),
+        (list(range(100)), False, True, [0]),
+        ([0] * 200 + list(range(1, 100)), True, False, [0, 100, 200]),
+        ([0] * 100 + [1] * 100, True, False, [0, 100, 200]),
+        ([0] * 99 + list(range(1, 100)), True, True, [0, 100]),
+        ([0] * 500 + list(range(1, 100)), True, False, [0, 100, 200, 300, 400]),
+        ([0] * 499 + list(range(1, 100)), True, False, [0, 100, 200, 300, 400]),
+        ([0] * 496 + list(range(1, 100)), True, False, [0, 100, 200, 300, 400]),
+    ],
+    ids=[
+        "skill-only-top-k",
+        "skill-only-fewer-than-limit",
+        "skill-only-ties",
+        "deduplicate-across-pages",
+        "exhaust-before-limit",
+        "ties-across-pages",
+        "stop-at-node-budget",
+        "include-last-budgeted-node",
+        "reach-owner-limit-at-budget",
+    ],
+)
+async def test_retrieve_vector_stops_at_unique_owner_limit(owners, include_scenes, tied, expected_offsets):
+    """Stop after five unique owners while preserving best hits and stable ties."""
+    hits = [
+        SimpleNamespace(
+            distance=0.25 if tied else index / len(owners),
+            record={
+                "node_id": f"node-{index:04d}",
+                "node_type": GraphNodeType.SCENE if include_scenes else GraphNodeType.SKILL,
+                "skill_version_id": None if include_scenes else f"version-{owner}",
+                "metadata": {"collection_skill_id": str(owner)},
+            },
+        )
+        for index, owner in enumerate(owners)
+    ]
+
+    def search_hits(snapshot_id, vector, *, top_k, node_type=None, offset=0):
+        """Return a sorted page using the store's default query arguments."""
+        return hits[offset : offset + top_k]
+
+    store = SimpleNamespace(search=AsyncMock(side_effect=search_hits))
+    algorithm = SkillManageAlgorithm(config(), store=store)
+    algorithm.embedding_model = SimpleNamespace(embed=AsyncMock(return_value=[[1.0, 0.0, 0.0]]))
+    algorithm.bind_vector_snapshot(
+        "snapshot",
+        skill_ids={str(owner) for owner in owners},
+        skill_versions={str(owner): f"version-{owner}" for owner in owners},
+    )
+
+    result = await algorithm.retrieve_vector(
+        task=Task(id="query", instruction="Find a Skill"), limit=5, include_scenes=include_scenes
+    )
+
+    expected_owners = list(dict.fromkeys(owners[:500] if include_scenes else owners))[:5]
+    assert [score.member_id for score in result.scores] == [str(owner) for owner in expected_owners]
+    assert [score.node_id for score in result.scores] == [
+        f"node-{owners.index(owner):04d}" for owner in expected_owners
+    ]
+    assert [score.similarity for score in result.scores] == pytest.approx(
+        [1 - hits[owners.index(owner)].distance for owner in expected_owners]
+    )
+    assert [score.skill_version_id for score in result.scores] == [f"version-{owner}" for owner in expected_owners]
+    assert [call.kwargs.get("offset", 0) for call in store.search.await_args_list] == expected_offsets
+    assert store.search.await_count <= 5
+    assert all(call.kwargs["top_k"] == (100 if include_scenes else 5) for call in store.search.await_args_list)
+    if not include_scenes:
+        assert "offset" not in store.search.await_args.kwargs
+    assert all(
+        call.kwargs.get("node_type") == (None if include_scenes else GraphNodeType.SKILL)
+        for call in store.search.await_args_list
+    )
 
 
 def seed(node, weight=1):
@@ -107,7 +187,7 @@ def test_exact_ppr_and_alpha_reduction(reference, content, aggregation, alpha):
 
 
 def test_explicit_prior_zero_edges_dangling_and_no_seeds(content):
-    nodes = [node for node in content.nodes if node.node_type == "skill"][:2]
+    nodes = [node for node in content.nodes if node.node_type == GraphNodeType.SKILL][:2]
     a, b = [node.node_id for node in nodes]
     edge = SimpleNamespace(source_node_id=a, target_node_id=b, edge_type="dependency", weight=0)
     assert pagerank(nodes, [edge], {a: 3, b: 1}) == pytest.approx({a: 0.75, b: 0.25})
@@ -123,7 +203,7 @@ def test_invalid_ppr_weights_rejected(content, weight):
 
 
 def test_type_budgets_union_ranks_and_balanced_mass(content):
-    skills = [node for node in content.nodes if node.node_type == "skill"]
+    skills = [node for node in content.nodes if node.node_type == GraphNodeType.SKILL]
     # Force lexical evidence onto a different candidate from the best dense hit.
     skills = [
         node.model_copy(
@@ -159,7 +239,7 @@ def test_type_budgets_union_ranks_and_balanced_mass(content):
 
 
 def test_dual_route_fusion_formula_and_deterministic_ties(content):
-    nodes = [node for node in content.nodes if node.node_type == "skill"]
+    nodes = [node for node in content.nodes if node.node_type == GraphNodeType.SKILL]
     schema = normalize_query(nodes[0].name)
     selected = select_seeds(nodes, [hit(nodes[0].node_id)], schema, candidates=4, seeds=4, threshold=0)
     entry = next(entry for entry in selected if entry.node_id == nodes[0].node_id)
@@ -237,7 +317,7 @@ def test_manual_priors_without_fused_rank_have_no_rank_bonus(neutral_skills):
 
 
 def test_graph_truncation_precedes_fields_and_isolated_ties(content):
-    nodes = [node for node in content.nodes if node.node_type == "skill"]
+    nodes = [node for node in content.nodes if node.node_type == GraphNodeType.SKILL]
     nodes[1] = nodes[1].model_copy(update={"name": "quasar", "description": "quasar", "tooling": ["quasar"]})
     schema = normalize_query("quasar")
     seeds = [seed(nodes[0].node_id, 0.9), seed(nodes[1].node_id, 0.1)]
@@ -256,7 +336,7 @@ def test_graph_truncation_precedes_fields_and_isolated_ties(content):
 
 
 def test_field_bonuses_require_candidate_evidence(content):
-    node = next(node for node in content.nodes if node.node_type == "skill")
+    node = next(node for node in content.nodes if node.node_type == GraphNodeType.SKILL)
     bare = node.model_copy(
         update={
             "name": "other",

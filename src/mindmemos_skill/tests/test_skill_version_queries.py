@@ -31,6 +31,63 @@ from pydantic import ValidationError
 from .test_skill_content_persistence import plain, service  # noqa: F401
 
 
+async def test_version_visibility_checks_bounded_batches_without_content(service, monkeypatch):
+    """Validate more than one batch without the default row cap or full snapshots."""
+    from mindmemos_skill.infra.database import Database
+    from mindmemos_skill.persistence.db_services.skills.service import VERSION_VISIBILITY_BATCH_SIZE
+
+    registered = await service.register_skill(RegisterRequest(project_id="p", skill=plain("visibility")))
+    persistence = service.repository.persistence
+    with persistence.session(Scope(fields={"project_id": "p"})):
+        database = persistence.skills.database
+        source = await database.get(SKILL_VERSIONS_TABLE, registered.skill_version_id)
+        identities = [f"visibility-version-{index}" for index in range(VERSION_VISIBILITY_BATCH_SIZE + 1)]
+        await database.insert(
+            SKILL_VERSIONS_TABLE,
+            [
+                {**source, "version_id": version_id, "version_label": f"v9.0.{index}"}
+                for index, version_id in enumerate(identities)
+            ],
+        )
+        reads = []
+        original_select = Database.select
+
+        async def record_projected_reads(self, table, **kwargs):
+            rows = await original_select(self, table, **kwargs)
+            reads.append((table, kwargs.get("fields"), len(rows)))
+            return rows
+
+        monkeypatch.setattr(Database, "select", record_projected_reads)
+        await persistence.skills.validate_version_visibility([])
+        assert reads == []
+        await persistence.skills.validate_version_visibility([*identities, identities[0]])
+        assert reads == [
+            (SKILL_VERSIONS_TABLE, ["version_id", "skill_id"], VERSION_VISIBILITY_BATCH_SIZE),
+            (SKILLS_TABLE, ["skill_id"], 1),
+            (SKILL_VERSIONS_TABLE, ["version_id", "skill_id"], 1),
+            (SKILLS_TABLE, ["skill_id"], 1),
+        ]
+
+
+@pytest.mark.parametrize("invisible", ["missing", "foreign", "deleted"])
+async def test_version_visibility_rejects_invisible_versions(service, invisible):
+    """Keep missing-version, project-isolation and soft-deletion checks for every member."""
+    visible = await service.register_skill(RegisterRequest(project_id="p", skill=plain("visible")))
+    version_id = "missing-version"
+    if invisible != "missing":
+        hidden = await service.register_skill(
+            RegisterRequest(project_id="other" if invisible == "foreign" else "p", skill=plain("hidden"))
+        )
+        version_id = hidden.skill_version_id
+    persistence = service.repository.persistence
+    with persistence.session(Scope(fields={"project_id": "p"})):
+        if invisible == "deleted":
+            family = await persistence.skills.resolve_family(hidden.skill_id)
+            await persistence.skills.delete(family)
+        with pytest.raises(SkillNotFoundError, match=version_id):
+            await persistence.skills.validate_version_visibility([visible.skill_version_id, version_id])
+
+
 @pytest.mark.asyncio
 async def test_history_includes_commit_messages(service):
     """History preserves stored multiline messages and absent messages."""
@@ -169,7 +226,7 @@ async def test_stable_history_with_ties_and_new_insert(service):
     assert ids == sorted(ids)
     assert len(await service.skill_history(HistoryRequest(project_id="p", skill_id=first.skill_id))) == 6
     with service._persistence.session(Scope(fields={"project_id": "p"})) as session:
-        family = await session.skills.resolve_family("p", first.skill_id)
+        family = await session.skills.resolve_family(first.skill_id)
         projected = await session.skills.history(family, limit=None, fields=["version_id"])
         assert len(projected) == 6 and set(projected[0]) == {"version_id"}
 
@@ -250,7 +307,7 @@ async def test_unlimited_queries_and_hash_search_past_deleted_rows(service):
     resolved = await service.resolve_skill_version(VersionResolveRequest(project_id="p", skill_hash=visible.skill_hash))
     assert resolved.skill_version_id == visible.skill_version_id
     with service._persistence.session(Scope(fields={"project_id": "p"})) as session:
-        family = await session.skills.resolve_family("p", visible.skill_id)
+        family = await session.skills.resolve_family(visible.skill_id)
         families = []
         versions = []
         version = await session.skills.version(family)

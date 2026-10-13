@@ -13,6 +13,20 @@ from typing import Any
 
 import yaml
 
+from .constant import (
+    METADATA_ALLOWED_TOOLS,
+    METADATA_COMPATIBILITY,
+    METADATA_DOMAIN,
+    METADATA_DOMAINS,
+    METADATA_EXAMPLE_TASKS,
+    METADATA_EXAMPLES,
+    METADATA_KEY,
+    METADATA_LIBRARIES,
+    METADATA_SUMMARY,
+    METADATA_TAGS,
+    METADATA_TOOLING,
+    METADATA_VALUE,
+)
 from .errors import input_too_large, invalid_skill_document
 
 FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
@@ -256,9 +270,9 @@ def parse_skill_document(
     if not description:
         raise invalid_skill_document(version_id=version_id, reason="cannot derive description")
 
-    metadata = frontmatter.get("metadata") or {}
+    metadata = frontmatter.get(METADATA_KEY) or {}
     if not isinstance(metadata, dict):
-        metadata = {"value": metadata}
+        metadata = {METADATA_VALUE: metadata}
 
     inputs = normalize_string_list(frontmatter.get("inputs") or frontmatter.get("input"))
     outputs = normalize_string_list(frontmatter.get("outputs") or frontmatter.get("output"))
@@ -267,46 +281,46 @@ def parse_skill_document(
     if not outputs:
         outputs = extract_markdown_section(body, ["Outputs", "Output", "Returns", "Results"])
 
-    compatibility = normalize_string_list(frontmatter.get("compatibility"))
-    allowed_tools = normalize_string_list(frontmatter.get("allowed-tools") or frontmatter.get("allowed_tools"))
+    compatibility = normalize_string_list(frontmatter.get(METADATA_COMPATIBILITY))
+    allowed_tools = normalize_string_list(frontmatter.get("allowed-tools") or frontmatter.get(METADATA_ALLOWED_TOOLS))
 
     one_line_capability = compact_text(
         str(
             frontmatter.get("one_line_capability")
             or frontmatter.get("capability")
-            or frontmatter.get("summary")
-            or metadata.get("summary")
+            or frontmatter.get(METADATA_SUMMARY)
+            or metadata.get(METADATA_SUMMARY)
             or _first_sentence(description)
         )
     )
 
     domain_tags = _dedupe_preserve_order(
-        normalize_string_list(frontmatter.get("domain"))
-        + normalize_string_list(frontmatter.get("domains"))
-        + normalize_string_list(frontmatter.get("tags"))
+        normalize_string_list(frontmatter.get(METADATA_DOMAIN))
+        + normalize_string_list(frontmatter.get(METADATA_DOMAINS))
+        + normalize_string_list(frontmatter.get(METADATA_TAGS))
         + normalize_string_list(frontmatter.get("category"))
         + normalize_string_list(frontmatter.get("categories"))
-        + normalize_string_list(metadata.get("domain"))
-        + normalize_string_list(metadata.get("domains"))
-        + normalize_string_list(metadata.get("tags"))
+        + normalize_string_list(metadata.get(METADATA_DOMAIN))
+        + normalize_string_list(metadata.get(METADATA_DOMAINS))
+        + normalize_string_list(metadata.get(METADATA_TAGS))
         + extract_markdown_section(body, ["Domain", "Domains", "Tags", "Category"])
     )
 
     tooling = _dedupe_preserve_order(
-        normalize_string_list(frontmatter.get("tooling"))
-        + normalize_string_list(frontmatter.get("libraries"))
+        normalize_string_list(frontmatter.get(METADATA_TOOLING))
+        + normalize_string_list(frontmatter.get(METADATA_LIBRARIES))
         + normalize_string_list(frontmatter.get("dependencies"))
-        + normalize_string_list(metadata.get("tooling"))
-        + normalize_string_list(metadata.get("libraries"))
+        + normalize_string_list(metadata.get(METADATA_TOOLING))
+        + normalize_string_list(metadata.get(METADATA_LIBRARIES))
         + allowed_tools
         + extract_markdown_section(body, ["Tools", "Tooling", "Libraries", "Dependencies"])
     )
 
     example_tasks = _dedupe_preserve_order(
-        normalize_string_list(frontmatter.get("examples"))
-        + normalize_string_list(frontmatter.get("example_tasks"))
-        + normalize_string_list(metadata.get("examples"))
-        + normalize_string_list(metadata.get("example_tasks"))
+        normalize_string_list(frontmatter.get(METADATA_EXAMPLES))
+        + normalize_string_list(frontmatter.get(METADATA_EXAMPLE_TASKS))
+        + normalize_string_list(metadata.get(METADATA_EXAMPLES))
+        + normalize_string_list(metadata.get(METADATA_EXAMPLE_TASKS))
         + extract_markdown_section(body, ["Examples", "Example Tasks", "Use When", "Use Cases"])
     )
 
@@ -327,11 +341,11 @@ def parse_skill_document(
         "inputs": inputs,
         "outputs": outputs,
         "domain_tags": domain_tags,
-        "tooling": tooling,
-        "example_tasks": example_tasks,
-        "compatibility": compatibility,
-        "allowed_tools": allowed_tools,
-        "metadata": metadata,
+        METADATA_TOOLING: tooling,
+        METADATA_EXAMPLE_TASKS: example_tasks,
+        METADATA_COMPATIBILITY: compatibility,
+        METADATA_ALLOWED_TOOLS: allowed_tools,
+        METADATA_KEY: metadata,
         "rendered_snippet": rendered_snippet,
         "skill_id": skill_id,
     }

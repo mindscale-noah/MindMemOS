@@ -2,15 +2,59 @@
 
 import re
 from collections import deque
+from collections.abc import Mapping
 from pathlib import PurePosixPath
 
-from ....persistence.db_services.skill_management.typing import SkillGraphNodeRecord
+from ....persistence.db_services.graphs.typing import SkillGraphNodeRecord
 from ....scene.typing import ProvidedSceneRecord, SceneInput, SemanticDependency
+from .constant import (
+    METADATA_ALLOWED_TOOLS,
+    METADATA_COMPATIBILITY,
+    METADATA_EXTERNAL_DEPENDENCIES,
+    METADATA_INTENT,
+    METADATA_INTENT_SIGNATURE,
+    METADATA_KEY,
+    METADATA_LIBRARIES,
+    METADATA_LOCAL_SCRIPTS,
+    METADATA_TOOLING,
+)
 from .parsing import extract_frontmatter, extract_markdown_section, normalize_string_list
-from .typing import DerivedNodeMetadata
+from .typing import DerivedNodeMetadata, JointEdgeDraft
 
 SCRIPT_SUFFIXES = frozenset({".py", ".sh", ".js", ".ts", ".mjs", ".cjs", ".rb", ".r", ".ps1"})
 """Executable resource suffixes represented as paths, without reading or running their contents."""
+
+
+def scene_flow_edges(scene: SceneInput, node_ids: Mapping[str, str], *, weight: float) -> list[JointEdgeDraft]:
+    """Merge transitions to each target Scene into one directed flow edge.
+
+    Args:
+        scene: Source Scene with validated next-Scene rules.
+        node_ids: Local Scene IDs mapped to graph node IDs for this member.
+        weight: Strength assigned to every generated flow edge.
+
+    Returns:
+        Flow edges in first-target order, excluding terminal targets and self-loops.
+    """
+    targets: dict[str, list[str]] = {}
+    for rule in scene.next_scene_rules:
+        if not rule.target.startswith("END_") and rule.target != scene.scene_id:
+            targets.setdefault(rule.target, []).append(rule.condition)
+    edges: list[JointEdgeDraft] = []
+    for target, conditions in targets.items():
+        condition = "" if "" in conditions else " OR ".join(f"({value})" for value in dict.fromkeys(conditions))
+        if len(conditions) == 1:
+            condition = conditions[0]
+        edges.append(
+            {
+                "source": node_ids[scene.scene_id],
+                "target": node_ids[target],
+                "type": "flow",
+                "weight": weight,
+                "condition": condition,
+            }
+        )
+    return edges
 
 
 def _script_path(value):
@@ -84,8 +128,8 @@ def document_features(skill, parsed, *, member_id, family_id):
     scripts = _merge(scripts, [path for item in declared if (path := _script_path(item.strip("`")))])
     dependency_values = [
         frontmatter.get("dependencies"),
-        frontmatter.get("libraries"),
-        parsed["metadata"].get("libraries"),
+        frontmatter.get(METADATA_LIBRARIES),
+        parsed[METADATA_KEY].get(METADATA_LIBRARIES),
         extract_markdown_section(body, ["Dependencies", "Libraries"]),
     ]
     dependencies = [dependency for value in dependency_values for dependency in _document_dependencies(value)]
@@ -97,18 +141,18 @@ def document_features(skill, parsed, *, member_id, family_id):
             scripts = _merge(scripts, [path])
         else:
             external.append(dependency)
-    signature = frontmatter.get("intent_signature", parsed["metadata"].get("intent_signature", ""))
+    signature = frontmatter.get(METADATA_INTENT_SIGNATURE, parsed[METADATA_KEY].get(METADATA_INTENT_SIGNATURE, ""))
     metadata = DerivedNodeMetadata(
         collection_skill_id=member_id,
         family_id=family_id,
         intent_signature=_bounded(signature.strip(), 1000) if isinstance(signature, str) else "",
         local_scripts=tuple(scripts),
         external_dependencies=tuple(_merge([], external)),
-        compatibility=tuple(parsed["compatibility"]),
-        allowed_tools=tuple(parsed["allowed_tools"]),
+        compatibility=tuple(parsed[METADATA_COMPATIBILITY]),
+        allowed_tools=tuple(parsed[METADATA_ALLOWED_TOOLS]),
     )
     declaration_fragments = {item for value in dependency_values for item in normalize_string_list(value)}
-    tooling = _merge([item for item in parsed["tooling"] if item not in declaration_fragments], external)
+    tooling = _merge([item for item in parsed[METADATA_TOOLING] if item not in declaration_fragments], external)
     return metadata, tooling
 
 
@@ -126,19 +170,19 @@ def merge_skill_semantics(node: SkillGraphNodeRecord, record: ProvidedSceneRecor
     local, external = _dependencies(record.skill.dependencies)
     metadata = metadata.model_copy(
         update={
-            "intent": record.skill.goal,
-            "intent_signature": record.skill.intent_signature or metadata.intent_signature,
-            "local_scripts": tuple(_merge(metadata.local_scripts, local)),
-            "external_dependencies": tuple(_merge(metadata.external_dependencies, external)),
+            METADATA_INTENT: record.skill.goal,
+            METADATA_INTENT_SIGNATURE: record.skill.intent_signature or metadata.intent_signature,
+            METADATA_LOCAL_SCRIPTS: tuple(_merge(metadata.local_scripts, local)),
+            METADATA_EXTERNAL_DEPENDENCIES: tuple(_merge(metadata.external_dependencies, external)),
         }
     )
     return node.model_copy(
         update={
             "inputs": _merge(node.inputs, record.skill.inputs),
             "outputs": _merge(node.outputs, record.skill.outputs),
-            "tooling": _merge(node.tooling, (*record.skill.tooling, *external)),
+            METADATA_TOOLING: _merge(node.tooling, (*record.skill.tooling, *external)),
             "domain_tags": _merge(node.domain_tags, record.skill.tags),
-            "metadata": metadata.model_dump(mode="json"),
+            METADATA_KEY: metadata.model_dump(mode="json"),
         }
     )
 
@@ -234,9 +278,9 @@ def scene_features(scene: SceneInput, record: ProvidedSceneRecord, *, member_id:
         "one_line_capability": scene.name,
         "inputs": _merge([], scene.inputs),
         "outputs": _merge([], scene.outputs),
-        "tooling": _merge(scene.tooling, external),
+        METADATA_TOOLING: _merge(scene.tooling, external),
         "domain_tags": _merge([], scene.tags),
-        "metadata": metadata.model_dump(mode="json"),
+        METADATA_KEY: metadata.model_dump(mode="json"),
     }
 
 

@@ -15,6 +15,6 @@
 
 ## 图存储与本地数据库
 
-图、节点、边和快照按同一个 `graph_id` 关联。图谱版本继续以 UUID `graph_version_id` 作为内部关联键，`public_version_id` 保留 `skgv-` 表示；对外 API 使用既有快照协议。
+图、节点、边和快照按同一个 `graph_id` 关联。图谱版本只使用一个 `graph_version_id`，数据库以 `Text` 保存完整的 `skgv-` 字符串。当前版本指针、节点和边的版本引用，以及 Python 和 HTTP API 均使用同一个值；不再维护独立的 `public_version_id`，查询时不拆除前缀或转换为 UUID。
 
 独立 Skill 服务尚未上线，不保留旧图表的迁移、双身份桥接或滚动部署逻辑。已有本地数据库与当前结构冲突时，按项目流程只清理该 Skill 服务本地数据库并重启。此规则不适用于 `src/mindmemos/` 的商用云服务，也不得清理云数据。

@@ -1,10 +1,12 @@
 """Transactional central identities, owned snapshots, and reference checks."""
 
+from collections.abc import Sequence
 from datetime import datetime
-from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
+
+from mindmemos_skill.common.ids import generate_id, generate_stable_id
 
 from ....common.time_utils import utcnow
 from ....errors import (
@@ -15,12 +17,14 @@ from ....errors import (
     SkillVersionNotFoundError,
 )
 from ....infra.database import Database, Filter
+from ....infra.database.scoped import ScopedDatabase
 from ....skill import Skill, SkillSnapshot
+from ...access import _project_id_from_database
 from ...constants import (
     SKILL_VERSIONS_TABLE,
     SKILLS_TABLE,
 )
-from .typing import SceneData, SkillRecord, SkillVersionRecord, SkillVersionSummary, VersionNaming
+from .typing import SceneData, SkillRecord, SkillVersionRecord, SkillVersionSummary, SkillVersionWrite, VersionNaming
 from .versions import next_label
 
 DEFAULT_HISTORY_FIELDS = (
@@ -36,16 +40,19 @@ DEFAULT_HISTORY_FIELDS = (
     "created_at",
 )
 
+VERSION_VISIBILITY_BATCH_SIZE = 500
+"""Maximum version IDs per visibility query, keeping SQL parameter counts bounded."""
+
 
 class SkillDataService:
     """Implement central repository operations on a borrowed database.
 
     Args:
-        database: Database with the persistence tables already initialized.
+        database: Database | ScopedDatabase with the persistence tables already initialized.
         prefixed_ids: Whether new Skill identities use the prefixed format.
     """
 
-    def __init__(self, database: Database, *, prefixed_ids: bool = True):
+    def __init__(self, database: Database | ScopedDatabase, *, prefixed_ids: bool = True):
         self.database = database
         self.prefixed_ids = prefixed_ids
 
@@ -55,7 +62,7 @@ class SkillDataService:
         Returns:
             New immutable version identity.
         """
-        return ("skv-" if self.prefixed_ids else "v_") + uuid4().hex
+        return generate_id("skv-" if self.prefixed_ids else "v_")
 
     async def get_scene_data(self, version_id: str) -> SceneData | None:
         """Read a valid exact-version cache; storage and authorization failures propagate.
@@ -77,17 +84,17 @@ class SkillDataService:
         except ValidationError:
             return None
 
-    async def set_scene_data(self, project_id: str, version_id: str, data: SceneData) -> None:
+    async def set_scene_data(self, version_id: str, data: SceneData) -> None:
         """Merge only the Scene cache using the version's conditional metadata revision.
 
         Args:
-            project_id: Authorized project boundary.
             version_id: Exact source version.
             data: Newly validated complete cache.
 
         Raises:
             SkillConflictError: Version metadata changed before the update.
         """
+        project_id = _project_id_from_database(self.database)
         data = SceneData.model_validate(data.model_dump())
         version = await self.get(version_id)
         async with self.database.transaction() as tx:
@@ -106,11 +113,11 @@ class SkillDataService:
             if changed != 1:
                 raise SkillConflictError("Version metadata changed concurrently")
 
-    async def add(self, record: SkillVersionRecord) -> None:
+    async def add(self, record: SkillVersionWrite) -> None:
         """Insert one version; duplicate identities raise an integrity error.
 
         Args:
-            record: Complete version, including its local lineage.
+            record: Version input and lineage; the active scope supplies its project.
         """
         (await self.database.insert(SKILL_VERSIONS_TABLE, [record.model_dump(mode="python")]))
 
@@ -126,15 +133,73 @@ class SkillDataService:
         Raises:
             SkillNotFoundError: The version or its visible family is absent.
         """
+        _, version = await self.get_with_owner(version_id)
+        return version
+
+    async def get_with_owner(self, version_id: str) -> tuple[SkillRecord, SkillVersionRecord]:
+        """Read an exact version and its visible owner once within the active scope.
+
+        Args:
+            version_id: Exact version identity, never an alias or prefix.
+
+        Returns:
+            The owning Skill and its complete stored version.
+
+        Raises:
+            SkillNotFoundError: The version or its visible family is absent.
+        """
         row = await self.database.get(SKILL_VERSIONS_TABLE, version_id)
         if row is None:
             raise SkillNotFoundError(f"Version not found: {version_id}")
         family = await self.database.get(SKILLS_TABLE, {"project_id": row["project_id"], "skill_id": row["skill_id"]})
         if family is None or family["is_deleted"]:
             raise SkillNotFoundError(f"Version not found: {version_id}")
-        return SkillVersionRecord.model_validate(row)
+        return SkillRecord.model_validate(family), SkillVersionRecord.model_validate(row)
 
-    async def add_skill(self, skill: Skill, record: SkillVersionRecord) -> SkillVersionRecord:
+    async def validate_version_visibility(self, version_ids: Sequence[str]) -> None:
+        """Require all exact versions and their owners to be visible without loading content.
+
+        Args:
+            version_ids: Exact version identities within the active project; duplicates are ignored.
+
+        Raises:
+            SkillNotFoundError: Any version or its visible owning Skill is absent.
+        """
+        identities = list(dict.fromkeys(version_ids))
+        if not identities:
+            return
+        project_id = _project_id_from_database(self.database)
+        for start in range(0, len(identities), VERSION_VISIBILITY_BATCH_SIZE):
+            batch = identities[start : start + VERSION_VISIBILITY_BATCH_SIZE]
+            versions = await self.database.select(
+                SKILL_VERSIONS_TABLE,
+                filters=[
+                    Filter(field="project_id", value=project_id),
+                    Filter(field="version_id", op="in", value=batch),
+                ],
+                fields=["version_id", "skill_id"],
+                limit=None,
+            )
+            owners = {row["version_id"]: row["skill_id"] for row in versions}
+            for version_id in batch:
+                if version_id not in owners:
+                    raise SkillNotFoundError(f"Version not found: {version_id}")
+            families = await self.database.select(
+                SKILLS_TABLE,
+                filters=[
+                    Filter(field="project_id", value=project_id),
+                    Filter(field="skill_id", op="in", value=list(set(owners.values()))),
+                    Filter(field="is_deleted", value=False),
+                ],
+                fields=["skill_id"],
+                limit=None,
+            )
+            visible = {row["skill_id"] for row in families}
+            for version_id in batch:
+                if owners[version_id] not in visible:
+                    raise SkillNotFoundError(f"Version not found: {version_id}")
+
+    async def add_skill(self, skill: Skill, record: SkillVersionWrite) -> SkillVersionRecord:
         """Insert source content with caller-owned identity and version metadata.
 
         Args:
@@ -148,6 +213,8 @@ class SkillDataService:
         """
         values = record.model_dump(mode="python")
         values.update(skill.snapshot().model_dump(mode="python"))
+        if "project_id" not in values:
+            values["project_id"] = _project_id_from_database(self.database)
         stored = SkillVersionRecord.model_validate(values)
         (await self.add(stored))
         return stored
@@ -165,19 +232,7 @@ class SkillDataService:
             record = await self.get(version_id)
         except SkillNotFoundError:
             return None
-        snapshot = SkillSnapshot(
-            implementation=record.implementation,
-            config_schema_version=record.config_schema_version,
-            config=record.config,
-            name=record.name,
-            description=record.description,
-            standard_format=record.standard_format,
-            content=record.content,
-            content_hash=record.content_hash,
-            resources=record.resources,
-            skill_hash=record.skill_hash,
-        )
-        return Skill.from_snapshot(snapshot)
+        return Skill.from_snapshot(record.snapshot())
 
     async def list_versions(
         self, skill_id: str, *, limit: int | None = None, offset: int = 0
@@ -208,16 +263,16 @@ class SkillDataService:
                 visible.append(SkillVersionRecord.model_validate(row))
         return visible
 
-    async def resolve_family(self, project_id: str, reference: str) -> SkillRecord:
+    async def resolve_family(self, reference: str) -> SkillRecord:
         """Resolve an exact ID/alias, then a unique ID prefix.
 
         Args:
-            project_id: Local project scope.
             reference: Skill ID, alias, or unique ID prefix.
 
         Returns:
             The resolved central record.
         """
+        project_id = _project_id_from_database(self.database)
         candidates = await self._rows(
             SKILLS_TABLE,
             {"project_id": project_id, "is_deleted": False},
@@ -266,16 +321,16 @@ class SkillDataService:
             raise SkillConflictError(f"Ambiguous Skill prefix {reference!r}: {candidates}")
         return SkillRecord.model_validate(matches[0])
 
-    async def resolve(self, project_id: str, reference: str) -> tuple[SkillRecord, SkillVersionRecord]:
+    async def resolve(self, reference: str) -> tuple[SkillRecord, SkillVersionRecord]:
         """Resolve a family alias or a unique immutable version prefix.
 
         Args:
-            project_id: Authorized project boundary.
             reference: Alias, Skill ID or prefix, or Skill version ID or prefix.
 
         Returns:
             Owning family and selected version; a family selects its active version.
         """
+        project_id = _project_id_from_database(self.database)
         if reference.startswith(("skv-", "v_")):
             if reference in ("skv-", "v_"):
                 raise SkillVersionNotFoundError("Skill version prefix is incomplete")
@@ -310,13 +365,12 @@ class SkillDataService:
             if len(versions) > 1:
                 raise SkillConflictError("Ambiguous Skill version prefix")
             version = SkillVersionRecord.model_validate(versions[0])
-            return (await self.resolve_family(project_id, version.skill_id)), version
-        family = await self.resolve_family(project_id, reference)
+            return (await self.resolve_family(version.skill_id)), version
+        family = await self.resolve_family(reference)
         return family, (await self.version(family))
 
     async def list_skills(
         self,
-        project_id: str,
         *,
         limit: int | None,
         offset: int,
@@ -327,13 +381,13 @@ class SkillDataService:
         """List a page of central identities.
 
         Args:
-            project_id: Local project scope.
             limit: Maximum records.
             offset: Number of sorted records to skip.
             snapshot_at: Inclusive creation cutoff for cursor paging.
             after_created_at: Last returned creation time, if continuing a cursor.
             after_skill_id: Last returned Skill ID, if continuing a cursor.
         """
+        project_id = _project_id_from_database(self.database)
         if snapshot_at is None:
             rows = await self.database.select(
                 SKILLS_TABLE,
@@ -406,7 +460,6 @@ class SkillDataService:
 
     async def resolve_version_hash(
         self,
-        project_id: str,
         content_hash: str | None = None,
         *,
         skill_hash: str | None = None,
@@ -416,7 +469,6 @@ class SkillDataService:
         """Resolve a unique visible version satisfying every supplied constraint.
 
         Args:
-            project_id: Authorized project boundary.
             content_hash: Optional exact-text digest.
             skill_hash: Optional complete-source digest.
             skill_id: Optional exact owning family identity.
@@ -430,6 +482,7 @@ class SkillDataService:
             SkillVersionNotFoundError: No visible version matches all constraints.
             SkillAmbiguousVersionError: Multiple visible versions match.
         """
+        project_id = _project_id_from_database(self.database)
         if content_hash is None and skill_hash is None and version_id is None:
             raise ValueError("Supply a hash or version_id")
         filters = {"project_id": project_id}
@@ -529,7 +582,6 @@ class SkillDataService:
     async def register(
         self,
         *,
-        project_id: str,
         name: str,
         alias: str | None,
         source: str | None,
@@ -542,7 +594,6 @@ class SkillDataService:
         """Atomically register a new identity and its initial snapshot.
 
         Args:
-            project_id: Local project scope.
             name: Display name.
             alias: Optional exact shortcut.
             source: Initial provenance reference.
@@ -555,10 +606,11 @@ class SkillDataService:
         Returns:
             Newly registered family with its initial version selected.
         """
+        project_id = _project_id_from_database(self.database)
         naming = naming or VersionNaming()
         if naming.version_bump != "patch":
             raise ValueError("Initial registration has no version to increment")
-        skill_id = ("sk-" if self.prefixed_ids else "sk_") + uuid4().hex
+        skill_id = generate_id("sk-" if self.prefixed_ids else "sk_")
         version_id = self.new_version_id()
         record = SkillRecord(
             project_id=project_id,
@@ -646,12 +698,11 @@ class SkillDataService:
             raise SkillConflictError("Version identity or label conflicts with an existing version") from exc
 
     async def algorithm_publication(
-        self, project_id: str, run_id: str, input_hash: str, *, operation: str = "training"
+        self, run_id: str, input_hash: str, *, operation: str = "training"
     ) -> SkillVersionRecord | None:
         """Find an already published run without changing the active version.
 
         Args:
-            project_id: Repository owning the run.
             run_id: Stable run identity shared by execution attempts.
             input_hash: Exact request and pipeline identity.
             operation: Publication namespace, shared by retries of the same operation.
@@ -662,7 +713,8 @@ class SkillDataService:
         Raises:
             SkillConflictError: The run was previously published with different inputs.
         """
-        suffix = uuid5(NAMESPACE_URL, f"{operation}:{project_id}:{run_id}").hex
+        project_id = _project_id_from_database(self.database)
+        suffix = generate_stable_id(f"{operation}:{project_id}:{run_id}")
         identifier = ("skv-" if self.prefixed_ids else "v_") + suffix
         version = None
         for candidate_id in (identifier, ("v_" if self.prefixed_ids else "skv-") + suffix):
@@ -714,14 +766,14 @@ class SkillDataService:
         Raises:
             SkillConflictError: The active selection changed or the run identity was reused.
         """
-        existing = await self.algorithm_publication(skill.project_id, run_id, input_hash, operation=operation)
+        existing = await self.algorithm_publication(run_id, input_hash, operation=operation)
         if existing is not None:
             if not self._matches_algorithm_result(existing, skill, base_version_id, snapshot):
                 raise SkillConflictError("Algorithm publication parent or result changed")
             return existing
-        identifier = ("skv-" if self.prefixed_ids else "v_") + uuid5(
-            NAMESPACE_URL, f"{operation}:{skill.project_id}:{run_id}"
-        ).hex
+        identifier = generate_stable_id(
+            f"{operation}:{skill.project_id}:{run_id}", "skv-" if self.prefixed_ids else "v_"
+        )
         version = self._new_version(
             skill, snapshot, identifier, [base_version_id], f"{operation.capitalize()} run {run_id}"
         )
@@ -744,7 +796,7 @@ class SkillDataService:
                 return await SkillDataService(tx).get(identifier)
         except (IntegrityError, SkillConflictError):
             # A concurrent identical publication may have committed while acquiring the owner lock.
-            existing = await self.algorithm_publication(skill.project_id, run_id, input_hash, operation=operation)
+            existing = await self.algorithm_publication(run_id, input_hash, operation=operation)
             if existing is not None and self._matches_algorithm_result(existing, skill, base_version_id, snapshot):
                 return existing
             raise SkillConflictError("Active version or algorithm publication changed") from None

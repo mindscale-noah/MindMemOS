@@ -4,12 +4,16 @@ import math
 import re
 from collections import Counter, defaultdict
 
+from ....persistence.db_services.graphs.typing import GraphNodeType
+from .constant import (
+    METADATA_EVIDENCE,
+)
 from .linking import signature_tokens
 
 
 def _evidence(edge):
     """Read only deterministic linker evidence, retaining unknown formats conservatively."""
-    match = re.search(r"consumes:\s*(.+?)\.?\s*$", edge.metadata.get("evidence", ""))
+    match = re.search(r"consumes:\s*(.+?)\.?\s*$", edge.metadata.get(METADATA_EVIDENCE, ""))
     if not match or match[1].casefold() == "compatible i/o":
         return []
     return [value.strip() for value in match[1].split(",") if value.strip()]
@@ -34,7 +38,7 @@ def filter_edges(nodes, edges, config):
         Query-view edges; non-dependencies and unparseable evidence are retained.
         The top-k cap uses the union of both Scene endpoints' choices.
     """
-    scenes = {node.node_id for node in nodes if node.node_type == "scene"}
+    scenes = {node.node_id for node in nodes if node.node_type == GraphNodeType.SCENE}
     mode = config.dependency_filter
     if config.mode == "skill_only" or not scenes or mode == "none":
         return list(edges)

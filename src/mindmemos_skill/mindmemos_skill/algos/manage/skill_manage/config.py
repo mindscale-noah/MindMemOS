@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ....agents import AgentConfig, OpenAIChatConfig
 from ....infra.embedding import OpenAIEmbeddingConfig
-from ....persistence.db_services.skill_management.config import EmbeddingProfile as EmbeddingProfile
+from ....persistence.db_services.graphs.config import EmbeddingProfile as EmbeddingProfile
 
 
 class RetrievalStrategyConfig(BaseModel):
@@ -89,6 +89,9 @@ class SkillManageConfig(RetrievalStrategyConfig):
     build_scene: bool = True
     """Include validated Scene nodes; False builds only Skill nodes."""
 
+    scene_flow_weight: float = Field(default=0.3, gt=0, le=1, allow_inf_nan=False)
+    """Weight of directed transitions between Scenes in one Skill; must be in (0, 1]."""
+
     llm_linking: bool = True
     """Infer model relationships between Skill nodes; deterministic edges remain enabled."""
 
@@ -100,6 +103,9 @@ class SkillManageConfig(RetrievalStrategyConfig):
 
     enrich_skill: bool = False
     """Fill missing source-grounded Skill fields before node embedding."""
+
+    enrichment_concurrency: int = Field(default=4, gt=0, strict=True)
+    """Maximum number of Skill nodes enriched concurrently during one graph build."""
 
     enrichment_failure: Literal["error", "rules"] = "error"
     """Raise on enrichment failure, or explicitly keep rule fields with a warning."""

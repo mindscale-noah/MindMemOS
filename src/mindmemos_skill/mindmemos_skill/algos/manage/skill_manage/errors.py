@@ -10,7 +10,7 @@ class SceneGraphFailure(StrEnum):
     """Invalid source, bindings, typed records or configuration."""
 
     INSUFFICIENT_SOURCE = "SCENE_GRAPH_INSUFFICIENT_SOURCE"
-    """The document cannot justify a Scene; do not invent one or silently disable it."""
+    """The document cannot justify a Scene; the Pipeline retains its Skill without inventing a Scene."""
 
     MODEL_FAILED = "SCENE_GRAPH_MODEL_FAILED"
     """Extraction, linking, rewriting or embedding failed; no implicit fallback."""

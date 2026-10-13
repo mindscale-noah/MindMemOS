@@ -22,7 +22,7 @@ from mindmemos_skill.logging import get_logger, log_context, stage, traced
 from mindmemos_skill.logging.context import _context
 from mindmemos_skill.logging.tracing import bind_tracer
 from mindmemos_skill.persistence.constants import SKILL_TASKS_TABLE
-from mindmemos_skill.persistence.db_services.tasks import TaskDataService
+from mindmemos_skill.persistence.db_services.tasks import TaskWorkerService
 from mindmemos_skill.persistence.store import SkillPersistence, SkillPersistenceConfig
 from opentelemetry.sdk.trace import SpanProcessor
 from pydantic import ValidationError
@@ -37,7 +37,7 @@ async def task_store(tmp_path):
     database = SQLiteDatabase(SQLiteConfig(url=f"sqlite:///{tmp_path / 'tasks.db'}"))
     await SkillPersistence(SkillPersistenceConfig(), database=database).initialize_storage()
     try:
-        yield TaskDataService(database)
+        yield TaskWorkerService(database)
     finally:
         await database.close()
 
@@ -103,7 +103,7 @@ async def test_saved_trace_parent_headers_recovery_and_attempt_timing(task_store
     assert len(roots) == 3
     assert all(span.parent.span_id == submit.get_span_context().span_id for span in roots)
     assert all(span.context.trace_id == submit.get_span_context().trace_id for span in spans)
-    logs = await task_store.logs("project", spec.task_id)
+    logs = await task_store.scoped(Scope(fields={"project_id": "project"})).logs(spec.task_id)
     assert all(log.payload["request_id"] == "request-original" for log in logs)
     assert all(log.attempt == 2 for log in logs)
     assert any(log.payload["message"].startswith("stage.completed | ") for log in logs)
@@ -134,7 +134,8 @@ async def test_result_write_failure_remains_recoverable(task_store, recorder, mo
     assert record.status == TaskStatus.RUNNING
     assert record.finished_at is None
     assert not any(
-        log.payload["message"].startswith("task.finished | ") for log in await task_store.logs("project", spec.task_id)
+        log.payload["message"].startswith("task.finished | ")
+        for log in await task_store.scoped(Scope(fields={"project_id": "project"})).logs(spec.task_id)
     )
     assert any("Result storage unavailable" in (row.exc_text or "") for row in caplog.records)
     await manager.close()

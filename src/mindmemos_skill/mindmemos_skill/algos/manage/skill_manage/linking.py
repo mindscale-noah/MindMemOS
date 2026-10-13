@@ -7,8 +7,14 @@ from itertools import combinations
 from math import fsum, hypot
 from typing import Any, Iterable, Mapping
 
-from ....persistence.db_services.skill_management.typing import SkillGraphNodeRecord
+from ....persistence.db_services.graphs.typing import GraphNodeType, SkillGraphNodeRecord
 from .config import JointLinkingConfig
+from .constant import (
+    METADATA_EXAMPLE_TASKS,
+    METADATA_KEY,
+    METADATA_TOOLING,
+    METADATA_VALUE,
+)
 from .typing import DerivedNodeMetadata
 
 TOKEN_STOPWORDS = frozenset(
@@ -47,7 +53,7 @@ TOKEN_STOPWORDS = frozenset(
         "text",
         "the",
         "to",
-        "value",
+        METADATA_VALUE,
     }
 )
 
@@ -203,7 +209,7 @@ def joint_candidates(
     query_vectors: list[list[float]],
     config: JointLinkingConfig,
     *,
-    source_type: str | None = None,
+    source_type: GraphNodeType | None = None,
 ) -> dict[str, list[str]]:
     """Combine bounded dense, lexical and I/O routes within the explicit joint snapshot.
 
@@ -294,11 +300,11 @@ def joint_relation_payload(node: SkillGraphNodeRecord) -> dict[str, Any]:
         "description": node.description,
         "one_line_capability": node.one_line_capability,
         "domain_tags": node.domain_tags,
-        "example_tasks": node.example_tasks,
+        METADATA_EXAMPLE_TASKS: node.example_tasks,
         "inputs": node.inputs,
         "outputs": node.outputs,
-        "tooling": node.tooling,
-        "metadata": metadata.model_dump(mode="json"),
+        METADATA_TOOLING: node.tooling,
+        METADATA_KEY: metadata.model_dump(mode="json"),
     }
 
 
@@ -422,15 +428,15 @@ def joint_model_candidates(
     """
     candidates = {}
     if skill_linking:
-        skills = [node for node in nodes if node.node_type == "skill"]
+        skills = [node for node in nodes if node.node_type == GraphNodeType.SKILL]
         vectors = (
-            [vector for node, vector in zip(nodes, query_vectors, strict=True) if node.node_type == "skill"]
+            [vector for node, vector in zip(nodes, query_vectors, strict=True) if node.node_type == GraphNodeType.SKILL]
             if config.dense_candidates
             else []
         )
         candidates.update(joint_candidates(skills, vectors, config))
     if scene_linking:
-        candidates.update(joint_candidates(nodes, query_vectors, config, source_type="scene"))
+        candidates.update(joint_candidates(nodes, query_vectors, config, source_type=GraphNodeType.SCENE))
     return {
         source: [target for target in targets if frozenset((source, target)) not in dependency_pairs][
             : config.model_candidates

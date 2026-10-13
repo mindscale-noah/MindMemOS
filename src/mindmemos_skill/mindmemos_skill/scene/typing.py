@@ -3,6 +3,7 @@
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 Nonempty = Annotated[str, Field(min_length=1)]
 
@@ -32,7 +33,7 @@ class SceneTransition(SceneContractModel):
             value: Local peer ID or named terminal.
         """
         if value in ("END_", "YIELD_"):
-            raise ValueError("Terminal prefixes require a nonempty outcome")
+            raise PydanticCustomError("scene_terminal_outcome_missing", "Terminal prefixes require a nonempty outcome")
         return value
 
 
@@ -134,27 +135,38 @@ class ProvidedSceneRecord(SceneContractModel):
         steps = {step.logic_step_id: step for step in self.logic_steps}
         all_ids = [scene.scene_id for scene in self.scenes] + [step.logic_step_id for step in self.logic_steps]
         if len(set(all_ids)) != len(all_ids) or any(key.startswith(("END_", "YIELD_")) for key in all_ids):
-            raise ValueError("Local IDs must be unique and cannot use terminal prefixes")
+            raise PydanticCustomError(
+                "scene_local_ids_invalid", "Local IDs must be unique and cannot use terminal prefixes"
+            )
         if self.entry_scene_id not in scene_ids:
-            raise ValueError("Skill entry must identify a Scene in this record")
+            raise PydanticCustomError("scene_entry_missing", "Skill entry must identify a Scene in this record")
         owned = []
         for scene in self.scenes:
             contained = set(scene.contained_logic_steps)
             owned.extend(scene.contained_logic_steps)
             if scene.entry_logic_step_id not in contained or not contained <= steps.keys():
-                raise ValueError("Scene entry and contained steps must belong to this Scene")
+                raise PydanticCustomError(
+                    "scene_step_ownership_invalid", "Scene entry and contained steps must belong to this Scene"
+                )
             if any(
                 rule.target not in scene_ids and not rule.target.startswith("END_") for rule in scene.next_scene_rules
             ):
-                raise ValueError("Scene transitions require a peer Scene or END_* terminal")
+                raise PydanticCustomError(
+                    "scene_transition_invalid", "Scene transitions require a peer Scene or END_* terminal"
+                )
             for key in contained:
                 if any(
                     rule.target not in contained and not rule.target.startswith("YIELD_")
                     for rule in steps[key].next_step_rules
                 ):
-                    raise ValueError("Step transitions require a same-Scene step or YIELD_* terminal")
+                    raise PydanticCustomError(
+                        "scene_step_transition_invalid",
+                        "Step transitions require a same-Scene step or YIELD_* terminal",
+                    )
         if len(owned) != len(set(owned)) or set(owned) != steps.keys():
-            raise ValueError("Every logic step must belong to exactly one Scene")
+            raise PydanticCustomError(
+                "scene_step_assignment_invalid", "Every logic step must belong to exactly one Scene"
+            )
         self._validate_flow(
             self.entry_scene_id,
             {scene.scene_id: tuple(rule.target for rule in scene.next_scene_rules) for scene in self.scenes},
@@ -189,9 +201,9 @@ class ProvidedSceneRecord(SceneContractModel):
             return seen
 
         if reachable([entry], transitions) != transitions.keys():
-            raise ValueError("Every node must be reachable from its owning entry")
+            raise PydanticCustomError("scene_node_unreachable", "Every node must be reachable from its owning entry")
         if reachable(terminating, reverse) != transitions.keys():
-            raise ValueError("Every node must have a path to a terminal outcome")
+            raise PydanticCustomError("scene_terminal_unreachable", "Every node must have a path to a terminal outcome")
 
 
 class SceneExtractionResponse(SceneContractModel):
@@ -207,5 +219,5 @@ class SceneExtractionResponse(SceneContractModel):
     def validate_status(self):
         """Reject success without a record or insufficient source with invented actions."""
         if (self.status == "ok") != (self.record is not None):
-            raise ValueError("Extraction status and record disagree")
+            raise PydanticCustomError("scene_status_mismatch", "Extraction status and record disagree")
         return self

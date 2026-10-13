@@ -1,9 +1,12 @@
 # Skill 图存储：当前版本指针与不可变快照
 
 本文件说明 `mindmemos_skill` 当前实现的数据结构。建表定义以
-`src/mindmemos_skill/mindmemos_skill/persistence/db_services/skill_management/tables.py` 为准。
+`src/mindmemos_skill/mindmemos_skill/persistence/db_services/graphs/tables.py` 为准。
 所有图表以 `project_id` 隔离项目，以 `(project_id, graph_id)` 标识一张逻辑图。
 `actor_id` 仅记录创建者，不参与数据隔离。
+图的 `graph_id` 与快照的 `graph_version_id` 都以 `Text` 存储完整带前缀的 ID。
+`current_version_id` 和节点、边的 `graph_version_id` 同样是 `Text`，直接引用完整
+`skgv-…` 值。快照不再单独保存 `public_version_id`。
 
 ## 四张核心表
 

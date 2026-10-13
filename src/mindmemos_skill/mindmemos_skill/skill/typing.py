@@ -4,6 +4,7 @@ from typing import Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
+from pydantic_core import to_jsonable_python
 
 from .content import content_hash, decode_resources, encode_resources, skill_hash, validate_resource_paths
 
@@ -38,7 +39,7 @@ def parse_skill_header(content: str) -> tuple[str, str, dict[str, JsonValue]]:
     if not isinstance(description, str) or not description.strip():
         raise ValueError("SKILL.md frontmatter requires a nonempty description")
     extra = TypeAdapter(dict[str, JsonValue]).validate_python(
-        {key: value for key, value in parsed.items() if key not in {"name", "description"}}
+        to_jsonable_python({key: value for key, value in parsed.items() if key not in {"name", "description"}})
     )
     return name.strip(), description.strip(), extra
 

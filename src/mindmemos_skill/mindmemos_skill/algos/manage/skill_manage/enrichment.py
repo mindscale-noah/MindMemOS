@@ -4,7 +4,13 @@ import json
 from time import perf_counter
 
 from ....common.json import parse_model
-from ....persistence.db_services.skill_management.writer import graph_digest
+from ....persistence.db_services.graphs.writer import graph_digest
+from .constant import (
+    METADATA_EXAMPLE_TASKS,
+    METADATA_INTENT,
+    METADATA_KEY,
+    METADATA_TOOLING,
+)
 from .errors import SceneGraphError, SceneGraphFailure
 from .extraction import SceneExtractor
 from .typing import DerivedNodeMetadata, ExtractionSummary, SkillEnrichment
@@ -82,12 +88,12 @@ class SkillEnricher(SceneExtractor):
                     "one_line_capability": node.one_line_capability or fields.one_line_capability,
                     "inputs": node.inputs or _items(fields.inputs),
                     "outputs": node.outputs or _items(fields.outputs),
-                    "tooling": node.tooling or _items(fields.tooling),
+                    METADATA_TOOLING: node.tooling or _items(fields.tooling),
                     "domain_tags": node.domain_tags or _items(fields.domain_tags),
-                    "example_tasks": node.example_tasks or _items(fields.example_tasks),
-                    "metadata": metadata.model_copy(update={"intent": metadata.intent or fields.intent}).model_dump(
-                        mode="json"
-                    ),
+                    METADATA_EXAMPLE_TASKS: node.example_tasks or _items(fields.example_tasks),
+                    METADATA_KEY: metadata.model_copy(
+                        update={METADATA_INTENT: metadata.intent or fields.intent}
+                    ).model_dump(mode="json"),
                 }
             )
         finally:

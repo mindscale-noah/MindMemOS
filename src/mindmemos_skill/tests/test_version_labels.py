@@ -33,7 +33,6 @@ async def service(tmp_path):
 async def register(service, **options):
     with service.repository.persistence.session(Scope(fields={"project_id": service.default_project_id})) as scoped:
         family = await scoped.skills.register(
-            project_id=service.default_project_id,
             name="Example",
             alias=None,
             source=None,
@@ -46,7 +45,7 @@ async def register(service, **options):
 
 async def commit(service, first, **options):
     with service.repository.persistence.session(Scope(fields={"project_id": service.default_project_id})) as scoped:
-        owner = await scoped.skills.resolve_family(service.default_project_id, first.skill.skill_id)
+        owner = await scoped.skills.resolve_family(first.skill.skill_id)
         (await scoped.skills.commit(owner, snapshot("new"), message="Version test", naming=VersionNaming(**options)))
     return await service.show_skill(ShowRequest(project_id=service.default_project_id, skill_id=first.skill.skill_id))
 
@@ -117,7 +116,7 @@ async def test_concurrent_commit_does_not_duplicate_or_leave_orphans(service, tm
             with writer.repository.persistence.session(
                 Scope(fields={"project_id": writer.default_project_id})
             ) as scoped:
-                owner = await scoped.skills.resolve_family(writer.default_project_id, first.skill.skill_id)
+                owner = await scoped.skills.resolve_family(first.skill.skill_id)
             await asyncio.wait_for(barrier.wait(), timeout=10)
             try:
                 with writer.repository.persistence.session(

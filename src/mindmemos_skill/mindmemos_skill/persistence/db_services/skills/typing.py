@@ -68,11 +68,8 @@ class SkillRecord(RecordModel):
         return self
 
 
-class SkillVersionRecord(RecordModel):
-    """Complete insertable record for skill_versions."""
-
-    project_id: str = Field(min_length=1)
-    """Project owning this immutable local Skill version."""
+class SkillVersionWrite(RecordModel):
+    """Skill version input whose project is supplied by the repository scope."""
 
     version_id: str = Field(min_length=1)
     """Immutable Skill version identity."""
@@ -143,7 +140,24 @@ class SkillVersionRecord(RecordModel):
     @model_validator(mode="after")
     def validate_lineage(self):
         """Reject invalid local lineage and reversed timestamps."""
-        SkillSnapshot(
+        self.snapshot()
+        if self.version_id in self.parent_version_ids or len(set(self.parent_version_ids)) != len(
+            self.parent_version_ids
+        ):
+            raise ValueError("Parents must be unique and cannot include this version")
+        if any(not isinstance(parent, str) or not parent for parent in self.parent_version_ids):
+            raise ValueError("Parent IDs must be nonempty strings")
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at must not precede created_at")
+        return self
+
+    def snapshot(self) -> SkillSnapshot:
+        """Return portable source content from this already loaded version.
+
+        Returns:
+            Source fields without repository identity or mutable metadata.
+        """
+        return SkillSnapshot(
             implementation=self.implementation,
             config_schema_version=self.config_schema_version,
             config=self.config,
@@ -155,15 +169,13 @@ class SkillVersionRecord(RecordModel):
             content_hash=self.content_hash,
             skill_hash=self.skill_hash,
         )
-        if self.version_id in self.parent_version_ids or len(set(self.parent_version_ids)) != len(
-            self.parent_version_ids
-        ):
-            raise ValueError("Parents must be unique and cannot include this version")
-        if any(not isinstance(parent, str) or not parent for parent in self.parent_version_ids):
-            raise ValueError("Parent IDs must be nonempty strings")
-        if self.updated_at < self.created_at:
-            raise ValueError("updated_at must not precede created_at")
-        return self
+
+
+class SkillVersionRecord(SkillVersionWrite):
+    """Complete persisted record with its project ownership."""
+
+    project_id: str = Field(min_length=1)
+    """Project owning this immutable local Skill version."""
 
 
 class SkillVersionSummary(RecordModel):
@@ -245,8 +257,8 @@ class SceneData(BaseModel):
     schema_version: StrictInt = SCENE_SCHEMA_VERSION
     """Strict format version; strings and booleans are invalid."""
 
-    record: ProvidedSceneRecord
-    """Complete original source-grounded Scene and logic-step semantics."""
+    record: ProvidedSceneRecord | None
+    """Validated Scene semantics; None caches a confirmed insufficient-source result."""
 
     @field_validator("schema_version")
     @classmethod

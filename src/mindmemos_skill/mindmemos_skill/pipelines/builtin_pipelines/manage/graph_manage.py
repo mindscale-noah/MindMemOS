@@ -1,13 +1,22 @@
 """Organize, recommend, and query project-scoped graphs."""
 
 import asyncio
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from time import perf_counter
-from uuid import UUID, uuid4
+from typing import cast
 
-from ....agents import Agent
+from ....agents import Agent, OpenAIChatAgent
 from ....algos.manage.skill_manage.algorithm import SkillManageAlgorithm
+from ....algos.manage.skill_manage.build_config import restore_build_config
+from ....algos.manage.skill_manage.config import SkillManageConfig
+from ....algos.manage.skill_manage.constant import (
+    METADATA_COLLECTION_SKILL_ID,
+)
+from ....algos.manage.skill_manage.errors import SceneGraphError, SceneGraphFailure
 from ....algos.manage.skill_manage.extraction import SceneExtractor
 from ....algos.manage.skill_manage.parsing import parse_skill_document
+from ....algos.manage.typing import GeneratedGraph, GraphSnapshot
 from ....api.typing import (
     AddGraphMembersRequest,
     GraphRecommendationScore,
@@ -18,15 +27,20 @@ from ....api.typing import (
     RemoveGraphMembersRequest,
     VectorRecommendationScore,
 )
+from ....common.ids import generate_id
 from ....envs.typing import Task
 from ....errors import GraphNotFoundError
 from ....logging import get_logger
-from ....persistence.db_services.skill_management.service import GraphQueryService
-from ....persistence.db_services.skill_management.writer import SkillGraphStore
-from ....persistence.db_services.skills.typing import SceneData
+from ....persistence.db_services.graphs.service import GraphDataService
+from ....persistence.db_services.graphs.typing import GraphNodeType, GraphResolution, SkillGraphRecord
+from ....persistence.db_services.graphs.writer import SkillGraphStore
+from ....persistence.db_services.skills.typing import SceneData, SkillVersionRecord
 from ....persistence.store import SkillPersistence
+from ....scene.typing import ProvidedSceneRecord
+from ....skill import Skill
 from ...base import Pipeline
 from ...manage import ManagePipeline
+from ...typing import GraphListItem, GraphSnapshotListItem, GraphTopology
 from .config import GraphManagePipelineConfig
 
 
@@ -37,28 +51,10 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
     config_type = GraphManagePipelineConfig
     """Validated construction, retrieval and query settings."""
 
-    async def resolve_graph(self, project_id: str, reference: str) -> dict:
-        """Resolve one graph alias, family, or version in the authorized project.
+    persistence: SkillPersistence
+    """Required project-scoped storage borrowed from the active service session."""
 
-        Args:
-            project_id: Authorized project identity.
-            reference: Alias or unique prefixed graph identity.
-
-        Returns:
-            Public identity and selected graph snapshot.
-        """
-        return await self._queries(project_id).resolve(reference)
-
-    async def delete_graph(self, project_id: str, reference: str) -> None:
-        """Soft-delete a graph in the authorized project.
-
-        Args:
-            project_id: Authorized project identity.
-            reference: Active graph identity or alias.
-        """
-        await self._queries(project_id).delete(reference)
-
-    def __init__(self, config: GraphManagePipelineConfig, *, persistence: SkillPersistence):
+    def __init__(self, config: GraphManagePipelineConfig, *, persistence: SkillPersistence) -> None:
         """Borrow the shared store without performing graph or model I/O.
 
         Args:
@@ -69,17 +65,34 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
             raise TypeError("Graph management requires SkillPersistence")
         super().__init__(config, persistence=persistence)
 
-    def _algorithm(self, store, records=None):
+    @property
+    def graphs(self) -> GraphDataService:
+        """Return the graph service bound to the active persistence session."""
+        return self.persistence.graphs
+
+    def _algorithm(
+        self,
+        store: SkillGraphStore,
+        records: Mapping[str, ProvidedSceneRecord | None] | None = None,
+        config: SkillManageConfig | None = None,
+    ) -> SkillManageAlgorithm:
         """Construct one request-owned algorithm with captured Scene records."""
         if self.config.algorithm is None:
             raise ValueError("Graph algorithm model settings are required")
-        return SkillManageAlgorithm(self.config.algorithm, store=store, provided=records)
+        return SkillManageAlgorithm(config or self.config.algorithm, store=store, provided=records)
 
-    async def _resolve_skill_versions(self, project_id, ref_skills):
+    def _build_config(self, prior: GraphSnapshot | None) -> SkillManageConfig:
+        """Capture defaults for a new graph or restore the exact prior build settings."""
+        config = self.config.algorithm
+        if config is None:
+            raise ValueError("Graph algorithm model settings are required")
+        return restore_build_config(config, prior.metadata) if prior is not None else config.model_copy(deep=True)
+
+    async def _resolve_skill_versions(self, references: Sequence[str]) -> dict[str, SkillVersionRecord]:
         """Resolve every input before any extraction or publication."""
-        result = {}
-        for ref in ref_skills:
-            family, version = await self.persistence.skills.resolve(project_id, ref)
+        result: dict[str, SkillVersionRecord] = {}
+        for ref in references:
+            family, version = await self.persistence.skills.resolve(ref)
             if family.skill_id in result:
                 raise ValueError(
                     "Cannot construct graph: Multiple versions of skills with same skill id are not allowed."
@@ -87,35 +100,35 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
             result[family.skill_id] = version
         return result
 
-    async def _get_skill_by_versions(self, skill_versions):
-        """Load only the exact captured source versions."""
-        result = {}
-        for key, version in skill_versions.items():
-            source = await self.persistence.skills.get_skill(version.version_id)
-            if source is None:
-                raise ValueError("Skill version not found")
-            result[key] = source
-        return result
+    def _skills_from_versions(self, versions: Mapping[str, SkillVersionRecord]) -> dict[str, Skill]:
+        """Restore Skill objects directly from the versions captured by this Pipeline."""
+        return {key: Skill.from_snapshot(version.snapshot()) for key, version in versions.items()}
 
-    async def _get_or_extract_scene_records(self, project_id, versions, sources, force):
+    async def _get_or_extract_scene_records(
+        self,
+        versions: Mapping[str, SkillVersionRecord],
+        sources: Mapping[str, Skill],
+        force: bool,
+        config: SkillManageConfig | None = None,
+    ) -> dict[str, ProvidedSceneRecord | None]:
         """Read valid version caches or extract and merge validated replacements."""
-        result = {}
-        if self.config.algorithm is not None and not self.config.algorithm.build_scene and not force:
-            return result
         if not versions:
-            return result
-        if self.config.algorithm is None:
-            raise ValueError("Graph algorithm model settings are required")
+            return {}
+        config = config or self._build_config(None)
+        if not config.build_scene and not force:
+            return {}
         logger = get_logger(__name__)
         started = perf_counter()
         total = len(versions)
         completed = 0
+        cache_hits = 0
+        without_scenes = 0
         semaphore = asyncio.Semaphore(self.config.scene_concurrency)
         logger.info("Graph Scene processing started | total=%d concurrency=%d", total, self.config.scene_concurrency)
 
-        async def process(key):
+        async def process(key: str) -> tuple[str, ProvidedSceneRecord | None]:
             """Validate, read or extract, and persist one exact version within the concurrency limit."""
-            nonlocal completed
+            nonlocal completed, cache_hits, without_scenes
             async with semaphore:
                 version = versions[key]
                 item_started = perf_counter()
@@ -129,16 +142,31 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
                 )
                 try:
                     # Keep the original document validation gate before extraction I/O.
-                    parse_skill_document(
-                        sources[key].content, skill_id=key, max_chars=self.config.algorithm.max_input_chars
-                    )
+                    parse_skill_document(sources[key].content, skill_id=key, max_chars=config.max_input_chars)
                     data = None if force else await self.persistence.skills.get_scene_data(version.version_id)
                     cache_hit = data is not None
+                    cache_hits += int(cache_hit)
                     if data is None:
-                        extractor = SceneExtractor(Agent.from_config(self.config.algorithm.chat))
-                        record = await extractor.extract(sources[key].content)
+                        if config.chat is None:
+                            raise ValueError("Scene extraction requires chat model settings")
+                        client = cast(OpenAIChatAgent, Agent.from_config(config.chat))
+                        extractor = SceneExtractor(client)
+                        try:
+                            record = await extractor.extract(sources[key].content)
+                        except SceneGraphError as error:
+                            if error.code != SceneGraphFailure.INSUFFICIENT_SOURCE:
+                                raise
+                            record = None
                         data = SceneData(record=record)
-                        await self.persistence.skills.set_scene_data(project_id, version.version_id, data)
+                        await self.persistence.skills.set_scene_data(version.version_id, data)
+                    if data.record is None:
+                        without_scenes += 1
+                        logger.info(
+                            "Graph Skill retained without Scenes | skill=%s version_id=%s reason=insufficient_source cache_hit=%s",
+                            version.name,
+                            version.version_id,
+                            cache_hit,
+                        )
                     completed += 1
                     logger.info(
                         "Graph Scene Skill completed | progress=%d/%d skill=%s version_id=%s "
@@ -173,61 +201,123 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
             raise
         finally:
             logger.info(
-                "Graph Scene processing finished | progress=%d/%d elapsed_s=%.2f",
+                "Graph Scene processing finished | progress=%d/%d elapsed_s=%.2f cache_hits=%d extracted=%d without_scenes=%d",
                 completed,
                 total,
                 perf_counter() - started,
+                cache_hits,
+                completed - cache_hits,
+                without_scenes,
             )
 
-    async def _resolve_graph(self, project_id, reference):
+    async def _resolve_graph(self, reference: str) -> SkillGraphRecord:
         """Resolve a modifiable graph family and capture its current head once."""
-        graph = await self._queries(project_id).graph(reference)
-        return graph
+        return await self.graphs.get_graph(reference)
 
-    async def _members(self, project_id, graph):
-        """Read exact members and semantic nodes from one immutable head."""
-        if graph["current_version_id"] is None:
-            return {}, None
-        store = SkillGraphStore(
-            self.persistence.database,
-            project_id=project_id,
-            graph_id=graph["graph_id"],
-            actor_id=project_id,
-            version_ids={},
-        )
-        nodes, edges, metadata = await store.load(graph["current_version_id"])
-        versions = {}
-        for node in nodes:
-            if node.node_type == "skill":
-                version = await self.persistence.skills.get(node.skill_version_id)
-                versions[version.skill_id] = version
-        return versions, (nodes, edges, metadata)
+    async def _read_prior_graph(self, graph: SkillGraphRecord | None) -> GraphSnapshot | None:
+        """Read the captured immutable head without resolving its member versions."""
+        if graph is None or graph.current_version_id is None:
+            return None
+        snapshot_id = graph.current_version_id
+        nodes, edges, metadata = await self.graphs.load(graph.graph_id, snapshot_id)
+        return GraphSnapshot(snapshot_id=snapshot_id, nodes=nodes, edges=edges, metadata=metadata)
 
-    async def _publish(self, request, graph_id, versions, sources, records, graph=None, prior=None):
-        """Perform model work outside storage transactions and conditionally publish."""
-        store = SkillGraphStore(
+    async def _get_member_versions(self, prior: GraphSnapshot | None) -> dict[str, SkillVersionRecord]:
+        """Resolve the exact Skill versions referenced by a captured graph."""
+        versions: dict[str, SkillVersionRecord] = {}
+        if prior is not None:
+            for node in prior.nodes:
+                if node.node_type == GraphNodeType.SKILL:
+                    if node.skill_version_id is None:
+                        raise ValueError("Skill node requires a stored version")
+                    version = await self.persistence.skills.get(node.skill_version_id)
+                    versions[version.skill_id] = version
+        return versions
+
+    def _graph_store(
+        self,
+        request: OrganizeRequest | AddGraphMembersRequest | RemoveGraphMembersRequest,
+        graph_id: str,
+        versions: Mapping[str, SkillVersionRecord],
+        graph: SkillGraphRecord | None,
+    ) -> SkillGraphStore:
+        """Capture version bindings and the expected graph head for publication."""
+        alias = graph.alias if graph is not None else None
+        if graph is None and isinstance(request, OrganizeRequest):
+            alias = request.alias
+        return SkillGraphStore(
             self.persistence.database,
-            project_id=request.project_id,
             graph_id=graph_id,
             actor_id=request.agent_id or request.user_id or request.project_id,
-            alias=graph["alias"] if graph else request.alias,
+            alias=alias,
             message=request.commit_message,
             version_ids={key: value.version_id for key, value in versions.items()},
-            expected_snapshot=graph["current_version_id"] if graph else None,
+            expected_snapshot=graph.current_version_id if graph else None,
             check_head=True,
         )
-        algorithm = self._algorithm(store, records)
+
+    async def _generate_graph(
+        self,
+        store: SkillGraphStore,
+        sources: Mapping[str, Skill],
+        records: Mapping[str, ProvidedSceneRecord | None],
+        prior: GraphSnapshot | None,
+        config: SkillManageConfig | None = None,
+    ) -> GeneratedGraph:
+        """Generate complete graph data, reusing the prior snapshot where applicable."""
+        algorithm = self._algorithm(store, records, config or self._build_config(prior))
         if prior is not None:
-            nodes, edges, metadata = prior
-            algorithm.reuse_snapshot(graph["current_version_id"], nodes=nodes, edges=edges, metadata=metadata)
-        get_logger(__name__).info("Graph linking and embedding started")
-        await algorithm.organize(skills=sources)
-        get_logger(__name__).info("Graph publication completed")
-        return OrganizeResult(
-            graph_id=graph_id,
-            graph_version_id=algorithm.snapshot_id,
-            skill_version_ids=[versions[key].version_id for key in sorted(versions)],
+            algorithm.reuse_snapshot(prior.snapshot_id, nodes=prior.nodes, edges=prior.edges, metadata=prior.metadata)
+        get_logger(__name__).info("Graph generation started")
+        generated = await algorithm.organize(skills=sources)
+        get_logger(__name__).info(
+            "Graph generation completed | graph_id=%s graph_version_id=%s skills=%d scenes=%d nodes=%d edges=%d edge_types=%s",
+            store.graph_id,
+            generated.snapshot_id,
+            sum(node.node_type == GraphNodeType.SKILL for node in generated.nodes),
+            sum(node.node_type == GraphNodeType.SCENE for node in generated.nodes),
+            len(generated.nodes),
+            len(generated.edges),
+            dict(sorted(Counter(edge.edge_type for edge in generated.edges).items())),
         )
+        return generated
+
+    async def _publish_graph(self, store: SkillGraphStore, generated: GeneratedGraph) -> OrganizeResult:
+        """Atomically publish generated graph data with the captured head check."""
+        get_logger(__name__).info("Graph atomic publication started")
+        snapshot_id = await store.publish(
+            generated.snapshot_id,
+            request_hash=generated.request_hash,
+            nodes=generated.nodes,
+            edges=generated.edges,
+            metadata=generated.metadata,
+        )
+        get_logger(__name__).info("Graph publication completed")
+        versions = store.version_ids
+        return OrganizeResult(
+            graph_id=store.graph_id,
+            graph_version_id=snapshot_id,
+            skill_version_ids=[versions[key] for key in sorted(versions)],
+        )
+
+    async def resolve_graph(self, reference: str) -> GraphResolution:
+        """Resolve one graph alias, family, or version in the authorized project.
+
+        Args:
+            reference: Alias or unique prefixed graph identity.
+
+        Returns:
+            Public identity and selected graph snapshot.
+        """
+        return await self.graphs.resolve(reference)
+
+    async def delete_graph(self, reference: str) -> None:
+        """Soft-delete a graph in the authorized project.
+
+        Args:
+            reference: Active graph identity or alias.
+        """
+        await self.graphs.delete(reference)
 
     async def organize(self, request: OrganizeRequest) -> OrganizeResult:
         """Build the complete selected scope and atomically publish its snapshot.
@@ -245,18 +335,33 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         if self.config.algorithm.embedding is None:
             raise ValueError("Run skill organize requires embedding model settings")
 
-        graph = await self._resolve_graph(request.project_id, request.graph_id) if request.graph_id else None
+        graph = await self._resolve_graph(request.graph_id) if request.graph_id else None
         if graph is not None and request.alias is not None:
             raise ValueError("Existing graph aliases cannot be changed by organize")
-        versions = await self._resolve_skill_versions(request.project_id, request.skill_refs)
-        sources = await self._get_skill_by_versions(versions)
-        records = await self._get_or_extract_scene_records(
-            request.project_id, versions, sources, request.force_extract_scene
+        versions = await self._resolve_skill_versions(request.skill_refs)
+        get_logger(__name__).info("Graph organize inputs resolved | skills=%d", len(versions))
+        sources = self._skills_from_versions(versions)
+        prior = await self._read_prior_graph(graph)
+        config = self._build_config(prior)
+        captured = (
+            {
+                node.metadata[METADATA_COLLECTION_SKILL_ID]: node.skill_version_id
+                for node in prior.nodes
+                if node.node_type == GraphNodeType.SKILL
+            }
+            if prior is not None
+            else {}
         )
-        prior = (await self._members(request.project_id, graph))[1] if graph else None
-        return await self._publish(
-            request, graph["graph_id"] if graph else "skg-" + uuid4().hex, versions, sources, records, graph, prior
-        )
+        pending = {
+            key: version
+            for key, version in versions.items()
+            if request.force_extract_scene or captured.get(key) != version.version_id
+        }
+        records = await self._get_or_extract_scene_records(pending, sources, request.force_extract_scene, config)
+        graph_id = graph.graph_id if graph else generate_id("skg-")
+        store = self._graph_store(request, graph_id, versions, graph)
+        generated = await self._generate_graph(store, sources, records, prior, config)
+        return await self._publish_graph(store, generated)
 
     async def add_graph_members(self, request: AddGraphMembersRequest) -> OrganizeResult:
         """Validate the entire batch, then add new families without replacing versions.
@@ -267,22 +372,26 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         Returns:
             Snapshot containing all prior members and the new members.
         """
-        graph = await self._resolve_graph(request.project_id, request.graph_ref)
-        current, prior = await self._members(request.project_id, graph)
-        added = await self._resolve_skill_versions(request.project_id, request.skill_refs)
+        graph = await self._resolve_graph(request.graph_ref)
+        prior = await self._read_prior_graph(graph)
+        current = await self._get_member_versions(prior)
+        added = await self._resolve_skill_versions(request.skill_refs)
         if set(current) & set(added):
             raise ValueError("Skill family already belongs to the graph")
-        new_sources = await self._get_skill_by_versions(added)
-        records = await self._get_or_extract_scene_records(
-            request.project_id, added, new_sources, request.force_extract_scene
-        )
+        config = self._build_config(prior)
+        new_sources = self._skills_from_versions(added)
+        records = await self._get_or_extract_scene_records(added, new_sources, request.force_extract_scene, config)
         versions = {**current, **added}
-        sources = await self._get_skill_by_versions(versions)
-        if self.config.algorithm is not None and self.config.algorithm.build_scene and prior is not None:
-            scene_members = {node.metadata["collection_skill_id"] for node in prior[0] if node.node_type == "scene"}
-            missing = {key: value for key, value in current.items() if key not in scene_members}
-            records.update(await self._get_or_extract_scene_records(request.project_id, missing, sources, False))
-        return await self._publish(request, graph["graph_id"], versions, sources, records, graph, prior)
+        get_logger(__name__).info(
+            "Graph add inputs resolved | prior_skills=%d added_skills=%d total_skills=%d",
+            len(current),
+            len(added),
+            len(versions),
+        )
+        sources = {**self._skills_from_versions(current), **new_sources}
+        store = self._graph_store(request, graph.graph_id, versions, graph)
+        generated = await self._generate_graph(store, sources, records, prior, config)
+        return await self._publish_graph(store, generated)
 
     async def remove_graph_members(self, request: RemoveGraphMembersRequest) -> OrganizeResult:
         """Remove a complete validated family batch, preserving Skill source and history.
@@ -293,15 +402,25 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         Returns:
             Published remaining scope, including an empty graph.
         """
-        graph = await self._resolve_graph(request.project_id, request.graph_ref)
-        current, prior = await self._members(request.project_id, graph)
-        removed = await self._resolve_skill_versions(request.project_id, request.skill_refs)
+        graph = await self._resolve_graph(request.graph_ref)
+        prior = await self._read_prior_graph(graph)
+        current = await self._get_member_versions(prior)
+        removed = await self._resolve_skill_versions(request.skill_refs)
         if not set(removed) <= set(current):
             raise ValueError("Skill family is not a graph member")
         versions = {key: value for key, value in current.items() if key not in removed}
-        sources = await self._get_skill_by_versions(versions)
-        records = {}
-        return await self._publish(request, graph["graph_id"], versions, sources, records, graph, prior)
+        get_logger(__name__).info(
+            "Graph remove inputs resolved | prior_skills=%d removed_skills=%d remaining_skills=%d",
+            len(current),
+            len(removed),
+            len(versions),
+        )
+        sources = self._skills_from_versions(versions)
+        records: dict[str, ProvidedSceneRecord | None] = {}
+        config = self._build_config(prior)
+        store = self._graph_store(request, graph.graph_id, versions, graph)
+        generated = await self._generate_graph(store, sources, records, prior, config)
+        return await self._publish_graph(store, generated)
 
     async def recommend(self, request: RecommendRequest) -> RecommendResult:
         """Rank exact versions from one pinned snapshot using graph or cosine scores.
@@ -312,154 +431,129 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         Returns:
             Selected versions and original score components in the same order.
         """
-        graph = await self._queries(request.project_id).graph(request.graph_id)
-        snapshot = request.graph_version_id or graph["current_version_id"]
+        graph = await self._resolve_graph(request.graph_id)
+        snapshot = request.graph_version_id or graph.current_version_id
         if snapshot is None:
             raise ValueError("Graph has no published snapshot")
+        nodes, edges, metadata = await self.graphs.load(graph.graph_id, snapshot)
+        version_ids: dict[str, str] = {}
+        for node in nodes:
+            if node.node_type != GraphNodeType.SKILL:
+                continue
+            member_id = node.metadata[METADATA_COLLECTION_SKILL_ID]
+            if not isinstance(member_id, str) or node.skill_version_id is None:
+                raise ValueError("Skill node requires a member identity and a stored version")
+            version_ids[member_id] = node.skill_version_id
+        await self.persistence.skills.validate_version_visibility(list(version_ids.values()))
         store = SkillGraphStore(
             self.persistence.database,
-            project_id=request.project_id,
-            graph_id=graph["graph_id"],
+            graph_id=graph.graph_id,
             actor_id=request.project_id,
-            version_ids={},
+            version_ids=version_ids,
         )
-        nodes, edges, metadata = await store.load(snapshot)
-        versions = {
-            node.metadata["collection_skill_id"]: await self.persistence.skills.get(node.skill_version_id)
-            for node in nodes
-            if node.node_type == "skill"
-        }
-        store = SkillGraphStore(
-            self.persistence.database,
-            project_id=request.project_id,
-            graph_id=graph["graph_id"],
-            actor_id=request.project_id,
-            version_ids={key: value.version_id for key, value in versions.items()},
-        )
-        algorithm = self._algorithm(store)
+        config = restore_build_config(self._build_config(None), metadata)
+        algorithm = self._algorithm(store, config=config)
         task = Task(id="recommend", instruction=request.task)
+        scores: list[VectorRecommendationScore] | list[GraphRecommendationScore]
         if request.strategy == "vector":
             algorithm.validate_vector_metadata(metadata)
             algorithm.bind_vector_snapshot(
                 snapshot,
-                skill_ids=set(versions),
-                skill_versions={key: value.version_id for key, value in versions.items()},
+                skill_ids=set(version_ids),
+                skill_versions=version_ids,
             )
-            result = await algorithm.retrieve_vector(
+            vector_result = await algorithm.retrieve_vector(
                 task=task, limit=request.top_k, include_scenes=request.include_scenes
             )
             scores = [
                 VectorRecommendationScore(
-                    skill_version_id=versions[score.member_id].version_id,
+                    skill_version_id=version_ids[score.member_id],
                     similarity=score.similarity,
                     node_id=score.node_id,
                     node_type=score.node_type,
                 )
-                for score in result.scores[: request.top_k]
+                for score in vector_result.scores[: request.top_k]
             ]
+            score_type = vector_result.score_type
         else:
             await algorithm.load_snapshot(
                 snapshot,
-                skills=await self._get_skill_by_versions(versions),
                 nodes=nodes,
                 edges=edges,
                 metadata=metadata,
             )
-            result = await algorithm.retrieve(task=task, limit=request.top_k)
+            graph_result = await algorithm.retrieve(task=task, limit=request.top_k)
             scores = [
                 GraphRecommendationScore(
-                    skill_version_id=versions[score.member_id].version_id,
+                    skill_version_id=version_ids[score.member_id],
                     ppr_score=score.ppr_score,
                     scene_boost=score.scene_boost,
                     graph_score=score.graph_score,
                     rerank_score=score.rerank_score,
                 )
-                for score in result.scores[: request.top_k]
+                for score in graph_result.scores[: request.top_k]
             ]
+            score_type = graph_result.score_type
+        selected_versions = [await self.persistence.skills.get(score.skill_version_id) for score in scores]
         return RecommendResult(
-            skills=[versions[score.member_id] for score in result.scores[: request.top_k]],
+            skills=selected_versions,
             graph_version_id=snapshot,
             strategy=request.strategy,
-            score_type=result.score_type,
+            score_type=score_type,
             scores=scores,
             include_scenes=request.include_scenes,
         )
 
-    async def preview_graph(self, project_id: str, graph_ref: str) -> dict:
+    async def preview_graph(self, graph_ref: str) -> GraphTopology:
         """Read the published snapshot selected by an authorized reference.
 
         Args:
-            project_id: Authorized project identity.
             graph_ref: Graph family, alias, or immutable snapshot reference.
 
         Returns:
-            Complete published topology without model calls or writes.
+            Graph identity, selected snapshot identity, and complete published topology.
         """
-        selected = await self._queries(project_id).resolve(graph_ref)
-        version = selected["graph_version_id"]
-        if version is None:
+        selected = await self.graphs.resolve(graph_ref)
+        snapshot_id = selected["graph_version_id"]
+        if snapshot_id is None:
             raise ValueError("Graph has no published snapshot")
-        snapshot_id = UUID(version.removeprefix("skgv-"))
-        return await self.get_graph_snapshot(project_id, selected["graph_id"], snapshot_id)
+        return await self.get_graph_snapshot(selected["graph_id"], snapshot_id)
 
-    def _queries(self, project_id: str) -> GraphQueryService:
-        """Borrow the active scoped database for the current graph representation."""
-        return GraphQueryService(self.persistence.database, project_id)
-
-    async def list_graph(self, project_id: str) -> list[dict]:
+    async def list_graph(self) -> list[GraphListItem]:
         """List the project-owned graphs and their publication pointers.
 
-        Args:
-            project_id: Authorized project identity.
-
         Returns:
-            Graphs with stable public identities and publication pointers.
+            Graph records with string identities, timestamps, and publication pointers.
         """
-        rows = await self._queries(project_id).list_graphs()
-        result = []
-        for row in rows:
-            item = dict(row)
-            if item["current_version_id"] is not None:
-                item["current_version_id"] = f"skgv-{item['current_version_id'].hex}"
-            result.append(item)
-        return result
+        graphs = await self.graphs.list_graphs()
+        return [cast(GraphListItem, graph.model_dump()) for graph in graphs]
 
-    async def list_graph_snapshots(self, project_id: str, graph_id: str) -> list[dict]:
+    async def list_graph_snapshots(self, graph_id: str) -> list[GraphSnapshotListItem]:
         """List immutable snapshots and their creation metadata.
 
         Args:
-            project_id: Authorized project identity.
-            graph_id: Exact project-local graph identity.
+            graph_id: Project-local graph identity or alias.
 
         Returns:
-            Snapshots with stable public identities and creation metadata.
+            Snapshot records with string identities, build metadata, and timestamps.
         """
         try:
-            graph = await self._queries(project_id).graph(graph_id)
+            graph = await self._resolve_graph(graph_id)
         except GraphNotFoundError:
             return []
-        rows = await self._queries(project_id).snapshots(graph["graph_id"])
-        result = []
-        for row in rows:
-            item = dict(row)
-            item["graph_version_id"] = item.pop("public_version_id") or f"skgv-{row['graph_version_id'].hex}"
-            result.append(item)
-        return result
+        snapshots = await self.graphs.snapshots(graph.graph_id)
+        return [cast(GraphSnapshotListItem, snapshot.model_dump()) for snapshot in snapshots]
 
-    async def get_graph_snapshot(self, project_id: str, graph_id: str, snapshot_id: UUID) -> dict:
+    async def get_graph_snapshot(self, graph_id: str, snapshot_id: str) -> GraphTopology:
         """Read the selected snapshot's Skill members and relations.
 
         Args:
-            project_id: Authorized project identity.
-            graph_id: Exact project-local graph identity.
-            snapshot_id: Immutable snapshot identity.
+            graph_id: Project-local graph identity or alias.
+            snapshot_id: Exact prefixed immutable snapshot identity.
 
         Returns:
-            The current graph representation of the selected graph.
+            Graph identity, snapshot identity, and published nodes and edges.
         """
-        graph = await self._queries(project_id).graph(graph_id)
-        row = await self._queries(project_id).snapshot(graph["graph_id"], snapshot_id)
-        item = dict(row)
-        item["graph_id"] = graph["graph_id"]
-        item["graph_version_id"] = f"skgv-{snapshot_id.hex}"
-        return item
+        graph = await self._resolve_graph(graph_id)
+        preview = await self.graphs.snapshot(graph.graph_id, snapshot_id)
+        return {**preview, "graph_id": graph.graph_id}
