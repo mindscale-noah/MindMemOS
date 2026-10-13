@@ -1,0 +1,15 @@
+environment:
+  class_name: spreadsheetbench_text_action
+  config: {}
+data: null
+samples_file: null
+reference_run: output/treeskill_full_20261012_092954
+reference_optimizer_model: qwen3.5-35b-a3b
+service_config: config/mindmemos_skill/dev.yaml
+sdk_home: .mindmemos
+data_root: data/mindmemos_skill/spreadsheetbench/spreadsheetbench_verified_400
+split_file: resources/mindmemos_skill_eval/treeskill-spreadsheetbench/data_splits/splits.json
+initial_skill: resources/mindmemos_skill_eval/treeskill-spreadsheetbench/initial_skill
+profile: treeskill_mindmemos_eval
+poll_interval: 5
+output_dir: null

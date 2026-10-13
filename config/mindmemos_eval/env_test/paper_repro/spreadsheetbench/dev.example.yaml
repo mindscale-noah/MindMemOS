@@ -1,0 +1,24 @@
+environment:
+  class_name: spreadsheetbench_tool_calling
+  config:
+    agent:
+      model: gpt-5.4-mini
+      api_key: null
+      base_url: https://example.com/v1
+      reasoning_effort: medium
+      max_completion_tokens: 16384
+      max_retries: 10
+      timeout_s: 600
+      response_validation: content
+      retry_policy: all
+      retry_max_wait_s: 30
+      invalid_tool_arguments: empty
+    max_turns: 30
+    stagnation_limit: null
+    transactional_recalculation: false
+    tools: null
+    skill_loading_mode: tool
+samples_file: /Users/cuiyuqi/hw-project/MindMemOs-fastapi/mindmemos-skill-dev-0920/.tmp/skill_forest_repro_20261012/spreadsheetbench_samples.json
+skills: []
+concurrency: 40
+skill_body_only: true

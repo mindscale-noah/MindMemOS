@@ -4,7 +4,109 @@ This guide explains how to run the three standard benchmarks (LoCoMo, LongMemEva
 
 ---
 
-## Prerequisites
+## TreeSkill: SpreadsheetBench text_action
+
+`mindmemos-eval skill treeskill` registers a Skill through the public HTTP SDK and submits
+native TreeSkill training plus held-out testing to the Skill service. It shares the UI's
+`.mindmemos` SDK configuration and project credentials. Each registration is named
+`xlsx-mindmemos-eval-YYYYMMDD-HHMMSS-ffffff`. No baseline or automatic comparison is added.
+
+Use `config/mindmemos_eval/treeskill/dev.yaml` (with its matching example). The service
+profile is `treeskill_mindmemos_eval` in `config/mindmemos_skill/dev.yaml`. Restart the
+Skill service and UI backend after installing this change so the running processes load
+the new profile and reporting code. Client and service must share the same absolute data
+and output paths.
+
+```bash
+# Validate without model calls or registration.
+uv run --no-sync mindmemos-eval skill treeskill --env spreadsheetbench_text_action --check
+
+# Run native training and testing.
+uv run --no-sync mindmemos-eval skill treeskill --env spreadsheetbench_text_action
+```
+
+`--env` accepts any registered environment; lacking a reference score does not block execution.
+If omitted, it uses `environment.class_name` in the configuration (default: `spreadsheetbench_text_action`).
+For other environments, provide native `environment.config`, either `data` or `samples_file`,
+a train/val/test `split_file`, and `initial_skill`. They do not require `reference_run` or `data_root`.
+For example: `mindmemos-eval skill treeskill --env livemath --config /path/to/math.yaml`.
+Only `spreadsheetbench_text_action` uses the historical alignment below. Other environments
+still train, test, and publish results to the UI, without a score guarantee.
+
+The reference is `output/treeskill_full_20261012_092954`: 122/200 held-out successes (61%).
+Validation checks the exact 200/200 split and order, full initial Skill and resources,
+task/scoring metadata, workbook content, environment settings, and trainer parameters.
+The historical optimizer model was redacted in the saved configuration;
+`reference_optimizer_model: qwen3.5-35b-a3b` records the experiment owner's confirmation.
+Execution and router models are verified against recorded requests and the final Skill.
+The initial name receives the requested suffix; the body and resources stay intact.
+
+The protocol uses `spreadsheetbench_text_action`, the verified 400 dataset, no validation
+set, `qwen3.5-35b-a3b` for all model roles, 100 turns, transactional recalculation enabled,
+rollout/analysis/localization/test concurrency 32, one sample per task, and seed 41.
+Other sampling and timeout settings are checked against the reference trainer.
+
+Outputs are under `output/mindmemos_eval/treeskill/<timestamp>/`, or an empty `--output-dir`:
+
+- `registration.json` and `task.json`: registration, asynchronous task state, and publication.
+- `summary.json` and `report.md`: test counts, test time, tokens, execution errors, success rate.
+- `trajectories.jsonl`: native outcomes or explicit failed/unstarted records for test tasks.
+- `runtime.json`: full pipeline wall time, separately from test timing.
+- `training/train/`: native training statistics, trajectories, and the final dynamic Skill.
+- `training/test/`: original test artifacts, service JSONL, and `report.json`.
+
+Zero reward is a completed outcome, not an execution error. Success rate divides successes
+by completed tasks; unstarted tasks are separate. Missing timing or token totals remain
+null, with known partial usage reported separately. Failed service tasks return a failing
+exit code and preserve available reports. After publication, UI → Skills → registration
+name → final version → Content displays Test evaluation. Existing versions are not
+backfilled, and the historical 61% is not a guaranteed score for a new run.
+
+
+## Test a registered environment directly
+
+`mindmemos-eval skill test` runs exactly one mode: no-skill or a fixed static Skill collection.
+All supplied Skills are injected together into each task. Run commands from the repository root.
+Run `make init`, then edit `config/mindmemos_eval/env_test/dev.yaml` with the native environment,
+model connection, and registered Data loader settings. The example selects LiveMath.
+
+```bash
+uv run --no-sync mindmemos-eval skill envs
+uv run --no-sync mindmemos-eval skill test --no-skill --limit 10 --concurrency 2
+uv run --no-sync mindmemos-eval skill test --skills /path/to/skill_a /path/to/skill_b --limit 10
+```
+
+`--no-skill` and `--skills` are mutually exclusive. Without either flag, the configured `skills`
+list is used; an empty list means no-skill. Skill paths accept directories or `SKILL.md` files.
+`--config`, `--env`, `--split-file`, `--split`, `--limit`, `--concurrency`, and `--output-dir`
+override their respective settings. Relative paths are resolved from the working directory.
+Each output directory must be empty.
+
+Alternatively, `--samples samples.json` replaces the Data loader with an array of objects containing
+`task` and `reward_data`, validated against the selected environment's native models.
+Set `split_file: null` in the configuration to evaluate all input records.
+
+Reports contain these six required categories:
+
+| Category | Meaning |
+| --- | --- |
+| Data count | Planned, attempted, and normally completed tasks |
+| Elapsed time | Wall time including setup and execution; individual durations remain in the task records |
+| Token usage | Input, output, total; null when incomplete, with known sums in `reported_usage` and missing task count in `usage_missing` |
+| Execution failures | API timeouts and execution/scoring exceptions; normal zero rewards are not execution failures |
+| Success rate | Native `reward.success=true` count divided by normally completed tasks; null when none completed |
+| Trajectories | One JSONL record per finished task, including failures |
+
+Results are written under `output/mindmemos_eval/test/<run>/`: `summary.json`, `report.md`, and
+`tasks/trajectories.jsonl`. JSONL is appended as tasks finish; `position` retains input order.
+`result.trajectory` contains native interaction records, and `outcome` contains timing, usage,
+score, success, and errors. Failed executions have `result: null`; unavailable partial trajectories
+or token usage are not invented. Native task artifacts remain under `tasks/task-*/`.
+Execution errors produce a nonzero exit code; ordinary zero rewards do not.
+
+---
+
+## Memory prerequisites
 
 ### 1. Start dependency services
 
@@ -67,11 +169,11 @@ recorded in [`config/presets/dataset_download_sources.json`](../../config/preset
 
 ```bash
 python -m pip install huggingface_hub
-python scripts/download_datasets.py list --benchmark memory
-python scripts/download_datasets.py download --benchmark memory --dataset locomo
-python scripts/download_datasets.py download --benchmark memory --dataset longmemeval
-python scripts/download_datasets.py download --benchmark memory --dataset personamem
-python scripts/download_datasets.py download --benchmark memory --dataset memoryagentbench
+python scripts/download_datasets.py list memory
+python scripts/download_datasets.py download memory --name locomo
+python scripts/download_datasets.py download memory --name longmemeval
+python scripts/download_datasets.py download memory --name personamem
+python scripts/download_datasets.py download memory --name memoryagentbench
 ```
 
 Downloads default to `data/mindmemos_memory/<dataset>/` and preserve the official file formats:
@@ -111,9 +213,9 @@ Use `--data-root` to change the parent directory, `--verify-only` to check an ex
 and `--offline` to materialize Hugging Face datasets from an existing cache:
 
 ```bash
-python scripts/download_datasets.py download --benchmark memory --dataset locomo --data-root /path/to/memory
-python scripts/download_datasets.py download --benchmark memory --dataset locomo --verify-only
-python scripts/download_datasets.py download --benchmark memory --dataset personamem --offline
+python scripts/download_datasets.py download memory --name locomo --data-root /path/to/memory
+python scripts/download_datasets.py download memory --name locomo --verify-only
+python scripts/download_datasets.py download memory --name personamem --offline
 ```
 
 The custom-root example writes to `/path/to/memory/locomo/`; use the same `--data-root` when verifying
@@ -307,3 +409,45 @@ Token and timing percentiles (min / max / p50 / p95, no average — averages liv
 
 > PersonaMem uses deterministic (multiple-choice) scoring — no answer/judge LLM calls are made, so no `eval.*` rows appear in percentiles.
 > `vanilla`/`fast` search makes no LLM calls at all, so `search` token percentiles are empty for those runs; only `agentic`/`schema` search (which fans out to multiple LLM calls per query) populates them.
+
+
+## Skill-Forest evaluations
+
+Skill evaluations create an isolated in-process service and use the shared settings in
+`config/mindmemos_eval/dev.yaml`. Configure both `models.target` and `models.optimizer`
+with explicit model, API key, and base URL values. No HTTP or Memory server is required.
+
+```bash
+uv sync --all-packages --extra alfworld --extra spreadsheetbench
+make init
+uv run --no-sync python scripts/download_datasets.py download skill --name livemath
+uv run --no-sync mindmemos-eval skill run --smoke
+uv run --no-sync mindmemos-eval skill run
+```
+
+The default evaluates LiveMath's full committed split with no Skill, the initial Skill,
+and one frozen trained Skill. Smoke mode uses ordered 4/2/2 prefixes and one tree,
+one candidate, and depth/budget one. Use `--arms no_skill,initial_skill` to skip training.
+
+```bash
+uv run --no-sync python scripts/download_datasets.py download skill --all
+uv run --no-sync mindmemos-eval skill run --benchmark all
+uv run --no-sync mindmemos-eval skill run --benchmark spreadsheetbench --test-repeats 3
+uv run --no-sync mindmemos-eval skill report output/mindmemos_eval/skill/<run-directory>
+```
+
+The five benchmarks are LiveMath, ALFWorld, SpreadsheetBench, SearchQA, and OfficeQA.
+All selected inputs, receipts, and runtimes are checked before any training starts.
+Runtime failures are recorded and other benchmarks continue; incomplete runs exit nonzero.
+Each run requires an empty output directory and produces JSON, CSV, and Markdown reports.
+The pipeline's verified first test is adopted; subsequent repeats use the exact same
+published version in fresh workspaces. Missing usage is null, and infrastructure errors
+are distinct from normal wrong answers. The report command makes no model calls.
+
+SpreadsheetBench uses native tool calling with recalculation disabled by default.
+OfficeQA uses the native `max_tool_turns` setting. SearchQA uses `lucadiliello/searchqa`
+at revision `c1a979068ba118d85467179b704031d113d689cc`. The download script stores its
+Parquet files under `data/mindmemos_skill/searchqa/data/`. The single `data_splits/splits.json`
+uses native HF `key` values and preserves the original 400 / 200 / 1,400 split and order.
+Evaluation copies selected `question`, `context`, and `answers` fields unchanged into the
+run's `prepared/searchqa/items.json`, using `key` as task ID. No ID mapping resource is needed.

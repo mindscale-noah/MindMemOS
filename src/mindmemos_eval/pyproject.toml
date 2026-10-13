@@ -21,6 +21,9 @@ dependencies = [
     "tqdm>=4.67.3",
 ]
 
+[project.scripts]
+mindmemos-eval = "mindmemos_eval.cli:main"
+
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]
 build-backend = "uv_build"

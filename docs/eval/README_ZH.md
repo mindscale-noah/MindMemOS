@@ -1,10 +1,122 @@
 # MindMemOS 评测指南
 
-本文集中说明 LoCoMo、LongMemEval、PersonaMem、MemoryAgentBench 和 SpreadsheetBench-Verified 的复现入口，以及如何用 `metrics.py` 统计耗时与 token 用量。
+本文集中说明 Memory 基准和 Skill-Forest 五基准的复现入口，以及如何用 `metrics.py` 统计耗时与 token 用量。
 
 ---
 
-## 前置条件
+## TreeSkill：SpreadsheetBench text_action
+
+`mindmemos-eval skill treeskill` 通过公共 HTTP SDK 注册 Skill、提交原生 TreeSkill 训练，
+并由同一服务测试最终动态 Skill。使用与 UI 相同的 `.mindmemos` SDK 配置和项目凭据，
+注册名为 `xlsx-mindmemos-eval-YYYYMMDD-HHMMSS-ffffff`。不增加 baseline 或自动对比。
+
+默认配置：`config/mindmemos_eval/treeskill/dev.yaml`，示例为同目录的 `dev.example.yaml`。
+服务端使用 `config/mindmemos_skill/dev.yaml` 中独立的 `treeskill_mindmemos_eval` profile。
+首次接入后，需重启 Skill 服务和 UI 后端加载新代码及 profile；仅修改配置文件不会更新已运行的服务。
+CLI 与服务须共享相同绝对路径下的数据和输出目录。
+
+```bash
+# 不调用模型、不注册 Skill：核对参考记录、400 条数据、文件内容和配置。
+uv run --no-sync mindmemos-eval skill treeskill --env spreadsheetbench_text_action --check
+
+# 正式执行原生训练和测试。
+uv run --no-sync mindmemos-eval skill treeskill --env spreadsheetbench_text_action
+```
+
+`--env` 可选择系统内任意已注册环境，不因缺少历史效果保证而拒绝运行。
+省略时使用配置中的 `environment.class_name`（默认 `spreadsheetbench_text_action`）。
+其他环境使用其原生 `environment.config`，并通过 `data` 或 `samples_file` 提供匹配的数据，
+配合 `split_file` 的 train/val/test 划分及 `initial_skill`；无需历史 `reference_run` 或 `data_root`。
+例如 `mindmemos-eval skill treeskill --env livemath --config /path/to/math.yaml`。
+只有 `spreadsheetbench_text_action` 执行下面的历史协议对齐；其他环境照常训练、测试和发布 UI 结果，效果不保证。
+
+参考实验是 `output/treeskill_full_20261012_092954`，其 held-out 测试为 122/200（61%）。
+检查要求固定划分和顺序、完整初始 Skill 及资源、任务和评分元数据、工作簿内容、
+原生环境和 trainer 参数一致。历史 optimizer 模型在存档中被脱敏，
+`reference_optimizer_model: qwen3.5-35b-a3b` 来自实验所有者确认；
+执行模型和 router 模型分别从历史执行请求和最终动态 Skill 核对。
+名称按要求加后缀，初始 Skill 正文及资源保持一致。
+
+| 参数 | 本协议 |
+| --- | --- |
+| 环境 | `spreadsheetbench_text_action` |
+| 数据 | verified 400，固定 200 train / 200 test，validation 为空 |
+| 模型 | 执行、optimizer、failure optimizer、router 均为 `qwen3.5-35b-a3b` |
+| 最大交互轮数 | 100 |
+| 工作簿重新计算 | `transactional_recalculation=true` |
+| rollout / analysis / localization / test 并发 | 32 / 32 / 32 / 32 |
+| 每题采样数 / seed | 1 / 41 |
+| 采样、超时和阶段设置 | 从参考 trainer 配置逐项校验 |
+
+结果写入 `output/mindmemos_eval/treeskill/<时间>/`（可用 `--output-dir` 指定空目录）：
+
+- `registration.json`、`task.json`：注册身份、异步任务状态和最终版本。
+- `summary.json`、`report.md`：测试题量、测试耗时、token、执行错误和成功率。
+- `trajectories.jsonl`：每条测试题的原生结果或明确的失败/未开始记录。
+- `runtime.json`：整个注册、训练和测试流程的耗时，与测试耗时分开。
+- `training/train/`：原生训练阶段统计、轨迹和最终动态 Skill。
+- `training/test/`：服务端原始测试记录、JSONL 和 `report.json`。
+
+正常 reward=0 不计入执行错误。成功率分母是正常完成的题量；未开始题目单列。
+无法取得的耗时或 token 为 `null`，已知的部分 token 另列，不补零。
+训练或测试失败时命令返回失败，保留任务状态和已生成的测试报告。
+完整结束后，UI → Skills → 对应注册名 → 最终版本 → Content 显示 Test evaluation。
+旧版本不会自动补写摘要；61% 是参考结果，并非新运行的保证分数。
+
+
+## 直接测试已注册环境
+
+`mindmemos-eval skill test` 每次只运行一个模式：no-skill 或一组静态 Skill。
+多个 Skill 会一起注入每个任务，不进行训练或自动对比。以下命令在仓库根目录执行。
+
+先运行 `make init` 生成本地配置，再编辑 `config/mindmemos_eval/env_test/dev.yaml`。
+默认示例使用 LiveMath；`environment.class_name/config` 是环境注册名及其原生配置，
+`data.class_name/config` 是已注册数据加载器及其原生配置。模型连接填写在环境的 `agent` 中。
+可用 `skill envs` 查看环境注册名；不同环境需要各自适用的数据和配置。
+
+```bash
+uv run --no-sync mindmemos-eval skill envs
+
+# No-skill：取配置所选 split 的前 10 题。
+uv run --no-sync mindmemos-eval skill test --no-skill --limit 10 --concurrency 2
+
+# 静态 Skill：这两个目录作为一组同时提供给每个任务。
+uv run --no-sync mindmemos-eval skill test \
+  --skills /path/to/skill_a /path/to/skill_b --limit 10 --concurrency 2
+```
+
+`--no-skill` 与 `--skills` 互斥。未指定这两个参数时使用配置中的 `skills`，空列表表示 no-skill。
+Skill 路径可以是包含标准 frontmatter 的 `SKILL.md`，也可以是其所在目录。
+`--config` 指定其他配置，`--env` 覆盖环境注册名，`--split-file/--split` 选择固定划分，
+`--limit` 取有序前缀，`--output-dir` 指定空的输出目录。所有相对路径均相对于执行命令的目录。
+
+没有现成 Data 加载器时，可在配置中令 `data: null` 并设置 `samples_file`，或使用
+`--samples /path/to/samples.json` 覆盖数据源。JSON 文件是数组，每项只有 `task` 和
+`reward_data` 两个字段，内容必须符合所选环境的原生任务与评分数据模型。
+`split_file: null` 表示评测全部输入；提供 split 文件时，其 ID 必须存在于输入数据中。
+
+报告固定包含六项信息：
+
+| 项目 | 口径 |
+| --- | --- |
+| 数据量 | `planned` 选中数量、`attempted` 实际执行数量、`completed` 正常完成数量 |
+| 耗时 | `wall_seconds` 为准备和执行的墙钟耗时；每题耗时另存轨迹记录 |
+| Token 消耗 | `input_tokens/output_tokens/total_tokens`；有缺失时总量为 null，`reported_usage` 保存已知部分，`usage_missing` 标记缺失任务数 |
+| 执行失败 | `errors` 仅统计 API 超时等执行或评分异常；正常 reward=0 不计入 |
+| 成功率 | 环境 `reward.success=true` 的任务数 / 正常完成数；全部异常时为 null |
+| 逐题轨迹 | `tasks/trajectories.jsonl` 每个已结束任务一行，包含任务、结果或错误和原生轨迹 |
+
+每个任务结束后立即追加 JSONL，行顺序为完成顺序，`position` 保留原始任务顺序。
+`result.trajectory` 保存环境返回的交互记录，`outcome` 包含得分、成功标记、耗时、token 和错误。
+执行异常时 `result` 为 null，保留错误及原始任务目录位置；环境没有返回的轨迹或 token 不会虚构补齐。
+
+默认输出位于 `output/mindmemos_eval/test/<run>/`：`summary.json` 是结构化汇总，
+`report.md` 是可读报告，`tasks/trajectories.jsonl` 是逐题轨迹；`tasks/task-*/`
+保留原生工作目录和审计文件。出现执行异常时命令返回非零；只有正常零分时仍返回零。
+
+---
+
+## Memory 评测前置条件
 
 ### 1. 启动依赖服务
 
@@ -64,11 +176,11 @@ curl -s -X POST https://your-llm-provider/v1/chat/completions \
 
 ```bash
 python -m pip install huggingface_hub
-python scripts/download_datasets.py list --benchmark memory
-python scripts/download_datasets.py download --benchmark memory --dataset locomo
-python scripts/download_datasets.py download --benchmark memory --dataset longmemeval
-python scripts/download_datasets.py download --benchmark memory --dataset personamem
-python scripts/download_datasets.py download --benchmark memory --dataset memoryagentbench
+python scripts/download_datasets.py list memory
+python scripts/download_datasets.py download memory --name locomo
+python scripts/download_datasets.py download memory --name longmemeval
+python scripts/download_datasets.py download memory --name personamem
+python scripts/download_datasets.py download memory --name memoryagentbench
 ```
 
 默认下载到 `data/mindmemos_memory/<dataset>/`，保留官方文件格式：
@@ -106,9 +218,9 @@ MemoryAgentBench 保留官方 Parquet 格式，当前评测器的本地 `dataset
 Hugging Face 缓存准备数据：
 
 ```bash
-python scripts/download_datasets.py download --benchmark memory --dataset locomo --data-root /path/to/memory
-python scripts/download_datasets.py download --benchmark memory --dataset locomo --verify-only
-python scripts/download_datasets.py download --benchmark memory --dataset personamem --offline
+python scripts/download_datasets.py download memory --name locomo --data-root /path/to/memory
+python scripts/download_datasets.py download memory --name locomo --verify-only
+python scripts/download_datasets.py download memory --name personamem --offline
 ```
 
 自定义目录示例会写入 `/path/to/memory/locomo/`，校验该目录时也需传入相同的 `--data-root`。
@@ -223,47 +335,53 @@ uv run python -m mindmemos_eval.cli memory \
 
 > **当前边界**：上述命令复现 MemoryAgentBench 的 Vanilla 基线。当前 `develop` 分支的 `memory` CLI 尚未暴露 Add → Dreaming → Answer/Search → Score 的完整开关，因此不能仅凭配置文件名复现主 README 表格中的 Vanilla + Dreaming 行。
 
-### SpreadsheetBench-Verified
+### Skill-Forest 五基准测评
 
-SpreadsheetBench 使用独立的 Skill evaluator，首次运行时会自动下载并解压 Verified-400 数据集。先执行两条任务的冒烟测试：
-
-```bash
-uv run python -m mindmemos_eval.cli skill spreadsheetbench \
-  --data-root data/SpreadsheetBench \
-  --download \
-  --model gpt-5.4-mini \
-  --api-key <YOUR_KEY> \
-  --base-url https://your-llm-provider/v1 \
-  --limit 2 \
-  --concurrency 1 \
-  --run-dir results/spreadsheetbench_smoke
-```
-
-复现 Init-skill 路径时，加入仓库内置初始 Skill：
+Skill 测评在进程内创建隔离的本地 Skill service，不需要启动前述 Memory server 或 HTTP 服务。
+安装依赖并初始化共享配置：
 
 ```bash
-uv run python -m mindmemos_eval.cli skill spreadsheetbench \
-  --data-root data/SpreadsheetBench \
-  --skill resources/skill_evolve/spreadsheetbench_init_skill/xlsx \
-  --model gpt-5.4-mini \
-  --api-key <YOUR_KEY> \
-  --base-url https://your-llm-provider/v1 \
-  --concurrency 1 \
-  --run-dir results/spreadsheetbench_init
+uv sync --all-packages --extra alfworld --extra spreadsheetbench
+make init
 ```
 
-连接 MindMemOS Skill Evolution 服务时，再加入：
+在 `config/mindmemos_eval/dev.yaml` 中填写 `models.target` 和 `models.optimizer` 的模型名、
+`api_key`、`base_url`；四类并发和原生环境参数也在该文件配置。
+OfficeQA 的回合限制字段为 `max_tool_turns`。
 
-```text
---evolve
---evolve-every 1
---evolution-base-url http://127.0.0.1:8000
---evolution-api-key <MINDMEMOS_API_KEY>
+```bash
+uv run --no-sync python scripts/download_datasets.py download skill --name livemath
+uv run --no-sync mindmemos-eval skill run --smoke
+uv run --no-sync mindmemos-eval skill run
 ```
 
-No-skill 基线不传 `--skill`；Init-skill 传入初始 Skill，但不传 `--evolve`。
+默认运行 LiveMath 的完整固定 split，包含 `no_skill`、`initial_skill`、`trained_skill` 三组。
+`--smoke` 取固定 split 的前 4 train / 2 val / 2 test，并使用一棵树、一个候选、depth/budget 1。
+只运行对照时使用 `--arms no_skill,initial_skill`，不会创建训练服务，也不要求 optimizer 连接。
 
-> **当前边界**：当前 CLI 可以运行 No-skill、Init-skill 和在线 evolution 路径，但没有单独暴露主 README 表格中 Unsup./Sup. 两种实验协议的完整选择参数。对外报告结果时还需记录实际模型、并发、随机种子和重复运行次数。
+```bash
+uv run --no-sync python scripts/download_datasets.py download skill --all
+uv run --no-sync mindmemos-eval skill run --benchmark all
+uv run --no-sync mindmemos-eval skill run --benchmark spreadsheetbench --test-repeats 3
+uv run --no-sync mindmemos-eval skill report output/mindmemos_eval/skill/<run-directory>
+```
+
+`--benchmark all` 按顺序执行 LiveMath、ALFWorld、SpreadsheetBench、SearchQA、OfficeQA。
+运行前统一校验全部选中数据的下载 receipt、固定 split 和真实运行依赖；校验失败不会提交训练。
+运行阶段某个基准失败后继续其他基准，最终返回非零退出码。
+
+每次运行使用新目录；`--output-dir` 指向非空目录会报错。结果包括 `summary.json`、`summary.csv`、
+`report.md`、精确 Skill 版本及原始 rollout 引用。训练 pipeline 的第一轮测试经核验后直接采用，
+后续 repeat 使用同一个发布版本和独立工作目录。执行或评分错误单独记录；覆盖不完整时不输出完整准确率。
+`report` 只重算保存结果的统计，不调用模型。Token 缺失保留为 null，optimizer 成本与测试成本分别记录。
+
+SpreadsheetBench 固定使用原生 tool-calling，默认 `transactional_recalculation: false`。
+SearchQA 统一使用 `lucadiliello/searchqa`，固定 revision 为
+`c1a979068ba118d85467179b704031d113d689cc`。下载脚本将原始 Parquet 保存到
+`data/mindmemos_skill/searchqa/data/`。split 目录只保留 `splits.json`，使用该来源的原生
+`key`，保持原项目 train 400、val 200、test 1,400 的题目及顺序。
+评测直接保留源数据的 `question`、`context`、`answers`，仅将 `key` 作为 task ID；
+选中记录写入本次运行的 `prepared/searchqa/items.json`，不修改下载文件，也不需要 ID 映射资源。
 
 ---
 

@@ -23,7 +23,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     memory = subparsers.add_parser("memory", help="Run memory benchmark matrix add/search evaluations.")
     add_memory_args(memory)
 
-    skill = subparsers.add_parser("skill", help="Run skill benchmark self-evolution evaluation.")
+    skill = subparsers.add_parser("skill", help="Test registered environments or run Skill-Forest evaluations.")
     add_skill_args(skill)
 
     return parser

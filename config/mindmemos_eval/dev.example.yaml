@@ -1,0 +1,38 @@
+# Shared Skill evaluation settings for fresh in-process runs.
+models:
+  target:
+    model: gpt-5.4-mini
+    api_key: null
+    base_url: null
+    reasoning_effort: medium
+    max_completion_tokens: 16384
+  optimizer:
+    model: gpt-5.4-mini
+    api_key: null
+    base_url: null
+    max_completion_tokens: 16384
+skill_forest:
+  num_trees: 7
+  candidates_per_node: 3
+  max_depth: 3
+  expansion_budget: 30
+  seed: 42
+  expansion_concurrency: 4
+  rollout_concurrency: 4
+  model_concurrency: 4
+evaluation_concurrency: 4
+environments:
+  livemath: {}
+  searchqa:
+    max_turns: 1
+    max_context_chars: 6000
+  officeqa:
+    max_tool_turns: 24
+  spreadsheetbench:
+    max_turns: 30
+    skill_loading_mode: tool
+    transactional_recalculation: false
+  alfworld:
+    max_steps: 50
+    history_length: 2
+    seed: 42

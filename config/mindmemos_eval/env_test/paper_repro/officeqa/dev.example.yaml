@@ -1,0 +1,21 @@
+environment:
+  class_name: officeqa
+  config:
+    agent:
+      model: gpt-5.4-mini
+      api_key: null
+      base_url: https://example.com/v1
+      reasoning_effort: medium
+      max_completion_tokens: 16384
+      max_retries: 10
+      timeout_s: 600
+      response_validation: content
+      retry_policy: all
+      retry_max_wait_s: 30
+    max_tool_turns: 24
+    max_tool_chars: 16000
+    evaluator_version: 309dc01ad21113d240700eecb74d2f3e59f163b6
+samples_file: /Users/cuiyuqi/hw-project/MindMemOs-fastapi/mindmemos-skill-dev-0920/.tmp/skill_forest_repro_20261012/officeqa_samples.json
+skills: []
+concurrency: 40
+skill_body_only: true
