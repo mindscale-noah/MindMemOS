@@ -13,11 +13,14 @@ from fastapi import APIRouter, HTTPException, Query
 from mindmemos_sdk.config import ConfigManager
 from mindmemos_sdk.skills import (
     ActivateRequest,
+    AddGraphMembersRequest,
     DeleteRequest,
+    GraphResolveRequest,
     GraphSnapshotRequest,
     GraphSnapshotsRequest,
     HistoryRequest,
     ListRequest,
+    RemoveGraphMembersRequest,
     ShowRequest,
     StructuredSkillInfo,
     TrajectoryStatisticsRequest,
@@ -31,6 +34,8 @@ from mindmemos_sdk.skills import (
 from mindmemos_sdk.skills import (
     RegisterRequest as SkillRegisterRequest,
 )
+from mindmemos_skill.algos.train.treeskill import TreeSkill
+from mindmemos_skill.algos.train.treeskill.construction.markdown import parse_skill_markdown
 from mindmemos_skill.common.skill_runtime import load_runtime_skill
 from mindmemos_skill.envs.typing import Task
 from mindmemos_skill.skill import Skill, SkillSnapshot, decode_resources, encode_resources
@@ -100,6 +105,7 @@ def _content(version: dict) -> dict:
         "resources": list(resources),
         "binary_files": binary_files,
         "raw_resources": version["resources"],
+        "evaluations": ((version.get("metadata") or {}).get("algorithm_report") or {}).get("evaluations", {}),
     }
 
 
@@ -469,6 +475,21 @@ def sdk_workbench_router(
         async with skill_client(manager) as client:
             return await client.graph_snapshot(GraphSnapshotRequest(graph_id=graph_id, graph_version_id=snapshot_id))
 
+    @router.post("/graphs/preview")
+    async def preview_graph(body: GraphResolveRequest):
+        async with skill_client(manager) as client:
+            return await client.preview_graph(body)
+
+    @router.post("/graphs/members/add")
+    async def add_graph_members(body: AddGraphMembersRequest):
+        async with skill_client(manager) as client:
+            return await client.add_graph_members(body)
+
+    @router.post("/graphs/members/remove")
+    async def remove_graph_members(body: RemoveGraphMembersRequest):
+        async with skill_client(manager) as client:
+            return await client.remove_graph_members(body)
+
     @router.post("/assemble")
     async def assemble(body: AssembleRequest):
         if len({ref.skill_id for ref in body.versions}) != 1:
@@ -503,7 +524,17 @@ def sdk_workbench_router(
             )
             for version, skill in zip(versions, assembled, strict=True)
         ]
-        result = {"contents": contents, "task": task.model_dump()}
+        summaries = [
+            {
+                "original_length": len(version["content"]),
+                "assembled_length": len(skill.content),
+                "included_nodes": len(parse_skill_markdown(skill.content).nodes)
+                if isinstance(skill, TreeSkill)
+                else None,
+            }
+            for version, skill in zip(versions, assembled, strict=True)
+        ]
+        result = {"contents": contents, "task": task.model_dump(), "summaries": summaries}
         if len(contents) == 2:
             result["comparison"] = _compare_contents(*assembled, *versions)
         return result

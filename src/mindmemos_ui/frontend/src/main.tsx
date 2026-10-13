@@ -56,7 +56,7 @@ function App() {
           {[
             ["memories", "Memories"],
             ["skills", "Skills"],
-            ["graphs", "SkillSets"],
+            ["graphs", "Graphs"],
             ["settings", "Settings"],
           ].map(([key, label]) => (
             <button
@@ -126,7 +126,7 @@ function App() {
                   : page === "skills"
                     ? "Skills"
                     : page === "graphs"
-                      ? "SkillSets"
+                      ? "Graphs"
                       : "Settings"}
               </h1>
             )}

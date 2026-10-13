@@ -3,7 +3,19 @@ import { Empty } from "./components";
 import { SplitDiff } from "./split-diff";
 import { FilePreview } from "./file-preview";
 
+export type EvaluationSummary = {
+  count: number;
+  success_rate: number | null;
+  errors: number;
+  wall_seconds?: number | null;
+  task_seconds?: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  trajectory_file: string;
+};
 export type BundleContent = {
+  evaluations?: Record<string, EvaluationSummary>;
   files: Record<string, string>;
   resources: string[];
   binary_files?: string[];

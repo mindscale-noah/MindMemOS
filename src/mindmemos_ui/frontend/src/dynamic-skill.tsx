@@ -10,6 +10,11 @@ import {
 type Implementation = { implementation: string; dynamic: boolean };
 type Assembly = {
   contents: BundleContent[];
+  summaries?: {
+    original_length: number;
+    assembled_length: number;
+    included_nodes: number | null;
+  }[];
   task: { id: string; instruction: string };
   comparison?: Pick<BundleComparison, "files" | "implementation_changed">;
 };
@@ -109,7 +114,21 @@ export function DynamicSkill({
       {busy && <Empty>Assembling Skill for the task…</Empty>}
       {assembled ? (
         <>
-          <p className="muted">Assembly result: {assembled.task.instruction}</p>
+          <div role="status" className="muted">
+            {assembled.summaries?.map((summary, index) => (
+              <p key={index}>
+                Assemble complete
+                {assembled.summaries!.length > 1 ? ` · ${labels[index]}` : ""}
+                {" · Original Skill length: "}
+                {summary.original_length.toLocaleString("en-US")} characters
+                {" · Assembled Skill length: "}
+                {summary.assembled_length.toLocaleString("en-US")} characters
+                {summary.included_nodes !== null &&
+                  ` · Included ${summary.included_nodes.toLocaleString("en-US")} nodes`}
+              </p>
+            ))}
+            {!assembled.summaries && <p>Assemble complete</p>}
+          </div>
           <BundleBrowser
             key={assembled.task.id}
             content={assembled.contents[assembled.contents.length - 1]}

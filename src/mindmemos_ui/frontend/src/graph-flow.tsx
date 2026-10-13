@@ -27,7 +27,11 @@ import "@xyflow/react/dist/style.css";
 
 export type GraphNode = {
   node_id: string;
+  node_type?: "skill" | "scene";
+  owner_node_id?: string | null;
+  description?: string;
   skill_id: string;
+  skill_name?: string;
   skill_version_id: string;
   name: string;
   version_label?: string;
@@ -38,6 +42,9 @@ export type GraphEdge = {
   source_node_id: string;
   target_node_id: string;
   edge_type: string;
+  weight?: number;
+  condition?: string;
+  evidence?: string;
 };
 
 const NODE_WIDTH = 244;
@@ -61,6 +68,7 @@ type SkillNode = Node<
 >;
 
 function SkillCard({ data, selected }: NodeProps<SkillNode>) {
+  const scene = data.record.node_type === "scene";
   const version = data.record.version_label || "Unnamed version";
   return (
     <>
@@ -77,19 +85,23 @@ function SkillCard({ data, selected }: NodeProps<SkillNode>) {
         >
           <div className="graph-popover-heading">
             <div>
-              <span className="graph-popover-kicker">SKILL DETAILS</span>
+              <span className="graph-popover-kicker">{scene ? "SCENE DETAILS" : "SKILL DETAILS"}</span>
               <strong>{data.record.name}</strong>
             </div>
             <button
               type="button"
               className="graph-popover-close"
-              aria-label="Close Skill details"
+              aria-label={scene ? "Close Scene details" : "Close Skill details"}
               onClick={data.onClose}
             >
               ×
             </button>
           </div>
           <dl className="graph-popover-fields">
+            {scene && <>
+              <dt>Goal</dt><dd>{data.record.description || data.record.name}</dd>
+              <dt>Owner node</dt><dd><code>{data.record.owner_node_id}</code></dd>
+            </>}
             <dt>Version</dt>
             <dd>
               <code>{version}</code>
@@ -112,7 +124,7 @@ function SkillCard({ data, selected }: NodeProps<SkillNode>) {
             className="primary graph-popover-action"
             onClick={data.onOpenVersion}
           >
-            Open this version
+            {scene ? "Open owner version" : "Open this version"}
           </button>
         </NodeToolbar>
       )}
@@ -124,7 +136,7 @@ function SkillCard({ data, selected }: NodeProps<SkillNode>) {
         title={`${data.record.name} · ${version}`}
       >
         <span className="graph-node-kicker">
-          SKILL <span>· {data.relationCount} relationships</span>
+          {scene ? "SCENE" : "SKILL"} <span>· {data.relationCount} relationships</span>
         </span>
         <strong>{data.record.name}</strong>
         <code>{version}</code>
@@ -198,15 +210,17 @@ function SkillRelation(props: EdgeProps<SkillEdge>) {
           </div>
           <div className="graph-relation-endpoints">
             <div>
-              <span>Source Skill</span>
+              <span>Source node</span>
               <strong>{data.sourceName}</strong>
             </div>
             <span aria-hidden="true">→</span>
             <div>
-              <span>Target Skill</span>
+              <span>Target node</span>
               <strong>{data.targetName}</strong>
             </div>
           </div>
+          {data.record.condition && <p>Condition: {data.record.condition}</p>}
+          {data.record.evidence && <p>Evidence: {data.record.evidence}</p>}
           <p className="graph-popover-id">
             Relationship ID <code>{data.record.edge_id}</code>
           </p>
@@ -451,7 +465,7 @@ function Flow({
       ref={canvas}
       className="graph-canvas"
       role="region"
-      aria-label="Skill relationship graph"
+      aria-label="Skill and Scene relationship graph"
     >
       <div className="graph-legend" aria-label="Relationship color legend">
         {visibleTypes.map((type) => (

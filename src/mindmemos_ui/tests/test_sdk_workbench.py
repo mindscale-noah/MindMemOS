@@ -14,6 +14,58 @@ from mindmemos_ui.app import create_app as create_ui_app
 from mindmemos_skill import SkillConfig, create_service
 
 
+@pytest.mark.parametrize("selected", ["", "# Formulas\nCalculate totals.\n## Errors\nCheck errors.\n"])
+async def test_assembly_summary_counts_actual_tree_nodes(workbench, tmp_path, monkeypatch, selected):
+    from mindmemos_skill.agents import OpenAIChatConfig
+    from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillConfig
+    from mindmemos_skill.algos.train.treeskill.typing import RoutingResult
+    from mindmemos_skill.skill import Skill
+
+    browser, manager = workbench
+    source = tmp_path / "tree"
+    source.mkdir()
+    original = "---\nname: tree\ndescription: Example\n---\n# Formulas\nCalculate totals.\n## Errors\nCheck errors.\n# Styles\nKeep styles.\n"
+    (source / "SKILL.md").write_text(original)
+    preview = await browser.post("/api/register/preview", json={"path": str(source)})
+    registered = (await browser.post("/api/register/confirm", json={"plan_id": preview.json()["plan_id"]})).json()
+
+    async def route(self, task):
+        return RoutingResult(content=selected)
+
+    monkeypatch.setattr(TreeSkill, "route", route)
+
+    def loader(snapshot):
+        return TreeSkill(
+            TreeSkillConfig(router=OpenAIChatConfig(model="offline")), source=Skill.from_snapshot(snapshot).source
+        )
+
+    app = await create_ui_app(manager, skill_loader=loader)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client:
+        client.headers["x-workbench-token"] = (await client.get("/api/session")).json()["token"]
+        result = await client.post(
+            "/api/assemble",
+            json={
+                "versions": [
+                    {
+                        "source": "local",
+                        "skill_id": registered["skill"]["skill_id"],
+                        "version_id": registered["version"]["version_id"],
+                    }
+                ],
+                "instruction": "Calculate totals",
+            },
+        )
+    assert result.status_code == 200, result.text
+    assert result.json()["contents"][0]["files"]["SKILL.md"] == selected
+    assert result.json()["summaries"] == [
+        {
+            "original_length": len(original),
+            "assembled_length": len(selected),
+            "included_nodes": 2 if selected else 0,
+        }
+    ]
+
+
 @pytest_asyncio.fixture
 async def workbench(tmp_path, monkeypatch):
     """Connect the UI's SDK transport to an isolated project-owned Skill API."""
@@ -131,6 +183,14 @@ async def test_skill_lifecycle_uses_sdk_and_preserves_auxiliary_files(workbench,
         },
     )
     assert assembled.status_code == 200, assembled.text
+    for summary, item, suffix in zip(
+        assembled.json()["summaries"], assembled.json()["contents"], ("Original", "Updated"), strict=True
+    ):
+        assert summary == {
+            "original_length": len(f"---\nname: demo\ndescription: Example\n---\n{suffix}"),
+            "assembled_length": len(item["files"]["SKILL.md"]),
+            "included_nodes": None,
+        }
     assert {item["path"] for item in assembled.json()["comparison"]["files"]} == {
         "SKILL.md",
         "assets/data.bin",
@@ -275,3 +335,13 @@ async def test_browser_edited_snapshot_adds_deletes_and_preserves_files(workbenc
         assert rejected.status_code == 422, rejected.text
     rejected = await browser.post("/api/commit/edited", json=request, headers={"origin": "https://example.org"})
     assert rejected.status_code == 403
+
+
+def test_content_exposes_published_evaluation_summary():
+    from mindmemos_ui.sdk_workbench import _content
+
+    evaluation = {"count": 200, "success_rate": 0.61, "errors": 0, "trajectory_file": "/run/test/trajectories.jsonl"}
+    content = _content(
+        {"content": "# Skill", "resources": {}, "metadata": {"algorithm_report": {"evaluations": {"test": evaluation}}}}
+    )
+    assert content["evaluations"]["test"] == evaluation
