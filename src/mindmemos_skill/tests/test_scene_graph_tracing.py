@@ -30,11 +30,11 @@ async def test_build_stage_spans_capture_timing_hierarchy_and_failures(
         await asyncio.sleep(0)
         return node
 
-    async def chat(self, system, payload):
-        return '{"relations": []}'
+    async def chat(self, system, payload, allowed):
+        return self._parse_relations('{"relations": []}', allowed=allowed)
 
     monkeypatch.setattr(SkillEnricher, "enrich", enrich)
-    monkeypatch.setattr(SkillManageAlgorithm, "_chat", chat)
+    monkeypatch.setattr(SkillManageAlgorithm, "_request_relations", chat)
     request = OrganizeRequest(project_id="project", skill_refs=[item.skill.skill_id for item in items[:2]])
     versions = await pipeline._resolve_skill_versions(request.skill_refs)
     sources = pipeline._skills_from_versions(versions)

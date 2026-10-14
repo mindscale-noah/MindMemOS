@@ -254,6 +254,9 @@ class TreeSkillEvalConfig(BaseModel):
     profile: str = "treeskill_mindmemos_eval"
     """Configured server training profile; its trainer must be treeskill."""
 
+    concurrency: int = Field(default=32, ge=1)
+    """Explicit worker limit for rollout, analysis, localization and held-out evaluation."""
+
     poll_interval: float = Field(default=5, ge=1, le=60)
     """Seconds between persisted HTTP task progress reads."""
 

@@ -6,22 +6,29 @@ models:
     base_url: null
     reasoning_effort: medium
     max_completion_tokens: 16384
+    max_retries: 10
+    timeout_s: 600
   optimizer:
     reasoning_effort: medium
     model: gpt-5.4-mini
     api_key: null
     base_url: null
     max_completion_tokens: 16384
+    max_retries: 10
+    timeout_s: 600
 skill_forest:
+  validation_batch_size: 8
+  selection_tiebreak: novelty
+  patch_application: exact
   num_trees: 7
   candidates_per_node: 3
   max_depth: 3
   expansion_budget: 30
   seed: 42
-  expansion_concurrency: 40
-  rollout_concurrency: 40
-  model_concurrency: 40
-evaluation_concurrency: 40
+  expansion_concurrency: 20
+  rollout_concurrency: 20
+  model_concurrency: 20
+evaluation_concurrency: 20
 environments:
   livemath: {}
   searchqa:

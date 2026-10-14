@@ -81,8 +81,15 @@ async def test_http_run_uses_named_registration_and_service_test(monkeypatch, tm
         split_file=tmp_path / "split.json",
         initial_skill=source,
         output_dir=tmp_path / "run",
+        concurrency=16,
     )
-    write_json(config.reference_run / "training/train/config.json", {"algorithm": {"seed": 41}})
+    reference_algorithm = {
+        "seed": 41,
+        "rollout_concurrency": 32,
+        "analysis_concurrency": 32,
+        "localization_concurrency": 32,
+    }
+    write_json(config.reference_run / "training/train/config.json", {"algorithm": reference_algorithm})
     monkeypatch.setattr(
         treeskill,
         "prepare",
@@ -123,7 +130,17 @@ async def test_http_run_uses_named_registration_and_service_test(monkeypatch, tm
             calls["training"] = request
             for i in range(3):
                 complete(config.output_dir, i, i != 1)
-            write_json(config.output_dir / "training/train/config.json", {"algorithm": {"seed": 41}})
+            write_json(
+                config.output_dir / "training/train/config.json",
+                {
+                    "algorithm": {
+                        **reference_algorithm,
+                        "rollout_concurrency": 16,
+                        "analysis_concurrency": 16,
+                        "localization_concurrency": 16,
+                    }
+                },
+            )
             return {"task_id": "task", "project_id": "ui-project", "status": "queued"}
 
         async def task_progress(self, request):

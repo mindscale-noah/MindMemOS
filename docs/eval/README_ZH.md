@@ -337,6 +337,8 @@ uv run python -m mindmemos_eval.cli memory \
 
 ### Skill-Forest 五基准测评
 
+交给测试执行者的完整下载、参数确认、Select/Merge 运行与验收流程见 [五数据集测试交接指南](skill_forest_handoff_ZH.md)。
+
 Skill 测评在进程内创建隔离的本地 Skill service，不需要启动前述 Memory server 或 HTTP 服务。
 安装依赖并初始化共享配置：
 
@@ -358,6 +360,18 @@ uv run --no-sync mindmemos-eval skill run
 默认运行 LiveMath 的完整固定 split，包含 `no_skill`、`initial_skill`、`trained_skill` 三组。
 `--smoke` 取固定 split 的前 4 train / 2 val / 2 test，并使用一棵树、一个候选、depth/budget 1。
 只运行对照时使用 `--arms no_skill,initial_skill`，不会创建训练服务，也不要求 optimizer 连接。
+
+与论文比较时设置 `--test-repeats 3`，报告同一个冻结 Skill 的三轮均值；默认的一轮结果不能
+直接当作论文均值。`skill_forest.validation_batch_size` 默认为 8，候选完成一个批次后才判断
+是否提前拒绝。`selection_tiebreak: novelty` 与论文及独立选优脚本一致：先在完整训练集上评分，
+最高分并列时选择相对初始 Skill 的双文档 TF-IDF 新颖度最高者。`validation` 仅对应
+早期训练入口的旧规则，依次比较树内验证分数、深度和正文长度，不用于论文对齐。`patch_application: exact`
+要求补丁目标唯一且整组编辑有效；`reference` 使用原 SkillOpt 的行后插入和缺失目标处理规则。
+这些设置不能代替对模型、初始正文和数据输入的核对。
+
+Skill-Forest 算法版本 3 对齐树内划分与反思随机种子，并为 LiveMath 使用原运行的阶段选项
+顺序。共享根验证与各树候选验证使用各自的种子，保留原实验行为。旧版本训练目录不能续跑；
+请使用新目录，旧结果仍可用于查看和对比。
 
 ```bash
 uv run --no-sync python scripts/download_datasets.py download skill --all
@@ -565,3 +579,9 @@ uv run python -m mindmemos_eval.memory.metrics \
 
 > PersonaMem 使用确定性评分，无 answer/judge LLM 调用，percentiles sheet 中不产生 `eval.*` 行。
 > `vanilla`/`fast` search 完全不调用 LLM，所以这类 run 的 `search` token 分位数是空的；只有 `agentic`/`schema`（一次 query 会触发多次 LLM call）才会填上数据。
+
+反思与合并结果统一保持批次提交顺序，不随请求完成先后改变。
+生成协议版本为 5，不能续用旧版本训练检查点。
+
+
+优化器响应统一按参考协议处理：保留原始 JSON 顺序与元数据，按报告批次大小补支持次数，并保存请求与回答。无效模型输出使用证据回退，传输故障仍报错；不再提供 strict/reference 切换。

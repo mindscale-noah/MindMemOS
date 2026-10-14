@@ -3,16 +3,17 @@
 import hashlib
 import json
 from collections.abc import Iterator, Mapping
+from functools import partial
 from itertools import islice
 from math import hypot
 from time import perf_counter
 from uuid import UUID
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 from mindmemos_skill.common.ids import generate_id
 
-from ....agents import Agent
+from ....agents import Agent, OpenAIChatAgent
 from ....common.asyncio import map_bounded
 from ....common.json import parse_model
 from ....envs.typing import Task
@@ -807,7 +808,6 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
     ) -> list[InferredEdge]:
         """Infer all batches concurrently and merge validated proposals in input order."""
         weighted = self.config.joint_linking.relation_weighting == "model_confidence"
-        relation_validation = self.config.joint_linking.relation_validation
         system = JOINT_RELATION_WEIGHT_SYSTEM if weighted else JOINT_RELATION_SYSTEM
         completed_pairs = 0
         batches = []
@@ -833,18 +833,9 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
             )
             payload = [[joint_relation_payload(node) for node in pair] for pair in batch]
             try:
-                relations = parse_model((await self._chat(system, {"pairs": payload})), JointRelations)
                 allowed = {frozenset((left.node_id, right.node_id)) for left, right in batch}
+                relations = await self._request_relations(system, {"pairs": payload}, allowed)
                 for relation in relations.relations:
-                    if (
-                        relation.source_id == relation.target_id
-                        or frozenset((relation.source_id, relation.target_id)) not in allowed
-                    ):
-                        if relation_validation == "strict":
-                            raise ValueError("Relation endpoints must belong to a supplied pair")
-                        continue
-                    if weighted and relation.weight is None:
-                        raise ValueError("Model-confidence weighting requires an explicit weight")
                     weight = relation.weight if weighted else RELATION_TYPE_WEIGHTS[relation.edge_type]
                     edge = {
                         "source": relation.source_id,
@@ -883,15 +874,62 @@ class SkillManageAlgorithm(SkillManager[SkillManageConfig]):
                     result[key] = edge
         return list(result.values())
 
-    async def _chat(self, system: str, payload: dict[str, JsonValue]) -> str:
-        """Require structured JSON from the configured chat dependency."""
-        if self.chat_model is None:
-            raise RuntimeError("Chat model is not configured")
-        result = await self.chat_model.run(
+    def _parse_relations(self, text: str, *, allowed: set[frozenset[str]]) -> JointRelations:
+        """Validate candidate membership and weights inside the shared parse retry boundary."""
+        reason = "invalid_schema"
+        try:
+            parsed = parse_model(text, JointRelations)
+            relations = []
+            for relation in parsed.relations:
+                if (
+                    relation.source_id == relation.target_id
+                    or frozenset((relation.source_id, relation.target_id)) not in allowed
+                ):
+                    if self.config.joint_linking.relation_validation == "strict":
+                        reason = "invalid_endpoints"
+                        raise ValueError("Relation endpoints must belong to a supplied pair")
+                    continue
+                if self.config.joint_linking.relation_weighting == "model_confidence" and relation.weight is None:
+                    reason = "missing_weight"
+                    raise ValueError("Model-confidence weighting requires an explicit weight")
+                relations.append(relation)
+            return JointRelations(relations=tuple(relations))
+        except (ValueError, TypeError) as error:
+            details = {"reason": reason, "error_type": type(error).__name__}
+            if isinstance(error, ValidationError):
+                details["validation_types"] = sorted(
+                    {item["type"] for item in error.errors(include_input=False, include_context=False)}
+                )
+            get_logger(__name__).warning("graph.relations.invalid_output", extra={"event_body": details})
+        raise SceneGraphError(SceneGraphFailure.MODEL_FAILED) from None
+
+    @traced("skill_manage.build.linking.batch")
+    async def _request_relations(
+        self, system: str, payload: dict[str, JsonValue], allowed: set[frozenset[str]]
+    ) -> JointRelations:
+        """Retry malformed responses per batch without changing the shared chat instance."""
+        if not isinstance(self.chat_model, OpenAIChatAgent):
+            raise RuntimeError("Graph relations require the configured OpenAI chat agent")
+        agent = OpenAIChatAgent(
+            self.chat_model.config,
+            model=self.chat_model,
+            output_parser=partial(self._parse_relations, allowed=allowed),
+            parse_feedback=lambda error: (
+                "Return the complete corrected relations JSON. Copy exact endpoint IDs from one supplied pair "
+                "for every relation; never mix pairs or return self links. Include weight when requested."
+            ),
+        )
+        result = await agent.run(
             system=system, user=json.dumps(payload, ensure_ascii=False), response_format={"type": "json_object"}
         )
-        if not isinstance(result.output, str):
-            raise TypeError("Graph chat model must return JSON text")
+        if not isinstance(result.output, JointRelations):
+            raise TypeError("Graph chat model must return validated relations")
+        get_logger(__name__).info(
+            "Graph relation batch validated | pairs=%d attempts=%d edges=%d",
+            len(allowed),
+            result.usage["parse_attempts"],
+            len(result.output.relations),
+        )
         return result.output
 
     async def _embed(self, texts: list[str]) -> list[list[float]]:

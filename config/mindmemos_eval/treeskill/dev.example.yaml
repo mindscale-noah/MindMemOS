@@ -11,5 +11,6 @@ data_root: data/mindmemos_skill/spreadsheetbench/spreadsheetbench_verified_400
 split_file: resources/mindmemos_skill_eval/treeskill-spreadsheetbench/data_splits/splits.json
 initial_skill: resources/mindmemos_skill_eval/treeskill-spreadsheetbench/initial_skill
 profile: treeskill
+concurrency: 16
 poll_interval: 5
 output_dir: null

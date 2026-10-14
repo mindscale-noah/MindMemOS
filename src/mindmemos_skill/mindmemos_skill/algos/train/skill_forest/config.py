@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ....agents import OpenAIChatConfig
 from ....agents.config import AgentConfig
 
-ALGORITHM_VERSION: Final[int] = 2
+ALGORITHM_VERSION: Final[int] = 5
 """Version of the Skill-Forest algorithm and its persisted output contract."""
 
 
@@ -29,6 +29,12 @@ class SkillForestTrainerConfig(BaseModel):
 
     ensemble_strategy: Literal["select", "hierarchical_merge"] = "select"
     """Return a scored winner or synthesize winners through pairwise merging."""
+
+    selection_tiebreak: Literal["novelty", "validation"] = "novelty"
+    """Use the paper's novelty tie-break or its archived execution's validation ordering."""
+
+    patch_application: Literal["exact", "reference"] = "exact"
+    """Require atomic exact edits or reproduce the original SkillOpt text-edit behavior."""
 
     num_trees: int = Field(default=7, ge=1)
     """Number of independently partitioned optimizers."""
@@ -71,6 +77,9 @@ class SkillForestTrainerConfig(BaseModel):
 
     early_rejection: bool = True
     """Stop validation only when the exact remaining-score bound cannot pass."""
+
+    validation_batch_size: int = Field(default=8, ge=1)
+    """Per-candidate validation batch completed before checking the rejection bound."""
 
     merge_batch_size: int = Field(default=8, ge=2)
     """Maximum patches combined per level of within-candidate aggregation."""

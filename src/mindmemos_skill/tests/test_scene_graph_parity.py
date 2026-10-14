@@ -110,12 +110,19 @@ async def test_original_complete_build_and_model_payloads(case, monkeypatch):
             self.calls.append(list(texts))
             return [[1.0, 0.2 if "csv" in value.lower() else 0.8, 0.1] for value in texts]
 
-    class Chat:
+    from mindmemos_skill.agents import OpenAIChatAgent
+
+    class Chat(OpenAIChatAgent):
         def __init__(self):
-            self.config = config.chat
+            super().__init__(config.chat)
             self.calls = []
 
-        async def run(self, **request):
+        async def run_messages(self, *, messages, tools=None, response_format=None):
+            request = {
+                "system": messages[0]["content"],
+                "user": messages[1]["content"],
+                "response_format": response_format,
+            }
             self.calls.append(request)
             pairs = json.loads(request["user"])["pairs"]
             relations = []

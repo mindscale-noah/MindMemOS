@@ -1,4 +1,4 @@
-"""Offline verification of shared candidate ranking without per-call files."""
+"""Offline verification of shared candidate ranking with saved optimizer evidence."""
 
 import json
 from types import SimpleNamespace
@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from mindmemos_skill.agents import AgentResult
 from mindmemos_skill.algos.train.skill_forest import SkillForestEnvAdapter, SkillForestTrainer, SkillForestTrainerConfig
-from mindmemos_skill.algos.train.skill_forest.generation import InvalidPatchError, generate_patch
+from mindmemos_skill.algos.train.skill_forest.generation import generate_patch
 from mindmemos_skill.algos.train.skill_forest.runtime import ForestRuntime
 from mindmemos_skill.algos.train.skill_forest.typing import Patch, SkillForestRankingContext
 from mindmemos_skill.envs.data.typing import DataSample, RewardData
@@ -60,7 +60,7 @@ async def run_generation(directory, response, *, depth=0, trainer_entry=False, m
             if trainer_entry:
                 trainer = SkillForestTrainer(agent_config(monkeypatch, optimizer, settings))
                 return await trainer._generate_patch(
-                    SimpleNamespace(id="parent", skill=skill, depth=depth),
+                    SimpleNamespace(id="parent", tree_id=0, skill=skill, depth=depth),
                     0,
                     SimpleNamespace(train_ids=[sample.task.id]),
                     {sample.task.id: sample},
@@ -84,7 +84,7 @@ async def run_generation(directory, response, *, depth=0, trainer_entry=False, m
 
 
 @pytest.mark.parametrize("depth,budget", [(0, 3), (1, 2), (2, 1), (5, 1)])
-async def test_ranking_respects_depth_order_without_stage_files(monkeypatch, tmp_path, depth, budget):
+async def test_ranking_respects_depth_order_and_saves_stage_evidence(monkeypatch, tmp_path, depth, budget):
     patch, optimizer = await run_generation(
         tmp_path,
         '{"selected_indices": [3, 3, -1, 99, 2, 1, 0]}',
@@ -96,7 +96,7 @@ async def test_ranking_respects_depth_order_without_stage_files(monkeypatch, tmp
     assert [edit.content for edit in patch.edits] == [f"Rule {i}" for i in [3, 2, 1][:budget]]
     assert len(optimizer.messages) == 2
     assert f"budget={budget}" in optimizer.messages[1][1]["content"]
-    assert not list(tmp_path.rglob("*.json"))
+    assert list(tmp_path.rglob("request.json"))
 
 
 @pytest.mark.parametrize("options", [{}, {"ranking_enabled": False, "ranking_edit_budgets": (1,)}])
@@ -106,7 +106,7 @@ async def test_ranking_skips_within_budget_or_when_disabled(monkeypatch, tmp_pat
     )
     assert len(patch.edits) == 4
     assert len(optimizer.messages) == 1
-    assert not list(tmp_path.rglob("*.json"))
+    assert list(tmp_path.rglob("request.json"))
 
 
 @pytest.mark.parametrize(
@@ -119,10 +119,12 @@ async def test_ranking_skips_within_budget_or_when_disabled(monkeypatch, tmp_pat
         '{"selected_indices": [1.5]}',
     ],
 )
-async def test_invalid_ranking_fails_proposal_without_truncation(monkeypatch, tmp_path, response):
-    with pytest.raises(InvalidPatchError):
-        (await run_generation(tmp_path, response, ranking_edit_budgets=(2,), monkeypatch=monkeypatch))
-    assert not list(tmp_path.rglob("*.json"))
+async def test_invalid_ranking_uses_reference_selection_or_truncation(monkeypatch, tmp_path, response):
+    patch, optimizer = await run_generation(tmp_path, response, ranking_edit_budgets=(2,), monkeypatch=monkeypatch)
+    expected = ["Rule 1"] if response == '{"selected_indices": [true]}' else ["Rule 0", "Rule 1"]
+    assert [edit.content for edit in patch.edits] == expected
+    responses = [json.loads(path.read_text())["output"] for path in tmp_path.rglob("response.json")]
+    assert response in responses
 
 
 async def test_ranking_provider_failure_is_not_an_invalid_patch(monkeypatch, tmp_path):
@@ -132,7 +134,7 @@ async def test_ranking_provider_failure_is_not_an_invalid_patch(monkeypatch, tmp
                 tmp_path, RuntimeError("provider offline"), ranking_edit_budgets=(2,), monkeypatch=monkeypatch
             )
         )
-    assert not list(tmp_path.rglob("*.json"))
+    assert list(tmp_path.rglob("request.json"))
 
 
 @pytest.mark.parametrize(
@@ -147,17 +149,17 @@ async def test_ranking_provider_failure_is_not_an_invalid_patch(monkeypatch, tmp
         "spreadsheetbench_text_action",
     ],
 )
-def test_all_adapters_share_ranking_and_support_literal_overrides(environment):
+def test_all_adapters_use_declared_ranking_and_support_literal_overrides(environment):
     context = SkillForestRankingContext(
         skill="# Rules",
         patch=Patch(edits=[{"op": "append", "content": "Verify output"}]),
         edit_budget=1,
     )
     adapter = SkillForestEnvAdapter.build(environment, {})
-    assert adapter.build_ranking_messages(context)[0]["content"] == SkillForestEnvAdapter.RANKING_PROMPT
+    assert adapter.build_ranking_messages(context)[0]["content"] == adapter.RANKING_PROMPT
     custom = SkillForestEnvAdapter.build(environment, {"ranking": "Custom ranking instructions"})
     assert custom.build_ranking_messages(context)[0]["content"] == "Custom ranking instructions"
-    assert adapter.prompts.ranking == SkillForestEnvAdapter.RANKING_PROMPT
+    assert adapter.prompts.ranking == adapter.RANKING_PROMPT
 
 
 @pytest.mark.parametrize("budgets", [(), (0,), (-1, 2)])
@@ -209,4 +211,4 @@ async def test_ranking_selects_from_final_merged_pool(monkeypatch, tmp_path):
     assert [edit.content for edit in patch.edits] == [f"Merged {i}" for i in [5, 1, 4, 0]]
     assert len(optimizer.messages) == 4
     assert "[5] op=append" in optimizer.messages[-1][1]["content"]
-    assert not list(tmp_path.rglob("*.json"))
+    assert list(tmp_path.rglob("request.json"))

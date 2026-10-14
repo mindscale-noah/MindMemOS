@@ -4,7 +4,7 @@ from typing import Literal
 
 from mindmemos_skill.persistence.db_services.skills.typing import UserVersionLabel
 from mindmemos_skill.skill import decode_resources
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, model_validator
 
 
 class RequestModel(BaseModel):
@@ -222,3 +222,206 @@ class ConfigImportRequest(RequestModel):
 
     archive: str = Field(max_length=3000000)
     """Base64-encoded ZIP bytes, never extracted to the filesystem."""
+
+
+class AlgorithmDirectoryRequest(RequestModel):
+    """Select a local algorithm output directory."""
+
+    path: str = Field(min_length=1, max_length=4096)
+    """Directory on the machine hosting the workbench."""
+
+
+class ForestSkill(BaseModel):
+    """Display-only subset of a checkpoint Skill."""
+
+    name: str = ""
+    """Human-readable Skill name."""
+
+    content: str = ""
+    """Saved Skill text, without runtime connection configuration."""
+
+
+class ForestCheckpoint(BaseModel):
+    """Version-independent display fields from a saved node."""
+
+    id: str
+    """Node identity within its training run."""
+
+    tree_id: int
+    """Tree index recorded by the trainer."""
+
+    parent_id: str | None = None
+    """Parent identity, absent for a root."""
+
+    depth: int = 0
+    """Distance from the root."""
+
+    status: Literal["root", "generated", "accepted", "rejected"]
+    """Persisted decision; generated does not prove a running process."""
+
+    scores: dict[str, float] = Field(default_factory=dict)
+    """Validated task IDs mapped to binary success scores."""
+
+    gain: float = 0
+    """Saved change in mean validation success; partial rejection uses a sentinel zero."""
+
+    expanded: bool = False
+    """Whether candidate expansion was completed."""
+
+    skill: ForestSkill = Field(default_factory=ForestSkill)
+    """Safe fields used by the node inspector."""
+
+
+class ForestNodeView(BaseModel):
+    """Compact node view derived from saved evidence."""
+
+    winner: Literal["tree", "final"] | None = None
+    """Official selection role, absent until a completed result identifies the node."""
+
+    checkpoint: ForestCheckpoint
+    """Saved checkpoint with only display fields retained."""
+
+    completed: int
+    """Distinct validation tasks with successful execution records."""
+
+    total: int | None
+    """Expected validation tasks, or None when unavailable."""
+
+    score: float | None
+    """Mean over observed validation successes, including partial observations."""
+
+    gain: float | None
+    """Final gain only when the complete validation set is available."""
+
+    errors: int = 0
+    """Invalid or failed evaluation records, excluded from completed tasks."""
+
+
+class ForestProgress(BaseModel):
+    """Training milestones inferred from saved artifacts, not process liveness."""
+
+    stage: Literal["root", "search", "select", "completed", "unknown"] = "unknown"
+    """Latest phase evidenced by files in this training root."""
+
+    roots_completed: int = 0
+    """Number of saved root checkpoints."""
+
+    roots_total: int | None = None
+    """Expected roots from the persisted split manifest."""
+
+    expansions_completed: int = 0
+    """Parents whose candidate expansion has been committed."""
+
+    expansion_budget: int | None = None
+    """Maximum parent expansions, not a guaranteed final count."""
+
+
+class ForestRunView(BaseModel):
+    """One independent training root; runs are never merged."""
+
+    path: str
+    """Absolute training root path."""
+
+    progress: ForestProgress = Field(default_factory=ForestProgress)
+    """Observed stage and committed work counts."""
+
+    nodes: list[ForestNodeView]
+    """Readable checkpoints in this run."""
+
+
+class ForestReport(BaseModel):
+    """Read-only snapshot of discovered Skill-Forest runs."""
+
+    runs: list[ForestRunView]
+    """Independent runs discovered beneath the selected directory."""
+
+    warnings: list[str]
+    """Incomplete, inaccessible, or bounded evidence notices."""
+
+
+class ForestSplit(BaseModel):
+    """Validation membership stored in a training manifest."""
+
+    validation_ids: list[str]
+    """Task IDs expected for one tree's validation."""
+
+
+class ForestTrainerBudget(BaseModel):
+    """Display-only subset of the persisted trainer settings."""
+
+    expansion_budget: int | None = Field(default=None, ge=0)
+    """Configured upper limit on parent expansions."""
+
+
+class ForestManifest(BaseModel):
+    """Only the non-sensitive split fields needed for progress totals."""
+
+    trainer: ForestTrainerBudget = Field(default_factory=ForestTrainerBudget)
+    """Non-sensitive settings needed to show search progress."""
+
+    splits: list[ForestSplit]
+    """Validation splits ordered by tree index."""
+
+
+class ForestReward(BaseModel):
+    """Binary validation outcome used by the trainer."""
+
+    success: StrictBool
+    """Whether evaluation passed, distinct from execution success."""
+
+
+class ForestEvaluationResult(BaseModel):
+    """Safe subset of an incremental evaluation result."""
+
+    reward: ForestReward
+    """Completed environment evaluation."""
+
+    error: JsonValue = None
+    """Explicit execution error, if present in an external artifact."""
+
+
+class ForestEvaluationRecord(BaseModel):
+    """One completed task entry from evaluation.jsonl."""
+
+    task_id: str
+    """Identity used to deduplicate validation observations."""
+
+    result: ForestEvaluationResult
+    """Scored outcome without trajectories or model configuration."""
+
+
+class ForestWinnerRecord(BaseModel):
+    """One officially selected tree winner."""
+
+    id: str
+    """Winner checkpoint identity."""
+
+    tree_id: int
+    """Tree owning the winner."""
+
+
+class ForestSelectionReport(BaseModel):
+    """Final selection identity from the algorithm report."""
+
+    selected_node_id: str | None = None
+    """Final winner ID; None for synthesized ensemble outputs."""
+
+
+class ForestTrainingSelection(BaseModel):
+    """Saved per-tree winners and final selection."""
+
+    winners: list[ForestWinnerRecord]
+    """Official tree winners, not inferred from displayed scores."""
+
+    algorithm_report: ForestSelectionReport
+    """Final selected node recorded by the trainer."""
+
+
+class ForestSelectionResult(BaseModel):
+    """Minimal completed-result fields used for winner highlighting."""
+
+    status: str
+    """Only completed results authorize winner markers."""
+
+    training: ForestTrainingSelection
+    """Authoritative selection evidence within this training root."""
