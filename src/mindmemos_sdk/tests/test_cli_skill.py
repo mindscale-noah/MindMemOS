@@ -278,9 +278,9 @@ def test_source_registration_commit_and_export(remote, tmp_path, capsys):
     assert body["active"] is False
     target = tmp_path / "export"
     assert cli.main(["skill", "export", "skv-a", "--to", str(target)]) == 0
-    assert (target / "data.bin").read_bytes() == b"\x00\xff"
+    assert (target / "demo/data.bin").read_bytes() == b"\x00\xff"
     assert cli.main(["skill", "export", "skv-a", "--to", str(target)]) == 2
-    assert (target / "SKILL.md").read_bytes() == CONTENT.encode()
+    assert (target / "demo/SKILL.md").read_bytes() == CONTENT.encode()
     assert cli.main(["skill", "export", "skv-a", "--to", str(target), "--overwrite"]) == 0
 
 
@@ -395,21 +395,23 @@ def test_async_accepted_and_array_progress():
 
 
 def test_export_replacement_failure_rolls_back_original(tmp_path, monkeypatch):
-    target = tmp_path / "export"
-    target.mkdir()
+    from mindmemos_sdk.skills import files
+
+    target = tmp_path / "export" / "demo"
+    target.mkdir(parents=True)
     (target / "original").write_bytes(b"keep")
-    original_rename = type(target).rename
+    original_replace = files.os.replace
 
-    def fail_staging(self, destination):
-        if self.name.startswith(".skill-export-"):
+    def fail_staging(source, destination):
+        if "-export-" in source.name:
             raise OSError("Replacement failed")
-        return original_rename(self, destination)
+        return original_replace(source, destination)
 
-    monkeypatch.setattr(type(target), "rename", fail_staging)
+    monkeypatch.setattr(files.os, "replace", fail_staging)
     with pytest.raises(OSError, match="Replacement failed"):
-        export_source({"skill_version_id": "skv-a", "content": CONTENT, "resources": {}}, str(target), True)
+        export_source({"skill_version_id": "skv-a", "content": CONTENT, "resources": {}}, str(target.parent), True)
     assert (target / "original").read_bytes() == b"keep"
-    assert list(tmp_path.iterdir()) == [target]
+    assert list(target.parent.iterdir()) == [target]
 
 
 def test_trajectory_report_file_and_stdin(remote, tmp_path, monkeypatch):

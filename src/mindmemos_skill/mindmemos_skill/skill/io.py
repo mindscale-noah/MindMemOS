@@ -1,11 +1,8 @@
 """Read and atomically export complete Skill source files."""
 
-import os
-import shutil
 from pathlib import Path
-from tempfile import mkdtemp
 
-from mindmemos_skill.common.ids import generate_id
+from mindmemos_sdk.skills.files import export_skill_files
 
 from .typing import SkillContent
 
@@ -47,46 +44,21 @@ def export_skill(source: SkillContent, directory: str | Path, *, overwrite: bool
 
     Args:
         source: Validated Skill source to export.
-        directory: Dedicated destination Skill directory.
+        directory: Parent directory for the named Skill child.
         overwrite: Replace a nonempty destination when true.
 
     Returns:
-        Absolute destination directory.
+        Absolute path of the exported Skill child directory.
 
     Raises:
         ValueError: Destination is unsafe or already populated without overwrite.
     """
     source = SkillContent.model_validate(source.model_dump())
-    raw = Path(directory).expanduser().absolute()
-    if raw.is_symlink():
-        raise ValueError("Export destination must not be a symbolic link")
-    target = raw.resolve()
-    if target == Path.home() or target == Path.cwd() or target in Path.cwd().parents or target.parent == target:
-        raise ValueError("Export destination must be a dedicated Skill directory")
-    if target.exists() and (not target.is_dir() or (not overwrite and any(target.iterdir()))):
-        raise ValueError("Export destination exists and is not empty")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    stage = Path(mkdtemp(prefix=f".{target.name}-export-", dir=target.parent))
-    backup = target.parent / f".{target.name}-backup-{generate_id()}"
-    try:
-        files = {"SKILL.md": source.content.encode("utf-8"), **source.resources}
-        for name, content in files.items():
-            destination = stage / name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(content)
-        if target.exists():
-            if not overwrite and any(target.iterdir()):
-                raise ValueError("Export destination changed during export")
-            os.replace(target, backup)
-        try:
-            os.replace(stage, target)
-        except BaseException:
-            if backup.exists():
-                os.replace(backup, target)
-            raise
-        if backup.exists():
-            shutil.rmtree(backup)
-        return target
-    finally:
-        if stage.exists():
-            shutil.rmtree(stage)
+    return export_skill_files(
+        source.content,
+        source.resources,
+        directory,
+        name=source.name,
+        standard_format=source.standard_format,
+        overwrite=overwrite,
+    )

@@ -114,8 +114,10 @@ def add_skill_commands(subparsers: argparse._SubParsersAction) -> None:
         parser = command(name, handler, f"{name.capitalize()} a Skill reference.")
         parser.add_argument("skill_ref")
         if name == "export":
-            parser.add_argument("--to", required=True)
-            parser.add_argument("--overwrite", action="store_true")
+            parser.add_argument("--to", required=True, help="Parent folder; export creates a <skill-name> subfolder.")
+            parser.add_argument(
+                "--overwrite", action="store_true", help="Replace only the named Skill subfolder, removing stale files."
+            )
     commit = command("commit", _commit, "Publish a child of the selected Skill version.")
     commit.allow_abbrev = False
     commit.description = "Supply exactly one --from or --json-skill; JSON must include a nonempty commit_message."

@@ -1,5 +1,7 @@
 """End-to-end Python writes and reads with complete source content."""
 
+from pathlib import Path
+
 import pytest
 import pytest_asyncio
 from mindmemos_skill.api.typing import (
@@ -74,7 +76,9 @@ async def test_structured_registration_commit_read_and_export(service, tmp_path)
     assert second.version.commit_message == "update"
     assert second.skill.active_version_id == second.version.version_id
     path = tmp_path / "export"
-    await service.export_skill(ExportRequest(project_id="p", skill_id=registered.skill_id, directory=str(path)))
+    path = Path(
+        await service.export_skill(ExportRequest(project_id="p", skill_id=registered.skill_id, directory=str(path)))
+    )
     assert (path / "SKILL.md").read_bytes() == b"new"
     assert (path / "asset.bin").read_bytes() == b"\x00\xff"
     assert snapshot_from_version(second.version).skill_hash == second.version.skill_hash

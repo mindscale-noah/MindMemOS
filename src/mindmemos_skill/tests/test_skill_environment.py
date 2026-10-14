@@ -38,8 +38,8 @@ class ContentEnvironment(Environment[EnvironmentOptions]):
         skill = skills[0]
         assert isinstance(skill, Skill)
         text = skill.content
-        skill.export(workspace / "skill", overwrite=True)
-        assert (workspace / "skill/SKILL.md").read_text() == text
+        destination = skill.export(workspace / "skill", overwrite=True)
+        assert (destination / "SKILL.md").read_text() == text
         if self.fail:
             raise RuntimeError("Execution failed")
         return RolloutResult(output=text, trajectory=[], reward=Reward(score=1, success=True, detail="Matched"))
@@ -132,8 +132,9 @@ async def test_environment_receives_complete_skill_and_unchanged_references(tmp_
             assert prepared is not skill
             assert prepared.resources == skill.resources
             result = await super()._run(task=task, reward_data=reward_data, skills=skills, workspace=workspace)
-            assert (workspace / "skill/references/guide.md").read_bytes() == b"Use the reference.\r\n"
-            assert (workspace / "skill/asset.bin").read_bytes() == b"\x00\xff\x01"
+            destination = prepared.resolve_export_directory(workspace / "skill")
+            assert (destination / "references/guide.md").read_bytes() == b"Use the reference.\r\n"
+            assert (destination / "asset.bin").read_bytes() == b"\x00\xff\x01"
             return result
 
     env = ReferenceEnvironment(EnvironmentOptions())

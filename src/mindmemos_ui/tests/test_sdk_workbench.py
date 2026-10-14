@@ -197,14 +197,22 @@ async def test_skill_lifecycle_uses_sdk_and_preserves_auxiliary_files(workbench,
     }
     assert next(item for item in assembled.json()["comparison"]["files"] if item["path"] == "assets/data.bin")["binary"]
 
-    target = tmp_path / "exported"
+    parent = tmp_path / "exported"
+    parent.mkdir()
+    (parent / "keep.txt").write_text("keep")
+    target = parent / "demo"
     export = await browser.post(
         "/api/export/preview",
-        json={"version": {"source": "local", "skill_id": skill_id, "version_id": second}, "directory": str(target)},
+        json={"version": {"source": "local", "skill_id": skill_id, "version_id": second}, "directory": str(parent)},
     )
     assert export.status_code == 200, export.text
+    assert export.json()["directory"] == str(target)
+    assert export.json()["overwrite"] is False
+    assert not target.exists()
     confirmed = await browser.post("/api/export/confirm", json={"plan_id": export.json()["plan_id"]})
     assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["path"] == str(target)
+    assert (parent / "keep.txt").read_text() == "keep"
     assert (target / "assets" / "data.bin").read_bytes() == b"\x00updated"
     assert (target / "SKILL.md").read_text(encoding="utf-8").endswith("Updated")
 
@@ -345,3 +353,40 @@ def test_content_exposes_published_evaluation_summary():
         {"content": "# Skill", "resources": {}, "metadata": {"algorithm_report": {"evaluations": {"test": evaluation}}}}
     )
     assert content["evaluations"]["test"] == evaluation
+
+
+async def test_export_preview_checks_child_changes_and_preserves_parent(workbench, tmp_path):
+    browser, manager = workbench
+    source = tmp_path / "source"
+    source.mkdir()
+    content = "---\nname: demo\ndescription: Example\n---\nOriginal"
+    (source / "SKILL.md").write_text(content)
+    registration = (await browser.post("/api/register/preview", json={"path": str(source)})).json()
+    registered = (await browser.post("/api/register/confirm", json={"plan_id": registration["plan_id"]})).json()
+    version = {
+        "source": "local",
+        "skill_id": registered["skill"]["skill_id"],
+        "version_id": registered["version"]["version_id"],
+    }
+    parent = tmp_path / "exports"
+    child = parent / "demo"
+    child.mkdir(parents=True)
+    (child / "old.txt").write_text("old")
+    request = {"version": version, "directory": str(parent)}
+    preview = (await browser.post("/api/export/preview", json=request)).json()
+    assert preview["directory"] == str(child)
+    assert preview["overwrite"] is True
+    (child / "changed.txt").write_text("changed after preview")
+    response = await browser.post("/api/export/confirm", json={"plan_id": preview["plan_id"]})
+    assert response.status_code == 409
+    assert (child / "changed.txt").exists()
+    preview = (await browser.post("/api/export/preview", json=request)).json()
+    (parent / "sibling.txt").write_text("created after preview")
+    response = await browser.post("/api/export/confirm", json={"plan_id": preview["plan_id"]})
+    assert response.status_code == 200, response.text
+    assert response.json()["path"] == str(child)
+    assert sorted(path.name for path in child.iterdir()) == ["SKILL.md"]
+    assert (parent / "sibling.txt").read_text() == "created after preview"
+    imported = await browser.post("/api/register/preview", json={"path": response.json()["path"]})
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["name"] == "demo"

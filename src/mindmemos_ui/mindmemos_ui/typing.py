@@ -153,7 +153,7 @@ class ExportRequest(RequestModel):
     """Source snapshot."""
 
     directory: str = Field(min_length=1)
-    """Final destination Skill directory."""
+    """Parent directory for the named Skill export folder."""
 
 
 class ConfirmRequest(RequestModel):

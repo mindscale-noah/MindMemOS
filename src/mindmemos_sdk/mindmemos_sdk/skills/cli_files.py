@@ -2,11 +2,10 @@
 
 import fnmatch
 import os
-import shutil
-import tempfile
 from pathlib import Path
 
 from .content import decode_resources, encode_resources, parse_frontmatter
+from .files import export_skill_files
 
 
 def _reject_symlinks(path: Path) -> None:
@@ -102,41 +101,19 @@ def export_source(version: dict, destination: str, overwrite: bool) -> dict:
 
     Args:
         version: HTTP version data with content and encoded resources.
-        destination: Local export directory.
+        destination: Parent directory for the named Skill child.
         overwrite: Whether an existing nonempty directory may be replaced.
 
     Returns:
         Destination and exported version identity.
     """
-    target = Path(destination).absolute()
-    _reject_symlinks(target)
-    if target.exists() and (not target.is_dir() or (any(target.iterdir()) and not overwrite)):
-        raise ValueError("Export destination must be an empty directory, or use --overwrite")
     resources = decode_resources(version["resources"])
-    target.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".skill-export-", dir=target.parent))
-    backup = None
-    try:
-        (staging / "SKILL.md").write_bytes(version["content"].encode("utf-8"))
-        for name, raw in resources.items():
-            path = staging / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(raw)
-        if target.exists():
-            backup_path = Path(tempfile.mkdtemp(prefix=".skill-backup-", dir=target.parent))
-            backup_path.rmdir()
-            target.rename(backup_path)
-            backup = backup_path
-        try:
-            staging.rename(target)
-        except OSError:
-            if backup is not None:
-                backup.rename(target)
-                backup = None
-            raise
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
-        if backup is not None:
-            shutil.rmtree(backup)
+    target = export_skill_files(
+        version["content"],
+        resources,
+        destination,
+        name=version.get("name"),
+        standard_format=version.get("standard_format", True),
+        overwrite=overwrite,
+    )
     return {"directory": str(target), "skill_version_id": version["skill_version_id"], "resources": len(resources)}

@@ -575,10 +575,10 @@ class ExportRequest(ShowRequest):
     """Export stored content without binding or tracking the destination."""
 
     directory: Nonempty
-    """Application directory receiving the complete stored document and resources."""
+    """Parent directory receiving a named Skill folder with the complete document and resources."""
 
     overwrite: bool = False
-    """Permit replacing a nonempty destination, including removal of stale files."""
+    """Permit replacing the named Skill child, including removal of stale files."""
 
 
 class CommitRequest(RequestAuth):

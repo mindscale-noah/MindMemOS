@@ -152,7 +152,7 @@ with MindMemOSClient(config=sdk) as client:
 
 当前 TreeSkill 示例配置使用 `qwen3.5-9b`：成功分析、定位和融合使用 thinking 解码，失败分析、policy 和 router 使用 instruct 解码。分析并发为 128，采样、定位和测试并发为 16；thinking 请求超时为 1800 秒，instruct 请求超时为 600 秒，模型重试次数为 3。各阶段 token 预算保留为 16384，这是相对上游 reference 配置的明确覆盖项。默认初始 Skill 仍为仓库内的简版；严格复现实验需通过 `--initial-skill` 指定授权的完整 Human-Written xlsx 包。
 
-初始 Skill 的标准 `SKILL.md` 和全部辅助文件通过 SDK 上传；返回版本的源文件导出到 `evolved_skill/`，完整版本（包括 TreeSkill implementation、router 配置及辅助文件）另存为 `evolved_skill.json`。仅导出的源目录不包含独立的动态运行配置，恢复动态行为时使用完整版本快照。
+初始 Skill 的标准 `SKILL.md` 和全部辅助文件通过 SDK 上传；返回版本的源文件导出到 `evolved_skill/<skill-name>/`，完整版本（包括 TreeSkill implementation、router 配置及辅助文件）另存为 `evolved_skill.json`。仅导出的源目录不包含独立的动态运行配置，恢复动态行为时使用完整版本快照。
 
 脚本按固定划分选择训练和测试任务，直接提交一个 `TrainingRequest(algo="treeskill")`：`tasks` 包含两组数据，`split.train` 与 `split.test` 分别绑定对应 ID，`split.val` 为空。服务通用训练 pipeline 只把 train 传给 Trainer，最终候选冻结后执行 test；test 不参与采样、分析、融合或选优。`--test-count 0` 可只训练不测试，不执行初始 baseline。请求保留事务式公式重算。
 
@@ -199,7 +199,7 @@ experiment/
 │   ├── config.json              # 同样仅保存算法配置
 │   ├── summary.json             # 训练阶段结果
 │   ├── final_skill.json         # 可恢复的最终 TreeSkill 快照
-│   ├── final_skill/             # SKILL.md 与完整辅助资源
+│   ├── final_skill/             # <skill-name>/ 下保存 SKILL.md 与完整辅助资源
 │   ├── tree_metadata.json       # 最终树的稳定节点身份
 │   ├── rollouts/train/          # 每个任务/采样的 audit、workspace 或 error.json
 │   ├── stages/                  # evidence、analysis、localization、fusion 的阶段汇总

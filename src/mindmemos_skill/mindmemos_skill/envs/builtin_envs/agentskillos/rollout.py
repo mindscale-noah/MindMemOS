@@ -116,8 +116,8 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
             destination = attempt / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(content)
-        for name, skill in zip(ranking, skills, strict=True):
-            skill.export(attempt / ".agents" / "skills" / name)
+        for skill in skills:
+            skill.export(attempt / ".agents" / "skills")
         audit = workspace.parent / "audit"
         identifier = generate_id()
         task_path = audit / f"official-task-{identifier}.json"

@@ -30,9 +30,9 @@ async def test_runtime_restores_standard_crlf_source_without_loading_provider(tm
     monkeypatch.setattr("mindmemos_skill.agents.Agent.from_config", provider)
     snapshot = skill.snapshot()
     restored = load_runtime_skill(snapshot)
-    restored.export(tmp_path / "source")
+    destination = restored.export(tmp_path / "source")
     assert calls == []
-    assert (tmp_path / "source/SKILL.md").read_bytes() == source.content.encode()
+    assert (destination / "SKILL.md").read_bytes() == source.content.encode()
     selected = await restored.assemble(Task(id="route", instruction="Do A"))
     assert len(calls) == 1
     assert "Do A" in selected.content and "Do B" not in selected.content

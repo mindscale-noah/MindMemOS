@@ -19,6 +19,8 @@ def test_local_file_and_structured_source_are_equivalent(tmp_path: Path):
     assert from_file.snapshot() == structured.snapshot()
     restored = Skill.from_snapshot(from_file.snapshot())
     destination = restored.export(tmp_path / "export")
+    assert destination == tmp_path / "export" / "Example"
+    assert Skill.from_path(destination).snapshot() == from_file.snapshot()
     assert (destination / "SKILL.md").read_bytes() == content.encode("utf-8")
     assert (destination / "assets" / "logo.bin").read_bytes() == b"\x00\xff"
 
