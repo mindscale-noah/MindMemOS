@@ -429,6 +429,22 @@ The default evaluates LiveMath's full committed split with no Skill, the initial
 and one frozen trained Skill. Smoke mode uses ordered 4/2/2 prefixes and one tree,
 one candidate, and depth/budget one. Use `--arms no_skill,initial_skill` to skip training.
 
+For a paper comparison, use `--test-repeats 3` and report the mean of all three tests
+of the frozen Skill. The default single test is a different reporting protocol.
+`skill_forest.validation_batch_size` defaults to 8; early rejection is checked after
+each complete batch. `selection_tiebreak: novelty` follows both the paper and its standalone selector:
+score each tree winner on the full training set, then break top-score ties by maximum
+pairwise TF-IDF novelty relative to the initial Skill. `validation` retains the earlier
+training entry point's validation-score, depth, and text-length ordering; it is not
+the paper-alignment setting. `patch_application: exact` requires unique targets and an entirely valid patch;
+`reference` uses the original SkillOpt line insertion and missing-target behavior.
+Also verify the model, initial Skill text, and task inputs when reproducing a run.
+
+Skill-Forest algorithm version 3 aligns tree partition and reflection seeds and uses
+the archived phase-specific option order for LiveMath. Shared root validation and
+tree-local candidate validation retain their respective reference seeds. Use a new
+training directory; earlier algorithm checkpoints are not compatible with version 3.
+
 ```bash
 uv run --no-sync python scripts/download_datasets.py download skill --all
 uv run --no-sync mindmemos-eval skill run --benchmark all
@@ -451,3 +467,9 @@ Parquet files under `data/mindmemos_skill/searchqa/data/`. The single `data_spli
 uses native HF `key` values and preserves the original 400 / 200 / 1,400 split and order.
 Evaluation copies selected `question`, `context`, and `answers` fields unchanged into the
 run's `prepared/searchqa/items.json`, using `key` as task ID. No ID mapping resource is needed.
+
+Reflection and merge results retain batch submission order, regardless of request completion order.
+Generation protocol version 5 rejects checkpoints from earlier versions.
+
+
+Optimizer responses always follow the reference protocol: preserve original JSON order and metadata, use reported batch sizes for support counts, and save requests and responses. Invalid model output uses the documented evidence fallback; transport errors propagate.

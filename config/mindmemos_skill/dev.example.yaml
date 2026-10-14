@@ -190,6 +190,9 @@ service:
             model_concurrency: 12
             min_gain: 0.0
             early_rejection: true
+            validation_batch_size: 8
+            selection_tiebreak: novelty
+            patch_application: exact
             reflection_minibatch_size: 8
             reflection_edit_budget: 4
             ranking_enabled: true

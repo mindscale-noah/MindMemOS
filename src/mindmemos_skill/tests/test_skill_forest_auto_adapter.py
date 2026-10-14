@@ -11,8 +11,8 @@ from mindmemos_skill.algos.train.skill_forest import SkillForestEnvAdapter, Skil
 from mindmemos_skill.algos.train.skill_forest.env_specific.selection import select_env_adapter
 from mindmemos_skill.algos.train.skill_forest.registry import BUILTIN_ADAPTER_NAMES
 from mindmemos_skill.envs import Environment, RolloutResult
-from mindmemos_skill.envs.builtin_envs.livemath.typing import LiveMathTask
-from mindmemos_skill.envs.data import DataSample, RewardData
+from mindmemos_skill.envs.builtin_envs.livemath.typing import LiveMathRewardData, LiveMathTask
+from mindmemos_skill.envs.data import DataSample
 from mindmemos_skill.skill import Skill, SkillContent
 
 from .agent_testing import agent_config
@@ -45,10 +45,13 @@ def test_unmatched_or_unregistered_environment_uses_generic(caplog):
 async def test_same_trainer_uses_run_adapter_for_reflection_and_synthesis(tmp_path, monkeypatch, caplog):
     cases = json.loads((Path(__file__).parent / "fixtures/skill_forest/livemath_reflection.json").read_text())["cases"]
     failed = cases[0]
+    (tmp_path / "source.json").write_text("[]")
     samples = [
         DataSample(
             task=LiveMathTask.model_validate({**failed["task"], "id": f"task-{index}"}),
-            reward_data=RewardData(),
+            reward_data=LiveMathRewardData(
+                correct_choice=failed["task"]["choices"][0], source_file=tmp_path / "source.json", choice_seed=42
+            ),
         )
         for index in range(4)
     ]

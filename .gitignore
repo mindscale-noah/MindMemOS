@@ -24,6 +24,8 @@ config/mindmemos_skill/*.yaml
 !config/mindmemos_skill/*.example.yaml
 config/mindmemos_eval/memory_evaluation/*.yaml
 config/mindmemos_eval/dev.yaml
+config/mindmemos_eval/forest_select/dev.yaml
+config/mindmemos_eval/forest_merge/dev.yaml
 config/mindmemos_eval/env_test/dev.yaml
 config/mindmemos_eval/env_test/paper_repro/**/dev.yaml
 !config/mindmemos_eval/memory_evaluation/*.example.yaml
