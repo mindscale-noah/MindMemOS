@@ -66,7 +66,9 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
             available = ", ".join(sorted(self._available_engine_names()))
             raise ValueError(f"Unknown search strategy {strategy!r}. Available strategies: {available}")
 
-        if inp.agentic:
+        owns_agentic = getattr(engine, "owns_agentic", None)
+        engine_agentic = inp.agentic and owns_agentic is not None and owns_agentic()
+        if inp.agentic and not engine_agentic:
             candidates = await self._agentic_wrapper().run(inp, context, engine)
         elif inp.token_budget is not None:
             # Retention packs from a wider pool than top_k; raise engine recall accordingly.
@@ -89,6 +91,9 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
         if augment is not None:
             # Engines may add results from other channels (e.g. images) after text final filtering.
             memories = await augment(inp, context, memories)
+        if engine_agentic:
+            # The engine runs its own agentic retrieval, starting from the single-pass result.
+            memories = await engine.agentic_refine(inp, context, memories)
         return SearchPipelineResult(status="ok", memories=memories)
 
     async def _search_with_retention(

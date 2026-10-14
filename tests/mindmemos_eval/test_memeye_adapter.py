@@ -144,7 +144,7 @@ async def test_vanilla_mm_gets_images_and_the_answerer_sees_them(tmp_path):
     assert result["metrics"]["B-1"] == 100.0
     assert "image_url" in json.dumps(answer.calls[0])
     assert result["cost"]["add"]["calls"] == 1 and result["cost"]["search"]["calls"] == 2
-    assert memory.searches[0][1] == {"user_id": "memeye-t", "top_k": 20, "rerank": True}
+    assert memory.searches[0][1] == {"user_id": "memeye-t", "top_k": 20, "rerank": True, "search_strategy": "fast"}
 
 
 @pytest.mark.asyncio

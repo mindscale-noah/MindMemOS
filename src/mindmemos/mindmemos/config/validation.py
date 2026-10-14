@@ -16,11 +16,7 @@ from .algo.search.vanilla.vanilla import (
     VANILLA_HYBRID_PREFETCH_MAX,
     VANILLA_RECALL_SIZE_MAX,
 )
-from .algo.vanilla_mm import (
-    VANILLA_MM_FEATURE_REQUIREMENTS,
-    VANILLA_MM_FEATURES,
-    VANILLA_MM_FEATURES_IMPLEMENTED,
-)
+from .algo.vanilla_mm import IMAGE_DETAILS
 from .multimodal import BLOB_STORE_BACKENDS, MM_EMBED_PROTOCOLS, MM_IMAGE_TRANSPORTS
 
 
@@ -656,30 +652,20 @@ def _validate_multimodal(cfg: Any) -> None:
     )
 
     vmm = cfg.algo_config.vanilla_mm
-    for name, minimum in (("image_top_k", 1), ("max_images_per_request", 1), ("max_occurrences_per_image", 1)):
+    for name, minimum in (
+        ("image_top_k", 1),
+        ("max_images_per_request", 1),
+        ("max_occurrences_per_image", 1),
+        ("image_context_chars", 0),
+        ("evidence_images", 0),
+        ("anchored_fact_limit", 0),
+        ("image_hit_margin", 0),
+        ("max_extraction_images", 1),
+        ("agentic_max_steps", 1),
+    ):
         path = f"algo_config.vanilla_mm.{name}"
         _validate_range(path, getattr(vmm, name), RangeRule(path, min_value=minimum))
-    _validate_range(
-        "algo_config.vanilla_mm.image_context_chars",
-        vmm.image_context_chars,
-        RangeRule("algo_config.vanilla_mm.image_context_chars", min_value=0),
-    )
-    _validate_vanilla_mm_features(vmm.features)
-
-
-def _validate_vanilla_mm_features(features: Any) -> None:
-    enabled = {name for name in VANILLA_MM_FEATURES if getattr(features, name)}
-    for name in sorted(enabled - VANILLA_MM_FEATURES_IMPLEMENTED):
-        raise InvalidConfigError(
-            f"algo_config.vanilla_mm.features.{name}", support="false (not implemented in this version)"
-        )
-    for name in sorted(enabled):
-        for group in VANILLA_MM_FEATURE_REQUIREMENTS.get(name, ()):
-            if not enabled.intersection(group):
-                raise InvalidConfigError(
-                    f"algo_config.vanilla_mm.features.{name}",
-                    support=f"false unless one of {', '.join(group)} is enabled",
-                )
+    _validate_choice("algo_config.vanilla_mm.extraction_image_detail", vmm.extraction_image_detail, set(IMAGE_DETAILS))
 
 
 def _validate_kafka(kafka: Any) -> None:

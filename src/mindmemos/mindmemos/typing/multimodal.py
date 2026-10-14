@@ -41,7 +41,11 @@ class ImageRecord(BaseModel):
     """Event time of the first occurrence."""
     embed_model: str | None = None
     source_url: str | None = None
+    description: str | None = None
+    """VLM description of the image including visible text (enhanced mode)."""
     occurrences: list[ImageOccurrence] = Field(default_factory=list)
+    anchored_memory_ids: list[str] = Field(default_factory=list)
+    """Text memories extracted from the turns showing this image (enhanced mode)."""
 
     @property
     def session_ids(self) -> list[str]:

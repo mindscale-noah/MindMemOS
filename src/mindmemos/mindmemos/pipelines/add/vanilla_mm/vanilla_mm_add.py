@@ -16,6 +16,13 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from ....components.multimodal import AttachedImage, ImageLoader, attached_images, has_images, without_images
+from ....components.multimodal.extraction import (
+    IMAGE_BLOB_IDS_KEY,
+    ExtractionImage,
+    MultimodalMemoryExtractor,
+    RequestImages,
+    request_images,
+)
 from ....config import VanillaMmConfig, get_config
 from ....errors import BadRequestError, ConfigNotInitializedError
 from ....infra.blob import BlobStore, StoredBlob, get_blob_store
@@ -97,12 +104,23 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
         if not has_images(inp):
             return await super().add_sync(inp, context, add_record_id=add_record_id)
 
-        image_events = await self._add_images(inp, context)
+        cfg = self._config()
+        image_events, stored = await self._add_images(inp, context)
         text_inp = without_images(inp)
-        if text_inp.messages:
-            result = await super().add_sync(text_inp, context, add_record_id=None)
-        else:
+        if not text_inp.messages:
             result = AddPipelineSyncResult(status="ok")
+        elif cfg.enhanced:
+            # The wrapped extractor sees this request's images and anchors facts to them.
+            images = RequestImages(
+                by_message=_images_by_text_index(inp, stored),
+                detail=cfg.extraction_image_detail,
+                max_images=cfg.max_extraction_images,
+            )
+            with request_images(images):
+                result = await super().add_sync(text_inp, context, add_record_id=None)
+            await self._link_images(context, result, images)
+        else:
+            result = await super().add_sync(text_inp, context, add_record_id=None)
         result = result.model_copy(update={"memories": [*result.memories, *image_events]})
         if add_record_id is not None:
             await suppress_recording_errors(
@@ -126,7 +144,43 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
             inp = await self._with_stored_blobs(inp, context)
         return await super().add_async(inp, context, add_record_id=add_record_id, record_metadata=record_metadata)
 
-    async def _add_images(self, inp: AddPipelineInput, context: MemoryRequestContext) -> list[MemoryAddEventItem]:
+    def _memory_extractor_for(self, llm_client):
+        # Inert unless an enhanced request publishes its images (see ``request_images``).
+        return MultimodalMemoryExtractor(super()._memory_extractor_for(llm_client), llm_client=llm_client)
+
+    async def _link_images(
+        self, context: MemoryRequestContext, result: AddPipelineSyncResult, images: RequestImages
+    ) -> None:
+        """Store image descriptions and the memories anchored to each image on the image records."""
+
+        memory_ids = [event.memory_id for event in result.memories if event.memory_id]
+        anchored: dict[str, list[str]] = {}
+        if memory_ids:
+            for view in await self.db_reader.get_memories(context, memory_ids):
+                for blob_id in (view.metadata or {}).get(IMAGE_BLOB_IDS_KEY) or []:
+                    anchored.setdefault(blob_id, []).append(view.memory_id)
+        blob_ids = set(anchored) | set(images.descriptions)
+        if not blob_ids or self._mm_client() is None:
+            return
+        store = self._images()
+        ids = {image_point_id(context.project_id, context.user_id, blob_id): blob_id for blob_id in blob_ids}
+        updates = []
+        for record in await store.get_images(context, list(ids)):
+            blob_id = ids[record.image_id]
+            merged = list(dict.fromkeys([*record.anchored_memory_ids, *anchored.get(blob_id, [])]))[:100]
+            updates.append(
+                record.model_copy(
+                    update={
+                        "anchored_memory_ids": merged,
+                        "description": images.descriptions.get(blob_id) or record.description,
+                    }
+                )
+            )
+        await store.update_images(context, updates)
+
+    async def _add_images(
+        self, inp: AddPipelineInput, context: MemoryRequestContext
+    ) -> tuple[list[MemoryAddEventItem], list[tuple[StoredBlob, bytes, AttachedImage]]]:
         cfg = self._config()
         images = attached_images(inp, context_chars=cfg.image_context_chars)
         if len(images) > cfg.max_images_per_request:
@@ -140,8 +194,8 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
             return [
                 MemoryAddEventItem(operation="add", content=f"[image {blob.blob_id[:12]} stored]", memory_type="image")
                 for blob, _, _ in stored
-            ]
-        return await self._index(stored, context, client, cfg)
+            ], stored
+        return await self._index(stored, context, client, cfg), stored
 
     async def _store_blobs(
         self, images: list[AttachedImage], context: MemoryRequestContext
@@ -304,3 +358,34 @@ def _event(record: ImageRecord, image: AttachedImage, operation: str) -> MemoryA
         memory_id=record.image_id,
         memory_type="image",
     )
+
+
+def _images_by_text_index(
+    inp: AddPipelineInput, stored: list[tuple[StoredBlob, bytes, AttachedImage]]
+) -> dict[int, list[ExtractionImage]]:
+    """Map images to the message indices of the text-only input vanilla receives.
+
+    Image-only turns are dropped from that input, so their images go to the next kept turn
+    (the reply that discusses them), or to the previous one when they come last.
+    """
+
+    kept = [
+        index
+        for index, message in enumerate(inp.messages)
+        if not (isinstance(message, DialogueMessage) and message.images and not message.content.strip())
+    ]
+    position = {original: text_index for text_index, original in enumerate(kept)}
+    result: dict[int, list[ExtractionImage]] = {}
+    for blob, data, image in stored:
+        if image.message_index in position:
+            target = position[image.message_index]
+        else:
+            later = [position[i] for i in kept if i > image.message_index]
+            earlier = [position[i] for i in kept if i < image.message_index]
+            if not later and not earlier:
+                continue
+            target = later[0] if later else earlier[-1]
+        images = result.setdefault(target, [])
+        if all(existing.blob_id != blob.blob_id for existing in images):
+            images.append(ExtractionImage(blob_id=blob.blob_id, mime_type=blob.mime_type, data=data))
+    return result

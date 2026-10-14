@@ -180,7 +180,7 @@ def _search_config():
     )
 
 
-async def _run(algorithm: str, monkeypatch) -> dict:
+async def _run(algorithm: str, monkeypatch, *, enhanced: bool = False) -> dict:
     for target in (
         "mindmemos.pipelines.search.pipeline.get_config",
         "mindmemos.pipelines.search.vanilla.engine.get_config",
@@ -209,7 +209,7 @@ async def _run(algorithm: str, monkeypatch) -> dict:
         engine = VanillaSearchEngine(db_reader=store, db_writer=store, text_config=TEXT_CONFIG, embed_client=embed)
     else:
         add = VanillaMmAddPipeline(
-            **common, image_store=images, mm_embed_client=mm, vanilla_mm_config=VanillaMmConfig()
+            **common, image_store=images, mm_embed_client=mm, vanilla_mm_config=VanillaMmConfig(enhanced=enhanced)
         )
         engine = VanillaMmSearchEngine(
             db_reader=store,
@@ -218,7 +218,7 @@ async def _run(algorithm: str, monkeypatch) -> dict:
             embed_client=embed,
             image_store=images,
             mm_embed_client=mm,
-            vanilla_mm_config=VanillaMmConfig(),
+            vanilla_mm_config=VanillaMmConfig(enhanced=enhanced),
         )
     search = SearchPipelineImpl(
         db_reader=store, db_writer=store, engines={algorithm: engine}, final_filter=None, rerank_client=None
@@ -247,9 +247,10 @@ async def _run(algorithm: str, monkeypatch) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_text_only_requests_match_vanilla_exactly(monkeypatch) -> None:
+@pytest.mark.parametrize("enhanced", [False, True], ids=["base", "enhanced"])
+async def test_text_only_requests_match_vanilla_exactly(monkeypatch, enhanced: bool) -> None:
     vanilla = await _run("vanilla", monkeypatch)
-    vanilla_mm = await _run("vanilla_mm", monkeypatch)
+    vanilla_mm = await _run("vanilla_mm", monkeypatch, enhanced=enhanced)
 
     assert vanilla["llm"], "the fake LLM must be exercised"
     assert vanilla["plans"], "memories must be written"

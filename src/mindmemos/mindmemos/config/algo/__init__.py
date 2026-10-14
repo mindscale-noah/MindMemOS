@@ -30,7 +30,7 @@ from .search import (
 )
 from .skill import SkillEvolutionConfig
 from .text_processing import TextProcessingConfig
-from .vanilla_mm import VanillaMmConfig, VanillaMmFeatures
+from .vanilla_mm import VanillaMmConfig
 
 __all__ = [
     "AgenticConfig",
@@ -59,6 +59,5 @@ __all__ = [
     "TextProcessingConfig",
     "VanillaAddConfig",
     "VanillaMmConfig",
-    "VanillaMmFeatures",
     "VanillaSearchConfig",
 ]

@@ -62,14 +62,15 @@ class MemEyeAdapter:
             tasks = tasks[: int(limit)]
         modes = tuple(raw.get("modes") or MODES)
         search = {"top_k": 20, "rerank": True, **dict(bench_config.search_params or {})}
-        search.pop("public_search_strategy", None)
+        strategy = search.pop("search_strategy", None) or search.pop("public_search_strategy", None) or "fast"
+        search["search_strategy"] = strategy if strategy in ("fast", "agentic") else "fast"
         run = _Run(
             memory=memory,
             answer_llm=answer_llm,
             judge_llm=judge_llm if runner.score else None,
             send_images=bench_config.memory_algorithm in IMAGE_ALGORITHMS,
             add=runner.add,
-            search_params={k: search[k] for k in ("top_k", "rerank") if k in search},
+            search_params={k: search[k] for k in ("top_k", "rerank", "search_strategy") if k in search},
             max_questions=int(execution.get("max_questions") or 0),
             max_images=int(execution.get("max_answer_images") or 8),
             encoder=ImageEncoder(memory, max_side=int(execution.get("image_max_side") or 1024)),
@@ -152,8 +153,15 @@ class _Run:
     async def _question(self, task: MemEyeTask, user_id: str, mode: str, q: Question) -> dict[str, Any]:
         async with self.qa_semaphore:
             started = time.perf_counter()
+            query_images = [ImageRef(path=str(path)) for path in q.images] if self.send_images else []
             result = await self._timed(
-                "search", lambda: self.memory.search(q.question, user_id=user_id, **self.search_params)
+                "search",
+                lambda: self.memory.search(
+                    q.question,
+                    user_id=user_id,
+                    **self.search_params,
+                    **({"query_images": query_images} if query_images else {}),
+                ),
             )
             search_ms = (time.perf_counter() - started) * 1000
             memories = list(result.memories)

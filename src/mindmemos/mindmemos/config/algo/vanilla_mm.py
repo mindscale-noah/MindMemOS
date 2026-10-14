@@ -2,68 +2,32 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-
-@dataclass
-class VanillaMmFeatures:
-    """MHG-inspired feature switches layered on the vanilla_mm base. All default off.
-
-    The base (all switches off) stores raw images and adds a text-to-image similarity channel;
-    text handling is exactly vanilla. Dependencies between switches are listed in
-    ``VANILLA_MM_FEATURE_REQUIREMENTS`` and checked by config validation.
-    """
-
-    image_index: bool = False
-    """Index each image with a VLM description plus the text visible in it."""
-
-    multimodal_extraction: bool = False
-    """Let a VLM extract facts from images together with the surrounding dialogue."""
-
-    fact_image_anchoring: bool = False
-    """Bind extracted facts to their source images and return those images as evidence."""
-
-    query_image_understanding: bool = False
-    """Interpret images attached to a search query before retrieval."""
-
-    visual_entity_linking: bool = False
-    """Link entities seen in images to entities mentioned in text."""
-
-    agentic_retrieval: bool = False
-    """Multimodal ReAct retrieval; runs only when the request uses search_strategy=agentic."""
-
-
-VANILLA_MM_FEATURES: tuple[str, ...] = (
-    "image_index",
-    "multimodal_extraction",
-    "fact_image_anchoring",
-    "query_image_understanding",
-    "visual_entity_linking",
-    "agentic_retrieval",
-)
-
-VANILLA_MM_FEATURE_REQUIREMENTS: dict[str, tuple[tuple[str, ...], ...]] = {
-    # Linking needs a textual view of what an image shows.
-    "visual_entity_linking": (("image_index", "multimodal_extraction"),),
-}
-"""Feature -> requirement groups; every group needs at least one of its features enabled."""
-
-VANILLA_MM_FEATURES_IMPLEMENTED: frozenset[str] = frozenset()
-"""Features this build implements; enabling any other one is a config error."""
+IMAGE_DETAILS = frozenset({"auto", "low", "high"})
 
 
 @dataclass
 class VanillaMmConfig:
-    """Image handling on top of the reused vanilla add/search pipelines."""
+    """Image handling on top of the reused vanilla add/search pipelines.
+
+    ``enhanced: false`` is the base: raw images are stored and a text-to-image similarity channel is
+    appended to search. ``enhanced: true`` turns on the MHG-inspired features together: VLM fact
+    extraction for turns with images (facts anchored to their images, one description per image),
+    evidence images taken from the images anchored to retrieved facts, facts recalled through
+    matching images (text-to-image and query-image-to-image), and a simplified multimodal agentic
+    retrieval when the request uses ``search_strategy=agentic``. Text-only behavior is vanilla
+    either way.
+    """
 
     image_search: bool = True
-    """Add the text-to-image similarity channel to search (needs ``mm_embed_model_router``)."""
+    """Search images by similarity (needs ``mm_embed_model_router``)."""
 
     image_top_k: int = 5
-    """Maximum image results appended after the text results."""
+    """Base mode: maximum image results appended after the text results."""
 
     image_score_threshold: float | None = None
-    """Minimum text-image similarity for an image result; None keeps the top ``image_top_k``."""
+    """Minimum text-image similarity for an image hit; None keeps the top ``image_top_k``."""
 
     image_context_chars: int = 500
     """Characters of the surrounding dialogue kept with each stored image."""
@@ -74,5 +38,23 @@ class VanillaMmConfig:
     max_occurrences_per_image: int = 20
     """Contexts remembered per deduplicated image (oldest kept first)."""
 
-    features: VanillaMmFeatures = field(default_factory=VanillaMmFeatures)
-    """MHG-inspired feature switches."""
+    enhanced: bool = False
+    """Turn on all MHG-inspired features (see the class docstring)."""
+
+    evidence_images: int = 6
+    """Enhanced: maximum evidence images returned per search."""
+
+    anchored_fact_limit: int = 5
+    """Enhanced: maximum facts recalled through matching images, beyond the text results."""
+
+    image_hit_margin: float = 0.03
+    """Enhanced: an image hit counts as a match when its similarity exceeds the median of the hits by this much."""
+
+    extraction_image_detail: str = "auto"
+    """Enhanced: image detail sent to the VLM during extraction (auto, low, high)."""
+
+    max_extraction_images: int = 6
+    """Enhanced: maximum images attached to one extraction call."""
+
+    agentic_max_steps: int = 4
+    """Enhanced: tool calls allowed in multimodal agentic retrieval before it must submit."""

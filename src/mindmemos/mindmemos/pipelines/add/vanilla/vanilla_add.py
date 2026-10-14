@@ -120,8 +120,13 @@ class VanillaAddPipeline(MemoryDbPipelineMixin):
         if llm_client is not _CLIENT_UNSET and embed_client is not _CLIENT_UNSET:
             self._builder = self._build_runtime(llm_client, embed_client)
 
+    def _memory_extractor_for(self, llm_client):
+        """The extractor of one runtime; subclasses may wrap it."""
+
+        return self._explicit_memory_extractor or VanillaMemoryExtractor(llm_client=llm_client)
+
     def _build_runtime(self, llm_client, embed_client) -> AddCoreBuilder:
-        memory_extractor = self._explicit_memory_extractor or VanillaMemoryExtractor(llm_client=llm_client)
+        memory_extractor = self._memory_extractor_for(llm_client)
         vectorizer = MemoryVectorizer(
             sparse_encoder=self._sparse_encoder,
             embed_client=embed_client,

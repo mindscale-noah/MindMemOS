@@ -348,13 +348,13 @@ algo_config:
     image_context_chars: 500
     max_images_per_request: 32
     max_occurrences_per_image: 20
-    features:
-      image_index: false
-      multimodal_extraction: false
-      fact_image_anchoring: false
-      query_image_understanding: false
-      visual_entity_linking: false
-      agentic_retrieval: false
+    enhanced: false               # true: VLM extraction + fact-image anchoring + image-recalled facts + agentic
+    evidence_images: 6
+    anchored_fact_limit: 5
+    image_hit_margin: 0.03
+    extraction_image_detail: auto
+    max_extraction_images: 6
+    agentic_max_steps: 4
 
 kafka:
   enabled: true

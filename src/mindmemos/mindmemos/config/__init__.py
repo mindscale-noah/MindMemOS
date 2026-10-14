@@ -13,7 +13,6 @@ from .algo import (
     SkillEvolutionConfig,
     TextProcessingConfig,
     VanillaMmConfig,
-    VanillaMmFeatures,
 )
 from .algo.add.vanilla import VanillaAddConfig
 from .algo.search import (
@@ -104,7 +103,6 @@ __all__ = [
     "TextProcessingConfig",
     "VanillaAddConfig",
     "VanillaMmConfig",
-    "VanillaMmFeatures",
     "VanillaSearchConfig",
     "bind_config_overrides",
     "build",

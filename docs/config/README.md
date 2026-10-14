@@ -209,21 +209,36 @@ semantics.
 `memory_algorithm: vanilla_mm` reuses the vanilla add and search pipelines for text: a request
 without images behaves exactly like `vanilla`. Images attached to dialogue turns
 (`DialogueMessage.images`) are stored in the blob store and, when `mm_embed_model_router` is
-configured, embedded into the image collection with the dialogue around them. Search appends
-images found by text-image similarity after the (unchanged) text results.
+configured, embedded into the image collection with the dialogue around them.
+
+With `enhanced: false` (base) search appends the images most similar to the query text after the
+(unchanged) text results. `enhanced: true` turns on, together:
+
+- **VLM extraction**: a chunk containing images is extracted by one call to the chat model with
+  the images attached (the same number of calls as vanilla; the chat model must accept images).
+  Facts are anchored to the images of the turns they came from, and each image gets a description
+  including its visible text.
+- **Anchored evidence**: evidence images are the images anchored to the retrieved facts, plus
+  images that stand out for the query text or the query images (`query_images`); facts anchored to
+  those images are recalled too. Images that do not stand out from the rest are not returned.
+- **Multimodal agentic retrieval**: with `search_strategy: agentic`, a short tool loop (search
+  memories, search images, view images, submit) refines the single-pass result.
 
 | Field | Default | Description |
 |---|---|---|
-| `image_search` | `true` | Add the text-to-image similarity channel to search (needs `mm_embed_model_router`). |
-| `image_top_k` | `5` | Maximum image results appended after the text results. |
-| `image_score_threshold` | `null` | Minimum text-image similarity; `null` keeps the top `image_top_k`. |
+| `image_search` | `true` | Search images by similarity (needs `mm_embed_model_router`). |
+| `image_top_k` | `5` | Base mode: maximum image results appended after the text results. |
+| `image_score_threshold` | `null` | Minimum text-image similarity; `null` keeps the top hits. |
 | `image_context_chars` | `500` | Characters of surrounding dialogue stored with each image. |
 | `max_images_per_request` | `32` | Add requests with more images are rejected (`add.too_many_images`). |
 | `max_occurrences_per_image` | `20` | Appearances remembered per deduplicated image. |
-| `features` | *(nested)* | MHG-inspired switches, all `false`: `image_index`, `multimodal_extraction`, `fact_image_anchoring`, `query_image_understanding`, `visual_entity_linking`, `agentic_retrieval`. |
-
-Feature dependencies are validated at load time (`visual_entity_linking` needs `image_index` or
-`multimodal_extraction`). Switches that are not implemented in the running version are rejected.
+| `enhanced` | `false` | Turn on all features above. |
+| `evidence_images` | `6` | Enhanced: maximum evidence images per search. |
+| `anchored_fact_limit` | `5` | Enhanced: maximum facts recalled through matching images. |
+| `image_hit_margin` | `0.03` | Enhanced: an image hit must exceed the median similarity of the hits by this much. |
+| `extraction_image_detail` | `auto` | Enhanced: image detail for VLM extraction (`auto`, `low`, `high`). |
+| `max_extraction_images` | `6` | Enhanced: maximum images in one extraction call. |
+| `agentic_max_steps` | `4` | Enhanced: tool calls in agentic retrieval before it must submit. |
 
 ## `mm_embed_model_router` — multimodal embedding
 
