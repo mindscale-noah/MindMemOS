@@ -4,6 +4,8 @@ from copy import copy
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
+from mindmemos_sdk.skills.files import resolve_skill_export_directory
+
 from .io import export_skill, read_skill
 from .typing import SkillContent, SkillSnapshot
 
@@ -126,12 +128,28 @@ class Skill:
         """
         return cls(read_skill(path))
 
+    def resolve_export_directory(self, directory: str | Path) -> Path:
+        """Resolve the named export folder without writing any files.
+
+        Args:
+            directory: Parent directory for the exported Skill.
+
+        Returns:
+            Absolute path of the named Skill child directory.
+        """
+        return resolve_skill_export_directory(
+            self._source.content,
+            directory,
+            name=self._source.name,
+            standard_format=self._source.standard_format,
+        )
+
     def export(self, directory: str | Path, *, overwrite: bool = False) -> Path:
         """Write complete source files into a dedicated directory.
 
         Args:
-            directory: Destination Skill directory.
-            overwrite: Replace existing files when true.
+            directory: Parent directory for the named Skill child.
+            overwrite: Replace the named child, removing stale files, when true.
 
         Returns:
             Absolute destination path.

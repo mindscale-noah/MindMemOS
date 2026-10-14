@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from mindmemos_sdk.skills import files
 from mindmemos_skill.skill import Skill, SkillContent, SkillSet, compare_snapshots, io
 
 
@@ -66,19 +67,19 @@ def test_diff_includes_empty_files_binary_resources_and_metadata():
 
 
 def test_export_failure_restores_previous_directory(tmp_path, monkeypatch):
-    destination = tmp_path / "export"
-    destination.mkdir()
+    destination = tmp_path / "export" / "Name"
+    destination.mkdir(parents=True)
     (destination / "keep").write_bytes(b"original")
-    replace = io.os.replace
+    replace = files.os.replace
 
     def fail_publish(old, new):
         if old.is_dir() and "-export-" in old.name:
             raise OSError("publish failed")
         return replace(old, new)
 
-    monkeypatch.setattr(io.os, "replace", fail_publish)
+    monkeypatch.setattr(files.os, "replace", fail_publish)
     with pytest.raises(OSError, match="publish failed"):
-        Skill(source()).export(destination, overwrite=True)
+        Skill(source()).export(destination.parent, overwrite=True)
     assert (destination / "keep").read_bytes() == b"original"
     assert sorted(path.name for path in tmp_path.iterdir()) == ["export"]
 
@@ -117,13 +118,13 @@ async def test_skillset_assembly_preserves_selection_order_and_concurrency():
 
 
 def test_export_overwrite_removes_stale_files_and_preserves_plain_text(tmp_path):
-    destination = tmp_path / "export"
-    destination.mkdir()
+    destination = tmp_path / "export" / "Name"
+    destination.mkdir(parents=True)
     (destination / "stale").write_bytes(b"stale")
     skill = Skill(source("plain\r\n", {"asset": b"\x00\xff"}))
     with pytest.raises(ValueError):
-        skill.export(destination)
-    skill.export(destination, overwrite=True)
+        skill.export(destination.parent)
+    skill.export(destination.parent, overwrite=True)
     assert sorted(path.name for path in destination.iterdir()) == ["SKILL.md", "asset"]
     assert (destination / "SKILL.md").read_bytes() == b"plain\r\n"
     assert (destination / "asset").read_bytes() == b"\x00\xff"

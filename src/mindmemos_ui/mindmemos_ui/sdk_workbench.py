@@ -437,14 +437,15 @@ def sdk_workbench_router(
 
     @router.post("/export/preview")
     async def export_preview(body: ExportRequest):
-        target = _export_directory(body.directory, manager.config_dir)
         async with skill_client(manager) as client:
             version = await show_version(client, body.version)
         snapshot = _snapshot(version)
+        skill = Skill.from_snapshot(snapshot)
+        target = _export_directory(str(skill.resolve_export_directory(body.directory)), manager.config_dir)
         fingerprint = _directory_hash(target)
         files = sorted(["SKILL.md", *snapshot.resources])
         return {
-            "plan_id": remember("export", (target, fingerprint, snapshot)),
+            "plan_id": remember("export", (target.parent, target, fingerprint, snapshot)),
             "directory": str(target),
             "files": files,
             "overwrite": target.exists() and any(target.iterdir()),
@@ -453,11 +454,14 @@ def sdk_workbench_router(
 
     @router.post("/export/confirm")
     async def export_confirm(body: ConfirmRequest):
-        target, expected, snapshot = consume(body.plan_id, "export")
-        target = _export_directory(str(target), manager.config_dir)
+        parent, expected_target, expected, snapshot = consume(body.plan_id, "export")
+        skill = Skill.from_snapshot(snapshot)
+        target = _export_directory(str(skill.resolve_export_directory(parent)), manager.config_dir)
+        if target != expected_target:
+            raise HTTPException(409, "Destination changed; preview again")
         if _directory_hash(target) != expected:
             raise HTTPException(409, "Destination changed; preview again")
-        path = Skill.from_snapshot(snapshot).export(target, overwrite=True)
+        path = skill.export(parent, overwrite=True)
         return {"path": str(path)}
 
     @router.get("/graphs")

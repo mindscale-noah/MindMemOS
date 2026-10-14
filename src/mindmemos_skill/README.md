@@ -347,7 +347,9 @@ description. Nonstandard content requires explicit name and description without
 rewriting the text. `Skill.from_path()` reads standard local content as UTF-8 bytes
 and preserves all auxiliary files.
 
-`Skill.export()` exports the complete directory. A nonempty destination requires
+`Skill.export(directory)` creates `<directory>/<skill-name>/` and returns that final path,
+which can be passed directly to `Skill.from_path()`. Standard content uses its frontmatter
+name; nonstandard content uses its explicit name. A nonempty named child requires
 `overwrite=True`, which replaces that directory and removes stale files.
 `with_content()` creates a candidate while preserving resources and subclass
 dependencies; `with_resources()` explicitly replaces resources. `await assemble(task)`
@@ -398,8 +400,8 @@ print(result.output)
 ```
 
 The caller prepares an existing, independent workspace and exports assembled Skills
-with `Skill.export(directory)` to `.agents/skills/<name>`, `.claude/skills/<name>`, or
-`.dsh/skills/<name>`, respectively. Harnesses own native tool execution, not Skill
+with `Skill.export(directory)`, passing `.agents/skills`, `.claude/skills`, or
+`.dsh/skills` as the parent. The exporter appends `<name>`. Harnesses own native tool execution, not Skill
 assembly or scoring. They do not accept legacy requests, Skill bindings, or callable
 tools. Environments requiring per-turn tool callbacks retain their corresponding
 Agent interface.

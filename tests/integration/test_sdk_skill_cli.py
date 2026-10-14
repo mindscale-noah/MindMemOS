@@ -127,7 +127,7 @@ def test_cli_version_lifecycle_resources_and_trajectories(cli_server, tmp_path):
     assert run("resolve", family)["skill_version_id"] == second_id
     run("activate", family, "--version-id", first)
     exported = tmp_path / "exported"
-    run("export", second_id, "--to", str(exported))
+    exported = Path(run("export", second_id, "--to", str(exported))["directory"])
     assert (exported / "resource.bin").read_bytes() == b"\x00\xff"
     report = {
         "skill_version_id": second_id,

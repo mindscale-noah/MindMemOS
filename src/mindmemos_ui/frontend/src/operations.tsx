@@ -159,13 +159,13 @@ export function Export({
       {!result && (
         <form onSubmit={preview}>
           <label>
-            Destination Skill folder
+            Export parent folder
             <div className="fields">
-              <input required value={directory} onChange={(event) => { setDirectory(event.target.value); setPlan(undefined); }} placeholder="Choose a destination folder" />
+              <input required value={directory} onChange={(event) => { setDirectory(event.target.value); setPlan(undefined); }} placeholder="Choose a parent folder" />
               <button type="button" disabled={busy} onClick={pickDirectory}>Choose folder</button>
             </div>
           </label>
-          <p className="muted">Export SKILL.md and all supporting files for this version.</p>
+          <p className="muted">A folder named after this Skill will be created inside the selected folder, containing SKILL.md and all supporting files.</p>
           <div className="actions">
             <button disabled={busy}>Preview export</button>
           </div>
@@ -173,11 +173,12 @@ export function Export({
       )}
       {plan && (
         <section>
+          <p>Final Skill folder</p>
           <code>{plan.directory}</code>
           <p>
             {plan.overwrite
-              ? "The destination folder will be replaced. Files outside this version will be removed."
-              : "The complete snapshot will be written to the destination folder."}
+              ? "This Skill folder will be replaced, removing files outside this version. Other files in the parent folder will be kept."
+              : "The complete snapshot will be written to this Skill folder. Other files in the parent folder will be kept."}
           </p>
           <Changes text={plan.diff} />
           <div className="actions">
@@ -191,7 +192,7 @@ export function Export({
         <section>
           <h2>Exported</h2>
           <code>{result.path}</code>
-          <p className="muted">The agent will read these files the next time it loads the Skill.</p>
+          <p className="muted">Select this Skill folder to register the exported version again.</p>
         </section>
       )}
       <Message text={error} error />

@@ -84,14 +84,14 @@ async def test_external_directories_are_untracked_and_export_is_explicit(service
     )
     assert second.version.parent_version_ids == [first.version.version_id]
     assert second.version.commit_message == "New version"
-    exported = tmp_path / "application"
-    await service.export_skill(ref(first, directory=str(exported)))
+    exported = tmp_path / "application" / "Example"
+    await service.export_skill(ref(first, directory=str(exported.parent)))
     await service.active_skill(ActiveRequest(project_id="p", version_id=first.version.version_id))
     assert (exported / "SKILL.md").read_bytes() == (header + "edited externally").encode()
     with pytest.raises(ValueError, match="not empty"):
-        await service.export_skill(ref(first, directory=str(exported)))
+        await service.export_skill(ref(first, directory=str(exported.parent)))
     (exported / "stale.txt").write_text("stale")
-    await service.export_skill(ref(first, directory=str(exported), overwrite=True))
+    await service.export_skill(ref(first, directory=str(exported.parent), overwrite=True))
     assert not (exported / "stale.txt").exists()
     assert (exported / "SKILL.md").read_bytes() == (header + "original").encode()
     assert (exported / "asset.bin").read_bytes() == b"\0old"
@@ -150,11 +150,11 @@ async def test_inactive_commit_keeps_captured_parent_after_active_moves(service)
 
 @pytest.mark.asyncio
 async def test_export_failure_restores_previous_directory(service, tmp_path, monkeypatch):
-    import mindmemos_skill.skill.io as skill_io
+    from mindmemos_sdk.skills import files as skill_io
 
     first = await register(service)
-    target = tmp_path / "export"
-    target.mkdir()
+    target = tmp_path / "export" / "Example"
+    target.mkdir(parents=True)
     (target / "old").write_text("keep")
     replace = skill_io.os.replace
 
@@ -165,10 +165,11 @@ async def test_export_failure_restores_previous_directory(service, tmp_path, mon
 
     monkeypatch.setattr(skill_io.os, "replace", fail_stage)
     with pytest.raises(OSError):
-        await service.export_skill(ref(first, directory=str(target), overwrite=True))
+        await service.export_skill(ref(first, directory=str(target.parent), overwrite=True))
     assert (target / "old").read_text() == "keep"
-    with pytest.raises(ValueError):
-        await service.export_skill(ref(first, directory=str(tmp_path), overwrite=True))
+    monkeypatch.setattr(service.repository.persistence, "local_database_path", lambda: str(target / "repository.db"))
+    with pytest.raises(ValueError, match="repository database"):
+        await service.export_skill(ref(first, directory=str(target.parent), overwrite=True))
 
 
 @pytest.mark.asyncio

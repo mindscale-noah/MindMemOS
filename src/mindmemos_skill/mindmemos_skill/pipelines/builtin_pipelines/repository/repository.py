@@ -356,16 +356,15 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             Absolute path of the exported application directory.
         """
         request = ExportRequest.model_validate(request)
-        target = Path(request.directory).expanduser().resolve()
-        database_path = self.persistence.local_database_path()
-        if database_path is not None:
-            if Path(database_path).resolve().is_relative_to(target):
-                raise ValueError("Export destination must not contain the repository database")
         detail = await self.show_skill(
             ShowRequest(project_id=request.project_id, skill_id=request.skill_id, version_id=request.version_id)
         )
         snapshot = snapshot_from_version(detail.version)
         skill = Skill.from_snapshot(snapshot)
+        target = skill.resolve_export_directory(request.directory)
+        database_path = self.persistence.local_database_path()
+        if database_path is not None and Path(database_path).resolve().is_relative_to(target):
+            raise ValueError("Export destination must not contain the repository database")
         return str(skill.export(request.directory, overwrite=request.overwrite))
 
     async def commit_skill(self, request: CommitRequest) -> SkillDetail:

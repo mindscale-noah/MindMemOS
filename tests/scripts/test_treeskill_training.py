@@ -139,7 +139,7 @@ async def test_sdk_submits_splits_and_exports_complete_version(submission):
             await run._train(client, **submission)
     assert not any(request.url.path.endswith(("/register", "/train")) for request in requests[first_count:])
     root = submission["root"]
-    assert (root / "evolved_skill/helper.bin").read_bytes() == b"\x00\xff"
+    assert (root / "evolved_skill/example/helper.bin").read_bytes() == b"\x00\xff"
     assert read_json(root / "evolved_skill.json")["implementation"] == "treeskill"
     assert read_json(root / "evolved_skill.json")["config"] == version["config"]
     assert len(list(read_jsonl(root / "service_progress.jsonl"))) == 1

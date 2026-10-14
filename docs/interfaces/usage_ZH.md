@@ -1648,17 +1648,19 @@ mindmemos skill show coffee
 }
 ```
 
-导出选定版本到本地目录：
+导出选定版本到父目录下的 `<skill-name>/` 子目录。名称来自该版本的 `SKILL.md`；非标准格式使用版本的显式名称。例如名称为 `coffee-helper` 时：
 
 ```bash
-mindmemos skill export coffee --to ./output/coffee-helper
+mindmemos skill export coffee --to ./output
 ```
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | `skill_ref` | string | 是 | — | Skill 别名、ID 或版本引用，例如 `coffee`。 |
-| `--to` | string | 是 | — | 导出目标目录，例如 `./output/coffee-helper`。 |
-| `--overwrite` | boolean | 否 | `False` | 覆盖已有导出目录，添加即启用。 |
+| `--to` | string | 是 | — | 导出父目录，例如 `./output`；最终目录为 `./output/<skill-name>/`。 |
+| `--overwrite` | boolean | 否 | `False` | 替换同名 Skill 子目录并移除旧文件；父目录中的其他内容保持不变。 |
+
+返回的 `directory` 是最终 Skill 目录，可直接用于重新注册。UI 和 Python `Skill.export(directory)` 使用相同规则。始终追加名称：旧用法 `--to ./output/coffee-helper` 现在会写入 `./output/coffee-helper/coffee-helper/`，应改为 `--to ./output`。非法目录名会在写入前报错。
 
 </details>
 

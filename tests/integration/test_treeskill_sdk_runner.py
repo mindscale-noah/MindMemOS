@@ -77,4 +77,4 @@ async def test_sdk_runner_authenticates_trains_tests_and_exports(tmp_path):
     assert read_json(root / "training/train/report.json")["train_count"] == 1
     assert [row["task_id"] for row in read_json(root / "training/test/results.json")["tasks"]] == ["test"]
     assert read_json(root / "evolved_skill.json")["metadata"]["algorithm_report"]["train_count"] == 1
-    assert (root / "evolved_skill/helper.bin").read_bytes() == b"\x00\xff"
+    assert (root / "evolved_skill/example/helper.bin").read_bytes() == b"\x00\xff"

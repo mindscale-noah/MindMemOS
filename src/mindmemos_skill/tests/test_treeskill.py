@@ -145,8 +145,8 @@ async def test_snapshot_and_environment_preserve_references_and_route_only_once(
     class LocalEnvironment(Environment[EnvironmentOptions]):
         async def _run(self, *, task, reward_data, skills, workspace):
             assert isinstance(skills[0], Skill)
-            skills[0].export(workspace / "skill")
-            assert (workspace / "skill/references/check.md").read_bytes() == b"Original reference"
+            destination = skills[0].export(workspace / "skill")
+            assert (destination / "references/check.md").read_bytes() == b"Original reference"
             return RolloutResult(
                 output=skills[0].content,
                 trajectory=[],
@@ -191,8 +191,8 @@ async def test_assemble_returns_complete_skill_and_environment_uses_that_object(
     class IdentityEnvironment(Environment[EnvironmentOptions]):
         async def _run(self, *, task, reward_data, skills, workspace):
             assert skills[0] is prepared
-            skills[0].export(workspace / "skill")
-            assert (workspace / "skill/references/check.md").read_bytes() == b"Original reference"
+            destination = skills[0].export(workspace / "skill")
+            assert (destination / "references/check.md").read_bytes() == b"Original reference"
             return RolloutResult(output="ok", trajectory=[], reward=Reward(score=1, success=True, detail="Passed"))
 
     from unittest.mock import patch
@@ -211,9 +211,9 @@ async def test_restore_and_export_defer_router_until_assembly(tmp_path):
     snapshot = source.snapshot()
     with patch("mindmemos_skill.agents.Agent.from_config", return_value=router) as factory:
         restored = TreeSkill.from_snapshot(snapshot)
-        restored.export(tmp_path / "exported")
+        destination = restored.export(tmp_path / "exported")
         assert restored.snapshot() == snapshot
-        assert (tmp_path / "exported/references/check.md").read_bytes() == b"Original reference"
+        assert (destination / "references/check.md").read_bytes() == b"Original reference"
         plain = restored.with_content("Plain instructions")
         assert (await plain.assemble(Task(id="plain", instruction="Read"))).content == plain.content
         factory.assert_not_called()

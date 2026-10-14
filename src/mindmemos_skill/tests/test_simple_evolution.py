@@ -361,9 +361,9 @@ async def test_simple_evolution_collects_samples_and_publishes(tmp_path, monkeyp
                 assert result.content.startswith(original.content.rstrip())
                 assert result.content_hash != original.content_hash
                 assert result.skill_hash != original.skill_hash
-                restored.export(tmp_path / "export")
-                assert (tmp_path / "export/SKILL.md").read_bytes() == result.content.encode("utf-8")
-                assert (tmp_path / "export/asset.bin").read_bytes() == b"unchanged"
+                destination = restored.export(tmp_path / "export")
+                assert (destination / "SKILL.md").read_bytes() == result.content.encode("utf-8")
+                assert (destination / "asset.bin").read_bytes() == b"unchanged"
             recorded = read_json(tmp_path / "runs" / result.run_id / "input.json")
             assert len(recorded["sampled_trajectory_ids"]) == 2
             assert len(set(recorded["sampled_trajectory_ids"])) == 2
