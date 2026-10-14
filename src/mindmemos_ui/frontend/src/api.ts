@@ -1,3 +1,4 @@
+import { requestErrorMessage } from "./errors";
 let token = "";
 export type TrajectoryCounts = {
   total: number;
@@ -58,34 +59,30 @@ export async function api<T>(
   method = "GET",
   body?: unknown,
 ): Promise<T> {
-  const response = await fetch("/api/" + path, {
-    method,
-    headers: { "Content-Type": "application/json", "X-Workbench-Token": token },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    const messages: Record<number, string> = {
-      401: "Authentication failed. Check your API key.",
-      403: "Access denied or session expired. Refresh the page.",
-      409:
-        path.startsWith("service-config") ||
-        path.startsWith("configurations") ||
-        path.startsWith("client-configurations")
-          ? "The configuration file has changed. Copy your draft, then reload before saving."
-          : "Conflict: the version label is already in use, the contents have changed, or the Skill is still referenced.",
-      429: "操作频繁，请稍后重试。",
-      503: path.startsWith("memories")
-        ? "The Memory service is not configured or is temporarily unavailable. Check the connection settings."
-        : "The Skill service is not configured or is temporarily unavailable. Check the connection settings.",
-    };
+  let response: Response;
+  try {
+    response = await fetch("/api/" + path, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Workbench-Token": token,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
     throw new Error(
-      (response.status === 429 ? messages[429] : data.detail) ||
-        messages[response.status] ||
-        `Request failed (${response.status})`,
+      "Cannot connect to the UI server. Make sure it is running, then refresh the page.",
     );
   }
-  return response.json();
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(requestErrorMessage(path, response.status, data?.detail));
+  }
+  try {
+    return await response.json();
+  } catch {
+    throw new Error("The server returned an invalid response. Please retry.");
+  }
 }
 export async function session() {
   const result = await api<{
