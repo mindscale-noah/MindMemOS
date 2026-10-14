@@ -8,6 +8,7 @@ from .models import (
     FeedbackMode,
     FileMessage,
     GetResult,
+    ImageRef,
     MemoryAddItem,
     MemoryLineage,
     MemoryPageResult,
@@ -38,6 +39,7 @@ __all__ = [
     "Message",
     "TextMessage",
     "DialogueMessage",
+    "ImageRef",
     "UrlMessage",
     "FileMessage",
 ]

@@ -30,6 +30,7 @@ from ..typing import (
     AddMode,
     DialogueMessage,
     FileMessage,
+    ImageRef,
     MemoryAddEventItem,
     MemorySearchItem,
     SkillContext,
@@ -159,6 +160,9 @@ class SearchRequest(ActorIdentityRequest):
 
     query: NonEmptyStr
     """Search query."""
+
+    query_images: list[ImageRef] = Field(default_factory=list)
+    """Images attached to the query; accepted only by multimodal memory algorithms (``vanilla_mm``)."""
 
     filters: dict[str, Any] | None = None
     """Custom structured filter DSL parsed by ``mappers.api.parse_search_dsl``."""
@@ -369,5 +373,8 @@ def validate_messages_have_content(messages) -> None:
             or getattr(message, "url", None)
             or getattr(message, "file_path", None)
         )
+        if getattr(message, "images", None):
+            # An image-only turn is valid; whether the algorithm accepts images is checked per API key.
+            continue
         if not isinstance(text, str) or not text.strip():
             raise ValueError(f"messages[{index}] must contain non-empty content")

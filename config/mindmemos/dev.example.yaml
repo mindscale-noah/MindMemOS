@@ -51,11 +51,35 @@ rerank_model_router:
       timeout: 600
       num_retries: 3
 
+# Multimodal (text + image) embedding for memory_algorithm=vanilla_mm. Text and images must be
+# encoded into one vector space; `dimensions` sizes the Qdrant image collection and is checked at
+# startup. Leave endpoints empty to only store images (no image retrieval). Example:
+#   endpoints:
+#     - model: siglip2-base-patch16-384
+#       api_base: http://127.0.0.1:8090/v1
+#       api_key:
+#       dimensions: 768
+#       protocol: openai        # OpenAI-style /embeddings; images as {"image": "data:..."}
+#       image_transport: base64 # or url (send the original URL when the image came from one)
+mm_embed_model_router:
+  endpoints: []
+
+# Raw image storage for multimodal algorithms (content-addressed, per project).
+blob_store:
+  backend: local
+  local_root: data/blobs
+  max_image_bytes: 20971520
+  allowed_path_roots: []        # directories ImageRef.path may point into; empty disables paths
+  url_fetch_enabled: true
+  url_fetch_timeout: 20.0
+  url_allow_private_hosts: false
+
 database:
   qdrant:
     memory_collection: memory_item_v1
     entity_collection: entity_item_v1
     source_collection: source_item_v1
+    image_collection: image_item_v1
     semantic_vector_name: semantic
     bm25_vector_name: bm25
     vector_size: 2560
@@ -317,6 +341,20 @@ algo_config:
       top_m_guarantee: 5
       mmr_lambda: 0.7
   skill_evolution: {}
+  vanilla_mm:
+    image_search: true
+    image_top_k: 5
+    image_score_threshold:
+    image_context_chars: 500
+    max_images_per_request: 32
+    max_occurrences_per_image: 20
+    features:
+      image_index: false
+      multimodal_extraction: false
+      fact_image_anchoring: false
+      query_image_understanding: false
+      visual_entity_linking: false
+      agentic_retrieval: false
 
 kafka:
   enabled: true

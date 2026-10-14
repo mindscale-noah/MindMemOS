@@ -16,6 +16,12 @@ from .algo.search.vanilla.vanilla import (
     VANILLA_HYBRID_PREFETCH_MAX,
     VANILLA_RECALL_SIZE_MAX,
 )
+from .algo.vanilla_mm import (
+    VANILLA_MM_FEATURE_REQUIREMENTS,
+    VANILLA_MM_FEATURES,
+    VANILLA_MM_FEATURES_IMPLEMENTED,
+)
+from .multimodal import BLOB_STORE_BACKENDS, MM_EMBED_PROTOCOLS, MM_IMAGE_TRANSPORTS
 
 
 @dataclass(frozen=True)
@@ -451,6 +457,7 @@ def validate_config(cfg: Any, *, allow_project_embedding_dimensions: bool = Fals
     _validate_model_router("rerank_model_router", cfg.rerank_model_router)
     _validate_embedding_vector_size(cfg, allow_project_embedding_dimensions=allow_project_embedding_dimensions)
     _validate_algo(cfg)
+    _validate_multimodal(cfg)
     _validate_kafka(cfg.kafka)
 
 
@@ -602,6 +609,77 @@ def _validate_search(search: Any) -> None:
             "algo_config.search.schema_search.property.alloc_max_factor",
             support=">= algo_config.search.schema_search.property.alloc_min_factor",
         )
+
+
+def _validate_multimodal(cfg: Any) -> None:
+    dimensions: set[int] = set()
+    for index, endpoint in enumerate(cfg.mm_embed_model_router.endpoints):
+        prefix = f"mm_embed_model_router.endpoints[{index}]"
+        _require_string(f"{prefix}.model", _attr(endpoint, "model", f"{prefix}.model"))
+        _require_string(f"{prefix}.api_base", _attr(endpoint, "api_base", f"{prefix}.api_base"))
+        _validate_choice(f"{prefix}.protocol", endpoint.protocol, set(MM_EMBED_PROTOCOLS))
+        _validate_choice(f"{prefix}.image_transport", endpoint.image_transport, set(MM_IMAGE_TRANSPORTS))
+        if endpoint.dimensions is None:
+            raise MissingConfigValueError(f"{prefix}.dimensions", reason="it sizes the image collection")
+        _validate_range(f"{prefix}.dimensions", endpoint.dimensions, RangeRule(f"{prefix}.dimensions", min_value=1))
+        dimensions.add(int(endpoint.dimensions))
+        _validate_range(
+            f"{prefix}.timeout",
+            endpoint.timeout,
+            RangeRule(f"{prefix}.timeout", min_value=0, include_min=False, support="positive number"),
+        )
+        _validate_range(
+            f"{prefix}.num_retries",
+            endpoint.num_retries,
+            RangeRule(f"{prefix}.num_retries", min_value=0, support="non-negative integer"),
+        )
+        _validate_range(
+            f"{prefix}.max_batch_size",
+            endpoint.max_batch_size,
+            RangeRule(f"{prefix}.max_batch_size", min_value=1, support="positive integer >= 1"),
+        )
+    if len(dimensions) > 1:
+        raise InvalidConfigError(
+            "mm_embed_model_router.endpoints[].dimensions", support="one value shared by all endpoints"
+        )
+
+    blob = cfg.blob_store
+    _validate_choice("blob_store.backend", blob.backend, set(BLOB_STORE_BACKENDS))
+    _require_string("blob_store.local_root", blob.local_root)
+    _validate_range(
+        "blob_store.max_image_bytes", blob.max_image_bytes, RangeRule("blob_store.max_image_bytes", min_value=1)
+    )
+    _validate_range(
+        "blob_store.url_fetch_timeout",
+        blob.url_fetch_timeout,
+        RangeRule("blob_store.url_fetch_timeout", min_value=0, include_min=False, support="positive number"),
+    )
+
+    vmm = cfg.algo_config.vanilla_mm
+    for name, minimum in (("image_top_k", 1), ("max_images_per_request", 1), ("max_occurrences_per_image", 1)):
+        path = f"algo_config.vanilla_mm.{name}"
+        _validate_range(path, getattr(vmm, name), RangeRule(path, min_value=minimum))
+    _validate_range(
+        "algo_config.vanilla_mm.image_context_chars",
+        vmm.image_context_chars,
+        RangeRule("algo_config.vanilla_mm.image_context_chars", min_value=0),
+    )
+    _validate_vanilla_mm_features(vmm.features)
+
+
+def _validate_vanilla_mm_features(features: Any) -> None:
+    enabled = {name for name in VANILLA_MM_FEATURES if getattr(features, name)}
+    for name in sorted(enabled - VANILLA_MM_FEATURES_IMPLEMENTED):
+        raise InvalidConfigError(
+            f"algo_config.vanilla_mm.features.{name}", support="false (not implemented in this version)"
+        )
+    for name in sorted(enabled):
+        for group in VANILLA_MM_FEATURE_REQUIREMENTS.get(name, ()):
+            if not enabled.intersection(group):
+                raise InvalidConfigError(
+                    f"algo_config.vanilla_mm.features.{name}",
+                    support=f"false unless one of {', '.join(group)} is enabled",
+                )
 
 
 def _validate_kafka(kafka: Any) -> None:

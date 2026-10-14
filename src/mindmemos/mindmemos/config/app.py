@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from ..logging import get_logger
 from .algo import MemoryAlgoConfig
 from .base import build, frozen_field, secret_field
+from .multimodal import BlobStoreConfig, MmEmbedRouterConfig
 from .validation import validate_config
 
 T = TypeVar("T")
@@ -274,6 +275,9 @@ class QdrantConfig:
 
     search_record_collection: str = field(default="search_record_v1")
     """Qdrant search request/response record collection name"""
+
+    image_collection: str = field(default="image_item_v1")
+    """Qdrant image collection (multimodal algorithms); sized by ``mm_embed_model_router`` dimensions"""
 
     skill_version_collection: str = field(default="skill_version_v1")
     """Qdrant skill version metadata collection name"""
@@ -587,6 +591,12 @@ class MemoryConfig:
 
     rerank_model_router: ModelRouterConfig = field(default_factory=ModelRouterConfig)
     """Rerank model Router configuration. Empty endpoints -> cosine fallback."""
+
+    mm_embed_model_router: MmEmbedRouterConfig = frozen_field(default_factory=MmEmbedRouterConfig)
+    """Multimodal (text + image) embedding router. Empty endpoints -> images are stored but not indexed."""
+
+    blob_store: BlobStoreConfig = frozen_field(default_factory=BlobStoreConfig)
+    """Raw image storage and allowed image sources for multimodal algorithms."""
 
 
 def build_config(config_name: str = "dev", config_path: str | Path | None = None) -> MemoryConfig:

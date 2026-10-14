@@ -7,17 +7,21 @@ from typing import Literal
 
 from ..errors import AuthenticationError
 
-MemoryAlgorithm = Literal["vanilla", "schema"]
+MemoryAlgorithm = Literal["vanilla", "vanilla_mm", "schema"]
 
 
 @dataclass(frozen=True)
 class MemoryAlgorithmBinding:
     add_pipeline: str
     search_pipeline: str
+    supports_images: bool = False
 
 
 MEMORY_ALGORITHM_REGISTRY: dict[str, MemoryAlgorithmBinding] = {
     "vanilla": MemoryAlgorithmBinding(add_pipeline="vanilla_add", search_pipeline="vanilla"),
+    "vanilla_mm": MemoryAlgorithmBinding(
+        add_pipeline="vanilla_mm_add", search_pipeline="vanilla_mm", supports_images=True
+    ),
     "schema": MemoryAlgorithmBinding(add_pipeline="schema_add", search_pipeline="schema"),
 }
 

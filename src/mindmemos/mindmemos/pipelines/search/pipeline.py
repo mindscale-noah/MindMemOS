@@ -21,10 +21,13 @@ from .base import SearchEngine
 from .default import DefaultSearchEngine
 from .schema import SchemaSearchEngine
 from .vanilla import VanillaSearchEngine
+from .vanilla_mm import VanillaMmSearchEngine
 
 logger = get_logger(__name__)
 
-_DEFAULT_ENGINE_NAMES = frozenset({"default", "vanilla", "schema"})
+_DEFAULT_ENGINE_NAMES = frozenset({"default", "vanilla", "vanilla_mm", "schema"})
+# Strategies that follow vanilla's text ranking rules (vanilla_mm only adds an image channel).
+_VANILLA_STRATEGIES = frozenset({"vanilla", "vanilla_mm"})
 
 
 @register(type="search", name="search_pipeline")
@@ -80,8 +83,12 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
                 rerank=inp.rerank and _strategy_allows_rerank(strategy),
                 score_threshold=inp.score_threshold,
             )
-            return SearchPipelineResult(status="ok", memories=memories)
-        memories = await self._search_with_retention(inp, strategy=strategy, candidates=candidates)
+        else:
+            memories = await self._search_with_retention(inp, strategy=strategy, candidates=candidates)
+        augment = getattr(engine, "augment_results", None)
+        if augment is not None:
+            # Engines may add results from other channels (e.g. images) after text final filtering.
+            memories = await augment(inp, context, memories)
         return SearchPipelineResult(status="ok", memories=memories)
 
     async def _search_with_retention(
@@ -153,6 +160,8 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
             engine = DefaultSearchEngine(**common)
         elif name == "vanilla":
             engine = VanillaSearchEngine(**common)
+        elif name == "vanilla_mm":
+            engine = VanillaMmSearchEngine(**common)
         else:
             engine = SchemaSearchEngine(**common)
         self._engines[name] = engine
@@ -179,6 +188,6 @@ def _optional_rerank_client() -> RerankClient | None:
 
 
 def _strategy_allows_rerank(strategy: str) -> bool:
-    if strategy != "vanilla":
+    if strategy not in _VANILLA_STRATEGIES:
         return True
     return get_config().algo_config.search.vanilla.use_reranker

@@ -1,0 +1,54 @@
+# Multimodal memory benchmarks (MemEye) for vanilla vs vanilla_mm.
+# Every algorithm is answered by the same VLM (answer_llm) from what search returns: text memories
+# plus the images vanilla_mm returns. Images are sent by path, so the server needs
+# blob_store.allowed_path_roots to cover the dataset directory.
+runner:
+  base_url: http://127.0.0.1:8000
+  timeout_seconds: 3600
+  max_conv_concurrency: 8     # tasks built and evaluated in parallel (one project each)
+  max_qa_concurrency: 8       # questions answered concurrently within one task
+  max_score_concurrency: 8    # OPEN-answer judge calls in flight
+  add: true
+  score: true
+  show_progress: true
+  llm:
+    model: gpt-4.1-mini
+    api_key: your-api-key
+    base_url: https://your-base-url/v1
+    temperature: 0.0
+    timeout: 600
+  answer_llm:                 # vision-capable answerer shared by all algorithms
+    model: gpt-4.1-mini
+    api_key: your-api-key
+    base_url: https://your-base-url/v1
+  judge_llm:                  # OPEN-answer judge (MemEye rubric)
+    model: gpt-4.1-mini
+    api_key: your-api-key
+    base_url: https://your-base-url/v1
+
+benchmarks:
+  memeye:
+    dataset: datasets/memeye/data       # holds dialog/ and image/ (HF: MemEyeBench/MemEye)
+    default_algorithm: vanilla_mm
+    output_root: runs/mindmemos_eval
+    # tasks: [Brand_Memory_Test]        # subset of the 8 tasks
+    # modes: [mcq, open]
+
+execution_params:
+  memeye:
+    top_k: 20                 # text memories per question
+    max_answer_images: 8      # images attached to the answerer (question images first)
+    image_max_side: 1024      # images are downscaled to this many pixels on the long side
+    # max_questions: 3        # smoke test: first N questions per phase
+
+algorithm_profiles:
+  vanilla:
+    memory_algorithm: vanilla
+    search_params:
+      top_k: 20
+      rerank: true
+  vanilla_mm:
+    memory_algorithm: vanilla_mm
+    search_params:
+      top_k: 20
+      rerank: true

@@ -35,6 +35,7 @@ They are read at load time (`.env` at the repository root is honoured):
 | `dreaming` | Background dreaming / consolidation jobs. |
 | `search` | Search engines (`default`, `vanilla`, `schema_search`), `agentic`, `rerank`, and `retention`. |
 | `skill_evolution` | Skill evolution and rollout knobs. |
+| `vanilla_mm` | Image channel and feature switches of the multimodal `vanilla_mm` algorithm. |
 
 ## `algo_config.add.schema.chunker` — episode chunking
 
@@ -202,6 +203,62 @@ semantics.
 | `estimator_version` | `heuristic-v2` | Token estimator implementation (currently heuristic only). |
 | `top_m_guarantee` | `5` | Candidates force-kept by relevance before MMR re-ranking (mixed-v2). |
 | `mmr_lambda` | `0.70` | Trade-off between priority and redundancy in MMR packing (mixed-v2). |
+
+## `algo_config.vanilla_mm` — vanilla + multimodal
+
+`memory_algorithm: vanilla_mm` reuses the vanilla add and search pipelines for text: a request
+without images behaves exactly like `vanilla`. Images attached to dialogue turns
+(`DialogueMessage.images`) are stored in the blob store and, when `mm_embed_model_router` is
+configured, embedded into the image collection with the dialogue around them. Search appends
+images found by text-image similarity after the (unchanged) text results.
+
+| Field | Default | Description |
+|---|---|---|
+| `image_search` | `true` | Add the text-to-image similarity channel to search (needs `mm_embed_model_router`). |
+| `image_top_k` | `5` | Maximum image results appended after the text results. |
+| `image_score_threshold` | `null` | Minimum text-image similarity; `null` keeps the top `image_top_k`. |
+| `image_context_chars` | `500` | Characters of surrounding dialogue stored with each image. |
+| `max_images_per_request` | `32` | Add requests with more images are rejected (`add.too_many_images`). |
+| `max_occurrences_per_image` | `20` | Appearances remembered per deduplicated image. |
+| `features` | *(nested)* | MHG-inspired switches, all `false`: `image_index`, `multimodal_extraction`, `fact_image_anchoring`, `query_image_understanding`, `visual_entity_linking`, `agentic_retrieval`. |
+
+Feature dependencies are validated at load time (`visual_entity_linking` needs `image_index` or
+`multimodal_extraction`). Switches that are not implemented in the running version are rejected.
+
+## `mm_embed_model_router` — multimodal embedding
+
+Same shape as the other routers. Each endpoint must encode text and images into one vector space.
+
+| Field | Default | Description |
+|---|---|---|
+| `model` | — | Model name sent to the endpoint. |
+| `api_base` | — | Base URL; the protocol appends its path (`/embeddings`). |
+| `api_key` | `null` | Bearer token (optional for local endpoints). |
+| `dimensions` | — | Required. Sizes the `database.qdrant.image_collection` and is checked at startup. |
+| `protocol` | `openai` | Wire format. `openai`: `POST /embeddings` with `input` = strings, or `[{"image": "<data URI or URL>"}]`. |
+| `image_transport` | `base64` | `base64` data URIs, or `url` to send the original URL when an image came from one. |
+| `timeout` / `num_retries` / `max_batch_size` | `60` / `3` / `16` | Per-request timeout, retries before trying the next endpoint, inputs per request. |
+| `extra_body` | `{}` | Extra request body fields. |
+
+With no endpoints, `vanilla_mm` only stores images. At startup the server embeds one probe text: a
+dimension mismatch (endpoint vs `dimensions` vs an existing image collection) stops startup; an
+unreachable endpoint only logs a warning. Changing the model requires a new `image_collection`.
+
+## `blob_store` — raw image storage
+
+| Field | Default | Description |
+|---|---|---|
+| `backend` | `local` | Storage backend (the `BlobStore` interface is ready for object storage). |
+| `local_root` | `data/blobs` | Directory of the local backend; relative to the repository root. |
+| `max_image_bytes` | `20971520` | Larger images are rejected. |
+| `allowed_path_roots` | `[]` | Directories `ImageRef.path` may point into; empty disables path inputs. |
+| `url_fetch_enabled` | `true` | Download `ImageRef.url` inputs. |
+| `url_fetch_timeout` | `20.0` | Download timeout in seconds. |
+| `url_allow_private_hosts` | `false` | Allow URLs resolving to private/loopback addresses (SSRF guard; DNS rebinding is not covered). |
+
+Images are deduplicated by SHA-256 per project (blob store) and per project+user (image
+collection). Only PNG, JPEG, GIF, WebP and BMP are accepted (checked by content, not extension).
+Stored images are readable by the project's keys at `GET /v1/memory/images/{blob_id}`.
 
 ## Validation
 

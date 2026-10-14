@@ -156,9 +156,7 @@ class _ScopeAdapter:
         uid = env._conv_user_id(0)
         runner_cfg = getattr(args, "runner_config", None)
         if runner_cfg is not None and runner_cfg.add:
-            await memory.add(
-                [{"role": "user", "content": "hi"}], user_id=uid, mode="sync", session_id=uid
-            )
+            await memory.add([{"role": "user", "content": "hi"}], user_id=uid, mode="sync", session_id=uid)
             self.added.append(uid)
         await memory.search("hi", user_id=uid)
         self.searched.append(uid)
@@ -357,6 +355,9 @@ async def test_reset_project_clears_qdrant_and_neo4j(monkeypatch):
     qdrant_deletes: list[tuple] = []
 
     class _FakeQdrant:
+        async def collection_exists(self, collection_name):
+            return True
+
         def __init__(self):
             self.counts = iter((2, 0))
 
@@ -436,6 +437,9 @@ async def test_reset_project_raises_when_qdrant_delete_fails(monkeypatch):
     closed = False
 
     class _FakeQdrant:
+        async def collection_exists(self, collection_name):
+            return True
+
         async def count(self, *, collection_name, count_filter, exact):
             return SimpleNamespace(count=2)
 
@@ -466,6 +470,9 @@ async def test_reset_project_raises_when_qdrant_still_contains_project_data(monk
     cfg = db_reset.ResetConfig(collections=("memory_item_v1",))
 
     class _FakeQdrant:
+        async def collection_exists(self, collection_name):
+            return True
+
         def __init__(self):
             self.counts = iter((2, 1))
 
@@ -513,7 +520,6 @@ def test_memory_cli_returns_one_when_database_reset_fails(monkeypatch):
     assert cli.main([]) == 1
 
 
-
 # ---------- resolve_collections (dynamic Qdrant collection names) ----------
 
 
@@ -545,6 +551,7 @@ def test_resolve_collections_reads_custom_names(tmp_path):
             "add_record_collection": "custom_add",
             "schema_add_buffer_collection": "custom_buffer",
             "search_record_collection": "custom_search",
+            "image_collection": "custom_image",
         },
     )
     assert resolve_collections(cfg) == (
@@ -554,6 +561,7 @@ def test_resolve_collections_reads_custom_names(tmp_path):
         "custom_add",
         "custom_buffer",
         "custom_search",
+        "custom_image",
     )
 
 
@@ -577,6 +585,7 @@ def test_resolve_collections_falls_back_missing_fields(tmp_path):
         DEFAULT_COLLECTIONS[3],
         DEFAULT_COLLECTIONS[4],
         DEFAULT_COLLECTIONS[5],
+        DEFAULT_COLLECTIONS[6],
     )
 
 
@@ -599,3 +608,24 @@ def test_resolve_collections_non_mapping_falls_back(tmp_path, caplog):
         result = resolve_collections(cfg)
     assert result == DEFAULT_COLLECTIONS
     assert any("resolve_qdrant_collections_failed" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_reset_project_skips_collections_that_do_not_exist(monkeypatch):
+    """Algorithm-specific collections (the vanilla_mm image collection) are absent until used."""
+    from mindmemos_eval.memory import db_reset
+
+    cfg = db_reset.ResetConfig(collections=("image_item_v1",))
+
+    class _FakeQdrant:
+        async def collection_exists(self, collection_name):
+            return False
+
+        async def count(self, **kwargs):
+            raise AssertionError("count must not run on a missing collection")
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(db_reset, "AsyncQdrantClient", lambda **kw: _FakeQdrant())
+    assert await db_reset._reset_qdrant(cfg, "proj_x") == {"qdrant:image_item_v1": 0}

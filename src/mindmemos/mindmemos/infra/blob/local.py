@@ -1,0 +1,96 @@
+"""Local-directory blob store.
+
+Layout: ``<root>/<namespace-dir>/<id[:2]>/<id>`` holds the bytes and ``<id>.json`` the descriptor.
+Writes go through a temp file and ``os.replace`` so readers never see partial blobs.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+import re
+import tempfile
+from pathlib import Path
+
+from .base import StoredBlob, blob_id_for, is_valid_blob_id
+
+_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+class LocalBlobStore:
+    """Blob store backed by a local directory."""
+
+    def __init__(self, root: str | Path) -> None:
+        self._root = Path(root)
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    async def put(self, namespace: str, data: bytes, *, mime_type: str) -> StoredBlob:
+        return await asyncio.to_thread(self._put, namespace, data, mime_type)
+
+    async def get(self, namespace: str, blob_id: str) -> tuple[StoredBlob, bytes] | None:
+        return await asyncio.to_thread(self._get, namespace, blob_id)
+
+    async def stat(self, namespace: str, blob_id: str) -> StoredBlob | None:
+        return await asyncio.to_thread(self._stat, namespace, blob_id)
+
+    def public_url(self, namespace: str, blob_id: str) -> str | None:
+        del namespace, blob_id
+        return None
+
+    def _put(self, namespace: str, data: bytes, mime_type: str) -> StoredBlob:
+        blob_id = blob_id_for(data)
+        blob = StoredBlob(blob_id=blob_id, mime_type=mime_type, size_bytes=len(data))
+        path = self._path(namespace, blob_id)
+        if path.exists():
+            return self._stat(namespace, blob_id) or blob
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(path, data)
+        meta = {"mime_type": mime_type, "size_bytes": len(data)}
+        _atomic_write(path.with_suffix(".json"), json.dumps(meta).encode("utf-8"))
+        return blob
+
+    def _get(self, namespace: str, blob_id: str) -> tuple[StoredBlob, bytes] | None:
+        blob = self._stat(namespace, blob_id)
+        if blob is None:
+            return None
+        return blob, self._path(namespace, blob_id).read_bytes()
+
+    def _stat(self, namespace: str, blob_id: str) -> StoredBlob | None:
+        if not is_valid_blob_id(blob_id):
+            return None
+        path = self._path(namespace, blob_id)
+        meta_path = path.with_suffix(".json")
+        if not path.exists() or not meta_path.exists():
+            return None
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        return StoredBlob(blob_id=blob_id, mime_type=str(meta["mime_type"]), size_bytes=int(meta["size_bytes"]))
+
+    def _path(self, namespace: str, blob_id: str) -> Path:
+        if not is_valid_blob_id(blob_id):
+            raise ValueError("invalid blob id")
+        return self._root / _namespace_dir(namespace) / blob_id[:2] / blob_id
+
+
+def _namespace_dir(namespace: str) -> str:
+    """Readable, collision-free, traversal-safe directory name for a namespace."""
+
+    if not namespace:
+        raise ValueError("blob namespace must not be empty")
+    digest = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:12]
+    return f"{_UNSAFE.sub('_', namespace)[:64]}-{digest}"
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise

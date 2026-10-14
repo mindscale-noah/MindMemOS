@@ -11,6 +11,7 @@ from .dreaming import DreamingConfig
 from .search import SearchConfig
 from .skill import SkillEvolutionConfig
 from .text_processing import TextProcessingConfig
+from .vanilla_mm import VanillaMmConfig
 
 
 @dataclass
@@ -38,3 +39,6 @@ class MemoryAlgoConfig:
 
     skill_evolution: SkillEvolutionConfig = field(default_factory=SkillEvolutionConfig)
     """Skill evolution configuration for benchmark-driven skill optimization."""
+
+    vanilla_mm: VanillaMmConfig = field(default_factory=VanillaMmConfig)
+    """vanilla_mm configuration: image channel settings and MHG-inspired feature switches."""

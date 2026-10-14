@@ -12,6 +12,8 @@ from .algo import (
     SchemaAddMergeConfig,
     SkillEvolutionConfig,
     TextProcessingConfig,
+    VanillaMmConfig,
+    VanillaMmFeatures,
 )
 from .algo.add.vanilla import VanillaAddConfig
 from .algo.search import (
@@ -56,12 +58,14 @@ from .context import (
     reset_config,
     update_config,
 )
+from .multimodal import BlobStoreConfig, MmEmbedEndpointConfig, MmEmbedRouterConfig
 from .validation import validate_config
 
 __all__ = [
     "AgenticConfig",
     "AddAlgoConfig",
     "AuthConfig",
+    "BlobStoreConfig",
     "ConfigOverrides",
     "CommonAlgoConfig",
     "DatabaseConfig",
@@ -79,6 +83,8 @@ __all__ = [
     "KafkaTopicConfig",
     "MemoryAlgoConfig",
     "MemoryConfig",
+    "MmEmbedEndpointConfig",
+    "MmEmbedRouterConfig",
     "ModelEndpointConfig",
     "ModelRouterConfig",
     "Neo4jConfig",
@@ -97,6 +103,8 @@ __all__ = [
     "TelemetryConfig",
     "TextProcessingConfig",
     "VanillaAddConfig",
+    "VanillaMmConfig",
+    "VanillaMmFeatures",
     "VanillaSearchConfig",
     "bind_config_overrides",
     "build",

@@ -14,12 +14,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from ..config import get_config, init_config_from_env
-from ..errors import ApiError
+from ..errors import ApiError, InvalidConfigError
 from ..infra import shutdown_tracer_provider
 from ..infra.db import close_database_clients, ensure_database_schema
 from ..infra.kafka import start_kafka, stop_kafka
-from ..llm import close_llm_clients, init_embed_client, init_llm_client, validate_embedding_dimension
+from ..llm import (
+    close_llm_clients,
+    get_mm_embed_client,
+    init_embed_client,
+    init_llm_client,
+    validate_embedding_dimension,
+)
 from ..logging import configure_logging, configure_tracing, get_logger
+from ..pipelines.memory_db import ImageMemoryStore
 from ..workers import register_workers
 from .internal_routes import router as internal_router
 from .routes import router as memory_router
@@ -46,6 +53,7 @@ async def lifespan(app: FastAPI):
     init_llm_client()
     init_embed_client()
     await validate_embedding_dimension()
+    await _check_multimodal_embedding()
     logger.info("llm clients ready")
 
     # Register all Kafka consumer handlers before starting; start_kafka is a
@@ -61,6 +69,36 @@ async def lifespan(app: FastAPI):
         await _close_databases()
         logger.info("mindmemos api stopped")
         shutdown_tracer_provider()
+
+
+async def _check_multimodal_embedding() -> None:
+    """Probe the multimodal embedding endpoint once and check dimensions against config and Qdrant.
+
+    A dimension mismatch is fatal: vectors would not fit the image collection. An unreachable
+    endpoint only warns, so text memory keeps working; image indexing fails until it recovers.
+    """
+
+    client = get_mm_embed_client()
+    if client is None:
+        logger.info("multimodal embedding not configured; vanilla_mm stores images without indexing them")
+        return
+    expected = client.dimensions
+    collection_size = await ImageMemoryStore().collection_vector_size()
+    if collection_size is not None and collection_size != expected:
+        raise InvalidConfigError(
+            "mm_embed_model_router.endpoints[].dimensions",
+            support=f"{collection_size} to match the existing image collection (or use a new image_collection)",
+        )
+    try:
+        vector = (await client.embed_texts(["dimension check"], task="startup.dimension_check"))[0]
+    except InvalidConfigError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - reachability problems must not block text memory
+        if getattr(exc, "code", None) == "embedding.dimension_mismatch":
+            raise InvalidConfigError("mm_embed_model_router.endpoints[].dimensions", support=str(exc)) from exc
+        logger.warning("multimodal embedding endpoint unreachable at startup", error=str(exc)[:300])
+        return
+    logger.info("multimodal embedding ready", model=client.model, dimensions=len(vector))
 
 
 async def _close_llm_clients() -> None:

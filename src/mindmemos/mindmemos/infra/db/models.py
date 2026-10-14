@@ -87,6 +87,15 @@ class SourcePoint:
 
 
 @dataclass(kw_only=True)
+class ImagePoint:
+    """Qdrant point for the image collection (one dense multimodal vector)."""
+
+    image_id: str
+    payload: dict[str, Any]
+    vector: list[float]
+
+
+@dataclass(kw_only=True)
 class AddRecordPoint:
     """Qdrant point for ``add_record_v1``."""
 

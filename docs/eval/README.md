@@ -72,6 +72,38 @@ cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_
 
 ---
 
+## Multimodal: MemEye (`vanilla` vs `vanilla_mm`)
+
+MemEye (8 tasks, MCQ + OPEN, images in the dialogue) runs against any algorithm with one shared
+answerer: the `answer_llm` (a vision model) sees the text memories and images returned by search,
+plus the question's own images. `vanilla` receives the dialogue without images; `vanilla_mm`
+receives the images by path, so the server's `blob_store.allowed_path_roots` must cover the dataset.
+Dataset captions are never sent.
+
+1. Download `MemEyeBench/MemEye` from Hugging Face and link it so `datasets/memeye/data` holds
+   `dialog/` and `image/`.
+2. For `vanilla_mm`, configure `mm_embed_model_router` on the server (see `docs/config/README.md`).
+3. Copy `config/mindmemos_eval/memory_evaluation_multimodal.example.yaml` to
+   `memory_evaluation_multimodal.yaml`, fill in the LLM keys, then run once per algorithm:
+
+```bash
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_multimodal.yaml \
+  --benchmark-list memeye --algorithm vanilla_mm \
+  --manifest-output reports/memeye_vanilla_mm.jsonl \
+  --api-key-output config/mindmemos/eval_api_keys.yaml
+```
+
+`eval_result.metrics` reports, in percent: `EM` (MCQ exact match averaged over the four option
+rotations, macro mean over tasks), `B-1` (OPEN BLEU-1) and `Judge` (OPEN, MemEye 0–1 judge rubric),
+plus per-task values. `eval_result.cost` holds client-side add/search call counts and latencies and
+answerer/judge token usage; `eval_result.valid` is false when any answer or judge call failed.
+Per-question rows (retrieved items, predictions, scores) are written under
+`output_root/<run_id>/memeye/`. For a smoke test set `execution_params.memeye.max_questions: 2` and
+`benchmarks.memeye.tasks: [Brand_Memory_Test]`.
+
+---
+
 ## Smoke Test (recommended first)
 
 Use `--limit 2` to minimize data volume and verify the full pipeline end-to-end:

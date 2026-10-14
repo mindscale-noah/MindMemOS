@@ -12,8 +12,8 @@ import yaml
 
 from .base import AlgorithmProfile, BenchmarkSpec, RunnerConfig
 
-SUPPORTED_MEMORY_ALGORITHMS = frozenset({"vanilla", "schema"})
-SUPPORTED_BENCHMARK_SEARCH_STRATEGIES = frozenset({"vanilla", "schema"})
+SUPPORTED_MEMORY_ALGORITHMS = frozenset({"vanilla", "vanilla_mm", "schema"})
+SUPPORTED_BENCHMARK_SEARCH_STRATEGIES = frozenset({"vanilla", "vanilla_mm", "schema"})
 
 
 def load_algorithm_profiles(path: str | Path) -> dict[str, AlgorithmProfile]:

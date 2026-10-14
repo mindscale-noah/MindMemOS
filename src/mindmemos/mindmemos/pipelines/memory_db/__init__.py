@@ -4,6 +4,7 @@ from ...typing import MemoryDbWriteResult
 from .add_record_store import AddRecordStore
 from .add_records import AddRecordBuffer, AddRecordBufferKey, BufferedAddRecord, buffer_key, context_from_record
 from .catalog import MemoryCatalog
+from .image_store import ImageMemoryStore
 from .operation_records import MemoryOperationRecorder, suppress_recording_errors, utcnow
 from .reader import MemoryDbReader
 from .schema_add_buffer_store import SchemaAddBufferStore
@@ -14,6 +15,7 @@ __all__ = [
     "AddRecordBufferKey",
     "AddRecordStore",
     "BufferedAddRecord",
+    "ImageMemoryStore",
     "MemoryCatalog",
     "MemoryDbReader",
     "MemoryDbWriteResult",

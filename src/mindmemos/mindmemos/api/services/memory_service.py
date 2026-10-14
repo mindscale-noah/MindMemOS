@@ -6,7 +6,8 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from ...config import get_config
-from ...errors import MemoryNotFoundError, ResourceNotFoundError
+from ...errors import BadRequestError, MemoryNotFoundError, ResourceNotFoundError
+from ...infra.blob import get_blob_store
 from ...logging import get_logger, traced
 from ...pipelines import create_pipeline
 from ...pipelines.add import AddPipeline
@@ -166,6 +167,7 @@ class MemoryService:
         # Stamp request identity onto the handler-root span so downstream LLM spans
         # (which live in this trace, not the auth dependency's trace) are attributable.
         annotate_request_trace(auth)
+        _reject_images_unless_supported(auth, request)
         pipeline, _add_pipeline_name = self._add_pipeline_for_auth(auth)
         if pipeline is None:
             raise NotImplementedError("add pipeline implementation is not wired yet")
@@ -197,6 +199,7 @@ class MemoryService:
         """Run sync add while streaming progress events."""
 
         annotate_request_trace(auth)
+        _reject_images_unless_supported(auth, request)
         pipeline, _add_pipeline_name = self._add_pipeline_for_auth(auth)
         if pipeline is None:
             raise NotImplementedError("add pipeline implementation is not wired yet")
@@ -457,6 +460,11 @@ class MemoryService:
         annotate_request_trace(auth)
         ctx = to_memory_request_context(auth, request)
         binding = binding_for_memory_algorithm(auth.memory_algorithm)
+        if request.query_images and not binding.supports_images:
+            raise BadRequestError(
+                f"query_images require a multimodal memory_algorithm; this key uses {auth.memory_algorithm}",
+                code="search.images_unsupported",
+            )
         payload = to_search_pipeline_input(request, search_pipeline=binding.search_pipeline)
         pipeline = self._pipeline("_search")
         if pipeline is None:
@@ -494,6 +502,17 @@ class MemoryService:
             operation="search",
         )
         return result
+
+    @traced("memory_service.get_image")
+    async def get_image(self, auth: AuthContext, blob_id: str) -> tuple[bytes, str]:
+        """Read one stored image of the caller's project."""
+
+        annotate_request_trace(auth)
+        found = await get_blob_store().get(auth.project_id, blob_id)
+        if found is None:
+            raise ResourceNotFoundError(f"image {blob_id} not found", code="image.not_found")
+        blob, data = found
+        return data, blob.mime_type
 
     @traced("memory_service.get")
     async def get(self, auth: AuthContext, request: GetRequest) -> GetPipelineResult:
@@ -603,6 +622,18 @@ class MemoryService:
 
 _service: MemoryService | None = None
 _service_key: tuple[str, ...] | None = None
+
+
+def _reject_images_unless_supported(auth: AuthContext, request: AddRequest) -> None:
+    """Keep images away from text-only algorithms instead of silently dropping them."""
+
+    if not any(getattr(message, "images", None) for message in request.messages):
+        return
+    if not binding_for_memory_algorithm(auth.memory_algorithm).supports_images:
+        raise BadRequestError(
+            f"images require a multimodal memory_algorithm; this key uses {auth.memory_algorithm}",
+            code="add.images_unsupported",
+        )
 
 
 def get_memory_service() -> MemoryService:

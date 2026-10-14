@@ -207,6 +207,26 @@ No-skill 基线不传 `--skill`；Init-skill 传入初始 Skill，但不传 `--e
 
 ---
 
+## 多模态：MemEye（`vanilla` 对比 `vanilla_mm`）
+
+MemEye（8 个任务，MCQ + OPEN，对话中含图片）对所有算法使用同一个作答器：`answer_llm`（需支持看图）只看到检索返回的文本记忆和图片，以及题目自带的图片。`vanilla` 收到去掉图片的对话；`vanilla_mm` 以路径方式收到图片，因此服务端 `blob_store.allowed_path_roots` 需要覆盖数据集目录。数据集自带的图片描述不会发送给记忆系统。
+
+1. 从 Hugging Face 下载 `MemEyeBench/MemEye`，链接到 `datasets/memeye/data`（包含 `dialog/` 和 `image/`）。
+2. 跑 `vanilla_mm` 时，在服务端配置 `mm_embed_model_router`（见 `docs/config/README.md`）。
+3. 复制 `config/mindmemos_eval/memory_evaluation_multimodal.example.yaml` 为 `memory_evaluation_multimodal.yaml`，填好 LLM key，每个算法跑一次：
+
+```bash
+uv run python -m mindmemos_eval.cli memory \
+  --benchmark-config config/mindmemos_eval/memory_evaluation_multimodal.yaml \
+  --benchmark-list memeye --algorithm vanilla_mm \
+  --manifest-output reports/memeye_vanilla_mm.jsonl \
+  --api-key-output config/mindmemos/eval_api_keys.yaml
+```
+
+`eval_result.metrics` 给出百分制指标：`EM`（MCQ 四种选项轮换的平均精确匹配，按任务宏平均）、`B-1`（OPEN 的 BLEU-1）、`Judge`（OPEN，MemEye 的 0–1 评分标准），以及逐任务数值。`eval_result.cost` 记录客户端的写入/检索调用次数与延迟、作答器和 judge 的 token 用量；只要有作答或 judge 调用失败，`eval_result.valid` 即为 false。逐题明细写在 `output_root/<run_id>/memeye/`。冒烟测试可设 `execution_params.memeye.max_questions: 2`、`benchmarks.memeye.tasks: [Brand_Memory_Test]`。
+
+---
+
 ## 快速冒烟测试（推荐先跑）
 
 用 `--limit 2` 把数据量砍到最小，验证全链路是否跑通：

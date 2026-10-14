@@ -101,6 +101,18 @@ class HttpTransport:
         """Send a DELETE request and return the parsed response envelope."""
         return self._request_envelope("DELETE", path, params=params, request_id=request_id)
 
+    def get_bytes(self, path: str) -> tuple[bytes, str]:
+        """Send a GET request for a binary resource; return its bytes and content type."""
+        if not self._api_key:
+            raise AuthRequiredError("No api_key configured. Run `mindmemos auth` first.")
+        url = f"{self._base_url}{path}"
+        response = self._send_with_retries(
+            "GET", url, json=None, params=None, headers={"Authorization": f"Bearer {self._api_key}"}
+        )
+        if response.status_code >= 400:
+            parse_envelope(response)
+        return response.content, response.headers.get("content-type", "application/octet-stream")
+
     def _request_envelope(
         self,
         method: str,
@@ -248,6 +260,18 @@ class AsyncHttpTransport:
     ) -> Envelope:
         """Send a DELETE request and return the parsed response envelope."""
         return await self._request_envelope("DELETE", path, params=params, request_id=request_id)
+
+    async def get_bytes(self, path: str) -> tuple[bytes, str]:
+        """Send a GET request for a binary resource; return its bytes and content type."""
+        if not self._api_key:
+            raise AuthRequiredError("No api_key configured. Run `mindmemos auth` first.")
+        url = f"{self._base_url}{path}"
+        response = await self._send_with_retries(
+            "GET", url, json=None, params=None, headers={"Authorization": f"Bearer {self._api_key}"}
+        )
+        if response.status_code >= 400:
+            parse_envelope(response)
+        return response.content, response.headers.get("content-type", "application/octet-stream")
 
     async def _request_envelope(
         self,

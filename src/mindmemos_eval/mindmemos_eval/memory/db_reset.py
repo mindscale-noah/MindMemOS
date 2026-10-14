@@ -39,6 +39,7 @@ DEFAULT_COLLECTIONS: tuple[str, ...] = (
     "add_record_v1",
     "schema_add_buffer_v1",
     "search_record_v1",
+    "image_item_v1",
 )
 
 
@@ -90,6 +91,7 @@ _QDRANT_COLLECTION_FIELDS: tuple[tuple[str, str], ...] = (
     ("add_record_collection", "add_record_v1"),
     ("schema_add_buffer_collection", "schema_add_buffer_v1"),
     ("search_record_collection", "search_record_v1"),
+    ("image_collection", "image_item_v1"),
 )
 
 
@@ -142,8 +144,7 @@ def resolve_collections(server_config_path: str | Path | None = None) -> tuple[s
         return DEFAULT_COLLECTIONS
 
     collections = tuple(
-        str(qdrant.get(field_name, default_name))
-        for field_name, default_name in _QDRANT_COLLECTION_FIELDS
+        str(qdrant.get(field_name, default_name)) for field_name, default_name in _QDRANT_COLLECTION_FIELDS
     )
     logger.info("resolved_qdrant_collections path=%s collections=%s", path, collections)
     return collections
@@ -186,6 +187,10 @@ async def _reset_qdrant(cfg: ResetConfig, project_id: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     try:
         for collection in cfg.collections:
+            # Algorithm-specific collections (e.g. the vanilla_mm image collection) exist only once used.
+            if not await client.collection_exists(collection):
+                counts[f"qdrant:{collection}"] = 0
+                continue
             try:
                 counted = await client.count(collection_name=collection, count_filter=filter_, exact=True)
                 counted_before = int(counted.count)

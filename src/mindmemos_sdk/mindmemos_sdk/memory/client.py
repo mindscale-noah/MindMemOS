@@ -17,6 +17,7 @@ from .models import (
     AddResult,
     FeedbackMode,
     GetResult,
+    ImageRef,
     MemoryPageResult,
     MemoryScrollResult,
     MemorySearchHit,
@@ -124,8 +125,9 @@ class MemoryClient:
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        query_images: list[ImageRef | dict[str, Any]] | None = None,
     ) -> SearchResult:
-        """Search memories."""
+        """Search memories. ``query_images`` attaches images (multimodal algorithms only)."""
         request = self._core.search(
             query,
             top_k=top_k,
@@ -138,9 +140,14 @@ class MemoryClient:
             app_id=app_id,
             agent_id=agent_id,
             session_id=session_id,
+            query_images=query_images,
         )
         envelope = self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
+
+    def get_image(self, blob_id: str) -> tuple[bytes, str]:
+        """Download an image stored for this project (``metadata.blob_id`` of an image result)."""
+        return self._transport.get_bytes(f"/v1/memory/images/{blob_id}")
 
     def get(
         self,

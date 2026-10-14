@@ -14,6 +14,7 @@ from mindmemos_sdk.transport import AsyncHttpTransport
 
 from mindmemos_eval.memory.envs.locomo import LocomoAdapter
 from mindmemos_eval.memory.envs.longmemeval.adapter import LongMemEvalAdapter
+from mindmemos_eval.memory.envs.memeye import MemEyeAdapter
 from mindmemos_eval.memory.envs.memoryagentbench.adapter import MemoryAgentBenchAdapter
 from mindmemos_eval.memory.envs.personamem import PersonaMemAdapter
 
@@ -89,13 +90,13 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         "--algorithm",
         metavar="NAME",
         type=validate_memory_algorithm,
-        help="Global algorithm profile name applied to every benchmark; currently validated to vanilla or schema.",
+        help="Global algorithm profile name applied to every benchmark; currently validated to vanilla, vanilla_mm or schema.",
     )
     parser.add_argument(
         "--memory-algorithm",
         metavar="NAME",
         type=validate_memory_algorithm,
-        help="Legacy override for only the memory_algorithm binding; currently validated to vanilla or schema.",
+        help="Legacy override for only the memory_algorithm binding; currently validated to vanilla, vanilla_mm or schema.",
     )
     parser.add_argument(
         "--base-url",
@@ -372,6 +373,7 @@ def default_adapters() -> dict[str, BenchmarkAdapter]:
     return {
         "locomo": LocomoAdapter(),
         "longmemeval": LongMemEvalAdapter(),
+        "memeye": MemEyeAdapter(),
         "memoryagentbench": MemoryAgentBenchAdapter(),
         "personamem": PersonaMemAdapter(),
         "personamem_subset": PersonaMemAdapter(),
