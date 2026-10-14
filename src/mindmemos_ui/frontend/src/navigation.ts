@@ -4,6 +4,7 @@ import type { Selection } from "./api";
 export type Page =
   | "skills"
   | "memories"
+  | "algorithm-visualization"
   | "graphs"
   | "settings"
   | "service-settings";
@@ -17,6 +18,7 @@ export function readRoute(): Route {
     page:
       page === "memories" ||
       page === "graphs" ||
+      page === "algorithm-visualization" ||
       page === "settings" ||
       page === "service-settings"
         ? page

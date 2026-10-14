@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Sequence
 
 from ....skill import Skill
-from .typing import Node, Patch, TreeSplit
+from .typing import Edit, Node, Patch, TreeSplit
 
 
 def split_tasks(task_ids: Sequence[str], *, train_ratio: float, seed: int) -> TreeSplit:
@@ -31,12 +31,43 @@ def split_tasks(task_ids: Sequence[str], *, train_ratio: float, seed: int) -> Tr
     return TreeSplit(train_ids=tuple(ids[:count]), validation_ids=tuple(ids[count:]))
 
 
-def apply_patch(skill: Skill, patch: Patch) -> Skill:
+def _apply_reference_edit(text: str, edit: Edit) -> str:
+    """Apply the archived SkillOpt line edits, including protected tail sections."""
+    markers = (
+        ("<!-- SLOW_UPDATE_START -->", "<!-- SLOW_UPDATE_END -->"),
+        ("<!-- APPENDIX_START -->", "<!-- APPENDIX_END -->"),
+    )
+    content = edit.content.strip()
+    protected_starts = []
+    target_index = text.find(edit.target) if edit.target else -1
+    for start_marker, end_marker in markers:
+        content = content.replace(start_marker, "").replace(end_marker, "")
+        start, end = text.find(start_marker), text.find(end_marker)
+        if start >= 0:
+            protected_starts.append(start)
+        if start >= 0 and end >= 0 and start <= target_index < end + len(end_marker):
+            return text
+    if edit.op == "append" or (edit.op == "insert_after" and target_index < 0):
+        if protected_starts:
+            position = min(protected_starts)
+            return text[:position].rstrip() + "\n\n" + content + "\n\n" + text[position:]
+        return text.rstrip() + "\n\n" + content + "\n"
+    if edit.op == "insert_after":
+        end = text.find("\n", target_index + len(edit.target))
+        position = end + 1 if end != -1 else len(text)
+        return text[:position] + "\n" + content + "\n" + text[position:]
+    if target_index >= 0:
+        return text.replace(edit.target, "" if edit.op == "delete" else content, 1)
+    return text
+
+
+def apply_patch(skill: Skill, patch: Patch, *, reference: bool = False) -> Skill:
     """Apply a complete patch atomically while preserving other files and resources.
 
     Args:
         skill: Parent Skill, never mutated.
         patch: Sequential exact edits to SKILL.md.
+        reference: Preserve historical append, line insertion and missing-target semantics.
 
     Returns:
         A separate Skill containing the resulting entrypoint.
@@ -46,6 +77,9 @@ def apply_patch(skill: Skill, patch: Patch) -> Skill:
     """
     text = skill.content
     for edit in patch.edits:
+        if reference:
+            text = _apply_reference_edit(text, edit)
+            continue
         if edit.op == "append":
             text = text.rstrip() + "\n\n" + edit.content
             continue
@@ -106,7 +140,9 @@ def expansion_wave(nodes: Sequence[Node], *, limit: int, max_depth: int) -> list
     Returns:
         Highest parent-relative gains first, with stable ties.
     """
-    return sorted((node for node in nodes if node.depth < max_depth), key=lambda node: -node.gain)[:limit]
+    return sorted(
+        (node for node in nodes if node.depth < max_depth), key=lambda node: (-node.gain, node.tree_id, node.id)
+    )[:limit]
 
 
 def tree_winners(nodes: Sequence[Node]) -> list[Node]:
@@ -123,7 +159,12 @@ def tree_winners(nodes: Sequence[Node]) -> list[Node]:
         if node.parent_id is None or node.gain <= 0:
             continue
         previous = winners.get(node.tree_id)
-        if previous is None or mean_score(node.scores) > mean_score(previous.scores):
+        if previous is None or (-mean_score(node.scores), node.depth, len(node.skill.content), node.id) < (
+            -mean_score(previous.scores),
+            previous.depth,
+            len(previous.skill.content),
+            previous.id,
+        ):
             winners[node.tree_id] = node
     return [winners[key] for key in sorted(winners)]
 

@@ -1,3 +1,4 @@
+import { rateLimitMessage } from "./errors";
 import React, { useEffect, useRef, useState } from "react";
 import { api, versionLabel, type Version } from "./api";
 export function useRefresh(action: () => void) {
@@ -5,7 +6,7 @@ export function useRefresh(action: () => void) {
   const pending = useRef(false);
   async function refresh() {
     if (pending.current) {
-      setError("操作频繁，请稍后重试。");
+      setError(rateLimitMessage);
       return;
     }
     pending.current = true;

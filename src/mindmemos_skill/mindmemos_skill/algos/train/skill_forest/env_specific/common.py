@@ -54,6 +54,30 @@ def final_patch_user(skill: str, groups: list[tuple[str, dict[str, JsonValue]]])
 class SkillForestReferenceEnvAdapter(SkillForestEnvAdapter):
     """Share the released optimizer protocol across benchmark adapters."""
 
+    RANKING_PROMPT = """\
+You are an expert skill-optimization optimizer. You receive a skill document and a pool
+of proposed edits. Your job is to RANK the edits by importance and select the top ones.
+
+Ranking criteria (in order of priority):
+1. **Systematic impact**: edits that address widespread, recurring failure patterns
+   across many tasks should rank highest. A rule that fixes 50%% of failures beats
+   one that fixes a single edge case.
+2. **Complementarity**: edits that fill gaps in the current skill (not duplicate
+   existing content) rank higher.
+3. **Generality**: edits phrased as general principles rank higher than those
+   tied to specific question types or entities.
+4. **Actionability**: edits with clear, concrete guidance rank higher than vague advice.
+
+You will be told how many edits to select (the budget).
+
+Respond ONLY with a valid JSON object:
+{
+  "reasoning": "<brief justification for your ranking decisions>",
+  "selected_indices": [<0-based indices of the top edits, in priority order>]
+}
+"""
+    """Unmodified reference instructions for ranking candidate edits."""
+
     MERGE_FAILURE_PROMPT = """\
 You are a skill-edit coordinator. You receive multiple independently-proposed patches
 from FAILURE analysis of agent trajectories. Merge them into ONE coherent, non-redundant patch.
@@ -215,7 +239,7 @@ Respond ONLY with a valid JSON object:
                 "role": "user",
                 "content": patch_merge_user(
                     context.skill,
-                    [patch.model_dump(exclude_unset=True) for patch in context.patches],
+                    [patch.optimizer_input() for patch in context.patches],
                     level=context.level,
                 ),
             },
@@ -237,8 +261,8 @@ Respond ONLY with a valid JSON object:
                 "content": final_patch_user(
                     context.skill,
                     [
-                        ("failure", context.failure.model_dump(exclude_unset=True)),
-                        ("success", context.success.model_dump(exclude_unset=True)),
+                        ("failure", context.failure.optimizer_input()),
+                        ("success", context.success.optimizer_input()),
                     ],
                 ),
             },

@@ -1,0 +1,1503 @@
+{
+  "source": "paper LiveMath T7 seed42 20260902_152252",
+  "training_pool_ids": [
+    "202602:22",
+    "202512:8",
+    "202511:16",
+    "202601:44",
+    "202511:14",
+    "202602:30",
+    "202602:2",
+    "202601:41",
+    "202601:23",
+    "202511:20",
+    "202601:22",
+    "202512:14",
+    "202511:26",
+    "202511:3",
+    "202601:33",
+    "202602:7",
+    "202602:27",
+    "202602:31",
+    "202602:41",
+    "202512:25",
+    "202602:10",
+    "202602:16",
+    "202512:16",
+    "202512:2",
+    "202512:24",
+    "202512:32",
+    "202602:47",
+    "202602:46",
+    "202512:21",
+    "202512:33",
+    "202602:45",
+    "202602:26",
+    "202512:41",
+    "202601:38",
+    "202601:14"
+  ],
+  "splits": [
+    {
+      "train_ids": [
+        "202511:20",
+        "202511:26",
+        "202602:30",
+        "202602:10",
+        "202602:26",
+        "202512:16",
+        "202512:33",
+        "202602:27",
+        "202602:47",
+        "202512:24",
+        "202601:33",
+        "202601:22",
+        "202512:14",
+        "202602:46",
+        "202601:23",
+        "202512:25",
+        "202602:45"
+      ],
+      "validation_ids": [
+        "202602:2",
+        "202512:32",
+        "202602:22",
+        "202601:38",
+        "202511:3",
+        "202602:41",
+        "202511:16",
+        "202512:41",
+        "202512:21",
+        "202602:16",
+        "202601:44",
+        "202512:2",
+        "202511:14",
+        "202601:14",
+        "202602:7",
+        "202602:31",
+        "202512:8",
+        "202601:41"
+      ]
+    },
+    {
+      "train_ids": [
+        "202512:8",
+        "202601:33",
+        "202601:44",
+        "202602:16",
+        "202602:22",
+        "202602:45",
+        "202601:22",
+        "202602:27",
+        "202512:33",
+        "202512:24",
+        "202512:2",
+        "202602:46",
+        "202601:38",
+        "202512:25",
+        "202511:16",
+        "202602:30",
+        "202602:7"
+      ],
+      "validation_ids": [
+        "202601:23",
+        "202602:2",
+        "202602:31",
+        "202602:41",
+        "202601:14",
+        "202511:14",
+        "202602:10",
+        "202511:20",
+        "202512:16",
+        "202601:41",
+        "202512:14",
+        "202512:41",
+        "202511:26",
+        "202512:32",
+        "202511:3",
+        "202602:26",
+        "202602:47",
+        "202512:21"
+      ]
+    },
+    {
+      "train_ids": [
+        "202602:22",
+        "202512:41",
+        "202512:2",
+        "202602:2",
+        "202511:16",
+        "202601:38",
+        "202512:21",
+        "202512:8",
+        "202601:14",
+        "202512:32",
+        "202602:31",
+        "202601:33",
+        "202602:46",
+        "202602:26",
+        "202511:20",
+        "202601:41",
+        "202602:10"
+      ],
+      "validation_ids": [
+        "202512:25",
+        "202602:16",
+        "202602:30",
+        "202601:23",
+        "202602:27",
+        "202512:33",
+        "202602:47",
+        "202512:16",
+        "202512:14",
+        "202511:3",
+        "202511:26",
+        "202601:22",
+        "202601:44",
+        "202602:41",
+        "202602:45",
+        "202511:14",
+        "202512:24",
+        "202602:7"
+      ]
+    },
+    {
+      "train_ids": [
+        "202602:10",
+        "202512:32",
+        "202601:22",
+        "202512:25",
+        "202602:26",
+        "202512:33",
+        "202602:7",
+        "202602:27",
+        "202602:2",
+        "202601:14",
+        "202601:38",
+        "202512:8",
+        "202512:16",
+        "202511:3",
+        "202601:33",
+        "202601:44",
+        "202602:31"
+      ],
+      "validation_ids": [
+        "202512:2",
+        "202602:47",
+        "202602:46",
+        "202602:22",
+        "202512:41",
+        "202512:14",
+        "202511:26",
+        "202512:21",
+        "202511:20",
+        "202601:41",
+        "202601:23",
+        "202512:24",
+        "202511:16",
+        "202602:16",
+        "202511:14",
+        "202602:41",
+        "202602:45",
+        "202602:30"
+      ]
+    },
+    {
+      "train_ids": [
+        "202602:45",
+        "202512:14",
+        "202602:2",
+        "202602:16",
+        "202602:22",
+        "202601:33",
+        "202601:23",
+        "202512:21",
+        "202602:46",
+        "202511:16",
+        "202511:14",
+        "202601:44",
+        "202512:2",
+        "202511:20",
+        "202602:47",
+        "202512:16",
+        "202512:32"
+      ],
+      "validation_ids": [
+        "202602:26",
+        "202602:41",
+        "202601:14",
+        "202512:8",
+        "202512:24",
+        "202601:22",
+        "202602:10",
+        "202602:30",
+        "202601:41",
+        "202602:31",
+        "202512:25",
+        "202511:3",
+        "202511:26",
+        "202602:7",
+        "202601:38",
+        "202512:41",
+        "202602:27",
+        "202512:33"
+      ]
+    },
+    {
+      "train_ids": [
+        "202512:14",
+        "202512:32",
+        "202602:27",
+        "202601:14",
+        "202512:25",
+        "202511:16",
+        "202602:30",
+        "202602:2",
+        "202511:20",
+        "202602:7",
+        "202511:14",
+        "202602:26",
+        "202601:38",
+        "202512:8",
+        "202602:31",
+        "202601:33",
+        "202601:41"
+      ],
+      "validation_ids": [
+        "202512:24",
+        "202512:41",
+        "202512:16",
+        "202602:16",
+        "202602:10",
+        "202512:33",
+        "202511:3",
+        "202602:45",
+        "202602:46",
+        "202512:2",
+        "202602:41",
+        "202511:26",
+        "202602:47",
+        "202602:22",
+        "202601:22",
+        "202601:44",
+        "202601:23",
+        "202512:21"
+      ]
+    },
+    {
+      "train_ids": [
+        "202512:16",
+        "202601:38",
+        "202601:44",
+        "202511:3",
+        "202602:26",
+        "202512:21",
+        "202602:7",
+        "202602:46",
+        "202601:23",
+        "202512:33",
+        "202602:30",
+        "202602:47",
+        "202512:24",
+        "202601:41",
+        "202602:2",
+        "202602:27",
+        "202602:22"
+      ],
+      "validation_ids": [
+        "202512:2",
+        "202512:41",
+        "202602:45",
+        "202601:22",
+        "202601:33",
+        "202602:31",
+        "202602:16",
+        "202511:20",
+        "202512:25",
+        "202601:14",
+        "202511:14",
+        "202602:41",
+        "202602:10",
+        "202511:26",
+        "202511:16",
+        "202512:8",
+        "202512:14",
+        "202512:32"
+      ]
+    }
+  ],
+  "samples": [
+    {
+      "sample": {
+        "task": {
+          "id": "202511:20",
+          "instruction": "Let $K_t$ denote the complete graph on $t$ vertices. For graphs $G$ and $H$, write $G\\rightarrow H$ to mean that every red-blue coloring of the edges of $G$ contains a monochromatic copy of $H$. What is the strongest statement that can be proved about this relation for every integer $k\\ge 2$?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "For every integer $k\\ge 2$ there is a graph $G$ such that $G\\nrightarrow K_k$ and $G\\rightarrow (K_{R(k)-1},K_k)$, where $R(k)$ denotes the Ramsey number of $K_k$."
+            },
+            {
+              "label": "B",
+              "text": "For every integer $k\\ge 2$ there is a graph $G$ such that $K_k\\nsubseteq G$ and $G\\rightarrow (K_{R(k)-1},K_{k-1})$, where $R(k)$ denotes the Ramsey number of $K_k$."
+            },
+            {
+              "label": "C",
+              "text": "For every integer $k\\ge 2$ there is a graph $G$ such that $G\\rightarrow K_{k-1}$."
+            },
+            {
+              "label": "D",
+              "text": "For every integer $k\\ge 2$ there is a graph $G$ such that $K_k\\nsubseteq G$ and $G\\rightarrow (K_k,K_{k-1})$."
+            },
+            {
+              "label": "E",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            }
+          ],
+          "task_type": "Universal–Existential"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "E",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 42,
+      "expected_user": "## Question\nLet $K_t$ denote the complete graph on $t$ vertices. For graphs $G$ and $H$, write $G\\rightarrow H$ to mean that every red-blue coloring of the edges of $G$ contains a monochromatic copy of $H$. What is the strongest statement that can be proved about this relation for every integer $k\\ge 2$?\n\n## Choices\nA. For every integer $k\\ge 2$ there is a graph $G$ such that $G\\nrightarrow K_k$ and $G\\rightarrow (K_{R(k)-1},K_k)$, where $R(k)$ denotes the Ramsey number of $K_k$.\nB. For every integer $k\\ge 2$ there is a graph $G$ such that $K_k\\nsubseteq G$ and $G\\rightarrow (K_{R(k)-1},K_{k-1})$, where $R(k)$ denotes the Ramsey number of $K_k$.\nC. For every integer $k\\ge 2$ there is a graph $G$ such that $G\\rightarrow K_{k-1}$.\nD. For every integer $k\\ge 2$ there is a graph $G$ such that $K_k\\nsubseteq G$ and $G\\rightarrow (K_k,K_{k-1})$.\nE. One of the remaining options is correct, but a stronger result can be proven.",
+      "expected_correct": {
+        "label": "E",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:14",
+          "instruction": "Let $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold."
+            },
+            {
+              "label": "B",
+              "text": "All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\)."
+            },
+            {
+              "label": "C",
+              "text": "Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold."
+            },
+            {
+              "label": "D",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "E",
+              "text": "If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold."
+            }
+          ],
+          "task_type": "Biconditional or Equivalence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "D",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 10042,
+      "expected_user": "## Question\nLet $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?\n\n## Choices\nA. Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold.\nB. Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold.\nC. All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\).\nD. One of the remaining options is correct, but a stronger result can be proven.\nE. If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold.",
+      "expected_correct": {
+        "label": "D",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:16",
+          "instruction": "Let $N\\ge 3$, let $g:\\mathbb{R}\\to\\mathbb{R}$ satisfy hypotheses (G1)–(G5), and consider any solution $u\\in X^1(\\mathbb{R}^N)$ of\n\\[\n-\\Delta u-\\frac{(N-2)^2}{4|x|^2}u=g(u)\\quad\\text{in }\\mathbb{R}^N\\setminus\\{0\\}.\n\\]\nIf, in addition, $g$ is Hölder continuous, what is the strongest statement that can be proved about the regularity of every such solution?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "There exists a solution $u\\in X^1(\\mathbb{R}^N)$ of the equation that belongs to $C^2(\\mathbb{R}^N\\setminus\\{0\\})$."
+            },
+            {
+              "label": "B",
+              "text": "Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^{2,\\alpha}_{\\mathrm{loc}}(\\mathbb{R}^N\\setminus\\{0\\})$ for some $\\alpha\\in(0,1)$."
+            },
+            {
+              "label": "C",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "D",
+              "text": "Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^{1,\\alpha}_{\\mathrm{loc}}(\\mathbb{R}^N\\setminus\\{0\\})$ for some $\\alpha\\in(0,1)$."
+            },
+            {
+              "label": "E",
+              "text": "Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^2(\\mathbb{R}^N)$."
+            }
+          ],
+          "task_type": "Existence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "C",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 1000045,
+      "expected_user": "## Question\nLet $N\\ge 3$, let $g:\\mathbb{R}\\to\\mathbb{R}$ satisfy hypotheses (G1)–(G5), and consider any solution $u\\in X^1(\\mathbb{R}^N)$ of\n\\[\n-\\Delta u-\\frac{(N-2)^2}{4|x|^2}u=g(u)\\quad\\text{in }\\mathbb{R}^N\\setminus\\{0\\}.\n\\]\nIf, in addition, $g$ is Hölder continuous, what is the strongest statement that can be proved about the regularity of every such solution?\n\n## Choices\nA. There exists a solution $u\\in X^1(\\mathbb{R}^N)$ of the equation that belongs to $C^2(\\mathbb{R}^N\\setminus\\{0\\})$.\nB. Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^{1,\\alpha}_{\\mathrm{loc}}(\\mathbb{R}^N\\setminus\\{0\\})$ for some $\\alpha\\in(0,1)$.\nC. Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^{2,\\alpha}_{\\mathrm{loc}}(\\mathbb{R}^N\\setminus\\{0\\})$ for some $\\alpha\\in(0,1)$.\nD. Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^2(\\mathbb{R}^N)$.\nE. One of the remaining options is correct, but a stronger result can be proven.",
+      "expected_correct": {
+        "label": "E",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:14",
+          "instruction": "Let $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold."
+            },
+            {
+              "label": "B",
+              "text": "All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\)."
+            },
+            {
+              "label": "C",
+              "text": "Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold."
+            },
+            {
+              "label": "D",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "E",
+              "text": "If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold."
+            }
+          ],
+          "task_type": "Biconditional or Equivalence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "D",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 1010045,
+      "expected_user": "## Question\nLet $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?\n\n## Choices\nA. Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold.\nB. One of the remaining options is correct, but a stronger result can be proven.\nC. If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold.\nD. All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\).\nE. Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold.",
+      "expected_correct": {
+        "label": "B",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:16",
+          "instruction": "Let $N\\ge 3$, let $g:\\mathbb{R}\\to\\mathbb{R}$ satisfy hypotheses (G1)–(G5), and consider any solution $u\\in X^1(\\mathbb{R}^N)$ of\n\\[\n-\\Delta u-\\frac{(N-2)^2}{4|x|^2}u=g(u)\\quad\\text{in }\\mathbb{R}^N\\setminus\\{0\\}.\n\\]\nIf, in addition, $g$ is Hölder continuous, what is the strongest statement that can be proved about the regularity of every such solution?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "There exists a solution $u\\in X^1(\\mathbb{R}^N)$ of the equation that belongs to $C^2(\\mathbb{R}^N\\setminus\\{0\\})$."
+            },
+            {
+              "label": "B",
+              "text": "Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^{2,\\alpha}_{\\mathrm{loc}}(\\mathbb{R}^N\\setminus\\{0\\})$ for some $\\alpha\\in(0,1)$."
+            },
+            {
+              "label": "C",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "D",
+              "text": "Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^{1,\\alpha}_{\\mathrm{loc}}(\\mathbb{R}^N\\setminus\\{0\\})$ for some $\\alpha\\in(0,1)$."
+            },
+            {
+              "label": "E",
+              "text": "Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^2(\\mathbb{R}^N)$."
+            }
+          ],
+          "task_type": "Existence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "C",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 2000048,
+      "expected_user": "## Question\nLet $N\\ge 3$, let $g:\\mathbb{R}\\to\\mathbb{R}$ satisfy hypotheses (G1)–(G5), and consider any solution $u\\in X^1(\\mathbb{R}^N)$ of\n\\[\n-\\Delta u-\\frac{(N-2)^2}{4|x|^2}u=g(u)\\quad\\text{in }\\mathbb{R}^N\\setminus\\{0\\}.\n\\]\nIf, in addition, $g$ is Hölder continuous, what is the strongest statement that can be proved about the regularity of every such solution?\n\n## Choices\nA. One of the remaining options is correct, but a stronger result can be proven.\nB. Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^2(\\mathbb{R}^N)$.\nC. Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^{2,\\alpha}_{\\mathrm{loc}}(\\mathbb{R}^N\\setminus\\{0\\})$ for some $\\alpha\\in(0,1)$.\nD. There exists a solution $u\\in X^1(\\mathbb{R}^N)$ of the equation that belongs to $C^2(\\mathbb{R}^N\\setminus\\{0\\})$.\nE. Every solution $u\\in X^1(\\mathbb{R}^N)$ of the equation belongs to $C^{1,\\alpha}_{\\mathrm{loc}}(\\mathbb{R}^N\\setminus\\{0\\})$ for some $\\alpha\\in(0,1)$.",
+      "expected_correct": {
+        "label": "A",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:14",
+          "instruction": "Let $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold."
+            },
+            {
+              "label": "B",
+              "text": "All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\)."
+            },
+            {
+              "label": "C",
+              "text": "Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold."
+            },
+            {
+              "label": "D",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "E",
+              "text": "If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold."
+            }
+          ],
+          "task_type": "Biconditional or Equivalence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "D",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 2010048,
+      "expected_user": "## Question\nLet $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?\n\n## Choices\nA. Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold.\nB. Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold.\nC. If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold.\nD. All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\).\nE. One of the remaining options is correct, but a stronger result can be proven.",
+      "expected_correct": {
+        "label": "E",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:3",
+          "instruction": "Let $(M,\\varphi)$ be a diffuse separable $\\mathrm{W}^*$-probability space (that is, a von Neumann algebra with a faithful normal state). Recall that $(M,\\varphi)$ is called selfless if the first-factor inclusion $(M,\\varphi)\\subset (M,\\varphi)\\ast (M,\\varphi)$, where $\\ast$ denotes the free product of $\\mathrm{W}^*$-probability spaces, is existentially closed; and that an inclusion $(M,\\varphi)\\subset (N,\\psi)$ is existentially closed if for some nonprincipal ultrafilter $\\mathcal U$ one has $(M,\\varphi)\\subset (N,\\psi)\\subset (M,\\varphi)^{\\mathcal U}$ via the diagonal inclusion. Which statement gives a complete characterization of when $(M,\\varphi)$ is selfless?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "B",
+              "text": "Exactly that the free product $(M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ itself is selfless."
+            },
+            {
+              "label": "C",
+              "text": "Exactly that for every nontrivial $\\mathrm{W}^*$-probability space $(N,\\psi)$, the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (N,\\psi)$ is existentially closed."
+            },
+            {
+              "label": "D",
+              "text": "It is characterized by the existence of some nontrivial $\\mathrm{W}^*$-probability space $(N,\\psi)$ such that the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (N,\\psi)$ is existentially closed."
+            },
+            {
+              "label": "E",
+              "text": "Exactly that the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ is existentially closed for every nonprincipal ultrafilter $\\mathcal U$, in the sense that $(M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ embeds into $(M,\\varphi)^{\\mathcal U}$ over $(M,\\varphi)$ via the diagonal inclusion."
+            }
+          ],
+          "task_type": "Biconditional or Equivalence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "A",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 3000051,
+      "expected_user": "## Question\nLet $(M,\\varphi)$ be a diffuse separable $\\mathrm{W}^*$-probability space (that is, a von Neumann algebra with a faithful normal state). Recall that $(M,\\varphi)$ is called selfless if the first-factor inclusion $(M,\\varphi)\\subset (M,\\varphi)\\ast (M,\\varphi)$, where $\\ast$ denotes the free product of $\\mathrm{W}^*$-probability spaces, is existentially closed; and that an inclusion $(M,\\varphi)\\subset (N,\\psi)$ is existentially closed if for some nonprincipal ultrafilter $\\mathcal U$ one has $(M,\\varphi)\\subset (N,\\psi)\\subset (M,\\varphi)^{\\mathcal U}$ via the diagonal inclusion. Which statement gives a complete characterization of when $(M,\\varphi)$ is selfless?\n\n## Choices\nA. Exactly that for every nontrivial $\\mathrm{W}^*$-probability space $(N,\\psi)$, the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (N,\\psi)$ is existentially closed.\nB. It is characterized by the existence of some nontrivial $\\mathrm{W}^*$-probability space $(N,\\psi)$ such that the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (N,\\psi)$ is existentially closed.\nC. Exactly that the free product $(M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ itself is selfless.\nD. One of the remaining options is correct, but a stronger result can be proven.\nE. Exactly that the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ is existentially closed for every nonprincipal ultrafilter $\\mathcal U$, in the sense that $(M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ embeds into $(M,\\varphi)^{\\mathcal U}$ over $(M,\\varphi)$ via the diagonal inclusion.",
+      "expected_correct": {
+        "label": "D",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:14",
+          "instruction": "Let $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold."
+            },
+            {
+              "label": "B",
+              "text": "All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\)."
+            },
+            {
+              "label": "C",
+              "text": "Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold."
+            },
+            {
+              "label": "D",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "E",
+              "text": "If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold."
+            }
+          ],
+          "task_type": "Biconditional or Equivalence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "D",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 3010051,
+      "expected_user": "## Question\nLet $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?\n\n## Choices\nA. Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold.\nB. Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold.\nC. One of the remaining options is correct, but a stronger result can be proven.\nD. All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\).\nE. If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold.",
+      "expected_correct": {
+        "label": "C",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:14",
+          "instruction": "Let $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold."
+            },
+            {
+              "label": "B",
+              "text": "All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\)."
+            },
+            {
+              "label": "C",
+              "text": "Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold."
+            },
+            {
+              "label": "D",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "E",
+              "text": "If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold."
+            }
+          ],
+          "task_type": "Biconditional or Equivalence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "D",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 4000054,
+      "expected_user": "## Question\nLet $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?\n\n## Choices\nA. All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\).\nB. Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold.\nC. One of the remaining options is correct, but a stronger result can be proven.\nD. If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold.\nE. Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold.",
+      "expected_correct": {
+        "label": "C",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:26",
+          "instruction": "Let \\(G_m=\\mathrm{GL}(m,\\mathbb C)\\). Define the character varieties \\(\\mathcal M_r(Y):=\\mathrm{Hom}(\\pi_1(Y),G_r)/\\!/G_r\\) and \\(\\mathcal M_{dr}(X-B):=\\mathrm{Hom}(\\pi_1(X-B),G_{dr})/\\!/G_{dr}\\), whose smooth loci carry holomorphic Poisson structures. Let \\(\\mathsf{Frob}:\\mathcal M_r(Y)\\to\\mathcal M_{dr}(X-B)\\) be the natural map induced by sending the holonomy of \\((V,\\nabla)\\) to the holonomy of its direct image \\((f_*V,f_*\\nabla)\\). What is the strongest statement that can be proved about \\(\\mathsf{Frob}\\)?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "\\(\\mathsf{Frob}\\) is a Poisson isomorphism from \\(\\mathcal M_r(Y)\\) onto a symplectic leaf of the smooth locus of \\(\\mathcal M_{dr}(X-B)\\)."
+            },
+            {
+              "label": "B",
+              "text": "\\(\\mathsf{Frob}\\) is an embedding."
+            },
+            {
+              "label": "C",
+              "text": "\\(\\mathsf{Frob}\\) is a Poisson embedding."
+            },
+            {
+              "label": "D",
+              "text": "\\(\\mathsf{Frob}\\) is a Poisson map on the smooth loci, but induction from the finite-index subgroup can identify distinct conjugacy classes, so \\(\\mathsf{Frob}\\) need not be injective."
+            },
+            {
+              "label": "E",
+              "text": "\\(\\mathsf{Frob}\\) is an algebraic embedding of character varieties, but its Poisson compatibility holds only after restricting to the loci of irreducible representations."
+            }
+          ],
+          "task_type": "Universal"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "C",
+            "text": "\\(\\mathsf{Frob}\\) is a Poisson embedding."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 4010054,
+      "expected_user": "## Question\nLet \\(G_m=\\mathrm{GL}(m,\\mathbb C)\\). Define the character varieties \\(\\mathcal M_r(Y):=\\mathrm{Hom}(\\pi_1(Y),G_r)/\\!/G_r\\) and \\(\\mathcal M_{dr}(X-B):=\\mathrm{Hom}(\\pi_1(X-B),G_{dr})/\\!/G_{dr}\\), whose smooth loci carry holomorphic Poisson structures. Let \\(\\mathsf{Frob}:\\mathcal M_r(Y)\\to\\mathcal M_{dr}(X-B)\\) be the natural map induced by sending the holonomy of \\((V,\\nabla)\\) to the holonomy of its direct image \\((f_*V,f_*\\nabla)\\). What is the strongest statement that can be proved about \\(\\mathsf{Frob}\\)?\n\n## Choices\nA. \\(\\mathsf{Frob}\\) is a Poisson embedding.\nB. \\(\\mathsf{Frob}\\) is a Poisson map on the smooth loci, but induction from the finite-index subgroup can identify distinct conjugacy classes, so \\(\\mathsf{Frob}\\) need not be injective.\nC. \\(\\mathsf{Frob}\\) is a Poisson isomorphism from \\(\\mathcal M_r(Y)\\) onto a symplectic leaf of the smooth locus of \\(\\mathcal M_{dr}(X-B)\\).\nD. \\(\\mathsf{Frob}\\) is an algebraic embedding of character varieties, but its Poisson compatibility holds only after restricting to the loci of irreducible representations.\nE. \\(\\mathsf{Frob}\\) is an embedding.",
+      "expected_correct": {
+        "label": "A",
+        "text": "\\(\\mathsf{Frob}\\) is a Poisson embedding."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:14",
+          "instruction": "Let $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold."
+            },
+            {
+              "label": "B",
+              "text": "All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\)."
+            },
+            {
+              "label": "C",
+              "text": "Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold."
+            },
+            {
+              "label": "D",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "E",
+              "text": "If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold."
+            }
+          ],
+          "task_type": "Biconditional or Equivalence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "D",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 5000057,
+      "expected_user": "## Question\nLet $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?\n\n## Choices\nA. Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold.\nB. All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\).\nC. One of the remaining options is correct, but a stronger result can be proven.\nD. If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold.\nE. Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold.",
+      "expected_correct": {
+        "label": "C",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:26",
+          "instruction": "Let \\(G_m=\\mathrm{GL}(m,\\mathbb C)\\). Define the character varieties \\(\\mathcal M_r(Y):=\\mathrm{Hom}(\\pi_1(Y),G_r)/\\!/G_r\\) and \\(\\mathcal M_{dr}(X-B):=\\mathrm{Hom}(\\pi_1(X-B),G_{dr})/\\!/G_{dr}\\), whose smooth loci carry holomorphic Poisson structures. Let \\(\\mathsf{Frob}:\\mathcal M_r(Y)\\to\\mathcal M_{dr}(X-B)\\) be the natural map induced by sending the holonomy of \\((V,\\nabla)\\) to the holonomy of its direct image \\((f_*V,f_*\\nabla)\\). What is the strongest statement that can be proved about \\(\\mathsf{Frob}\\)?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "\\(\\mathsf{Frob}\\) is a Poisson isomorphism from \\(\\mathcal M_r(Y)\\) onto a symplectic leaf of the smooth locus of \\(\\mathcal M_{dr}(X-B)\\)."
+            },
+            {
+              "label": "B",
+              "text": "\\(\\mathsf{Frob}\\) is an embedding."
+            },
+            {
+              "label": "C",
+              "text": "\\(\\mathsf{Frob}\\) is a Poisson embedding."
+            },
+            {
+              "label": "D",
+              "text": "\\(\\mathsf{Frob}\\) is a Poisson map on the smooth loci, but induction from the finite-index subgroup can identify distinct conjugacy classes, so \\(\\mathsf{Frob}\\) need not be injective."
+            },
+            {
+              "label": "E",
+              "text": "\\(\\mathsf{Frob}\\) is an algebraic embedding of character varieties, but its Poisson compatibility holds only after restricting to the loci of irreducible representations."
+            }
+          ],
+          "task_type": "Universal"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "C",
+            "text": "\\(\\mathsf{Frob}\\) is a Poisson embedding."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 5010057,
+      "expected_user": "## Question\nLet \\(G_m=\\mathrm{GL}(m,\\mathbb C)\\). Define the character varieties \\(\\mathcal M_r(Y):=\\mathrm{Hom}(\\pi_1(Y),G_r)/\\!/G_r\\) and \\(\\mathcal M_{dr}(X-B):=\\mathrm{Hom}(\\pi_1(X-B),G_{dr})/\\!/G_{dr}\\), whose smooth loci carry holomorphic Poisson structures. Let \\(\\mathsf{Frob}:\\mathcal M_r(Y)\\to\\mathcal M_{dr}(X-B)\\) be the natural map induced by sending the holonomy of \\((V,\\nabla)\\) to the holonomy of its direct image \\((f_*V,f_*\\nabla)\\). What is the strongest statement that can be proved about \\(\\mathsf{Frob}\\)?\n\n## Choices\nA. \\(\\mathsf{Frob}\\) is an algebraic embedding of character varieties, but its Poisson compatibility holds only after restricting to the loci of irreducible representations.\nB. \\(\\mathsf{Frob}\\) is a Poisson map on the smooth loci, but induction from the finite-index subgroup can identify distinct conjugacy classes, so \\(\\mathsf{Frob}\\) need not be injective.\nC. \\(\\mathsf{Frob}\\) is an embedding.\nD. \\(\\mathsf{Frob}\\) is a Poisson isomorphism from \\(\\mathcal M_r(Y)\\) onto a symplectic leaf of the smooth locus of \\(\\mathcal M_{dr}(X-B)\\).\nE. \\(\\mathsf{Frob}\\) is a Poisson embedding.",
+      "expected_correct": {
+        "label": "E",
+        "text": "\\(\\mathsf{Frob}\\) is a Poisson embedding."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:3",
+          "instruction": "Let $(M,\\varphi)$ be a diffuse separable $\\mathrm{W}^*$-probability space (that is, a von Neumann algebra with a faithful normal state). Recall that $(M,\\varphi)$ is called selfless if the first-factor inclusion $(M,\\varphi)\\subset (M,\\varphi)\\ast (M,\\varphi)$, where $\\ast$ denotes the free product of $\\mathrm{W}^*$-probability spaces, is existentially closed; and that an inclusion $(M,\\varphi)\\subset (N,\\psi)$ is existentially closed if for some nonprincipal ultrafilter $\\mathcal U$ one has $(M,\\varphi)\\subset (N,\\psi)\\subset (M,\\varphi)^{\\mathcal U}$ via the diagonal inclusion. Which statement gives a complete characterization of when $(M,\\varphi)$ is selfless?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "B",
+              "text": "Exactly that the free product $(M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ itself is selfless."
+            },
+            {
+              "label": "C",
+              "text": "Exactly that for every nontrivial $\\mathrm{W}^*$-probability space $(N,\\psi)$, the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (N,\\psi)$ is existentially closed."
+            },
+            {
+              "label": "D",
+              "text": "It is characterized by the existence of some nontrivial $\\mathrm{W}^*$-probability space $(N,\\psi)$ such that the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (N,\\psi)$ is existentially closed."
+            },
+            {
+              "label": "E",
+              "text": "Exactly that the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ is existentially closed for every nonprincipal ultrafilter $\\mathcal U$, in the sense that $(M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ embeds into $(M,\\varphi)^{\\mathcal U}$ over $(M,\\varphi)$ via the diagonal inclusion."
+            }
+          ],
+          "task_type": "Biconditional or Equivalence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "A",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 6000060,
+      "expected_user": "## Question\nLet $(M,\\varphi)$ be a diffuse separable $\\mathrm{W}^*$-probability space (that is, a von Neumann algebra with a faithful normal state). Recall that $(M,\\varphi)$ is called selfless if the first-factor inclusion $(M,\\varphi)\\subset (M,\\varphi)\\ast (M,\\varphi)$, where $\\ast$ denotes the free product of $\\mathrm{W}^*$-probability spaces, is existentially closed; and that an inclusion $(M,\\varphi)\\subset (N,\\psi)$ is existentially closed if for some nonprincipal ultrafilter $\\mathcal U$ one has $(M,\\varphi)\\subset (N,\\psi)\\subset (M,\\varphi)^{\\mathcal U}$ via the diagonal inclusion. Which statement gives a complete characterization of when $(M,\\varphi)$ is selfless?\n\n## Choices\nA. One of the remaining options is correct, but a stronger result can be proven.\nB. Exactly that for every nontrivial $\\mathrm{W}^*$-probability space $(N,\\psi)$, the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (N,\\psi)$ is existentially closed.\nC. Exactly that the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ is existentially closed for every nonprincipal ultrafilter $\\mathcal U$, in the sense that $(M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ embeds into $(M,\\varphi)^{\\mathcal U}$ over $(M,\\varphi)$ via the diagonal inclusion.\nD. Exactly that the free product $(M,\\varphi) \\ast (\\operatorname{L}(\\mathbb{Z}),\\tau_{\\mathbb{Z}})$ itself is selfless.\nE. It is characterized by the existence of some nontrivial $\\mathrm{W}^*$-probability space $(N,\\psi)$ such that the first-factor inclusion $(M,\\varphi) \\subset (M,\\varphi) \\ast (N,\\psi)$ is existentially closed.",
+      "expected_correct": {
+        "label": "A",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    },
+    {
+      "sample": {
+        "task": {
+          "id": "202511:14",
+          "instruction": "Let $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?",
+          "choices": [
+            {
+              "label": "A",
+              "text": "Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold."
+            },
+            {
+              "label": "B",
+              "text": "All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\)."
+            },
+            {
+              "label": "C",
+              "text": "Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold."
+            },
+            {
+              "label": "D",
+              "text": "One of the remaining options is correct, but a stronger result can be proven."
+            },
+            {
+              "label": "E",
+              "text": "If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold."
+            }
+          ],
+          "task_type": "Biconditional or Equivalence"
+        },
+        "reward_data": {
+          "correct_choice": {
+            "label": "D",
+            "text": "One of the remaining options is correct, but a stronger result can be proven."
+          },
+          "source_file": "fixture.json",
+          "choice_seed": 42
+        }
+      },
+      "seed": 6010060,
+      "expected_user": "## Question\nLet $T$ be an exponential o-minimal theory, and let $T_{\\mathrm{convex}}$ denote the complete theory of models of $T$ expanded by a predicate for a non-trivial $T$-convex valuation subring $\\mathcal O$. Call $T$ transserial if it satisfies the following axiom: for every $n\\in\\mathbb N$ and every $(n+1)$-ary $T$-definable function $f$, writing $\\dagger_n f(\\bar x,t)=\\frac{\\partial f(\\bar x,t)/\\partial t}{f(\\bar x,t)}$ when defined and $\\infty$ otherwise, and $G_m^f(\\bar x,t):=\\min\\{|(\\dagger_n^k f)(\\bar x,t)|:k\\le m\\}$, there is some $m\\in\\mathbb N$ such that\n$$T_{\\mathrm{convex}}\\models \\forall \\bar x\\,\\exists r\\in\\mathcal O\\,\\forall t\\in\\mathcal O\\,(t>r\\to G_m^f(\\bar x,t)<1).$$\nAlso, $\\mathbb E\\langle b\\rangle$ denotes the $T$-substructure generated by $\\mathbb E\\cup\\{b\\}$, $y\\equiv_{\\mathbb E} g(b)$ means that $y$ and $g(b)$ have the same complete type over $\\mathbb E$, and $\\mathbb E^{>\\mathcal O}:=\\{x\\in\\mathbb E:x>a\\text{ for all }a\\in\\mathcal O\\}$ (so $\\mathcal O<b<\\mathbb E^{>\\mathcal O}$ is interpreted pointwise). Consider the following conditions:\n(1) $T$ is transserial.\n(2) $T$ is exponentially bounded and, for every $(\\mathbb E, \\mathcal O) \\models T_{\\mathrm{convex}}$, every $b$ with $\\mathcal O < b < \\mathbb E^{>\\mathcal O}$, and every $y \\in \\mathbb E\\langle b\\rangle$, there exists an $\\mathbb E$-definable gne $g$ such that $y \\equiv_{\\mathbb E} g(b)$.\n(3) Every $1$-$\\dcl_T$-dimensional wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(4) Every $1$-$\\dcl_T$-dimensional res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(5) Every wim-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\n(6) Every res-constructible extension of a model of $T_{\\mathrm{convex}}$ has the gne-property.\nWhich statement about these six conditions is valid?\n\n## Choices\nA. All six conditions are equivalent, and in condition (2) the witnessing \\(\\mathbb E\\)-definable gne \\(g\\) can always be chosen so that \\(y=g(b)\\), not just \\(y\\equiv_{\\mathbb E} g(b)\\).\nB. Conditions (1), (2), (3), and (4) are equivalent. Moreover, each of conditions (5) and (6) implies these four, but the converse implications from the 1-dimensional cases to the arbitrary constructible cases need not hold.\nC. Conditions (2), (3), and (4) are equivalent, and each of them follows from condition (1); however, to obtain either of the full constructibility statements (5) or (6) one needs an additional argument not forced by the first four conditions, so (5) and (6) may fail even when (1)–(4) hold.\nD. One of the remaining options is correct, but a stronger result can be proven.\nE. If any one of the six conditions holds, then conditions (2), (3), (4), (5), and (6) all hold.",
+      "expected_correct": {
+        "label": "D",
+        "text": "One of the remaining options is correct, but a stronger result can be proven."
+      }
+    }
+  ],
+  "reflection_seeds": [
+    {
+      "tree_id": 0,
+      "depth": 0,
+      "candidate_index": 0,
+      "seed": 10000061
+    },
+    {
+      "tree_id": 0,
+      "depth": 0,
+      "candidate_index": 1,
+      "seed": 20000080
+    },
+    {
+      "tree_id": 0,
+      "depth": 0,
+      "candidate_index": 2,
+      "seed": 30000099
+    },
+    {
+      "tree_id": 0,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 10100061
+    },
+    {
+      "tree_id": 0,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 20100080
+    },
+    {
+      "tree_id": 0,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 30100099
+    },
+    {
+      "tree_id": 0,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 10100061
+    },
+    {
+      "tree_id": 0,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 20100080
+    },
+    {
+      "tree_id": 0,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 30100099
+    },
+    {
+      "tree_id": 0,
+      "depth": 2,
+      "candidate_index": 0,
+      "seed": 10200061
+    },
+    {
+      "tree_id": 0,
+      "depth": 2,
+      "candidate_index": 1,
+      "seed": 20200080
+    },
+    {
+      "tree_id": 0,
+      "depth": 2,
+      "candidate_index": 2,
+      "seed": 30200099
+    },
+    {
+      "tree_id": 0,
+      "depth": 2,
+      "candidate_index": 0,
+      "seed": 10200061
+    },
+    {
+      "tree_id": 0,
+      "depth": 2,
+      "candidate_index": 1,
+      "seed": 20200080
+    },
+    {
+      "tree_id": 0,
+      "depth": 2,
+      "candidate_index": 2,
+      "seed": 30200099
+    },
+    {
+      "tree_id": 1,
+      "depth": 0,
+      "candidate_index": 0,
+      "seed": 11000064
+    },
+    {
+      "tree_id": 1,
+      "depth": 0,
+      "candidate_index": 1,
+      "seed": 21000083
+    },
+    {
+      "tree_id": 1,
+      "depth": 0,
+      "candidate_index": 2,
+      "seed": 31000102
+    },
+    {
+      "tree_id": 1,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 11100064
+    },
+    {
+      "tree_id": 1,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 21100083
+    },
+    {
+      "tree_id": 1,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 31100102
+    },
+    {
+      "tree_id": 2,
+      "depth": 0,
+      "candidate_index": 0,
+      "seed": 12000067
+    },
+    {
+      "tree_id": 2,
+      "depth": 0,
+      "candidate_index": 1,
+      "seed": 22000086
+    },
+    {
+      "tree_id": 2,
+      "depth": 0,
+      "candidate_index": 2,
+      "seed": 32000105
+    },
+    {
+      "tree_id": 2,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 12100067
+    },
+    {
+      "tree_id": 2,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 22100086
+    },
+    {
+      "tree_id": 2,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 32100105
+    },
+    {
+      "tree_id": 2,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 12100067
+    },
+    {
+      "tree_id": 2,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 22100086
+    },
+    {
+      "tree_id": 2,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 32100105
+    },
+    {
+      "tree_id": 2,
+      "depth": 2,
+      "candidate_index": 0,
+      "seed": 12200067
+    },
+    {
+      "tree_id": 2,
+      "depth": 2,
+      "candidate_index": 1,
+      "seed": 22200086
+    },
+    {
+      "tree_id": 2,
+      "depth": 2,
+      "candidate_index": 2,
+      "seed": 32200105
+    },
+    {
+      "tree_id": 2,
+      "depth": 2,
+      "candidate_index": 0,
+      "seed": 12200067
+    },
+    {
+      "tree_id": 2,
+      "depth": 2,
+      "candidate_index": 1,
+      "seed": 22200086
+    },
+    {
+      "tree_id": 2,
+      "depth": 2,
+      "candidate_index": 2,
+      "seed": 32200105
+    },
+    {
+      "tree_id": 3,
+      "depth": 0,
+      "candidate_index": 0,
+      "seed": 13000070
+    },
+    {
+      "tree_id": 3,
+      "depth": 0,
+      "candidate_index": 1,
+      "seed": 23000089
+    },
+    {
+      "tree_id": 3,
+      "depth": 0,
+      "candidate_index": 2,
+      "seed": 33000108
+    },
+    {
+      "tree_id": 3,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 13100070
+    },
+    {
+      "tree_id": 3,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 23100089
+    },
+    {
+      "tree_id": 3,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 33100108
+    },
+    {
+      "tree_id": 3,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 13100070
+    },
+    {
+      "tree_id": 3,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 23100089
+    },
+    {
+      "tree_id": 3,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 33100108
+    },
+    {
+      "tree_id": 3,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 13100070
+    },
+    {
+      "tree_id": 3,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 23100089
+    },
+    {
+      "tree_id": 3,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 33100108
+    },
+    {
+      "tree_id": 3,
+      "depth": 2,
+      "candidate_index": 0,
+      "seed": 13200070
+    },
+    {
+      "tree_id": 3,
+      "depth": 2,
+      "candidate_index": 1,
+      "seed": 23200089
+    },
+    {
+      "tree_id": 3,
+      "depth": 2,
+      "candidate_index": 2,
+      "seed": 33200108
+    },
+    {
+      "tree_id": 3,
+      "depth": 2,
+      "candidate_index": 0,
+      "seed": 13200070
+    },
+    {
+      "tree_id": 3,
+      "depth": 2,
+      "candidate_index": 1,
+      "seed": 23200089
+    },
+    {
+      "tree_id": 3,
+      "depth": 2,
+      "candidate_index": 2,
+      "seed": 33200108
+    },
+    {
+      "tree_id": 3,
+      "depth": 2,
+      "candidate_index": 0,
+      "seed": 13200070
+    },
+    {
+      "tree_id": 3,
+      "depth": 2,
+      "candidate_index": 1,
+      "seed": 23200089
+    },
+    {
+      "tree_id": 3,
+      "depth": 2,
+      "candidate_index": 2,
+      "seed": 33200108
+    },
+    {
+      "tree_id": 4,
+      "depth": 0,
+      "candidate_index": 0,
+      "seed": 14000073
+    },
+    {
+      "tree_id": 4,
+      "depth": 0,
+      "candidate_index": 1,
+      "seed": 24000092
+    },
+    {
+      "tree_id": 4,
+      "depth": 0,
+      "candidate_index": 2,
+      "seed": 34000111
+    },
+    {
+      "tree_id": 4,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 14100073
+    },
+    {
+      "tree_id": 4,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 24100092
+    },
+    {
+      "tree_id": 4,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 34100111
+    },
+    {
+      "tree_id": 5,
+      "depth": 0,
+      "candidate_index": 0,
+      "seed": 15000076
+    },
+    {
+      "tree_id": 5,
+      "depth": 0,
+      "candidate_index": 1,
+      "seed": 25000095
+    },
+    {
+      "tree_id": 5,
+      "depth": 0,
+      "candidate_index": 2,
+      "seed": 35000114
+    },
+    {
+      "tree_id": 5,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 15100076
+    },
+    {
+      "tree_id": 5,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 25100095
+    },
+    {
+      "tree_id": 5,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 35100114
+    },
+    {
+      "tree_id": 5,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 15100076
+    },
+    {
+      "tree_id": 5,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 25100095
+    },
+    {
+      "tree_id": 5,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 35100114
+    },
+    {
+      "tree_id": 6,
+      "depth": 0,
+      "candidate_index": 0,
+      "seed": 16000079
+    },
+    {
+      "tree_id": 6,
+      "depth": 0,
+      "candidate_index": 1,
+      "seed": 26000098
+    },
+    {
+      "tree_id": 6,
+      "depth": 0,
+      "candidate_index": 2,
+      "seed": 36000117
+    },
+    {
+      "tree_id": 6,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 16100079
+    },
+    {
+      "tree_id": 6,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 26100098
+    },
+    {
+      "tree_id": 6,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 36100117
+    },
+    {
+      "tree_id": 6,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 16100079
+    },
+    {
+      "tree_id": 6,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 26100098
+    },
+    {
+      "tree_id": 6,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 36100117
+    },
+    {
+      "tree_id": 6,
+      "depth": 1,
+      "candidate_index": 0,
+      "seed": 16100079
+    },
+    {
+      "tree_id": 6,
+      "depth": 1,
+      "candidate_index": 1,
+      "seed": 26100098
+    },
+    {
+      "tree_id": 6,
+      "depth": 1,
+      "candidate_index": 2,
+      "seed": 36100117
+    },
+    {
+      "tree_id": 6,
+      "depth": 2,
+      "candidate_index": 0,
+      "seed": 16200079
+    },
+    {
+      "tree_id": 6,
+      "depth": 2,
+      "candidate_index": 1,
+      "seed": 26200098
+    },
+    {
+      "tree_id": 6,
+      "depth": 2,
+      "candidate_index": 2,
+      "seed": 36200117
+    },
+    {
+      "tree_id": 6,
+      "depth": 2,
+      "candidate_index": 0,
+      "seed": 16200079
+    },
+    {
+      "tree_id": 6,
+      "depth": 2,
+      "candidate_index": 1,
+      "seed": 26200098
+    },
+    {
+      "tree_id": 6,
+      "depth": 2,
+      "candidate_index": 2,
+      "seed": 36200117
+    }
+  ]
+}

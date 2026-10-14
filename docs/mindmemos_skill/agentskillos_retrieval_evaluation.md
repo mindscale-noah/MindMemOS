@@ -83,6 +83,8 @@ Scene 抽取通过 `skill_manage.scene.extract` 和 `skill_manage.scene.model_ca
 
 `scene.extraction.transport_failed` 记录异常类型、可用的 HTTP 状态，以及服务能识别的截断或空响应原因；`scene.extraction.invalid_output` 记录校验错误类型，例如 `scene_entry_missing`、`scene_step_ownership_invalid`、`scene_node_unreachable`，以区分具体结构约束。诊断不保存 Skill 原文、模型回复或供应商错误正文。`completion_truncated` 表示输出预算耗尽，应先用相同文档复测合适的预算，不能把截断输出当作无 Scene。`insufficient_source` 则保留 Skill 节点并缓存空 Scene，抽取 span 标记为成功并记录 `extraction.outcome=insufficient_source`，不计作模型故障。
 
+关系生成的每个批次通过 `skill_manage.build.linking.batch` span 记录耗时。JSON 结构、候选对归属和必需权重校验均位于共享 Agent 的解析重试范围内，按 `parse_max_attempts` 和 `parse_retry_mode` 执行；只重试失败批次，成功批次不重复调用。`graph.relations.invalid_output` 只记录错误分类。严格模式下，重试耗尽仍中止建图，不丢弃错误关系后继续发布。
+
 ## 离线复核已保存的排名
 
 `scripts.skill_eval.agentskillos.replay` 保留旧项目的离线评分与基线比较流程。排名文件是 `{任务 ID: [数据源 Skill ID, ...]}`；任务、标签和排名必须覆盖同一组任务。所有指标复用同一计算函数，已有输出文件会被拒绝覆盖。

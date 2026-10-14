@@ -1,23 +1,17 @@
 """Run-local forest data and validated atomic patch contracts."""
 
 from collections.abc import Callable, Coroutine, Sequence
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal, Protocol, Self, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from ....envs.base import Environment
 from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult, Task
 from ....skill import Skill
 from ....skill.typing import SkillSnapshot
-
-
-class RankingResponse(BaseModel):
-    """Optimizer-selected indices from a bounded candidate edit pool."""
-
-    selected_indices: list[StrictInt]
-    """Zero-based indices in optimizer priority order."""
 
 
 class Edit(BaseModel):
@@ -66,18 +60,44 @@ class Patch(BaseModel):
     edits: list[Edit] = Field(default_factory=list)
     """Ordered atomic edits; empty means no change is warranted."""
 
+    reference_payload: dict[str, JsonValue] | None = Field(default=None, exclude=True)
+    """Original optimizer JSON, including field order and metadata, used only between generation stages."""
 
-class ReflectionResponse(BaseModel):
-    """Structured reflection result containing a proposed patch."""
+    @classmethod
+    def from_reference(
+        cls,
+        payload: dict[str, JsonValue],
+        *,
+        source: str | None = None,
+        support: int = 1,
+        edit_budget: int | None = None,
+        merge_level: int | None = None,
+    ) -> Self:
+        """Validate executable edits while preserving original JSON order and uninterpreted metadata."""
+        raw = deepcopy(payload)
+        edits = raw.get("edits")
+        if not isinstance(edits, list):
+            raise ValueError("Reference patch requires an edits list")
+        if edit_budget is not None:
+            edits = edits[:edit_budget]
+            raw["edits"] = edits
+        validated = []
+        for edit in edits:
+            if not isinstance(edit, dict):
+                raise ValueError("Reference patch edits must be objects")
+            if source is not None:
+                edit.setdefault("source_type", source)
+                edit.setdefault("support_count", support)
+            if merge_level is not None:
+                edit["merge_level"] = merge_level
+            validated.append(
+                Edit.model_validate({key: value for key, value in edit.items() if key in Edit.model_fields})
+            )
+        return cls(reasoning=raw.get("reasoning", ""), edits=validated, reference_payload=raw)
 
-    model_config = ConfigDict(extra="allow")
-    """Retain source failure_summary or success_patterns without exposing private data."""
-
-    batch_size: int = Field(default=0, ge=0)
-    """Analyst-reported trajectory count, retained for response inspection."""
-
-    patch: Patch
-    """Nested reasoning and edits returned by reflection."""
+    def optimizer_input(self) -> dict[str, JsonValue]:
+        """Return the preserved reference payload or the strict typed payload."""
+        return self.reference_payload if self.reference_payload is not None else self.model_dump(exclude_unset=True)
 
 
 class TreeSplit(BaseModel):

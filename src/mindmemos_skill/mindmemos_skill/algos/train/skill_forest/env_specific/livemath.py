@@ -1,6 +1,11 @@
 """LiveMath reflection rendering from the shared environment result contract."""
 
-from .....envs.builtin_envs.livemath.typing import LiveMathReward, LiveMathTask
+from hashlib import sha256
+from random import Random
+from string import ascii_uppercase
+
+from .....envs.builtin_envs.livemath.typing import Choice, LiveMathReward, LiveMathRewardData, LiveMathTask
+from .....envs.data.typing import DataSample
 from ..env_adapter import SkillForestEnvAdapter
 from ..typing import SkillForestTrajectoryContext
 from .common import SkillForestReferenceEnvAdapter
@@ -9,6 +14,27 @@ from .common import SkillForestReferenceEnvAdapter
 @SkillForestEnvAdapter.register("livemath")
 class SkillForestLiveMathEnvAdapter(SkillForestReferenceEnvAdapter):
     """Adapt Skill-Forest training evidence to LiveMath."""
+
+    def prepare_sample(self, sample: DataSample, *, seed: int) -> DataSample:
+        """Restore source option order before applying the reference phase seed."""
+        task, reward = sample.task, sample.reward_data
+        if not isinstance(task, LiveMathTask) or not isinstance(reward, LiveMathRewardData):
+            raise TypeError("LiveMath preparation requires a typed task and answer key")
+        if reward.choice_seed == seed:
+            return sample
+        source_indices = list(range(len(task.choices)))
+        if reward.choice_seed is not None:
+            digest = sha256(f"{reward.choice_seed}:{task.id}".encode()).hexdigest()
+            Random(int(digest[:16], 16)).shuffle(source_indices)
+        source_choices = [choice for _, choice in sorted(zip(source_indices, task.choices, strict=True))]
+        digest = sha256(f"{seed}:{task.id}".encode()).hexdigest()
+        Random(int(digest[:16], 16)).shuffle(source_choices)
+        choices = [Choice(label=label, text=choice.text) for label, choice in zip(ascii_uppercase, source_choices)]
+        correct_index = source_choices.index(reward.correct_choice)
+        return DataSample(
+            task=task.model_copy(update={"choices": choices}),
+            reward_data=reward.model_copy(update={"correct_choice": choices[correct_index], "choice_seed": seed}),
+        )
 
     ANALYST_ERROR_PROMPT = """\
 You are an expert failure-analysis agent for theorem-grounded mathematical multiple-choice questions.

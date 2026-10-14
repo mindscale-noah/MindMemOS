@@ -20,6 +20,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from mindmemos_sdk import MindMemOSClient
 
+from .algorithm_visualization import algorithm_visualization_router
 from .config import SettingsUpdate, apply_sdk_settings
 from .sdk_settings import sdk_settings_router
 from .sdk_workbench import sdk_workbench_router
@@ -43,6 +44,7 @@ async def create_app(
     """
     manager = config_manager or ConfigManager()
     app = FastAPI(title="MindMemOS UI", docs_url=None, redoc_url=None)
+    app.include_router(algorithm_visualization_router())
     app.include_router(service_settings_router(manager.config_dir))
     app.include_router(sdk_settings_router(manager.config_dir))
     app.include_router(sdk_workbench_router(manager, skill_loader=skill_loader))
@@ -81,6 +83,8 @@ async def create_app(
             if request.method in {"GET", "HEAD"} or request.url.path in {
                 "/api/configurations/choose-directory",
                 "/api/skills/choose-directory",
+                "/api/algorithm-visualization/choose-directory",
+                "/api/algorithm-visualization/report",
             }:
                 response = await call_next(request)
             else:

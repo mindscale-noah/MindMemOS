@@ -2,12 +2,10 @@
 
 import random
 from collections.abc import Sequence
+from copy import deepcopy
 from pathlib import Path
-from typing import TypeVar
 
-from pydantic import BaseModel
-
-from ....common.json import parse_model
+from ....common.json import extract_json_object
 from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult
 from ....logging import get_logger
@@ -16,8 +14,6 @@ from .runtime import ForestRuntime, parallel
 from .typing import (
     EvidenceBatch,
     Patch,
-    RankingResponse,
-    ReflectionResponse,
     SkillForestFinalPatchContext,
     SkillForestPatchMergeContext,
     SkillForestRankingContext,
@@ -27,19 +23,43 @@ from .typing import (
 
 logger = get_logger(__name__)
 
-ModelT = TypeVar("ModelT", bound=BaseModel)
-
 
 class InvalidPatchError(ValueError):
     """The optimizer response violates the patch protocol, unlike transport or I/O failures."""
 
 
-def _parse(text: str, model_type: type[ModelT]) -> ModelT:
-    """Separate invalid model output from provider failures without retrying."""
+def _parse_reference(
+    text: str,
+    *,
+    reflection: bool = False,
+    source: str | None = None,
+    edit_budget: int | None = None,
+    merge_level: int | None = None,
+) -> Patch:
+    """Parse reference metadata without converting provider failures into patch failures."""
     try:
-        return parse_model(text, model_type)
-    except ValueError as exc:
+        raw = extract_json_object(text)
+        support = max(int(raw.get("batch_size", 0) or 0), 1) if reflection else 1
+        payload = raw.get("patch") if reflection else raw
+        if not isinstance(payload, dict):
+            raise ValueError("Reference response requires a patch object")
+        return Patch.from_reference(
+            payload, source=source, support=support, edit_budget=edit_budget, merge_level=merge_level
+        )
+    except (ValueError, TypeError) as exc:
         raise InvalidPatchError(str(exc)) from exc
+
+
+def _concatenate_reference(patches: Sequence[Patch], *, reasoning: str, level: int | None = None) -> Patch:
+    """Retain valid evidence when reference aggregation returns malformed model output."""
+    edits = []
+    for patch in patches:
+        for edit in deepcopy(patch.optimizer_input()["edits"]):
+            if level is not None:
+                edit.setdefault("merge_level", level)
+            edits.append(edit)
+    logger.warning("[skill_forest.patch_merge] fallback | reason=invalid_reference_response")
+    return Patch.from_reference({"reasoning": reasoning, "edits": edits})
 
 
 async def _reflect_batch(
@@ -62,20 +82,13 @@ async def _reflect_batch(
         messages=runtime.env_adapter.build_reflection_messages(context),
         directory=directory / "reflection" / name / f"{index:06d}",
     )
-    parsed = _parse(response, ReflectionResponse)
-    patch = parsed.patch.model_copy(update={"edits": parsed.patch.edits[: config.reflection_edit_budget]})
-    edits = [
-        edit.model_copy(
-            update={
-                "source_type": edit.source_type or name,
-                "support_count": edit.support_count if edit.support_count is not None else len(batch),
-            }
-        )
-        for edit in patch.edits
-    ]
-    patch = patch.model_copy(update={"edits": edits})
-    logger.info(f"[skill_forest.reflection] progress | extracted_items={len(patch.edits)}")
-    return patch
+    try:
+        patch = _parse_reference(response, reflection=True, source=name, edit_budget=config.reflection_edit_budget)
+        logger.info(f"[skill_forest.reflection] progress | extracted_items={len(patch.edits)}")
+        return patch
+    except InvalidPatchError:
+        logger.warning("[skill_forest.reflection] skipped | reason=invalid_reference_response")
+        return Patch()
 
 
 async def _merge_group(
@@ -95,7 +108,10 @@ async def _merge_group(
         ),
         directory=directory / name / f"{level:03d}" / f"{index:06d}",
     )
-    patch = _parse(response, Patch)
+    try:
+        patch = _parse_reference(response, merge_level=level)
+    except InvalidPatchError:
+        patch = _concatenate_reference(patches, reasoning="fallback concatenation", level=level)
     patch = patch.model_copy(update={"edits": [edit.model_copy(update={"merge_level": level}) for edit in patch.edits]})
     logger.info(f"[skill_forest.patch_merge] progress | patch_edits={len(patch.edits)}")
     return patch
@@ -149,13 +165,26 @@ async def _rank_patch(patch: Patch, *, text: str, depth: int, runtime: ForestRun
         ),
         directory=directory / "ranking",
     )
-    ranking = _parse(response, RankingResponse)
-    indices = list(dict.fromkeys(index for index in ranking.selected_indices if 0 <= index < len(patch.edits)))[:budget]
-    if not indices:
-        raise InvalidPatchError("Optimizer ranking returned no valid edit indices")
-    patch = patch.model_copy(update={"edits": [patch.edits[index] for index in indices]})
-    logger.info(f"[skill_forest.ranking] progress | patch_edits={len(patch.edits)}")
-    return patch
+    try:
+        ranking = extract_json_object(response)
+        supplied = ranking.get("selected_indices", [])
+        if not isinstance(supplied, list):
+            supplied = []
+        indices = list(
+            dict.fromkeys(index for index in supplied if isinstance(index, int) and 0 <= index < len(patch.edits))
+        )[:budget]
+    except ValueError:
+        indices = []
+    raw = deepcopy(patch.optimizer_input())
+    if indices:
+        raw["reasoning"] = patch.reasoning + f" [optimizer-ranked: selected {len(indices)}/{len(patch.edits)} edits]"
+        raw["ranking_details"] = ranking
+    else:
+        indices = list(range(min(budget, len(patch.edits))))
+        raw["reasoning"] = patch.reasoning + f" [fallback truncated {len(patch.edits)}->{budget} edits]"
+        logger.warning("[skill_forest.ranking] fallback | reason=invalid_reference_response")
+    raw["edits"] = [raw["edits"][index] for index in indices]
+    return Patch.from_reference(raw)
 
 
 async def generate_patch(
@@ -215,7 +244,10 @@ async def generate_patch(
             ),
             directory=directory / "final_merge",
         )
-        patch = _parse(response, Patch)
+        try:
+            patch = _parse_reference(response)
+        except InvalidPatchError:
+            patch = _concatenate_reference([failure, success], reasoning="fallback: failure first, then success")
         logger.info(f"[skill_forest.final_patch_merge] progress | patch_edits={len(patch.edits)}")
     else:
         patch = failure if failure.edits else success

@@ -57,7 +57,9 @@ export function Graphs({
       const latest = [...rows].sort((a, b) =>
         b.created_at.localeCompare(a.created_at),
       )[0];
-      const head = graphs.value?.find((item) => item.graph_id === graph)?.current_version_id;
+      const head = graphs.value?.find(
+        (item) => item.graph_id === graph,
+      )?.current_version_id;
       const current = rows.find((item) => item.graph_version_id === head);
       setSnapshot((current || latest).graph_version_id);
     }
@@ -157,7 +159,6 @@ export function Graphs({
           <button onClick={refresh.refresh}>Refresh</button>
         </div>
       </div>
-      {!connected && <Message text="The Skill service is not connected." />}
       <Message
         text={refresh.error || graphs.error || snapshots.error || data.error}
         error
@@ -213,7 +214,7 @@ export function Graphs({
             />
           </Suspense>
         </>
-      ) : (
+      ) : !(refresh.error || graphs.error || snapshots.error || data.error) ? (
         <Empty>
           {data.loading || graphs.loading || snapshots.loading
             ? "Loading…"
@@ -223,7 +224,7 @@ export function Graphs({
                 ? "Select a graph"
                 : "This graph has no nodes"}
         </Empty>
-      )}
+      ) : null}
     </>
   );
 }

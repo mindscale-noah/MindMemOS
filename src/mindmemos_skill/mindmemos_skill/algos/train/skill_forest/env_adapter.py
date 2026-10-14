@@ -5,6 +5,7 @@ import json
 from pydantic import JsonValue
 
 from ....envs.base import Environment
+from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult
 from ....registry.base import Registrable
 from .config import SkillForestEnvAdapterConfig
@@ -91,6 +92,10 @@ Respond ONLY with a valid JSON object:
         Args:
             env: Caller-owned rollout environment; generic adaptation accepts any environment.
         """
+
+    def prepare_sample(self, sample: DataSample, *, seed: int) -> DataSample:
+        """Materialize a task for a training phase; most environments keep it unchanged."""
+        return sample
 
     def render_trajectory(self, context: SkillForestTrajectoryContext) -> str:
         """Render public evidence without evaluator-only details.

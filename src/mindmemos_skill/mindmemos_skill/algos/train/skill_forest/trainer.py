@@ -67,7 +67,7 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
             Splits in tree-index order.
         """
         return [
-            split_tasks(task_ids, train_ratio=self.config.train_ratio, seed=self.config.seed + index)
+            split_tasks(task_ids, train_ratio=self.config.train_ratio, seed=self.config.seed + index * 1_000_003)
             for index in range(self.config.num_trees)
         ]
 
@@ -297,7 +297,7 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
 
         share_train = self.config.root_share_train_trajectory
         share_validation = share_train or self.config.root_share_validation
-        validation_ids = list(dict.fromkeys(key for split in splits for key in split.validation_ids))
+        validation_ids = sorted({key for split in splits for key in split.validation_ids})
         first = node_directory(root, 0, "tree-000-root")
         shared = {}
         if share_validation:
@@ -306,7 +306,16 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
                 if share_train
                 else validation_ids
             )
-            shared = await self._collect(skill, ids, samples, env, runtime, first, "eval")
+            shared = await self._collect(
+                skill,
+                ids,
+                samples,
+                env,
+                runtime,
+                first,
+                "eval",
+                seed=self.config.seed if share_train else self.config.seed + 10_000,
+            )
         roots = []
         for index, split in enumerate(splits):
             node_id = f"tree-{index:03d}-root"
@@ -314,7 +323,9 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
             validation = (
                 shared
                 if share_validation
-                else await self._collect(skill, split.validation_ids, samples, env, runtime, directory, "eval")
+                else await self._collect(
+                    skill, split.validation_ids, samples, env, runtime, directory, "eval", tree_id=index
+                )
             )
             scores = {key: float(validation[key].reward.success) for key in split.validation_ids}
             checkpoint = NodeCheckpoint(id=node_id, tree_id=index, skill=skill.snapshot(), status="root", scores=scores)
@@ -370,13 +381,25 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
         runtime: ForestRuntime,
         node_dir: Path,
         purpose: Literal["train", "eval"],
+        *,
+        tree_id: int = 0,
+        seed: int | None = None,
     ) -> dict[str, RolloutResult]:
         """Rebuild one complete rollout group without per-task recovery."""
         name = "rollouts.jsonl" if purpose == "train" else "evaluation.jsonl"
         (node_dir / name).unlink(missing_ok=True)
+        phase_seed = (
+            seed if seed is not None else self.config.seed + tree_id * 1_000_003 + (10_000 if purpose == "eval" else 0)
+        )
         results = await runtime.scheduler.collect(
             env=env,
-            samples=[samples[key] for key in ids],
+            samples=[
+                runtime.env_adapter.prepare_sample(
+                    samples[key],
+                    seed=phase_seed,
+                )
+                for key in ids
+            ],
             skill=skill,
             directory=node_dir / "workspaces" / purpose,
             stage_name="skill_forest.train.rollout" if purpose == "train" else "skill_forest.root.evaluation",
@@ -456,7 +479,9 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
             if parent.parent_id is None and self.config.root_share_train_trajectory:
                 evidence = {key: shared_evidence[key] for key in split.train_ids}
             else:
-                evidence = await self._collect(parent.skill, split.train_ids, samples, env, runtime, directory, "train")
+                evidence = await self._collect(
+                    parent.skill, split.train_ids, samples, env, runtime, directory, "train", tree_id=parent.tree_id
+                )
             candidates = await parallel(
                 self._candidate(parent, index, split, samples, evidence, env, runtime, root)
                 for index in range(self.config.candidates_per_node)
@@ -504,7 +529,7 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
                     logger.info("[skill_forest.candidate] progress | reason=invalid_patch | accepted=False")
                     return None
                 try:
-                    candidate = apply_patch(parent.skill, patch)
+                    candidate = apply_patch(parent.skill, patch, reference=self.config.patch_application == "reference")
                 except ValueError:
                     runtime.metrics["invalid_patches"] += 1
                     logger.info("[skill_forest.candidate] progress | reason=patch_application_failed | accepted=False")
@@ -529,21 +554,30 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
                 write_node(root, checkpoint)
                 logger.info("[skill_forest.candidate] progress | accepted=False | reason=unchanged_skill")
                 return None
-            ordered = sorted(split.validation_ids, key=lambda key: parent.scores[key])
+            ordered = sorted(split.validation_ids, key=lambda key: (parent.scores[key], key))
 
             def reject(results: dict[str, RolloutResult]) -> bool:
                 scores = {key: float(result.reward.success) for key, result in results.items()}
                 return cannot_improve(scores, parent.scores, self.config.min_gain)
 
             (directory / "evaluation.jsonl").unlink(missing_ok=True)
-            results = await runtime.scheduler.collect(
-                env=env,
-                samples=[samples[key] for key in ordered],
-                skill=candidate,
-                directory=directory / "workspaces" / "eval",
-                stop_when=reject if self.config.early_rejection else None,
-                stage_name="skill_forest.candidate.evaluation",
-            )
+            results: dict[str, RolloutResult] = {}
+            for start in range(0, len(ordered), self.config.validation_batch_size):
+                if self.config.early_rejection and reject(results):
+                    break
+                batch = await runtime.scheduler.collect(
+                    env=env,
+                    samples=[
+                        runtime.env_adapter.prepare_sample(
+                            samples[key], seed=self.config.seed + parent.tree_id * 1_000_003 + 10_000
+                        )
+                        for key in ordered[start : start + self.config.validation_batch_size]
+                    ],
+                    skill=candidate,
+                    directory=directory / "workspaces" / "eval" / f"batch-{start:06d}",
+                    stage_name="skill_forest.candidate.evaluation",
+                )
+                results.update(batch)
             scores = {key: float(result.reward.success) for key, result in results.items()}
             complete = len(scores) == len(parent.scores)
             gain = mean_score(scores) - mean_score(parent.scores) if complete else 0.0
@@ -572,7 +606,6 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
         directory: Path,
     ) -> Patch:
         """Generate one candidate patch from its parent's training evidence."""
-        node_id = f"{parent.id}-{index:02d}"
         logger.info("[skill_forest.patch_generation] started")
         patch = await generate_patch(
             skill=parent.skill,
@@ -580,7 +613,7 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
             results=[evidence[key] for key in split.train_ids],
             runtime=runtime,
             directory=directory,
-            seed=int.from_bytes(hashlib.sha256(f"{self.config.seed}:{node_id}".encode()).digest()[:8]),
+            seed=self.config.seed + parent.tree_id * 1_000_003 + parent.depth * 100_000 + (index + 1) * 10_000_019,
             depth=parent.depth,
         )
         runtime.metrics["proposed_patches"] += 1
@@ -607,7 +640,20 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
             for node, value, distance in zip(winners, values, distances, strict=True)
         ]
         if self.config.ensemble_strategy == "select":
-            best = max(range(len(winners)), key=lambda index: (values[index], distances[index]))
+            if self.config.selection_tiebreak == "novelty":
+                best = max(range(len(winners)), key=lambda index: (values[index], distances[index]))
+            else:
+                best = min(
+                    range(len(winners)),
+                    key=lambda index: (
+                        -values[index],
+                        -mean_score(winners[index].scores),
+                        winners[index].depth,
+                        len(winners[index].skill.content),
+                        winners[index].id,
+                        winners[index].tree_id,
+                    ),
+                )
             return winners[best].skill, winners[best].id, winner_scores
         threshold = max(values) - self.config.merge_threshold
         items = [

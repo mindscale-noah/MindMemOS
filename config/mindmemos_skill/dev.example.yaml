@@ -190,6 +190,9 @@ service:
             model_concurrency: 12
             min_gain: 0.0
             early_rejection: true
+            validation_batch_size: 8
+            selection_tiebreak: novelty
+            patch_application: exact
             reflection_minibatch_size: 8
             reflection_edit_budget: 4
             ranking_enabled: true
@@ -216,19 +219,19 @@ service:
             optimizer: treeskill_qwen3_5_thinking
             failure_optimizer: treeskill_qwen3_5_fast
             samples_per_task: 1
-            rollout_concurrency: 32
+            rollout_concurrency: 16
             min_trajectories: 1
             max_trajectories: 200
             annotation_mode: required
             require_skill_match: true
             success_score_threshold: 1.0
-            analysis_concurrency: 32
+            analysis_concurrency: 16
             analysis_temperature: 1.0
             analysis_max_tokens: 16384
             analysis_max_turns: 100
             shell_timeout_seconds: 120
             transcript_max_chars: 20000
-            localization_concurrency: 32
+            localization_concurrency: 16
             localization_temperature: 0.0
             localization_max_tokens: 16384
             fusion_temperature: 0.0
@@ -238,7 +241,7 @@ service:
             routing_max_tokens: 16384
             algorithm_version: '1'
             prompt_version: treeskill-v1
-        evaluation_concurrency: 32
+        evaluation_concurrency: 16
   evolution_pipelines:
     simple:
       class_name: simple_evolution

@@ -87,7 +87,7 @@ def run_skill_benchmark(args: argparse.Namespace) -> int:
                     f"Prepared {config.environment.class_name}: {len(pools['train'])} train / {len(pools['test'])} test."
                 )
                 if config.environment.class_name == "spreadsheetbench_text_action":
-                    print("Reference aligned: max_turns=100; recalculation=true; concurrency=32.")
+                    print(f"Reference inputs aligned: max_turns=100; recalculation=true; concurrency={config.concurrency}.")
                 return 0
             summary = asyncio.run(run_treeskill(config))
             print(summary.model_dump_json(indent=2), flush=True)

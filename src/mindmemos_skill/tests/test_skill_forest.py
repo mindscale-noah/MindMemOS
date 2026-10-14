@@ -8,7 +8,12 @@ from collections import Counter
 import pytest
 from mindmemos_skill.agents import AgentResult
 from mindmemos_skill.algos import Algorithm
-from mindmemos_skill.algos.train.skill_forest import ALGORITHM_VERSION, SkillForestTrainer, SkillForestTrainerConfig
+from mindmemos_skill.algos.train.skill_forest import (
+    ALGORITHM_VERSION,
+    SkillForestEnvAdapter,
+    SkillForestTrainer,
+    SkillForestTrainerConfig,
+)
 from mindmemos_skill.algos.train.skill_forest.tree import (
     apply_patch,
     cannot_improve,
@@ -225,6 +230,13 @@ def test_global_priority_and_tree_winners():
 
 @pytest.mark.parametrize("shared_train,shared_validation", [(True, True), (False, True), (False, False)])
 async def test_complete_select_global_caps_and_root_sharing(monkeypatch, tmp_path, shared_train, shared_validation):
+    prepared_seeds = []
+
+    def prepare_sample(self, sample, *, seed):
+        prepared_seeds.append(seed)
+        return sample
+
+    monkeypatch.setattr(SkillForestEnvAdapter, "prepare_sample", prepare_sample)
     settings = config(root_share_train_trajectory=shared_train, root_share_validation=shared_validation)
     result, env, optimizer = await run_training(tmp_path, settings, monkeypatch=monkeypatch)
     assert "improved" in result.content
@@ -247,8 +259,10 @@ async def test_complete_select_global_caps_and_root_sharing(monkeypatch, tmp_pat
     first_root_evaluations = len([path for _, path in root_calls if "node-tree-000-root/workspaces/eval" in path])
     if shared_train:
         assert first_root_evaluations == len(union | train_union)
+        assert prepared_seeds[:first_root_evaluations] == [42] * first_root_evaluations
     elif shared_validation:
         assert first_root_evaluations == len(union)
+        assert prepared_seeds[:first_root_evaluations] == [10042] * first_root_evaluations
     else:
         assert first_root_evaluations == len(splits[0]["validation_ids"])
     serialized = json.dumps(optimizer.messages)
@@ -388,7 +402,8 @@ async def test_early_rejection_reduces_calls_without_changing_winner(monkeypatch
 
 @pytest.mark.parametrize("concurrency", [1, 2, 8])
 @pytest.mark.parametrize("passed,early_rejection", [(False, True), (False, False), (True, True)])
-async def test_candidate_validation_queue(tmp_path, monkeypatch, concurrency, passed, early_rejection):
+@pytest.mark.parametrize("batch_size", [1, 4, 8])
+async def test_candidate_validation_queue(tmp_path, monkeypatch, concurrency, passed, early_rejection, batch_size):
     from mindmemos_skill.algos.train.skill_forest import trainer as trainer_module
     from mindmemos_skill.algos.train.skill_forest.runtime import ForestRuntime
     from mindmemos_skill.algos.train.skill_forest.typing import TreeSplit
@@ -397,8 +412,10 @@ async def test_candidate_validation_queue(tmp_path, monkeypatch, concurrency, pa
         return Patch.model_validate({"edits": [{"op": "append", "content": "improved"}]})
 
     monkeypatch.setattr(trainer_module, "generate_patch", generate_patch)
-    settings = config(rollout_concurrency=concurrency, early_rejection=early_rejection)
-    expected_peak = min(7, concurrency)
+    settings = config(
+        rollout_concurrency=concurrency, early_rejection=early_rejection, validation_batch_size=batch_size
+    )
+    expected_peak = min(7, concurrency, batch_size)
 
     class ValidationEnvironment:
         def __init__(self):
@@ -443,8 +460,9 @@ async def test_candidate_validation_queue(tmp_path, monkeypatch, concurrency, pa
 
     candidate = await run()
     expected_calls = len(env.calls)
+    # Bounds are checked only after all calls in the reference microbatch finish.
     if early_rejection and not passed:
-        assert 4 <= expected_calls <= min(7, 4 + concurrency - 1)
+        assert expected_calls == min(7, ((4 + batch_size - 1) // batch_size) * batch_size)
     else:
         assert expected_calls == 7
     assert env.peak == expected_peak
@@ -461,7 +479,8 @@ def test_obsolete_validation_microbatch_size_is_rejected():
         config(validation_microbatch_size=0)
 
 
-async def test_select_breaks_score_ties_by_paper_novelty(monkeypatch, tmp_path):
+@pytest.mark.parametrize("tiebreak,expected", [("novelty", 1), ("validation", 0)])
+async def test_select_breaks_score_ties_by_configured_protocol(monkeypatch, tmp_path, tiebreak, expected):
     from mindmemos_skill.algos.train.skill_forest.runtime import ForestRuntime
 
     initial = initial_skill()
@@ -473,11 +492,11 @@ async def test_select_breaks_score_ties_by_paper_novelty(monkeypatch, tmp_path):
             parent_id="root",
             gain=1,
             skill=initial.with_content(text),
-            scores={"x": 1},
+            scores={"x": 1 if index == 0 else 0.5},
         )
         for index, text in enumerate(texts)
     ]
-    settings = config()
+    settings = config(selection_tiebreak=tiebreak)
 
     async def evaluate():
         runtime = ForestRuntime(agent_config(monkeypatch, FakeOptimizer(), settings))
@@ -493,7 +512,7 @@ async def test_select_breaks_score_ties_by_paper_novelty(monkeypatch, tmp_path):
         finally:
             await runtime.close()
 
-    assert (await evaluate())[0].content == winners[1].skill.content
+    assert (await evaluate())[0].content == winners[expected].skill.content
 
 
 async def test_merge_filters_only_initial_winners(monkeypatch, tmp_path):
@@ -657,7 +676,7 @@ async def test_minibatch_reflection_preserves_evidence_and_outcome_groups(monkey
         if messages[1]["content"].startswith('{"skill"') and '"patches"' in messages[1]["content"]
     ]
     for request in merges:
-        assert sorted(patch["edits"][0]["support_count"] for patch in request["patches"]) == [1, 2]
+        assert sorted(patch["edits"][0]["support_count"] for patch in request["patches"]) == [3, 3]
 
 
 async def test_reflection_rejects_unpaired_results_before_model_calls(tmp_path):

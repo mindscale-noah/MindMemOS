@@ -11,6 +11,7 @@ from typing import Any, TypeVar
 from pydantic import JsonValue
 
 from ....agents import Agent
+from ....common.json import write_json
 from ....envs.base import Environment
 from ....envs.data.typing import DataSample
 from ....envs.typing import RolloutResult
@@ -124,17 +125,18 @@ class ForestRuntime:
                 shutil.rmtree(directory, ignore_errors=True)
 
     async def chat(self, *, messages: list[dict[str, str]], directory: Path) -> str:
-        """Make one bounded optimizer call without a per-call checkpoint.
+        """Make one bounded optimizer call; record its model-visible input and output.
 
         Args:
             messages: Complete two-message optimizer request.
-            directory: Logical generation stage retained by existing callers.
+            directory: Generation-stage directory for request and response evidence.
 
         Returns:
             Nonempty optimizer response text.
         """
         logger.info("[skill_forest.optimizer] started")
         async with self.model_slots:
+            write_json(directory / "request.json", messages)
             agent = Agent.from_config(self.config.optimizer)
             self.metrics["model_calls"] += 1
             try:
@@ -148,6 +150,7 @@ class ForestRuntime:
                 self.metrics[key] += int(result.usage.get(key, 0))
             self.metrics["usage_reported_calls"] += bool(result.usage)
             logger.info(f"[skill_forest.optimizer] progress | model_calls=1 | usage_reported={bool(result.usage)}")
+            write_json(directory / "response.json", {"output": result.output, "usage": result.usage})
             return result.output
 
     async def close(self) -> None:
@@ -156,7 +159,7 @@ class ForestRuntime:
 
 
 async def parallel(coroutines: Iterable[Coroutine[Any, Any, ResultT]]) -> list[ResultT]:
-    """Await sibling work in order and drain all calls when one fails.
+    """Await sibling work and drain all calls when one fails.
 
     Args:
         coroutines: Independent operations in the same training phase.

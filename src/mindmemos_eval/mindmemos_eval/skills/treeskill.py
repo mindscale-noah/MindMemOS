@@ -130,11 +130,13 @@ def prepare(config: TreeSkillEvalConfig) -> tuple[Environment, dict[str, list[Da
     algorithm = TreeSkillTrainerConfig.model_validate(
         pipeline["trainer"]["config"], context=AgentCatalog(agents=document["service"].get("agents", {}))
     )
-    expected = TreeSkillTrainerConfig.model_validate(_reference_algorithm(reference, config.reference_optimizer_model))
+    expected = TreeSkillTrainerConfig.model_validate(
+        _with_requested_concurrency(_reference_algorithm(reference, config.reference_optimizer_model), config.concurrency)
+    )
     if _protocol(algorithm.model_dump(mode="json")) != _protocol(expected.model_dump(mode="json")):
         raise ValueError("Service TreeSkill profile differs from the reference trainer/model parameters")
-    if pipeline["evaluation_concurrency"] != 32:
-        raise ValueError("Reference evaluation concurrency must be 32")
+    if pipeline["evaluation_concurrency"] != config.concurrency:
+        raise ValueError("Service evaluation concurrency must match the requested concurrency")
     requests = {}
     initial = Skill.from_path(config.initial_skill)
     for phase, pattern in (
@@ -355,7 +357,19 @@ async def run(config: TreeSkillEvalConfig) -> EnvTestSummary:
     if config.environment.class_name != "spreadsheetbench_text_action":
         return summary
     actual = read_json(directory / "training/train/config.json")["algorithm"]
-    expected = read_json(config.reference_run / "training/train/config.json")["algorithm"]
+    expected = _with_requested_concurrency(
+        read_json(config.reference_run / "training/train/config.json")["algorithm"], config.concurrency
+    )
     if _protocol(actual) != _protocol(expected):
         raise ValueError("Running service trainer differed from the reference; results are not aligned")
     return summary
+
+
+def _with_requested_concurrency(algorithm: dict, concurrency: int) -> dict:
+    """Replace only reference worker limits with the explicitly requested limit."""
+    return {
+        **algorithm,
+        "rollout_concurrency": concurrency,
+        "analysis_concurrency": concurrency,
+        "localization_concurrency": concurrency,
+    }

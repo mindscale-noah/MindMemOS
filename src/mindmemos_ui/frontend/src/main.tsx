@@ -1,11 +1,17 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, session, type Connections, type Selection } from "./api";
 import { useLoad, useRefresh, Message, Empty } from "./components";
+import { ServiceBoundary } from "./service-boundary";
 import { ServiceSettings } from "./service-settings";
 import { Skills } from "./skills";
 import { Memories } from "./memories";
 import { Detail } from "./detail";
+const AlgorithmVisualization = lazy(() =>
+  import("./algorithm-visualization").then((module) => ({
+    default: module.AlgorithmVisualization,
+  })),
+);
 import { Graphs } from "./graphs";
 import { useNavigation, type Page } from "./navigation";
 import "./style.css";
@@ -57,6 +63,7 @@ function App() {
             ["memories", "Memories"],
             ["skills", "Skills"],
             ["graphs", "Graphs"],
+            ["algorithm-visualization", "Algorithm Visualization"],
             ["settings", "Settings"],
           ].map(([key, label]) => (
             <button
@@ -125,9 +132,11 @@ function App() {
                   ? "Memories"
                   : page === "skills"
                     ? "Skills"
-                    : page === "graphs"
-                      ? "Graphs"
-                      : "Settings"}
+                    : page === "algorithm-visualization"
+                      ? "Algorithm Visualization"
+                      : page === "graphs"
+                        ? "Graphs"
+                        : "Settings"}
               </h1>
             )}
           </div>
@@ -142,48 +151,98 @@ function App() {
               <>
                 {visited.has("skills") && (
                   <div hidden={!!selection || page !== "skills"}>
-                    <Skills
-                      open={open}
-                      active={!selection && page === "skills"}
-                    />
+                    <ServiceBoundary
+                      service="skill"
+                      connections={connections}
+                      checkFailed={connectionError}
+                      retry={connectionRefresh.refresh}
+                      settings={() => navigate({ page: "settings" })}
+                    >
+                      <Skills
+                        open={open}
+                        active={
+                          !selection &&
+                          page === "skills" &&
+                          connections?.skill.status === "connected"
+                        }
+                      />
+                    </ServiceBoundary>
                   </div>
                 )}
                 {visited.has("memories") && (
                   <div hidden={!!selection || page !== "memories"}>
-                    <Memories
-                      dirty={setDirty}
-                      active={!selection && page === "memories"}
-                    />
+                    <ServiceBoundary
+                      service="memory"
+                      connections={connections}
+                      checkFailed={connectionError}
+                      retry={connectionRefresh.refresh}
+                      settings={() => navigate({ page: "settings" })}
+                    >
+                      <Memories
+                        dirty={setDirty}
+                        active={
+                          !selection &&
+                          page === "memories" &&
+                          connections?.memory.status === "connected"
+                        }
+                      />
+                    </ServiceBoundary>
+                  </div>
+                )}
+                {visited.has("algorithm-visualization") && (
+                  <div
+                    hidden={!!selection || page !== "algorithm-visualization"}
+                  >
+                    <Suspense fallback={<Empty>Loading visualization…</Empty>}>
+                      <AlgorithmVisualization />
+                    </Suspense>
                   </div>
                 )}
                 {visited.has("graphs") && (
                   <div hidden={!!selection || page !== "graphs"}>
-                    <Graphs
-                      connected={connections?.skill.status === "connected"}
-                      open={open}
-                    />
+                    <ServiceBoundary
+                      service="skill"
+                      connections={connections}
+                      checkFailed={connectionError}
+                      retry={connectionRefresh.refresh}
+                      settings={() => navigate({ page: "settings" })}
+                    >
+                      <Graphs
+                        connected={connections?.skill.status === "connected"}
+                        open={open}
+                      />
+                    </ServiceBoundary>
                   </div>
                 )}
                 {selection ? (
-                  <Detail
-                    dirty={setDirty}
-                    key={selection.source + selection.id}
-                    selection={selection}
-                    tab={
-                      route.tab || (selection.version ? "content" : "versions")
-                    }
-                    change={(tab, version, replace) =>
-                      navigate(
-                        {
-                          page,
-                          selection: { ...selection, version },
-                          tab,
-                        },
-                        replace,
-                      )
-                    }
-                    back={back}
-                  />
+                  <ServiceBoundary
+                    service="skill"
+                    connections={connections}
+                    checkFailed={connectionError}
+                    retry={connectionRefresh.refresh}
+                    settings={() => navigate({ page: "settings" })}
+                  >
+                    <Detail
+                      dirty={setDirty}
+                      key={selection.source + selection.id}
+                      selection={selection}
+                      tab={
+                        route.tab ||
+                        (selection.version ? "content" : "versions")
+                      }
+                      change={(tab, version, replace) =>
+                        navigate(
+                          {
+                            page,
+                            selection: { ...selection, version },
+                            tab,
+                          },
+                          replace,
+                        )
+                      }
+                      back={back}
+                    />
+                  </ServiceBoundary>
                 ) : page === "service-settings" ? (
                   <ServiceSettings
                     connections={connections}
