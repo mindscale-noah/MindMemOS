@@ -215,7 +215,7 @@ read as `false`).
 |---|---|---|
 | `off` (default) | Plain vanilla. Requests with images are rejected (400, `add.images_unsupported`). | Plain vanilla. `query_images` are rejected (400, `search.images_unsupported`); `multimodal` is ignored. |
 | `basic` | Text through vanilla; images stored in the blob store and, with `mm_embed_model_router`, embedded into the image collection with the dialogue around them. | Multimodal searches append the images most similar to the query text (`image_top_k`) after the text results. |
-| `enhanced` | As `basic`, and a chunk with images is extracted by one VLM call: dialogue facts go to text memory, anchored to their images (`metadata.image_blob_ids`); each image's description and visual facts are stored on its image record, with a text vector (never in text memory). | Multimodal searches add facts recalled through standout image matches, evidence images and, with `search_strategy: agentic`, a multimodal agent. |
+| `enhanced` | As `basic`, and a chunk with images is extracted by one VLM call: dialogue facts go to text memory, anchored to their images (`metadata.image_blob_ids`); each image's description and visual facts are stored on its image record, with a text vector (never in text memory). | Multimodal searches add facts recalled through standout image matches, the most relevant visual facts, evidence images and, with `search_strategy: agentic`, a multimodal agent. |
 
 A search is **multimodal** only when the request has `query_images` or sets `multimodal: true`
 (`POST /v1/memory/search`, SDK `search(multimodal=True)`). Any other search, and any request
@@ -230,10 +230,14 @@ Enhanced details:
 - **Image scores** mix text similarity (query vs. description + visual facts + dialogue, in the
   image record's `text` vector) with image similarity (multimodal embedding), each normalized over
   its hits, weighted by `image_text_weight`.
-- **Evidence images**: images that stand out for the query images, the session of the best match,
-  then images anchored to the retrieved facts interleaved with the best-scored images. Facts
-  anchored to images that stand out by image similarity are recalled too. Image results carry
-  their description and visual facts as text.
+- **Visual facts**: the visual facts of the evidence images and of the `visual_fact_images`
+  best-scored images are reranked against the query (when the request sets `rerank`); the top
+  `visual_fact_limit` are returned as separate results (`memory_type: visual_fact`, with the
+  `blob_id` of their image), after the text results.
+- **Evidence images**: images that stand out for the query images, the session of the best image
+  similarity match, then images anchored to the retrieved facts interleaved with the best-scored
+  images. Facts anchored to images that stand out by image similarity are recalled too. Image
+  results carry their description (and their visual facts when `visual_fact_limit` is 0).
 - **Multimodal agentic retrieval**: a short tool loop (search memories, search images, view images,
   submit) refines the single-pass result.
 
@@ -251,6 +255,8 @@ Enhanced details:
 | `anchored_fact_limit` | `5` | Enhanced: maximum facts recalled through matching images. |
 | `image_hit_margin` | `0.03` | Enhanced: an image hit must exceed the median similarity of the hits by this much to recall facts. |
 | `image_text_weight` | `0.5` | Enhanced: weight of text similarity in image scores (the rest is image similarity). |
+| `visual_fact_limit` | `10` | Enhanced: visual facts returned as separate results; `0` puts them in the image results instead. |
+| `visual_fact_images` | `12` | Enhanced: best-scored images whose visual facts are candidates (evidence images always are). |
 | `max_visual_facts_per_image` | `30` | Enhanced: visual facts kept per image (newest first). |
 | `extraction_image_detail` | `auto` | Enhanced: image detail for VLM extraction (`auto`, `low`, `high`). |
 | `max_extraction_images` | `6` | Enhanced: maximum images in one extraction call. |

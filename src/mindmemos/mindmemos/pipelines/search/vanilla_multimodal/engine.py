@@ -11,9 +11,10 @@ usual final filter (rerank, threshold, ``top_k``). The image channel runs after 
 - basic: the query text is embedded by the multimodal model and matched against the user's stored
   images; matches are appended after the text results (up to ``image_top_k``).
 - enhanced: image hits are scored by text similarity (query vs. each image's description and
-  visual facts) mixed with image similarity; facts recalled through standout image matches,
-  then evidence images (session of the best match, anchored to the facts, similar), are appended.
-  Image items carry their description and visual facts.
+  visual facts) mixed with image similarity. Appended after the text results: facts recalled
+  through standout image matches, the visual facts of the best-matching images most relevant to
+  the query (reranked, one result each), then evidence images (session of the best match,
+  anchored to the facts, similar) carrying their descriptions.
 
 Each image item references the original image by ``blob_id`` (``GET /v1/memory/images/{blob_id}``).
 """
@@ -33,11 +34,12 @@ from ....components.multimodal.extraction import IMAGE_BLOB_IDS_KEY
 from ....config import MultimodalConfig, get_config
 from ....errors import ConfigNotInitializedError, InvalidFilterError
 from ....infra.blob import BlobStore, get_blob_store
-from ....llm import ImageInput, MmEmbedClient, get_llm_client, get_mm_embed_client
+from ....llm import ImageInput, MmEmbedClient, RerankClient, get_llm_client, get_mm_embed_client, get_rerank_client
 from ....logging import get_logger, traced
 from ....mappers import parse_search_dsl
 from ....typing import (
     FieldCondition,
+    ImageRecord,
     ImageSearchHit,
     MemoryDbSearchHit,
     MemoryRequestContext,
@@ -56,6 +58,7 @@ from ..vanilla.engine import _to_memory_search_item
 logger = get_logger(__name__)
 _UNSET = object()
 IMAGE_MEMORY_TYPE = "image"
+VISUAL_FACT_MEMORY_TYPE = "visual_fact"
 IMAGE_FILTER_FIELDS = frozenset({"user_id", "app_id", "session_id", "agent_id", "request_id", "created_at"})
 """Public filter fields that image items carry; a filter on any other field skips the image channel."""
 
@@ -88,10 +91,12 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         multimodal_config: MultimodalConfig | None = None,
         llm_client: Any = None,
         blob_store: BlobStore | None = None,
+        rerank_client: RerankClient | None | object = _UNSET,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._explicit_llm_client = llm_client
+        self._explicit_rerank_client = rerank_client
         self._blob_store = blob_store
         self._image_store = image_store
         self._explicit_mm_client = mm_embed_client
@@ -172,7 +177,7 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         memories: list[MemorySearchItem],
         cfg: MultimodalConfig,
     ) -> list[MemorySearchItem]:
-        """Text results, facts recalled through matching images, and the evidence images.
+        """Text results, facts recalled through matching images, visual facts, and the evidence images.
 
         Only image hits that stand out by image similarity (``_strong``) recall facts; evidence
         images mix images anchored to the facts with the best (text + image) matches.
@@ -211,7 +216,9 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         similar = [(h.record.blob_id, h.record.user_id, h.score, "similar") for h in hits.ranked]
         # Session expansion: the best matching image usually identifies an episode (a route, a game,
         # a dashboard series); its sibling images in that session, in order, carry the rest of it.
-        seeds = strong_query[:1] + hits.ranked[:1]
+        # The seed is the best image-similarity match: text similarity of descriptions tends to pick
+        # a look-alike episode (another paint test, another dashboard).
+        seeds = strong_query[:1] + hits.by_image[:1]
         expansion, positions = await self._session_expansion(context, seeds, cfg)
         ordered = [(h.record.blob_id, h.record.user_id, h.score, "query_image") for h in strong_query]
         ordered += expansion
@@ -221,13 +228,55 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         for blob_id, user_id, score, evidence in ordered:
             if blob_id not in chosen and len(chosen) < cfg.evidence_images:
                 chosen[blob_id] = (user_id, score, evidence)
-        image_items = await self._evidence_items(context, chosen, [*hits.ranked, *hits.by_query_image])
+        with_facts = cfg.visual_fact_limit <= 0
+        image_items, evidence_records = await self._evidence_items(
+            context, chosen, [*hits.ranked, *hits.by_query_image], with_facts=with_facts
+        )
         for item in image_items:
             position = positions.get(item.metadata.get("blob_id"))
             if position is not None:
                 item.metadata["session_position"] = position
                 item.memory = f"[image {position}] {item.memory.removeprefix('[image] ')}"
-        return [*memories, *recalled_items, *image_items]
+        pool = [*evidence_records, *(hit.record for hit in hits.ranked[: cfg.visual_fact_images])]
+        fact_items = await self._visual_fact_items(inp, pool, cfg)
+        return [*memories, *recalled_items, *fact_items, *image_items]
+
+    async def _visual_fact_items(
+        self, inp: SearchPipelineInput, records: list[ImageRecord], cfg: MultimodalConfig
+    ) -> list[MemorySearchItem]:
+        """The visual facts of ``records`` most relevant to the query, one result each.
+
+        Visual facts are kept out of text memory; this is how a multimodal search still returns
+        them as individual facts (ranked by the reranker when the request asks for reranking).
+        """
+
+        if cfg.visual_fact_limit <= 0:
+            return []
+        unique = {record.blob_id: record for record in reversed(records)}
+        ordered = [unique[blob_id] for blob_id in dict.fromkeys(record.blob_id for record in records)]
+        candidates = [(record, index) for record in ordered for index in range(len(record.visual_facts))]
+        if not candidates:
+            return []
+        documents = [record.visual_facts[index] for record, index in candidates]
+        order: list[tuple[int, float | None]] = [(i, None) for i in range(len(candidates))]
+        reranker = self._rerank_client() if inp.rerank else None
+        if reranker is not None and inp.query.strip():
+            try:
+                response = await reranker.rerank(inp.query, documents, top_n=cfg.visual_fact_limit)
+                order = [
+                    (hit.index, hit.relevance_score) for hit in response.results if 0 <= hit.index < len(documents)
+                ]
+            except Exception:  # noqa: BLE001 - fall back to image rank order
+                logger.warning("multimodal_visual_fact_rerank_failed", exc_info=True)
+        return [_visual_fact_item(*candidates[i], score) for i, score in order[: cfg.visual_fact_limit]]
+
+    def _rerank_client(self) -> RerankClient | None:
+        if self._explicit_rerank_client is not _UNSET:
+            return self._explicit_rerank_client  # type: ignore[return-value]
+        try:
+            return get_rerank_client()
+        except Exception:  # noqa: BLE001 - no reranker: image rank order
+            return None
 
     async def _session_expansion(
         self, context: MemoryRequestContext, seeds: list[ImageSearchHit], cfg: MultimodalConfig
@@ -306,7 +355,11 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         context: MemoryRequestContext,
         chosen: dict[str, tuple[str | None, float | None, str]],
         hits: list[ImageSearchHit],
-    ) -> list[MemorySearchItem]:
+        *,
+        with_facts: bool = True,
+    ) -> tuple[list[MemorySearchItem], list[ImageRecord]]:
+        """Result items of the chosen images, and their records."""
+
         known = {hit.record.blob_id: hit.record for hit in hits}
         missing = {
             image_point_id(context.project_id, user_id, blob_id): blob_id
@@ -316,16 +369,17 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         if missing:
             for record in await self._images().get_images(context, list(missing)):
                 known[record.blob_id] = record
-        items = []
+        items, records = [], []
         for blob_id, (_, score, evidence) in chosen.items():
             record = known.get(blob_id)
             if record is None:
                 items.append(_bare_image_item(blob_id, evidence))
                 continue
-            item = _to_search_item(ImageSearchHit(record=record, score=score or 0.0))
+            item = _to_search_item(ImageSearchHit(record=record, score=score or 0.0), with_facts=with_facts)
             item.metadata["evidence"] = evidence
             items.append(item)
-        return items
+            records.append(record)
+        return items, records
 
     def owns_agentic(self, inp: SearchPipelineInput) -> bool:
         """Enhanced multimodal searches replace the generic agentic wrapper with the multimodal agent."""
@@ -458,19 +512,42 @@ def _bare_image_item(blob_id: str, evidence: str) -> MemorySearchItem:
     )
 
 
-def _to_search_item(hit: ImageSearchHit) -> MemorySearchItem:
+def _image_event_time(record: ImageRecord) -> datetime | None:
+    first = record.occurrences[0] if record.occurrences else None
+    if first and first.event_timestamp_ms:
+        return datetime.fromtimestamp(first.event_timestamp_ms / 1000, tz=UTC)
+    return record.event_time
+
+
+def _visual_fact_item(record: ImageRecord, index: int, score: float | None) -> MemorySearchItem:
+    event_time = _image_event_time(record)
+    return MemorySearchItem(
+        id=f"{record.image_id}#{index}",
+        memory=record.visual_facts[index],
+        memory_type=VISUAL_FACT_MEMORY_TYPE,
+        last_update_at=format_datetime(record.updated_at),
+        event_time=format_datetime(event_time) if event_time else None,
+        source_timestamp=format_datetime(event_time) if event_time else None,
+        metadata={
+            "modality": VISUAL_FACT_MEMORY_TYPE,
+            "score": score,
+            "image_id": record.image_id,
+            "blob_id": record.blob_id,
+            "image_path": f"/v1/memory/images/{record.blob_id}",
+        },
+        status="active",
+    )
+
+
+def _to_search_item(hit: ImageSearchHit, *, with_facts: bool = True) -> MemorySearchItem:
     record = hit.record
     first = record.occurrences[0] if record.occurrences else None
     caption = next((occ.caption for occ in record.occurrences if occ.caption), None)
     text = caption or record.description or (first.context if first else "") or "image"
-    if record.visual_facts:
+    if with_facts and record.visual_facts:
         # What the VLM read from the pixels lives here (enhanced), not in text memory.
         text += "\n" + "\n".join(f"- {fact}" for fact in record.visual_facts)
-    event_time = (
-        datetime.fromtimestamp(first.event_timestamp_ms / 1000, tz=UTC)
-        if first and first.event_timestamp_ms
-        else record.event_time
-    )
+    event_time = _image_event_time(record)
     return MemorySearchItem(
         id=record.image_id,
         memory=f"[image] {text}",

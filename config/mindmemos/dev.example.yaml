@@ -358,6 +358,8 @@ algo_config:
     anchored_fact_limit: 5
     image_hit_margin: 0.03
     image_text_weight: 0.5        # text vs. image similarity in image scores
+    visual_fact_limit: 10         # visual facts returned as separate results (0: inside image results)
+    visual_fact_images: 12
     max_visual_facts_per_image: 30
     extraction_image_detail: auto
     max_extraction_images: 6

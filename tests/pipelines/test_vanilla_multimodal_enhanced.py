@@ -405,3 +405,77 @@ async def test_archived_facts_are_not_recalled_through_images() -> None:
         SearchPipelineInput(query="sofa", search_pipeline="vanilla", multimodal=True), CTX, []
     )
     assert all(item.memory_type == "image" for item in out)
+
+
+class ReversingReranker:
+    def __init__(self):
+        self.calls = []
+
+    async def rerank(self, query, documents, top_n, **kwargs):
+        from mindmemos.typing import RerankHit, RerankResponse
+
+        self.calls.append((query, list(documents), top_n))
+        order = list(reversed(range(len(documents))))[:top_n]
+        return RerankResponse(results=[RerankHit(index=i, relevance_score=1.0 - k / 10) for k, i in enumerate(order)])
+
+
+@pytest.mark.asyncio
+async def test_visual_facts_come_back_as_reranked_results_and_images_keep_descriptions() -> None:
+    ad, sofa = "d" * 64, "s" * 64
+    hits = [
+        ImageSearchHit(
+            record=_record(ad, description="Ethos ad", facts=["Ethos ad is white.", "Logo is green."]), score=0.25
+        ),
+        ImageSearchHit(record=_record(sofa, description="Sofa", facts=["Sofa is red."]), score=0.2),
+    ]
+    reranker = ReversingReranker()
+    engine = _engine(FakeReader([]), hits, visual_fact_limit=2, session_expansion_images=0)
+    engine._explicit_rerank_client = reranker
+
+    out = await engine.augment_results(
+        SearchPipelineInput(query="Ethos ad colour", search_pipeline="vanilla", multimodal=True, rerank=True), CTX, []
+    )
+
+    facts = [o for o in out if o.memory_type == "visual_fact"]
+    assert [f.memory for f in facts] == ["Sofa is red.", "Logo is green."]  # reranker order, limit 2
+    assert reranker.calls == [("Ethos ad colour", ["Ethos ad is white.", "Logo is green.", "Sofa is red."], 2)]
+    assert facts[0].metadata["blob_id"] == sofa and len({f.id for f in facts}) == 2
+    images = [o for o in out if o.memory_type == "image"]
+    assert [i.memory for i in images] == ["[image] Ethos ad", "[image] Sofa"]  # facts are separate results
+    assert out.index(facts[-1]) < out.index(images[0])
+
+    without_rerank = await engine.augment_results(
+        SearchPipelineInput(query="Ethos ad colour", search_pipeline="vanilla", multimodal=True), CTX, []
+    )
+    assert [o.memory for o in without_rerank if o.memory_type == "visual_fact"] == [
+        "Ethos ad is white.",
+        "Logo is green.",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_session_expansion_seeds_from_the_best_image_similarity_match() -> None:
+    def in_session(blob, session, score):
+        record = _record(blob, description=blob[0]).model_copy(
+            update={"occurrences": [ImageOccurrence(session_id=session, event_timestamp_ms=1)]}
+        )
+        return ImageSearchHit(record=record, score=score)
+
+    by_image = [in_session("a" * 64, "S3", 0.2), in_session("b" * 64, "S6", 0.1)]
+    by_text = [in_session("b" * 64, "S6", 0.9), in_session("a" * 64, "S3", 0.1)]
+    seen_sessions = []
+
+    class SessionImages(FakeImages):
+        async def list_session_images(self, ctx, session_id, *, user_id=None, limit=50):
+            seen_sessions.append(session_id)
+            return []
+
+    engine = _engine(FakeReader([]), by_image, image_text_weight=0.9)
+    engine._image_store = SessionImages(by_image, text_hits=by_text)
+    engine._explicit_embed_client = FakeEmbed()
+
+    await engine.augment_results(
+        SearchPipelineInput(query="paint test", search_pipeline="vanilla", multimodal=True), CTX, []
+    )
+
+    assert seen_sessions == ["S3"]

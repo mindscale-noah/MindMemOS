@@ -18,8 +18,9 @@ class MultimodalConfig:
     - ``enhanced``: turns with images are extracted by a VLM; dialogue facts go to text memory,
       anchored to their images, while visual facts and image descriptions stay on the image records
       (with a text vector, so image search scores text and image similarity together). A multimodal
-      search adds facts recalled through matching images, evidence images (anchored, similar and
-      from the session of the best match) and, with ``search_strategy=agentic``, a multimodal agent.
+      search adds facts recalled through matching images, the visual facts most relevant to the query
+      (from the best-matching images), evidence images (anchored, similar and from the session of the
+      best match) and, with ``search_strategy=agentic``, a multimodal agent.
 
     Text-only requests, and searches that are not multimodal (no ``query_images`` and
     ``multimodal=false``), behave exactly like vanilla in every mode.
@@ -61,6 +62,12 @@ class MultimodalConfig:
     image_text_weight: float = 0.5
     """Enhanced: weight of the text similarity (query vs. description and visual facts) in image scores;
     the rest is image similarity. Each channel is normalized before mixing."""
+
+    visual_fact_limit: int = 10
+    """Enhanced: visual facts returned as separate results (reranked against the query); 0 disables."""
+
+    visual_fact_images: int = 12
+    """Enhanced: best-matching images whose visual facts are candidates (evidence images always are)."""
 
     max_visual_facts_per_image: int = 30
     """Enhanced: visual facts kept per image record (newest extraction first)."""
