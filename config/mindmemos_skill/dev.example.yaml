@@ -23,6 +23,21 @@ service:
   disabled_services: []
   # Algorithm-owned Agent presets; references use <algo>_<llm_name>.
   agents:
+    # Optional native harness preset; select it only in callers accepting CLI Agents.
+    native_openclaw_custom:
+      class_name: openclaw
+      config:
+        class_name: openclaw
+        cli_path: openclaw
+        model: your-model-id
+        api_key: null
+        base_url: null
+        api: openai-completions
+        reasoning_effort: null
+        context_window: 200000
+        max_completion_tokens: 8192
+        timeout_s: 300.0
+        extra_args: []
     skill_forest_gpt_5_4_mini:
       class_name: openai_chat
       config:
