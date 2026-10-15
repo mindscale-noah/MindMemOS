@@ -6,6 +6,7 @@ _BUILTIN_MODULES = (
     ".buitin_agents.openai_chat",
     ".buitin_agents.codex",
     ".buitin_agents.claude",
+    ".buitin_agents.openclaw",
     ".buitin_agents.deepseek_harness",
 )
 """Modules whose imports register built-in agents."""
