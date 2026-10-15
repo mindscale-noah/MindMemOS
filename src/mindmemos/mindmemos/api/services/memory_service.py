@@ -460,11 +460,8 @@ class MemoryService:
         annotate_request_trace(auth)
         ctx = to_memory_request_context(auth, request)
         binding = binding_for_memory_algorithm(auth.memory_algorithm)
-        if request.query_images and not binding.supports_images:
-            raise BadRequestError(
-                f"query_images require a multimodal memory_algorithm; this key uses {auth.memory_algorithm}",
-                code="search.images_unsupported",
-            )
+        if request.query_images and (reason := _images_unsupported_reason(auth)):
+            raise BadRequestError(f"query_images {reason}", code="search.images_unsupported")
         payload = to_search_pipeline_input(request, search_pipeline=binding.search_pipeline)
         pipeline = self._pipeline("_search")
         if pipeline is None:
@@ -625,15 +622,22 @@ _service_key: tuple[str, ...] | None = None
 
 
 def _reject_images_unless_supported(auth: AuthContext, request: AddRequest) -> None:
-    """Keep images away from text-only algorithms instead of silently dropping them."""
+    """Keep images away from text-only configurations instead of silently dropping them."""
 
     if not any(getattr(message, "images", None) for message in request.messages):
         return
+    if reason := _images_unsupported_reason(auth):
+        raise BadRequestError(f"images {reason}", code="add.images_unsupported")
+
+
+def _images_unsupported_reason(auth: AuthContext) -> str | None:
+    """Why this request may not carry images, or None when it may (reads the request-bound config)."""
+
     if not binding_for_memory_algorithm(auth.memory_algorithm).supports_images:
-        raise BadRequestError(
-            f"images require a multimodal memory_algorithm; this key uses {auth.memory_algorithm}",
-            code="add.images_unsupported",
-        )
+        return f"are not supported by memory_algorithm {auth.memory_algorithm}"
+    if get_config().algo_config.multimodal.mode == "off":
+        return "require algo_config.multimodal.mode basic or enhanced; it is off for this project"
+    return None
 
 
 def get_memory_service() -> MemoryService:

@@ -1,4 +1,4 @@
-"""Raw image (blob) storage used by multimodal memory algorithms."""
+"""Raw image (blob) storage used by multimodal memory (vanilla, ``algo_config.multimodal``)."""
 
 from __future__ import annotations
 

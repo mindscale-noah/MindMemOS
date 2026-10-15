@@ -35,7 +35,7 @@ They are read at load time (`.env` at the repository root is honoured):
 | `dreaming` | Background dreaming / consolidation jobs. |
 | `search` | Search engines (`default`, `vanilla`, `schema_search`), `agentic`, `rerank`, and `retention`. |
 | `skill_evolution` | Skill evolution and rollout knobs. |
-| `vanilla_mm` | Image channel and feature switches of the multimodal `vanilla_mm` algorithm. |
+| `multimodal` | Images in `vanilla` memory: `mode` (`off` / `basic` / `enhanced`) and the image channel. |
 
 ## `algo_config.add.schema.chunker` — episode chunking
 
@@ -204,42 +204,62 @@ semantics.
 | `top_m_guarantee` | `5` | Candidates force-kept by relevance before MMR re-ranking (mixed-v2). |
 | `mmr_lambda` | `0.70` | Trade-off between priority and redundancy in MMR packing (mixed-v2). |
 
-## `algo_config.vanilla_mm` — vanilla + multimodal
+## `algo_config.multimodal` — images in vanilla memory
 
-`memory_algorithm: vanilla_mm` reuses the vanilla add and search pipelines for text: a request
-without images behaves exactly like `vanilla`. Images attached to dialogue turns
-(`DialogueMessage.images`) are stored in the blob store and, when `mm_embed_model_router` is
-configured, embedded into the image collection with the dialogue around them.
+`memory_algorithm: vanilla` handles images when `mode` is not `off`. The mode is a normal config
+value, so it can be set per project (`project_override_config`), e.g.
+`{"algo_config": {"multimodal": {"mode": "enhanced"}}}`. Quote `"off"` in YAML (a bare `off` is
+read as `false`).
 
-With `enhanced: false` (base) search appends the images most similar to the query text after the
-(unchanged) text results. `enhanced: true` turns on, together:
+| Mode | Add | Search |
+|---|---|---|
+| `off` (default) | Plain vanilla. Requests with images are rejected (400, `add.images_unsupported`). | Plain vanilla. `query_images` are rejected (400, `search.images_unsupported`); `multimodal` is ignored. |
+| `basic` | Text through vanilla; images stored in the blob store and, with `mm_embed_model_router`, embedded into the image collection with the dialogue around them. | Multimodal searches append the images most similar to the query text (`image_top_k`) after the text results. |
+| `enhanced` | As `basic`, and a chunk with images is extracted by one VLM call: dialogue facts go to text memory, anchored to their images (`metadata.image_blob_ids`); each image's description and visual facts are stored on its image record, with a text vector (never in text memory). | Multimodal searches add facts recalled through standout image matches, evidence images and, with `search_strategy: agentic`, a multimodal agent. |
 
-- **VLM extraction**: a chunk containing images is extracted by one call to the chat model with
-  the images attached (the same number of calls as vanilla; the chat model must accept images).
-  Facts are anchored to the images of the turns they came from, and each image gets a description
-  including its visible text.
-- **Anchored evidence**: evidence images are the images anchored to the retrieved facts, plus
-  images that stand out for the query text or the query images (`query_images`); facts anchored to
-  those images are recalled too. Images that do not stand out from the rest are not returned.
-- **Multimodal agentic retrieval**: with `search_strategy: agentic`, a short tool loop (search
-  memories, search images, view images, submit) refines the single-pass result.
+A search is **multimodal** only when the request has `query_images` or sets `multimodal: true`
+(`POST /v1/memory/search`, SDK `search(multimodal=True)`). Any other search, and any request
+without images, behaves exactly like vanilla in every mode: same results, same model calls, no
+image lookups, even for users who stored images. Vanilla text search, related-memory recall during
+add, dreaming and feedback never see visual facts.
+
+Enhanced details:
+
+- **VLM extraction** uses the same number of chat calls as vanilla (the chat model must accept
+  images). Each image gets a description including its visible text and a list of visual facts.
+- **Image scores** mix text similarity (query vs. description + visual facts + dialogue, in the
+  image record's `text` vector) with image similarity (multimodal embedding), each normalized over
+  its hits, weighted by `image_text_weight`.
+- **Evidence images**: images that stand out for the query images, the session of the best match,
+  then images anchored to the retrieved facts interleaved with the best-scored images. Facts
+  anchored to images that stand out by image similarity are recalled too. Image results carry
+  their description and visual facts as text.
+- **Multimodal agentic retrieval**: a short tool loop (search memories, search images, view images,
+  submit) refines the single-pass result.
 
 | Field | Default | Description |
 |---|---|---|
+| `mode` | `off` | `off`, `basic` or `enhanced` (above). |
 | `image_search` | `true` | Search images by similarity (needs `mm_embed_model_router`). |
-| `image_top_k` | `5` | Base mode: maximum image results appended after the text results. |
-| `image_score_threshold` | `null` | Minimum text-image similarity; `null` keeps the top hits. |
+| `image_top_k` | `5` | Basic: maximum image results appended after the text results. |
+| `image_score_threshold` | `null` | Basic: minimum text-image similarity; `null` keeps the top hits. |
 | `image_context_chars` | `500` | Characters of surrounding dialogue stored with each image. |
 | `max_images_per_request` | `32` | Add requests with more images are rejected (`add.too_many_images`). |
 | `max_occurrences_per_image` | `20` | Appearances remembered per deduplicated image. |
-| `enhanced` | `false` | Turn on all features above. |
 | `evidence_images` | `6` | Enhanced: maximum evidence images per search. |
 | `session_expansion_images` | `4` | Enhanced: images from the session of the best image match (in order, the match included); `0` disables. |
 | `anchored_fact_limit` | `5` | Enhanced: maximum facts recalled through matching images. |
-| `image_hit_margin` | `0.03` | Enhanced: an image hit must exceed the median similarity of the hits by this much. |
+| `image_hit_margin` | `0.03` | Enhanced: an image hit must exceed the median similarity of the hits by this much to recall facts. |
+| `image_text_weight` | `0.5` | Enhanced: weight of text similarity in image scores (the rest is image similarity). |
+| `max_visual_facts_per_image` | `30` | Enhanced: visual facts kept per image (newest first). |
 | `extraction_image_detail` | `auto` | Enhanced: image detail for VLM extraction (`auto`, `low`, `high`). |
 | `max_extraction_images` | `6` | Enhanced: maximum images in one extraction call. |
 | `agentic_max_steps` | `4` | Enhanced: tool calls in agentic retrieval before it must submit. |
+
+Deleting memory: archived memories are never recalled through images. Deleting a user's or a
+project's images (`ImageMemoryStore.purge_images`) removes their image records and the blobs no
+other image record of the project uses (a project purge drops the whole blob namespace); the eval
+project reset also deletes the project's blobs.
 
 ## `mm_embed_model_router` — multimodal embedding
 
@@ -250,15 +270,20 @@ Same shape as the other routers. Each endpoint must encode text and images into 
 | `model` | — | Model name sent to the endpoint. |
 | `api_base` | — | Base URL; the protocol appends its path (`/embeddings`). |
 | `api_key` | `null` | Bearer token (optional for local endpoints). |
-| `dimensions` | — | Required. Sizes the `database.qdrant.image_collection` and is checked at startup. |
+| `dimensions` | — | Required. Sizes the `image` vector of `database.qdrant.image_collection` and is checked at startup. |
 | `protocol` | `openai` | Wire format. `openai`: `POST /embeddings` with `input` = strings, or `[{"image": "<data URI or URL>"}]`. |
 | `image_transport` | `base64` | `base64` data URIs, or `url` to send the original URL when an image came from one. |
 | `timeout` / `num_retries` / `max_batch_size` | `60` / `3` / `16` | Per-request timeout, retries before trying the next endpoint, inputs per request. |
 | `extra_body` | `{}` | Extra request body fields. |
 
-With no endpoints, `vanilla_mm` only stores images. At startup the server embeds one probe text: a
-dimension mismatch (endpoint vs `dimensions` vs an existing image collection) stops startup; an
+With no endpoints, multimodal modes only store images. At startup the server embeds one probe text:
+a dimension mismatch (endpoint vs `dimensions` vs an existing image collection) stops startup; an
 unreachable endpoint only logs a warning. Changing the model requires a new `image_collection`.
+
+The image collection has two named vectors: `image` (this router) and `text` (the text embedding
+router, `database.qdrant.vector_size` dimensions; set in enhanced mode). Startup also stops when an
+existing image collection has no `text` vector of that size (created by an older version): use a new
+`image_collection` name or drop the collection.
 
 ## `blob_store` — raw image storage
 

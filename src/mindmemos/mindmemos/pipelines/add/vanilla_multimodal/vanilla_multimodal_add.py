@@ -1,10 +1,15 @@
-"""vanilla_mm add pipeline: vanilla text memory plus stored, embedded images.
+"""Vanilla add with images (``algo_config.multimodal.mode``): the add pipeline bound to ``vanilla``.
 
-A request without images is handed to ``VanillaAddPipeline`` untouched. For a request with
-images, the text part (images removed, image-only turns dropped) still goes through vanilla
-unchanged; each image is loaded, stored once per project in the blob store (content hash), and,
-when ``mm_embed_model_router`` is configured, embedded into the image collection with the
-dialogue context it appeared in. Without that router images are only stored.
+Mode ``off``, and any request without images, is handed to ``VanillaAddPipeline`` untouched. For
+a request with images, the text part (images removed, image-only turns dropped) still goes through
+vanilla; each image is loaded, stored once per project in the blob store (content hash), and,
+when ``mm_embed_model_router`` is configured, embedded into the image collection with the dialogue
+context it appeared in. Without that router images are only stored.
+
+Mode ``enhanced`` also lets the extractor read the images (``MultimodalMemoryExtractor``): dialogue
+facts reach text memory through vanilla, anchored to their images; the descriptions and visual
+facts the VLM read from the pixels are stored on the image records with a text vector, so they
+never enter text memory (vanilla search, related-memory recall, dreaming and feedback).
 """
 
 from __future__ import annotations
@@ -23,10 +28,10 @@ from ....components.multimodal.extraction import (
     RequestImages,
     request_images,
 )
-from ....config import VanillaMmConfig, get_config
+from ....config import MultimodalConfig, get_config
 from ....errors import BadRequestError, ConfigNotInitializedError
 from ....infra.blob import BlobStore, StoredBlob, get_blob_store
-from ....llm import ImageInput, MmEmbedClient, get_mm_embed_client
+from ....llm import ImageInput, MmEmbedClient, get_embed_client, get_mm_embed_client
 from ....logging import get_logger, traced
 from ....typing import (
     AddPipelineAsyncResult,
@@ -42,6 +47,7 @@ from ....typing import (
 from ...memory_db import ImageMemoryStore, suppress_recording_errors
 from ...registry import register
 from ..vanilla import VanillaAddPipeline
+from ..vanilla.vanilla_add import _CLIENT_UNSET
 
 logger = get_logger(__name__)
 _UNSET = object()
@@ -65,16 +71,16 @@ def image_point_id(project_id: str, user_id: str | None, blob_id: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"mindmemos:image:{project_id}:{user_id or ''}:{blob_id}"))
 
 
-def _default_vanilla_mm_config() -> VanillaMmConfig:
+def _default_multimodal_config() -> MultimodalConfig:
     try:
-        return get_config().algo_config.vanilla_mm
+        return get_config().algo_config.multimodal
     except ConfigNotInitializedError:
-        return VanillaMmConfig()
+        return MultimodalConfig()
 
 
-@register(type="add", name="vanilla_mm_add")
-class VanillaMmAddPipeline(VanillaAddPipeline):
-    """Vanilla add for text, plus raw-image storage and multimodal image indexing."""
+@register(type="add", name="vanilla_multimodal_add")
+class VanillaMultimodalAddPipeline(VanillaAddPipeline):
+    """Vanilla add for text, plus raw-image storage and image indexing when multimodal mode is on."""
 
     def __init__(
         self,
@@ -83,7 +89,7 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
         blob_store: BlobStore | None = None,
         image_loader: ImageLoader | None = None,
         mm_embed_client: MmEmbedClient | None | object = _UNSET,
-        vanilla_mm_config: VanillaMmConfig | None = None,
+        multimodal_config: MultimodalConfig | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -91,9 +97,8 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
         self._blob_store = blob_store
         self._image_loader = image_loader
         self._explicit_mm_client = mm_embed_client
-        self._explicit_vanilla_mm_config = vanilla_mm_config
+        self._explicit_multimodal_config = multimodal_config
 
-    @traced("add.vanilla_mm_add.sync")
     async def add_sync(
         self,
         inp: AddPipelineInput,
@@ -103,33 +108,46 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
     ) -> AddPipelineSyncResult:
         if not has_images(inp):
             return await super().add_sync(inp, context, add_record_id=add_record_id)
+        return await self._add_sync_with_images(inp, context, add_record_id=add_record_id)
 
+    @traced("add.vanilla_multimodal_add.sync")
+    async def _add_sync_with_images(
+        self,
+        inp: AddPipelineInput,
+        context: MemoryRequestContext,
+        *,
+        add_record_id: str | None,
+    ) -> AddPipelineSyncResult:
         cfg = self._config()
+        _require_multimodal(cfg)
         image_events, stored = await self._add_images(inp, context)
         text_inp = without_images(inp)
-        if not text_inp.messages:
-            result = AddPipelineSyncResult(status="ok")
-        elif cfg.enhanced:
-            # The wrapped extractor sees this request's images and anchors facts to them.
+        images: RequestImages | None = None
+        if cfg.mode == "enhanced":
+            # The wrapped extractor sees this request's images, anchors dialogue facts to them and
+            # collects what each image shows (stored on the image records below).
             images = RequestImages(
                 by_message=_images_by_text_index(inp, stored),
                 detail=cfg.extraction_image_detail,
                 max_images=cfg.max_extraction_images,
+                max_facts=cfg.max_visual_facts_per_image,
             )
+        if not text_inp.messages:
+            result = AddPipelineSyncResult(status="ok")
+        elif images is not None:
             with request_images(images):
                 result = await super().add_sync(text_inp, context, add_record_id=None)
-            await self._link_images(context, result, images)
+            await self._link_images(context, result, images, cfg)
         else:
             result = await super().add_sync(text_inp, context, add_record_id=None)
         result = result.model_copy(update={"memories": [*result.memories, *image_events]})
         if add_record_id is not None:
             await suppress_recording_errors(
                 self.recorder.mark_add_completed(context, add_record_id, result),
-                operation="add.vanilla_mm_add.sync",
+                operation="add.vanilla_multimodal_add.sync",
             )
         return result
 
-    @traced("add.vanilla_mm_add.async")
     async def add_async(
         self,
         inp: AddPipelineInput,
@@ -141,17 +159,22 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
         """Queue the request with images already stored, so queue messages carry blob ids only."""
 
         if has_images(inp):
+            _require_multimodal(self._config())
             inp = await self._with_stored_blobs(inp, context)
         return await super().add_async(inp, context, add_record_id=add_record_id, record_metadata=record_metadata)
 
     def _memory_extractor_for(self, llm_client):
-        # Inert unless an enhanced request publishes its images (see ``request_images``).
+        # Inert unless an enhanced request with images publishes them (see ``request_images``).
         return MultimodalMemoryExtractor(super()._memory_extractor_for(llm_client), llm_client=llm_client)
 
     async def _link_images(
-        self, context: MemoryRequestContext, result: AddPipelineSyncResult, images: RequestImages
+        self,
+        context: MemoryRequestContext,
+        result: AddPipelineSyncResult,
+        images: RequestImages,
+        cfg: MultimodalConfig,
     ) -> None:
-        """Store image descriptions and the memories anchored to each image on the image records."""
+        """Store on each image record its description, visual facts, anchored memories and text vector."""
 
         memory_ids = [event.memory_id for event in result.memories if event.memory_id]
         anchored: dict[str, list[str]] = {}
@@ -159,24 +182,56 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
             for view in await self.db_reader.get_memories(context, memory_ids):
                 for blob_id in (view.metadata or {}).get(IMAGE_BLOB_IDS_KEY) or []:
                     anchored.setdefault(blob_id, []).append(view.memory_id)
-        blob_ids = set(anchored) | set(images.descriptions)
+        blob_ids = set(anchored) | set(images.visuals)
         if not blob_ids or self._mm_client() is None:
+            if images.visuals:
+                logger.info("multimodal_visual_facts_dropped", reason="images_not_indexed", count=len(images.visuals))
             return
         store = self._images()
         ids = {image_point_id(context.project_id, context.user_id, blob_id): blob_id for blob_id in blob_ids}
-        updates = []
+        updates: list[ImageRecord] = []
         for record in await store.get_images(context, list(ids)):
             blob_id = ids[record.image_id]
             merged = list(dict.fromkeys([*record.anchored_memory_ids, *anchored.get(blob_id, [])]))[:100]
-            updates.append(
-                record.model_copy(
-                    update={
-                        "anchored_memory_ids": merged,
-                        "description": images.descriptions.get(blob_id) or record.description,
-                    }
-                )
-            )
-        await store.update_images(context, updates)
+            update: dict[str, Any] = {"anchored_memory_ids": merged}
+            visuals = images.visuals.get(blob_id)
+            if visuals is not None:
+                update["description"] = visuals.description or record.description
+                facts = list(dict.fromkeys([*visuals.facts, *record.visual_facts]))
+                update["visual_facts"] = facts[: cfg.max_visual_facts_per_image]
+            updates.append(record.model_copy(update=update))
+        text_vectors = await self._text_vectors(
+            context, [record for record in updates if record.blob_id in images.visuals], store
+        )
+        await store.update_images(context, updates, text_vectors=text_vectors)
+
+    async def _text_vectors(
+        self, context: MemoryRequestContext, records: list[ImageRecord], store: ImageMemoryStore
+    ) -> dict[str, list[float]]:
+        """Text-embed what each image shows, for the text channel of image search."""
+
+        texts = {record.image_id: image_index_text(record) for record in records}
+        texts = {image_id: text for image_id, text in texts.items() if text}
+        if not texts:
+            return {}
+        try:
+            embed_client = self._text_embed_client()
+            response = await embed_client.embed(task="multimodal.add.image_text", text=list(texts.values()))
+        except Exception:  # noqa: BLE001 - the image stays searchable by its image vector
+            logger.warning("multimodal_image_text_embed_failed", request_id=context.request_id, exc_info=True)
+            return {}
+        vectors = dict(zip(texts, response.embeddings, strict=False))
+        size = store.text_vector_size
+        if any(len(vector) != size for vector in vectors.values()):
+            # e.g. a project bound to another embedding provider: keep the image vector only.
+            logger.warning("multimodal_image_text_vector_size_mismatch", expected=size)
+            return {}
+        return vectors
+
+    def _text_embed_client(self):
+        if self._explicit_embed_client is not _CLIENT_UNSET:
+            return self._explicit_embed_client
+        return get_embed_client()
 
     async def _add_images(
         self, inp: AddPipelineInput, context: MemoryRequestContext
@@ -190,7 +245,7 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
         stored = await self._store_blobs(images, context)
         client = self._mm_client()
         if client is None:
-            logger.info("vanilla_mm_images_stored_unindexed", count=len(stored), request_id=context.request_id)
+            logger.info("multimodal_images_stored_unindexed", count=len(stored), request_id=context.request_id)
             return [
                 MemoryAddEventItem(operation="add", content=f"[image {blob.blob_id[:12]} stored]", memory_type="image")
                 for blob, _, _ in stored
@@ -213,7 +268,7 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
         stored: list[tuple[StoredBlob, bytes, AttachedImage]],
         context: MemoryRequestContext,
         client: MmEmbedClient,
-        cfg: VanillaMmConfig,
+        cfg: MultimodalConfig,
     ) -> list[MemoryAddEventItem]:
         now = datetime.now(UTC)
         by_id: dict[str, tuple[StoredBlob, bytes, list[AttachedImage]]] = {}
@@ -235,7 +290,7 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
                         ImageInput(data=by_id[i][1], mime_type=by_id[i][0].mime_type, url=_source_url(by_id[i][2]))
                         for i in new_ids
                     ],
-                    task="vanilla_mm.add.image",
+                    task="multimodal.add.image",
                 )
                 if new_ids
                 else []
@@ -295,8 +350,8 @@ class VanillaMmAddPipeline(VanillaAddPipeline):
             messages.append(message)
         return inp.model_copy(update={"messages": messages})
 
-    def _config(self) -> VanillaMmConfig:
-        return self._explicit_vanilla_mm_config or _default_vanilla_mm_config()
+    def _config(self) -> MultimodalConfig:
+        return self._explicit_multimodal_config or _default_multimodal_config()
 
     def _mm_client(self) -> MmEmbedClient | None:
         if self._explicit_mm_client is not _UNSET:
@@ -330,6 +385,22 @@ class _MultiLock:
     async def __aexit__(self, *exc: object) -> None:
         for lock in reversed(self._locks):
             lock.release()
+
+
+def _require_multimodal(cfg: MultimodalConfig) -> None:
+    # The API rejects these first; this guards direct pipeline calls and queued requests.
+    if cfg.mode == "off":
+        raise BadRequestError(
+            "images require algo_config.multimodal.mode basic or enhanced", code="add.images_unsupported"
+        )
+
+
+def image_index_text(record: ImageRecord) -> str:
+    """The text an image is found by in the text channel: its description, visual facts and dialogue."""
+
+    context = next((occ.context for occ in record.occurrences if occ.context), "")
+    parts = [record.description or "", *record.visual_facts, context]
+    return "\n".join(part.strip() for part in parts if part and part.strip())
 
 
 def _source_url(images: list[AttachedImage]) -> str | None:

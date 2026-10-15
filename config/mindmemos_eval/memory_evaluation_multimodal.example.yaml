@@ -1,7 +1,9 @@
-# Multimodal memory benchmarks (MemEye) for vanilla vs vanilla_mm.
-# Every algorithm is answered by the same VLM (answer_llm) from what search returns: text memories
-# plus the images vanilla_mm returns. Images are sent by path, so the server needs
-# blob_store.allowed_path_roots to cover the dataset directory.
+# Multimodal memory benchmark (MemEye) for vanilla with algo_config.multimodal.mode off / basic / enhanced.
+# The mode is set per project through algorithm_profiles.vanilla.project_override_config (this file:
+# enhanced). Every configuration is answered by the same VLM (answer_llm) from what search returns:
+# text memories plus the images a multimodal search returns. Images are sent by path, so the server
+# needs blob_store.allowed_path_roots to cover the dataset directory. For mode off set
+# execution_params.memeye.send_images: false (that mode rejects images).
 runner:
   base_url: http://127.0.0.1:8000
   timeout_seconds: 3600
@@ -29,7 +31,7 @@ runner:
 benchmarks:
   memeye:
     dataset: datasets/memeye/data       # holds dialog/ and image/ (HF: MemEyeBench/MemEye)
-    default_algorithm: vanilla_mm
+    default_algorithm: vanilla
     output_root: runs/mindmemos_eval
     # tasks: [Brand_Memory_Test]        # subset of the 8 tasks
     # modes: [mcq, open]
@@ -39,16 +41,18 @@ execution_params:
     top_k: 20                 # text memories per question
     max_answer_images: 8      # images attached to the answerer (question images first)
     image_max_side: 1024      # images are downscaled to this many pixels on the long side
+    send_images: true         # send turn and question images (false for a text-only baseline)
     # max_questions: 3        # smoke test: first N questions per phase
 
 algorithm_profiles:
   vanilla:
     memory_algorithm: vanilla
+    project_override_config:
+      algo_config:
+        multimodal:
+          mode: enhanced      # off | basic | enhanced
     search_params:
       top_k: 20
       rerank: true
-  vanilla_mm:
-    memory_algorithm: vanilla_mm
-    search_params:
-      top_k: 20
-      rerank: true
+      multimodal: true        # search stored images too (ignored while the mode is off)
+      # search_strategy: agentic   # enhanced: multimodal agentic retrieval

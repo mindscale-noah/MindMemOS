@@ -153,6 +153,8 @@ class QdrantEngine:
                     size=spec.vector_size,
                     distance=self._distance(spec.distance),
                 )
+                for name, size in spec.extra_dense_vectors:
+                    vectors_config[name] = qmodels.VectorParams(size=size, distance=self._distance(spec.distance))
             if spec.enable_sparse:
                 sparse_vectors_config = {
                     spec.sparse_vector_name: qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
@@ -220,6 +222,7 @@ class QdrantEngine:
             spec.enable_sparse,
             spec.on_disk_payload,
             tuple((index.field_name, repr(index.field_schema)) for index in spec.payload_indexes),
+            spec.extra_dense_vectors,
         )
 
     async def upsert(self, collection: str, points: list[qmodels.PointStruct]) -> None:

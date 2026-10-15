@@ -53,7 +53,7 @@ def load_builtin_pipelines() -> None:
         ".add.default",
         ".add.schema",
         ".add.vanilla",
-        ".add.vanilla_mm",
+        ".add.vanilla_multimodal",
         ".delete.default",
         ".dreaming.default",
         ".feedback.default",

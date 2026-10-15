@@ -55,6 +55,8 @@ class QdrantCollectionSpec:
     enable_sparse: bool = False
     on_disk_payload: bool | None = None
     payload_indexes: list[PayloadIndexSpec] = field(default_factory=list)
+    extra_dense_vectors: tuple[tuple[str, int], ...] = ()
+    """Additional named dense vectors ``(name, size)`` using the same distance."""
 
 
 @dataclass(kw_only=True)
@@ -88,11 +90,12 @@ class SourcePoint:
 
 @dataclass(kw_only=True)
 class ImagePoint:
-    """Qdrant point for the image collection (one dense multimodal vector)."""
+    """Qdrant point for the image collection: a multimodal image vector and an optional text vector."""
 
     image_id: str
     payload: dict[str, Any]
     vector: list[float]
+    text_vector: list[float] | None = None
 
 
 @dataclass(kw_only=True)

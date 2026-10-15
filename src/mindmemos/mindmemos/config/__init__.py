@@ -5,6 +5,7 @@ from .algo import (
     DreamingConfig,
     EpisodesChunkerConfig,
     MemoryAlgoConfig,
+    MultimodalConfig,
     SchemaAddConfig,
     SchemaAddEpisodeEdgeConfig,
     SchemaAddExtractionConfig,
@@ -12,7 +13,6 @@ from .algo import (
     SchemaAddMergeConfig,
     SkillEvolutionConfig,
     TextProcessingConfig,
-    VanillaMmConfig,
 )
 from .algo.add.vanilla import VanillaAddConfig
 from .algo.search import (
@@ -82,6 +82,7 @@ __all__ = [
     "KafkaTopicConfig",
     "MemoryAlgoConfig",
     "MemoryConfig",
+    "MultimodalConfig",
     "MmEmbedEndpointConfig",
     "MmEmbedRouterConfig",
     "ModelEndpointConfig",
@@ -102,7 +103,6 @@ __all__ = [
     "TelemetryConfig",
     "TextProcessingConfig",
     "VanillaAddConfig",
-    "VanillaMmConfig",
     "VanillaSearchConfig",
     "bind_config_overrides",
     "build",

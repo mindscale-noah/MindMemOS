@@ -17,7 +17,9 @@ def test_images_and_query_images_are_sent_without_empty_fields() -> None:
     assert message["images"] == [{"data": "aGk=", "image_id": "A"}]
     body = build_search_body(user_id="u", query="q", query_images=[ImageRef(url="https://x/a.png")])
     assert body["query_images"] == [{"url": "https://x/a.png"}]
-    assert "query_images" not in build_search_body(user_id="u", query="q")
+    plain = build_search_body(user_id="u", query="q")
+    assert "query_images" not in plain and "multimodal" not in plain  # text-only bodies are unchanged
+    assert build_search_body(user_id="u", query="q", multimodal=True)["multimodal"] is True
 
 
 def test_image_ref_requires_one_source() -> None:

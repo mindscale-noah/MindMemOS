@@ -8,10 +8,10 @@ from ..base import frozen_field
 from .add import AddAlgoConfig
 from .common import CommonAlgoConfig
 from .dreaming import DreamingConfig
+from .multimodal import MultimodalConfig
 from .search import SearchConfig
 from .skill import SkillEvolutionConfig
 from .text_processing import TextProcessingConfig
-from .vanilla_mm import VanillaMmConfig
 
 
 @dataclass
@@ -40,5 +40,5 @@ class MemoryAlgoConfig:
     skill_evolution: SkillEvolutionConfig = field(default_factory=SkillEvolutionConfig)
     """Skill evolution configuration for benchmark-driven skill optimization."""
 
-    vanilla_mm: VanillaMmConfig = field(default_factory=VanillaMmConfig)
-    """vanilla_mm configuration: image channel settings and MHG-inspired feature switches."""
+    multimodal: MultimodalConfig = field(default_factory=MultimodalConfig)
+    """Images in vanilla memory: ``mode`` off / basic / enhanced and the image channel settings."""

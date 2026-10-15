@@ -126,8 +126,14 @@ class MemoryClient:
         agent_id: str | None = None,
         session_id: str | None = None,
         query_images: list[ImageRef | dict[str, Any]] | None = None,
+        multimodal: bool = False,
     ) -> SearchResult:
-        """Search memories. ``query_images`` attaches images (multimodal algorithms only)."""
+        """Search memories.
+
+        ``multimodal=True`` searches stored images too (image results and facts recalled through
+        them); ``query_images`` attaches images to the query and implies it. Both need the project's
+        ``algo_config.multimodal.mode`` to be basic or enhanced; otherwise the search is text-only.
+        """
         request = self._core.search(
             query,
             top_k=top_k,
@@ -141,6 +147,7 @@ class MemoryClient:
             agent_id=agent_id,
             session_id=session_id,
             query_images=query_images,
+            multimodal=multimodal,
         )
         envelope = self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)

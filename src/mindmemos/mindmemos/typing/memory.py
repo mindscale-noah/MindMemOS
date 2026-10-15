@@ -201,7 +201,7 @@ class ImageRef(BaseModel):
 
     Used in: ``DialogueMessage.images`` and ``SearchPipelineInput.query_images``.
     Exactly one of ``path`` / ``url`` / ``data`` / ``blob_id`` locates the bytes.
-    Only multimodal memory algorithms (``vanilla_mm``) accept images.
+    Accepted by ``vanilla`` when ``algo_config.multimodal.mode`` is basic or enhanced.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -261,7 +261,7 @@ class DialogueMessage(BaseModel):
     """Dialogue event time as a 13-digit millisecond timestamp, or None when omitted."""
 
     images: list[ImageRef] = Field(default_factory=list)
-    """Images attached to this turn; only multimodal memory algorithms accept them."""
+    """Images attached to this turn; accepted by vanilla with ``algo_config.multimodal.mode`` basic or enhanced."""
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:

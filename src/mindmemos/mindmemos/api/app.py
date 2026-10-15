@@ -80,14 +80,21 @@ async def _check_multimodal_embedding() -> None:
 
     client = get_mm_embed_client()
     if client is None:
-        logger.info("multimodal embedding not configured; vanilla_mm stores images without indexing them")
+        logger.info("multimodal embedding not configured; multimodal vanilla stores images without indexing them")
         return
     expected = client.dimensions
-    collection_size = await ImageMemoryStore().collection_vector_size()
+    store = ImageMemoryStore()
+    collection_size = await store.collection_vector_size()
     if collection_size is not None and collection_size != expected:
         raise InvalidConfigError(
             "mm_embed_model_router.endpoints[].dimensions",
             support=f"{collection_size} to match the existing image collection (or use a new image_collection)",
+        )
+    if collection_size is not None and await store.collection_vector_size("text") != store.text_vector_size:
+        # Collections created before images had a text vector (or for another text embedding size).
+        raise InvalidConfigError(
+            "database.qdrant.image_collection",
+            support=f"a collection with a {store.text_vector_size}-d 'text' vector: use a new name or drop it",
         )
     try:
         vector = (await client.embed_texts(["dimension check"], task="startup.dimension_check"))[0]

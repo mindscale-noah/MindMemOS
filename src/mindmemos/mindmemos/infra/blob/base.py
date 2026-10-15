@@ -37,6 +37,14 @@ class BlobStore(Protocol):
         """Return the blob descriptor without reading the bytes."""
         ...
 
+    async def delete(self, namespace: str, blob_id: str) -> bool:
+        """Delete one blob; return whether it existed."""
+        ...
+
+    async def delete_namespace(self, namespace: str) -> None:
+        """Delete every blob of a namespace (a project purge)."""
+        ...
+
     def public_url(self, namespace: str, blob_id: str) -> str | None:
         """Return a URL third parties can fetch (object storage); None for private backends."""
         ...

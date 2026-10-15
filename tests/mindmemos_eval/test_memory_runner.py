@@ -612,7 +612,7 @@ def test_resolve_collections_non_mapping_falls_back(tmp_path, caplog):
 
 @pytest.mark.asyncio
 async def test_reset_project_skips_collections_that_do_not_exist(monkeypatch):
-    """Algorithm-specific collections (the vanilla_mm image collection) are absent until used."""
+    """Collections created on demand (the multimodal image collection) are absent until used."""
     from mindmemos_eval.memory import db_reset
 
     cfg = db_reset.ResetConfig(collections=("image_item_v1",))

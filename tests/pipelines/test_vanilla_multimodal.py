@@ -1,4 +1,4 @@
-"""vanilla_mm with images: storage, deduplication, degraded mode and the text-to-image channel."""
+"""Multimodal vanilla, mode basic: storage, deduplication, degraded mode and the text-to-image channel."""
 
 from __future__ import annotations
 
@@ -7,11 +7,12 @@ import hashlib
 
 import pytest
 from mindmemos.components.multimodal import ImageLoader
-from mindmemos.config import BlobStoreConfig, TextProcessingConfig, VanillaMmConfig
+from mindmemos.config import BlobStoreConfig, MultimodalConfig, TextProcessingConfig
+from mindmemos.errors import BadRequestError
 from mindmemos.infra.blob import LocalBlobStore
-from mindmemos.pipelines.add.vanilla_mm import VanillaMmAddPipeline, image_point_id
-from mindmemos.pipelines.search.vanilla_mm import VanillaMmSearchEngine
-from mindmemos.pipelines.search.vanilla_mm.engine import _image_filter
+from mindmemos.pipelines.add.vanilla_multimodal import VanillaMultimodalAddPipeline, image_point_id
+from mindmemos.pipelines.search.vanilla_multimodal import VanillaMultimodalSearchEngine
+from mindmemos.pipelines.search.vanilla_multimodal.engine import _image_filter
 from mindmemos.typing import (
     AddPipelineInput,
     AddPipelineSyncResult,
@@ -81,8 +82,8 @@ class FakeImageStore:
         return [ImageSearchHit(record=r, score=0.3) for r in list(self.records.values())[:limit]]
 
 
-class StubVanillaAdd(VanillaMmAddPipeline):
-    """vanilla_mm whose vanilla parent is replaced by a recorder of the text input it receives."""
+class StubVanillaAdd(VanillaMultimodalAddPipeline):
+    """The multimodal wrapper whose vanilla parent is replaced by a recorder of the text input it receives."""
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -108,7 +109,7 @@ def _pipeline(tmp_path, *, mm=None, store=None):
         blob_store=blobs,
         image_loader=ImageLoader(BlobStoreConfig(), blobs),
         mm_embed_client=mm,
-        vanilla_mm_config=VanillaMmConfig(),
+        multimodal_config=MultimodalConfig(mode="basic"),
     )
     return pipeline, blobs
 
@@ -184,7 +185,7 @@ async def test_without_mm_router_images_are_only_stored(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_too_many_images_are_rejected(tmp_path) -> None:
     pipeline, _ = _pipeline(tmp_path, mm=FakeMm())
-    pipeline._explicit_vanilla_mm_config = VanillaMmConfig(max_images_per_request=1)
+    pipeline._explicit_multimodal_config = MultimodalConfig(mode="basic", max_images_per_request=1)
     inp = AddPipelineInput(
         messages=[{"role": "user", "content": "x", "images": [{"data": _b64(PNG)}, {"data": _b64(PNG_B)}]}]
     )
@@ -213,14 +214,14 @@ async def test_async_add_queues_blob_references_not_bytes(tmp_path, monkeypatch)
 
 
 def _engine(*, mm, store, cfg=None):
-    return VanillaMmSearchEngine(
+    return VanillaMultimodalSearchEngine(
         db_reader=object(),
         db_writer=object(),
         embed_client=object(),
         text_config=TEXT_CONFIG,
         image_store=store,
         mm_embed_client=mm,
-        vanilla_mm_config=cfg or VanillaMmConfig(),
+        multimodal_config=cfg or MultimodalConfig(mode="basic"),
     )
 
 
@@ -240,7 +241,7 @@ async def test_image_results_follow_the_text_results(tmp_path) -> None:
     engine = _engine(mm=mm, store=store)
 
     items = await engine.augment_results(
-        SearchPipelineInput(query="sofa colour", filters={"user_id": "u1"}, search_pipeline="vanilla_mm"),
+        SearchPipelineInput(query="sofa colour", filters={"user_id": "u1"}, search_pipeline="vanilla", multimodal=True),
         _context(),
         [TEXT_RESULT],
     )
@@ -257,9 +258,9 @@ async def test_image_results_follow_the_text_results(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_image_channel_is_skipped_when_unavailable_or_filtered_on_text_only_fields() -> None:
     store = FakeImageStore()
-    inp = SearchPipelineInput(query="q", search_pipeline="vanilla_mm")
+    inp = SearchPipelineInput(query="q", search_pipeline="vanilla", multimodal=True)
     assert await _engine(mm=None, store=store).augment_results(inp, _context(), [TEXT_RESULT]) == [TEXT_RESULT]
-    off = VanillaMmConfig(image_search=False)
+    off = MultimodalConfig(mode="basic", image_search=False)
     assert await _engine(mm=FakeMm(), store=store, cfg=off).augment_results(inp, _context(), [TEXT_RESULT]) == [
         TEXT_RESULT
     ]
@@ -274,3 +275,40 @@ def test_image_filter_keeps_session_and_user_conditions() -> None:
     assert parsed is not None
     assert _image_filter({"mem_type": "fact"}) is None
     assert _image_filter(None) is not None
+
+
+@pytest.mark.asyncio
+async def test_mode_off_rejects_images_and_leaves_text_to_vanilla(tmp_path) -> None:
+    mm, store = FakeMm(), FakeImageStore()
+    pipeline, blobs = _pipeline(tmp_path, mm=mm, store=store)
+    pipeline._explicit_multimodal_config = MultimodalConfig(mode="off")
+    inp = AddPipelineInput(messages=[{"role": "user", "content": "x", "images": [{"data": _b64(PNG)}]}])
+
+    with pytest.raises(BadRequestError) as error:
+        await pipeline.add_sync(inp, _context())
+    with pytest.raises(BadRequestError):
+        await pipeline.add_async(inp, _context())
+
+    assert error.value.code == "add.images_unsupported"
+    assert pipeline.vanilla_inputs == [] and mm.images == [] and store.records == {}
+    assert await blobs.stat("proj", hashlib.sha256(PNG).hexdigest()) is None
+    await pipeline.add_sync(AddPipelineInput(messages=[{"role": "user", "content": "x"}]), _context())
+    assert len(pipeline.vanilla_inputs) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["off", "basic", "enhanced"])
+async def test_only_multimodal_searches_touch_images(mode: str) -> None:
+    mm, store = FakeMm(), FakeImageStore()
+    engine = _engine(mm=mm, store=store, cfg=MultimodalConfig(mode=mode))
+    plain = SearchPipelineInput(query="sofa", search_pipeline="vanilla")
+
+    assert engine.is_multimodal(plain) is False
+    assert engine.owns_agentic(plain.model_copy(update={"agentic": True})) is False
+    assert await engine.augment_results(plain, _context(), [TEXT_RESULT]) == [TEXT_RESULT]
+    assert mm.texts == [] and mm.images == []
+
+    flagged = plain.model_copy(update={"multimodal": True})
+    with_image = plain.model_copy(update={"query_images": [{"data": _b64(PNG)}]})
+    assert engine.is_multimodal(flagged) is (mode != "off")
+    assert engine.is_multimodal(with_image) is (mode != "off")

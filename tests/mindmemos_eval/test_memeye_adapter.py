@@ -111,7 +111,7 @@ class FakeLlm:
         return LLMCompletion(content=answer, total_tokens=10)
 
 
-async def _run(tmp_path, algorithm):
+async def _run(tmp_path, *, send_images=True, search_params=None):
     _dataset(tmp_path / "data")
     memory = FakeMemory()
     # MCQ rotation 1: red is A; rotation 2: red is B; the fake answerer always says A -> EM 0.5.
@@ -120,11 +120,13 @@ async def _run(tmp_path, algorithm):
     spec = BenchmarkSpec(
         name="memeye",
         dataset=str(tmp_path / "data"),
-        memory_algorithm=algorithm,
+        memory_algorithm="vanilla",
         raw={"tasks": ["T"], "output_root": str(tmp_path / "runs")},
+        execution_params={"send_images": send_images},
+        search_params=dict(search_params or {}),
     )
     args = argparse.Namespace(runner_config=RunnerConfig(), limit=None)
-    ctx = RunContext(identity=new_identity("memeye", algorithm))
+    ctx = RunContext(identity=new_identity("memeye", "vanilla"))
     result = await MemEyeAdapter().run(
         memory=memory, answer_llm=answer, judge_llm=judge, ctx=ctx, bench_config=spec, args=args
     )
@@ -132,8 +134,8 @@ async def _run(tmp_path, algorithm):
 
 
 @pytest.mark.asyncio
-async def test_vanilla_mm_gets_images_and_the_answerer_sees_them(tmp_path):
-    result, memory, answer = await _run(tmp_path, "vanilla_mm")
+async def test_images_are_sent_and_the_answerer_sees_them(tmp_path):
+    result, memory, answer = await _run(tmp_path, search_params={"multimodal": True})
 
     [(messages, kwargs)] = memory.adds
     assert kwargs["session_id"] == "S1"
@@ -144,15 +146,22 @@ async def test_vanilla_mm_gets_images_and_the_answerer_sees_them(tmp_path):
     assert result["metrics"]["B-1"] == 100.0
     assert "image_url" in json.dumps(answer.calls[0])
     assert result["cost"]["add"]["calls"] == 1 and result["cost"]["search"]["calls"] == 2
-    assert memory.searches[0][1] == {"user_id": "memeye-t", "top_k": 20, "rerank": True, "search_strategy": "fast"}
+    assert memory.searches[0][1] == {
+        "user_id": "memeye-t",
+        "top_k": 20,
+        "rerank": True,
+        "search_strategy": "fast",
+        "multimodal": True,
+    }
 
 
 @pytest.mark.asyncio
-async def test_text_only_algorithms_get_no_images(tmp_path):
-    _, memory, _ = await _run(tmp_path, "vanilla")
+async def test_text_only_baseline_sends_no_images(tmp_path):
+    _, memory, _ = await _run(tmp_path, send_images=False)
     [(messages, _)] = memory.adds
     assert [m.role for m in messages] == ["user", "assistant"]
     assert all(not m.images for m in messages)
+    assert all("query_images" not in kwargs for _, kwargs in memory.searches)
 
 
 def test_scoring_helpers():

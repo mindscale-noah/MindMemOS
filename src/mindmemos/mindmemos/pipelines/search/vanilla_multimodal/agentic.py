@@ -1,4 +1,4 @@
-"""Simplified multimodal agentic retrieval (vanilla_mm enhanced, ``search_strategy=agentic``).
+"""Simplified multimodal agentic retrieval (vanilla, multimodal mode enhanced, ``search_strategy=agentic``).
 
 A short ReAct loop over four tools, distilled from MHG's six-tool retriever: search text
 memories, search images (by text or by the question's image, results shown to the model), view
@@ -15,7 +15,7 @@ import re
 from typing import Any
 
 from ....components.multimodal import ImageLoader
-from ....config import VanillaMmConfig, get_config
+from ....config import MultimodalConfig, get_config
 from ....logging import get_logger
 from ....typing import MemoryRequestContext, MemorySearchItem, SearchPipelineInput
 
@@ -43,7 +43,7 @@ _JSON = re.compile(r"\{.*\}", re.DOTALL)
 class MultimodalAgent:
     """Runs the retrieval loop for one search request."""
 
-    def __init__(self, engine: Any, llm_client: Any, cfg: VanillaMmConfig) -> None:
+    def __init__(self, engine: Any, llm_client: Any, cfg: MultimodalConfig) -> None:
         self._engine = engine
         self._llm = llm_client
         self._cfg = cfg
@@ -69,7 +69,7 @@ class MultimodalAgent:
         for step in range(self._cfg.agentic_max_steps + 1):
             if step == self._cfg.agentic_max_steps:
                 messages.append({"role": "user", "content": "Tool budget used up. Reply with submit now."})
-            response = await self._llm.chat(task="vanilla_mm.search.agentic", messages=messages)
+            response = await self._llm.chat(task="multimodal.search.agentic", messages=messages)
             reply = response.content or ""
             action = _parse(reply)
             messages.append({"role": "assistant", "content": reply})
@@ -103,8 +103,8 @@ class MultimodalAgent:
                 return "search_images needs a query or by_question_image."
             from .engine import _to_search_item
 
-            text_hits, image_hits = await self._engine.image_hits(query, context, self._cfg)
-            hits = image_hits if by_image else text_hits
+            found = await self._engine.image_hits(query, context, self._cfg)
+            hits = found.by_query_image if by_image else found.ranked
             items = [_to_search_item(hit) for hit in hits[:4]]
             return await self._show([self._image_handle(item) for item in items], header="Images found")
         if tool == "view_images":
@@ -180,8 +180,8 @@ class MultimodalAgent:
 
     @staticmethod
     def _image_line(handle: str, item: MemorySearchItem) -> str:
-        description = item.metadata.get("description") or item.memory
-        return f"{handle} ({item.event_time or 'unknown date'}) {description[:300]}"
+        # The item text: its description and the visual facts recorded about it.
+        return f"{handle} ({item.event_time or 'unknown date'}) {item.memory.removeprefix('[image] ')[:600]}"
 
     def _result(
         self, submitted: dict[str, list[str]], texts: list[MemorySearchItem], images: list[MemorySearchItem]

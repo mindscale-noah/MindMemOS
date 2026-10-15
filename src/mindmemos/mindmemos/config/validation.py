@@ -10,13 +10,13 @@ from typing import Any
 from omegaconf.errors import ConfigAttributeError, MissingMandatoryValue
 
 from ..errors import InvalidConfigError, MissingConfigValueError
+from .algo.multimodal import IMAGE_DETAILS, MULTIMODAL_MODES
 from .algo.search.vanilla.vanilla import (
     VANILLA_DEDUP_MAX_CANDIDATES,
     VANILLA_HYBRID_PREFETCH_FACTOR_MAX,
     VANILLA_HYBRID_PREFETCH_MAX,
     VANILLA_RECALL_SIZE_MAX,
 )
-from .algo.vanilla_mm import IMAGE_DETAILS
 from .multimodal import BLOB_STORE_BACKENDS, MM_EMBED_PROTOCOLS, MM_IMAGE_TRANSPORTS
 
 
@@ -651,7 +651,12 @@ def _validate_multimodal(cfg: Any) -> None:
         RangeRule("blob_store.url_fetch_timeout", min_value=0, include_min=False, support="positive number"),
     )
 
-    vmm = cfg.algo_config.vanilla_mm
+    mm = cfg.algo_config.multimodal
+    if str(mm.mode) not in MULTIMODAL_MODES:
+        # YAML 1.1 reads a bare `off` as false.
+        raise InvalidConfigError(
+            "algo_config.multimodal.mode", support=", ".join(sorted(MULTIMODAL_MODES)) + ' (quote it in YAML: "off")'
+        )
     for name, minimum in (
         ("image_top_k", 1),
         ("max_images_per_request", 1),
@@ -661,12 +666,18 @@ def _validate_multimodal(cfg: Any) -> None:
         ("anchored_fact_limit", 0),
         ("session_expansion_images", 0),
         ("image_hit_margin", 0),
+        ("max_visual_facts_per_image", 0),
         ("max_extraction_images", 1),
         ("agentic_max_steps", 1),
     ):
-        path = f"algo_config.vanilla_mm.{name}"
-        _validate_range(path, getattr(vmm, name), RangeRule(path, min_value=minimum))
-    _validate_choice("algo_config.vanilla_mm.extraction_image_detail", vmm.extraction_image_detail, set(IMAGE_DETAILS))
+        path = f"algo_config.multimodal.{name}"
+        _validate_range(path, getattr(mm, name), RangeRule(path, min_value=minimum))
+    _validate_range(
+        "algo_config.multimodal.image_text_weight",
+        mm.image_text_weight,
+        RangeRule("algo_config.multimodal.image_text_weight", min_value=0, max_value=1),
+    )
+    _validate_choice("algo_config.multimodal.extraction_image_detail", mm.extraction_image_detail, set(IMAGE_DETAILS))
 
 
 def _validate_kafka(kafka: Any) -> None:

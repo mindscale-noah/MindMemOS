@@ -72,27 +72,36 @@ cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_
 
 ---
 
-## Multimodal: MemEye (`vanilla` vs `vanilla_mm`)
+## Multimodal: MemEye (`vanilla`, multimodal mode off / basic / enhanced)
 
-MemEye (8 tasks, MCQ + OPEN, images in the dialogue) runs against any algorithm with one shared
-answerer: the `answer_llm` (a vision model) sees the text memories and images returned by search,
-plus the question's own images. `vanilla` receives the dialogue without images; `vanilla_mm`
-receives the images by path, so the server's `blob_store.allowed_path_roots` must cover the dataset.
-Dataset captions are never sent.
+MemEye (8 tasks, MCQ + OPEN, images in the dialogue) runs with one shared answerer: the
+`answer_llm` (a vision model) sees the text memories and images returned by search, plus the
+question's own images. The algorithm is always `vanilla`; the profile's `project_override_config`
+sets `algo_config.multimodal.mode`, and `search_params.multimodal: true` makes every search use the
+stored images. With `execution_params.memeye.send_images: true` the dialogue and question images
+are sent by path, so the server's `blob_store.allowed_path_roots` must cover the dataset; mode
+`off` rejects images, so its baseline sets `send_images: false`. Dataset captions are never sent.
 
 1. Download `MemEyeBench/MemEye` from Hugging Face and link it so `datasets/memeye/data` holds
    `dialog/` and `image/`.
-2. For `vanilla_mm`, configure `mm_embed_model_router` on the server (see `docs/config/README.md`).
+2. For modes `basic` and `enhanced`, configure `mm_embed_model_router` on the server (see
+   `docs/config/README.md`).
 3. Copy `config/mindmemos_eval/memory_evaluation_multimodal.example.yaml` to
-   `memory_evaluation_multimodal.yaml`, fill in the LLM keys, then run once per algorithm:
+   `memory_evaluation_multimodal.yaml`, fill in the LLM keys and set the mode (the example uses
+   `enhanced`; for B0 use `"off"` with `send_images: false`, for B1 `basic`; add
+   `search_strategy: agentic` for the multimodal agent), then run:
 
 ```bash
 uv run python -m mindmemos_eval.cli memory \
   --benchmark-config config/mindmemos_eval/memory_evaluation_multimodal.yaml \
-  --benchmark-list memeye --algorithm vanilla_mm \
-  --manifest-output reports/memeye_vanilla_mm.jsonl \
-  --api-key-output config/mindmemos/eval_api_keys.yaml
+  --benchmark-list memeye --algorithm vanilla \
+  --manifest-output reports/memeye_enhanced.jsonl \
+  --api-key-output config/mindmemos/eval_api_keys.yaml \
+  --server-config config/mindmemos/dev.yaml
 ```
+
+`--server-config` lets the project reset find the server's collections and blob root, so stored
+images are deleted with the project.
 
 `eval_result.metrics` reports, in percent: `EM` (MCQ exact match averaged over the four option
 rotations, macro mean over tasks), `B-1` (OPEN BLEU-1) and `Judge` (OPEN, MemEye 0–1 judge rubric),

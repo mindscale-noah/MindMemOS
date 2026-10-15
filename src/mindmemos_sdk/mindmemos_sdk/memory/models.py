@@ -31,7 +31,7 @@ class ImageRef(BaseModel):
     Mirrors :class:`mindmemos.typing.memory.ImageRef`. Set exactly one of ``path`` (readable by
     the server under its allowed roots), ``url``, ``data`` (base64 or a data URI) or ``blob_id``
     (an image already stored for the project, as returned in search results). Images are
-    accepted only by multimodal memory algorithms (``vanilla_mm``).
+    accepted by ``vanilla`` when the project's ``algo_config.multimodal.mode`` is basic or enhanced.
     """
 
     path: str | None = None
@@ -60,7 +60,7 @@ class DialogueMessage(BaseModel):
     timestamp: int | None = None
     """Dialogue timestamp in 13-digit milliseconds. Leave unset when unavailable."""
     images: list[ImageRef] = Field(default_factory=list)
-    """Images attached to this turn (multimodal algorithms only). May be the only content."""
+    """Images attached to this turn (multimodal mode only). May be the only content."""
 
 
 class UrlMessage(BaseModel):
@@ -300,6 +300,7 @@ def build_search_body(
     agent_id: str | None = None,
     session_id: str | None = None,
     query_images: list[ImageRef | dict[str, Any]] | None = None,
+    multimodal: bool = False,
 ) -> dict[str, Any]:
     """Build a memory search request body without empty optional fields."""
     if not isinstance(rerank, bool):
@@ -324,6 +325,8 @@ def build_search_body(
         body["filters"] = filters
     if query_images:
         body["query_images"] = [_serialize_image(image) for image in query_images]
+    if multimodal:
+        body["multimodal"] = True
     return body
 
 

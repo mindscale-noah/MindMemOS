@@ -1,9 +1,11 @@
 """MemEye benchmark adapter: the same build / retrieve / answer / judge loop for every algorithm.
 
-1. Build: each dialogue session is one ``memory.add`` call (sync, in session order). Algorithms that
-   accept images (``vanilla_mm``) receive the turn images by path; text-only algorithms get the
-   same turns without images (image-only turns are skipped). Dataset captions are never sent.
-2. Retrieve: one ``memory.search`` per question (MCQ rotations share it).
+1. Build: each dialogue session is one ``memory.add`` call (sync, in session order). With
+   ``execution_params.send_images`` (default true) the turn images are sent by path; otherwise the
+   same turns go without images (image-only turns are skipped), e.g. for a text-only baseline
+   (vanilla with ``algo_config.multimodal.mode: off`` rejects images). Dataset captions are never sent.
+2. Retrieve: one ``memory.search`` per question (MCQ rotations share it), with the question images
+   when images are sent and ``search_params.multimodal`` passed through.
 3. Answer: the shared VLM answerer (``answer.py``) sees the retrieved text, the returned images
    and the question images.
 4. Score: debiased MCQ EM over option rotations; OPEN BLEU-1 and the MemEye judge rubric.
@@ -34,7 +36,6 @@ from .scoring import bleu1, extract_choice, judge_messages, parse_judge
 
 logger = logging.getLogger("mindmemos_eval.memory.memeye")
 
-IMAGE_ALGORITHMS = frozenset({"vanilla_mm"})
 RETRIES = 6
 BACKOFF_SECONDS = 10.0
 
@@ -68,9 +69,9 @@ class MemEyeAdapter:
             memory=memory,
             answer_llm=answer_llm,
             judge_llm=judge_llm if runner.score else None,
-            send_images=bench_config.memory_algorithm in IMAGE_ALGORITHMS,
+            send_images=bool(execution.get("send_images", True)),
             add=runner.add,
-            search_params={k: search[k] for k in ("top_k", "rerank", "search_strategy") if k in search},
+            search_params={k: search[k] for k in ("top_k", "rerank", "search_strategy", "multimodal") if k in search},
             max_questions=int(execution.get("max_questions") or 0),
             max_images=int(execution.get("max_answer_images") or 8),
             encoder=ImageEncoder(memory, max_side=int(execution.get("image_max_side") or 1024)),

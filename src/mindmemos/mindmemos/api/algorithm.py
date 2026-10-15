@@ -7,7 +7,7 @@ from typing import Literal
 
 from ..errors import AuthenticationError
 
-MemoryAlgorithm = Literal["vanilla", "vanilla_mm", "schema"]
+MemoryAlgorithm = Literal["vanilla", "schema"]
 
 
 @dataclass(frozen=True)
@@ -15,12 +15,13 @@ class MemoryAlgorithmBinding:
     add_pipeline: str
     search_pipeline: str
     supports_images: bool = False
+    """Images are accepted when the bound ``algo_config.multimodal.mode`` is not ``off``."""
 
 
 MEMORY_ALGORITHM_REGISTRY: dict[str, MemoryAlgorithmBinding] = {
-    "vanilla": MemoryAlgorithmBinding(add_pipeline="vanilla_add", search_pipeline="vanilla"),
-    "vanilla_mm": MemoryAlgorithmBinding(
-        add_pipeline="vanilla_mm_add", search_pipeline="vanilla_mm", supports_images=True
+    # The multimodal wrapper runs plain vanilla while algo_config.multimodal.mode is off.
+    "vanilla": MemoryAlgorithmBinding(
+        add_pipeline="vanilla_multimodal_add", search_pipeline="vanilla", supports_images=True
     ),
     "schema": MemoryAlgorithmBinding(add_pipeline="schema_add", search_pipeline="schema"),
 }

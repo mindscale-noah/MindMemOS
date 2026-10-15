@@ -13,6 +13,7 @@ from .add import (
 )
 from .common import CommonAlgoConfig
 from .dreaming import DreamingConfig
+from .multimodal import MultimodalConfig
 from .root import MemoryAlgoConfig
 from .search import (
     AgenticConfig,
@@ -30,7 +31,6 @@ from .search import (
 )
 from .skill import SkillEvolutionConfig
 from .text_processing import TextProcessingConfig
-from .vanilla_mm import VanillaMmConfig
 
 __all__ = [
     "AgenticConfig",
@@ -46,6 +46,7 @@ __all__ = [
     "EpisodesChunkerConfig",
     "MemoryAlgoConfig",
     "MemoryRetentionConfig",
+    "MultimodalConfig",
     "PropertySearchConfig",
     "RerankConfig",
     "SchemaAddConfig",
@@ -58,6 +59,5 @@ __all__ = [
     "SkillEvolutionConfig",
     "TextProcessingConfig",
     "VanillaAddConfig",
-    "VanillaMmConfig",
     "VanillaSearchConfig",
 ]

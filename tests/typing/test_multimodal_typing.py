@@ -13,7 +13,9 @@ def test_text_only_dialogue_message_serializes_as_before() -> None:
 
 
 def test_text_only_search_input_serializes_as_before() -> None:
-    assert "query_images" not in SearchPipelineInput(query="q").model_dump()
+    plain = SearchPipelineInput(query="q").model_dump()
+    assert "query_images" not in plain and "multimodal" not in plain
+    assert SearchPipelineInput(query="q", multimodal=True).model_dump()["multimodal"] is True
     with_image = SearchPipelineInput(query="q", query_images=[{"url": "http://x/a.png"}])
     assert with_image.model_dump()["query_images"][0]["url"] == "http://x/a.png"
 

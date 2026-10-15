@@ -28,3 +28,21 @@ async def test_namespaces_are_isolated_and_ids_are_validated(tmp_path) -> None:
     weird = await store.put("../evil/..", b"y", mime_type="image/png")
     assert all(tmp_path in p.parents for p in tmp_path.rglob("*"))
     assert (await store.get("../evil/..", weird.blob_id))[1] == b"y"
+
+
+@pytest.mark.asyncio
+async def test_delete_one_blob_and_a_whole_namespace(tmp_path) -> None:
+    store = LocalBlobStore(tmp_path)
+    a = await store.put("proj-a", b"a", mime_type="image/png")
+    b = await store.put("proj-a", b"b", mime_type="image/png")
+    other = await store.put("proj-b", b"a", mime_type="image/png")
+
+    assert await store.delete("proj-a", a.blob_id) is True
+    assert await store.delete("proj-a", a.blob_id) is False
+    assert await store.delete("proj-a", "../../etc/passwd") is False
+    assert await store.get("proj-a", a.blob_id) is None and await store.get("proj-a", b.blob_id) is not None
+
+    await store.delete_namespace("proj-a")
+    await store.delete_namespace("proj-a")  # idempotent
+    assert await store.get("proj-a", b.blob_id) is None
+    assert await store.get("proj-b", other.blob_id) is not None  # other projects keep theirs

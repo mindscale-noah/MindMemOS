@@ -43,6 +43,8 @@ class ImageRecord(BaseModel):
     source_url: str | None = None
     description: str | None = None
     """VLM description of the image including visible text (enhanced mode)."""
+    visual_facts: list[str] = Field(default_factory=list)
+    """Facts read from the pixels by the VLM (enhanced mode); kept here, never in text memory."""
     occurrences: list[ImageOccurrence] = Field(default_factory=list)
     anchored_memory_ids: list[str] = Field(default_factory=list)
     """Text memories extracted from the turns showing this image (enhanced mode)."""

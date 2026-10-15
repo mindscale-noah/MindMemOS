@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -38,9 +39,24 @@ class LocalBlobStore:
     async def stat(self, namespace: str, blob_id: str) -> StoredBlob | None:
         return await asyncio.to_thread(self._stat, namespace, blob_id)
 
+    async def delete(self, namespace: str, blob_id: str) -> bool:
+        return await asyncio.to_thread(self._delete, namespace, blob_id)
+
+    async def delete_namespace(self, namespace: str) -> None:
+        await asyncio.to_thread(shutil.rmtree, self._root / _namespace_dir(namespace), True)
+
     def public_url(self, namespace: str, blob_id: str) -> str | None:
         del namespace, blob_id
         return None
+
+    def _delete(self, namespace: str, blob_id: str) -> bool:
+        if not is_valid_blob_id(blob_id):
+            return False
+        path = self._path(namespace, blob_id)
+        existed = path.exists()
+        path.unlink(missing_ok=True)
+        path.with_suffix(".json").unlink(missing_ok=True)
+        return existed
 
     def _put(self, namespace: str, data: bytes, mime_type: str) -> StoredBlob:
         blob_id = blob_id_for(data)

@@ -51,7 +51,7 @@ rerank_model_router:
       timeout: 600
       num_retries: 3
 
-# Multimodal (text + image) embedding for memory_algorithm=vanilla_mm. Text and images must be
+# Multimodal (text + image) embedding for vanilla with algo_config.multimodal.mode basic/enhanced. Text and images must be
 # encoded into one vector space; `dimensions` sizes the Qdrant image collection and is checked at
 # startup. Leave endpoints empty to only store images (no image retrieval). Example:
 #   endpoints:
@@ -64,7 +64,7 @@ rerank_model_router:
 mm_embed_model_router:
   endpoints: []
 
-# Raw image storage for multimodal algorithms (content-addressed, per project).
+# Raw image storage for multimodal vanilla (content-addressed, per project).
 blob_store:
   backend: local
   local_root: data/blobs
@@ -341,18 +341,24 @@ algo_config:
       top_m_guarantee: 5
       mmr_lambda: 0.7
   skill_evolution: {}
-  vanilla_mm:
+  multimodal:
+    # off: plain vanilla, images rejected (400). basic: raw images stored, image similarity search.
+    # enhanced: VLM extraction (dialogue facts -> text memory anchored to images; visual facts and
+    # descriptions -> image records), image-recalled facts, evidence images, multimodal agentic.
+    # Searches are multimodal only with query_images or multimodal=true. Per project overridable.
+    mode: "off"
     image_search: true
-    image_top_k: 5
+    image_top_k: 5                # basic: image results appended after the text results
     image_score_threshold:
     image_context_chars: 500
     max_images_per_request: 32
     max_occurrences_per_image: 20
-    enhanced: false               # true: VLM extraction + fact-image anchoring + image-recalled facts + agentic
-    evidence_images: 6
+    evidence_images: 6            # enhanced from here on
     session_expansion_images: 4
     anchored_fact_limit: 5
     image_hit_margin: 0.03
+    image_text_weight: 0.5        # text vs. image similarity in image scores
+    max_visual_facts_per_image: 30
     extraction_image_detail: auto
     max_extraction_images: 6
     agentic_max_steps: 4

@@ -1,7 +1,7 @@
 """One answerer for every memory algorithm: retrieved text and images go to the same VLM.
 
 The answerer sees exactly what ``memory.search`` returned: text memories as a numbered list with
-their times, and image results (vanilla_mm) attached as images labelled with the dialogue they
+their times, and image results (multimodal search) attached as images labelled with the dialogue they
 came from. Question images are attached for every algorithm. Nothing else (dataset captions,
 gold clues) is shown.
 """

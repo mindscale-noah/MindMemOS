@@ -1,11 +1,14 @@
-"""VLM fact extraction for chunks that carry images (vanilla_mm enhanced mode).
+"""VLM fact extraction for chunks that carry images (vanilla, ``algo_config.multimodal.mode=enhanced``).
 
 ``MultimodalMemoryExtractor`` wraps the vanilla extractor. A chunk without images goes to the
 vanilla extractor untouched. A chunk with images makes the same single extraction call, built
-from the same vanilla prompt, with the images attached and rules for writing visual facts
-(adapted from MHG's per-round memorizer). The same call also returns one description per image.
-Each extracted fact is anchored to the images of the turns it came from
-(``metadata["image_blob_ids"]``).
+from the same vanilla prompt, with the images attached and rules for reading them (adapted from
+MHG's per-round memorizer). The call returns two separate outputs:
+
+- ``memories``: dialogue facts, written to text memory by the vanilla pipeline as usual. Each is
+  anchored to the images of the turns it came from (``metadata["image_blob_ids"]``).
+- ``image_memories``: per image, a description and visual facts. They are collected on the
+  request (``RequestImages.visuals``) and stored on the image records, never in text memory.
 
 The images of the current request reach the shared extractor through a context variable that
 the add pipeline sets per request (``request_images``).
@@ -37,30 +40,40 @@ IMAGE_BLOB_IDS_KEY = "image_blob_ids"
 
 VISUAL_RULES = """## Images in this chunk (these rules take precedence over any conflicting rule below)
 Some extractable messages carry images. They are attached after the JSON payload, each labelled
-"IMAGE k (evidence_index i)". The pixels are direct evidence of message i: a fact read from the
-image is supported by source_ref "s{i}", like the message text.
-- For EVERY attached image, output at least one memory describing what it shows: the subject
-  (brand, product, person, place, screen), the key objects, colors, counts, spatial layout
-  (left/right/above/below), and all visible text copied verbatim (signs, labels, prices, numbers,
-  UI or chat text). Make it self-contained and dated, e.g. "On 2024-01-05 the user shared a
-  Coca-Cola and Citi sponsorship ad with a red background and the slogan '...'". Use mem_type fact.
-- An assistant message describing an attached image may be used when it agrees with the pixels.
-- Name things explicitly; never write "this image", "the photo" or "the screen". The labels
-  "IMAGE k" exist only in this request: never mention them in memories or descriptions.
-- Describe the state that is shown; do not compute answers (no totals that are not displayed).
-- Several distinct panels, items or people shown: write separate facts for them.
-- An image resembling earlier ones (same template, game, route, dashboard): include the detail
-  that makes this one identifiable (its date, its distinctive values).
-- Output, in addition to "memories", the top-level field "image_descriptions":
-  [{"image": k, "description": "<what it shows plus all visible text, 1-3 sentences>"}] with one
-  entry per attached image. This extra field is required for chunks with images.
+"IMAGE k (evidence_index i)"; the payload lists the labels under that message's "images".
+Write two separate outputs:
+1. "memories": the facts of the dialogue, following the rules below. Use the images only to
+   understand what the messages refer to (e.g. which item "this one" is); do not put descriptions
+   of image content in "memories".
+2. "image_memories" (top-level field, required for chunks with images): one entry per attached
+   image, [{"image": k, "description": "<what it shows plus all visible text, 1-3 sentences>",
+   "facts": ["<visual fact>", ...]}]. Visual facts record what the pixels show: the subject (brand,
+   product, person, place, screen), the key objects, colors, counts, spatial layout
+   (left/right/above/below), and all visible text copied verbatim (signs, labels, prices, numbers,
+   UI or chat text). Each fact is self-contained and dated, e.g. "On 2024-01-05 the user shared a
+   Coca-Cola and Citi sponsorship ad with a red background and the slogan '...'".
+   - An assistant message describing an attached image may be used when it agrees with the pixels.
+   - Several distinct panels, items or people shown: write separate facts for them.
+   - An image resembling earlier ones (same template, game, route, dashboard): include the detail
+     that makes this one identifiable (its date, its distinctive values).
+   - Describe the state that is shown; do not compute answers (no totals that are not displayed).
+Name things explicitly; never write "this image", "the photo" or "the screen". The labels
+"IMAGE k" exist only in this request: never mention them in memories, descriptions or facts.
 
 """
 
 
-REMINDER = """Before answering: the attached images ({numbers}) are evidence too. Output at least one
-memory per image describing what it shows (subject, colors, layout, counts, visible text verbatim),
-plus the top-level "image_descriptions" field with one entry per image."""
+REMINDER = """Before answering: the attached images ({numbers}) are evidence too. Output the top-level
+"image_memories" field with one entry per image: its description and its visual facts (subject,
+colors, layout, counts, visible text verbatim). Keep "memories" for the facts of the dialogue."""
+
+
+@dataclass(frozen=True)
+class ImageVisuals:
+    """What the VLM read from one image: stored on its image record, not in text memory."""
+
+    description: str
+    facts: list[str]
 
 
 @dataclass(frozen=True)
@@ -77,15 +90,16 @@ class RequestImages:
     by_message: dict[int, list[ExtractionImage]]
     detail: str = "auto"
     max_images: int = 6
-    descriptions: dict[str, str] = field(default_factory=dict)
-    """Filled by the extractor: blob_id -> VLM description."""
+    max_facts: int = 30
+    visuals: dict[str, ImageVisuals] = field(default_factory=dict)
+    """Filled by the extractor: blob_id -> description and visual facts."""
 
     def for_message(self, index: int) -> list[ExtractionImage]:
         return self.by_message.get(index, [])
 
 
 _REQUEST_IMAGES: contextvars.ContextVar[RequestImages | None] = contextvars.ContextVar(
-    "vanilla_mm_request_images", default=None
+    "multimodal_request_images", default=None
 )
 
 
@@ -134,8 +148,8 @@ class MultimodalMemoryExtractor:
         result = result.model_copy(
             update={"memories": [m.model_copy(update={"content": strip_labels(m.content)}) for m in result.memories]}
         )
-        _collect_descriptions(parsed, attached, images)
-        return _anchor(_mark_extractor(result, "vanilla_mm_vlm"), envelope, attached)
+        _collect_visuals(parsed, attached, images)
+        return _anchor(_mark_extractor(result, "multimodal_vlm"), envelope, attached)
 
 
 @dataclass(frozen=True)
@@ -178,18 +192,22 @@ def _with_images(messages: list[dict[str, Any]], attached: list[_Attached], *, d
     return [{"role": "system", "content": VISUAL_RULES + system["content"]}, {"role": "user", "content": parts}]
 
 
-def _collect_descriptions(parsed: dict[str, Any], attached: list[_Attached], images: RequestImages) -> None:
+def _collect_visuals(parsed: dict[str, Any], attached: list[_Attached], images: RequestImages) -> None:
     by_number = {item.number: item.image.blob_id for item in attached}
-    for entry in parsed.get("image_descriptions") or []:
+    for entry in parsed.get("image_memories") or []:
         if not isinstance(entry, dict):
             continue
         try:
             blob_id = by_number.get(int(entry.get("image")))
         except (TypeError, ValueError):
             continue
-        description = str(entry.get("description") or "").strip()
-        if blob_id and description:
-            images.descriptions[blob_id] = strip_labels(description)[:1000]
+        description = strip_labels(str(entry.get("description") or "").strip())[:1000]
+        raw_facts = entry.get("facts") or []
+        raw_facts = [raw_facts] if isinstance(raw_facts, str) else raw_facts
+        facts = [strip_labels(str(fact).strip())[:1000] for fact in raw_facts if str(fact).strip()]
+        facts = list(dict.fromkeys(facts))[: images.max_facts]
+        if blob_id and (description or facts):
+            images.visuals[blob_id] = ImageVisuals(description=description, facts=facts)
 
 
 def _anchor(

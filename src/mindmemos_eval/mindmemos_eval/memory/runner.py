@@ -21,7 +21,7 @@ from mindmemos_eval.memory.envs.personamem import PersonaMemAdapter
 from ..llm import LLMClient, LLMConfig
 from .base import BenchmarkAdapter, BenchmarkSpec, RunContext, RunnerConfig
 from .config import _merged_runner_config, _option, load_benchmark_specs, validate_memory_algorithm
-from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_collections
+from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_blob_root, resolve_collections
 from .identity import RunIdentity, new_identity, write_api_keys
 from .manifest import BenchmarkRunManifest, write_manifests
 
@@ -90,13 +90,13 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         "--algorithm",
         metavar="NAME",
         type=validate_memory_algorithm,
-        help="Global algorithm profile name applied to every benchmark; currently validated to vanilla, vanilla_mm or schema.",
+        help="Global algorithm profile name applied to every benchmark; currently validated to vanilla or schema.",
     )
     parser.add_argument(
         "--memory-algorithm",
         metavar="NAME",
         type=validate_memory_algorithm,
-        help="Legacy override for only the memory_algorithm binding; currently validated to vanilla, vanilla_mm or schema.",
+        help="Legacy override for only the memory_algorithm binding; currently validated to vanilla or schema.",
     )
     parser.add_argument(
         "--base-url",
@@ -250,7 +250,8 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Path to the MindMemOS server yaml config (e.g. config/mindmemos/dev.yaml). Used to read the actual "
         "Qdrant collection names so the add-stage cleanup clears exactly what the server writes, even when "
-        "collections are renamed away from the _v1 defaults. When omitted, the default collection names are used.",
+        "collections are renamed away from the _v1 defaults, and the local blob store root (stored images). When "
+        "omitted, the default collection names and blob root are used.",
     )
 
     parser.add_argument(
@@ -419,6 +420,7 @@ def _build_reset_config(args: argparse.Namespace) -> ResetConfig:
         neo4j_password=_option(args, "neo4j_password") or env.neo4j_password,
         neo4j_database=_option(args, "neo4j_database") or env.neo4j_database,
         collections=resolve_collections(_option(args, "server_config")),
+        blob_root=resolve_blob_root(_option(args, "server_config")),
     )
 
 

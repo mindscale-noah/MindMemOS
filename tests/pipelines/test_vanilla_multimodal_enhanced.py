@@ -1,4 +1,5 @@
-"""vanilla_mm enhanced mode: VLM extraction with anchoring, anchored evidence, agentic refine."""
+"""Multimodal vanilla, mode enhanced: VLM extraction (dialogue vs. visual facts), anchoring, hybrid image
+search, image-recalled facts, evidence images, agentic refine."""
 
 from __future__ import annotations
 
@@ -10,16 +11,17 @@ import pytest
 from mindmemos.components.multimodal.extraction import (
     IMAGE_BLOB_IDS_KEY,
     ExtractionImage,
+    ImageVisuals,
     MultimodalMemoryExtractor,
     RequestImages,
     request_images,
 )
 from mindmemos.components.multimodal.messages import AttachedImage
-from mindmemos.config import TextProcessingConfig, VanillaMmConfig
+from mindmemos.config import MultimodalConfig, TextProcessingConfig
 from mindmemos.infra.blob import StoredBlob
-from mindmemos.pipelines.add.vanilla_mm.vanilla_mm_add import _images_by_text_index
-from mindmemos.pipelines.search.vanilla_mm import VanillaMmSearchEngine
-from mindmemos.pipelines.search.vanilla_mm.engine import _strong
+from mindmemos.pipelines.add.vanilla_multimodal.vanilla_multimodal_add import _images_by_text_index
+from mindmemos.pipelines.search.vanilla_multimodal import VanillaMultimodalSearchEngine
+from mindmemos.pipelines.search.vanilla_multimodal.engine import _mix, _strong, _to_search_item
 from mindmemos.typing import (
     AddPipelineInput,
     ExtractionEnvelope,
@@ -79,10 +81,16 @@ async def test_chunk_with_images_uses_one_vlm_call_and_anchors_facts() -> None:
     vlm = FakeVlm(
         {
             "memories": [
-                {"ref_id": "m1", "content": "The user's sofa is green velvet.", "source_refs": ["s1"]},
+                {"ref_id": "m1", "content": "The user bought a new sofa.", "source_refs": ["s1"]},
                 {"ref_id": "m2", "content": "The user had pasta for lunch.", "source_refs": ["s2"]},
             ],
-            "image_descriptions": [{"image": 1, "description": "A green velvet three-seat sofa."}],
+            "image_memories": [
+                {
+                    "image": 1,
+                    "description": "A green velvet three-seat sofa (IMAGE 1).",
+                    "facts": ["On 2024-01-05 the user showed a green velvet sofa.", "The sofa has three seats."],
+                }
+            ],
         }
     )
     inner = FakeInner()
@@ -100,12 +108,18 @@ async def test_chunk_with_images_uses_one_vlm_call_and_anchors_facts() -> None:
     assert vlm.messages[0]["content"].startswith("## Images in this chunk")  # takes precedence over vanilla rules
     payload = json.loads(user[0]["text"])
     assert payload["extractable"][0]["images"] == ["IMAGE 1"]
-    assert "IMAGE 1" in user[-1]["text"]  # closing reminder
+    assert "IMAGE 1" in user[-1]["text"] and "image_memories" in user[-1]["text"]  # closing reminder
+    # Dialogue facts only: visual facts never become memories.
     sofa, lunch = result.memories
     assert sofa.metadata[IMAGE_BLOB_IDS_KEY] == ["b" * 64]  # the reply describing the image
     assert IMAGE_BLOB_IDS_KEY not in lunch.metadata
-    assert sofa.metadata["extractor"] == "vanilla_mm_vlm"
-    assert images.descriptions == {"b" * 64: "A green velvet three-seat sofa."}
+    assert sofa.metadata["extractor"] == "multimodal_vlm"
+    assert images.visuals == {
+        "b" * 64: ImageVisuals(
+            description="A green velvet three-seat sofa.",
+            facts=["On 2024-01-05 the user showed a green velvet sofa.", "The sofa has three seats."],
+        )
+    }
 
 
 @pytest.mark.asyncio
@@ -135,7 +149,7 @@ def test_image_only_turns_hand_their_images_to_the_next_kept_turn() -> None:
     assert {k: [i.blob_id for i in v] for k, v in mapping.items()} == {0: ["a" * 64], 1: ["b" * 64]}
 
 
-def _record(blob: str, memory_ids=(), description=None) -> ImageRecord:
+def _record(blob: str, memory_ids=(), description=None, facts=()) -> ImageRecord:
     return ImageRecord(
         image_id=f"img-{blob[:4]}",
         blob_id=blob,
@@ -146,6 +160,7 @@ def _record(blob: str, memory_ids=(), description=None) -> ImageRecord:
         created_at=NOW,
         updated_at=NOW,
         description=description,
+        visual_facts=list(facts),
         anchored_memory_ids=list(memory_ids),
         occurrences=[ImageOccurrence(context="user: the sofa", event_timestamp_ms=1704412800000)],
     )
@@ -167,11 +182,11 @@ class FakeReader:
 
 
 class FakeImages:
-    def __init__(self, hits):
-        self.hits = hits
+    def __init__(self, hits, text_hits=()):
+        self.hits, self.text_hits = hits, list(text_hits)
 
-    async def search_images(self, ctx, vector, *, filters=None, limit=5, score_threshold=None):
-        return self.hits
+    async def search_images(self, ctx, vector, *, channel="image", filters=None, limit=5, score_threshold=None):
+        return self.text_hits if channel == "text" else self.hits
 
     async def get_images(self, ctx, ids):
         return [h.record for h in self.hits if h.record.image_id in ids]
@@ -203,7 +218,7 @@ def _view(memory_id, content, blobs=()):
 def _engine(reader, hits, llm=None, **cfg):
     from mindmemos.infra.blob import LocalBlobStore
 
-    return VanillaMmSearchEngine(
+    return VanillaMultimodalSearchEngine(
         blob_store=LocalBlobStore("/nonexistent-blob-root"),
         db_reader=reader,
         db_writer=object(),
@@ -212,7 +227,7 @@ def _engine(reader, hits, llm=None, **cfg):
         image_store=FakeImages(hits),
         mm_embed_client=FakeMm(),
         llm_client=llm,
-        vanilla_mm_config=VanillaMmConfig(enhanced=True, **cfg),
+        multimodal_config=MultimodalConfig(mode="enhanced", **cfg),
     )
 
 
@@ -236,7 +251,7 @@ async def test_enhanced_search_returns_anchored_images_and_image_recalled_facts(
     engine = _engine(reader, hits)
 
     out = await engine.augment_results(
-        SearchPipelineInput(query="Ethos ad background", search_pipeline="vanilla_mm"),
+        SearchPipelineInput(query="Ethos ad background", search_pipeline="vanilla", multimodal=True),
         CTX,
         [_item("m1", "The sofa is green velvet.")],
     )
@@ -283,7 +298,7 @@ async def test_agentic_refine_puts_submitted_evidence_first_and_falls_back_on_fa
     fast = [_item("m1", "sofa fact"), _item("m2", "Ethos fact")]
 
     out = await engine.agentic_refine(
-        SearchPipelineInput(query="Ethos background?", search_pipeline="vanilla_mm"), CTX, fast
+        SearchPipelineInput(query="Ethos background?", search_pipeline="vanilla", multimodal=True), CTX, fast
     )
 
     assert [o.id for o in out if o.memory_type != "image"] == ["m2", "m1"]
@@ -291,7 +306,8 @@ async def test_agentic_refine_puts_submitted_evidence_first_and_falls_back_on_fa
     assert "Images found" in json.dumps(llm.seen[1][-1]["content"])
 
     broken = _engine(FakeReader([]), hits, llm=ScriptedLlm([]))
-    assert await broken.agentic_refine(SearchPipelineInput(query="q", search_pipeline="vanilla_mm"), CTX, fast) == fast
+    inp = SearchPipelineInput(query="q", search_pipeline="vanilla", multimodal=True)
+    assert await broken.agentic_refine(inp, CTX, fast) == fast
 
 
 @pytest.mark.asyncio
@@ -314,10 +330,78 @@ async def test_best_image_match_brings_its_session_siblings_in_order() -> None:
     engine._image_store = SessionImages([hit, *route])
 
     out = await engine.augment_results(
-        SearchPipelineInput(query="route with parked trucks", search_pipeline="vanilla_mm"), CTX, []
+        SearchPipelineInput(query="route with parked trucks", search_pipeline="vanilla", multimodal=True), CTX, []
     )
 
     images = [o for o in out if o.memory_type == "image"]
     assert [i.metadata["blob_id"][0] for i in images][:4] == ["2", "3", "4", "5"]  # window, then the fill
     assert images[0].memory.startswith("[image 2 of 5 in conversation S3]")
     assert images[2].metadata["evidence"] == "similar" and images[0].metadata["evidence"] == "session"
+
+
+def test_image_scores_mix_normalized_text_and_image_similarity() -> None:
+    records = [_record(chr(ord("a") + i) * 64) for i in range(12)]
+    # Image similarity is flat (near-identical screenshots); text similarity has one clear match.
+    by_image = [ImageSearchHit(record=r, score=0.16 - i * 0.001) for i, r in enumerate(records)]
+    by_text = [ImageSearchHit(record=records[7], score=0.71)]
+    by_text += [ImageSearchHit(record=r, score=0.40 - i * 0.005) for i, r in enumerate(records) if i != 7]
+
+    def order(hits):
+        return [hit.record.blob_id[0] for hit in hits]
+
+    assert order(_mix([], by_image, 0.5))[:3] == ["a", "b", "c"]  # no text vectors yet: image ranking
+    assert order(_mix(by_text, by_image, 0.5))[0] == "h"  # the clear text match wins
+    assert order(_mix(by_text, by_image, 0.0))[:3] == ["a", "b", "c"]
+    partial = _mix(by_text[:1], by_image[:2], 0.5)  # an image missing from a channel scores 0 there
+    assert set(order(partial)) == {"a", "b", "h"}
+
+
+def test_image_items_carry_description_and_visual_facts() -> None:
+    record = _record("a" * 64, description="Ethos Water ad", facts=["The ad has a white background."])
+    item = _to_search_item(ImageSearchHit(record=record, score=0.3))
+    assert item.memory == "[image] Ethos Water ad\n- The ad has a white background."
+    assert item.metadata["visual_facts"] == ["The ad has a white background."]
+
+
+class FakeEmbed:
+    def __init__(self):
+        self.calls = []
+
+    async def embed(self, task, text, **kwargs):
+        from mindmemos.llm import EmbeddingResponse
+
+        self.calls.append((task, text))
+        return EmbeddingResponse(embeddings=[[0.1, 0.2] for _ in (text if isinstance(text, list) else [text])])
+
+
+@pytest.mark.asyncio
+async def test_text_channel_finds_images_by_their_visual_facts() -> None:
+    ad, other = "d" * 64, "o" * 64
+    by_image = [ImageSearchHit(record=_record(other), score=0.15), ImageSearchHit(record=_record(ad), score=0.14)]
+    by_text = [ImageSearchHit(record=_record(ad, facts=["The Ethos ad is white."]), score=0.8)]
+    embed = FakeEmbed()
+    engine = _engine(FakeReader([]), by_image, evidence_images=2, session_expansion_images=0)
+    engine._image_store = FakeImages(by_image, text_hits=by_text)
+    engine._explicit_embed_client = embed
+
+    hits = await engine.image_hits(
+        SearchPipelineInput(query="Ethos ad colour", search_pipeline="vanilla", multimodal=True), CTX, engine._config()
+    )
+
+    assert [h.record.blob_id for h in hits.ranked] == [ad, other]
+    assert [h.record.blob_id for h in hits.by_image] == [other, ad]  # raw image similarity kept apart
+    assert embed.calls == [("search.query", "Ethos ad colour")]
+
+
+@pytest.mark.asyncio
+async def test_archived_facts_are_not_recalled_through_images() -> None:
+    sofa = "s" * 64
+    archived = _view("m9", "Deleted fact.", blobs=[sofa]).model_copy(update={"status": "archived"})
+    hits = [
+        ImageSearchHit(record=_record(sofa, memory_ids=["m9"]), score=0.25),
+        *[ImageSearchHit(record=_record(str(i) * 64), score=0.14) for i in range(5)],
+    ]
+    out = await _engine(FakeReader([archived]), hits).augment_results(
+        SearchPipelineInput(query="sofa", search_pipeline="vanilla", multimodal=True), CTX, []
+    )
+    assert all(item.memory_type == "image" for item in out)

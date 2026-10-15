@@ -112,6 +112,7 @@ class MemoryCore:
         agent_id: str | None = None,
         session_id: str | None = None,
         query_images: list[ImageRef | dict[str, Any]] | None = None,
+        multimodal: bool = False,
     ) -> MemoryRequest[SearchResult]:
         return MemoryRequest(
             path="/v1/memory/search",
@@ -128,6 +129,7 @@ class MemoryCore:
                 agent_id=agent_id or self._defaults.agent_id,
                 session_id=session_id or self._defaults.session_id,
                 query_images=query_images,
+                multimodal=multimodal,
             ),
             parse=parse_search_result,
         )

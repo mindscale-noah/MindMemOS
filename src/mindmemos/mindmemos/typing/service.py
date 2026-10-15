@@ -27,7 +27,7 @@ from .memory import (
 )
 
 ServiceResultStatus = Literal["ok", "error", "queued"]
-SearchPipelineStrategy = Literal["default", "vanilla", "vanilla_mm", "schema"]
+SearchPipelineStrategy = Literal["default", "vanilla", "schema"]
 
 
 class AddStreamCancelled(Exception):
@@ -220,7 +220,10 @@ class SearchPipelineInput(BaseModel):
     """Search query."""
 
     query_images: list[ImageRef] = Field(default_factory=list)
-    """Images attached to the query; only multimodal search engines accept them."""
+    """Images attached to the query; they make the search multimodal (vanilla, mode basic/enhanced)."""
+
+    multimodal: bool = False
+    """Search stored images too; implied by ``query_images``. False keeps the search text-only."""
 
     filters: dict[str, Any] | None = None
     """Public filter DSL parsed into an internal SearchFilter."""
@@ -252,9 +255,11 @@ class SearchPipelineInput(BaseModel):
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data = handler(self)
-        # Text-only searches serialize exactly as before query images existed (search records).
+        # Text-only searches serialize exactly as before images existed (search records).
         if not self.query_images:
             data.pop("query_images", None)
+        if not self.multimodal:
+            data.pop("multimodal", None)
         return data
 
 
