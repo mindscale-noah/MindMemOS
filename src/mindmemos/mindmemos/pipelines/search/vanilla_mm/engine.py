@@ -151,7 +151,12 @@ class VanillaMmSearchEngine(VanillaSearchEngine):
             for blob_id in ((view.metadata or {}).get(IMAGE_BLOB_IDS_KEY) or []) if view else []:
                 anchored.append((blob_id, view.user_id, None, "anchored"))
         similar = [(h.record.blob_id, h.record.user_id, h.score, "similar") for h in text_hits]
+        # Session expansion: the best matching image usually identifies an episode (a route, a game,
+        # a dashboard series); its sibling images in that session, in order, carry the rest of it.
+        seeds = [hit for hit in (strong_query[:1] + text_hits[:1])]
+        expansion, positions = await self._session_expansion(context, seeds, cfg)
         ordered = [(h.record.blob_id, h.record.user_id, h.score, "query_image") for h in strong_query]
+        ordered += expansion
         for pair in zip_longest(anchored, similar):
             ordered.extend(entry for entry in pair if entry is not None)
         chosen: dict[str, tuple[str | None, float | None, str]] = {}
@@ -159,7 +164,40 @@ class VanillaMmSearchEngine(VanillaSearchEngine):
             if blob_id not in chosen and len(chosen) < cfg.evidence_images:
                 chosen[blob_id] = (user_id, score, evidence)
         image_items = await self._evidence_items(context, chosen, [*text_hits, *query_image_hits], memories)
+        for item in image_items:
+            position = positions.get(item.metadata.get("blob_id"))
+            if position is not None:
+                item.metadata["session_position"] = position
+                item.memory = f"[image {position}] {item.memory.removeprefix('[image] ')}"
         return [*memories, *recalled_items, *image_items]
+
+    async def _session_expansion(
+        self, context: MemoryRequestContext, seeds: list[ImageSearchHit], cfg: VanillaMmConfig
+    ) -> tuple[list[tuple[str, str | None, float | None, str]], dict[str, str]]:
+        """Seed images plus their session siblings in order; returns entries and position labels."""
+
+        entries: list[tuple[str, str | None, float | None, str]] = []
+        positions: dict[str, str] = {}
+        if cfg.session_expansion_images <= 0:
+            return entries, positions
+        for seed in seeds:
+            session_id = next((occ.session_id for occ in seed.record.occurrences if occ.session_id), None)
+            if session_id is None:
+                continue
+            siblings = await self._images().list_session_images(context, session_id, user_id=seed.record.user_id)
+            ids = [image.blob_id for image in siblings]
+            if seed.record.blob_id not in ids:
+                continue
+            pos = ids.index(seed.record.blob_id)
+            size = cfg.session_expansion_images
+            start = max(0, min(pos - size // 2, len(ids) - size))
+            for index in range(start, min(len(ids), start + size)):
+                blob_id = ids[index]
+                evidence = "similar" if blob_id == seed.record.blob_id else "session"
+                score = seed.score if blob_id == seed.record.blob_id else None
+                entries.append((blob_id, siblings[index].user_id, score, evidence))
+                positions.setdefault(blob_id, f"{index + 1} of {len(ids)} in conversation {session_id}")
+        return entries, positions
 
     async def image_hits(
         self, inp: SearchPipelineInput, context: MemoryRequestContext, cfg: VanillaMmConfig

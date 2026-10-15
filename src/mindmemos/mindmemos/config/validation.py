@@ -659,6 +659,7 @@ def _validate_multimodal(cfg: Any) -> None:
         ("image_context_chars", 0),
         ("evidence_images", 0),
         ("anchored_fact_limit", 0),
+        ("session_expansion_images", 0),
         ("image_hit_margin", 0),
         ("max_extraction_images", 1),
         ("agentic_max_steps", 1),

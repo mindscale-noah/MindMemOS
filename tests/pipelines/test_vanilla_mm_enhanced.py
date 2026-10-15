@@ -292,3 +292,32 @@ async def test_agentic_refine_puts_submitted_evidence_first_and_falls_back_on_fa
 
     broken = _engine(FakeReader([]), hits, llm=ScriptedLlm([]))
     assert await broken.agentic_refine(SearchPipelineInput(query="q", search_pipeline="vanilla_mm"), CTX, fast) == fast
+
+
+@pytest.mark.asyncio
+async def test_best_image_match_brings_its_session_siblings_in_order() -> None:
+    def in_session(blob, minute, score=0.0):
+        record = _record(blob).model_copy(
+            update={"occurrences": [ImageOccurrence(session_id="S3", event_timestamp_ms=minute * 60_000)]}
+        )
+        return ImageSearchHit(record=record, score=score)
+
+    route = [in_session(str(i) * 64, i) for i in range(1, 6)]  # checkpoints 1..5 of one route
+    hit = route[3].model_copy(update={"score": 0.17})
+
+    class SessionImages(FakeImages):
+        async def list_session_images(self, ctx, session_id, *, user_id=None, limit=50):
+            assert session_id == "S3"
+            return [h.record for h in route]
+
+    engine = _engine(FakeReader([]), [hit], session_expansion_images=4, evidence_images=6)
+    engine._image_store = SessionImages([hit, *route])
+
+    out = await engine.augment_results(
+        SearchPipelineInput(query="route with parked trucks", search_pipeline="vanilla_mm"), CTX, []
+    )
+
+    images = [o for o in out if o.memory_type == "image"]
+    assert [i.metadata["blob_id"][0] for i in images][:4] == ["2", "3", "4", "5"]  # window, then the fill
+    assert images[0].memory.startswith("[image 2 of 5 in conversation S3]")
+    assert images[2].metadata["evidence"] == "similar" and images[0].metadata["evidence"] == "session"

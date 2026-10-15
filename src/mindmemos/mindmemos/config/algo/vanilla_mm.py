@@ -44,6 +44,9 @@ class VanillaMmConfig:
     evidence_images: int = 6
     """Enhanced: maximum evidence images returned per search."""
 
+    session_expansion_images: int = 4
+    """Enhanced: images taken from the session of the best image match (it included), in order; 0 disables."""
+
     anchored_fact_limit: int = 5
     """Enhanced: maximum facts recalled through matching images, beyond the text results."""
 

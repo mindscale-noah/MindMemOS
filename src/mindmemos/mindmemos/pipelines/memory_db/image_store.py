@@ -5,7 +5,7 @@ from __future__ import annotations
 from ...infra.db import DatabaseClients, resolve_database_clients
 from ...logging import traced
 from ...mappers import search_filter_to_qdrant, to_image_point, to_image_record
-from ...typing import ImageRecord, ImageSearchHit, MemoryRequestContext, SearchFilter
+from ...typing import FieldCondition, ImageRecord, ImageSearchHit, MemoryRequestContext, SearchFilter
 
 
 class ImageMemoryStore:
@@ -43,6 +43,23 @@ class ImageMemoryStore:
                 raise ValueError("image record belongs to another project")
             await self._clients.qdrant.image.set_payload(record.image_id, to_image_point(record, []).payload)
 
+    @traced("memory_db.list_session_images", record_args=False)
+    async def list_session_images(
+        self, ctx: MemoryRequestContext, session_id: str, *, user_id: str | None, limit: int = 50
+    ) -> list[ImageRecord]:
+        """Images seen in one session (of one user), oldest first."""
+
+        conditions = [FieldCondition(field="session_id", op="match", value=session_id)]
+        if user_id:
+            conditions.append(FieldCondition(field="user_id", op="match", value=user_id))
+        records = await self._clients.qdrant.image.list(
+            ctx.project_id,
+            filter_=search_filter_to_qdrant(ctx, SearchFilter(must=conditions), target="image"),
+            limit=limit,
+        )
+        images = [to_image_record(record.payload) for record in records]
+        return sorted(images, key=lambda image: _first_time(image, session_id))
+
     @traced("memory_db.search_images", record_args=False)
     async def search_images(
         self,
@@ -61,3 +78,8 @@ class ImageMemoryStore:
             score_threshold=score_threshold,
         )
         return [ImageSearchHit(record=to_image_record(hit.payload), score=hit.score) for hit in hits]
+
+
+def _first_time(image: ImageRecord, session_id: str) -> int:
+    times = [occ.event_timestamp_ms or 0 for occ in image.occurrences if occ.session_id == session_id]
+    return min(times) if times else 0

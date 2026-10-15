@@ -350,6 +350,7 @@ algo_config:
     max_occurrences_per_image: 20
     enhanced: false               # true: VLM extraction + fact-image anchoring + image-recalled facts + agentic
     evidence_images: 6
+    session_expansion_images: 4
     anchored_fact_limit: 5
     image_hit_margin: 0.03
     extraction_image_detail: auto

@@ -234,6 +234,7 @@ With `enhanced: false` (base) search appends the images most similar to the quer
 | `max_occurrences_per_image` | `20` | Appearances remembered per deduplicated image. |
 | `enhanced` | `false` | Turn on all features above. |
 | `evidence_images` | `6` | Enhanced: maximum evidence images per search. |
+| `session_expansion_images` | `4` | Enhanced: images from the session of the best image match (in order, the match included); `0` disables. |
 | `anchored_fact_limit` | `5` | Enhanced: maximum facts recalled through matching images. |
 | `image_hit_margin` | `0.03` | Enhanced: an image hit must exceed the median similarity of the hits by this much. |
 | `extraction_image_detail` | `auto` | Enhanced: image detail for VLM extraction (`auto`, `low`, `high`). |

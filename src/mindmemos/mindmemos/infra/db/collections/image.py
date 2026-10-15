@@ -72,6 +72,16 @@ class ImageRepository(CollectionRepository):
         records = await self._engine.retrieve(self.collection, image_ids)
         return [record for record in records if record.payload.get("project_id") == project_id]
 
+    async def list(
+        self, project_id: str, *, filter_: qmodels.Filter | None = None, limit: int = 50
+    ) -> list[QdrantRecord]:
+        if not await self._engine.collection_exists(self.collection):
+            return []
+        records, _ = await self._engine.scroll(
+            self.collection, scroll_filter=self._engine.project_filter(project_id, filter_=filter_), limit=limit
+        )
+        return records
+
     async def search(
         self,
         project_id: str,
