@@ -438,15 +438,8 @@ async def test_visual_facts_come_back_as_reranked_results_and_images_keep_descri
     )
 
     facts = [o for o in out if o.memory_type == "visual_fact"]
-    # Reranker order, limit 2; each fact names the image it was read from.
-    assert [f.memory for f in facts] == ["[image: Sofa] Sofa is red.", "[image: Ethos ad] Logo is green."]
-    assert reranker.calls == [
-        (
-            "Ethos ad colour",
-            ["[image: Ethos ad] Ethos ad is white.", "[image: Ethos ad] Logo is green.", "[image: Sofa] Sofa is red."],
-            2,
-        )
-    ]
+    assert [f.memory for f in facts] == ["Sofa is red.", "Logo is green."]  # reranker order, limit 2
+    assert reranker.calls == [("Ethos ad colour", ["Ethos ad is white.", "Logo is green.", "Sofa is red."], 2)]
     assert facts[0].metadata["blob_id"] == sofa and len({f.id for f in facts}) == 2
     images = [o for o in out if o.memory_type == "image"]
     assert [i.memory for i in images] == ["[image] Ethos ad", "[image] Sofa"]  # facts are separate results
@@ -456,8 +449,8 @@ async def test_visual_facts_come_back_as_reranked_results_and_images_keep_descri
         SearchPipelineInput(query="Ethos ad colour", search_pipeline="vanilla", multimodal=True), CTX, []
     )
     assert [o.memory for o in without_rerank if o.memory_type == "visual_fact"] == [
-        "[image: Ethos ad] Ethos ad is white.",
-        "[image: Ethos ad] Logo is green.",
+        "Ethos ad is white.",
+        "Logo is green.",
     ]
 
 
@@ -524,41 +517,7 @@ async def test_agent_memory_search_also_finds_visual_facts() -> None:
     observation = json.dumps(llm.seen[1][-1]["content"])
     assert "Visual facts:" in observation and "F3" in observation and "background is white" in observation
     assert searched == ["Ethos ad background"]
-    assert out[0].memory == "[image: Ethos ad] The Ethos ad background is white."
-    assert out[0].memory_type == "visual_fact"
-
-
-def test_visual_facts_name_their_image_briefly() -> None:
-    from mindmemos.pipelines.search.vanilla_multimodal.engine import _image_label, _visual_fact_text
-
-    record = _record(
-        "a" * 64,
-        description="Daily Glucose Dashboard for Maya Patel dated 2025-04-01 labeled Overview. Six metric boxes.",
-        facts=["Late Window 57% with circular chart bottom right"],
-    )
-    assert _visual_fact_text(record, 0) == (
-        "[image: Daily Glucose Dashboard for Maya Patel dated 2025-04-01 labeled Overview] "
-        "Late Window 57% with circular chart bottom right"
-    )
-    long = record.model_copy(update={"description": "word " * 60})
-    assert len(_image_label(long)) <= 103 and _image_label(long).endswith("...")
-    assert _visual_fact_text(record.model_copy(update={"description": None}), 0) == record.visual_facts[0]
-
-
-def test_agent_keeps_only_a_few_unsubmitted_visual_facts() -> None:
-    from mindmemos.pipelines.search.vanilla_multimodal.agentic import UNSUBMITTED_VISUAL_FACTS, MultimodalAgent
-
-    agent = MultimodalAgent(engine=None, llm_client=None, cfg=MultimodalConfig(mode="enhanced"))
-    texts = [_item("m1", "dialogue fact")]
-    visual = [
-        MemorySearchItem(id=f"v{i}", memory=f"visual {i}", memory_type="visual_fact", last_update_at="")
-        for i in range(10)
-    ]
-    handles = {item.id: agent._fact_handle(item) for item in [*texts, *visual]}
-
-    out = agent._result({"facts": [handles["v9"]], "images": []}, [*texts, *visual], [])
-
-    assert [o.id for o in out] == ["v9", "m1", *[f"v{i}" for i in range(UNSUBMITTED_VISUAL_FACTS)]]
+    assert out[0].memory == "The Ethos ad background is white." and out[0].memory_type == "visual_fact"
 
 
 @pytest.mark.asyncio
