@@ -173,6 +173,10 @@ class DialogueMessage(BaseModel):
     timestamp: int | None = None
     """Dialogue event time as a 13-digit millisecond timestamp, or None when omitted."""
 
+    agent: str | None = None
+    """Originating agent identity: ``main`` for the parent agent, or an agent
+    type label such as ``code-agent-N`` for a sub agent. None when unlabelled."""
+
 
 class SourceRef(BaseModel):
     """Purpose: Describe an external source referenced by memory extraction.

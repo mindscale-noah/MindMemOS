@@ -32,6 +32,9 @@ class DialogueMessageInput(_StrictModel):
     role: NonEmptyStr
     content: NonEmptyStr
     timestamp: int | None = None
+    agent: NonEmptyStr | None = None
+    """Originating agent identity: 'main' for the parent agent, or an agent type
+    label such as 'code-agent-N' for a sub agent."""
 
 
 MemoryMessageInput = DialogueMessageInput | UrlMessageInput | FileMessageInput | TextMessageInput

@@ -3,11 +3,17 @@
 from .EN.add.vanilla import EXTRACTION_SYSTEM_PROMPT
 from .EN.add.vanilla_entity import EXTRACTION_SYSTEM_PROMPT_ENTITY
 from .EN.add.trajectory_dedup import EXPERIENCE_DEDUP_SYSTEM_PROMPT
-from .EN.add.trajectory_experience import EXPERIENCE_EXTRACTION_SYSTEM_PROMPT
+from .EN.add.trajectory_experience import (
+    EXPERIENCE_EXTRACTION_SYSTEM_PROMPT,
+    EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_PARENT,
+)
 from .ZH.add.vanilla import EXTRACTION_SYSTEM_PROMPT_ZH
 from .ZH.add.vanilla_entity import EXTRACTION_SYSTEM_PROMPT_ENTITY_ZH
 from .ZH.add.trajectory_dedup import EXPERIENCE_DEDUP_SYSTEM_PROMPT_ZH
-from .ZH.add.trajectory_experience import EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_ZH
+from .ZH.add.trajectory_experience import (
+    EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_ZH,
+    EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_PARENT_ZH,
+)
 
 
 def get_extraction_system_prompt(lang: str, *, enable_entities: bool = False) -> str:
@@ -18,9 +24,16 @@ def get_extraction_system_prompt(lang: str, *, enable_entities: bool = False) ->
     return EXTRACTION_SYSTEM_PROMPT_ZH if lang == "zh" else EXTRACTION_SYSTEM_PROMPT
 
 
-def get_trajectory_experience_prompt(lang: str) -> str:
-    """Return the trajectory experience-extraction prompt for a language."""
+def get_trajectory_experience_prompt(lang: str, kind: str = "subagent") -> str:
+    """Return the trajectory experience-extraction prompt for a language and agent kind.
 
+    ``kind == "parent"`` selects the Main-Agent planning prompt; any other value
+    (the default ``"subagent"``) returns the existing per-trajectory experience
+    prompt.
+    """
+
+    if kind == "parent":
+        return EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_PARENT_ZH if lang == "zh" else EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_PARENT
     return EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_ZH if lang == "zh" else EXPERIENCE_EXTRACTION_SYSTEM_PROMPT
 
 
@@ -38,6 +51,8 @@ __all__ = [
     "EXPERIENCE_DEDUP_SYSTEM_PROMPT",
     "EXPERIENCE_DEDUP_SYSTEM_PROMPT_ZH",
     "EXPERIENCE_EXTRACTION_SYSTEM_PROMPT",
+    "EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_PARENT",
+    "EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_PARENT_ZH",
     "EXPERIENCE_EXTRACTION_SYSTEM_PROMPT_ZH",
     "get_extraction_system_prompt",
     "get_trajectory_dedup_prompt",

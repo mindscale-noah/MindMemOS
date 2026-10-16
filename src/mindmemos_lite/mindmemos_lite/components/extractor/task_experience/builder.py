@@ -66,23 +66,30 @@ def _normalize_role(role: str) -> str:
 
 def _normalize_message(
     message: DialogueMessage | TextMessage | UrlMessage | FileMessage,
-) -> tuple[str, str, int | None] | None:
-    """Reduce one add input to the ``(role, text, timestamp)`` the prompt expects.
+) -> tuple[str, str, int | None, str | None] | None:
+    """Reduce one add input to the ``(role, text, timestamp, agent)`` the prompt expects.
 
     The caller keeps every surviving message at its original request position, so
     extracted ``source_message_indices`` keep pointing at the real source message.
     System messages carry no trajectory evidence, and file/URL attachments are
-    not evidence for this pipeline, so both are dropped.
+    not evidence for this pipeline, so both are dropped. ``agent`` is the message's
+    originating-agent label (``main`` for the parent, ``code-agent-N`` for a sub
+    agent, or ``None`` when unlabelled) and is carried through untouched.
     """
     if isinstance(message, TextMessage):
-        role, text, timestamp = "user", message.text, None
+        role, text, timestamp, agent = "user", message.text, None, None
     elif isinstance(message, DialogueMessage):
-        role, text, timestamp = _normalize_role(message.role), message.content, message.timestamp
+        role, text, timestamp, agent = (
+            _normalize_role(message.role),
+            message.content,
+            message.timestamp,
+            message.agent,
+        )
     else:
         return None
     if role == "system" or not text.strip():
         return None
-    return role, text, timestamp
+    return role, text, timestamp, agent
 
 
 def _truncate_tool_message(text: str, role: str, cfg: TrajectoryAddConfig) -> str:
@@ -244,9 +251,10 @@ class TrajectoryExperienceBuilder:
             normalized = _normalize_message(message)
             if normalized is None:
                 continue
-            role, text, timestamp = normalized
+            role, text, timestamp, agent = normalized
             turn = {
                 "message_index": index,
+                "agent": agent,
                 "role": role,
                 "text": _truncate_tool_message(text, role, cfg),
                 "timestamp": timestamp,
@@ -264,9 +272,12 @@ class TrajectoryExperienceBuilder:
         lang = _dominant_lang(list(preprocessed_by_index.values()))
 
         # 3. Extract experiences once (task text stays fixed for the whole trace).
+        #    The prompt kind (parent/main-agent vs sub-agent) is read per request from
+        #    metadata.extraction_prompt, defaulting to the sub-agent trajectory prompt.
+        kind = inp.metadata.get("extraction_prompt", "subagent")
         candidates: list[ExtractedExperienceCandidate] = []
         if turns:
-            extracted = await self._extractor.extract(task_text, turns, lang, context)
+            extracted = await self._extractor.extract(task_text, turns, lang, context, kind)
             for index, candidate in enumerate(extracted):
                 candidates.append(candidate.model_copy(update={"ref_id": f"e{index}"}))
 

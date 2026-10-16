@@ -44,10 +44,12 @@ class _RecordingExtractor:
     def __init__(self) -> None:
         self.calls = 0
         self.turns: list[dict] = []
+        self.kinds: list[str] = []
 
-    async def extract(self, task_text, turns, lang, context):
+    async def extract(self, task_text, turns, lang, context, kind="subagent"):
         self.calls += 1
         self.turns = list(turns)
+        self.kinds.append(kind)
         indices = [int(turn["message_index"]) for turn in turns]
         return [
             ExtractedExperienceCandidate(

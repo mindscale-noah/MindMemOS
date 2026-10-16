@@ -345,6 +345,11 @@ class NormalizedMessage(BaseModel):
     role: str = Field(description="Normalized message role: user, assistant, system, tool, or speaker.")
     raw_role: str | None = Field(default=None, description="Original message role before normalization.")
     speaker: str | None = Field(default=None, description="Speaker identity for arbitrary named-speaker dialogue.")
+    agent: str | None = Field(
+        default=None,
+        description="Originating agent identity: 'main' for the parent agent, or an agent type label "
+        "(e.g. 'code-agent-N') for a sub agent; None when unlabelled.",
+    )
     timestamp: int | None = Field(default=None, description="Millisecond timestamp if available.")
     message_index: int = Field(description="Original index in AddPipelineInput.messages.")
     is_extractable: bool = Field(

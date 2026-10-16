@@ -181,11 +181,13 @@ class MessageChunker:
                 raw_role = None
                 speaker = None
                 timestamp = None
+                agent = None
             elif isinstance(message, DialogueMessage):
                 text = message.content
                 raw_role = message.role
                 role, speaker = self._normalize_role(message.role)
                 timestamp = message.timestamp
+                agent = message.agent
             elif isinstance(message, FileMessage):
                 # Attachments do not participate in conversational Turn grouping,
                 # but downstream algorithms still need their provenance.
@@ -224,6 +226,7 @@ class MessageChunker:
                     role=role,
                     raw_role=raw_role,
                     speaker=speaker,
+                    agent=agent,
                     timestamp=timestamp,
                     message_index=message_index,
                     is_extractable=role != "system",
@@ -652,6 +655,7 @@ class MessageChunker:
                 NormalizedMessage(
                     text=parts.head_text,
                     role=first.role if first else "user",
+                    agent=first.agent if first else None,
                     timestamp=first.timestamp if first else None,
                     message_index=first.message_index if first else 0,
                     is_extractable=True,
@@ -680,6 +684,7 @@ class MessageChunker:
                 NormalizedMessage(
                     text=parts.tail_text,
                     role=last.role if last else "assistant",
+                    agent=last.agent if last else None,
                     timestamp=last.timestamp if last else None,
                     message_index=last.message_index if last else 0,
                     is_extractable=True,
