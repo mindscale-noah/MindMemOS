@@ -23,10 +23,10 @@ logger = get_logger(__name__)
 
 AGENT_SYSTEM = """You retrieve evidence from a long-term memory of a user's past conversations with an assistant. A separate model will answer the QUESTION from the evidence you submit; you do not answer it.
 
-Memory holds short FACTS distilled from the conversations (each with its date) and the IMAGES shared in them (each with its date, a description, and the facts recorded about it).
+Memory holds short FACTS distilled from the conversations (each with its date), VISUAL FACTS read from the images shared in them, and the IMAGES themselves (each with its date and a description).
 
 Tools (reply with exactly ONE JSON object per turn, nothing else):
-- {"tool": "search_memories", "args": {"query": "..."}} -> facts matching a short description of what you need.
+- {"tool": "search_memories", "args": {"query": "..."}} -> facts and visual facts matching a short description of what you need.
 - {"tool": "search_images", "args": {"query": "..."}} or {"tool": "search_images", "args": {"by_question_image": true}} -> images matching a description of what they show, or matching the image attached to the question; the top images are shown to you.
 - {"tool": "view_images", "args": {"images": ["I1", "I2"]}} -> look at images you have seen listed.
 - {"tool": "submit", "args": {"facts": ["F1", "F4"], "images": ["I2"]}} -> finish with the facts and images the answer needs, most important first.
@@ -38,6 +38,7 @@ Guidance:
 - Use short, specific queries. Do not repeat a query. Submit as soon as you have enough."""
 
 _JSON = re.compile(r"\{.*\}", re.DOTALL)
+VISUAL_FACTS_PER_SEARCH = 6
 
 
 class MultimodalAgent:
@@ -91,9 +92,18 @@ class MultimodalAgent:
     ) -> list[dict[str, Any]] | str:
         if tool == "search_memories" and args.get("query"):
             query = str(args["query"])
-            found = await self._engine.search_candidates(inp.model_copy(update={"query": query, "top_k": 8}), context)
+            search = inp.model_copy(update={"query": query, "top_k": 8})
+            found = await self._engine.search_candidates(search, context)
+            # Visual facts are not in text memory; they are searched through the images.
+            visual = await self._engine.visual_facts_for(search, context, self._cfg, limit=VISUAL_FACTS_PER_SEARCH)
             lines = [self._fact_line(self._fact_handle(item), item) for item in found[:8]]
-            return "Facts:\n" + ("\n".join(lines) if lines else "(none)")
+            visual_lines = [self._fact_line(self._fact_handle(item), item) for item in visual]
+            return (
+                "Facts:\n"
+                + ("\n".join(lines) if lines else "(none)")
+                + "\nVisual facts:\n"
+                + ("\n".join(visual_lines) if visual_lines else "(none)")
+            )
         if tool == "search_images":
             by_image = bool(args.get("by_question_image"))
             query = (

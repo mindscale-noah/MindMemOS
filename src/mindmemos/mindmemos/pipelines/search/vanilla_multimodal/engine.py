@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import statistics
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from itertools import zip_longest
 from typing import Any
@@ -269,6 +269,17 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
             except Exception:  # noqa: BLE001 - fall back to image rank order
                 logger.warning("multimodal_visual_fact_rerank_failed", exc_info=True)
         return [_visual_fact_item(*candidates[i], score) for i, score in order[: cfg.visual_fact_limit]]
+
+    async def visual_facts_for(
+        self, inp: SearchPipelineInput, context: MemoryRequestContext, cfg: MultimodalConfig, *, limit: int
+    ) -> list[MemorySearchItem]:
+        """The visual facts most relevant to ``inp.query``, from its best-matching images."""
+
+        if limit <= 0 or not inp.query.strip():
+            return []
+        hits = await self.image_hits(inp.model_copy(update={"query_images": []}), context, cfg)
+        records = [hit.record for hit in hits.ranked[: cfg.visual_fact_images]]
+        return await self._visual_fact_items(inp, records, replace(cfg, visual_fact_limit=limit))
 
     def _rerank_client(self) -> RerankClient | None:
         if self._explicit_rerank_client is not _UNSET:

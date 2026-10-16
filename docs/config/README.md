@@ -239,7 +239,8 @@ Enhanced details:
   images. Facts anchored to images that stand out by image similarity are recalled too. Image
   results carry their description (and their visual facts when `visual_fact_limit` is 0).
 - **Multimodal agentic retrieval**: a short tool loop (search memories, search images, view images,
-  submit) refines the single-pass result.
+  submit) refines the single-pass result; its memory search returns dialogue facts and the visual
+  facts of the best-matching images.
 
 | Field | Default | Description |
 |---|---|---|

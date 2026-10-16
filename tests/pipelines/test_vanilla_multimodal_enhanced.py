@@ -479,3 +479,37 @@ async def test_session_expansion_seeds_from_the_best_image_similarity_match() ->
     )
 
     assert seen_sessions == ["S3"]
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_search_also_finds_visual_facts() -> None:
+    ad = "d" * 64
+    hits = [
+        ImageSearchHit(
+            record=_record(ad, description="Ethos ad", facts=["The Ethos ad background is white."]), score=0.3
+        )
+    ]
+    llm = ScriptedLlm(
+        [
+            '{"tool": "search_memories", "args": {"query": "Ethos ad background"}}',
+            '{"tool": "submit", "args": {"facts": ["F3"], "images": []}}',
+        ]
+    )
+    engine = _engine(FakeReader([]), hits, llm=llm, session_expansion_images=0)
+    searched = []
+
+    async def dialogue_facts(inp, context, *, options=None):
+        searched.append(inp.query)
+        return [_item("m7", "The user discussed the Ethos campaign.")]
+
+    engine.search_candidates = dialogue_facts
+    fast = [_item("m1", "sofa fact")]
+
+    out = await engine.agentic_refine(
+        SearchPipelineInput(query="Ethos background?", search_pipeline="vanilla", multimodal=True), CTX, fast
+    )
+
+    observation = json.dumps(llm.seen[1][-1]["content"])
+    assert "Visual facts:" in observation and "F3" in observation and "background is white" in observation
+    assert searched == ["Ethos ad background"]
+    assert out[0].memory == "The Ethos ad background is white." and out[0].memory_type == "visual_fact"
