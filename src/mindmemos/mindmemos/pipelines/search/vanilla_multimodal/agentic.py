@@ -39,6 +39,8 @@ Guidance:
 
 _JSON = re.compile(r"\{.*\}", re.DOTALL)
 VISUAL_FACTS_PER_SEARCH = 6
+UNSUBMITTED_VISUAL_FACTS = 5
+"""Visual facts of the fast path kept after the agent's evidence when the agent did not submit them."""
 
 
 class MultimodalAgent:
@@ -198,7 +200,11 @@ class MultimodalAgent:
     ) -> list[MemorySearchItem]:
         chosen_facts = [self._facts[h] for h in submitted["facts"] if h in self._facts]
         chosen_images = [self._images[h] for h in submitted["images"] if h in self._images]
-        facts = _unique([*chosen_facts, *texts], key=lambda item: item.id)
+        chosen_ids = {item.id for item in chosen_facts}
+        # Unsubmitted visual facts are mostly noise once the agent has chosen: keep only the best few.
+        visual = [item for item in texts if item.memory_type == "visual_fact" and item.id not in chosen_ids]
+        dropped = {item.id for item in visual[UNSUBMITTED_VISUAL_FACTS:]}
+        facts = _unique([*chosen_facts, *(item for item in texts if item.id not in dropped)], key=lambda item: item.id)
         image_items = _unique([*chosen_images, *images], key=lambda item: item.metadata.get("blob_id"))
         return [*facts, *image_items[: max(self._cfg.evidence_images, len(chosen_images))]]
 

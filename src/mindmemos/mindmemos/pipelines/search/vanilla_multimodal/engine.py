@@ -263,7 +263,7 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         candidates = [(record, index) for record in ordered for index in range(len(record.visual_facts))]
         if not candidates:
             return []
-        documents = [record.visual_facts[index] for record, index in candidates]
+        documents = [_visual_fact_text(record, index) for record, index in candidates]
         order: list[tuple[int, float | None]] = [(i, None) for i in range(len(candidates))]
         reranker = self._rerank_client() if inp.rerank else None
         if reranker is not None and inp.query.strip():
@@ -536,11 +536,31 @@ def _image_event_time(record: ImageRecord) -> datetime | None:
     return record.event_time
 
 
+def _image_label(record: ImageRecord, max_chars: int = 100) -> str:
+    """A short name of the image: its caption, else the first sentence of its description."""
+
+    caption = next((occ.caption for occ in record.occurrences if occ.caption), None)
+    text = (caption or record.description or "").strip()
+    first = text.split(". ", 1)[0].rstrip(".")
+    if len(first) > max_chars:
+        first = first[:max_chars].rsplit(" ", 1)[0] + "..."
+    return first
+
+
+def _visual_fact_text(record: ImageRecord, index: int) -> str:
+    """A visual fact with the image it was read from: facts of look-alike images (dashboards of one
+    template, screenshots of one game) are ambiguous on their own."""
+
+    label = _image_label(record)
+    fact = record.visual_facts[index]
+    return f"[image: {label}] {fact}" if label else fact
+
+
 def _visual_fact_item(record: ImageRecord, index: int, score: float | None) -> MemorySearchItem:
     event_time = _image_event_time(record)
     return MemorySearchItem(
         id=f"{record.image_id}#{index}",
-        memory=record.visual_facts[index],
+        memory=_visual_fact_text(record, index),
         memory_type=VISUAL_FACT_MEMORY_TYPE,
         last_update_at=format_datetime(record.updated_at),
         event_time=format_datetime(event_time) if event_time else None,
