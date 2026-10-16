@@ -144,11 +144,15 @@ class MultimodalMemoryExtractor:
             logger.warning("multimodal_extraction_failed", request_id=context.request_id, exc_info=True)
             return await self._inner.extract_from_envelope(envelope, preprocessed_texts, context)
         parsed = response.parsed if isinstance(response.parsed, dict) else {}
-        result = MemoryExtractionResult.model_validate(_normalize_extraction_payload(parsed))
+        _collect_visuals(parsed, attached, images)
+        try:
+            result = MemoryExtractionResult.model_validate(_normalize_extraction_payload(parsed))
+        except Exception:  # noqa: BLE001 - e.g. an unknown mem_type: dialogue facts from vanilla instead
+            logger.warning("multimodal_extraction_invalid", request_id=context.request_id, exc_info=True)
+            return await self._inner.extract_from_envelope(envelope, preprocessed_texts, context)
         result = result.model_copy(
             update={"memories": [m.model_copy(update={"content": strip_labels(m.content)}) for m in result.memories]}
         )
-        _collect_visuals(parsed, attached, images)
         return _anchor(_mark_extractor(result, "multimodal_vlm"), envelope, attached)
 
 

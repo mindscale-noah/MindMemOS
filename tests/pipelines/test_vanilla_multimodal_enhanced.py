@@ -559,3 +559,24 @@ def test_agent_keeps_only_a_few_unsubmitted_visual_facts() -> None:
     out = agent._result({"facts": [handles["v9"]], "images": []}, [*texts, *visual], [])
 
     assert [o.id for o in out] == ["v9", "m1", *[f"v{i}" for i in range(UNSUBMITTED_VISUAL_FACTS)]]
+
+
+@pytest.mark.asyncio
+async def test_invalid_dialogue_facts_fall_back_to_vanilla_but_keep_the_visual_facts() -> None:
+    vlm = FakeVlm(
+        {
+            "memories": [{"ref_id": "m1", "content": "Plan the trip.", "mem_type": "plan", "source_refs": ["s0"]}],
+            "image_memories": [{"image": 1, "description": "A sofa.", "facts": ["The sofa is green."]}],
+        }
+    )
+    inner = FakeInner()
+    images = RequestImages(by_message={0: [ExtractionImage("b" * 64, "image/png", b"\x89PNG")]})
+
+    with request_images(images):
+        envelope = _envelope()
+        await MultimodalMemoryExtractor(inner, llm_client=vlm).extract_from_envelope(
+            envelope, _preprocessed(envelope), CTX
+        )
+
+    assert inner.calls == 1  # no 500: vanilla extracts the dialogue facts of this chunk
+    assert images.visuals == {"b" * 64: ImageVisuals(description="A sofa.", facts=["The sofa is green."])}
