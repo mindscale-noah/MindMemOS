@@ -263,9 +263,7 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         candidates = [(record, index) for record in ordered for index in range(len(record.visual_facts))]
         if not candidates:
             return []
-        # Rank by the fact itself: with the image label in the text, the reranker matches the label and
-        # returns many facts of one image instead of the relevant facts of several.
-        documents = [record.visual_facts[index] for record, index in candidates]
+        documents = [_visual_fact_text(record, index) for record, index in candidates]
         order: list[tuple[int, float | None]] = [(i, None) for i in range(len(candidates))]
         reranker = self._rerank_client() if inp.rerank else None
         if reranker is not None and inp.query.strip():

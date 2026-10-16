@@ -443,7 +443,7 @@ async def test_visual_facts_come_back_as_reranked_results_and_images_keep_descri
     assert reranker.calls == [
         (
             "Ethos ad colour",
-            ["Ethos ad is white.", "Logo is green.", "Sofa is red."],  # ranked by the fact alone
+            ["[image: Ethos ad] Ethos ad is white.", "[image: Ethos ad] Logo is green.", "[image: Sofa] Sofa is red."],
             2,
         )
     ]

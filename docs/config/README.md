@@ -235,8 +235,7 @@ Enhanced details:
   `visual_fact_limit` are returned as separate results (`memory_type: visual_fact`, with the
   `blob_id` of their image), after the text results. Each names its image
   (`[image: <first sentence of the description>] <fact>`): facts of look-alike images (one
-  dashboard template, one game's screenshots) are ambiguous on their own. Ranking uses the fact
-  alone.
+  dashboard template, one game's screenshots) are ambiguous on their own.
 - **Evidence images**: images that stand out for the query images, the session of the best image
   similarity match, then images anchored to the retrieved facts interleaved with the best-scored
   images. Facts anchored to images that stand out by image similarity are recalled too. Image
