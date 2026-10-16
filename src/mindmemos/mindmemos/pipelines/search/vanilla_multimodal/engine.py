@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import statistics
 from contextvars import ContextVar
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from itertools import zip_longest
 from typing import Any
@@ -242,7 +242,12 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         return [*memories, *recalled_items, *fact_items, *image_items]
 
     async def _visual_fact_items(
-        self, inp: SearchPipelineInput, records: list[ImageRecord], cfg: MultimodalConfig
+        self,
+        inp: SearchPipelineInput,
+        records: list[ImageRecord],
+        cfg: MultimodalConfig,
+        *,
+        limit: int | None = None,
     ) -> list[MemorySearchItem]:
         """The visual facts of ``records`` most relevant to the query, one result each.
 
@@ -250,7 +255,8 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         them as individual facts (ranked by the reranker when the request asks for reranking).
         """
 
-        if cfg.visual_fact_limit <= 0:
+        limit = cfg.visual_fact_limit if limit is None else limit
+        if limit <= 0:
             return []
         unique = {record.blob_id: record for record in reversed(records)}
         ordered = [unique[blob_id] for blob_id in dict.fromkeys(record.blob_id for record in records)]
@@ -262,13 +268,13 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         reranker = self._rerank_client() if inp.rerank else None
         if reranker is not None and inp.query.strip():
             try:
-                response = await reranker.rerank(inp.query, documents, top_n=cfg.visual_fact_limit)
+                response = await reranker.rerank(inp.query, documents, top_n=limit)
                 order = [
                     (hit.index, hit.relevance_score) for hit in response.results if 0 <= hit.index < len(documents)
                 ]
             except Exception:  # noqa: BLE001 - fall back to image rank order
                 logger.warning("multimodal_visual_fact_rerank_failed", exc_info=True)
-        return [_visual_fact_item(*candidates[i], score) for i, score in order[: cfg.visual_fact_limit]]
+        return [_visual_fact_item(*candidates[i], score) for i, score in order[:limit]]
 
     async def visual_facts_for(
         self, inp: SearchPipelineInput, context: MemoryRequestContext, cfg: MultimodalConfig, *, limit: int
@@ -279,7 +285,7 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
             return []
         hits = await self.image_hits(inp.model_copy(update={"query_images": []}), context, cfg)
         records = [hit.record for hit in hits.ranked[: cfg.visual_fact_images]]
-        return await self._visual_fact_items(inp, records, replace(cfg, visual_fact_limit=limit))
+        return await self._visual_fact_items(inp, records, cfg, limit=limit)
 
     def _rerank_client(self) -> RerankClient | None:
         if self._explicit_rerank_client is not _UNSET:

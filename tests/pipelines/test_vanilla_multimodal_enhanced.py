@@ -35,6 +35,7 @@ from mindmemos.typing import (
     SearchPipelineInput,
     TurnMessageRef,
 )
+from omegaconf import OmegaConf
 
 CTX = MemoryRequestContext(request_id="r", account_id="a", project_id="p", api_key_uuid="k", user_id="u")
 NOW = datetime(2024, 1, 5, tzinfo=UTC)
@@ -495,7 +496,11 @@ async def test_agent_memory_search_also_finds_visual_facts() -> None:
             '{"tool": "submit", "args": {"facts": ["F3"], "images": []}}',
         ]
     )
-    engine = _engine(FakeReader([]), hits, llm=llm, session_expansion_images=0)
+    engine = _engine(FakeReader([]), hits, llm=llm)
+    # The server's config is an OmegaConf object, not a dataclass instance.
+    engine._explicit_multimodal_config = OmegaConf.structured(
+        MultimodalConfig(mode="enhanced", session_expansion_images=0)
+    )
     searched = []
 
     async def dialogue_facts(inp, context, *, options=None):
