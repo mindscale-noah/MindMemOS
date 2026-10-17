@@ -15,6 +15,7 @@ from mindmemos_sdk.transport import AsyncHttpTransport
 from mindmemos_eval.memory.envs.locomo import LocomoAdapter
 from mindmemos_eval.memory.envs.longmemeval.adapter import LongMemEvalAdapter
 from mindmemos_eval.memory.envs.memeye import MemEyeAdapter
+from mindmemos_eval.memory.envs.memgallery import MemGalleryAdapter
 from mindmemos_eval.memory.envs.memoryagentbench.adapter import MemoryAgentBenchAdapter
 from mindmemos_eval.memory.envs.personamem import PersonaMemAdapter
 
@@ -375,6 +376,7 @@ def default_adapters() -> dict[str, BenchmarkAdapter]:
         "locomo": LocomoAdapter(),
         "longmemeval": LongMemEvalAdapter(),
         "memeye": MemEyeAdapter(),
+        "memgallery": MemGalleryAdapter(),
         "memoryagentbench": MemoryAgentBenchAdapter(),
         "personamem": PersonaMemAdapter(),
         "personamem_subset": PersonaMemAdapter(),

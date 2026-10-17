@@ -12,6 +12,7 @@ import asyncio
 import base64
 import io
 import mimetypes
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -93,17 +94,24 @@ async def build_messages(
     question_images: list[Path],
     encoder: ImageEncoder,
     max_images: int,
+    system: str | None = None,
+    line: Callable[[int, Any], str] = format_memory,
+    image_label: Callable[[int, Any], str] = lambda index, item: f"Image of memory [{index}]: {item.memory}",
 ) -> tuple[list[dict[str, Any]], int]:
-    """Chat messages for one question; returns them with the number of attached images."""
+    """Chat messages for one question; returns them with the number of attached images.
+
+    ``system``, ``line`` and ``image_label`` let another benchmark keep this layout with its own
+    answer protocol (defaults: MemEye).
+    """
 
     lines, image_parts = [], []
     budget = max(0, max_images - len(question_images))
     for index, item in enumerate(memories, start=1):
-        lines.append(format_memory(index, item))
+        lines.append(line(index, item))
         blob_id = (item.metadata or {}).get("blob_id") if item.memory_type == "image" else None
         if blob_id and budget > 0:
             budget -= 1
-            image_parts.append({"type": "text", "text": f"Image of memory [{index}]: {item.memory}"})
+            image_parts.append({"type": "text", "text": image_label(index, item)})
             image_parts.append({"type": "image_url", "image_url": {"url": await encoder.from_blob(blob_id)}})
     content: list[dict[str, Any]] = [
         {"type": "text", "text": "MEMORIES:\n" + ("\n".join(lines) if lines else "(no memories retrieved)")},
@@ -113,7 +121,7 @@ async def build_messages(
         content.append({"type": "text", "text": "Image attached to the question:"})
         content.append({"type": "image_url", "image_url": {"url": await encoder.from_path(path)}})
     content.append({"type": "text", "text": f"QUESTION:\n{question_block}"})
-    system = MCQ_SYSTEM if mode == "mcq" else OPEN_SYSTEM
+    system = system or (MCQ_SYSTEM if mode == "mcq" else OPEN_SYSTEM)
     attached = sum(1 for part in content if part["type"] == "image_url")
     return [{"role": "system", "content": system}, {"role": "user", "content": content}], attached
 

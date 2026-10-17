@@ -1,0 +1,1 @@
+Return the image_id of the image(s). If there are multiple images, sort them in ascending order and separate them by commas. Format example: “D2:IMG_003, D2:IMG_010, D10:IMG_002” (for format reference only).
