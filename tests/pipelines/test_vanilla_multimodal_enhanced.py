@@ -539,3 +539,39 @@ async def test_invalid_dialogue_facts_fall_back_to_vanilla_but_keep_the_visual_f
 
     assert inner.calls == 1  # no 500: vanilla extracts the dialogue facts of this chunk
     assert images.visuals == {"b" * 64: ImageVisuals(description="A sofa.", facts=["The sofa is green."])}
+
+
+@pytest.mark.asyncio
+async def test_visuals_are_kept_when_the_vlm_names_images_by_their_label() -> None:
+    from mindmemos.components.multimodal.extraction import _image_number
+
+    assert [_image_number(v) for v in (2, "2", "IMAGE 2", "image_2", " Image #2 ")] == [2, 2, 2, 2, 2]
+    assert [_image_number(v) for v in (None, "", "two", True, "IMAGE 2 and 3")] == [None] * 5
+
+    a, b = "a" * 64, "b" * 64
+    labelled = {
+        "memories": [],
+        "image_memories": [
+            {"image": "IMAGE 2", "description": "A lake.", "facts": ["A dog sits by a lake."]},
+            {"image": "IMAGE 1", "description": "A sofa.", "facts": []},
+        ],
+    }
+    unnumbered = {
+        "memories": [],
+        "image_memories": [
+            {"description": "A sofa.", "facts": []},
+            {"image": "the second one", "description": "A lake.", "facts": []},
+        ],
+    }
+    for parsed in (labelled, unnumbered):
+        images = RequestImages(
+            by_message={
+                0: [ExtractionImage(a, "image/png", b"\x89PNG")],
+                2: [ExtractionImage(b, "image/png", b"\x89PNG")],
+            }
+        )
+        extractor = MultimodalMemoryExtractor(FakeInner(), llm_client=FakeVlm(parsed))
+        with request_images(images):
+            envelope = _envelope()
+            await extractor.extract_from_envelope(envelope, _preprocessed(envelope), CTX)
+        assert images.visuals[a].description == "A sofa." and images.visuals[b].description == "A lake."

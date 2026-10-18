@@ -145,6 +145,12 @@ class MultimodalMemoryExtractor:
             return await self._inner.extract_from_envelope(envelope, preprocessed_texts, context)
         parsed = response.parsed if isinstance(response.parsed, dict) else {}
         _collect_visuals(parsed, attached, images)
+        missing = [item.number for item in attached if item.image.blob_id not in images.visuals]
+        if missing:
+            # Those images stay searchable by similarity only (no description, no visual facts).
+            logger.warning(
+                "multimodal_visuals_missing", request_id=context.request_id, images=missing, attached=len(attached)
+            )
         try:
             result = MemoryExtractionResult.model_validate(_normalize_extraction_payload(parsed))
         except Exception:  # noqa: BLE001 - e.g. an unknown mem_type: dialogue facts from vanilla instead
@@ -198,13 +204,14 @@ def _with_images(messages: list[dict[str, Any]], attached: list[_Attached], *, d
 
 def _collect_visuals(parsed: dict[str, Any], attached: list[_Attached], images: RequestImages) -> None:
     by_number = {item.number: item.image.blob_id for item in attached}
-    for entry in parsed.get("image_memories") or []:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            blob_id = by_number.get(int(entry.get("image")))
-        except (TypeError, ValueError):
-            continue
+    entries = [entry for entry in parsed.get("image_memories") or [] if isinstance(entry, dict)]
+    # Entries without a usable number still map by position when there is one per attached image.
+    by_position = len(entries) == len(attached)
+    for position, entry in enumerate(entries):
+        number = _image_number(entry.get("image"))
+        if number is None and by_position:
+            number = attached[position].number
+        blob_id = by_number.get(number) if number is not None else None
         description = strip_labels(str(entry.get("description") or "").strip())[:1000]
         raw_facts = entry.get("facts") or []
         raw_facts = [raw_facts] if isinstance(raw_facts, str) else raw_facts
@@ -212,6 +219,17 @@ def _collect_visuals(parsed: dict[str, Any], attached: list[_Attached], images: 
         facts = list(dict.fromkeys(facts))[: images.max_facts]
         if blob_id and (description or facts):
             images.visuals[blob_id] = ImageVisuals(description=description, facts=facts)
+
+
+def _image_number(value: Any) -> int | None:
+    """The image number of an entry: 2, "2", "IMAGE 2" and "image_2" all mean IMAGE 2."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    match = re.fullmatch(r"\s*(?:image[\s_#-]*)?(\d+)\s*", str(value or ""), re.IGNORECASE)
+    return int(match.group(1)) if match else None
 
 
 def _anchor(
