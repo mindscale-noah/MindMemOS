@@ -575,3 +575,64 @@ async def test_visuals_are_kept_when_the_vlm_names_images_by_their_label() -> No
             envelope = _envelope()
             await extractor.extract_from_envelope(envelope, _preprocessed(envelope), CTX)
         assert images.visuals[a].description == "A sofa." and images.visuals[b].description == "A lake."
+
+
+class TaskVlm:
+    """Replies per task: the main extraction and the visual-only description calls."""
+
+    def __init__(self, replies):
+        self.replies, self.calls = replies, []
+
+    async def chat(self, *, task, messages, format_parser=None, **kwargs):
+        self.calls.append((task, messages))
+        parsed = self.replies[task]
+        return SimpleNamespace(parsed=parsed, content=json.dumps(parsed))
+
+
+@pytest.mark.asyncio
+async def test_images_beyond_the_call_limit_get_a_visual_only_call() -> None:
+    sofa, lamp, pasta = "a" * 64, "b" * 64, "c" * 64
+    vlm = TaskVlm(
+        {
+            "memory.add.extract_multimodal": {
+                "memories": [
+                    {"ref_id": "m1", "content": "The user bought a new sofa.", "source_refs": ["s0"]},
+                    {"ref_id": "m2", "content": "The user had pasta for lunch.", "source_refs": ["s2"]},
+                ],
+                "image_memories": [
+                    {"image": 1, "description": "A green sofa.", "facts": []},
+                    {"image": 2, "description": "A brass lamp.", "facts": []},
+                ],
+            },
+            "memory.add.describe_images": {
+                "image_memories": [{"image": "IMAGE 1", "description": "A plate of pasta.", "facts": ["Penne."]}]
+            },
+        }
+    )
+    images = RequestImages(
+        by_message={
+            0: [ExtractionImage(sofa, "image/png", b"\x89PNG"), ExtractionImage(lamp, "image/png", b"\x89PNG")],
+            2: [ExtractionImage(pasta, "image/png", b"\x89PNG")],
+        },
+        max_images=2,
+    )
+    with request_images(images):
+        envelope = _envelope()
+        result = await MultimodalMemoryExtractor(FakeInner(), llm_client=vlm).extract_from_envelope(
+            envelope, _preprocessed(envelope), CTX
+        )
+
+    calls = dict(vlm.calls)
+    assert sum(p["type"] == "image_url" for p in calls["memory.add.extract_multimodal"][1]["content"]) == 2
+    described = calls["memory.add.describe_images"][1]["content"]
+    assert [p["type"] for p in described] == ["text", "image_url"]
+    assert described[0]["text"].startswith("IMAGE 1, shared on 1970-01-01 in this turn:\nuser: Lunch was pasta")
+    assert {k: v.description for k, v in images.visuals.items()} == {
+        sofa: "A green sofa.",
+        lamp: "A brass lamp.",
+        pasta: "A plate of pasta.",
+    }
+    # Dialogue facts anchor to every image of their turn, also those described separately.
+    sofa_fact, pasta_fact = result.memories
+    assert sofa_fact.metadata[IMAGE_BLOB_IDS_KEY] == [sofa, lamp]
+    assert pasta_fact.metadata[IMAGE_BLOB_IDS_KEY] == [pasta]

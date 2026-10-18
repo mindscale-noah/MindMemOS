@@ -10,12 +10,17 @@ MHG's per-round memorizer). The call returns two separate outputs:
 - ``image_memories``: per image, a description and visual facts. They are collected on the
   request (``RequestImages.visuals``) and stored on the image records, never in text memory.
 
+The call attaches up to ``max_images`` images; a chunk with more also makes visual-only calls (up to
+``max_images`` images each, alongside the main call) that describe the rest from the turns they were
+shared in. Dialogue facts are anchored to every image of their turns.
+
 The images of the current request reach the shared extractor through a context variable that
 the add pipeline sets per request (``request_images``).
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextvars
 import json
@@ -23,6 +28,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from ...logging import get_logger
@@ -61,6 +67,19 @@ Name things explicitly; never write "this image", "the photo" or "the screen". T
 "IMAGE k" exist only in this request: never mention them in memories, descriptions or facts.
 
 """
+
+
+OVERFLOW_PROMPT = """You record what the images shared in a conversation show. Each image is labelled "IMAGE k" and
+preceded by the turn it was shared in, with its date. Output only JSON:
+{"image_memories": [{"image": k, "description": "<what it shows plus all visible text, 1-3 sentences>",
+"facts": ["<visual fact>", ...]}]}, one entry per image, with k the number of its label.
+Visual facts record what the pixels show: the subject (brand, product, person, place, screen), the key
+objects, colors, counts, spatial layout (left/right/above/below), and all visible text copied verbatim
+(signs, labels, prices, numbers, UI or chat text). Each fact is self-contained and dated. Use the turn to
+know what the image is (an assistant reply describing it may be used when it agrees with the pixels).
+Write separate facts for distinct panels, items or people; for an image resembling others, include what
+makes this one identifiable; describe the state shown, without computing answers. Name things explicitly;
+never write "this image" or "the photo", and never mention the "IMAGE k" labels."""
 
 
 REMINDER = """Before answering: the attached images ({numbers}) are evidence too. Output the top-level
@@ -126,10 +145,35 @@ class MultimodalMemoryExtractor:
         context: MemoryRequestContext,
     ) -> MemoryExtractionResult:
         images = _REQUEST_IMAGES.get()
-        attached = _chunk_images(envelope, images) if images is not None else []
-        if not attached or self._llm_client is None:
+        chunk = _chunk_images(envelope, images) if images is not None else []
+        if not chunk or self._llm_client is None:
             return await self._inner.extract_from_envelope(envelope, preprocessed_texts, context)
         assert images is not None
+        # One call extracts the dialogue and the first max_images images; the rest of the chunk's
+        # images are described by visual-only calls running alongside it.
+        attached, overflow = chunk[: images.max_images], chunk[images.max_images :]
+        batches = [overflow[i : i + images.max_images] for i in range(0, len(overflow), images.max_images)]
+        result, *_ = await asyncio.gather(
+            self._extract(envelope, preprocessed_texts, context, images, attached, chunk),
+            *(self._describe(envelope, context, images, batch) for batch in batches),
+        )
+        missing = [item.number for item in chunk if item.image.blob_id not in images.visuals]
+        if missing:
+            # Those images stay searchable by similarity only (no description, no visual facts).
+            logger.warning(
+                "multimodal_visuals_missing", request_id=context.request_id, images=missing, chunk_images=len(chunk)
+            )
+        return result
+
+    async def _extract(
+        self,
+        envelope: ExtractionEnvelope,
+        preprocessed_texts: list[PreprocessedText],
+        context: MemoryRequestContext,
+        images: RequestImages,
+        attached: list[_Attached],
+        chunk: list[_Attached],
+    ) -> MemoryExtractionResult:
         prompt = _envelope_prompt_messages(
             envelope, preprocessed_texts, context, enable_entities=bool(getattr(self._inner, "_enable_entities", False))
         )
@@ -145,12 +189,6 @@ class MultimodalMemoryExtractor:
             return await self._inner.extract_from_envelope(envelope, preprocessed_texts, context)
         parsed = response.parsed if isinstance(response.parsed, dict) else {}
         _collect_visuals(parsed, attached, images)
-        missing = [item.number for item in attached if item.image.blob_id not in images.visuals]
-        if missing:
-            # Those images stay searchable by similarity only (no description, no visual facts).
-            logger.warning(
-                "multimodal_visuals_missing", request_id=context.request_id, images=missing, attached=len(attached)
-            )
         try:
             result = MemoryExtractionResult.model_validate(_normalize_extraction_payload(parsed))
         except Exception:  # noqa: BLE001 - e.g. an unknown mem_type: dialogue facts from vanilla instead
@@ -159,7 +197,42 @@ class MultimodalMemoryExtractor:
         result = result.model_copy(
             update={"memories": [m.model_copy(update={"content": strip_labels(m.content)}) for m in result.memories]}
         )
-        return _anchor(_mark_extractor(result, "multimodal_vlm"), envelope, attached)
+        return _anchor(_mark_extractor(result, "multimodal_vlm"), envelope, chunk)
+
+    async def _describe(
+        self,
+        envelope: ExtractionEnvelope,
+        context: MemoryRequestContext,
+        images: RequestImages,
+        batch: list[_Attached],
+    ) -> None:
+        """Visual-only call for images beyond the main call's limit: their descriptions and visual facts."""
+
+        numbered = [
+            _Attached(number=i, evidence_index=item.evidence_index, image=item.image) for i, item in enumerate(batch, 1)
+        ]
+        parts: list[dict[str, Any]] = []
+        for item in numbered:
+            data = base64.b64encode(item.image.data).decode("ascii")
+            parts.append(
+                {"type": "text", "text": f"IMAGE {item.number}, {_turn_context(envelope, item.evidence_index)}"}
+            )
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{item.image.mime_type};base64,{data}", "detail": images.detail},
+                }
+            )
+        try:
+            response = await self._llm_client.chat(
+                task="memory.add.describe_images",
+                messages=[{"role": "system", "content": OVERFLOW_PROMPT}, {"role": "user", "content": parts}],
+                format_parser=parse_memory_extraction_json,
+            )
+        except Exception:  # noqa: BLE001 - the images stay searchable by similarity
+            logger.warning("multimodal_image_description_failed", request_id=context.request_id, exc_info=True)
+            return
+        _collect_visuals(response.parsed if isinstance(response.parsed, dict) else {}, numbered, images)
 
 
 @dataclass(frozen=True)
@@ -170,11 +243,13 @@ class _Attached:
 
 
 def _chunk_images(envelope: ExtractionEnvelope, images: RequestImages) -> list[_Attached]:
+    """Every distinct image of the chunk's extractable messages, numbered in order."""
+
     attached: list[_Attached] = []
     seen: set[str] = set()
     for evidence_index, message in enumerate(envelope.extractable_messages):
         for image in images.for_message(message.message_index):
-            if image.blob_id in seen or len(attached) >= images.max_images:
+            if image.blob_id in seen:
                 continue
             seen.add(image.blob_id)
             attached.append(_Attached(number=len(attached) + 1, evidence_index=evidence_index, image=image))
@@ -219,6 +294,23 @@ def _collect_visuals(parsed: dict[str, Any], attached: list[_Attached], images: 
         facts = list(dict.fromkeys(facts))[: images.max_facts]
         if blob_id and (description or facts):
             images.visuals[blob_id] = ImageVisuals(description=description, facts=facts)
+
+
+def _turn_context(envelope: ExtractionEnvelope, evidence_index: int) -> str:
+    """The turn an image was shared in (and the reply right after it), with its date."""
+
+    messages = envelope.extractable_messages
+    shared = messages[evidence_index]
+    lines = [f"{shared.role}: {shared.text}"]
+    if evidence_index + 1 < len(messages) and messages[evidence_index + 1].role != shared.role:
+        reply = messages[evidence_index + 1]
+        lines.append(f"{reply.role}: {reply.text}")
+    when = (
+        datetime.fromtimestamp(shared.timestamp / 1000, tz=UTC).date().isoformat()
+        if shared.timestamp
+        else "date unknown"
+    )
+    return f"shared on {when} in this turn:\n" + "\n".join(line[:1000] for line in lines)
 
 
 def _image_number(value: Any) -> int | None:

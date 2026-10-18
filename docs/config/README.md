@@ -226,7 +226,9 @@ add, dreaming and feedback never see visual facts.
 Enhanced details:
 
 - **VLM extraction** uses the same number of chat calls as vanilla (the chat model must accept
-  images). Each image gets a description including its visible text and a list of visual facts.
+  images); a chunk with more than `max_extraction_images` images adds one visual-only call per
+  `max_extraction_images` further images. Each image gets a description including its visible text
+  and a list of visual facts.
 - **Image scores** mix text similarity (query vs. description + visual facts + dialogue, in the
   image record's `text` vector) with image similarity (multimodal embedding), each normalized over
   its hits, weighted by `image_text_weight`.
@@ -260,7 +262,7 @@ Enhanced details:
 | `visual_fact_images` | `12` | Enhanced: best-scored images whose visual facts are candidates (evidence images always are). |
 | `max_visual_facts_per_image` | `30` | Enhanced: visual facts kept per image (newest first). |
 | `extraction_image_detail` | `auto` | Enhanced: image detail for VLM extraction (`auto`, `low`, `high`). |
-| `max_extraction_images` | `6` | Enhanced: maximum images in one extraction call. |
+| `max_extraction_images` | `6` | Enhanced: maximum images in one extraction call; a chunk with more also makes visual-only calls (this many images each) for the rest. |
 | `agentic_max_steps` | `4` | Enhanced: tool calls in agentic retrieval before it must submit. |
 
 Deleting memory: archived memories are never recalled through images. Deleting a user's or a

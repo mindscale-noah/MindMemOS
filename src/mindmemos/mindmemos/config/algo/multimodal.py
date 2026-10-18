@@ -76,7 +76,8 @@ class MultimodalConfig:
     """Enhanced: image detail sent to the VLM during extraction (auto, low, high)."""
 
     max_extraction_images: int = 6
-    """Enhanced: maximum images attached to one extraction call."""
+    """Enhanced: maximum images attached to one extraction call; a chunk with more images also makes
+    visual-only calls (this many images each) for the rest."""
 
     agentic_max_steps: int = 4
     """Enhanced: tool calls allowed in multimodal agentic retrieval before it must submit."""
