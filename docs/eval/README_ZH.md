@@ -209,6 +209,8 @@ No-skill 基线不传 `--skill`；Init-skill 传入初始 Skill，但不传 `--e
 
 ## 多模态：MemEye（`vanilla`，多模态模式 off / basic / enhanced）
 
+> 完整流程（下载 MemEye 和 Mem-Gallery、本地多模态 embedding 服务、服务端配置、一键跑四组配置）见 [多模态 Benchmark 运行指南](multimodal_benchmark_ZH.md)。下面是手动跑单个配置的方式。
+
 MemEye（8 个任务，MCQ + OPEN，对话中含图片）使用同一个作答器：`answer_llm`（需支持看图）只看到检索返回的文本记忆和图片，以及题目自带的图片。算法固定为 `vanilla`；由 profile 的 `project_override_config` 设置 `algo_config.multimodal.mode`，`search_params.multimodal: true` 让每次检索都使用已存的图片。`execution_params.memeye.send_images: true` 时，对话图片和题目图片以路径方式发送，因此服务端 `blob_store.allowed_path_roots` 需要覆盖数据集目录；`off` 模式会拒绝图片，所以其基线设 `send_images: false`。数据集自带的图片描述不会发送给记忆系统。
 
 1. 从 Hugging Face 下载 `MemEyeBench/MemEye`，链接到 `datasets/memeye/data`（包含 `dialog/` 和 `image/`）。

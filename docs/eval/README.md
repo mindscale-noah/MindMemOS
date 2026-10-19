@@ -74,6 +74,8 @@ cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_
 
 ## Multimodal: MemEye (`vanilla`, multimodal mode off / basic / enhanced)
 
+> End-to-end setup (MemEye and Mem-Gallery downloads, the local multimodal embedding server, server config, one-command runs of all four configurations with `scripts/run_multimodal_bench.py`): see the [multimodal benchmark guide (Chinese)](multimodal_benchmark_ZH.md). Below: running one configuration by hand.
+
 MemEye (8 tasks, MCQ + OPEN, images in the dialogue) runs with one shared answerer: the
 `answer_llm` (a vision model) sees the text memories and images returned by search, plus the
 question's own images. The algorithm is always `vanilla`; the profile's `project_override_config`
