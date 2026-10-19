@@ -15,11 +15,3 @@ api_keys:
   scopes:
   - memory:read
   - memory:write
-- key_id: key_dev_0003
-  api_key: dev-api-key-003
-  project_id: proj-dev-vanilla-mm-memory
-  memory_algorithm: vanilla_mm
-  enabled: true
-  scopes:
-  - memory:read
-  - memory:write
