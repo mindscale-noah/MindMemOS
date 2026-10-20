@@ -27,6 +27,7 @@ from .env_adapter import SkillForestEnvAdapter
 from .env_specific.selection import select_env_adapter
 from .generation import InvalidPatchError, generate_patch
 from .runtime import ForestRuntime, parallel
+from .synthesis import split_merge_content
 from .tree import apply_patch, cannot_improve, expansion_wave, mean_score, novelty, split_tasks, tree_winners
 from .typing import (
     EnsembleCandidate,
@@ -723,20 +724,19 @@ class SkillForestTrainer(SkillTrainer[SkillForestTrainerConfig]):
             text = await runtime.chat(
                 messages=runtime.env_adapter.build_skill_merge_messages(
                     SkillForestSkillMergeContext(
-                        left=left.skill.content,
-                        right=right.skill.content,
+                        left=split_merge_content(left.skill.content)[1],
+                        right=split_merge_content(right.skill.content)[1],
                         left_score=left.score,
                         right_score=right.score,
                     )
                 ),
                 directory=root / "trees" / "merge",
             )
-            if not text.strip().startswith("#"):
-                raise ValueError("Skill synthesis requires complete Markdown starting with '#'")
+            _, text = split_merge_content(text)
+            if not text.strip():
+                raise ValueError("Skill synthesis returned an empty body")
             if initial.source.standard_format:
-                lines = initial.content.splitlines(keepends=True)
-                closing = next(index for index, line in enumerate(lines[1:], 1) if line.rstrip("\r\n") == "---")
-                header = "".join(lines[: closing + 1])
+                header, _ = split_merge_content(initial.content)
                 text = header + ("" if header.endswith(("\r", "\n")) else "\n") + text
             candidate = initial.with_content(text)
             value = await self._score_ensemble_skill(candidate, left.owner, name, samples, env, runtime, root)
