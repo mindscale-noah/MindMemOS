@@ -593,7 +593,7 @@ def test_prompt_text_and_structured_requests():
         "merge_failure": "c2e4c64a95065022616cceb8b46c275b07b5e6dab6375fa551d4766ebbfa7767",
         "merge_success": "9f62da1aff25522d632a6936d71577a3d13bfa3fbd2c8ee35294ec87f2710d72",
         "merge_final": "fabbc8adbdbfc62577d9b09108c64782ee45589a0fd0a18a3dc4fee96b28d5b3",
-        "hierarchical_merge_skills": "7ab9fd5e61c283706772e4780d05cd29e246de6dbee7483bb31d5403dfc07696",
+        "hierarchical_merge_skills": "073838c5e2889300fba3ba306c933d28a28a7a90f6215d91c989723f3dcca1ce",
     }
     for name, expected_hash in prompt_hashes.items():
         assert sha256(load_prompt(name).encode()).hexdigest() == expected_hash

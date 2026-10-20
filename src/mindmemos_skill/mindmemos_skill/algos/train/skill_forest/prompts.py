@@ -190,8 +190,8 @@ narrow any contract.
 
 You will receive three components:
 
-- `Skill Candidate 1`: the first complete Skill and its validation score;
-- `Skill Candidate 2`: the second complete Skill and its validation score;
+- `Skill Candidate 1`: the first Skill body and its validation score;
+- `Skill Candidate 2`: the second Skill body and its validation score;
 - `Diff`: a unified diff between the complete Skills to help locate textual differences.
 
 The diff is only an auxiliary view and cannot replace the two complete Skills:
@@ -278,8 +278,8 @@ in the final Skill, revise the final Skill before returning it.
 
 **IV. Output requirements**
 
-- Output only one complete Markdown Skill file.
-- The first non-whitespace character must be `#`.
+- Output only the complete merged Markdown body. Metadata is managed by the caller.
+- Do not output YAML frontmatter or invent metadata. A heading at the beginning is optional.
 - Do not output JSON, code fences, merge reports, audit tables, explanations, prefixes, or suffixes.
 - Do not mention Skill Candidate 1, Skill Candidate 2, the diff, validation scores, or the merging process in the final Skill.
 - The final Skill must be usable independently of the current input.
