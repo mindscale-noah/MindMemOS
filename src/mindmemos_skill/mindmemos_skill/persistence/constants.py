@@ -41,6 +41,9 @@ SKILL_GRAPH_EDGES_TABLE: Final[str] = "skill_graph_edges_v1"
 SKILL_TASKS_TABLE: Final[str] = "skill_tasks_v1"
 """Durable Skill execution requests and their latest state."""
 
+SKILL_EVALUATIONS_TABLE: Final[str] = "skill_evaluations_v1"
+"""Independent judge results linked to Skill versions or trajectories by business identity."""
+
 SKILL_VERSION_LABEL_INDEX: Final[str] = "skill_versions_label_uq"
 """Unique version display label within one project and Skill."""
 

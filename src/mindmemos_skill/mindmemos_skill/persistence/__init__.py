@@ -2,6 +2,7 @@
 
 from .base import Persistence
 from .config import SkillPersistenceConfig
+from .db_services.evaluations import EvaluationRecord
 from .db_services.graphs import (
     SkillGraphEdgeRecord,
     SkillGraphEdgeWrite,
@@ -38,5 +39,6 @@ __all__ = [
     "TrajectoryRecord",
     "TrajectoryWrite",
     "TrajectorySummary",
+    "EvaluationRecord",
     "build_persistence_tables",
 ]

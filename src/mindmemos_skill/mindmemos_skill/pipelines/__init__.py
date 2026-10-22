@@ -10,7 +10,9 @@ from ..api.typing import (
     TrainingRequest,
     TrainingSplit,
 )
+from .analyze import AnalyzePipeline
 from .base import Pipeline
+from .builtin_pipelines.analyze.pipeline import BuiltinAnalyzePipeline
 from .builtin_pipelines.evolve.evolving import SimpleEvolutionPipeline
 from .builtin_pipelines.manage.graph_manage import GraphManagePipeline
 from .builtin_pipelines.repository.repository import RepositoryPipeline
@@ -21,6 +23,8 @@ from .train import TrainingPipeline
 
 __all__ = [
     "Pipeline",
+    "AnalyzePipeline",
+    "BuiltinAnalyzePipeline",
     "EvolutionPipeline",
     "SimpleEvolutionPipeline",
     "ConfiguredTrainingPipeline",

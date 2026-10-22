@@ -8,6 +8,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    FiniteFloat,
     JsonValue,
     StringConstraints,
     model_validator,
@@ -420,6 +421,9 @@ class RecommendHttpRequest(GraphResolveHttpRequest):
     include_scenes: bool = Field(default=False, strict=True)
     """Vector-only option matching Scene nodes as well as Skill nodes."""
 
+    include_evaluation: bool = Field(default=False, strict=True)
+    """Include completed evaluations after recommendation when available."""
+
     @model_validator(mode="after")
     def validate_strategy(self):
         """Reject vector-only options in graph mode and blank instructions."""
@@ -428,6 +432,51 @@ class RecommendHttpRequest(GraphResolveHttpRequest):
         if not self.query.strip():
             raise ValueError("Query must not be blank")
         return self
+
+
+class SkillAnalyzeHttpRequest(HttpRequest):
+    """Run or reuse static analysis for one exact Skill version."""
+
+    skill_version_id: Nonempty
+    """Exact version belonging to the authenticated project."""
+
+    request_id: Nonempty | None = None
+    """Optional trace identity excluded from the evaluation cache key."""
+
+    force_refresh: bool = Field(default=False, strict=True)
+    """Execute the analyzer again even when a completed result exists."""
+
+
+class TrajectoryAnalyzeHttpRequest(HttpRequest):
+    """Run or reuse analysis for one exact stored trajectory."""
+
+    trajectory_id: Nonempty
+    """Exact trajectory belonging to the authenticated project."""
+
+    request_id: Nonempty | None = None
+    """Optional trace identity excluded from the evaluation cache key."""
+
+    attribute: bool | None = None
+    """Optional per-request failure-attribution override."""
+
+    verifier_score: FiniteFloat | None = None
+    """Optional finite verifier score overriding the stored reward."""
+
+    force_refresh: bool = Field(default=False, strict=True)
+    """Execute the analyzer again even when a completed result exists."""
+
+
+class EvaluationQueryHttpRequest(HttpRequest):
+    """Read completed evaluations for exact Skill versions."""
+
+    skill_version_ids: list[Nonempty] = Field(min_length=1)
+    """Exact versions whose completed evaluations should be returned."""
+
+    judge_types: list[Literal["static_skill", "trajectory"]] | None = None
+    """Optional analyzer families to include."""
+
+    limit: int = Field(default=200, ge=1, le=1000, strict=True)
+    """Maximum evaluation rows returned."""
 
 
 class GraphMembersHttpRequest(GraphResolveHttpRequest):

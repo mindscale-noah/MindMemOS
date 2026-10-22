@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from ..infra.database.scoped import ScopedDatabase
 from .access import RepositoryDatabase, _project_id_from_database
 from .constants import (
+    SKILL_EVALUATIONS_TABLE,
     SKILL_GRAPH_EDGES_TABLE,
     SKILL_GRAPH_NODES_TABLE,
     SKILL_GRAPH_VERSIONS_TABLE,
@@ -17,6 +18,7 @@ from .constants import (
     TRAJECTORY_CONSUMPTIONS_TABLE,
 )
 from .db_services.audit.service import AuditDataService
+from .db_services.evaluations.service import EvaluationDataService
 from .db_services.graphs.service import GraphDataService
 from .db_services.skills.service import SkillDataService
 from .db_services.tasks.service import TaskDataService
@@ -63,6 +65,7 @@ class SkillPersistenceSession:
             skills=skill_reader,
         )
         self.tasks = TaskDataService(self.repository(frozenset({SKILL_TASKS_TABLE, SKILL_TASK_LOGS_TABLE})))
+        self.evaluations = EvaluationDataService(self.repository(frozenset({SKILL_EVALUATIONS_TABLE})))
         self.audit: AuditDataService | None = None
         if audit_database is not None:
             audit = RepositoryDatabase(

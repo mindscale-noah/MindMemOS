@@ -299,11 +299,21 @@ Service / HTTP 测试：
 
 ## 8. 实施状态
 
-- [ ] 评测持久化
-- [ ] Analyze Pipeline
-- [ ] Config / Factory / Service 接入
-- [ ] Analyze 与 Evaluation HTTP 接口
-- [ ] Recommend 可选评测展示
-- [ ] 配置同步
-- [ ] 测试与静态检查
-- [ ] 精确提交
+- [x] 评测持久化
+- [x] Analyze Pipeline
+- [x] Config / Factory / Service 接入
+- [x] Analyze 与 Evaluation HTTP 接口
+- [x] Recommend 可选评测展示
+- [x] 配置同步
+- [x] 测试与静态检查
+- [x] 精确提交
+
+### 验证记录（2026-10-22）
+
+- 针对性回归：`70 passed, 1 warning`。
+- 全量 Skill 测试：`1428 passed, 21 failed, 27 skipped`。
+- Ruff：`ruff check src/mindmemos_skill` 通过；本任务变更及新增的 32 个 Python 文件 `ruff format --check` 通过。
+- 离线验证：Fake Judge 已覆盖成功、失败、缓存、重试、HTTP 和 Recommend 展示路径。
+- 真实 Judge：本轮未验证，原因是当前 LLM API 未开启；该环境限制未阻断离线接入验证。
+- 全量测试剩余 21 项失败均为既有环境或未触及模块问题（Windows 符号链接权限、原生异步/环境、Skill Forest prompt/引用/恢复、LibreOffice/PATH 等），Analyze、Evaluation、HTTP、Recommend 和配置相关失败为 0。
+- 精确提交：仅纳入本任务相关文件；现有未跟踪文档、`docs_skill_manage/`、`gos/` 等无关内容未纳入变更。

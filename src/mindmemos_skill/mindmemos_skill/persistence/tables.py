@@ -3,6 +3,7 @@
 from sqlalchemy import MetaData
 
 from ..infra.database import TableRegistry
+from .db_services.evaluations.tables import build_tables as build_evaluation_tables
 from .db_services.graphs.tables import build_tables as build_graph_tables
 from .db_services.skills.tables import build_tables as build_skill_tables
 from .db_services.tasks.tables import build_tables as build_task_tables
@@ -21,4 +22,5 @@ def build_persistence_tables() -> TableRegistry:
         + build_trajectory_tables(metadata)
         + build_graph_tables(metadata)
         + build_task_tables(metadata)
+        + build_evaluation_tables(metadata)
     )

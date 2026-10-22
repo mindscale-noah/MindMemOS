@@ -11,7 +11,7 @@ from ..agents.config import AgentCatalog
 from ..infra import Infrastructure
 from ..infra.database import Database
 from ..infra.database.config import SQLiteConfig
-from ..pipelines import EvolutionPipeline, ManagePipeline, Pipeline, TrainingPipeline
+from ..pipelines import AnalyzePipeline, EvolutionPipeline, ManagePipeline, Pipeline, TrainingPipeline
 from ..pipelines.builtin_pipelines.repository.repository import RepositoryPipeline
 from .config import ImplementationConfig, ServiceConfig, SkillConfig
 
@@ -99,6 +99,10 @@ def validate_service_config(config: ServiceConfig) -> None:
         if config.persistence is None:
             raise ValueError("manage_pipeline requires global persistence")
         _validate_pipeline(config.manage_pipeline, ManagePipeline, agents)
+    if "analyze" not in config.disabled_services and config.analyze_pipeline is not None:
+        if config.persistence is None:
+            raise ValueError("analyze_pipeline requires global persistence")
+        _validate_pipeline(config.analyze_pipeline, AnalyzePipeline, agents)
     if "training" not in config.disabled_services:
         for spec in config.training_pipelines.values():
             _validate_pipeline(spec, TrainingPipeline, agents)
