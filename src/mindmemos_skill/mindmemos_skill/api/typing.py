@@ -10,6 +10,7 @@ from pydantic import (
     JsonValue,
     SecretStr,
     StringConstraints,
+    TypeAdapter,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -17,7 +18,7 @@ from pydantic import (
 
 from mindmemos_skill.persistence.db_services.skills.typing import UserVersionLabel
 from mindmemos_skill.skill import SkillContent, decode_resources
-from mindmemos_skill.skill.typing import parse_skill_header
+from mindmemos_skill.skill.typing import SkillSnapshot, parse_skill_header
 
 from ..envs.config import EnvironmentConfig
 from ..envs.data.typing import DataSample, SplitManifest
@@ -210,6 +211,53 @@ class SkillPipelineRequest(RequestAuth):
     """Stable evolution identity for retries; None starts an independent run."""
 
 
+class CollectionEvolutionRequest(RequestAuth):
+    """Select exact readable Skill versions for collection evolution.
+
+    Backend choices and evidence preparation policies belong to the concrete
+    pipeline configuration. Implementations needing additional per-call inputs
+    may define typed request extensions and must validate them before I/O.
+    This contract does not prescribe trajectory queries or dataset selection.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject undeclared inputs rather than silently ignoring selection options."""
+
+    pipeline: Nonempty | None = None
+    """Configured instance name; omission requires exactly one available pipeline."""
+
+    skill_version_ids: list[Nonempty] = Field(min_length=1)
+    """Exact readable input versions, with at most one version per Skill family."""
+
+    editable_skills: list[Nonempty] | None = None
+    """Input Skill IDs allowed to change; None selects all, [] selects none."""
+
+    allow_create_skills: bool = True
+    """Whether the algorithm may propose new independent Skills."""
+
+    auto_accept: bool = True
+    """Whether saved output versions replace the active versions of existing Skills."""
+
+    run_id: str | None = Field(default=None, pattern=r"^evolve_[0-9a-f]{32}$")
+    """Stable evolution identity for retries; None starts an independent run."""
+
+    @model_validator(mode="after")
+    def validate_collection(self) -> Self:
+        """Reject duplicate version and editable member identities."""
+        if len(set(self.skill_version_ids)) != len(self.skill_version_ids):
+            raise ValueError("Evolution input versions must be unique")
+        if self.editable_skills is not None and len(set(self.editable_skills)) != len(self.editable_skills):
+            raise ValueError("Editable Skill IDs must be unique")
+        return self
+
+
+EvolutionRequest = SkillPipelineRequest | CollectionEvolutionRequest
+"""Prepared single-Skill or collection input accepted by evolution pipelines."""
+
+EVOLUTION_REQUEST_ADAPTER = TypeAdapter(EvolutionRequest)
+"""Validate stored and library evolution requests without algorithm-specific dispatch."""
+
+
 class TrainingSplit(BaseModel):
     """Assign task IDs to disjoint training, validation, and test sets."""
 
@@ -356,6 +404,64 @@ class AlgoSkillEvolveResult(BaseModel):
 
     skill_hash: Nonempty
     """Digest of the output document and auxiliary files."""
+
+
+class EvolutionPublishedSkill(BaseModel):
+    """One immutable member outcome in a published evolution collection."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject undeclared outcome data."""
+
+    key: str = Field(min_length=1)
+    """Original input ID or stable run-local creation key."""
+
+    skill_id: str = Field(min_length=1)
+    """Actual repository identity after publication."""
+
+    action: Literal["updated", "unchanged", "created"]
+    """Repository effect published for this member."""
+
+    base_version_id: str | None = None
+    """Exact input parent; None only for a newly created family."""
+
+    version_id: str = Field(min_length=1)
+    """Persisted immutable output version, whether or not it became active."""
+
+    snapshot: SkillSnapshot
+    """Complete persisted output."""
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> Self:
+        """Require a parent version for every existing member."""
+        if (self.action == "created") != (self.base_version_id is None):
+            raise ValueError("Only newly created families may omit a parent input version")
+        return self
+
+
+class EvolutionRunResult(BaseModel):
+    """Identify the persisted versions and snapshots of a completed collection evolution."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Require explicit collection outcomes rather than a synthetic primary version."""
+
+    run_id: str = Field(pattern=r"^evolve_[0-9a-f]{32}$")
+    """Stable execution identity used to inspect this publication."""
+
+    input_version_ids: dict[str, str]
+    """Original Skill IDs mapped to their exact input versions."""
+
+    skills: dict[str, SkillSnapshot]
+    """Persisted complete input outputs, including unchanged members."""
+
+    created_skills: dict[str, SkillSnapshot] = Field(default_factory=dict)
+    """New complete outputs keyed by run-local names; members contains their repository identities."""
+
+    members: list[EvolutionPublishedSkill] = Field(min_length=1)
+    """Persisted repository identities and outcomes for every returned Skill."""
+
+
+EvolutionResult = AlgoSkillEvolveResult | EvolutionRunResult
+"""Persisted single-Skill or collection evolution outcome."""
 
 
 class ProjectRequest(RequestAuth):

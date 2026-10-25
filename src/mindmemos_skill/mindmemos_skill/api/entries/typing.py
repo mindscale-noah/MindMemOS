@@ -461,13 +461,33 @@ class RemoveGraphMembersHttpRequest(GraphMembersHttpRequest):
 
 
 class EvolveHttpRequest(HttpRequest):
-    """Queue evolution from one exact stored version."""
+    """Queue one exact version or a collection through the common evolution endpoint."""
 
-    skill_version_id: Nonempty
-    """Exact baseline version belonging to the authorized project."""
+    skill_version_id: Nonempty | None = None
+    """Exact baseline version; exclusive with skill_version_ids."""
 
     auto_accept: bool = True
     """Whether the evolved version becomes the active Skill version."""
+
+    pipeline: Nonempty | None = None
+    """Permitted evolution pipeline; omission uses the configured HTTP default."""
+
+    skill_version_ids: list[Nonempty] | None = Field(default=None, min_length=1)
+    """Exact input version collection; exclusive with skill_version_id."""
+
+    editable_skills: list[Nonempty] | None = None
+    """Editable input Skill IDs; None permits all input members."""
+
+    allow_create_skills: bool = True
+    """Whether collection evolution may create independent Skills."""
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> Self:
+        """Reuse the SDK wire contract after normalizing HTTP identity strings."""
+        from mindmemos_sdk.skills import EvolveRequest
+
+        EvolveRequest.model_validate(self.model_dump())
+        return self
 
 
 class TaskShowHttpRequest(HttpRequest):

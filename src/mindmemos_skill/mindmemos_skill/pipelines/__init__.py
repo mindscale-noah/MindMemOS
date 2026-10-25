@@ -1,5 +1,6 @@
 """Shared pipeline contracts and explicit built-in registrations."""
 
+from ..algos.evolve.offline_evolution.pipeline import OfflineEvolutionPipeline
 from ..api.typing import (
     AlgoSkillEvolveResult,
     OrganizeRequest,
@@ -20,6 +21,7 @@ from .manage import ManagePipeline
 from .train import TrainingPipeline
 
 __all__ = [
+    "OfflineEvolutionPipeline",
     "Pipeline",
     "EvolutionPipeline",
     "SimpleEvolutionPipeline",

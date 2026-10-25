@@ -84,6 +84,15 @@
       "files": [
         "data/*.parquet"
       ]
+    },
+    "skillsbench": {
+      "kind": "archive",
+      "url": "https://github.com/benchflow-ai/skillsbench/releases/tag/v1.0",
+      "revision": "14f3396760786d4ec9ea28e7b865f2ce4d199fdf",
+      "archives": {
+        "source.tar.gz": "https://codeload.github.com/benchflow-ai/skillsbench/tar.gz/14f3396760786d4ec9ea28e7b865f2ce4d199fdf"
+      },
+      "strip_root": true
     }
   },
   "memory": {

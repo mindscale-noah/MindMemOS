@@ -5,7 +5,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from unittest.mock import Mock
 
+import httpx
 import jwt
 import pytest
 import pytest_asyncio
@@ -978,7 +980,40 @@ def test_http_policy_yaml_remains_strict():
     """Validate the deployment policy without accepting request-level pipeline names."""
     path = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/dev.example.yaml"
     policy = FastAPIConfig.model_validate(yaml.safe_load(path.read_text(encoding="utf-8"))["fastapi"])
-    assert policy.evolution_pipelines == {"simple"}
+    assert policy.evolution_pipelines == {"simple", "offline"}
+    assert policy.default_evolution_pipeline == "simple"
+
+
+def test_http_default_must_be_an_allowed_evolution_pipeline():
+    """Reject deployment defaults that would bypass the allowed pipeline policy."""
+    with pytest.raises(ValueError, match="default_evolution_pipeline"):
+        FastAPIConfig(
+            auth=HttpAuthConfig(mode="none", default_project_id="project"),
+            evolution_pipelines={"simple"},
+            default_evolution_pipeline="offline",
+        )
+
+
+async def test_custom_service_reports_unavailable_evolution_through_common_contract():
+    """Use declared optional methods instead of requiring algorithm-specific Service methods."""
+    service = Mock(spec=MindMemOSSkill)
+    service.submit_evolution.side_effect = NotImplementedError("Evolution is unavailable")
+    policy = FastAPIConfig(
+        auth=HttpAuthConfig(mode="none", default_project_id="project"),
+        evolution_pipelines={"simple", "offline"},
+        default_evolution_pipeline="simple",
+    )
+    app = create_app(
+        service,
+        api_config=policy,
+        identity_from_bearer=lambda credential: SkillHttpIdentity(project_id="project", scopes={"skill:write"}),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="http://127.0.0.1", headers={"authorization": "Bearer test"}
+    ) as client:
+        for body in ({"skill_version_id": "skv-a"}, {"pipeline": "offline", "skill_version_ids": ["skv-a", "skv-b"]}):
+            response = await client.post("/v1/skills/algos/evolve", json=body)
+            assert response.status_code == 422
 
 
 def test_local_import_does_not_load_http_dependencies():

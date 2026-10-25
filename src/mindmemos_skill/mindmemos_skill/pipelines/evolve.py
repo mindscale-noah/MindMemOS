@@ -2,13 +2,13 @@
 
 from abc import ABC, abstractmethod
 
-from ..api.typing import AlgoSkillEvolveResult, SkillPipelineRequest
+from ..api.typing import EvolutionRequest, EvolutionResult, SkillPipelineRequest
 from ..registry.base import ConfigT
 from .base import Pipeline
 
 
 class EvolutionPipeline(Pipeline[ConfigT], ABC):
-    """Prepare evidence, invoke an evolver, and persist a selected Skill.
+    """Prepare evidence, invoke an evolver, and publish the resulting Skill versions.
 
     Concrete implementations choose injected algorithms and data services.
     Evidence may come from stored trajectories or caller-scoped environment
@@ -20,8 +20,8 @@ class EvolutionPipeline(Pipeline[ConfigT], ABC):
     """
 
     @abstractmethod
-    async def evolve(self, request: SkillPipelineRequest) -> AlgoSkillEvolveResult:
-        """Evolve one Skill and commit a child of its captured current version.
+    async def evolve(self, request: EvolutionRequest) -> EvolutionResult:
+        """Evolve prepared Skill inputs and return the pipeline's declared outcome.
 
         Implementations must preserve project scope and source data, avoid
         holding database transactions during algorithm execution, retain the
@@ -29,12 +29,23 @@ class EvolutionPipeline(Pipeline[ConfigT], ABC):
         They must not mutate the request or return success before persistence.
 
         Args:
-            request: Skill selection and optional expected current version.
+            request: Prepared single-Skill selection or exact version collection.
 
         Returns:
-            Persisted Skill/version identities and the execution identity.
+            Persisted single-Skill or collection version identities.
 
         Raises:
             ValueError: Inputs or required evolution evidence are invalid.
             SkillConflictError: The expected current version changed.
         """
+
+    async def prepare_request(self, request: EvolutionRequest) -> EvolutionRequest:
+        """Validate supported input before task admission or direct execution.
+
+        Args:
+            request: Authorized evolution selection.
+
+        Returns:
+            The original single-Skill request; collection implementations override this method.
+        """
+        return SkillPipelineRequest.model_validate(request)
