@@ -11,7 +11,6 @@ from mindmemos_sdk.skills import ActivateRequest, AsyncSkillClient, EvolveReques
 from mindmemos_sdk.transport import AsyncHttpTransport
 from mindmemos_skill.algos.evolve.offline_evolution import engine as engine_module
 from mindmemos_skill.algos.evolve.offline_evolution.evolver import OfflineSkillEvolver
-from mindmemos_skill.algos.evolve.offline_evolution.pipeline.config import OfflineTrajectoryConfig
 from mindmemos_skill.algos.evolve.offline_evolution.typing import RunLayout, SkillEvolutionResult
 from mindmemos_skill.api.entries.fastapi import create_app
 from mindmemos_skill.api.typing import (
@@ -29,6 +28,7 @@ from mindmemos_skill.persistence.constants import (
 )
 from mindmemos_skill.persistence.db_services.trajectories.typing import TrajectoryWrite
 from mindmemos_skill.pipelines import EvolutionPipeline, Pipeline
+from mindmemos_skill.pipelines.builtin_pipelines.offline_evolution.config import OfflineTrajectoryConfig
 from pydantic import BaseModel
 
 from mindmemos_skill import create_service
@@ -408,8 +408,8 @@ async def test_corrupt_unpublished_candidate_is_not_rerun(scenario, monkeypatch)
     """Validate a retained candidate after a publication failure before writing versions."""
     from pathlib import Path
 
-    from mindmemos_skill.algos.evolve.offline_evolution.pipeline import pipeline as pipeline_module
     from mindmemos_skill.common.json import read_json, write_json
+    from mindmemos_skill.pipelines.builtin_pipelines.offline_evolution import pipeline as pipeline_module
 
     service, members, calls, _ = scenario
     body = request(members).model_copy(update={"run_id": "evolve_" + uuid4().hex})

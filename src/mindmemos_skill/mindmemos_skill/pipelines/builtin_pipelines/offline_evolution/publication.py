@@ -2,14 +2,14 @@
 
 from pathlib import Path
 
-from .....api.typing import EvolutionPublishedSkill, EvolutionRunResult
-from .....common.checkpoint import boundary
-from .....errors import SkillConflictError
-from .....persistence import SkillVersionRecord
-from .....persistence.constants import SKILL_VERSIONS_TABLE
-from .....persistence.db_services.skills.typing import VersionNaming
-from .....persistence.store import SkillPersistence
-from ..typing import EvolutionSnapshot
+from ....algos.evolve.offline_evolution.typing import EvolutionSnapshot
+from ....api.typing import EvolutionPublishedSkill, EvolutionRunResult
+from ....common.checkpoint import boundary
+from ....errors import SkillConflictError
+from ....persistence import SkillVersionRecord
+from ....persistence.constants import SKILL_VERSIONS_TABLE
+from ....persistence.db_services.skills.typing import VersionNaming
+from ....persistence.store import SkillPersistence
 from .typing import CapturedEvolutionInputs, EvolutionRunManifest
 
 

@@ -4,7 +4,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-from .....pipelines.config import PipelineComponentConfig
+from ...config import PipelineComponentConfig
 
 
 class OfflineTrajectoryConfig(BaseModel):
@@ -48,9 +48,9 @@ class OfflineEvolutionPipelineConfig(BaseModel):
         Raises:
             ValueError: The selected algorithm is not an evolver or its options are invalid.
         """
-        from .....algos import Algorithm
-        from .....persistence.db_services.skills.typing import VersionNaming
-        from ..evolver import OfflineSkillEvolver
+        from ....algos import Algorithm
+        from ....algos.evolve.offline_evolution.evolver import OfflineSkillEvolver
+        from ....persistence.db_services.skills.typing import VersionNaming
 
         selected = Algorithm.resolve(self.evolver.class_name)
         if not issubclass(selected, OfflineSkillEvolver):

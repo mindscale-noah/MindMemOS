@@ -6,9 +6,9 @@ import pytest
 import yaml
 from mindmemos_skill.agents import Agent, ClaudeConfig, CodexConfig
 from mindmemos_skill.algos.evolve.offline_evolution.config import OfflineEvolutionConfig
-from mindmemos_skill.algos.evolve.offline_evolution.pipeline.config import OfflineTrajectoryConfig
 from mindmemos_skill.config.loader import load_skill_config
 from mindmemos_skill.pipelines.builtin_pipelines.evolve.config import TrajCollectConfig
+from mindmemos_skill.pipelines.builtin_pipelines.offline_evolution.config import OfflineTrajectoryConfig
 from pydantic import ValidationError
 
 EXAMPLE = Path(__file__).resolve().parents[4] / "config/mindmemos_skill/dev.example.yaml"

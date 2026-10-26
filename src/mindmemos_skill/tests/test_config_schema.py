@@ -32,7 +32,7 @@ def test_deployment_example_covers_pipeline_fields_and_nondefault_agent_options(
     assert {spec["class_name"] for spec in specs} == {
         name
         for name, implementation in Pipeline.registered_types().items()
-        if ".builtin_pipelines." in implementation.__module__ or name == "offline_evolution"
+        if ".builtin_pipelines." in implementation.__module__
     }
     algorithms = Algorithm.registered_types()
     assert {spec["config"]["trainer"]["class_name"] for spec in service["training_pipelines"].values()} == {

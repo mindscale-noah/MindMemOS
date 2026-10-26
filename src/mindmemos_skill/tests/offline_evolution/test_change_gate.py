@@ -3,7 +3,12 @@
 import json
 import shutil
 
-from mindmemos_skill.algos.evolve.offline_evolution.change_gate import open_items_feedback, run_change_gate
+import pytest
+from mindmemos_skill.algos.evolve.offline_evolution.change_gate import (
+    changed_files,
+    open_items_feedback,
+    run_change_gate,
+)
 from mindmemos_skill.algos.evolve.offline_evolution.layout import skill_names
 from mindmemos_skill.algos.evolve.offline_evolution.typing import RunLayout
 
@@ -28,6 +33,40 @@ def _status(report) -> dict[str, str]:
 
 def _dropped(*findings: str) -> list[dict]:
     return [{"findings": list(findings), "reason": "not needed"}]
+
+
+@pytest.mark.parametrize(
+    ("path", "before", "after", "changed"),
+    [
+        ("pdf/asset.bin", b"\x00a\r\nb", b"\x00a\nb", True),
+        ("pdf/asset.bin", b"\x00a\nb", b"\x00a\r\nb", True),
+        ("pdf/asset.bin", b"\x00a\r\nb", b"\x00a\r\nb", False),
+        ("pdf/forms.md", b"# Forms\r\n", b"# Forms\n", True),
+    ],
+)
+def test_changed_files_compares_exact_bytes(tmp_path, path, before, after, changed):
+    """Detect binary and text byte differences without changing line endings."""
+    layout = _layout(tmp_path)
+    (layout.input_skills / path).write_bytes(before)
+    (layout.edited_skills / path).write_bytes(after)
+
+    assert changed_files(layout.input_skills, layout.edited_skills) == ({path} if changed else set())
+
+
+def test_claimed_binary_line_ending_change_reaches_candidate(tmp_path):
+    """Keep an authorized binary resource replacement in the assembled candidate."""
+    layout = _layout(tmp_path)
+    for root in (layout.input_skills, layout.edited_skills):
+        (root / "pdf/reference.bin").write_bytes(b"\x00a\nb")
+    (layout.input_skills / "pdf/asset.bin").write_bytes(b"\x00a\r\nb")
+    (layout.edited_skills / "pdf/asset.bin").write_bytes(b"\x00a\nb")
+    claim(layout.change_workspace, change("C1", ["pdf/asset.bin"]))
+
+    report = run_change_gate(layout, ACCEPTED, {"pdf"})
+
+    assert _status(report) == {"C1": "accepted"}
+    assert report.accepted_files == ["pdf/asset.bin"]
+    assert (layout.candidate_skills / "pdf/asset.bin").read_bytes() == b"\x00a\nb"
 
 
 def test_unclaimed_edits_are_left_out_and_unknown_findings_rejected(tmp_path):

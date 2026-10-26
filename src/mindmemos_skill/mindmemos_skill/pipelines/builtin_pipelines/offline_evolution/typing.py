@@ -2,9 +2,9 @@
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from .....api.typing import CollectionEvolutionRequest
-from .....envs.typing import Task
-from .....persistence import SkillRecord, SkillVersionRecord
+from ....api.typing import CollectionEvolutionRequest
+from ....envs.typing import Task
+from ....persistence import SkillRecord, SkillVersionRecord
 
 
 class HistoricalTask(Task):

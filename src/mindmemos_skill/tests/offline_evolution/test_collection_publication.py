@@ -5,12 +5,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from mindmemos_skill.algos.evolve.offline_evolution.pipeline import publication
-from mindmemos_skill.algos.evolve.offline_evolution.pipeline.typing import (
-    CapturedEvolutionInputs,
-    EvolutionInputMember,
-    EvolutionRunManifest,
-)
 from mindmemos_skill.algos.evolve.offline_evolution.typing import EvolutionSnapshot
 from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillConfig
 from mindmemos_skill.api.typing import CollectionEvolutionRequest
@@ -21,6 +15,12 @@ from mindmemos_skill.persistence import SkillPersistence
 from mindmemos_skill.persistence.config import SkillPersistenceConfig
 from mindmemos_skill.persistence.constants import SKILL_VERSIONS_TABLE, SKILLS_TABLE
 from mindmemos_skill.persistence.db_services.skills.service import SkillDataService
+from mindmemos_skill.pipelines.builtin_pipelines.offline_evolution import publication
+from mindmemos_skill.pipelines.builtin_pipelines.offline_evolution.typing import (
+    CapturedEvolutionInputs,
+    EvolutionInputMember,
+    EvolutionRunManifest,
+)
 from mindmemos_skill.skill import Skill, SkillContent
 
 

@@ -1,6 +1,5 @@
 """Shared pipeline contracts and explicit built-in registrations."""
 
-from ..algos.evolve.offline_evolution.pipeline import OfflineEvolutionPipeline
 from ..api.typing import (
     AlgoSkillEvolveResult,
     OrganizeRequest,
@@ -14,6 +13,7 @@ from ..api.typing import (
 from .base import Pipeline
 from .builtin_pipelines.evolve.evolving import SimpleEvolutionPipeline
 from .builtin_pipelines.manage.graph_manage import GraphManagePipeline
+from .builtin_pipelines.offline_evolution import OfflineEvolutionPipeline
 from .builtin_pipelines.repository.repository import RepositoryPipeline
 from .builtin_pipelines.training.training import ConfiguredTrainingPipeline
 from .evolve import EvolutionPipeline

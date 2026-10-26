@@ -3,6 +3,7 @@
 import json
 import shutil
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from mindmemos_skill.algos.evolve import SkillTrajectory
@@ -13,6 +14,7 @@ from mindmemos_skill.algos.evolve.offline_evolution.config import EvolutionOptio
 from mindmemos_skill.algos.evolve.offline_evolution.evolver import _read_candidate
 from mindmemos_skill.algos.evolve.offline_evolution.typing import RunLayout
 from mindmemos_skill.envs.typing import Reward, Task
+from mindmemos_skill.infra.database import Database
 from mindmemos_skill.skill import Skill, SkillContent
 
 from .helpers import EVIDENCE_SCRIPT, FakeAgent, failing, make_inputs, write_change, write_evidence
@@ -85,6 +87,10 @@ def test_nonstandard_candidates_reject_resource_symlinks(tmp_path):
 @pytest.mark.parametrize("allow_create", [False, True])
 @pytest.mark.parametrize("delete", [False, True])
 async def test_adapter_enforces_scopes_and_preserves_complete_resources(tmp_path, monkeypatch, allow_create, delete):
+    """Run the standalone algorithm without a database while enforcing mutation scopes."""
+    monkeypatch.setattr(
+        Database, "__init__", Mock(side_effect=AssertionError("The algorithm must not open a database"))
+    )
     sources, _ = make_inputs(tmp_path)
     pdf = Skill.from_path(sources / "pdf")
     pdf = pdf.with_resources({**pdf.resources, "asset.bin": b"\x00\xff\r\n"})

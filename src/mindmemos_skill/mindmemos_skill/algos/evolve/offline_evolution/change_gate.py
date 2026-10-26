@@ -53,7 +53,7 @@ def load_changes(layout: RunLayout) -> ChangeSet:
 
 
 def changed_files(baseline: Path, edited: Path) -> set[str]:
-    """List skill-relative paths added, removed or modified, ignoring line-ending differences.
+    """List skill-relative paths added, removed or modified by their exact bytes.
 
     Args:
         baseline: Original skills directory.
@@ -65,7 +65,7 @@ def changed_files(baseline: Path, edited: Path) -> set[str]:
     before, after = _files(baseline), _files(edited)
     changed = set(before) ^ set(after)
     for path in set(before) & set(after):
-        if before[path].read_bytes().replace(b"\r\n", b"\n") != after[path].read_bytes().replace(b"\r\n", b"\n"):
+        if before[path].read_bytes() != after[path].read_bytes():
             changed.add(path)
     return changed
 
