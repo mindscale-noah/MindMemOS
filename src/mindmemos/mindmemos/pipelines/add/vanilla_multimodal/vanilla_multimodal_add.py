@@ -309,7 +309,7 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
                     user_id=context.user_id,
                     app_id=context.app_id,
                     created_at=now,
-                    updated_at=now,
+                    update_at=now,
                     event_time=datetime.fromtimestamp(occurrences[0].timestamp_ms / 1000, tz=UTC),
                     embed_model=client.model,
                     source_url=_source_url(occurrences),
@@ -323,7 +323,7 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
                 merged = [*record.occurrences, *(_occurrence(image, context) for image in occurrences)]
                 updates.append(
                     record.model_copy(
-                        update={"occurrences": merged[: cfg.max_occurrences_per_image], "updated_at": now}
+                        update={"occurrences": merged[: cfg.max_occurrences_per_image], "update_at": now}
                     )
                 )
                 events.append(_event(record, occurrences[0], "reinforcement"))

@@ -542,7 +542,7 @@ def _visual_fact_item(record: ImageRecord, index: int, score: float | None) -> M
         id=f"{record.image_id}#{index}",
         memory=record.visual_facts[index],
         memory_type=VISUAL_FACT_MEMORY_TYPE,
-        last_update_at=format_datetime(record.updated_at),
+        last_update_at=format_datetime(record.update_at),
         event_time=format_datetime(event_time) if event_time else None,
         source_timestamp=format_datetime(event_time) if event_time else None,
         metadata={
@@ -570,7 +570,7 @@ def _to_search_item(hit: ImageSearchHit, *, with_facts: bool = True) -> MemorySe
         id=record.image_id,
         memory=f"[image] {text}",
         memory_type=IMAGE_MEMORY_TYPE,
-        last_update_at=format_datetime(record.updated_at),
+        last_update_at=format_datetime(record.update_at),
         event_time=format_datetime(event_time) if event_time else None,
         source_timestamp=format_datetime(event_time) if event_time else None,
         metadata={

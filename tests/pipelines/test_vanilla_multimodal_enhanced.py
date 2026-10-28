@@ -159,7 +159,7 @@ def _record(blob: str, memory_ids=(), description=None, facts=()) -> ImageRecord
         project_id="p",
         user_id="u",
         created_at=NOW,
-        updated_at=NOW,
+        update_at=NOW,
         description=description,
         visual_facts=list(facts),
         anchored_memory_ids=list(memory_ids),
