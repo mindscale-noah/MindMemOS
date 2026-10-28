@@ -272,18 +272,28 @@ project reset also deletes the project's blobs.
 
 ## `mm_embed_model_router` — multimodal embedding
 
-Same shape as the other routers. Each endpoint must encode text and images into one vector space.
+Same shape as the other routers, and like them requests route through a shared
+`litellm.Router`: retries, cooldowns and endpoint failover are litellm's. Each endpoint must
+encode text and images into one vector space; images ride the Jina-style extension of the
+OpenAI embeddings API (`input` items `{"image": "<data URI or URL>"}`), which litellm passes
+through to `openai/`-compatible endpoints verbatim.
 
 | Field | Default | Description |
 |---|---|---|
-| `model` | — | Model name sent to the endpoint. |
-| `api_base` | — | Base URL; the protocol appends its path (`/embeddings`). |
+| `model` | — | LiteLLM model identifier with a provider prefix, e.g. `openai/siglip2-base-patch16-384`; litellm strips the prefix on the wire. |
+| `api_base` | — | Base URL; litellm appends the embeddings path (`/embeddings`). |
 | `api_key` | `null` | Bearer token (optional for local endpoints). |
 | `dimensions` | — | Required. Sizes the `image` vector of `database.qdrant.image_collection` and is checked at startup. |
-| `protocol` | `openai` | Wire format. `openai`: `POST /embeddings` with `input` = strings, or `[{"image": "<data URI or URL>"}]`. |
-| `image_transport` | `base64` | `base64` data URIs, or `url` to send the original URL when an image came from one. |
-| `timeout` / `num_retries` / `max_batch_size` | `60` / `3` / `16` | Per-request timeout, retries before trying the next endpoint, inputs per request. |
+| `image_transport` | `base64` | `base64` data URIs, or `url` to send the original URL when an image came from one. Shared by all endpoints. |
+| `timeout` / `num_retries` / `max_batch_size` | `60` / `3` / `16` | Per-request timeout, retries, inputs per request. Retries/failover across endpoints are litellm's; `max_batch_size` is shared. |
+| `rpm` / `tpm` | `null` | Optional LiteLLM rate limits per endpoint. |
 | `extra_body` | `{}` | Extra request body fields. |
+| `routing_strategy` / `allowed_fails` / `cool_down` / `retry_after` | `simple-shuffle` / `null` / `null` / `0` | Router-level LiteLLM routing fields, as on the other routers. |
+| `dimensions_supported_models` | `[]` | Model name prefixes (provider prefix stripped) allowed to receive `dimensions` on the wire; litellm otherwise drops it for any openai-compatible model whose name lacks `text-embedding-3` (list `siglip2` to keep it). |
+
+For local development `scripts/mm_embed_server.py` serves SigLIP2 (`siglip2-base-patch16-384`,
+768 dimensions) behind this contract on `http://127.0.0.1:8090/v1` — see its docstring for the
+run command (`uv run --no-project --with torch --with transformers --with pillow ...`).
 
 With no endpoints, multimodal modes only store images. At startup the server embeds one probe text:
 a dimension mismatch (endpoint vs `dimensions` vs an existing image collection) stops startup; an
@@ -298,8 +308,16 @@ existing image collection has no `text` vector of that size (created by an older
 
 | Field | Default | Description |
 |---|---|---|
-| `backend` | `local` | Storage backend (the `BlobStore` interface is ready for object storage). |
+| `backend` | `local` | Storage backend: `local` or `s3` (any S3-compatible endpoint: MinIO, OSS S3 gateway, R2). |
 | `local_root` | `data/blobs` | Directory of the local backend; relative to the repository root. |
+| `s3_endpoint` | *(required for s3)* | Endpoint URL with scheme, e.g. `http://localhost:9100`; `https://` enables TLS. |
+| `s3_region` | `us-east-1` | Bucket region/location used when creating the bucket. |
+| `s3_bucket` | *(required for s3)* | Bucket name; created lazily on first use if missing. |
+| `s3_access_key` | *(required for s3)* | Access key (env: `MINDMEMOS_S3_ACCESS_KEY`). |
+| `s3_secret_key` | *(required for s3)* | Secret key (env: `MINDMEMOS_S3_SECRET_KEY`). |
+| `s3_public_base_url` | *(none)* | Optional public mirror; when set, `public_url()` returns shareable URLs. |
+| `s3_presign_endpoint` | *(none)* | External address baked into the short-lived presigned URLs of `POST /v1/memory/search` hits; unset signs against `s3_endpoint` (env: `MINDMEMOS_S3_PRESIGN_ENDPOINT`). |
+| `s3_presign_expiry_seconds` | `3600` | Presigned URL lifetime, `1..604800` seconds (env: `MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS`). |
 | `max_image_bytes` | `20971520` | Larger images are rejected. |
 | `allowed_path_roots` | `[]` | Directories `ImageRef.path` may point into; empty disables path inputs. |
 | `url_fetch_enabled` | `true` | Download `ImageRef.url` inputs. |
@@ -308,7 +326,18 @@ existing image collection has no `text` vector of that size (created by an older
 
 Images are deduplicated by SHA-256 per project (blob store) and per project+user (image
 collection). Only PNG, JPEG, GIF, WebP and BMP are accepted (checked by content, not extension).
-Stored images are readable by the project's keys at `GET /v1/memory/images/{blob_id}`.
+Stored images are readable by the project's keys at `GET /v1/memory/images/{blob_id}?user_id=<owner>`;
+the server verifies the declared owner against the image records, so another user's blob id 404s.
+On the `s3` backend, search hits instead carry `metadata.image_url` — a presigned GET link (signed
+locally, no store I/O) that downloads the bytes directly from MinIO without transiting this API;
+the proxy route above remains as the fallback when the backend cannot sign (e.g. `local`).
+
+The `s3` backend needs the `s3` extra (`pip install mindmemos[s3]`; the dev workspace already
+includes it). Object keys mirror the local layout (`<namespace-prefix>/<id[:2]>/<id>`); the MIME
+type rides on the object's content-type. For local development `make dev-blobs` starts MinIO on
+port 9100 (ClickHouse native claims 9000) with credentials taken from the same `MINDMEMOS_S3_*`
+environment variables. All `s3_*` fields except `s3_region` can be set via environment
+(`MINDMEMOS_S3_ENDPOINT/BUCKET/ACCESS_KEY/SECRET_KEY/PUBLIC_BASE_URL/PRESIGN_ENDPOINT/PRESIGN_EXPIRY_SECONDS`).
 
 ## Validation
 

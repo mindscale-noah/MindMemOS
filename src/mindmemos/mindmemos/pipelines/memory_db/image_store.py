@@ -107,6 +107,21 @@ class ImageMemoryStore:
         )
         return [ImageSearchHit(record=to_image_record(hit.payload), score=hit.score) for hit in hits]
 
+    @traced("memory_db.blob_owned_by", record_args=False)
+    async def blob_owned_by(self, ctx: MemoryRequestContext, blob_id: str, user_id: str) -> bool:
+        """Whether this project has an image record of ``blob_id`` owned by ``user_id``."""
+
+        conditions = [
+            FieldCondition(field="blob_id", op="match", value=blob_id),
+            FieldCondition(field="user_id", op="match", value=user_id),
+        ]
+        return (
+            await self._clients.qdrant.image.count(
+                ctx.project_id, filter_=search_filter_to_qdrant(ctx, SearchFilter(must=conditions), target="image")
+            )
+            > 0
+        )
+
     @traced("memory_db.purge_images", record_args=False)
     async def purge_images(self, ctx: MemoryRequestContext, blobs: BlobStore, *, user_id: str | None = None) -> int:
         """Delete the image records of the request project (or of one user in it) and their unused blobs.

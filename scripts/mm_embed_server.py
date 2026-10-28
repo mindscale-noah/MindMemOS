@@ -13,9 +13,10 @@ project dependencies, so run it with them added on the fly:
 
     uv run --no-project --with torch --with transformers --with pillow python scripts/mm_embed_server.py
 
-The model (~1.5 GB) is downloaded from Hugging Face on first start. Server config:
-``mm_embed_model_router.endpoints: [{model: siglip2-base-patch16-384, api_base: http://127.0.0.1:8090/v1,
-dimensions: 768, protocol: openai}]``.
+The model (~1.5 GB) is downloaded from Hugging Face on first start. Server config
+(requests route through litellm, which strips the provider prefix on the wire):
+``mm_embed_model_router.endpoints: [{model: openai/siglip2-base-patch16-384,
+api_base: http://127.0.0.1:8090/v1, dimensions: 768}]``.
 """
 
 from __future__ import annotations

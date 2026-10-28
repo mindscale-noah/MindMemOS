@@ -90,6 +90,19 @@ def _merge_telemetry_env(data: dict) -> dict:
     return data
 
 
+def _merge_blob_env(data: dict) -> dict:
+    """Overlay blob store S3 connection settings from the environment (deploy secrets / compose ports)."""
+    blob = data.setdefault("blob_store", {})
+    _set_if_env(blob, "s3_endpoint", "MINDMEMOS_S3_ENDPOINT")
+    _set_if_env(blob, "s3_bucket", "MINDMEMOS_S3_BUCKET")
+    _set_if_env(blob, "s3_access_key", "MINDMEMOS_S3_ACCESS_KEY")
+    _set_if_env(blob, "s3_secret_key", "MINDMEMOS_S3_SECRET_KEY")
+    _set_if_env(blob, "s3_public_base_url", "MINDMEMOS_S3_PUBLIC_BASE_URL")
+    _set_if_env(blob, "s3_presign_endpoint", "MINDMEMOS_S3_PRESIGN_ENDPOINT")
+    _set_if_env(blob, "s3_presign_expiry_seconds", "MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS", caster=int)
+    return data
+
+
 def _normalize_auth_paths(data: dict, config_path: Path) -> dict:
     auth = data.setdefault("auth", {})
     if not isinstance(auth, dict):
@@ -520,7 +533,9 @@ class KafkaConfig:
     enabled: bool = field(default=False)
     """Whether Kafka infrastructure is enabled."""
 
-    bootstrap_servers: str = field(default_factory=lambda: _env_str("MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
+    bootstrap_servers: str = field(
+        default_factory=lambda: _env_str("MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    )
     """Kafka broker addresses, comma-separated."""
 
     client_id: str = field(default="memos")
@@ -613,6 +628,7 @@ def build_config(config_name: str = "dev", config_path: str | Path | None = None
     data = _merge_database_env(data)
     data = _merge_kafka_env(data)
     data = _merge_telemetry_env(data)
+    data = _merge_blob_env(data)
     cfg = build(MemoryConfig, data)
     validate_config(cfg)
     return cfg

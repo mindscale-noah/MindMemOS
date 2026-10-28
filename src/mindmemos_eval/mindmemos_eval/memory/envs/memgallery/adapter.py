@@ -7,7 +7,9 @@
    ``search_params.multimodal`` passed through.
 3. Answer: the shared VLM answerer with Mem-Gallery's prompts (``answer.py``).
 4. Score: F1, BLEU-1 and the Mem-Gallery judge (``scoring.py``), micro means over every question as
-   the benchmark reports, plus per-task and per-category means and client-side cost.
+   the benchmark reports, plus per-task and per-category means and client-side cost. ``--judge-runs``
+   runs the judge N times per question and averages the scores; search defaults come from the runner
+   config like every other benchmark.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from typing import Any
 from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.base import BenchmarkSpec, RunContext
 
-from ..memeye.adapter import _Run, _write_summary, run_tasks
+from ..memeye.adapter import _Run, _manifest_metrics, _write_summary, run_tasks
 from ..memeye.dataset import MemEyeTask, Question
 from .answer import answer_options, question_block
 from .dataset import load_task, task_names
@@ -60,7 +62,7 @@ class MemGalleryAdapter:
             bench_config=bench_config,
             args=args,
         )
-        result["metrics"] = metrics(result.pop("per_task_results"))
+        result["metrics"] = _manifest_metrics(metrics(result.pop("per_task_results")), result, headline="F1")
         _write_summary(result)
         logger.info("memgallery_metrics %s", {k: v for k, v in result["metrics"].items() if k[0].isupper()})
         return result

@@ -1,38 +1,37 @@
-"""Multimodal embedding client: text and images encoded into one vector space over HTTP.
+"""Multimodal embedding client: text and images encoded into one vector space.
 
-``MmEmbedClient.embed_texts`` / ``embed_images`` are the only entry points. The wire format is
-owned by a protocol adapter selected per endpoint (``mm_embed_model_router.endpoints[].protocol``),
-so supporting another provider means adding one adapter, not touching callers.
+``MmEmbedClient.embed_texts`` / ``embed_images`` are the only entry points. Requests
+route through a shared ``litellm.Router`` (built by ``llm.router.get_router``) exactly
+like the chat/embedding/rerank clients, so retries, cooldowns and endpoint failover
+are owned by litellm instead of this module.
 
-Protocol ``openai`` (OpenAI-style ``POST {api_base}/embeddings``)::
+Images ride the Jina-style multimodal extension of the OpenAI embeddings API —
+``input`` items of the shape ``{"image": ...}`` — which litellm passes through to
+``openai/``-compatible endpoints verbatim::
 
-    request  {"model": M, "input": ["text", ...], "dimensions": D}                # texts
-    request  {"model": M, "input": [{"image": "data:image/png;base64,..."}, ...]}  # images
+    request  {"model": M, "input": ["text", ...], "encoding_format": "float"}            # texts
+    request  {"model": M, "input": [{"image": "data:image/png;base64,..."}, ...]}        # images
              (``{"image": "https://..."}`` when ``image_transport: url`` and a URL is known)
-    response {"data": [{"index": i, "embedding": [...]}, ...], "model": M}
+    response {"data": [{"index": i, "embedding": [...]}], "model": M}
 
-The image item shape follows the Jina-style multimodal extension of the OpenAI embeddings API.
+The endpoint ``model`` is a LiteLLM identifier with a provider prefix (e.g.
+``openai/siglip2-base-patch16-384``); litellm strips the prefix on the wire, so the
+serving endpoint sees the bare model name.
 """
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import random
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, Protocol
-
-import httpx
-from omegaconf import DictConfig, ListConfig, OmegaConf
+from typing import Any
 
 from ..config import MmEmbedEndpointConfig, MmEmbedRouterConfig, get_config
 from ..errors import ApiError, EmbeddingDimensionError
 from ..logging import get_logger
+from .router import ModelRouter, get_router
 
 logger = get_logger(__name__)
-
-_RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
 @dataclass(frozen=True)
@@ -49,67 +48,37 @@ class ImageInput:
         return f"data:{self.mime_type};base64,{base64.b64encode(self.data).decode('ascii')}"
 
 
-class MmEmbedProtocol(Protocol):
-    """Wire-format adapter for one family of multimodal embedding APIs."""
-
-    def text_request(self, endpoint: MmEmbedEndpointConfig, texts: list[str]) -> tuple[str, dict[str, Any]]: ...
-
-    def image_request(
-        self, endpoint: MmEmbedEndpointConfig, images: list[ImageInput]
-    ) -> tuple[str, dict[str, Any]]: ...
-
-    def parse(self, payload: dict[str, Any], expected: int) -> list[list[float]]: ...
-
-
-class OpenAIMmProtocol:
-    """OpenAI-style ``/embeddings`` with Jina-style ``{"image": ...}`` items."""
-
-    def text_request(self, endpoint: MmEmbedEndpointConfig, texts: list[str]) -> tuple[str, dict[str, Any]]:
-        return "/embeddings", self._body(endpoint, list(texts))
-
-    def image_request(self, endpoint: MmEmbedEndpointConfig, images: list[ImageInput]) -> tuple[str, dict[str, Any]]:
-        items = []
-        for image in images:
-            use_url = endpoint.image_transport == "url" and image.url
-            items.append({"image": image.url if use_url else image.data_uri()})
-        return "/embeddings", self._body(endpoint, items)
-
-    def parse(self, payload: dict[str, Any], expected: int) -> list[list[float]]:
-        data = payload.get("data")
-        if not isinstance(data, list) or len(data) != expected:
-            raise ValueError(f"expected {expected} embeddings, got {len(data) if isinstance(data, list) else 'none'}")
-        ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
-        return [[float(x) for x in item["embedding"]] for item in ordered]
-
-    @staticmethod
-    def _body(endpoint: MmEmbedEndpointConfig, inputs: list[Any]) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": endpoint.model, "input": inputs, "encoding_format": "float"}
-        if endpoint.dimensions is not None:
-            body["dimensions"] = int(endpoint.dimensions)
-        extra = endpoint.extra_body
-        if isinstance(extra, (DictConfig, ListConfig)):
-            extra = OmegaConf.to_container(extra, resolve=True)
-        if extra:
-            body.update(extra)
-        return body
-
-
-PROTOCOLS: dict[str, MmEmbedProtocol] = {"openai": OpenAIMmProtocol()}
-
-
 class MmEmbedError(ApiError):
     status_code = 502
     code = "mm_embedding.provider_request_failed"
 
 
-class MmEmbedClient:
-    """Embeds texts and images through the configured endpoints, in order, with retries."""
+def _parse_vectors(resp: Any, expected: int) -> list[list[float]]:
+    """Read embedding vectors from a litellm response, dict- or attribute-style."""
 
-    def __init__(self, router: MmEmbedRouterConfig, *, http_client: httpx.AsyncClient | None = None) -> None:
-        if not router.endpoints:
+    data = getattr(resp, "data", None) or []
+    vectors: list[list[float]] = []
+    for item in data:
+        embedding = item.get("embedding") if isinstance(item, dict) else getattr(item, "embedding", None)
+        vectors.append([float(x) for x in embedding or []])
+    if len(vectors) != expected:
+        raise ValueError(f"expected {expected} embeddings, got {len(vectors)}")
+    return vectors
+
+
+class MmEmbedClient:
+    """Embeds texts and images through the shared LiteLLM router for the mm endpoints."""
+
+    ALIAS = "mm_embedding"
+
+    def __init__(self, router_cfg: MmEmbedRouterConfig, *, router: ModelRouter | None = None) -> None:
+        if not router_cfg.endpoints:
             raise ValueError("mm_embed_model_router has no endpoints")
-        self._endpoints = list(router.endpoints)
-        self._http = http_client
+        self._endpoints: list[MmEmbedEndpointConfig] = list(router_cfg.endpoints)
+        # Router-level transport details (image_transport, max_batch_size) read from the
+        # first endpoint: a litellm Router picks deployments itself, so per-endpoint
+        # request shaping is not possible — all mm endpoints must agree on them.
+        self._router = router if router is not None else get_router(router_cfg, self.ALIAS)[0]
 
     @property
     def dimensions(self) -> int:
@@ -125,10 +94,12 @@ class MmEmbedClient:
     async def embed_images(self, images: list[ImageInput], *, task: str = "mm.image") -> list[list[float]]:
         return await self._embed("image", list(images), task=task)
 
-    async def close(self) -> None:
-        if self._http is not None:
-            await self._http.aclose()
-            self._http = None
+    def _image_items(self, images: list[ImageInput]) -> list[dict[str, str]]:
+        use_url = self._endpoints[0].image_transport == "url"
+        items: list[dict[str, str]] = []
+        for image in images:
+            items.append({"image": image.url if (use_url and image.url) else image.data_uri()})
+        return items
 
     async def _embed(self, kind: str, inputs: list[Any], *, task: str) -> list[list[float]]:
         if not inputs:
@@ -140,106 +111,46 @@ class MmEmbedClient:
         return vectors
 
     async def _embed_batch(self, kind: str, batch: list[Any], *, task: str) -> list[list[float]]:
-        last_error: Exception | None = None
-        for endpoint in self._endpoints:
-            protocol = PROTOCOLS[endpoint.protocol]
-            path, body = (
-                protocol.text_request(endpoint, batch) if kind == "text" else protocol.image_request(endpoint, batch)
-            )
-            for attempt in range(int(endpoint.num_retries) + 1):
-                start = perf_counter()
-                try:
-                    payload = await self._post(endpoint, path, body)
-                    vectors = protocol.parse(payload, len(batch))
-                except _Retryable as exc:
-                    last_error = exc
-                    logger.info(
-                        "mm_embed_call",
-                        kind=kind,
-                        task=task,
-                        model=endpoint.model,
-                        status="retry",
-                        attempt=attempt + 1,
-                        latency_ms=round((perf_counter() - start) * 1000, 2),
-                        error=str(exc)[:200],
-                    )
-                    await asyncio.sleep(min(8.0, 0.5 * 2**attempt) * (0.5 + random.random()))
-                    continue
-                except Exception as exc:  # noqa: BLE001 - non-retryable: try the next endpoint
-                    last_error = exc
-                    logger.warning(
-                        "mm_embed_call",
-                        kind=kind,
-                        task=task,
-                        model=endpoint.model,
-                        status="error",
-                        error=str(exc)[:200],
-                    )
-                    break
-                for vector in vectors:
-                    if endpoint.dimensions is not None and len(vector) != int(endpoint.dimensions):
-                        raise EmbeddingDimensionError(
-                            expected=int(endpoint.dimensions), actual=len(vector), model=endpoint.model, task=task
-                        )
-                logger.info(
-                    "mm_embed_call",
-                    kind=kind,
-                    task=task,
-                    model=endpoint.model,
-                    status="ok",
-                    inputs=len(batch),
-                    latency_ms=round((perf_counter() - start) * 1000, 2),
-                )
-                return vectors
-        raise MmEmbedError(f"multimodal embedding failed: {last_error}") from last_error
-
-    async def _post(self, endpoint: MmEmbedEndpointConfig, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        if self._http is None:
-            self._http = httpx.AsyncClient()
-        headers = {"Content-Type": "application/json"}
-        if endpoint.api_key:
-            headers["Authorization"] = f"Bearer {endpoint.api_key}"
-        url = endpoint.api_base.rstrip("/") + path
+        items = batch if kind == "text" else self._image_items(batch)
+        start = perf_counter()
         try:
-            response = await self._http.post(url, json=body, headers=headers, timeout=float(endpoint.timeout))
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
-            raise _Retryable(f"{type(exc).__name__}: {exc}") from exc
-        if response.status_code in _RETRYABLE_STATUS:
-            raise _Retryable(f"HTTP {response.status_code}: {response.text[:200]}")
-        if response.status_code >= 400:
-            raise ValueError(f"HTTP {response.status_code}: {response.text[:200]}")
-        return response.json()
-
-
-class _Retryable(Exception):
-    pass
-
-
-_CLIENTS: dict[tuple[Any, ...], MmEmbedClient] = {}
-
-
-def _fingerprint(router: MmEmbedRouterConfig) -> tuple[Any, ...]:
-    return tuple(
-        (ep.model, ep.api_base, ep.api_key, ep.dimensions, ep.protocol, ep.image_transport, ep.max_batch_size)
-        for ep in router.endpoints
-    )
+            resp = await self._router.aembedding(model=self.ALIAS, input=items, encoding_format="float")
+            vectors = _parse_vectors(resp, len(batch))
+        except Exception as exc:  # noqa: BLE001 - one batch failed after litellm retries/failover
+            logger.warning(
+                "mm_embed_call",
+                kind=kind,
+                task=task,
+                model=self.model,
+                status="error",
+                error_type=type(exc).__name__,
+                error=str(exc)[:200],
+            )
+            raise MmEmbedError(f"multimodal embedding failed: {exc}") from exc
+        for vector in vectors:
+            if len(vector) != self.dimensions:
+                raise EmbeddingDimensionError(expected=self.dimensions, actual=len(vector), model=self.model, task=task)
+        logger.info(
+            "mm_embed_call",
+            kind=kind,
+            task=task,
+            model=self.model,
+            status="ok",
+            inputs=len(batch),
+            latency_ms=round((perf_counter() - start) * 1000, 2),
+        )
+        return vectors
 
 
 def get_mm_embed_client() -> MmEmbedClient | None:
-    """Return the multimodal embedding client, or None when no endpoint is configured."""
+    """Return the multimodal embedding client, or None when no endpoint is configured.
 
-    router = get_config().mm_embed_model_router
-    if not router.endpoints:
+    The underlying litellm Router is cached per resolved endpoint config (see
+    ``llm.router.get_router``); the wrapper itself is stateless, so building it per
+    call is cheap and always reflects the currently bound config.
+    """
+
+    router_cfg = get_config().mm_embed_model_router
+    if not router_cfg.endpoints:
         return None
-    key = _fingerprint(router)
-    client = _CLIENTS.get(key)
-    if client is None:
-        client = _CLIENTS[key] = MmEmbedClient(router)
-    return client
-
-
-async def close_mm_embed_clients() -> None:
-    clients = list(_CLIENTS.values())
-    _CLIENTS.clear()
-    for client in clients:
-        await client.close()
+    return MmEmbedClient(router_cfg)

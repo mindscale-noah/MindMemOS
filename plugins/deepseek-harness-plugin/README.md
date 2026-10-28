@@ -100,7 +100,9 @@ the row.
 - **Recall** hooks `agent/pre-step` (step 1 only) as a prepended waterfall
   listener. It extracts the real human prompt, runs `mindmemos memory search`,
   and appends one `createUserMessage` carrying the hits under a
-  `<relevant-memories>` banner. The injected message is stamped
+  `<relevant-memories>` banner. Image hits that carry `metadata.image_url` keep
+  the link in the injected text as `<image: URL>` — a short-lived direct link
+  the agent may fetch to view the stored image. The injected message is stamped
   `source.kind === "plugin"` so the store step can tell it apart from real input.
 - **Store** hooks the `session/event` firehose and reacts to `turn/end` with
   `reason.kind === "completed"`. It walks that turn's log back to its

@@ -88,7 +88,7 @@ class FakeMemory:
                     id="i1",
                     memory="[image] user: Here is my red sofa",
                     memory_type="image",
-                    metadata={"blob_id": "b" * 64, "score": 0.2},
+                    metadata={"blob_id": "b" * 64, "user_id": "user-1", "score": 0.2},
                     event_time=None,
                     source_timestamp=None,
                     last_update_at="x",
@@ -96,7 +96,7 @@ class FakeMemory:
             ]
         )
 
-    async def get_image(self, blob_id):
+    async def get_image(self, blob_id, user_id=None):
         return PNG, "image/png"
 
 

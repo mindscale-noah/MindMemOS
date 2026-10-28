@@ -152,9 +152,9 @@ class MemoryClient:
         envelope = self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
 
-    def get_image(self, blob_id: str) -> tuple[bytes, str]:
-        """Download an image stored for this project (``metadata.blob_id`` of an image result)."""
-        return self._transport.get_bytes(f"/v1/memory/images/{blob_id}")
+    def get_image(self, blob_id: str, user_id: str) -> tuple[bytes, str]:
+        """Download a stored image (``metadata.blob_id`` of an image result) of its owner ``user_id``."""
+        return self._transport.get_bytes(f"/v1/memory/images/{blob_id}", params={"user_id": user_id})
 
     def get(
         self,

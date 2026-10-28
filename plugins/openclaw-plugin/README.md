@@ -151,6 +151,14 @@ activating the venv. Alternatively set `cli` to a wrapper such as
 working directory. If memory add/search silently does nothing, check the gateway
 log for `ENOENT` — that means the `cli` path is wrong.
 
+## Image Memories
+
+Multimodal search hits can carry `metadata.image_url` — a short-lived direct
+link to the stored image. When present, the injected memory context keeps it as
+`<image: URL>` (with a hint that the model may fetch the link to view the
+image); a hit with no text but a link still appears, rendered as
+`[image memory] <image: URL>`.
+
 ## Subagent Behavior
 
 In subagent sessions (session key contains `:subagent:`), recalled memories are

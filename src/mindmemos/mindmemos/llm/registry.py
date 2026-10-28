@@ -9,7 +9,6 @@ from ..errors import InvalidConfigError
 from .chat import LLMClient
 from .embedding import EmbedClient
 from .gateway import close_gateway_http_client
-from .mm_embedding import close_mm_embed_clients
 from .rerank import RerankClient
 from .router import clear_router_cache, get_router
 
@@ -115,6 +114,5 @@ async def close_llm_clients() -> None:
     """Close Platform and LiteLLM HTTP clients and drop cached Routers."""
     clear_router_cache()
     await close_gateway_http_client()
-    await close_mm_embed_clients()
     await litellm.close_litellm_async_clients()
     litellm.aclient_session = None

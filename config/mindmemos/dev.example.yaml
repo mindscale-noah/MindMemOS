@@ -53,13 +53,15 @@ rerank_model_router:
 
 # Multimodal (text + image) embedding for vanilla with algo_config.multimodal.mode basic/enhanced. Text and images must be
 # encoded into one vector space; `dimensions` sizes the Qdrant image collection and is checked at
-# startup. Leave endpoints empty to only store images (no image retrieval). Example:
+# startup. Requests route through litellm like the chat/embed/rerank routers: `model` carries a
+# litellm provider prefix (stripped on the wire), retries/cooldowns/failover are litellm's.
+# Leave endpoints empty to only store images (no image retrieval). Example:
+#   dimensions_supported_models: [siglip2]  # keep `dimensions` on the wire (litellm drops it otherwise)
 #   endpoints:
-#     - model: siglip2-base-patch16-384
+#     - model: openai/siglip2-base-patch16-384
 #       api_base: http://127.0.0.1:8090/v1
 #       api_key:
 #       dimensions: 768
-#       protocol: openai        # OpenAI-style /embeddings; images as {"image": "data:..."}
 #       image_transport: base64 # or url (send the original URL when the image came from one)
 mm_embed_model_router:
   endpoints: []
@@ -68,6 +70,18 @@ mm_embed_model_router:
 blob_store:
   backend: local
   local_root: data/blobs
+  # S3-compatible backend (MinIO/OSS-S3/R2): `make dev-blobs` then switch:
+  # backend: s3                  # requires the s3 extra: uv sync (dev env) or pip install mindmemos[s3]
+  # s3_endpoint: http://localhost:9100
+  # s3_region: us-east-1
+  # s3_bucket: mindmemos-blobs   # created lazily on first use if missing
+  # s3_access_key: minioadmin    # overridable via MINDMEMOS_S3_ACCESS_KEY
+  # s3_secret_key: minioadmin    # overridable via MINDMEMOS_S3_SECRET_KEY
+  # s3_public_base_url:          # e.g. https://cdn.example.com/minio for shareable URLs
+  # s3_presign_endpoint:         # external address baked into search's short-lived image URLs
+  #                              # (e.g. https://minio.example.com when the server talks to MinIO
+  #                              # over an internal host); unset signs against s3_endpoint
+  # s3_presign_expiry_seconds: 3600  # 1s..604800s (S3 max 7 days); MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS
   max_image_bytes: 20971520
   allowed_path_roots: []        # directories ImageRef.path may point into; empty disables paths
   url_fetch_enabled: true

@@ -549,6 +549,7 @@ def _visual_fact_item(record: ImageRecord, index: int, score: float | None) -> M
             "modality": VISUAL_FACT_MEMORY_TYPE,
             "score": score,
             "image_id": record.image_id,
+            "user_id": record.user_id,
             "blob_id": record.blob_id,
             "image_path": f"/v1/memory/images/{record.blob_id}",
         },
@@ -575,6 +576,7 @@ def _to_search_item(hit: ImageSearchHit, *, with_facts: bool = True) -> MemorySe
         metadata={
             "modality": IMAGE_MEMORY_TYPE,
             "score": hit.score,
+            "user_id": record.user_id,
             "blob_id": record.blob_id,
             "mime_type": record.mime_type,
             "image_path": f"/v1/memory/images/{record.blob_id}",

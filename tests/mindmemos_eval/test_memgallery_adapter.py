@@ -90,11 +90,16 @@ class FakeMemory:
                 _item("m1", "User showed a robot tutor", "fact", {"image_blob_ids": [BLOB]}),
                 _item("m2", "User likes tea", "fact", {"image_blob_ids": [OTHER_BLOB]}),
                 _item("v1", "A white robot at a desk", "visual_fact", {"blob_id": BLOB}),
-                _item("i1", "[image] robot tutor", "image", {"blob_id": BLOB, "caller_image_ids": ["D1:IMG_001"]}),
+                _item(
+                    "i1",
+                    "[image] robot tutor",
+                    "image",
+                    {"blob_id": BLOB, "user_id": "memgallery-t", "caller_image_ids": ["D1:IMG_001"]},
+                ),
             ]
         )
 
-    async def get_image(self, blob_id):
+    async def get_image(self, blob_id, user_id=None):
         return PNG, "image/png"
 
 

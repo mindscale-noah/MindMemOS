@@ -171,7 +171,7 @@
 |---|---|
 | `POST /v1/memory/add` | `messages[].images: ImageRef[]`；允许只有图、没有文字的轮次 |
 | `POST /v1/memory/search` | 新增 `query_images: ImageRef[]`（隐含多模态）和 `multimodal: bool`（默认 false） |
-| `GET /v1/memory/images/{blob_id}` | 新增：返回本项目已存图片的原始字节，需要 `memory:read` 权限，私有缓存 1 天 |
+| `GET /v1/memory/images/{blob_id}` | 新增：返回本项目已存图片的原始字节，需要 `memory:read` 权限与 `?user_id=`（图片属主，服务端会对照图片记录校验，非属主一律 404 `image.not_found`），私有缓存 1 天 |
 
 **`ImageRef` 字段：** `path` / `url` / `data` / `blob_id`（四者恰好一个），以及可选的 `mime_type`、`image_id`（调用方的 id，检索结果会原样带回）、`caption`。持久化请求记录时，内联的 base64 会替换为 `<redacted>`。
 
@@ -189,9 +189,15 @@ POST /v1/memory/search
 ```
 
 **检索结果中新增的条目类型：**
-- `memory_type=image`：图片结果。`memory` 是 `[image] 描述或上下文`；`metadata` 包括 `blob_id`、`image_path`、`score`、`session_ids`、`caller_image_ids`、`occurrences`、`description`、`visual_facts`、`anchored_memory_ids`、`evidence`（query_image / session / anchored / similar），以及会话展开时的 `session_position`。
-- `memory_type=visual_fact`：单条视觉事实。`metadata` 包括 `blob_id`、`image_id` 和 rerank `score`。
+- `memory_type=image`：图片结果。`memory` 是 `[image] 描述或上下文`；`metadata` 包括 `blob_id`、`user_id`（属主，取原图时的必传参数）、`image_path`、`score`、`session_ids`、`caller_image_ids`、`occurrences`、`description`、`visual_facts`、`anchored_memory_ids`、`evidence`（query_image / session / anchored / similar），以及会话展开时的 `session_position`。
+- `memory_type=visual_fact`：单条视觉事实。`metadata` 包括 `blob_id`、`image_id`、`user_id` 和 rerank `score`。
 - 对话事实的 `metadata.image_blob_ids` 指向它锚定的图。
+
+**`metadata.image_url`（图片懒加载直链）：** 带 `blob_id` 的图片命中还会附带 `image_url`——
+`s3` 后端是短时效预签名 URL（本地 HMAC 签名，默认 1 小时，见 `blob_store.s3_presign_expiry_seconds`），
+客户端可直接 GET 原图，字节不过本 API;`local` 等无法签名的后端回落为上面的代理路由
+（`{base_url}/v1/memory/images/{blob_id}?user_id=<属主>`，仅当命中带属主时）。URL 过期或缺失时，
+仍用 `blob_id` + 属主 `user_id` 走 `get_image`。该字段在响应组装时注入、不落遥测。
 
 **错误码（400 或 404）：**
 - 写入与检索：`add.images_unsupported`、`search.images_unsupported`、`add.too_many_images`（单次最多 32 张）；
@@ -201,8 +207,8 @@ POST /v1/memory/search
 ### 4.2 SDK（`mindmemos_sdk`，同步和异步客户端都支持）
 
 - `add(messages)`：`DialogueMessage.images` 可以传 `ImageRef` 或 dict；
-- `search(query, query_images=..., multimodal=...)`；
-- `get_image(blob_id) -> (bytes, mime_type)`；
+- `search(query, query_images=..., multimodal=...)`：命中 `metadata.image_url` 随 `metadata` dict 原样透传；
+- `get_image(blob_id, user_id) -> (bytes, mime_type)`（`user_id` 为图片属主，即检索结果 `metadata.user_id`）；
 - 导出了 `ImageRef`。
 
 ### 4.3 配置
@@ -225,8 +231,8 @@ POST /v1/memory/search
 | `max_images_per_request` | 32 | 单次 add 的图片上限 |
 
 基础设施配置（完整说明见 `docs/config/README.md`）：
-- `mm_embed_model_router.endpoints[]`：model、api_base、api_key、dimensions、protocol、超时、重试、批大小；
-- `blob_store`：backend、local_root、max_image_bytes、allowed_path_roots、URL 下载开关和私网限制；
+- `mm_embed_model_router.endpoints[]`：model、api_base、api_key、dimensions、超时、重试、批大小；
+- `blob_store`：backend（local / s3）、local_root、max_image_bytes、allowed_path_roots、URL 下载开关和私网限制；s3 后端还有 `s3_endpoint`/`s3_bucket`/`s3_region`/`s3_access_key`/`s3_secret_key`/`s3_public_base_url`，以及检索直链相关的 `s3_presign_endpoint`/`s3_presign_expiry_seconds`；
 - `database.qdrant.image_collection`：默认 `image_item_v1`。
 
 ---
@@ -240,16 +246,17 @@ POST /v1/memory/search
 | `tests/pipelines/test_vanilla_multimodal_enhanced.py` | VLM 抽取、锚定、编号兼容、溢出调用、混合打分、证据图、视觉事实、agentic |
 | `tests/pipelines/memory_db/test_image_purge.py` | 图片与原图的清理 |
 | `tests/api/test_multimodal_requests.py` | API 层校验与错误码 |
-| `tests/components/test_image_loader.py`、`test_mm_embedding_client.py` | 加载安全限制、embedding 协议与故障转移 |
-| `tests/infra/test_blob_store.py`、`tests/config/test_multimodal_config.py`、`tests/typing/test_multimodal_typing.py`、`tests/mindmemos_sdk/test_multimodal_sdk.py` | 基础设施、配置校验、类型、SDK |
+| `tests/components/test_image_loader.py` | 加载安全限制 |
+| `tests/infra/test_blob_store.py`、`test_blob_store_s3.py`（live 见文件头）、`tests/config/test_multimodal_config.py`、`tests/typing/test_multimodal_typing.py`、`tests/mindmemos_sdk/test_multimodal_sdk.py` | 基础设施（local/S3/presign）、配置校验、类型、SDK |
+| `tests/api/test_memory_image_route.py`、`test_memory_search_image_url.py` | 取图路由、search 的 `image_url` 注入 |
 | `tests/mindmemos_eval/test_memeye_adapter.py`、`test_memgallery_adapter.py`、`test_db_reset_blobs.py` | 评测 adapter（离线） |
 
-- **全量测试：** 1299 passed、86 skipped。另有 6 个 failed 和 6 个 errors，`main` 上本来就有、与本分支无关：
-  - architecture guard 测试 2 个；
-  - `test_dev_configs_keep_vanilla_settings_in_canonical_sections`；
-  - memoryarena、skill_runners、sdk package boundary、kafka load report 各 1 个；
-  - scripts 和 spreadsheetbench 的收集错误。
-- **architecture guard 的违规清单：** 与 `main` 相同，本分支没有新增违规。
+- **全量测试（Windows 开发机）：** 1321 passed、92 skipped。另有 11 个 failed 和 8 个 collection errors，均为本批之前就存在的环境/包问题，与本批改动无关：
+  - architecture guard 测试 2 个（违规在 `main` 既有代码，本批没有新增）；
+  - eval 侧 memoryagentbench/memoryarena（数据集 zip 缺失）、skill_runners（包结构）共 5 个；
+  - SDK 侧 package boundary、skill 检测共 4 个（Windows 路径分隔符 / CRLF / 测试顺序）；
+  - prompts（GBK 编码）、scripts（缺 `scripts/locomo`）、spreadsheetbench（ImportError）的收集错误。
+- **S3/MinIO live 用例：** `MINDMEMOS_TEST_S3_ENDPOINT=http://localhost:9100 uv run pytest tests/infra/test_blob_store_s3_live.py`（`make dev-blobs` 后），含预签名 URL 匿名 GET 回读。
 
 ---
 

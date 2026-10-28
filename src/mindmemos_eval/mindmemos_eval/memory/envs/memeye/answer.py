@@ -46,8 +46,8 @@ class ImageEncoder:
         self._cache: dict[str, str] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
-    async def from_blob(self, blob_id: str) -> str:
-        return await self._cached(f"blob:{blob_id}", lambda: self._memory.get_image(blob_id))
+    async def from_blob(self, blob_id: str, user_id: str) -> str:
+        return await self._cached(f"blob:{blob_id}", lambda: self._memory.get_image(blob_id, user_id=user_id))
 
     async def from_path(self, path: Path) -> str:
         async def read() -> tuple[bytes, str]:
@@ -108,11 +108,13 @@ async def build_messages(
     budget = max(0, max_images - len(question_images))
     for index, item in enumerate(memories, start=1):
         lines.append(line(index, item))
-        blob_id = (item.metadata or {}).get("blob_id") if item.memory_type == "image" else None
-        if blob_id and budget > 0:
+        # The blob GET verifies the owner, so only images whose owner the result carries are fetchable.
+        meta = (item.metadata or {}) if item.memory_type == "image" else {}
+        blob_id, owner = meta.get("blob_id"), meta.get("user_id")
+        if blob_id and owner and budget > 0:
             budget -= 1
             image_parts.append({"type": "text", "text": image_label(index, item)})
-            image_parts.append({"type": "image_url", "image_url": {"url": await encoder.from_blob(blob_id)}})
+            image_parts.append({"type": "image_url", "image_url": {"url": await encoder.from_blob(blob_id, owner)}})
     content: list[dict[str, Any]] = [
         {"type": "text", "text": "MEMORIES:\n" + ("\n".join(lines) if lines else "(no memories retrieved)")},
         *image_parts,

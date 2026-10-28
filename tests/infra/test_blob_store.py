@@ -1,7 +1,11 @@
+import dataclasses
 import hashlib
 
 import pytest
-from mindmemos.infra.blob import LocalBlobStore
+from mindmemos.config import BlobStoreConfig
+from mindmemos.infra import blob as blob_module
+from mindmemos.infra.blob import LocalBlobStore, get_blob_store
+from mindmemos.infra.blob.s3 import S3BlobStore
 
 
 @pytest.mark.asyncio
@@ -46,3 +50,26 @@ async def test_delete_one_blob_and_a_whole_namespace(tmp_path) -> None:
     await store.delete_namespace("proj-a")  # idempotent
     assert await store.get("proj-a", b.blob_id) is None
     assert await store.get("proj-b", other.blob_id) is not None  # other projects keep theirs
+
+
+def test_get_blob_store_builds_and_caches_backends(monkeypatch) -> None:
+    monkeypatch.setattr(blob_module, "_STORES", {})
+
+    local = get_blob_store(BlobStoreConfig(backend="local", local_root="data/blob-tests"))
+    assert isinstance(local, LocalBlobStore)
+    assert get_blob_store(BlobStoreConfig(backend="local", local_root="data/blob-tests")) is local
+
+    s3 = BlobStoreConfig(
+        backend="s3",
+        s3_endpoint="http://localhost:9100",
+        s3_bucket="blobs",
+        s3_access_key="a",
+        s3_secret_key="s",
+    )
+    first = get_blob_store(s3)
+    assert isinstance(first, S3BlobStore)
+    assert get_blob_store(s3) is first  # cached per (backend, endpoint, bucket)
+    assert get_blob_store(dataclasses.replace(s3, s3_bucket="other")) is not first
+
+    with pytest.raises(ValueError, match="unsupported blob_store.backend"):
+        get_blob_store(BlobStoreConfig(backend="gcs"))
