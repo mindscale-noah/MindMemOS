@@ -65,7 +65,13 @@ IMAGE_FILTER_FIELDS = frozenset({"user_id", "app_id", "session_id", "agent_id", 
 _QUERY_TEXT_VECTORS: ContextVar[dict[str, list[float]] | None] = ContextVar(
     "multimodal_query_text_vectors", default=None
 )
-"""Text embeddings of the queries of the current multimodal search, reused by the image text channel."""
+"""Text embeddings of the queries of the current multimodal search, reused by the image text channel.
+
+Set by ``search_candidates`` and cleared by the last consumer of the request (``augment_results``,
+or ``agentic_refine`` when the agent runs afterwards), so a long-lived context — one benchmark
+runner task runs every search of a suite — does not accumulate vectors. Requests each run in
+their own task, so the cache never crosses request boundaries.
+"""
 
 
 @dataclass
@@ -141,7 +147,13 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
 
         if not self.is_multimodal(inp):
             return memories
-        return await self._augment(inp, context, memories)
+        try:
+            return await self._augment(inp, context, memories)
+        finally:
+            # The per-request embedding cache dies with its last consumer: the agent still
+            # reuses the query vectors when it refines right after, and resets them itself.
+            if not (inp.agentic and self.owns_agentic(inp)):
+                _QUERY_TEXT_VECTORS.set(None)
 
     @traced("search.vanilla_multimodal.images")
     async def _augment(
@@ -415,6 +427,8 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         except Exception:  # noqa: BLE001 - the fast-path result is always a valid answer
             logger.warning("multimodal_agentic_failed", exc_info=True)
             return fast
+        finally:
+            _QUERY_TEXT_VECTORS.set(None)  # the agent is the last consumer of the request cache
 
     def _config(self) -> MultimodalConfig:
         if self._explicit_multimodal_config is not None:

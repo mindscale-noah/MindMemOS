@@ -227,6 +227,7 @@ POST /v1/memory/search
 | `image_text_weight` | 0.5 | 图片打分中文本相似度的权重 |
 | `visual_fact_limit` / `visual_fact_images` | 10 / 12 | 返回的视觉事实条数 / 候选图片数 |
 | `max_extraction_images` | 6 | 单次抽取调用的图片数，超出部分另发调用 |
+| `max_concurrent_vlm_calls` | 8 | 全进程同时在飞的 VLM 抽取调用数（0 不限制） |
 | `extraction_image_detail` | auto | 传给 VLM 的图片精度 |
 | `agentic_max_steps` | 4 | agent 的工具调用步数 |
 | `max_images_per_request` | 32 | 单次 add 的图片上限 |

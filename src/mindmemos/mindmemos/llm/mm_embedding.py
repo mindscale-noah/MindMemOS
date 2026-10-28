@@ -21,6 +21,7 @@ serving endpoint sees the bare model name.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass, replace
 from time import perf_counter
@@ -126,12 +127,13 @@ class MmEmbedClient:
     async def embed_images(self, images: list[ImageInput], *, task: str = "mm.image") -> list[list[float]]:
         return await self._embed("image", list(images), task=task)
 
-    def _image_items(self, images: list[ImageInput]) -> list[dict[str, str]]:
+    async def _image_items(self, images: list[ImageInput]) -> list[dict[str, str]]:
         use_url = self._endpoints[0].image_transport == "url"
-        items: list[dict[str, str]] = []
-        for image in images:
-            items.append({"image": image.url if (use_url and image.url) else image.data_uri()})
-        return items
+        # b64-encoding megapixel images is CPU work: encode a whole batch off the event loop
+        uris = await asyncio.to_thread(
+            lambda: [image.url if (use_url and image.url) else image.data_uri() for image in images]
+        )
+        return [{"image": uri} for uri in uris]
 
     async def _embed(self, kind: str, inputs: list[Any], *, task: str) -> list[list[float]]:
         if not inputs:
@@ -143,7 +145,7 @@ class MmEmbedClient:
         return vectors
 
     async def _embed_batch(self, kind: str, batch: list[Any], *, task: str) -> list[list[float]]:
-        items = batch if kind == "text" else self._image_items(batch)
+        items = batch if kind == "text" else await self._image_items(batch)
         start = perf_counter()
         try:
             resp = await self._router.aembedding(model=self.ALIAS, input=items, encoding_format="float")

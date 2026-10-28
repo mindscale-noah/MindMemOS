@@ -699,6 +699,7 @@ def _validate_multimodal(cfg: Any) -> None:
         ("visual_fact_limit", 0),
         ("visual_fact_images", 0),
         ("max_extraction_images", 1),
+        ("max_concurrent_vlm_calls", 0),
         ("agentic_max_steps", 1),
     ):
         path = f"algo_config.multimodal.{name}"

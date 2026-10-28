@@ -17,6 +17,7 @@ import base64
 import binascii
 import ipaddress
 import socket
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
@@ -80,6 +81,9 @@ class ImageLoader:
         self._cfg = cfg
         self._blobs = blob_store
         self._http = http_client
+        self._owned: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient] = (
+            weakref.WeakKeyDictionary()
+        )
         self._roots = [Path(root).expanduser().resolve() for root in cfg.allowed_path_roots]
 
     async def load(self, ref: ImageRef, *, namespace: str) -> LoadedImage:
@@ -123,7 +127,7 @@ class ImageLoader:
     async def _fetch(self, url: str) -> bytes:
         if not self._cfg.url_fetch_enabled:
             raise ImageLoadError("image URLs are disabled (blob_store.url_fetch_enabled)", code="image.url_disabled")
-        client = self._http or httpx.AsyncClient()
+        client = self._http or self._client_for()
         try:
             current = url
             for _ in range(_MAX_REDIRECTS + 1):
@@ -162,9 +166,19 @@ class ImageLoader:
             raise ImageLoadError("too many redirects", code="image.fetch_failed")
         except httpx.HTTPError as exc:
             raise ImageLoadError(f"image URL fetch failed: {type(exc).__name__}", code="image.fetch_failed") from exc
-        finally:
-            if self._http is None:
-                await client.aclose()
+
+    def _client_for(self) -> httpx.AsyncClient:
+        """One shared client per event loop, so fetches of one request reuse their connections.
+
+        Cached per loop on purpose: a client binds to the loop it first runs on, and test
+        suites run a fresh loop per test; the server process has a single long-lived loop.
+        """
+
+        loop = asyncio.get_running_loop()
+        client = self._owned.get(loop)
+        if client is None:
+            client = self._owned[loop] = httpx.AsyncClient()
+        return client
 
     async def _resolve_url(self, url: str) -> _DialTarget:
         """Validate a URL hop and say where to dial it.

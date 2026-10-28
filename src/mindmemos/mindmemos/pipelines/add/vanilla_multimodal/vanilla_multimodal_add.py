@@ -131,6 +131,7 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
                 detail=cfg.extraction_image_detail,
                 max_images=cfg.max_extraction_images,
                 max_facts=cfg.max_visual_facts_per_image,
+                max_concurrent_vlm_calls=cfg.max_concurrent_vlm_calls,
             )
         if not text_inp.messages:
             result = AddPipelineSyncResult(status="ok")

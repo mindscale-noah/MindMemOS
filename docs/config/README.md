@@ -282,6 +282,7 @@ Enhanced details:
 | `max_visual_facts_per_image` | `30` | Enhanced: visual facts kept per image (newest first). |
 | `extraction_image_detail` | `auto` | Enhanced: image detail for VLM extraction (`auto`, `low`, `high`). |
 | `max_extraction_images` | `6` | Enhanced: maximum images in one extraction call; a chunk with more also makes visual-only calls (this many images each) for the rest. |
+| `max_concurrent_vlm_calls` | `8` | Enhanced: VLM extraction calls in flight across the whole process (main and visual-only, every add); bounds endpoint load under bursts of image-heavy adds. `0` disables the cap. |
 | `agentic_max_steps` | `4` | Enhanced: tool calls in agentic retrieval before it must submit. |
 
 Deleting memory: archived memories are never recalled through images. Deleting a user's or a

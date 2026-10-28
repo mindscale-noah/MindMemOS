@@ -3,6 +3,7 @@ search, image-recalled facts, evidence images, agentic refine."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -269,6 +270,21 @@ async def test_enhanced_search_returns_anchored_images_and_image_recalled_facts(
     assert images[1].memory == "[image] Ethos Water ad"
 
 
+@pytest.mark.asyncio
+async def test_query_text_vector_cache_is_cleared_after_the_search() -> None:
+    # One benchmark runner task runs every search of a suite in the same context; the cache
+    # set by search_candidates must die with the search instead of accumulating vectors.
+    from mindmemos.pipelines.search.vanilla_multimodal import engine as engine_module
+
+    engine = _engine(FakeReader([_view("m1", "The sofa is green velvet.")]), [])
+    engine_module._QUERY_TEXT_VECTORS.set({"stale": [0.1]})
+    inp = SearchPipelineInput(query="Ethos ad background", search_pipeline="vanilla", multimodal=True)
+
+    await engine.augment_results(inp, CTX, [_item("m1", "The sofa is green velvet.")])
+
+    assert engine_module._QUERY_TEXT_VECTORS.get() is None
+
+
 def test_request_local_image_labels_never_reach_memory() -> None:
     from mindmemos.components.multimodal.extraction import strip_labels
 
@@ -305,10 +321,19 @@ async def test_agentic_refine_puts_submitted_evidence_first_and_falls_back_on_fa
     assert [o.id for o in out if o.memory_type != "image"] == ["m2", "m1"]
     assert [o.metadata["blob_id"] for o in out if o.memory_type == "image"] == [ad]
     assert "Images found" in json.dumps(llm.seen[1][-1]["content"])
+    from mindmemos.pipelines.search.vanilla_multimodal import engine as engine_module
+
+    engine_module._QUERY_TEXT_VECTORS.set({"stale": [0.1]})
+    assert await engine.agentic_refine(
+        SearchPipelineInput(query="Ethos background?", search_pipeline="vanilla", multimodal=True), CTX, fast
+    )
+    assert engine_module._QUERY_TEXT_VECTORS.get() is None  # the agent is the cache's last consumer
 
     broken = _engine(FakeReader([]), hits, llm=ScriptedLlm([]))
     inp = SearchPipelineInput(query="q", search_pipeline="vanilla", multimodal=True)
+    engine_module._QUERY_TEXT_VECTORS.set({"stale": [0.1]})
     assert await broken.agentic_refine(inp, CTX, fast) == fast
+    assert engine_module._QUERY_TEXT_VECTORS.get() is None  # cleared even on the fallback path
 
 
 @pytest.mark.asyncio
@@ -636,3 +661,39 @@ async def test_images_beyond_the_call_limit_get_a_visual_only_call() -> None:
     sofa_fact, pasta_fact = result.memories
     assert sofa_fact.metadata[IMAGE_BLOB_IDS_KEY] == [sofa, lamp]
     assert pasta_fact.metadata[IMAGE_BLOB_IDS_KEY] == [pasta]
+
+
+@pytest.mark.asyncio
+async def test_overflow_calls_share_the_process_wide_vlm_cap() -> None:
+    class CountingVlm:
+        def __init__(self):
+            self.in_flight = 0
+            self.peak = 0
+
+        async def chat(self, *, task, messages, format_parser=None, **kwargs):
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            await asyncio.sleep(0.02)
+            self.in_flight -= 1
+            return SimpleNamespace(parsed={"memories": [], "image_memories": []}, content="{}")
+
+    vlm = CountingVlm()
+    inner = FakeInner()
+    images = RequestImages(
+        by_message={
+            0: [ExtractionImage(f"{k:064d}", "image/png", b"\x89PNG") for k in range(3)],
+            1: [ExtractionImage(f"{k:064d}", "image/png", b"\x89PNG") for k in range(3, 5)],
+            2: [ExtractionImage(f"{k:064d}", "image/png", b"\x89PNG") for k in range(5, 7)],
+        },
+        max_images=2,
+        max_concurrent_vlm_calls=2,
+    )
+
+    with request_images(images):
+        envelope = _envelope()
+        await MultimodalMemoryExtractor(inner, llm_client=vlm).extract_from_envelope(
+            envelope, _preprocessed(envelope), CTX
+        )
+
+    assert inner.calls == 0  # the VLM path ran, not the vanilla fallback
+    assert vlm.peak <= 2  # 1 main + 3 visual-only calls, never more than the cap in flight

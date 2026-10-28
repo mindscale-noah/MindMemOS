@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import socket
+from pathlib import Path
 
 import pytest
 from mindmemos.components.multimodal import ImageLoader, ImageLoadError, sniff_image_mime
@@ -154,3 +155,28 @@ def test_image_ref_needs_exactly_one_source() -> None:
         ImageRef()
     with pytest.raises(ValueError):
         ImageRef(path="/a.png", url="http://x/a.png")
+
+
+def test_owned_http_client_is_one_per_event_loop() -> None:
+    # Fetches of one request reuse their connections; a client binds to the loop it first ran
+    # on, so a fresh loop (every test, or a restarted server) must get its own client.
+    loader = _loader(Path("nowhere"))
+
+    async def twice() -> tuple[object, object]:
+        return loader._client_for(), loader._client_for()
+
+    loop = asyncio.new_event_loop()
+    try:
+        first, second = loop.run_until_complete(twice())
+    finally:
+        loop.close()
+    assert first is second  # one shared pool within the loop
+
+    def client_in_fresh_loop() -> object:
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(twice())[0]
+        finally:
+            loop.close()
+
+    assert client_in_fresh_loop() is not first  # never shared across loops
