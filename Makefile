@@ -74,7 +74,11 @@ export
 COMPOSE_ENV := $(if $(wildcard .env),--env-file .env,)
 COMPOSE := docker compose $(COMPOSE_ENV) -f dockers/docker-compose.memory.yml
 DEV_CORE_SERVICES := qdrant neo4j kafka kafka-ui kafka-exporter
-DB_OBSERVABILITY_SERVICES := $(DEV_CORE_SERVICES) clickhouse otel-collector grafana minio
+# MINIO=0 (or false/no/off) skips MinIO and its bucket bootstrap: `make dev MINIO=0`
+# for the pre-s3 layout (local blob backend, no MinIO container).
+MINIO ?= 1
+MINIO_SERVICES := $(if $(filter 0 false no off,$(MINIO)),,minio)
+DB_OBSERVABILITY_SERVICES := $(DEV_CORE_SERVICES) clickhouse otel-collector grafana $(MINIO_SERVICES)
 UV ?= $(shell command -v uv 2>/dev/null || printf uv)
 MINDMEMOS_GRAFANA_PORT ?= $(or $(MINDMEM_GRAFANA_PORT),$(MEMOS_GRAFANA_PORT),3000)
 MINDMEMOS_CLICKHOUSE_HTTP_PORT ?= $(or $(MINDMEM_CLICKHOUSE_HTTP_PORT),$(MEMOS_CLICKHOUSE_HTTP_PORT),8123)
@@ -153,14 +157,14 @@ dev-core:
 
 db-observability:
 	$(COMPOSE) up -d --wait $(DB_OBSERVABILITY_SERVICES)
-	$(COMPOSE) run --rm minio-init
+	$(if $(MINIO_SERVICES),$(COMPOSE) run --rm minio-init)
 	@echo "Grafana:    http://localhost:$(MINDMEMOS_GRAFANA_PORT) (dashboard: MindMemOS Observability)"
 	@echo "ClickHouse: http://localhost:$(MINDMEMOS_CLICKHOUSE_HTTP_PORT)"
 	@echo "Kafka:      $(MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS)"
 	@echo "Qdrant:     $(MINDMEMOS_QDRANT_URL)"
 	@echo "Neo4j:      $(MINDMEMOS_NEO4J_URI)"
 	@echo "OTel OTLP:  $(MINDMEMOS_TELEMETRY_ENDPOINT)"
-	@echo "MinIO:      $(MINDMEMOS_S3_ENDPOINT) (bucket: $(MINDMEMOS_S3_BUCKET))"
+	$(if $(MINIO_SERVICES),@echo "MinIO:      $(MINDMEMOS_S3_ENDPOINT) (bucket: $(MINDMEMOS_S3_BUCKET))")
 
 db-clean:
 	$(COMPOSE) down -v

@@ -73,6 +73,7 @@ Default addresses:
 make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
 make dev-blobs         # MinIO alone (also started by make dev / make db); see section 8
+make db MINIO=0        # traditional mode: same stack without MinIO
 ```
 
 Stop local dependencies:
@@ -154,7 +155,7 @@ Core services in Docker Compose:
 - `neo4j`: stores graph relationships.
 - `kafka`: asynchronous task queue; it can run even when it is disabled in the default configuration.
 - `clickhouse` + `otel-collector` + `grafana`: observability stack; disable `telemetry.enabled` in the configuration when observability is not needed.
-- `minio` + `minio-init`: image blob storage and its bucket bootstrap, used by the multimodal pipeline's `s3` backend; started with `make dev` / `make db` (or standalone via `make dev-blobs`).
+- `minio` + `minio-init`: image blob storage and its bucket bootstrap, used by the multimodal pipeline's `s3` backend; started with `make dev` / `make db` (or standalone via `make dev-blobs`); `make dev MINIO=0` skips it.
 
 For local deployment, the port variables in `.env` must align with the connection addresses in `config/mindmemos/dev.yaml`. At startup, environment variables also override the following configuration fields:
 
