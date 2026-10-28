@@ -126,9 +126,11 @@ execution_params:
         _specs(tmp_path, body)
 
 
-def test_benchmark_override_without_algo_config_hides_profile_mode(tmp_path) -> None:
+def test_benchmark_override_without_algo_config_hides_profile_mode(tmp_path, caplog) -> None:
     # Replace semantics: the benchmark override ships alone, so the profile's mode does not
-    # reach the server and the check cannot know the effective mode - it must not block.
+    # reach the server and the check cannot know the effective mode - it must not block. But
+    # the trap is named at load time: with the stock server default (off) every add with
+    # images would 400 mid-run, so a warning is logged.
     body = PROFILE.format(mode='"off"', bench="memeye") + """
     project_override_config:
       llm_config:
@@ -137,7 +139,9 @@ execution_params:
   memeye:
     send_images: true
 """
-    assert "memeye" in _specs(tmp_path, body)
+    with caplog.at_level("WARNING", logger="mindmemos_eval.memory.config"):
+        assert "memeye" in _specs(tmp_path, body)
+    assert any("add.images_unsupported" in record.message for record in caplog.records)
 
 
 def test_default_send_images_with_mode_off_rejected(tmp_path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Any
 import yaml
 
 from .base import AlgorithmProfile, BenchmarkSpec, RunnerConfig
+
+logger = logging.getLogger("mindmemos_eval.memory.config")
 
 SUPPORTED_MEMORY_ALGORITHMS = frozenset({"vanilla", "schema"})
 SUPPORTED_BENCHMARK_SEARCH_STRATEGIES = frozenset({"vanilla", "schema"})
@@ -289,6 +292,15 @@ def check_image_sending_consistency(
             " algo_config.multimodal.mode=off, and the server rejects image sends in that mode"
             " (add.images_unsupported, search.images_unsupported): set send_images: false"
             " or use a basic/enhanced profile"
+        )
+    if mode is None:
+        # Not an error: the server may enable multimodal globally, beyond this override. But with
+        # the stock server default (off) every add with images would 400 mid-run, so say it now.
+        logger.warning(
+            "execution_params.%s.send_images is true but project_override_config does not set"
+            " algo_config.multimodal.mode; if the server default is still off, adds will fail with"
+            " add.images_unsupported — set algo_config.multimodal.mode: basic/enhanced or send_images: false",
+            name,
         )
 
 

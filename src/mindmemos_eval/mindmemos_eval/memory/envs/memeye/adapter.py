@@ -110,6 +110,7 @@ async def run_tasks(
     strategy = (
         search.pop("search_strategy", None)
         or search.pop("public_search_strategy", None)
+        or ("agentic" if search.pop("agentic", None) is True else None)
         or runner.search_strategy
         or "fast"
     )

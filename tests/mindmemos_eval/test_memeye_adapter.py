@@ -181,6 +181,14 @@ async def test_spec_search_params_win_over_runner_defaults(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_agentic_search_param_maps_to_agentic_strategy(tmp_path):
+    # `agentic: true` is a supported search_params key on every benchmark; dropping it silently
+    # would mislabel an enhanced_agentic ablation as fast retrieval.
+    _, memory, _, _ = await _run(tmp_path, search_params={"agentic": True})
+    assert memory.searches[0][1]["search_strategy"] == "agentic"
+
+
+@pytest.mark.asyncio
 async def test_judge_runs_average_scores(tmp_path):
     result, _, _, judge = await _run(tmp_path, runner=RunnerConfig(judge_runs=3))
     # One OPEN question judged three times, all scores 1.0.
