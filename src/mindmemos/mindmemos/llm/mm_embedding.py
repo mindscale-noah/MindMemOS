@@ -22,7 +22,7 @@ serving endpoint sees the bare model name.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import Any
 
@@ -66,6 +66,20 @@ def _parse_vectors(resp: Any, expected: int) -> list[list[float]]:
     return vectors
 
 
+def _placeholder_key(ep: MmEmbedEndpointConfig) -> MmEmbedEndpointConfig:
+    """Give keyless ``openai/`` endpoints a placeholder api_key.
+
+    litellm's openai provider builds an OpenAI SDK client that refuses to construct
+    without credentials, so a genuinely keyless endpoint (empty ``api_key``, e.g. the
+    bundled ``mm_embed_server``) would fail every call before any request is sent.
+    The placeholder satisfies the client; the endpoint ignores the unused bearer token.
+    """
+
+    if ep.api_key or not str(ep.model).startswith("openai/"):
+        return ep
+    return replace(ep, api_key="none")
+
+
 class MmEmbedClient:
     """Embeds texts and images through the shared LiteLLM router for the mm endpoints."""
 
@@ -74,11 +88,14 @@ class MmEmbedClient:
     def __init__(self, router_cfg: MmEmbedRouterConfig, *, router: ModelRouter | None = None) -> None:
         if not router_cfg.endpoints:
             raise ValueError("mm_embed_model_router has no endpoints")
-        self._endpoints: list[MmEmbedEndpointConfig] = list(router_cfg.endpoints)
+        self._endpoints: list[MmEmbedEndpointConfig] = [_placeholder_key(ep) for ep in router_cfg.endpoints]
         # Router-level transport details (image_transport, max_batch_size) read from the
         # first endpoint: a litellm Router picks deployments itself, so per-endpoint
         # request shaping is not possible — all mm endpoints must agree on them.
-        self._router = router if router is not None else get_router(router_cfg, self.ALIAS)[0]
+        if router is not None:
+            self._router = router
+        else:
+            self._router = get_router(replace(router_cfg, endpoints=self._endpoints), self.ALIAS)[0]
 
     @property
     def dimensions(self) -> int:

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from mindmemos.config import MmEmbedEndpointConfig, MmEmbedRouterConfig
 from mindmemos.errors import EmbeddingDimensionError
-from mindmemos.llm.mm_embedding import ImageInput, MmEmbedClient, MmEmbedError
+from mindmemos.llm.mm_embedding import ImageInput, MmEmbedClient, MmEmbedError, _placeholder_key
 
 
 def _router_cfg(*endpoints: dict) -> MmEmbedRouterConfig:
@@ -99,3 +99,16 @@ async def test_empty_input_skips_the_router() -> None:
     assert await client.embed_texts([]) == []
     assert await client.embed_images([]) == []
     assert router.calls == []
+
+
+def test_keyless_openai_endpoints_get_a_placeholder_key() -> None:
+    """litellm's openai provider builds an OpenAI SDK client that refuses a missing
+    api_key even for keyless local endpoints (e.g. the bundled mm_embed_server)."""
+
+    assert _placeholder_key(MmEmbedEndpointConfig(model="openai/siglip", api_base="http://mm")).api_key == "none"
+    assert (
+        _placeholder_key(MmEmbedEndpointConfig(model="openai/siglip", api_base="http://mm", api_key="real")).api_key
+        == "real"
+    )
+    # other providers keep their empty key: only openai/ is known to refuse it
+    assert _placeholder_key(MmEmbedEndpointConfig(model="jina/mm", api_base="http://mm")).api_key is None
