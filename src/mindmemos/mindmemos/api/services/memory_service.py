@@ -671,8 +671,9 @@ def _attach_image_urls(
 ) -> None:
     """Attach ``metadata.image_url`` to search hits that reference a stored image.
 
-    S3/MinIO backends get a short-lived presigned URL clients can GET directly (lazy
-    loading; bytes never transit this API); backends that cannot sign fall back to the
+    Backends with a public mirror (``blob_store.s3_public_base_url``) get that permanent
+    URL; other S3/MinIO backends get a short-lived presigned URL clients can GET directly
+    (lazy loading; bytes never transit this API); backends that cannot sign fall back to the
     authenticated proxy route as a *relative* path (the client resolves it against its
     own API origin) when the hit's ``user_id`` is known — never the request's Host
     header, which is client-controlled and must not be reflected into a
@@ -694,7 +695,9 @@ def _attach_image_urls(
         expiry = expires_seconds if expires_seconds is not None else cfg.s3_presign_expiry_seconds
         for item in hits:
             blob_id = item.metadata["blob_id"]
-            url = blob_store.presigned_get(project_id, blob_id, expires_seconds=expiry)
+            url = blob_store.public_url(project_id, blob_id)
+            if url is None:
+                url = blob_store.presigned_get(project_id, blob_id, expires_seconds=expiry)
             if url is None and item.metadata.get("user_id"):
                 # self-declared ids may hold '&'/'#'/non-ASCII; quote keeps the owner one query value
                 owner = quote(str(item.metadata["user_id"]), safe="")

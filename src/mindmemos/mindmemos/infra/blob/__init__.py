@@ -27,7 +27,18 @@ def get_blob_store(cfg: BlobStoreConfig | None = None) -> BlobStore:
     if cfg.backend == "s3":
         from .s3 import S3BlobStore  # lazy: the minio client stays an optional extra
 
-        key = (cfg.backend, cfg.s3_endpoint, cfg.s3_bucket, cfg.s3_presign_endpoint or "")
+        key = (
+            cfg.backend,
+            cfg.s3_endpoint,
+            cfg.s3_bucket,
+            cfg.s3_presign_endpoint or "",
+            # clients sign with their credentials, so a rotated key or a changed region must
+            # not keep serving the cached client built from the old ones
+            cfg.s3_access_key or "",
+            cfg.s3_secret_key or "",
+            cfg.s3_region or "",
+            cfg.s3_public_base_url or "",
+        )
         store = _STORES.get(key)
         if store is None:
             store = _STORES[key] = S3BlobStore(

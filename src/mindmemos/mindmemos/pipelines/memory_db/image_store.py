@@ -137,7 +137,7 @@ class ImageMemoryStore:
         if user_id is not None:
             user_filter = search_filter_to_qdrant(ctx, _match("user_id", user_id), target="image")
         records = await repo.list_all(ctx.project_id, filter_=user_filter)
-        await repo.delete_many([record.point_id for record in records])
+        await repo.delete_many(ctx.project_id, [record.point_id for record in records])
         if user_id is None:
             await blobs.delete_namespace(ctx.project_id)
         else:

@@ -124,7 +124,9 @@ async def test_put_is_content_addressed_and_idempotent() -> None:
 
     assert first == second
     assert first.blob_id == hashlib.sha256(PNG_BYTES).hexdigest()
-    assert client.calls["put_object"] == 1  # the second put reuses the stored object (stat-first)
+    # no stat-first dedup: the second put overwrites the identical content-addressed object
+    # (idempotent) instead of costing every first store an extra round trip
+    assert client.calls["put_object"] == 2
     prefix = namespace_prefix("proj-a")
     assert ("blobs", f"{prefix}/{first.blob_id[:2]}/{first.blob_id}") in client.objects
     blob, data = await store.get("proj-a", first.blob_id)

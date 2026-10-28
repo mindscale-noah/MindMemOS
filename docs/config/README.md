@@ -335,7 +335,7 @@ existing image collection has no `text` vector of that size (created by an older
 | `s3_bucket` | *(required for s3)* | Bucket name; created lazily on first use if missing. |
 | `s3_access_key` | *(required for s3)* | Access key (env: `MINDMEMOS_S3_ACCESS_KEY`). |
 | `s3_secret_key` | *(required for s3)* | Secret key (env: `MINDMEMOS_S3_SECRET_KEY`). |
-| `s3_public_base_url` | *(none)* | Optional public mirror; when set, `public_url()` returns shareable URLs. |
+| `s3_public_base_url` | *(none)* | Optional public mirror (CDN) for the bucket; when set, image search hits carry permanent `base/bucket/<key>` URLs instead of short-lived presigned ones. |
 | `s3_presign_endpoint` | *(none)* | External address baked into the short-lived presigned URLs of `POST /v1/memory/search` hits; unset signs against `s3_endpoint` (env: `MINDMEMOS_S3_PRESIGN_ENDPOINT`). |
 | `s3_presign_expiry_seconds` | `3600` | Presigned URL lifetime, `1..604800` seconds (env: `MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS`). |
 | `max_image_bytes` | `20971520` | Larger images are rejected. |

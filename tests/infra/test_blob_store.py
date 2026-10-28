@@ -70,6 +70,8 @@ def test_get_blob_store_builds_and_caches_backends(monkeypatch) -> None:
     assert isinstance(first, S3BlobStore)
     assert get_blob_store(s3) is first  # cached per (backend, endpoint, bucket)
     assert get_blob_store(dataclasses.replace(s3, s3_bucket="other")) is not first
+    # the client signs with its credentials, so rotated keys must not keep the cached client
+    assert get_blob_store(dataclasses.replace(s3, s3_access_key="a2", s3_secret_key="s2")) is not first
 
     with pytest.raises(ValueError, match="unsupported blob_store.backend"):
         get_blob_store(BlobStoreConfig(backend="gcs"))

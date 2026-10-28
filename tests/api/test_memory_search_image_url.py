@@ -87,6 +87,13 @@ class _PresigningStore(LocalBlobStore):
         return f"https://minio.example.com/blobs/{namespace}/{blob_id}?X-Amz-Signature=fake&expires={expires_seconds}"
 
 
+class _MirroredStore(_PresigningStore):
+    """S3 backend with a public mirror (``s3_public_base_url``): signing stays unused."""
+
+    def public_url(self, namespace: str, blob_id: str) -> str | None:
+        return f"https://cdn.example.com/mirror/{namespace}/{blob_id}"
+
+
 def _image_result(*, owner: str = OWNER) -> SearchPipelineResult:
     return SearchPipelineResult(
         status="ok",
@@ -185,6 +192,19 @@ def test_presigning_backend_decorates_every_valid_image_hit(tmp_path, monkeypatc
         ("project-1", BLOB_ID, 3600),
         ("project-1", OTHER_BLOB_ID, 3600),
     ]
+
+
+def test_public_mirror_url_wins_over_presigning(tmp_path, monkeypatch, auth_context, config) -> None:
+    """A configured s3_public_base_url serves permanent URLs; no signing round per hit."""
+    store = _MirroredStore(tmp_path)
+    client = _client(auth_context, _service(monkeypatch, store))
+
+    memories = _search(client)
+    by_id = {item["id"]: item for item in memories}
+
+    assert by_id["img-1"]["metadata"]["image_url"] == f"https://cdn.example.com/mirror/project-1/{BLOB_ID}"
+    assert by_id[BLOB_ID]["metadata"]["image_url"] == f"https://cdn.example.com/mirror/project-1/{OTHER_BLOB_ID}"
+    assert store.presigned == []  # the mirror makes presigning unnecessary
 
 
 def test_internal_caller_gets_the_relative_proxy_path(tmp_path, monkeypatch, auth_context, config) -> None:

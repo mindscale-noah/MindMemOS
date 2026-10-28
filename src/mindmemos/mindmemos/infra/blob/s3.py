@@ -142,11 +142,11 @@ class S3BlobStore:
             return client
 
     def _put(self, namespace: str, data: bytes, mime_type: str) -> StoredBlob:
+        # No stat-first dedup: the key is the content hash, so a duplicate put overwrites the
+        # identical object (idempotent) instead of costing every first store an extra round
+        # trip. The mime type is sniffed from the same bytes and therefore identical too.
         self._ensure_bucket()
         blob_id = blob_id_for(data)
-        existing = self._stat(namespace, blob_id)
-        if existing is not None:
-            return existing
         self._client.put_object(
             self._bucket, self._key(namespace, blob_id), io.BytesIO(data), len(data), content_type=mime_type
         )
