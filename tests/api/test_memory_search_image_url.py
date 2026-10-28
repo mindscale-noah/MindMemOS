@@ -146,16 +146,14 @@ def _search(client: TestClient) -> list[dict]:
     return response.json()["data"]["memories"]
 
 
-def test_local_backend_falls_back_to_the_proxy_route_url(tmp_path, monkeypatch, auth_context, config) -> None:
+def test_local_backend_falls_back_to_the_relative_proxy_route(tmp_path, monkeypatch, auth_context, config) -> None:
     client = _client(auth_context, _service(monkeypatch, LocalBlobStore(tmp_path)))
 
     memories = _search(client)
     by_id = {item["id"]: item for item in memories}
 
     assert "image_url" not in by_id["mem-1"]["metadata"]  # text hit untouched
-    assert by_id["img-1"]["metadata"]["image_url"] == (
-        f"http://testserver/v1/memory/images/{BLOB_ID}?user_id={OWNER}"
-    )
+    assert by_id["img-1"]["metadata"]["image_url"] == f"/v1/memory/images/{BLOB_ID}?user_id={OWNER}"
     # bare hit has no owner to name on the proxy route -> stays undecorated
     assert "image_url" not in by_id[BLOB_ID]["metadata"]
     assert "image_url" not in by_id["img-bad"]["metadata"]
@@ -168,7 +166,7 @@ def test_proxy_fallback_quotes_special_owner_ids(tmp_path, monkeypatch, auth_con
     memories = _search(client)
 
     assert memories[1]["metadata"]["image_url"] == (
-        f"http://testserver/v1/memory/images/{BLOB_ID}?user_id=a%26b%3D%E5%BC%A0%E4%B8%89"
+        f"/v1/memory/images/{BLOB_ID}?user_id=a%26b%3D%E5%BC%A0%E4%B8%89"
     )
 
 
@@ -189,13 +187,15 @@ def test_presigning_backend_decorates_every_valid_image_hit(tmp_path, monkeypatc
     ]
 
 
-def test_search_without_base_url_skips_the_proxy_fallback(tmp_path, monkeypatch, auth_context, config) -> None:
-    """Internal callers (no HTTP request) never get a bogus proxy URL."""
+def test_internal_caller_gets_the_relative_proxy_path(tmp_path, monkeypatch, auth_context, config) -> None:
+    """Internal callers (no HTTP request) get the same inert relative path, never a bogus absolute origin."""
     service = _service(monkeypatch, LocalBlobStore(tmp_path))
 
-    result = asyncio.run(service.search(auth_context, SearchRequest(query="q"), base_url=None))
+    result = asyncio.run(service.search(auth_context, SearchRequest(query="q")))
 
-    assert all("image_url" not in (item.metadata or {}) for item in result.memories)
+    by_id = {item.id: item for item in result.memories}
+    assert by_id["img-1"].metadata["image_url"] == f"/v1/memory/images/{BLOB_ID}?user_id={OWNER}"
+    assert "image_url" not in by_id[BLOB_ID].metadata  # bare hit stays undecorated
 
 
 def test_expiry_flows_from_config_into_the_signed_urls(tmp_path, monkeypatch, auth_context, config_expiry_7200) -> None:

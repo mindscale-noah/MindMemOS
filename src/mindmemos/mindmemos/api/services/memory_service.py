@@ -459,13 +459,11 @@ class MemoryService:
         self,
         auth: AuthContext,
         request: SearchRequest,
-        *,
-        base_url: str | None = None,
     ) -> SearchPipelineResult:
         """Run the search pipeline.
 
-        ``base_url`` (the HTTP request's origin) decorates image hits with a proxy
-        ``metadata.image_url`` when the blob backend cannot presign.
+        Image hits are decorated with ``metadata.image_url``: a presigned link when the
+        blob backend can sign, otherwise a relative proxy path (see ``_attach_image_urls``).
         """
 
         # Stamp request identity onto the handler-root span so downstream LLM spans
@@ -481,10 +479,10 @@ class MemoryService:
             raise NotImplementedError("search pipeline implementation is not wired yet")
         config_ctx = await self._provider_config_context(ctx)
         with config_ctx:
-            return await self._search_with_context(pipeline, payload, ctx, base_url=base_url)
+            return await self._search_with_context(pipeline, payload, ctx)
 
     async def _search_with_context(
-        self, pipeline: SearchPipeline, payload, ctx, *, base_url: str | None = None
+        self, pipeline: SearchPipeline, payload, ctx
     ) -> SearchPipelineResult:
         request_submitted_at = utcnow()
         try:
@@ -514,7 +512,7 @@ class MemoryService:
             operation="search",
         )
         # Decorated after recording: telemetry keeps signed URLs (short-lived secrets) out.
-        _attach_image_urls(result, project_id=ctx.project_id, base_url=base_url)
+        _attach_image_urls(result, project_id=ctx.project_id)
         return result
 
     @traced("memory_service.get_image")
@@ -668,7 +666,6 @@ def _attach_image_urls(
     result: SearchPipelineResult,
     *,
     project_id: str,
-    base_url: str | None,
     store: Any | None = None,
     expires_seconds: int | None = None,
 ) -> None:
@@ -676,8 +673,10 @@ def _attach_image_urls(
 
     S3/MinIO backends get a short-lived presigned URL clients can GET directly (lazy
     loading; bytes never transit this API); backends that cannot sign fall back to the
-    authenticated proxy route built from ``base_url`` when both it and the hit's
-    ``user_id`` are known. ``metadata.blob_id`` remains the stable canonical reference;
+    authenticated proxy route as a *relative* path (the client resolves it against its
+    own API origin) when the hit's ``user_id`` is known — never the request's Host
+    header, which is client-controlled and must not be reflected into a
+    credential-bearing URL. ``metadata.blob_id`` remains the stable canonical reference;
     failures degrade silently — search results never break over URL decoration.
     """
 
@@ -696,10 +695,10 @@ def _attach_image_urls(
         for item in hits:
             blob_id = item.metadata["blob_id"]
             url = blob_store.presigned_get(project_id, blob_id, expires_seconds=expiry)
-            if url is None and base_url and item.metadata.get("user_id"):
+            if url is None and item.metadata.get("user_id"):
                 # self-declared ids may hold '&'/'#'/non-ASCII; quote keeps the owner one query value
                 owner = quote(str(item.metadata["user_id"]), safe="")
-                url = f"{base_url.rstrip('/')}/v1/memory/images/{blob_id}?user_id={owner}"
+                url = f"/v1/memory/images/{blob_id}?user_id={owner}"
             if url:
                 item.metadata["image_url"] = url
     except Exception as exc:  # noqa: BLE001 - decoration must never fail the search (e.g. s3 extra missing)

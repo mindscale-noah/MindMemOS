@@ -195,8 +195,9 @@ POST /v1/memory/search
 
 **`metadata.image_url`（图片懒加载直链）：** 带 `blob_id` 的图片命中还会附带 `image_url`——
 `s3` 后端是短时效预签名 URL（本地 HMAC 签名，默认 1 小时，见 `blob_store.s3_presign_expiry_seconds`），
-客户端可直接 GET 原图，字节不过本 API;`local` 等无法签名的后端回落为上面的代理路由
-（`{base_url}/v1/memory/images/{blob_id}?user_id=<属主>`，仅当命中带属主时）。URL 过期或缺失时，
+客户端可直接 GET 原图，字节不过本 API;`local` 等无法签名的后端回落为上面的代理路由的**相对路径**
+（`/v1/memory/images/{blob_id}?user_id=<属主>`，客户端按自己的 API 地址拼全，仅当命中带属主时——
+不取请求的 Host 头，避免把凭据指向不可信源）。URL 过期或缺失时，
 仍用 `blob_id` + 属主 `user_id` 走 `get_image`。该字段在响应组装时注入、不落遥测。
 
 **错误码（400 或 404）：**

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query
 from starlette.responses import Response, StreamingResponse
 
 from .deps import require_scopes
@@ -147,11 +147,10 @@ async def update_memory(
 @router.post("/search", response_model=SearchResponse)
 async def search_memory(
     payload: SearchRequest,
-    request: Request,
     auth: AuthContext = Depends(require_scopes(SCOPE_MEM_READ)),
     service: MemoryService = Depends(get_memory_service),
 ) -> SearchResponse:
-    result = await service.search(auth, payload, base_url=str(request.base_url))
+    result = await service.search(auth, payload)
     return to_memory_list_api_response(result, auth.request_id)
 
 

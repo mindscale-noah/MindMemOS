@@ -243,7 +243,7 @@ function formatMemoryContext(memories: MemoryHit[], userId: string | undefined):
   }
   const preamble = userId ? `Relevant memories for ${userId}:` : "Relevant memories:";
   const imageHint = hasImage
-    ? "(<image: …> URLs point at the stored images; presigned links are directly fetchable, proxy links need the project's API token)"
+    ? "(<image: …> URLs point at the stored images; presigned links are directly fetchable; proxy paths are relative to the MindMemOS API base and need the project's API token)"
     : "";
   return [MEMORY_CONTEXT_OPEN, preamble, imageHint, ...lines, MEMORY_CONTEXT_CLOSE].filter(Boolean).join("\n");
 }
