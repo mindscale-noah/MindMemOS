@@ -629,3 +629,54 @@ async def test_reset_project_skips_collections_that_do_not_exist(monkeypatch):
 
     monkeypatch.setattr(db_reset, "AsyncQdrantClient", lambda **kw: _FakeQdrant())
     assert await db_reset._reset_qdrant(cfg, "proj_x") == {"qdrant:image_item_v1": 0}
+
+
+@pytest.mark.asyncio
+async def test_reuse_api_key_checks_send_images_against_reused_override(tmp_path):
+    """The reused key's override is what the server applies, so that is what the check uses."""
+    config_path = tmp_path / "memory_eval.yaml"
+    config_path.write_text(
+        """
+algorithm_profiles:
+  vanilla:
+    memory_algorithm: vanilla
+    project_override_config:
+      algo_config:
+        multimodal:
+          mode: basic
+benchmarks:
+  memeye:
+    dataset: datasets/memeye/data
+    default_algorithm: vanilla
+execution_params:
+  memeye:
+    send_images: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+    api_key_path = tmp_path / "api_keys.yaml"
+    api_key_path.write_text(
+        """
+api_keys:
+  - key_id: key-1
+    api_key: dev-api-key
+    project_id: proj-1
+    memory_algorithm: vanilla
+    enabled: true
+    project_override_config:
+      algo_config:
+        multimodal:
+          mode: "off"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(
+        benchmark_config=str(config_path),
+        benchmark_list="memeye",
+        manifest_output=str(tmp_path / "manifest.jsonl"),
+        api_key_output=str(tmp_path / "generated_api_keys.yaml"),
+        reuse_api_key=str(api_key_path),
+    )
+
+    with pytest.raises(ValueError, match="send_images is true"):
+        await run_benchmark_matrix(args, adapters={"memeye": object()})

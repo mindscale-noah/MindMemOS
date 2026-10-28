@@ -223,6 +223,25 @@ without images, behaves exactly like vanilla in every mode: same results, same m
 image lookups, even for users who stored images. Vanilla text search, related-memory recall during
 add, dreaming and feedback never see visual facts.
 
+What each mode requires, and how a missing requirement shows up (nothing is a hard error at
+config load — the modes degrade, loudly in the logs):
+
+- **`basic` / `enhanced` need `mm_embed_model_router`** for similarity-based image results. With
+  no endpoints images are still stored, but never indexed: the server logs a **startup warning**
+  when the *global* mode is not `off` (a per-project `basic`/`enhanced` override only surfaces
+  through the per-add events below), every add logs `multimodal_images_stored_unindexed`, and
+  multimodal searches lose their similarity-based image recall (in `enhanced` mode, evidence
+  images anchored to text-recalled facts can still appear). `enhanced` additionally runs its VLM
+  extraction but then drops per-image descriptions and visual facts
+  (`multimodal_visual_facts_dropped`) — those VLM tokens are wasted.
+- **`enhanced` (and `search_strategy: agentic`) needs a chat model that accepts images** — the
+  VLM extractor and the multimodal agent attach image parts to chat calls. There is no capability
+  check: a provider that rejects the image parts fails the call
+  (`multimodal_extraction_failed`, fallback to plain text extraction), and a provider that
+  accepts and silently ignores them (typical for text-only OpenAI-compatible servers) returns no
+  `image_memories` (`multimodal_visuals_missing`) — text memory keeps working, but there are no
+  descriptions or visual facts. When image results look empty, check these log events first.
+
 Enhanced details:
 
 - **VLM extraction** uses the same number of chat calls as vanilla (the chat model must accept
@@ -295,7 +314,8 @@ For local development `scripts/mm_embed_server.py` serves SigLIP2 (`siglip2-base
 768 dimensions) behind this contract on `http://127.0.0.1:8090/v1` — see its docstring for the
 run command (`uv run --no-project --with torch --with transformers --with pillow ...`).
 
-With no endpoints, multimodal modes only store images. At startup the server embeds one probe text:
+With no endpoints, multimodal modes only store images (a startup warning fires when the *global*
+mode is not `off`; see the degradation log events above). At startup the server embeds one probe text:
 a dimension mismatch (endpoint vs `dimensions` vs an existing image collection) stops startup; an
 unreachable endpoint only logs a warning. Changing the model requires a new `image_collection`.
 

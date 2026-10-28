@@ -21,7 +21,13 @@ from mindmemos_eval.memory.envs.personamem import PersonaMemAdapter
 
 from ..llm import LLMClient, LLMConfig
 from .base import BenchmarkAdapter, BenchmarkSpec, RunContext, RunnerConfig
-from .config import _merged_runner_config, _option, load_benchmark_specs, validate_memory_algorithm
+from .config import (
+    _merged_runner_config,
+    _option,
+    check_image_sending_consistency,
+    load_benchmark_specs,
+    validate_memory_algorithm,
+)
 from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_blob_root, resolve_collections
 from .identity import RunIdentity, new_identity, write_api_keys
 from .manifest import BenchmarkRunManifest, write_manifests
@@ -439,6 +445,9 @@ async def run_benchmark_matrix(
         args.benchmark_config,
         algorithm_override=_option(args, "algorithm"),
         memory_algorithm_override=_option(args, "memory_algorithm"),
+        # With --reuse-api-key the server applies the OLD key file's override, not the YAML's,
+        # so the spec-level check is deferred to the reuse branch below.
+        validate_image_sending=not _option(args, "reuse_api_key"),
     )
     runner = _merged_runner_config(args)
     setattr(args, "runner_config", runner)
@@ -459,6 +468,15 @@ async def run_benchmark_matrix(
         existing = _load_existing_identity(reuse_path, benchmark=benchmark_names[0])
         identities = [existing]
         setattr(args, "_reused_key_file", reuse_path)
+        # The reused key's override is what the server actually applies per request.
+        check_image_sending_consistency(
+            benchmark_names[0], specs[benchmark_names[0]].execution_params, existing.project_override_config
+        )
+        if specs[benchmark_names[0]].project_override_config != existing.project_override_config:
+            logger.warning(
+                "reused api key carries a different project_override_config than the benchmark yaml;"
+                " the reused key's override is what the server applies"
+            )
         logger.info(
             "reusing existing api key project_id=%s api_key_prefix=%s",
             existing.project_id,

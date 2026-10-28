@@ -80,7 +80,16 @@ async def _check_multimodal_embedding() -> None:
 
     client = get_mm_embed_client()
     if client is None:
-        logger.info("multimodal embedding not configured; multimodal vanilla stores images without indexing them")
+        mode = get_config().algo_config.multimodal.mode
+        if str(mode) != "off":
+            logger.warning(
+                "multimodal mode has no mm_embed_model_router endpoints: images are stored but never"
+                " indexed, so multimodal searches return no image hits (enhanced also drops per-image"
+                " descriptions and visual facts after VLM extraction)",
+                mode=str(mode),
+            )
+        else:
+            logger.info("multimodal embedding not configured; multimodal vanilla stores images without indexing them")
         return
     expected = client.dimensions
     store = ImageMemoryStore()
