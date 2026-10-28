@@ -7,12 +7,11 @@ requiredness, which would otherwise surface only as server-side 422s at runtime.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
-
 from mindmemos.typing.memory import DialogueMessage as ServerDialogueMessage
 from mindmemos.typing.memory import ImageRef as ServerImageRef
 from mindmemos_sdk.memory.models import DialogueMessage as SdkDialogueMessage
 from mindmemos_sdk.memory.models import ImageRef as SdkImageRef
+from pydantic import BaseModel
 
 
 def _shape(model: type[BaseModel]) -> tuple[set[str], set[str]]:

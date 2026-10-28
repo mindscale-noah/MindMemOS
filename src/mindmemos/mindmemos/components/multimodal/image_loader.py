@@ -1,9 +1,13 @@
 """Resolve ``ImageRef`` inputs (path / url / base64 / blob_id) to validated image bytes.
 
-Every source is size-limited and must decode to a known raster format (checked by magic bytes),
-so an image reference can never be used to read or relay arbitrary files. Paths must lie under
-``blob_store.allowed_path_roots``; URLs are fetched without following redirects to hosts that
-resolve to private addresses unless ``blob_store.url_allow_private_hosts`` is set.
+Every source is size-limited (before decoding or streaming, not after) and must decode to a
+known raster format (checked by magic bytes), so an image reference can never be used to read
+or relay arbitrary files. Paths must lie under ``blob_store.allowed_path_roots``; URLs are
+fetched without following redirects to hosts that resolve to private addresses unless
+``blob_store.url_allow_private_hosts`` is set. URL hosts are resolved once and the connection
+is dialed to the resolved IP (Host header and TLS SNI keep the original hostname), so a
+rebinding DNS cannot pass the private-address check and then answer the connection from
+inside the network.
 """
 
 from __future__ import annotations
@@ -29,6 +33,15 @@ _MAX_REDIRECTS = 3
 
 class ImageLoadError(BadRequestError):
     code = "image.invalid"
+
+
+@dataclass(frozen=True)
+class _DialTarget:
+    """Where to send one URL hop: the (IP-pinned) URL to dial plus the original hostname."""
+
+    url: str
+    host_header: str | None
+    hostname: str | None
 
 
 @dataclass(frozen=True)
@@ -77,7 +90,7 @@ class ImageLoader:
             blob, data = found
             return LoadedImage(data=data, mime_type=blob.mime_type)
         if ref.data:
-            return self._validated(_decode_base64(ref.data))
+            return self._validated(_decode_base64(ref.data, max_bytes=self._cfg.max_image_bytes))
         if ref.path:
             return self._validated(await asyncio.to_thread(self._read_path, ref.path))
         if ref.url:
@@ -114,9 +127,20 @@ class ImageLoader:
         try:
             current = url
             for _ in range(_MAX_REDIRECTS + 1):
-                await self._check_url(current)
+                target = await self._resolve_url(current)
+                headers = {"Host": target.host_header} if target.host_header else None
+                extensions = (
+                    {"sni_hostname": target.hostname}
+                    if target.hostname and urlsplit(current).scheme == "https"
+                    else None
+                )
                 async with client.stream(
-                    "GET", current, timeout=self._cfg.url_fetch_timeout, follow_redirects=False
+                    "GET",
+                    target.url,
+                    headers=headers,
+                    extensions=extensions,
+                    timeout=self._cfg.url_fetch_timeout,
+                    follow_redirects=False,
                 ) as response:
                     if response.is_redirect:
                         current = urljoin(current, response.headers.get("location", ""))
@@ -142,12 +166,21 @@ class ImageLoader:
             if self._http is None:
                 await client.aclose()
 
-    async def _check_url(self, url: str) -> None:
+    async def _resolve_url(self, url: str) -> _DialTarget:
+        """Validate a URL hop and say where to dial it.
+
+        The hostname is resolved once and the resolved IP is pinned into the dialed URL: httpx
+        would otherwise resolve the hostname a second time when connecting, and a rebinding DNS
+        could pass the private-address check here and serve the actual connection from a
+        private address. The Host header and TLS SNI keep the original hostname; with
+        ``url_allow_private_hosts`` there is nothing to enforce, so the URL is dialed as-is.
+        """
+
         parts = urlsplit(url)
         if parts.scheme not in {"http", "https"} or not parts.hostname:
             raise ImageLoadError("image URL must be http(s)", code="image.url_denied")
         if self._cfg.url_allow_private_hosts:
-            return
+            return _DialTarget(url=url, host_header=None, hostname=None)
         try:
             infos = await asyncio.get_running_loop().getaddrinfo(
                 parts.hostname, parts.port or 443, type=socket.SOCK_STREAM
@@ -158,14 +191,27 @@ class ImageLoader:
             address = ipaddress.ip_address(info[4][0])
             if not address.is_global:
                 raise ImageLoadError("image URL resolves to a non-public address", code="image.url_denied")
+        pinned_ip = infos[0][4][0]
+        netloc = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+        if parts.port is not None:
+            netloc = f"{netloc}:{parts.port}"
+        return _DialTarget(
+            url=parts._replace(netloc=netloc).geturl(),
+            host_header=parts.netloc.rpartition("@")[2] or parts.hostname,
+            hostname=parts.hostname,
+        )
 
 
-def _decode_base64(raw: str) -> bytes:
+def _decode_base64(raw: str, *, max_bytes: int) -> bytes:
     text = raw.strip()
     if text.startswith("data:"):
         header, _, text = text.partition(",")
         if ";base64" not in header:
             raise ImageLoadError("data URI must be base64 encoded")
+    # Reject before decoding: a huge payload would otherwise be fully expanded in memory
+    # before the size check sees it. Four base64 chars encode three bytes.
+    if len(text) > (max_bytes // 3 + 1) * 4:
+        raise ImageLoadError(f"image exceeds {max_bytes} bytes", code="image.too_large")
     try:
         return base64.b64decode(text, validate=True)
     except (binascii.Error, ValueError) as exc:

@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import socket
 
 import pytest
 from mindmemos.components.multimodal import ImageLoader, ImageLoadError, sniff_image_mime
@@ -60,6 +62,82 @@ async def test_size_limit_and_private_urls(tmp_path) -> None:
     for url in ("http://127.0.0.1/x.png", "http://169.254.169.254/latest", "file:///etc/passwd"):
         with pytest.raises(ImageLoadError):
             await _loader(tmp_path).load(ImageRef(url=url), namespace="p")
+
+
+@pytest.mark.asyncio
+async def test_base64_is_rejected_before_decoding_when_oversized(tmp_path) -> None:
+    # The check must fire on the encoded length: a payload far beyond the limit is refused
+    # without ever being expanded in memory.
+    loader = _loader(tmp_path, max_image_bytes=64)
+    huge = base64.b64encode(PNG + b"\x00" * 1_000_000).decode()
+    assert len(huge) > 1_300_000
+    with pytest.raises(ImageLoadError, match="exceeds"):
+        await loader.load(ImageRef(data=huge), namespace="p")
+    with pytest.raises(ImageLoadError, match="exceeds"):  # data-URI form takes the same path
+        await loader.load(ImageRef(data=f"data:image/png;base64,{huge}"), namespace="p")
+
+
+@pytest.mark.asyncio
+async def test_url_is_dialed_on_the_resolved_ip_with_original_host(monkeypatch, tmp_path) -> None:
+    # DNS rebinding: the private-address check resolves the hostname once and the connection
+    # must dial that same IP (Host header / TLS SNI keep the original hostname), so a hostname
+    # that re-resolves to a private address for the actual connection cannot slip through.
+    import httpx
+
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["host"] = request.headers.get("host")
+        seen["sni"] = request.extensions.get("sni_hostname")
+        return httpx.Response(200, content=PNG)
+
+    loader = ImageLoader(
+        BlobStoreConfig(),
+        LocalBlobStore(tmp_path / "blobs"),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async def fake_getaddrinfo(host, port, **kwargs):  # noqa: ARG001 - (host, port, ...) per getaddrinfo
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", fake_getaddrinfo)
+
+    loaded = await loader.load(ImageRef(url="https://images.example.com:8443/pics/a.png"), namespace="p")
+
+    assert loaded.data == PNG and loaded.source_url == "https://images.example.com:8443/pics/a.png"
+    assert seen["url"] == "https://93.184.216.34:8443/pics/a.png"  # dialed on the pinned IP
+    assert seen["host"] == "images.example.com:8443"
+    assert seen["sni"] == "images.example.com"
+
+
+@pytest.mark.asyncio
+async def test_url_with_private_hosts_allowed_dials_the_hostname(monkeypatch, tmp_path) -> None:
+    import httpx
+
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["host"] = request.headers.get("host")
+        return httpx.Response(200, content=PNG)
+
+    loader = ImageLoader(
+        BlobStoreConfig(url_allow_private_hosts=True),
+        LocalBlobStore(tmp_path / "blobs"),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async def fail_getaddrinfo(*args, **kwargs):  # nothing may resolve: private hosts are allowed
+        raise AssertionError("getaddrinfo must not be called when private hosts are allowed")
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", fail_getaddrinfo)
+
+    loaded = await loader.load(ImageRef(url="http://localhost:9910/a.png"), namespace="p")
+
+    assert loaded.data == PNG
+    assert seen["url"] == "http://localhost:9910/a.png"
+    assert seen["host"] == "localhost:9910"  # no override: httpx derives Host from the URL itself
 
 
 @pytest.mark.asyncio

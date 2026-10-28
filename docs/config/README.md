@@ -342,7 +342,7 @@ existing image collection has no `text` vector of that size (created by an older
 | `allowed_path_roots` | `[]` | Directories `ImageRef.path` may point into; empty disables path inputs. Roots are not project-scoped: in multi-project deployments every project can read images under them. |
 | `url_fetch_enabled` | `true` | Download `ImageRef.url` inputs. |
 | `url_fetch_timeout` | `20.0` | Download timeout in seconds. |
-| `url_allow_private_hosts` | `false` | Allow URLs resolving to private/loopback addresses (SSRF guard; DNS rebinding is not covered). |
+| `url_allow_private_hosts` | `false` | Allow URLs resolving to private/loopback addresses (SSRF guard). Hosts are resolved once and the connection is dialed to the resolved IP, so DNS rebinding cannot bypass the check. |
 
 Images are deduplicated by SHA-256 per project (blob store) and per project+user (image
 collection). Only PNG, JPEG, GIF, WebP and BMP are accepted (checked by content, not extension).
