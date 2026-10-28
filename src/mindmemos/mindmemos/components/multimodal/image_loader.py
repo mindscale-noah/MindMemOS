@@ -49,7 +49,6 @@ class _DialTarget:
 class LoadedImage:
     data: bytes
     mime_type: str
-    source_url: str | None = None
 
 
 def sniff_image_mime(data: bytes) -> str | None:
@@ -66,6 +65,16 @@ def sniff_image_mime(data: bytes) -> str | None:
     if data[:2] == b"BM" and len(data) > 26:
         return "image/bmp"
     return None
+
+
+def image_data_uri(data: bytes, mime_type: str) -> str:
+    """The one place image bytes become a ``data:<mime>;base64,...`` URI.
+
+    Every producer of inline images (VLM prompts, mm-embed batches) goes through here so the
+    wire format cannot drift between them.
+    """
+
+    return f"data:{mime_type};base64,{base64.b64encode(data).decode('ascii')}"
 
 
 class ImageLoader:
@@ -94,21 +103,23 @@ class ImageLoader:
             blob, data = found
             return LoadedImage(data=data, mime_type=blob.mime_type)
         if ref.data:
-            return self._validated(_decode_base64(ref.data, max_bytes=self._cfg.max_image_bytes))
+            # Decode off the loop: a max-size image is tens of milliseconds of pure CPU,
+            # and one add fans out up to max_images_per_request of these back to back.
+            data = await asyncio.to_thread(_decode_base64, ref.data, max_bytes=self._cfg.max_image_bytes)
+            return self._validated(data)
         if ref.path:
             return self._validated(await asyncio.to_thread(self._read_path, ref.path))
         if ref.url:
-            data = await self._fetch(ref.url)
-            return self._validated(data, source_url=ref.url)
+            return self._validated(await self._fetch(ref.url))
         raise ImageLoadError("image has no source")
 
-    def _validated(self, data: bytes, *, source_url: str | None = None) -> LoadedImage:
+    def _validated(self, data: bytes) -> LoadedImage:
         if len(data) > self._cfg.max_image_bytes:
             raise ImageLoadError(f"image exceeds {self._cfg.max_image_bytes} bytes", code="image.too_large")
         mime = sniff_image_mime(data)
         if mime is None:
             raise ImageLoadError("unsupported image format (png, jpeg, gif, webp, bmp)", code="image.unsupported")
-        return LoadedImage(data=data, mime_type=mime, source_url=source_url)
+        return LoadedImage(data=data, mime_type=mime)
 
     def _read_path(self, raw: str) -> bytes:
         if not self._roots:
@@ -172,6 +183,9 @@ class ImageLoader:
 
         Cached per loop on purpose: a client binds to the loop it first runs on, and test
         suites run a fresh loop per test; the server process has a single long-lived loop.
+        The cached client is never ``aclose()``d — on the server it lives until process exit
+        (a bounded, intentional leak: the connections idle out on their own), and elsewhere
+        it dies with its loop. A loader instance itself is cheap to rebuild per request.
         """
 
         loop = asyncio.get_running_loop()
@@ -193,12 +207,15 @@ class ImageLoader:
         parts = urlsplit(url)
         if parts.scheme not in {"http", "https"} or not parts.hostname:
             raise ImageLoadError("image URL must be http(s)", code="image.url_denied")
+        try:
+            port = parts.port
+        except ValueError as exc:
+            # urlsplit defers port parsing: an out-of-range port only raises on first access.
+            raise ImageLoadError("image URL has an invalid port", code="image.invalid") from exc
         if self._cfg.url_allow_private_hosts:
             return _DialTarget(url=url, host_header=None, hostname=None)
         try:
-            infos = await asyncio.get_running_loop().getaddrinfo(
-                parts.hostname, parts.port or 443, type=socket.SOCK_STREAM
-            )
+            infos = await asyncio.get_running_loop().getaddrinfo(parts.hostname, port or 443, type=socket.SOCK_STREAM)
         except OSError as exc:
             raise ImageLoadError("image URL host does not resolve", code="image.fetch_failed") from exc
         for info in infos:
@@ -207,8 +224,8 @@ class ImageLoader:
                 raise ImageLoadError("image URL resolves to a non-public address", code="image.url_denied")
         pinned_ip = infos[0][4][0]
         netloc = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
-        if parts.port is not None:
-            netloc = f"{netloc}:{parts.port}"
+        if port is not None:
+            netloc = f"{netloc}:{port}"
         return _DialTarget(
             url=parts._replace(netloc=netloc).geturl(),
             host_header=parts.netloc.rpartition("@")[2] or parts.hostname,

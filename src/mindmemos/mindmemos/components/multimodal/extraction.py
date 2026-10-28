@@ -21,7 +21,6 @@ the add pipeline sets per request (``request_images``).
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextvars
 import json
 import re
@@ -41,6 +40,7 @@ from ..extractor.vanilla.memory import (
     _normalize_extraction_payload,
     parse_memory_extraction_json,
 )
+from .image_loader import image_data_uri
 
 logger = get_logger(__name__)
 IMAGE_BLOB_IDS_KEY = "image_blob_ids"
@@ -148,9 +148,7 @@ def _vlm_semaphore(limit: int) -> asyncio.Semaphore | None:
 async def _data_uris(images: list[ExtractionImage]) -> list[str]:
     """base64-encode images into data URIs off the event loop (megapixel encodes are CPU work)."""
 
-    return await asyncio.to_thread(
-        lambda: [f"data:{image.mime_type};base64,{base64.b64encode(image.data).decode('ascii')}" for image in images]
-    )
+    return await asyncio.to_thread(lambda: [image_data_uri(image.data, image.mime_type) for image in images])
 
 
 _REQUEST_IMAGES: contextvars.ContextVar[RequestImages | None] = contextvars.ContextVar(
@@ -213,7 +211,9 @@ class MultimodalMemoryExtractor:
         prompt = _envelope_prompt_messages(
             envelope, preprocessed_texts, context, enable_entities=bool(getattr(self._inner, "_enable_entities", False))
         )
-        messages = _with_images(prompt, attached, detail=images.detail, data_uris=await _data_uris([i.image for i in attached]))
+        messages = _with_images(
+            prompt, attached, detail=images.detail, data_uris=await _data_uris([i.image for i in attached])
+        )
         try:
             response = await self._vlm_chat(
                 images,

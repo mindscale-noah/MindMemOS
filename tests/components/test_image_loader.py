@@ -106,7 +106,7 @@ async def test_url_is_dialed_on_the_resolved_ip_with_original_host(monkeypatch, 
 
     loaded = await loader.load(ImageRef(url="https://images.example.com:8443/pics/a.png"), namespace="p")
 
-    assert loaded.data == PNG and loaded.source_url == "https://images.example.com:8443/pics/a.png"
+    assert loaded.data == PNG and loaded.mime_type == "image/png"
     assert seen["url"] == "https://93.184.216.34:8443/pics/a.png"  # dialed on the pinned IP
     assert seen["host"] == "images.example.com:8443"
     assert seen["sni"] == "images.example.com"
@@ -180,3 +180,63 @@ def test_owned_http_client_is_one_per_event_loop() -> None:
             loop.close()
 
     assert client_in_fresh_loop() is not first  # never shared across loops
+
+
+@pytest.mark.asyncio
+async def test_out_of_range_url_port_is_a_400_not_a_500(tmp_path) -> None:
+    # urlsplit defers port parsing to first access: an out-of-range port raises ValueError
+    # there, not an httpx error — it must surface as the image.* 400 envelope like any
+    # other invalid image input, not escape as a 500.
+    loader = _loader(tmp_path)
+    for url in ("http://example.com:70000/a.png", "https://h:99999/x"):
+        with pytest.raises(ImageLoadError, match="invalid port") as error:
+            await loader.load(ImageRef(url=url), namespace="p")
+        assert error.value.code == "image.invalid"
+
+
+@pytest.mark.asyncio
+async def test_url_follows_one_redirect_and_stops_loops(tmp_path) -> None:
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/hop":
+            return httpx.Response(302, headers={"location": "/final.png"})
+        if request.url.path == "/loop":
+            return httpx.Response(302, headers={"location": "/loop"})
+        return httpx.Response(200, content=PNG)
+
+    loader = ImageLoader(
+        BlobStoreConfig(url_allow_private_hosts=True),
+        LocalBlobStore(tmp_path / "blobs"),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    loaded = await loader.load(ImageRef(url="http://images.test/hop"), namespace="p")
+    assert loaded.data == PNG  # followed the single redirect
+
+    with pytest.raises(ImageLoadError, match="too many redirects") as loop_error:
+        await loader.load(ImageRef(url="http://images.test/loop"), namespace="p")
+    assert loop_error.value.code == "image.fetch_failed"
+
+
+@pytest.mark.asyncio
+async def test_url_fetch_failures_are_reported_as_image_errors(tmp_path) -> None:
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/missing":
+            return httpx.Response(404)
+        raise httpx.ConnectError("refused", request=request)
+
+    loader = ImageLoader(
+        BlobStoreConfig(url_allow_private_hosts=True),
+        LocalBlobStore(tmp_path / "blobs"),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(ImageLoadError, match="HTTP 404") as missing:
+        await loader.load(ImageRef(url="http://images.test/missing"), namespace="p")
+    assert missing.value.code == "image.fetch_failed"
+    with pytest.raises(ImageLoadError, match="fetch failed") as unreachable:
+        await loader.load(ImageRef(url="http://images.test/down"), namespace="p")
+    assert unreachable.value.code == "image.fetch_failed"

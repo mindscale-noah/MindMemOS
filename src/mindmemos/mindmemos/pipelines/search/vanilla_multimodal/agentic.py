@@ -10,12 +10,12 @@ fast path. Any failure falls back to the fast-path results.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import re
 from typing import Any
 
 from ....components.multimodal import ImageLoader
+from ....components.multimodal.image_loader import image_data_uri
 from ....config import MultimodalConfig, get_config
 from ....logging import get_logger
 from ....typing import MemoryRequestContext, MemorySearchItem, SearchPipelineInput
@@ -157,7 +157,7 @@ class MultimodalAgent:
         # b64-encoding megapixel images is CPU work: encode every image of this view in one hop
         encoded = await asyncio.to_thread(
             lambda: [
-                f"data:{blob.mime_type};base64,{base64.b64encode(data).decode('ascii')}"
+                image_data_uri(data, blob.mime_type)
                 for _, found in segments
                 if found is not None
                 for blob, data in (found,)
@@ -176,9 +176,7 @@ class MultimodalAgent:
             return []
         loader = ImageLoader(get_config().blob_store, self._engine.blobs())
         loaded = [await loader.load(ref, namespace=context.project_id) for ref in inp.query_images[:2]]
-        return await asyncio.to_thread(
-            lambda: [f"data:{img.mime_type};base64,{base64.b64encode(img.data).decode('ascii')}" for img in loaded]
-        )
+        return await asyncio.to_thread(lambda: [image_data_uri(img.data, img.mime_type) for img in loaded])
 
     def _fact_handle(self, item: MemorySearchItem) -> str:
         for handle, existing in self._facts.items():

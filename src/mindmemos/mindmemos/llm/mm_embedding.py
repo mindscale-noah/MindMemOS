@@ -22,13 +22,13 @@ serving endpoint sees the bare model name.
 from __future__ import annotations
 
 import asyncio
-import base64
 from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
 
+from ..components.multimodal.image_loader import image_data_uri
 from ..config import MmEmbedEndpointConfig, MmEmbedRouterConfig, get_config
 from ..errors import ApiError, EmbeddingDimensionError
 from ..logging import get_logger
@@ -48,7 +48,7 @@ class ImageInput:
     def data_uri(self) -> str:
         if self.data is None:
             raise ValueError("image has no inline bytes")
-        return f"data:{self.mime_type};base64,{base64.b64encode(self.data).decode('ascii')}"
+        return image_data_uri(self.data, self.mime_type)
 
 
 class MmEmbedError(ApiError):
