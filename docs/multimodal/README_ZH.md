@@ -31,7 +31,7 @@
   - agentic 检索单次约 20–30 s，每次搜索多 2–3 次 chat 调用。
 - **合入 main 前需要补的缺口：**
   1. 没有产品级的图片删除 API，见 §3.6；
-  2. 原图目前只能存本地磁盘；
+  2. 原图可存本地磁盘或 S3/MinIO（多实例/生产部署用 S3，见 §4.3），无需再补存储后端；
   3. 生产环境需要自备多模态 embedding API。
 
   其余已知限制见 §7.2。
@@ -234,7 +234,7 @@ POST /v1/memory/search
 
 基础设施配置（完整说明见 `docs/config/README.md`）：
 - `mm_embed_model_router.endpoints[]`：model、api_base、api_key、dimensions、超时、重试、批大小；
-- `blob_store`：backend（local / s3）、local_root、max_image_bytes、allowed_path_roots、URL 下载开关和私网限制；s3 后端还有 `s3_endpoint`/`s3_bucket`/`s3_region`/`s3_access_key`/`s3_secret_key`/`s3_public_base_url`，以及检索直链相关的 `s3_presign_endpoint`/`s3_presign_expiry_seconds`。从旧版本升级后需重跑 `make dev-setup`（uv sync）才能拿到 s3 extra 依赖；本地启用 s3 后端还需 `make dev-blobs` 启动 MinIO；
+- `blob_store`：backend（local / s3）、local_root、max_image_bytes、allowed_path_roots、URL 下载开关和私网限制；s3 后端还有 `s3_endpoint`/`s3_bucket`/`s3_region`/`s3_access_key`/`s3_secret_key`/`s3_public_base_url`，以及检索直链相关的 `s3_presign_endpoint`/`s3_presign_expiry_seconds`。从旧版本升级后需重跑 `make dev-setup`（uv sync）才能拿到 s3 extra 依赖；本地启用 s3 后端时 MinIO 已随 `make dev` / `make db` 一并启动（`make dev-blobs` 可单独启动）；
 - `database.qdrant.image_collection`：默认 `image_item_v1`。
 
 ---
@@ -372,7 +372,7 @@ POST /v1/memory/search
 ### 7.2 风险与限制
 
 1. **删除：** 没有产品级 API 删除用户或项目的图片和原图，合规上要补。
-2. **存储：** 原图目前只能存本地磁盘，多实例部署或生产环境需要实现对象存储后端。接口已预留。
+2. **存储：** 原图支持本地磁盘与 S3/MinIO 两种后端（`blob_store.backend`，含预签名 URL / 公网镜像直链，见 §4.3）；多实例部署用 S3。评测的项目重置只清本地 blob 目录，S3 后端下的原图需手动清理（重置时会有 WARNING）。
 3. **外部依赖：** 需要多模态 embedding API；仓库自带的 SigLIP2 服务只用于开发和评测。
 4. **同模板截图：** 视觉事实分不清出自哪张图，例如仪表盘、游戏截图类任务（MemEye 的 Personal_Health、Card_Playlog），这类任务仍然偏弱。
 5. **延迟：** enhanced 的写入和检索都明显变慢，agentic 检索在 20–30 s 量级，只适合对时延不敏感的场景。
@@ -381,5 +381,5 @@ POST /v1/memory/search
 
 ### 7.3 后续建议
 
-- 合入 `main` 前：补用户和项目级的图片删除，评估对象存储后端，补上线配置样例（多模态 embedding 端点）。
+- 合入 `main` 前：补用户和项目级的图片删除，补上线配置样例（多模态 embedding 端点；S3/MinIO 存储已交付，见 §4.3）。
 - 如需继续优化：用同期基线评估，优先考虑同模板截图的事实归属问题，以及 agentic 的重试。
