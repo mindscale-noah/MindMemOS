@@ -150,7 +150,7 @@ async def test_build_search_answer_and_metrics(tmp_path):
     assert set(queries) == {"Which image shows a robot tutor?", "Did Ann mention Mars?", "What is in the picture?"}
     assert queries["Did Ann mention Mars?"] == {
         "user_id": "memgallery-t",
-        "top_k": 20,
+        "top_k": 50,
         "rerank": True,
         "search_strategy": "fast",
         "multimodal": True,
@@ -177,6 +177,9 @@ async def test_build_search_answer_and_metrics(tmp_path):
     assert metrics["F1"] == pytest.approx(100.0, abs=0.01)  # "run robot" vs "running robots" after stemming
     assert metrics["per_point"]["AR"]["Judge"] == 50.0 and metrics["per_task"]["T"]["n"] == 3
     assert any((tmp_path / "runs").rglob("summary.json"))
+    # Manifest contract fields (locomo names) for the metrics collector.
+    assert metrics["overall_accuracy"] == pytest.approx(1.0) and metrics["total_questions"] == 3
+    assert metrics["judge_runs_used"] == 1 and metrics["judge_llm_calls"] == result["cost"]["judge_calls"]
 
 
 @pytest.mark.asyncio
