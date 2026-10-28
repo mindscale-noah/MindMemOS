@@ -22,9 +22,11 @@ serving endpoint sees the bare model name.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, is_dataclass, replace
 from time import perf_counter
 from typing import Any
+
+from omegaconf import DictConfig, OmegaConf
 
 from ..config import MmEmbedEndpointConfig, MmEmbedRouterConfig, get_config
 from ..errors import ApiError, EmbeddingDimensionError
@@ -66,6 +68,18 @@ def _parse_vectors(resp: Any, expected: int) -> list[list[float]]:
     return vectors
 
 
+def _as_dataclasses(router_cfg: MmEmbedRouterConfig) -> MmEmbedRouterConfig:
+    """Materialize an OmegaConf-backed router config into real dataclasses.
+
+    ``get_config`` hands out ``DictConfig`` nodes, and ``dataclasses.replace``
+    (used for the placeholder key below) only works on dataclass instances.
+    """
+
+    if isinstance(router_cfg, DictConfig):
+        return OmegaConf.to_object(router_cfg)
+    return router_cfg
+
+
 def _placeholder_key(ep: MmEmbedEndpointConfig) -> MmEmbedEndpointConfig:
     """Give keyless ``openai/`` endpoints a placeholder api_key.
 
@@ -88,6 +102,7 @@ class MmEmbedClient:
     def __init__(self, router_cfg: MmEmbedRouterConfig, *, router: ModelRouter | None = None) -> None:
         if not router_cfg.endpoints:
             raise ValueError("mm_embed_model_router has no endpoints")
+        router_cfg = _as_dataclasses(router_cfg)
         self._endpoints: list[MmEmbedEndpointConfig] = [_placeholder_key(ep) for ep in router_cfg.endpoints]
         # Router-level transport details (image_transport, max_batch_size) read from the
         # first endpoint: a litellm Router picks deployments itself, so per-endpoint

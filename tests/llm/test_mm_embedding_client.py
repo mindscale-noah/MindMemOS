@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from mindmemos.config import MmEmbedEndpointConfig, MmEmbedRouterConfig
+from mindmemos.config import MmEmbedEndpointConfig, MmEmbedRouterConfig, build
 from mindmemos.errors import EmbeddingDimensionError
 from mindmemos.llm.mm_embedding import ImageInput, MmEmbedClient, MmEmbedError, _placeholder_key
 
@@ -112,3 +112,18 @@ def test_keyless_openai_endpoints_get_a_placeholder_key() -> None:
     )
     # other providers keep their empty key: only openai/ is known to refuse it
     assert _placeholder_key(MmEmbedEndpointConfig(model="jina/mm", api_base="http://mm")).api_key is None
+
+
+def test_omegaconf_backed_router_config_is_accepted() -> None:
+    """get_config hands out DictConfig nodes, not dataclasses; the client must not
+    crash on them (dataclasses.replace only works on dataclass instances)."""
+
+    cfg = build(
+        MmEmbedRouterConfig,
+        {"endpoints": [{"model": "openai/siglip", "api_base": "http://mm", "dimensions": 768}]},
+    )
+    client = MmEmbedClient(cfg)  # no router injected: builds the litellm Router for real
+
+    assert [ep.api_key for ep in client._endpoints] == ["none"]
+    assert client.dimensions == 768
+    assert client.model == "openai/siglip"
