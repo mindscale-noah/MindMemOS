@@ -33,9 +33,6 @@ class ImageMemoryStore:
 
         return self._clients.qdrant.image.text_vector_size
 
-    async def ensure_collection(self, vector_size: int) -> None:
-        await self._clients.qdrant.image.ensure(vector_size)
-
     @traced("memory_db.get_images", record_args=False)
     async def get_images(self, ctx: MemoryRequestContext, image_ids: list[str]) -> list[ImageRecord]:
         records = await self._clients.qdrant.image.get_many(ctx.project_id, image_ids)

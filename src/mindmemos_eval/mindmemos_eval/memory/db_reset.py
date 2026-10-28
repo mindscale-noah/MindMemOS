@@ -46,7 +46,8 @@ DEFAULT_COLLECTIONS: tuple[str, ...] = (
     "image_item_v1",
 )
 DEFAULT_BLOB_ROOT = "data/blobs"
-"""Server default ``blob_store.local_root`` (relative paths resolve against the MindMemOS root)."""
+"""Server default ``blob_store.local_root``; relative roots resolve against the process working
+directory on both sides, so they only line up when the runner starts from the server's root."""
 
 
 @dataclass(frozen=True)
@@ -206,9 +207,23 @@ def _reset_blobs(cfg: ResetConfig, project_id: str) -> dict[str, int]:
     """Delete the project's stored images (blob files) and verify the directory is gone."""
 
     if cfg.blob_root is None:
+        logger.warning(
+            "project_reset blob cleanup skipped: blob_store backend is not local, so the stored"
+            " image objects of project_id=%s stay in the object store",
+            project_id,
+        )
         return {}
     path = Path(cfg.blob_root).expanduser() / blob_namespace_dir(project_id)
-    count = sum(1 for item in path.rglob("*") if item.is_file() and item.suffix != ".json") if path.exists() else 0
+    if not path.exists():
+        # Zero files can mean two things; say which paths were checked so a wrong root is not
+        # mistaken for a clean project.
+        logger.warning(
+            "project_reset no blob directory at %s: either this project stored no images, or the"
+            " server resolved blob_store.local_root against a different working directory",
+            path,
+        )
+        return {"blob:images": 0}
+    count = sum(1 for item in path.rglob("*") if item.is_file() and item.suffix != ".json")
     shutil.rmtree(path, ignore_errors=True)
     if path.exists():
         raise ProjectResetError(
