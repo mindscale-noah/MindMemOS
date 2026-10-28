@@ -32,9 +32,8 @@ from typing import Any
 from ....components.multimodal import ImageLoader, text_only_search
 from ....components.multimodal.extraction import IMAGE_BLOB_IDS_KEY
 from ....config import MultimodalConfig, get_config
-from ....errors import ConfigNotInitializedError, InvalidFilterError
-from ....infra.blob import BlobStore, get_blob_store
-from ....llm import ImageInput, MmEmbedClient, RerankClient, get_llm_client, get_mm_embed_client, get_rerank_client
+from ....infra.blob import BlobStore
+from ....llm import ImageInput, MmEmbedClient, RerankClient, get_llm_client, get_rerank_client
 from ....logging import get_logger, traced
 from ....mappers import parse_search_dsl
 from ....typing import (
@@ -50,6 +49,7 @@ from ....typing import (
 from ...add.vanilla_multimodal import image_point_id
 from ...memory_db import ImageMemoryStore
 from ...memory_db.image_store import IMAGE_CHANNEL, TEXT_CHANNEL
+from ...multimodal_deps import MM_CLIENT_UNSET, MultimodalDepsMixin
 from ...utils import format_datetime
 from ..base import SearchEngineOptions
 from ..vanilla import VanillaSearchEngine
@@ -86,14 +86,14 @@ class ImageHits:
     """Query images vs. images (best score per image)."""
 
 
-class VanillaMultimodalSearchEngine(VanillaSearchEngine):
+class VanillaMultimodalSearchEngine(MultimodalDepsMixin, VanillaSearchEngine):
     """Vanilla hybrid text retrieval, plus stored images for multimodal searches."""
 
     def __init__(
         self,
         *,
         image_store: ImageMemoryStore | None = None,
-        mm_embed_client: MmEmbedClient | None | object = _UNSET,
+        mm_embed_client: MmEmbedClient | None | object = MM_CLIENT_UNSET,
         multimodal_config: MultimodalConfig | None = None,
         llm_client: Any = None,
         blob_store: BlobStore | None = None,
@@ -113,7 +113,7 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
 
         if not (inp.query_images or inp.multimodal):
             return False
-        return self._config().mode != "off"
+        return self.multimodal_config().mode != "off"
 
     async def search_candidates(
         self,
@@ -126,9 +126,16 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
 
         if not self.is_multimodal(inp):
             return await super().search_candidates(inp, context, options=options)
-        if _QUERY_TEXT_VECTORS.get() is None:
-            _QUERY_TEXT_VECTORS.set({})
-        return await super().search_candidates(text_only_search(inp), context, options=options)
+        if _QUERY_TEXT_VECTORS.get() is not None:
+            return await super().search_candidates(text_only_search(inp), context, options=options)
+        _QUERY_TEXT_VECTORS.set({})
+        try:
+            return await super().search_candidates(text_only_search(inp), context, options=options)
+        except BaseException:
+            # A failed candidate search has no consumer left (augment_results / agentic_refine)
+            # to clear the per-request cache; leave the holder as it was found.
+            _QUERY_TEXT_VECTORS.set(None)
+            raise
 
     async def _encode_dense(self, query: str) -> list[float] | None:
         vector = await super()._encode_dense(query)
@@ -162,10 +169,10 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
         context: MemoryRequestContext,
         memories: list[MemorySearchItem],
     ) -> list[MemorySearchItem]:
-        cfg = self._config()
+        cfg = self.multimodal_config()
         if cfg.mode == "enhanced":
             return await self._augment_enhanced(inp, context, memories, cfg)
-        client = self._mm_client()
+        client = self.mm_client()
         if not cfg.image_search or client is None or not inp.query.strip():
             return memories
         filters = _image_filter(inp.filters)
@@ -173,7 +180,7 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
             logger.info("multimodal_image_channel_skipped", reason="filter_fields_not_on_images")
             return memories
         vector = (await client.embed_texts([inp.query], task="multimodal.search.query"))[0]
-        hits = await self._images().search_images(
+        hits = await self.images().search_images(
             context,
             vector,
             filters=filters,
@@ -320,7 +327,7 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
             session_id = next((occ.session_id for occ in seed.record.occurrences if occ.session_id), None)
             if session_id is None:
                 continue
-            siblings = await self._images().list_session_images(context, session_id, user_id=seed.record.user_id)
+            siblings = await self.images().list_session_images(context, session_id, user_id=seed.record.user_id)
             ids = [image.blob_id for image in siblings]
             if seed.record.blob_id not in ids:
                 continue
@@ -340,12 +347,12 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
     ) -> ImageHits:
         """Image matches for the query text (mixed and image-only scores) and for the query images."""
 
-        client = self._mm_client()
+        client = self.mm_client()
         filters = _image_filter(inp.filters)
         if client is None or not cfg.image_search or filters is None:
             return ImageHits()
         limit = max(cfg.evidence_images * 2, 8)
-        store = self._images()
+        store = self.images()
         hits = ImageHits()
         if inp.query.strip():
             image_vector = (await client.embed_texts([inp.query], task="multimodal.search.query"))[0]
@@ -396,7 +403,7 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
             if blob_id not in known
         }
         if missing:
-            for record in await self._images().get_images(context, list(missing)):
+            for record in await self.images().get_images(context, list(missing)):
                 known[record.blob_id] = record
         items, records = [], []
         for blob_id, (_, score, evidence) in chosen.items():
@@ -413,7 +420,7 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
     def owns_agentic(self, inp: SearchPipelineInput) -> bool:
         """Enhanced multimodal searches replace the generic agentic wrapper with the multimodal agent."""
 
-        return self.is_multimodal(inp) and self._config().mode == "enhanced"
+        return self.is_multimodal(inp) and self.multimodal_config().mode == "enhanced"
 
     @traced("search.vanilla_multimodal.agentic")
     async def agentic_refine(
@@ -423,35 +430,12 @@ class VanillaMultimodalSearchEngine(VanillaSearchEngine):
 
         try:
             llm = self._explicit_llm_client or get_llm_client()
-            return await MultimodalAgent(self, llm, self._config()).refine(inp, context, fast)
+            return await MultimodalAgent(self, llm, self.multimodal_config()).refine(inp, context, fast)
         except Exception:  # noqa: BLE001 - the fast-path result is always a valid answer
             logger.warning("multimodal_agentic_failed", exc_info=True)
             return fast
         finally:
             _QUERY_TEXT_VECTORS.set(None)  # the agent is the last consumer of the request cache
-
-    def _config(self) -> MultimodalConfig:
-        if self._explicit_multimodal_config is not None:
-            return self._explicit_multimodal_config
-        try:
-            return get_config().algo_config.multimodal
-        except ConfigNotInitializedError:
-            return MultimodalConfig()
-
-    def _mm_client(self) -> MmEmbedClient | None:
-        if self._explicit_mm_client is not _UNSET:
-            return self._explicit_mm_client  # type: ignore[return-value]
-        return get_mm_embed_client()
-
-    def blobs(self) -> BlobStore:
-        if self._blob_store is None:
-            self._blob_store = get_blob_store()
-        return self._blob_store
-
-    def _images(self) -> ImageMemoryStore:
-        if self._image_store is None:
-            self._image_store = ImageMemoryStore()
-        return self._image_store
 
 
 async def _no_hits() -> list[ImageSearchHit]:

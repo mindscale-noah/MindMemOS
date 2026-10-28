@@ -411,7 +411,9 @@ async def test_text_channel_finds_images_by_their_visual_facts() -> None:
     engine._explicit_embed_client = embed
 
     hits = await engine.image_hits(
-        SearchPipelineInput(query="Ethos ad colour", search_pipeline="vanilla", multimodal=True), CTX, engine._config()
+        SearchPipelineInput(query="Ethos ad colour", search_pipeline="vanilla", multimodal=True),
+        CTX,
+        engine.multimodal_config(),
     )
 
     assert [h.record.blob_id for h in hits.ranked] == [ad, other]
@@ -697,3 +699,74 @@ async def test_overflow_calls_share_the_process_wide_vlm_cap() -> None:
 
     assert inner.calls == 0  # the VLM path ran, not the vanilla fallback
     assert vlm.peak <= 2  # 1 main + 3 visual-only calls, never more than the cap in flight
+
+
+@pytest.mark.asyncio
+async def test_query_text_vector_cache_is_cleared_when_candidate_search_fails(monkeypatch) -> None:
+    # A candidate search that dies between setting the cache and its consumers must not
+    # leave the holder behind for whatever runs next in this context.
+    from mindmemos.pipelines.search import vanilla as vanilla_module
+    from mindmemos.pipelines.search.vanilla_multimodal import engine as engine_module
+
+    async def boom(self, inp, context, *, options=None):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(vanilla_module.VanillaSearchEngine, "search_candidates", boom)
+    engine = _engine(FakeReader([]), [])
+    inp = SearchPipelineInput(query="Ethos ad", search_pipeline="vanilla", multimodal=True)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        await engine.search_candidates(inp, CTX)
+
+    assert engine_module._QUERY_TEXT_VECTORS.get() is None
+
+
+@pytest.mark.asyncio
+async def test_agentic_step_budget_forces_submit_and_keeps_the_fast_result() -> None:
+    never = ScriptedLlm(['{"tool": "search_images", "args": {"query": "again"}}'] * 6)
+    hits = [ImageSearchHit(record=_record("d" * 64, description="Ethos Water ad"), score=0.25)]
+    engine = _engine(FakeReader([]), hits, llm=never, agentic_max_steps=2)
+    fast = [_item("m1", "sofa fact")]
+
+    out = await engine.agentic_refine(
+        SearchPipelineInput(query="Ethos background?", search_pipeline="vanilla", multimodal=True), CTX, fast
+    )
+
+    assert out == fast  # never submitted: the fast result is the answer
+    assert len(never.seen) == 3  # two tool turns, then the forced-submit turn
+    assert "Tool budget used up" in never.seen[2][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_agentic_view_images_returns_the_pixels_to_the_vlm() -> None:
+    import base64
+
+    ad = "d" * 64
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    hits = [ImageSearchHit(record=_record(ad, description="Ethos Water ad"), score=0.25)]
+    llm = ScriptedLlm(
+        [
+            '{"tool": "view_images", "args": {"images": ["I1"]}}',
+            '{"tool": "submit", "args": {"facts": [], "images": ["I1"]}}',
+        ]
+    )
+    engine = _engine(FakeReader([]), hits, llm=llm)
+
+    class Blobs:
+        async def get(self, namespace, blob_id):
+            return (StoredBlob(blob_id=blob_id, mime_type="image/png", size_bytes=len(png)), png)
+
+    engine._blob_store = Blobs()
+
+    out = await engine.agentic_refine(
+        SearchPipelineInput(query="Ethos background?", search_pipeline="vanilla", multimodal=True),
+        CTX,
+        [_to_search_item(hits[0])],
+    )
+
+    observation = llm.seen[1][-1]["content"]  # the view_images observation of the submit turn
+    texts = [part["text"] for part in observation if part.get("type") == "text"]
+    shown = [part for part in observation if part.get("type") == "image_url"]
+    assert any("Requested images" in text for text in texts)
+    assert [part["image_url"]["url"] for part in shown] == [f"data:image/png;base64,{base64.b64encode(png).decode()}"]
+    assert [o.metadata["blob_id"] for o in out if o.memory_type == "image"] == [ad]
