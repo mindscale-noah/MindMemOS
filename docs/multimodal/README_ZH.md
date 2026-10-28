@@ -248,9 +248,11 @@ POST /v1/memory/search
 | `tests/pipelines/memory_db/test_image_purge.py` | 图片与原图的清理 |
 | `tests/api/test_multimodal_requests.py` | API 层校验与错误码 |
 | `tests/components/test_image_loader.py` | 加载安全限制 |
+| `tests/components/test_mm_embedding_client.py` | mm embedding 客户端（litellm 路由、占位 key、OmegaConf、维度校验；纯单测，无需真实端点） |
 | `tests/infra/test_blob_store.py`、`test_blob_store_s3.py`（live 见文件头）、`tests/config/test_multimodal_config.py`、`tests/typing/test_multimodal_typing.py`、`tests/mindmemos_sdk/test_multimodal_sdk.py` | 基础设施（local/S3/presign）、配置校验、类型、SDK |
 | `tests/api/test_memory_image_route.py`、`test_memory_search_image_url.py` | 取图路由、search 的 `image_url` 注入 |
 | `tests/mindmemos_eval/test_memeye_adapter.py`、`test_memgallery_adapter.py`、`test_db_reset_blobs.py` | 评测 adapter（离线） |
+| `tests/mindmemos_sdk/test_model_contract.py` | SDK 与服务端 `ImageRef`/`DialogueMessage` 字段契约防漂移 |
 
 - **全量测试（Windows 开发机）：** 1321 passed、92 skipped。另有 11 个 failed 和 8 个 collection errors，均为本批之前就存在的环境/包问题，与本批改动无关：
   - architecture guard 测试 2 个（违规在 `main` 既有代码，本批没有新增）；

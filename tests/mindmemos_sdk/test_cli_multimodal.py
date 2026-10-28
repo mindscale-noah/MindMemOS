@@ -270,3 +270,25 @@ def test_memory_get_image_reports_api_errors(fake_client, capsys):
     out = capsys.readouterr().out
     assert "image not found" in out
     assert "request_id=req-1" in out
+
+
+def test_memory_get_image_unknown_mime_falls_back_to_bin_extension(fake_client, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    fake_client((PNG_BYTES, "application/octet-stream"))  # server-side type the CLI has no extension for
+
+    rc = _run(["memory", "get-image", BLOB_ID, "--user-id", "user-1"])
+
+    assert rc == 0
+    assert (tmp_path / f"{BLOB_ID}.bin").read_bytes() == PNG_BYTES
+
+
+def test_memory_get_image_unwritable_output_returns_error(fake_client, tmp_path, capsys):
+    fake_client((PNG_BYTES, "image/png"))
+    blocker = tmp_path / "blocker"
+    blocker.write_bytes(b"i am a file, not a directory")
+    output = blocker / "nested" / "out.png"  # parent is a regular file -> mkdir raises OSError
+
+    rc = _run(["memory", "get-image", BLOB_ID, "--user-id", "user-1", "-o", str(output)])
+
+    assert rc == 1
+    assert "failed to write" in capsys.readouterr().out

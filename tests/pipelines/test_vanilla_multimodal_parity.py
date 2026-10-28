@@ -16,7 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -224,6 +224,17 @@ def _search_config():
     )
 
 
+_FROZEN_NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+
+
+class _FrozenDatetime(datetime):
+    """The pipelines stamp records with ``datetime.now``; freeze it so the two runs cannot straddle a second."""
+
+    @classmethod
+    def now(cls, tz=None):  # noqa: PYI024 - mirrors datetime.now's signature
+        return _FROZEN_NOW if tz is None else _FROZEN_NOW.astimezone(tz)
+
+
 class _Harness:
     """One store and one set of fake clients; plain vanilla or the multimodal wrappers on top."""
 
@@ -232,8 +243,10 @@ class _Harness:
             "mindmemos.pipelines.search.pipeline.get_config",
             "mindmemos.pipelines.search.vanilla.engine.get_config",
             "mindmemos.components.text.preprocessor.get_config",
+            "mindmemos.pipelines.memory_db.writer.datetime",
+            "mindmemos.pipelines.add.vanilla_multimodal.vanilla_multimodal_add.datetime",
         ):
-            monkeypatch.setattr(target, _search_config)
+            monkeypatch.setattr(target, _search_config if target.endswith("get_config") else _FrozenDatetime)
         self.store = InMemoryVanillaStore()
         self.llm, self.embed, self.mm = RecordingLlm(), RecordingEmbed(), RecordingMmClient()
         self.images, self.recorder = RecordingImageStore(), RecordingRecorder()
