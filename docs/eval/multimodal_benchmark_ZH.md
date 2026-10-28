@@ -124,11 +124,12 @@ cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
    ```yaml
    mm_embed_model_router:
      endpoints:
-       - model: siglip2-base-patch16-384
+       - model: openai/siglip2-base-patch16-384
          api_base: http://127.0.0.1:8090/v1
          dimensions: 768
-         protocol: openai
    ```
+
+   > `model` 是 LiteLLM 标识符，必须带 provider 前缀（`openai/...`，前缀不会发给服务）；不再有 `protocol` 字段——mm embedding 路由统一走 OpenAI 风格的 embeddings 协议。
 
 3. 允许服务端按路径读取数据集里的图片。评测以文件路径方式发送图片，这里必须写**绝对路径**，并且是软链接解析之后的真实路径：
 

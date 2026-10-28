@@ -102,8 +102,9 @@ uv run python -m mindmemos_eval.cli memory \
   --server-config config/mindmemos/dev.yaml
 ```
 
-`--server-config` lets the project reset find the server's collections and blob root, so stored
-images are deleted with the project.
+`--server-config` lets the project reset find the server's collections and blob root (local blob
+backend only), so stored images are deleted with the project; with `blob_store.backend: s3` the
+reset still clears the collections but leaves the bucket objects untouched.
 
 `eval_result.metrics` reports, in percent: `EM` (MCQ exact match averaged over the four option
 rotations, macro mean over tasks), `B-1` (OPEN BLEU-1) and `Judge` (OPEN, MemEye 0–1 judge rubric),
@@ -112,6 +113,14 @@ answerer/judge token usage; `eval_result.valid` is false when any answer or judg
 Per-question rows (retrieved items, predictions, scores) are written under
 `output_root/<run_id>/memeye/`. For a smoke test set `execution_params.memeye.max_questions: 2` and
 `benchmarks.memeye.tasks: [Brand_Memory_Test]`.
+
+Multimodal runs follow the same runner protocol as the other benchmarks: search defaults (`top_k`,
+`rerank`, `search_strategy`) come from the runner config / CLI (`--top-k`, `--rerank`,
+`--search-strategy`), with benchmark/profile `search_params` still winning over them;
+`--max-search-concurrency` caps the search calls. `--judge-runs N` runs the OPEN judge N times per
+question and averages the scores. `metrics.overall_accuracy` follows the locomo convention (0–1)
+using the headline metric (`EM` for MemEye, `F1` for Mem-Gallery), and the answer/judge token
+fields use locomo's names, so the metrics collection below also works on multimodal manifests.
 
 ---
 
@@ -216,7 +225,7 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 | `--algorithm` | Algorithm profile: `vanilla` or `schema` |
 | `--limit N` | Max items per benchmark (conversations for LoCoMo, samples for LongMemEval, questions for PersonaMem) |
 | `--session-limit N` | LongMemEval only — add at most N sessions per sample; useful for smoke tests |
-| `--judge-runs N` | Run judge N times per question, decide by majority vote; default 1. The N runs execute sequentially per question, so judge-stage latency scales roughly linearly with N. Not applicable to PersonaMem (deterministic scoring) |
+| `--judge-runs N` | Run judge N times per question, decide by majority vote; default 1. The N runs execute sequentially per question, so judge-stage latency scales roughly linearly with N. Not applicable to PersonaMem (deterministic scoring). MemEye / Mem-Gallery judge scores are continuous — the N scores are averaged instead |
 | `--no-add` | Skip memory ingestion **and** the pre-add cleanup; reuse memories already in Qdrant/Neo4j for this project |
 | `--no-score` | Skip judge/scoring stage |
 | `--manifest-output` | JSONL file where eval results are written; required for metrics collection |

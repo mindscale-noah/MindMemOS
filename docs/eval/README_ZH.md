@@ -226,9 +226,11 @@ uv run python -m mindmemos_eval.cli memory \
   --server-config config/mindmemos/dev.yaml
 ```
 
-`--server-config` 让项目重置找到服务端的集合名和 blob 根目录，从而连同已存图片一起删除。
+`--server-config` 让项目重置找到服务端的集合名和 blob 根目录（仅 local 存储后端），从而连同已存图片一起删除；若 `blob_store.backend: s3`，重置仍会清掉集合，但不会删除桶中的图片对象。
 
 `eval_result.metrics` 给出百分制指标：`EM`（MCQ 四种选项轮换的平均精确匹配，按任务宏平均）、`B-1`（OPEN 的 BLEU-1）、`Judge`（OPEN，MemEye 的 0–1 评分标准），以及逐任务数值。`eval_result.cost` 记录客户端的写入/检索调用次数与延迟、作答器和 judge 的 token 用量；只要有作答或 judge 调用失败，`eval_result.valid` 即为 false。逐题明细写在 `output_root/<run_id>/memeye/`。冒烟测试可设 `execution_params.memeye.max_questions: 2`、`benchmarks.memeye.tasks: [Brand_Memory_Test]`。
+
+多模态评测遵循与其他 benchmark 相同的 runner 协议：检索默认参数（`top_k`、`rerank`、`search_strategy`）来自 runner 配置 / CLI（`--top-k`、`--rerank`、`--search-strategy`），benchmark/profile 的 `search_params` 仍可覆盖；`--max-search-concurrency` 限制并发检索。`--judge-runs N` 对每道 OPEN 题独立跑 N 次 judge 并取平均。`metrics.overall_accuracy` 沿用 locomo 的 0–1 约定（MemEye 取 `EM`、Mem-Gallery 取 `F1` 作为 headline），作答/judge 的 token 字段也沿用 locomo 命名，因此下面的指标汇总流程同样适用于多模态 manifest。
 
 ---
 
@@ -330,7 +332,7 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 | `--algorithm` | 算法 profile，当前支持 `vanilla` / `schema` |
 | `--limit N` | 每个 benchmark 最多处理 N 条（locomo=N 个对话，longmemeval=N 个 sample，personamem=N 道题） |
 | `--session-limit N` | LongMemEval 每个 sample 最多 add 前 N 个 session，用于加速冒烟测试 |
-| `--judge-runs N` | 每道题独立跑 N 次 judge，取多数票；默认 1。这 N 次是**串行**跑的，judge 阶段耗时基本随 N 线性增长。PersonaMem 不适用（确定性判分） |
+| `--judge-runs N` | 每道题独立跑 N 次 judge，取多数票；默认 1。这 N 次是**串行**跑的，judge 阶段耗时基本随 N 线性增长。PersonaMem 不适用（确定性判分）；MemEye / Mem-Gallery 的 judge 分数是连续值，N 次结果取**平均**而非多数票 |
 | `--no-add` | 跳过 add 阶段**以及** add 前的清库；复用该 project 已在 Qdrant/Neo4j 中的数据 |
 | `--no-score` | 跳过 judge 阶段 |
 | `--manifest-output` | 评测结果写入的 JSONL 文件，供后续 metrics 统计使用 |

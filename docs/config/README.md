@@ -311,7 +311,7 @@ existing image collection has no `text` vector of that size (created by an older
 | `backend` | `local` | Storage backend: `local` or `s3` (any S3-compatible endpoint: MinIO, OSS S3 gateway, R2). |
 | `local_root` | `data/blobs` | Directory of the local backend; relative to the repository root. |
 | `s3_endpoint` | *(required for s3)* | Endpoint URL with scheme, e.g. `http://localhost:9100`; `https://` enables TLS. |
-| `s3_region` | `us-east-1` | Bucket region/location used when creating the bucket. |
+| `s3_region` | `us-east-1` | Bucket region/location; required non-empty with `backend: s3` (an empty region fails validation — it would make presigning do a live location lookup). Baked into every presigned URL; also used when creating the bucket. |
 | `s3_bucket` | *(required for s3)* | Bucket name; created lazily on first use if missing. |
 | `s3_access_key` | *(required for s3)* | Access key (env: `MINDMEMOS_S3_ACCESS_KEY`). |
 | `s3_secret_key` | *(required for s3)* | Secret key (env: `MINDMEMOS_S3_SECRET_KEY`). |
