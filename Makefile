@@ -75,10 +75,12 @@ COMPOSE_ENV := $(if $(wildcard .env),--env-file .env,)
 COMPOSE := docker compose $(COMPOSE_ENV) -f dockers/docker-compose.memory.yml
 DEV_CORE_SERVICES := qdrant neo4j kafka kafka-ui kafka-exporter
 # MINIO=0 (or false/no/off) skips MinIO and its bucket bootstrap: `make dev MINIO=0`
-# for the pre-s3 layout (local blob backend, no MinIO container).
+# for the pre-s3 layout (local blob backend, no MinIO container). dev-down / db-clean
+# honor the flag too: they leave the MinIO container and its volume untouched.
 MINIO ?= 1
 MINIO_SERVICES := $(if $(filter 0 false no off,$(MINIO)),,minio)
 DB_OBSERVABILITY_SERVICES := $(DEV_CORE_SERVICES) clickhouse otel-collector grafana $(MINIO_SERVICES)
+DOWN_SERVICES := $(DEV_CORE_SERVICES) clickhouse otel-collector grafana
 UV ?= $(shell command -v uv 2>/dev/null || printf uv)
 MINDMEMOS_GRAFANA_PORT ?= $(or $(MINDMEM_GRAFANA_PORT),$(MEMOS_GRAFANA_PORT),3000)
 MINDMEMOS_CLICKHOUSE_HTTP_PORT ?= $(or $(MINDMEM_CLICKHOUSE_HTTP_PORT),$(MEMOS_CLICKHOUSE_HTTP_PORT),8123)
@@ -167,7 +169,7 @@ db-observability:
 	$(if $(MINIO_SERVICES),@echo "MinIO:      $(MINDMEMOS_S3_ENDPOINT) (bucket: $(MINDMEMOS_S3_BUCKET))")
 
 db-clean:
-	$(COMPOSE) down -v
+	$(if $(MINIO_SERVICES),$(COMPOSE) down -v,$(COMPOSE) down -v $(DOWN_SERVICES))
 
 dev-blobs:
 	$(COMPOSE) up -d --wait minio
@@ -175,4 +177,4 @@ dev-blobs:
 	@echo "MinIO:      $(MINDMEMOS_S3_ENDPOINT) (bucket: $(MINDMEMOS_S3_BUCKET))"
 
 dev-down:
-	$(COMPOSE) down
+	$(if $(MINIO_SERVICES),$(COMPOSE) down,$(COMPOSE) down $(DOWN_SERVICES))

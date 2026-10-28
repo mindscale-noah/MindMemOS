@@ -75,7 +75,8 @@ make dev
 make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
 make dev-blobs         # 单独启动 MinIO（make dev / make db 也会一并启动），见第 8 节
-make db MINIO=0        # 传统模式：同上但不起 MinIO
+make db MINIO=0        # 传统模式：同上但不起 MinIO（MINIO=0 的 dev-down / db-clean
+                       # 同样不会动 MinIO 容器和它的数据卷）
 ```
 
 停止本地依赖：

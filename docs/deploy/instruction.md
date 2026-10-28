@@ -73,7 +73,8 @@ Default addresses:
 make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
 make dev-blobs         # MinIO alone (also started by make dev / make db); see section 8
-make db MINIO=0        # traditional mode: same stack without MinIO
+make db MINIO=0        # traditional mode: same stack without MinIO (dev-down / db-clean
+                       # with MINIO=0 also leave the MinIO container and its volume alone)
 ```
 
 Stop local dependencies:
