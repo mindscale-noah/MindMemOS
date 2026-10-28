@@ -56,7 +56,7 @@
 
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。
 - **记忆系统可自主演化**：通过 schema learning、dreaming、feedback 持续优化记忆质量，自动学习高频记忆点、离线巩固合并记忆，并从交互纠错中反向优化 add/search 流程。
-- **多模态记忆**：图片与文本一同进入 vanilla 的 add / search——原图存本地磁盘或 S3/MinIO，按多模态 embedding（SigLIP2 兼容协议）建索引；`enhanced` 模式可用 VLM 抽取视觉事实并做多模态 agent 检索，图片命中附带短时效直链。默认关闭，纯文本行为逐字节不变。
+- **多模态记忆**：图片与文本一同进入 vanilla 的 add / search——原图存本地磁盘或 S3/MinIO，按多模态 embedding（SigLIP2 兼容协议）建索引；`enhanced` 模式可用 VLM 抽取视觉事实并做多模态 agent 检索，图片命中附带直链——S3/MinIO 上为短时效预签名 URL，本地存储为需鉴权的代理路由。默认关闭，纯文本行为逐字节不变。
 - **记忆与 Skills 联动**：经验记忆可以沉淀为 skill candidates；skills 的执行结果、失败轨迹和用户反馈也会回流到记忆系统，推动 skills 持续演进。
 - **插件集成能力**：支持通过插件将 MindMemOS 接入不同 Agent 与工作流，在交互前检索并注入相关记忆、回合结束后自动写回对话，当前已提供 [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) 和 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，并持续扩展更多集成。
 

@@ -339,7 +339,7 @@ existing image collection has no `text` vector of that size (created by an older
 | `s3_presign_endpoint` | *(none)* | External address baked into the short-lived presigned URLs of `POST /v1/memory/search` hits; unset signs against `s3_endpoint` (env: `MINDMEMOS_S3_PRESIGN_ENDPOINT`). |
 | `s3_presign_expiry_seconds` | `3600` | Presigned URL lifetime, `1..604800` seconds (env: `MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS`). |
 | `max_image_bytes` | `20971520` | Larger images are rejected. |
-| `allowed_path_roots` | `[]` | Directories `ImageRef.path` may point into; empty disables path inputs. |
+| `allowed_path_roots` | `[]` | Directories `ImageRef.path` may point into; empty disables path inputs. Roots are not project-scoped: in multi-project deployments every project can read images under them. |
 | `url_fetch_enabled` | `true` | Download `ImageRef.url` inputs. |
 | `url_fetch_timeout` | `20.0` | Download timeout in seconds. |
 | `url_allow_private_hosts` | `false` | Allow URLs resolving to private/loopback addresses (SSRF guard; DNS rebinding is not covered). |

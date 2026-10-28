@@ -59,7 +59,7 @@
 ```bash
 git clone <MindMemOS 仓库地址> MindMemOS
 cd MindMemOS
-git checkout feat_multimodal
+git checkout develop   # 含多模态能力的分支；合入前可用 feat_multimodal_engineering
 make dev-setup        # uv sync + NLP 资源
 cp .env.example .env  # 数据库连接等环境变量
 ```
@@ -98,7 +98,7 @@ uv run --no-project --with torch --with transformers --with pillow \
 ```
 
 - 首次启动会从 Hugging Face 下载 `google/siglip2-base-patch16-384`（约 1.5 GB）。
-- 设备自动选择：CUDA → MPS → CPU；也可以用 `--device cpu` 指定。
+- 设备自动选择：CUDA → MPS → CPU；也可以用 `--device cpu` 指定。注意：Windows 上 PyPI 的 `torch` 轮子只有 CPU 版，`--with torch` 装不出 CUDA；GPU 机器请改用 `--torch-backend=cu128`（uv ≥ 0.7）或 `--with torch==2.9.1+cu128 --extra-index-url https://download.pytorch.org/whl/cu128`。CPU 也能跑，只是几千张图的 embedding 会慢一个数量级。
 - 检查服务是否正常：
 
   ```bash

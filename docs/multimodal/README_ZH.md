@@ -24,7 +24,7 @@
   | Mem-Gallery | enhanced agentic | F1 / B-1 / Judge | 57.06 / 50.45 / 89.14 |
 
   - 相对纯文本基线：MemEye EM 约 +20、Judge 约 +25；Mem-Gallery F1 约 +18、Judge 约 +18。
-  - 相对 basic：两个数据集的 Judge 再高 3–5 分。
+  - 相对 basic：两个数据集的 Judge 再高 2–6 分（Mem-Gallery 快速检索 +2.0 至 MemEye agentic +5.5）。
 - **代价：**
   - enhanced 写入时，含图的对话段用 VLM 抽取。单次 add 的耗时是纯文本时的 2–3 倍，chat 调用数基本不变；图片多的数据（Mem-Gallery）写入 chat 调用多约 23%。
   - 快速检索单次约 7–9 s，纯文本约 3.5 s。
@@ -98,10 +98,10 @@
 
 1. **分流。** 不带图的请求直接交给 `VanillaAddPipeline`。
 2. **加载图片（`ImageLoader`）。** `ImageRef` 必须恰好指定一种来源：`path`、`url`、`data`（base64）或 `blob_id`。安全限制：
-   - `path` 只能落在 `blob_store.allowed_path_roots` 下；
+   - `path` 只能落在 `blob_store.allowed_path_roots` 下（注意：roots 不区分项目——多项目/共享部署下，roots 内的图片对每个项目都可见，建议只在单项目部署启用）；
    - `url` 默认拒绝私网地址（防 SSRF）；
    - 单张图上限 20 MB；会嗅探真实 MIME 类型。
-3. **存原图（blob store）。** 按内容 sha256 去重，每个项目一个命名空间。目前只有本地磁盘实现，接口已为对象存储预留。
+3. **存原图（blob store）。** 按内容 sha256 去重，每个项目一个命名空间。支持本地磁盘与 S3/MinIO 两种后端（`blob_store.backend`）。
 4. **图片索引。** 通过 `mm_embed_model_router` 生成图片向量，写入 Qdrant `image_item_v1`：
    - 同一项目、同一用户的同一张图只有一条记录，point id = uuid5(project, user, blob_id)；
    - 每次出现追加一条 `occurrence`：session、时间、所在轮次与下一轮的对话上下文、调用方传入的 `image_id` 和 caption；
@@ -149,7 +149,7 @@
 
 ### 3.5 依赖的外部服务
 
-- **多模态 embedding**（`mm_embed_model_router`）：文本和图片映射到同一个向量空间。目前只实现了 OpenAI 兼容协议（`input: [{"image": dataURI}]`），支持多个端点按顺序故障转移和批量拆分。
+- **多模态 embedding**（`mm_embed_model_router`）：文本和图片映射到同一个向量空间。目前只实现了 OpenAI 兼容协议（`input: [{"image": dataURI}]`），支持多个端点按顺序故障转移和批量拆分。端点配置没有 `protocol` 字段（早期分支版本有过，已删除；升级时请删掉该行，模型名需带 `openai/` 等前缀）。
   - 开发和评测可以用 `scripts/mm_embed_server.py`，它把本地 SigLIP2 包装成 HTTP 服务（768 维）。
   - **生产环境需要自备这个 API。**
 - **VLM：** 复用 vanilla 的 chat 模型，要求能接收图片。评测使用 gpt-4.1-mini。
@@ -158,7 +158,7 @@
 ### 3.6 删除与数据生命周期
 
 - 删除单条文本记忆后它变为 archived；经图召回时会跳过 archived 的记忆。
-- 图片和原图的清理有 `ImageMemoryStore.purge_images`：可按项目或用户删除；用户级删除时，原图只有在项目内没有其他记录引用时才删。**目前只有评测的项目重置和测试在用它，没有对外的产品 API。** 纯文本侧本来也没有批量删除 API。
+- 图片和原图的清理有 `ImageMemoryStore.purge_images`：可按项目或用户删除；用户级删除时，原图只有在项目内没有其他记录引用时才删。**目前只有测试在用它，没有对外的产品 API**；评测的项目重置是直接按 blob 目录与 Qdrant 集合清库（因此 S3 后端下评测重置不会清理 S3 上的原图，需要手动处理）。纯文本侧本来也没有批量删除 API。
 - **缺口：** 用户或项目被删除时，产品侧无法删除他们的图片记录和原图。
 
 ---
@@ -233,7 +233,7 @@ POST /v1/memory/search
 
 基础设施配置（完整说明见 `docs/config/README.md`）：
 - `mm_embed_model_router.endpoints[]`：model、api_base、api_key、dimensions、超时、重试、批大小；
-- `blob_store`：backend（local / s3）、local_root、max_image_bytes、allowed_path_roots、URL 下载开关和私网限制；s3 后端还有 `s3_endpoint`/`s3_bucket`/`s3_region`/`s3_access_key`/`s3_secret_key`/`s3_public_base_url`，以及检索直链相关的 `s3_presign_endpoint`/`s3_presign_expiry_seconds`；
+- `blob_store`：backend（local / s3）、local_root、max_image_bytes、allowed_path_roots、URL 下载开关和私网限制；s3 后端还有 `s3_endpoint`/`s3_bucket`/`s3_region`/`s3_access_key`/`s3_secret_key`/`s3_public_base_url`，以及检索直链相关的 `s3_presign_endpoint`/`s3_presign_expiry_seconds`。从旧版本升级后需重跑 `make dev-setup`（uv sync）才能拿到 s3 extra 依赖；本地启用 s3 后端还需 `make dev-blobs` 启动 MinIO；
 - `database.qdrant.image_collection`：默认 `image_item_v1`。
 
 ---
