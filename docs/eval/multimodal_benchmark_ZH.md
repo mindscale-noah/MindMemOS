@@ -207,9 +207,11 @@ uv run python scripts/run_multimodal_bench.py --benchmarks memgallery --configs 
 ## 8. 结果解读
 
 manifest 中的 `eval_result` 包含：
-- `metrics`：百分制总分、按任务（`per_task`）的分数，Mem-Gallery 另有按题型（`per_point`）的分数；
-- `cost`：客户端的写入和检索调用次数与延迟、作答器和 judge 的 token；
+- `metrics`：百分制总分、按任务（`per_task`）的分数，Mem-Gallery 另有按题型（`per_point`）的分数。另带 locomo 约定的汇总字段：`overall_accuracy`（0–1，MemEye 取 EM、Mem-Gallery 取 F1）、`total_questions`、`judge_runs_used` 和 locomo 命名的作答/judge token 字段，因此 `mindmemos_eval.memory.metrics` 汇总脚本可直接处理多模态 manifest；
+- `cost`：客户端的写入和检索调用次数与延迟、作答器和 judge 的 token（含 prompt/completion 拆分）；
 - `valid`：只要有作答或 judge 调用失败就为 false，这样的结果不可用。
+
+评测参数与其他 benchmark 共用同一套 runner 协议：检索默认参数（`top_k` / `rerank` / `search_strategy`）读 runner 配置和 CLI（`--top-k`、`--rerank` 等），profile/benchmark 的 `search_params` 可覆盖（本指南配置里固定 `top_k: 20`）；`--judge-runs N` 对每道 OPEN 题独立跑 N 次 judge 取平均（连续分数不做多数票）。
 
 **参考结果**（gpt-4.1-mini 作答和 judge，本地 SigLIP2，各 2 次均值；2026-10 测于 `feat_multimodal`）：
 
