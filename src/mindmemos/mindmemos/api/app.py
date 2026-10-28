@@ -7,6 +7,7 @@ the lifespan handler so importing this module stays cheap and side-effect free.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -16,6 +17,7 @@ from fastapi.responses import JSONResponse
 from ..config import get_config, init_config_from_env
 from ..errors import ApiError, InvalidConfigError
 from ..infra import shutdown_tracer_provider
+from ..infra.blob import get_blob_store
 from ..infra.db import close_database_clients, ensure_database_schema
 from ..infra.kafka import start_kafka, stop_kafka
 from ..llm import (
@@ -34,6 +36,10 @@ from .skill_routes import router as skill_router
 
 logger = get_logger(__name__)
 
+# Generous on purpose: a cold local SigLIP2 server may need tens of seconds for its first
+# forward pass; the bound only exists so a dead endpoint (litellm retries for minutes) boots.
+_MM_EMBED_PROBE_TIMEOUT_SECONDS = 60.0
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -48,6 +54,9 @@ async def lifespan(app: FastAPI):
     # Initialize databases (Qdrant + Neo4j): connect and ensure schema exists.
     await ensure_database_schema()
     logger.info("memory databases ready")
+
+    # Blob-store misconfiguration must fail the boot, not the first image request.
+    _check_blob_store()
 
     # startup instead of on the first request.
     init_llm_client()
@@ -69,6 +78,25 @@ async def lifespan(app: FastAPI):
         await _close_databases()
         logger.info("mindmemos api stopped")
         shutdown_tracer_provider()
+
+
+def _check_blob_store() -> None:
+    """Construct the configured blob store once at startup.
+
+    The S3 backend imports ``minio`` lazily, so a missing ``mindmemos[s3]`` extra would
+    otherwise pass validation and only surface as an ImportError -> HTTP 500 on the first
+    image add or get-image call.
+    """
+
+    if get_config().blob_store.backend != "s3":
+        return
+    try:
+        get_blob_store()
+    except ImportError as exc:
+        raise InvalidConfigError(
+            "blob_store.backend",
+            support=f"install the s3 extra (pip install 'mindmemos[s3]') or use the local backend: {exc}",
+        ) from exc
 
 
 async def _check_multimodal_embedding() -> None:
@@ -106,9 +134,22 @@ async def _check_multimodal_embedding() -> None:
             support=f"a collection with a {store.text_vector_size}-d 'text' vector: use a new name or drop it",
         )
     try:
-        vector = (await client.embed_texts(["dimension check"], task="startup.dimension_check"))[0]
+        vector = (
+            await asyncio.wait_for(
+                client.embed_texts(["dimension check"], task="startup.dimension_check"),
+                timeout=_MM_EMBED_PROBE_TIMEOUT_SECONDS,
+            )
+        )[0]
     except InvalidConfigError:
         raise
+    except TimeoutError:
+        # The probe goes out under the router's full retry policy; an unbounded wait here
+        # would stall the boot for minutes when the endpoint is down (same as unreachable).
+        logger.warning(
+            "multimodal embedding probe timed out",
+            timeout_seconds=_MM_EMBED_PROBE_TIMEOUT_SECONDS,
+        )
+        return
     except Exception as exc:  # noqa: BLE001 - reachability problems must not block text memory
         if getattr(exc, "code", None) == "embedding.dimension_mismatch":
             raise InvalidConfigError("mm_embed_model_router.endpoints[].dimensions", support=str(exc)) from exc
