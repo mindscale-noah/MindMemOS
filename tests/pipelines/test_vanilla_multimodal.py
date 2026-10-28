@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 
 import pytest
-from mindmemos.components.multimodal import ImageLoader
+from mindmemos.components.multimodal import ImageLoader, LoadedImage, attached_images
 from mindmemos.config import BlobStoreConfig, MultimodalConfig, TextProcessingConfig
 from mindmemos.errors import BadRequestError
-from mindmemos.infra.blob import LocalBlobStore
+from mindmemos.infra.blob import LocalBlobStore, StoredBlob
 from mindmemos.pipelines.add.vanilla_multimodal import VanillaMultimodalAddPipeline, image_point_id
 from mindmemos.pipelines.search.vanilla_multimodal import VanillaMultimodalSearchEngine
 from mindmemos.pipelines.search.vanilla_multimodal.engine import _image_filter
@@ -18,8 +19,10 @@ from mindmemos.typing import (
     AddPipelineSyncResult,
     ImageSearchHit,
     MemoryAddEventItem,
+    MemoryDbSearchHit,
     MemoryRequestContext,
     MemorySearchItem,
+    MemoryView,
     SearchPipelineInput,
 )
 
@@ -312,3 +315,114 @@ async def test_only_multimodal_searches_touch_images(mode: str) -> None:
     with_image = plain.model_copy(update={"query_images": [{"data": _b64(PNG)}]})
     assert engine.is_multimodal(flagged) is (mode != "off")
     assert engine.is_multimodal(with_image) is (mode != "off")
+
+
+@pytest.mark.asyncio
+async def test_multilock_rolls_back_acquired_stripes_when_cancelled_mid_acquire() -> None:
+    # A task cancelled while waiting for a later stripe must release the stripes it already
+    # holds: `async with` never calls __aexit__ when __aenter__ raises, and a stranded
+    # stripe lock would hang every future add hashed to it for the loop's lifetime.
+    from mindmemos.pipelines.add.vanilla_multimodal.vanilla_multimodal_add import _MultiLock
+
+    held, second = asyncio.Lock(), asyncio.Lock()
+    await held.acquire()
+
+    async def blocked() -> None:
+        async with _MultiLock([second, held]):
+            raise AssertionError("must not enter the lock")
+
+    task = asyncio.get_running_loop().create_task(blocked())
+    await asyncio.sleep(0)  # take `second`, then park on `held`
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await asyncio.wait_for(second.acquire(), timeout=0.1)  # rollback freed it
+    second.release()
+    held.release()
+
+
+@pytest.mark.asyncio
+async def test_store_blobs_fan_out_is_capped_process_wide(tmp_path) -> None:
+    # Every load+put of an image add hops to the shared default thread pool (download,
+    # base64 decode, S3 upload); the cap keeps a few 32-image adds from monopolizing it.
+    from mindmemos.pipelines.add.vanilla_multimodal.vanilla_multimodal_add import _IMAGE_IO_LIMIT
+
+    in_flight = 0
+    peak = 0
+
+    class CountingBlobs:
+        async def put(self, namespace, data, *, mime_type):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            return StoredBlob(blob_id=hashlib.sha256(data).hexdigest(), mime_type=mime_type, size_bytes=len(data))
+
+    class InstantLoader:
+        async def load(self, ref, *, namespace):
+            return LoadedImage(data=PNG, mime_type="image/png")
+
+    pipeline = StubVanillaAdd(
+        db_reader=object(),
+        db_writer=object(),
+        recorder=object(),
+        llm_client=None,
+        embed_client=None,
+        text_config=TEXT_CONFIG,
+        image_store=FakeImageStore(),
+        blob_store=CountingBlobs(),
+        image_loader=InstantLoader(),
+        mm_embed_client=None,
+        multimodal_config=MultimodalConfig(mode="basic"),
+    )
+    images = [{"data": _b64(PNG)}] * 32
+    inp = AddPipelineInput(messages=[{"role": "user", "content": "x", "images": images}])
+
+    stored = await pipeline._store_blobs(attached_images(inp, context_chars=100), _context())
+
+    assert len(stored) == 32
+    assert 2 <= peak <= _IMAGE_IO_LIMIT  # parallel, but never more than the cap
+
+
+@pytest.mark.asyncio
+async def test_occurrences_are_trimmed_to_max_occurrences_per_image(tmp_path) -> None:
+    mm, store = FakeMm(), FakeImageStore()
+    pipeline, _ = _pipeline(tmp_path, mm=mm, store=store)
+    pipeline._explicit_multimodal_config = MultimodalConfig(mode="basic", max_occurrences_per_image=2)
+    message = {"role": "user", "content": "the sofa", "images": [{"data": _b64(PNG)}]}
+
+    for index in range(4):
+        await pipeline.add_sync(AddPipelineInput(messages=[message]), _context(f"r{index}", f"s{index}"))
+
+    [record] = store.records.values()
+    # The merge keeps the earliest occurrences: old + new, truncated to the cap.
+    assert record.session_ids == ["s0", "s1"]
+
+
+def test_text_facts_surface_their_image_anchor_metadata() -> None:
+    # Facts extracted from image-bearing turns store image_blob_ids on the memory view; the
+    # search item must carry them so consumers (e.g. the Mem-Gallery answerer) can anchor a
+    # fact to its images — and nothing else of the stored metadata must leak into responses.
+    from mindmemos.pipelines.search.vanilla.engine import _to_memory_search_item
+
+    def hit(metadata: dict) -> MemoryDbSearchHit:
+        return MemoryDbSearchHit(
+            memory_id="m1",
+            score=1.0,
+            memory=MemoryView(
+                memory_id="m1",
+                project_id="proj",
+                content="the sofa is green",
+                mem_type="fact",
+                status="active",
+                metadata=metadata,
+            ),
+        )
+
+    anchored = _to_memory_search_item(hit({"image_blob_ids": ["a" * 64], "internal": "x"}))
+    assert anchored.metadata == {"image_blob_ids": ["a" * 64]}
+
+    plain = _to_memory_search_item(hit({"internal": "x"}))
+    assert plain.metadata == {}

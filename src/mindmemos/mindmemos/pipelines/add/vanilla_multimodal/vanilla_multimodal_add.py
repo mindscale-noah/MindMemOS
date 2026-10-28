@@ -20,7 +20,14 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
-from ....components.multimodal import AttachedImage, ImageLoader, attached_images, has_images, without_images
+from ....components.multimodal import (
+    AttachedImage,
+    ImageLoader,
+    attached_images,
+    has_images,
+    is_image_only_turn,
+    without_images,
+)
 from ....components.multimodal.extraction import (
     IMAGE_BLOB_IDS_KEY,
     ExtractionImage,
@@ -29,9 +36,9 @@ from ....components.multimodal.extraction import (
     request_images,
 )
 from ....config import MultimodalConfig, get_config
-from ....errors import BadRequestError, ConfigNotInitializedError
-from ....infra.blob import BlobStore, StoredBlob, get_blob_store
-from ....llm import ImageInput, MmEmbedClient, get_embed_client, get_mm_embed_client
+from ....errors import BadRequestError
+from ....infra.blob import BlobStore, StoredBlob
+from ....llm import ImageInput, MmEmbedClient, get_embed_client
 from ....logging import get_logger, traced
 from ....typing import (
     AddPipelineAsyncResult,
@@ -45,12 +52,12 @@ from ....typing import (
     MemoryRequestContext,
 )
 from ...memory_db import ImageMemoryStore, suppress_recording_errors
+from ...multimodal_deps import MM_CLIENT_UNSET, MultimodalDepsMixin
 from ...registry import register
 from ..vanilla import VanillaAddPipeline
 from ..vanilla.vanilla_add import _CLIENT_UNSET
 
 logger = get_logger(__name__)
-_UNSET = object()
 _LOCK_STRIPE_COUNT = 64
 _LOCK_STRIPES: dict[asyncio.AbstractEventLoop, list[asyncio.Lock]] = {}
 
@@ -65,21 +72,36 @@ def _lock_stripes() -> list[asyncio.Lock]:
     return stripes
 
 
+_IMAGE_IO_LIMIT = 8
+_IMAGE_IO_SEMAPHORES: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+
+
+def _image_io_semaphore() -> asyncio.Semaphore:
+    """Cap the in-flight load+put jobs of image-heavy adds process-wide.
+
+    Every job hops to a thread (URL download, base64 decode, S3 upload of up to
+    ``max_image_bytes``) on the default executor that text searches and blob reads share;
+    without a cap a few concurrent 32-image adds monopolize it. Per event loop like the lock
+    stripes: the server has one loop, test suites a fresh one per test.
+    """
+
+    loop = asyncio.get_running_loop()
+    semaphore = _IMAGE_IO_SEMAPHORES.get(loop)
+    if semaphore is None:
+        for stale in [other for other in _IMAGE_IO_SEMAPHORES if other.is_closed()]:
+            del _IMAGE_IO_SEMAPHORES[stale]
+        semaphore = _IMAGE_IO_SEMAPHORES[loop] = asyncio.Semaphore(_IMAGE_IO_LIMIT)
+    return semaphore
+
+
 def image_point_id(project_id: str, user_id: str | None, blob_id: str) -> str:
     """Images are deduplicated per project and user by content."""
 
     return str(uuid5(NAMESPACE_URL, f"mindmemos:image:{project_id}:{user_id or ''}:{blob_id}"))
 
 
-def _default_multimodal_config() -> MultimodalConfig:
-    try:
-        return get_config().algo_config.multimodal
-    except ConfigNotInitializedError:
-        return MultimodalConfig()
-
-
 @register(type="add", name="vanilla_multimodal_add")
-class VanillaMultimodalAddPipeline(VanillaAddPipeline):
+class VanillaMultimodalAddPipeline(MultimodalDepsMixin, VanillaAddPipeline):
     """Vanilla add for text, plus raw-image storage and image indexing when multimodal mode is on."""
 
     def __init__(
@@ -88,7 +110,7 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
         image_store: ImageMemoryStore | None = None,
         blob_store: BlobStore | None = None,
         image_loader: ImageLoader | None = None,
-        mm_embed_client: MmEmbedClient | None | object = _UNSET,
+        mm_embed_client: MmEmbedClient | None | object = MM_CLIENT_UNSET,
         multimodal_config: MultimodalConfig | None = None,
         **kwargs: Any,
     ) -> None:
@@ -118,7 +140,7 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
         *,
         add_record_id: str | None,
     ) -> AddPipelineSyncResult:
-        cfg = self._config()
+        cfg = self.multimodal_config()
         _require_multimodal(cfg)
         image_events, stored = await self._add_images(inp, context)
         text_inp = without_images(inp)
@@ -160,7 +182,7 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
         """Queue the request with images already stored, so queue messages carry blob ids only."""
 
         if has_images(inp):
-            _require_multimodal(self._config())
+            _require_multimodal(self.multimodal_config())
             inp = await self._with_stored_blobs(inp, context)
         return await super().add_async(inp, context, add_record_id=add_record_id, record_metadata=record_metadata)
 
@@ -184,11 +206,11 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
                 for blob_id in (view.metadata or {}).get(IMAGE_BLOB_IDS_KEY) or []:
                     anchored.setdefault(blob_id, []).append(view.memory_id)
         blob_ids = set(anchored) | set(images.visuals)
-        if not blob_ids or self._mm_client() is None:
+        if not blob_ids or self.mm_client() is None:
             if images.visuals:
                 logger.info("multimodal_visual_facts_dropped", reason="images_not_indexed", count=len(images.visuals))
             return
-        store = self._images()
+        store = self.images()
         ids = {image_point_id(context.project_id, context.user_id, blob_id): blob_id for blob_id in blob_ids}
         updates: list[ImageRecord] = []
         for record in await store.get_images(context, list(ids)):
@@ -237,14 +259,14 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
     async def _add_images(
         self, inp: AddPipelineInput, context: MemoryRequestContext
     ) -> tuple[list[MemoryAddEventItem], list[tuple[StoredBlob, bytes, AttachedImage]]]:
-        cfg = self._config()
+        cfg = self.multimodal_config()
         images = attached_images(inp, context_chars=cfg.image_context_chars)
         if len(images) > cfg.max_images_per_request:
             raise BadRequestError(
                 f"at most {cfg.max_images_per_request} images per add request", code="add.too_many_images"
             )
         stored = await self._store_blobs(images, context)
-        client = self._mm_client()
+        client = self.mm_client()
         if client is None:
             logger.info("multimodal_images_stored_unindexed", count=len(stored), request_id=context.request_id)
             return [
@@ -257,12 +279,16 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
         self, images: list[AttachedImage], context: MemoryRequestContext
     ) -> list[tuple[StoredBlob, bytes, AttachedImage]]:
         loader = self._loader()
-        blobs = self._blobs()
-        loaded = await asyncio.gather(*(loader.load(image.ref, namespace=context.project_id) for image in images))
-        stored = await asyncio.gather(
-            *(blobs.put(context.project_id, item.data, mime_type=item.mime_type) for item in loaded)
-        )
-        return [(blob, item.data, image) for blob, item, image in zip(stored, loaded, images, strict=True)]
+        blobs = self.blobs()
+        semaphore = _image_io_semaphore()
+
+        async def store(image: AttachedImage) -> tuple[StoredBlob, bytes, AttachedImage]:
+            async with semaphore:
+                item = await loader.load(image.ref, namespace=context.project_id)
+                blob = await blobs.put(context.project_id, item.data, mime_type=item.mime_type)
+            return blob, item.data, image
+
+        return list(await asyncio.gather(*(store(image) for image in images)))
 
     async def _index(
         self,
@@ -277,7 +303,7 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
             image_id = image_point_id(context.project_id, context.user_id, blob.blob_id)
             by_id.setdefault(image_id, (blob, data, []))[2].append(image)
 
-        store = self._images()
+        store = self.images()
         events: list[MemoryAddEventItem] = []
         stripes = _lock_stripes()
         locks = sorted({zlib.crc32(image_id.encode()) % len(stripes) for image_id in by_id})
@@ -323,9 +349,7 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
                 occurrences = by_id[image_id][2]
                 merged = [*record.occurrences, *(_occurrence(image, context) for image in occurrences)]
                 updates.append(
-                    record.model_copy(
-                        update={"occurrences": merged[: cfg.max_occurrences_per_image], "update_at": now}
-                    )
+                    record.model_copy(update={"occurrences": merged[: cfg.max_occurrences_per_image], "update_at": now})
                 )
                 events.append(_event(record, occurrences[0], "reinforcement"))
             await store.upsert_images(context, inserts)
@@ -334,7 +358,7 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
 
     async def _with_stored_blobs(self, inp: AddPipelineInput, context: MemoryRequestContext) -> AddPipelineInput:
         loader = self._loader()
-        blobs = self._blobs()
+        blobs = self.blobs()
         messages = []
         for message in inp.messages:
             if isinstance(message, DialogueMessage) and message.images:
@@ -351,28 +375,10 @@ class VanillaMultimodalAddPipeline(VanillaAddPipeline):
             messages.append(message)
         return inp.model_copy(update={"messages": messages})
 
-    def _config(self) -> MultimodalConfig:
-        return self._explicit_multimodal_config or _default_multimodal_config()
-
-    def _mm_client(self) -> MmEmbedClient | None:
-        if self._explicit_mm_client is not _UNSET:
-            return self._explicit_mm_client  # type: ignore[return-value]
-        return get_mm_embed_client()
-
-    def _blobs(self) -> BlobStore:
-        if self._blob_store is None:
-            self._blob_store = get_blob_store()
-        return self._blob_store
-
     def _loader(self) -> ImageLoader:
         if self._image_loader is None:
-            self._image_loader = ImageLoader(get_config().blob_store, self._blobs())
+            self._image_loader = ImageLoader(get_config().blob_store, self.blobs())
         return self._image_loader
-
-    def _images(self) -> ImageMemoryStore:
-        if self._image_store is None:
-            self._image_store = ImageMemoryStore()
-        return self._image_store
 
 
 class _MultiLock:
@@ -380,8 +386,18 @@ class _MultiLock:
         self._locks = locks
 
     async def __aenter__(self) -> None:
-        for lock in self._locks:
-            await lock.acquire()
+        acquired: list[asyncio.Lock] = []
+        try:
+            for lock in self._locks:
+                await lock.acquire()
+                acquired.append(lock)
+        except BaseException:
+            # A task cancelled while waiting for a later stripe must not strand the earlier
+            # ones: `async with` never calls __aexit__ when __aenter__ raises, and a leaked
+            # stripe lock would hang every future add hashed to it for the loop's lifetime.
+            for lock in reversed(acquired):
+                lock.release()
+            raise
 
     async def __aexit__(self, *exc: object) -> None:
         for lock in reversed(self._locks):
@@ -441,11 +457,7 @@ def _images_by_text_index(
     (the reply that discusses them), or to the previous one when they come last.
     """
 
-    kept = [
-        index
-        for index, message in enumerate(inp.messages)
-        if not (isinstance(message, DialogueMessage) and message.images and not message.content.strip())
-    ]
+    kept = [index for index, message in enumerate(inp.messages) if not is_image_only_turn(message)]
     position = {original: text_index for text_index, original in enumerate(kept)}
     result: dict[int, list[ExtractionImage]] = {}
     for blob, data, image in stored:
