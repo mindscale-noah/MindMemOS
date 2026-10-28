@@ -46,6 +46,7 @@
 
 ## 📰 News
 
+- **2026-10-28**：多模态记忆发布——`memory.add` / `memory.search` 支持图片：原图存本地磁盘或 S3/MinIO，用多模态 embedding 模型（SigLIP2 兼容协议）建立图片索引；`enhanced` 模式提供 VLM 视觉事实抽取与多模态 agent 检索。MemEye / Mem-Gallery 评测结果与一键复现指南见 [benchmark 指南](docs/eval/multimodal_benchmark_ZH.md)与[多模态说明](docs/multimodal/README_ZH.md)。
 - **2026-08-18**：我们发布了 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，让 DeepSeek Harness（dsh）Agent 自动召回并写入 MindMemOS 记忆。
 - **2026-08-14**：我们发布了 [MindMemOS 1.0 技术报告](https://arxiv.org/abs/2608.12428)《MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents》。
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
@@ -55,6 +56,7 @@
 
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。
 - **记忆系统可自主演化**：通过 schema learning、dreaming、feedback 持续优化记忆质量，自动学习高频记忆点、离线巩固合并记忆，并从交互纠错中反向优化 add/search 流程。
+- **多模态记忆**：图片与文本一同进入 vanilla 的 add / search——原图存本地磁盘或 S3/MinIO，按多模态 embedding（SigLIP2 兼容协议）建索引；`enhanced` 模式可用 VLM 抽取视觉事实并做多模态 agent 检索，图片命中附带短时效直链。默认关闭，纯文本行为逐字节不变。
 - **记忆与 Skills 联动**：经验记忆可以沉淀为 skill candidates；skills 的执行结果、失败轨迹和用户反馈也会回流到记忆系统，推动 skills 持续演进。
 - **插件集成能力**：支持通过插件将 MindMemOS 接入不同 Agent 与工作流，在交互前检索并注入相关记忆、回合结束后自动写回对话，当前已提供 [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) 和 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，并持续扩展更多集成。
 
@@ -398,6 +400,19 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 | Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
 | **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
 | **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
+
+### 🖼️ 多模态记忆：MemEye
+
+- **评测基准**：[MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye)，多轮对话穿插图片的长期记忆基准，8 个任务共 742 题；MCQ 计 EM、开放题计 BLEU-1 与 LLM Judge，按任务宏平均。
+
+| 配置 | EM | B-1 | Judge |
+| :--- | :---: | :---: | :---: |
+| b0（纯文本基线） | 43.03 | 20.32 | 26.26 |
+| b1（图片相似度检索） | 59.77 | 27.02 | 47.80 |
+| enhanced（VLM 视觉事实） | 63.45 | 25.49 | 50.80 |
+| enhanced_agentic（多模态 agent） | **65.89** | **27.09** | **53.30** |
+
+配置：vanilla 算法；作答与 judge 为 `gpt-4.1-mini`；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）；各 2 次均值（2026-10）。Mem-Gallery 结果与完整运行指南见 [docs/eval/multimodal_benchmark_ZH.md](docs/eval/multimodal_benchmark_ZH.md)，能力实现细节见 [docs/multimodal/README_ZH.md](docs/multimodal/README_ZH.md)。
 
 ## 🗺️ Coming Features
 
