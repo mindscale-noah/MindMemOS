@@ -2,10 +2,9 @@
 
 import asyncio
 
-from structlog.testing import capture_logs
-
 from mindmemos.api import app as app_module
 from mindmemos.config import MemoryConfig, build
+from structlog.testing import capture_logs
 
 
 def _run_check(monkeypatch, mode: str) -> None:

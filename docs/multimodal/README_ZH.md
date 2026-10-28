@@ -189,7 +189,7 @@ POST /v1/memory/search
 ```
 
 **检索结果中新增的条目类型：**
-- `memory_type=image`：图片结果。`memory` 是 `[image] 描述或上下文`；`metadata` 包括 `blob_id`、`user_id`（属主，取原图时的必传参数）、`image_path`、`score`、`session_ids`、`caller_image_ids`、`occurrences`、`description`、`visual_facts`、`anchored_memory_ids`、`evidence`（query_image / session / anchored / similar），以及会话展开时的 `session_position`。
+- `memory_type=image`：图片结果。`memory` 是 `[image] 描述或上下文`；`metadata` 包括 `blob_id`、`user_id`（属主，取原图时的必传参数）、`score`、`session_ids`、`caller_image_ids`、`occurrences`、`description`、`visual_facts`、`anchored_memory_ids`、`evidence`（query_image / session / anchored / similar），以及会话展开时的 `session_position`。
 - `memory_type=visual_fact`：单条视觉事实。`metadata` 包括 `blob_id`、`image_id`、`user_id` 和 rerank `score`。
 - 对话事实的 `metadata.image_blob_ids` 指向它锚定的图。
 

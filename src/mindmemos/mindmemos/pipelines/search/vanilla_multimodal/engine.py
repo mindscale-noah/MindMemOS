@@ -523,7 +523,6 @@ def _bare_image_item(blob_id: str, evidence: str) -> MemorySearchItem:
             "modality": IMAGE_MEMORY_TYPE,
             "blob_id": blob_id,
             "evidence": evidence,
-            "image_path": f"/v1/memory/images/{blob_id}",
         },
         status="active",
     )
@@ -551,7 +550,6 @@ def _visual_fact_item(record: ImageRecord, index: int, score: float | None) -> M
             "image_id": record.image_id,
             "user_id": record.user_id,
             "blob_id": record.blob_id,
-            "image_path": f"/v1/memory/images/{record.blob_id}",
         },
         status="active",
     )
@@ -579,7 +577,6 @@ def _to_search_item(hit: ImageSearchHit, *, with_facts: bool = True) -> MemorySe
             "user_id": record.user_id,
             "blob_id": record.blob_id,
             "mime_type": record.mime_type,
-            "image_path": f"/v1/memory/images/{record.blob_id}",
             "source_url": record.source_url,
             "session_ids": record.session_ids,
             "caller_image_ids": [occ.caller_image_id for occ in record.occurrences if occ.caller_image_id],

@@ -197,7 +197,7 @@ class MultimodalMemoryExtractor:
         result = result.model_copy(
             update={"memories": [m.model_copy(update={"content": strip_labels(m.content)}) for m in result.memories]}
         )
-        return _anchor(_mark_extractor(result, "multimodal_vlm"), envelope, chunk)
+        return _anchor(_mark_extractor(result, "multimodal_vlm"), chunk)
 
     async def _describe(
         self,
@@ -324,9 +324,7 @@ def _image_number(value: Any) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _anchor(
-    result: MemoryExtractionResult, envelope: ExtractionEnvelope, attached: list[_Attached]
-) -> MemoryExtractionResult:
+def _anchor(result: MemoryExtractionResult, attached: list[_Attached]) -> MemoryExtractionResult:
     """Anchor each fact to the images of its source messages and of the message they reply to."""
 
     by_evidence: dict[int, list[str]] = {}

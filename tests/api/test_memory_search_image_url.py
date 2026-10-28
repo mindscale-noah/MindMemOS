@@ -102,14 +102,14 @@ def _image_result(*, owner: str = OWNER) -> SearchPipelineResult:
                 memory="[image] a screenshot",
                 memory_type="image",
                 last_update_at="2026-10-28 00:00:00",
-                metadata={"modality": "image", "blob_id": BLOB_ID, "user_id": owner, "image_path": f"/v1/memory/images/{BLOB_ID}"},
+                metadata={"modality": "image", "blob_id": BLOB_ID, "user_id": owner},
             ),
             MemorySearchItem(  # bare image hit: blob known, owner unknown
                 id=BLOB_ID,
                 memory="[image]",
                 memory_type="image",
                 last_update_at="2026-10-28 00:00:00",
-                metadata={"modality": "image", "blob_id": OTHER_BLOB_ID, "image_path": f"/v1/memory/images/{OTHER_BLOB_ID}"},
+                metadata={"modality": "image", "blob_id": OTHER_BLOB_ID},
             ),
             MemorySearchItem(  # malformed blob id: never decorated
                 id="img-bad",

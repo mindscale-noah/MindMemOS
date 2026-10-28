@@ -250,7 +250,7 @@ async def test_image_results_follow_the_text_results(tmp_path) -> None:
     image = items[1]
     assert image.memory_type == "image"
     assert image.memory == "[image] user: my sofa"
-    assert image.metadata["blob_id"] and image.metadata["image_path"].endswith(image.metadata["blob_id"])
+    assert image.metadata["blob_id"]
     assert image.metadata["caller_image_ids"] == ["I"]
     assert mm.texts[-1] == ["sofa colour"]
 

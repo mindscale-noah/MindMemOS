@@ -22,7 +22,7 @@ serving endpoint sees the bare model name.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass, is_dataclass, replace
+from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import Any
 

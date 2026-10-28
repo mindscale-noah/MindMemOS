@@ -23,7 +23,7 @@ from typing import Any
 from mindmemos_eval.llm import LLMClient
 from mindmemos_eval.memory.base import BenchmarkSpec, RunContext
 
-from ..memeye.adapter import _Run, _manifest_metrics, _write_summary, run_tasks
+from ..memeye.adapter import _manifest_metrics, _Run, _write_summary, run_tasks
 from ..memeye.dataset import MemEyeTask, Question
 from .answer import answer_options, question_block
 from .dataset import load_task, task_names
