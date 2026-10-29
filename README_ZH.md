@@ -401,37 +401,26 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 | **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
 | **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
 
-### 🖼️ 多模态记忆：MemEye
+### 🖼️ 多模态记忆：MemEye 与 Mem-Gallery
 
-- **评测基准**：[MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye)，多轮对话穿插图片的长期记忆基准，8 个任务共 742 题；MCQ 计 EM、开放题计 BLEU-1 与 LLM Judge，按任务宏平均。
+- **评测基准**：[MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye)（8 任务共 742 题，多轮对话穿插图片；MCQ 计 EM、开放题计 BLEU-1，按任务宏平均）与 [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery)（20 任务共 1711 开放题；token 级 F1 与 BLEU-1，按题微平均）。
 
-| 配置 | EM | B-1 | Judge |
-| :--- | :---: | :---: | :---: |
-| b0（纯文本基线） | 43.03 | 20.32 | 26.26 |
-| b1（图片相似度检索） | 59.77 | 27.02 | 47.80 |
-| enhanced（VLM 视觉事实） | 63.45 | 25.49 | 50.80 |
-| enhanced_agentic（多模态 agent） | **65.89** | **27.09** | **53.30** |
+| 方法 | MemEye EM | MemEye B-1 | Mem-Gallery F1 | Mem-Gallery B-1 |
+| :--- | :---: | :---: | :---: | :---: |
+| MemoryOS | 45.75 | 13.12 | 43.09 | 37.76 |
+| A-MEM | 49.73 | 21.11 | 44.08 | 38.37 |
+| SimpleMem | 50.34 | 9.42 | 34.73 | 28.90 |
+| HyperMem | 47.82 | 19.64 | 44.57 | 33.42 |
+| M2A | 52.31 | 6.31 | 15.04 | 10.28 |
+| MMA | 50.96 | 16.32 | 26.99 | 20.60 |
+| SRAG | 58.36 | 31.48 | 41.07 | 35.03 |
+| UniversalRAG | 60.49 | 11.23 | 48.36 | 41.90 |
+| MindMemOS b0（纯文本基线） | 43.03 | 20.32 | 38.72 | 32.59 |
+| MindMemOS b1（图片相似度检索） | 59.77 | 27.02 | 54.73 | 47.75 |
+| MindMemOS enhanced（VLM 视觉事实） | 63.45 | 25.49 | 55.66 | 48.98 |
+| MindMemOS enhanced_agentic（多模态 agent） | **65.89** | 27.09 | **57.06** | **50.45** |
 
-配置：vanilla 算法；作答与 judge 为 `gpt-4.1-mini`；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）；各 2 次均值（2026-10）。Mem-Gallery 结果、各任务/题型分解与完整运行指南见 [docs/eval/README_ZH.md 的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
-
-**Mem-Gallery：同条件开源基线对比**（F1 / B-1 为与 judge 无关的确定性指标）：
-
-| 方法 | F1 | B-1 |
-| :--- | :---: | :---: |
-| MemoryOS | 43.09 | 37.76 |
-| A-MEM | 44.08 | 38.37 |
-| SimpleMem | 34.73 | 28.90 |
-| HyperMem | 44.57 | 33.42 |
-| M2A | 15.04 | 10.28 |
-| MMA | 26.99 | 20.60 |
-| SRAG（多模态语义检索） | 41.07 | 35.03 |
-| UniversalRAG | 48.36 | 41.90 |
-| MindMemOS b0（纯文本基线） | 38.72 | 32.59 |
-| MindMemOS b1（图片相似度检索） | 54.73 | 47.75 |
-| MindMemOS enhanced（VLM 视觉事实） | 55.66 | 48.98 |
-| MindMemOS enhanced_agentic（多模态 agent） | **57.06** | **50.45** |
-
-条件说明：基线行为同一实验条件下的复现——同全量 Mem-Gallery（20 任务 / 1711 题）、同作答器 `gpt-4.1-mini`、benchmark 原版 QA 与评分协议、3 次均值（出处为双盲评审中的在投论文，暂不附链接）；MindMemOS 四行为本仓库当前实现的评测（2 次均值）。该复现的 LLM Judge 模型（`GPT-5.4-mini`）与本文（`gpt-4.1-mini`）不同，Judge 分数不可同表比较，故只列 F1 / B-1。
+配置：vanilla 算法；所有行均以 `gpt-4.1-mini` 作答；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）。基线行为同一实验条件下的复现（3 次均值；出处为双盲评审中的在投论文，暂不附链接）；MindMemOS 四行为本仓库当前实现的评测（2 次均值，2026-10）。两组 Judge 模型不同（本文 `gpt-4.1-mini`、基线 `GPT-5.4-mini`），Judge 分数不可同表比较；MindMemOS 的 Judge（b0 → enhanced_agentic）：MemEye 26.26 / 47.80 / 50.80 / 53.30，Mem-Gallery 70.68 / 85.06 / 87.06 / 89.14。完整运行指南见 [docs/eval/README_ZH.md 的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
 
 ## 🗺️ Coming Features
 

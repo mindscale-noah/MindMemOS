@@ -413,42 +413,26 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 | **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
 | **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
 
-### 🖼️ Multimodal Memory: MemEye
+### 🖼️ Multimodal Memory: MemEye & Mem-Gallery
 
-- **Benchmark**: [MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye), a long-term multimodal memory benchmark where multi-turn dialogs interleave images — 8 tasks, 742 questions; EM on MCQ, BLEU-1 and LLM-judge on open questions, macro-averaged over tasks.
+- **Benchmarks**: [MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye) (8 tasks, 742 questions — multi-turn dialogs interleaving images; EM on MCQ, BLEU-1 on open questions, macro-averaged over tasks) and [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery) (20 tasks, 1,711 open questions; token-level F1 and BLEU-1, micro-averaged over questions).
 
-| Configuration | EM | B-1 | Judge |
-| :----------- | :-----: | :---: | :---: |
-| b0 (text-only baseline) | 43.03 | 20.32 | 26.26 |
-| b1 (image-similarity retrieval) | 59.77 | 27.02 | 47.80 |
-| enhanced (VLM visual facts) | 63.45 | 25.49 | 50.80 |
-| enhanced_agentic (multimodal agent) | **65.89** | **27.09** | **53.30** |
+| Method | MemEye EM | MemEye B-1 | Mem-Gallery F1 | Mem-Gallery B-1 |
+| :--- | :---: | :---: | :---: | :---: |
+| MemoryOS | 45.75 | 13.12 | 43.09 | 37.76 |
+| A-MEM | 49.73 | 21.11 | 44.08 | 38.37 |
+| SimpleMem | 50.34 | 9.42 | 34.73 | 28.90 |
+| HyperMem | 47.82 | 19.64 | 44.57 | 33.42 |
+| M2A | 52.31 | 6.31 | 15.04 | 10.28 |
+| MMA | 50.96 | 16.32 | 26.99 | 20.60 |
+| SRAG | 58.36 | 31.48 | 41.07 | 35.03 |
+| UniversalRAG | 60.49 | 11.23 | 48.36 | 41.90 |
+| MindMemOS b0 (text-only baseline) | 43.03 | 20.32 | 38.72 | 32.59 |
+| MindMemOS b1 (image-similarity retrieval) | 59.77 | 27.02 | 54.73 | 47.75 |
+| MindMemOS enhanced (VLM visual facts) | 63.45 | 25.49 | 55.66 | 48.98 |
+| MindMemOS enhanced_agentic (multimodal agent) | **65.89** | 27.09 | **57.06** | **50.45** |
 
-Setup: vanilla algorithm; answerer & judge `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`); mean of 2 runs (2026-10). Mem-Gallery results, per-task/per-type breakdowns and the step-by-step run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
-
-**Mem-Gallery: open-source baselines under identical conditions** (F1 / B-1 — deterministic, judge-free metrics):
-
-| Method | F1 | B-1 |
-| :--- | :---: | :---: |
-| MemoryOS | 43.09 | 37.76 |
-| A-MEM | 44.08 | 38.37 |
-| SimpleMem | 34.73 | 28.90 |
-| HyperMem | 44.57 | 33.42 |
-| M2A | 15.04 | 10.28 |
-| MMA | 26.99 | 20.60 |
-| SRAG (multimodal semantic RAG) | 41.07 | 35.03 |
-| UniversalRAG | 48.36 | 41.90 |
-| MindMemOS b0 (text-only baseline) | 38.72 | 32.59 |
-| MindMemOS b1 (image-similarity retrieval) | 54.73 | 47.75 |
-| MindMemOS enhanced (VLM visual facts) | 55.66 | 48.98 |
-| MindMemOS enhanced_agentic (multimodal agent) | **57.06** | **50.45** |
-
-Conditions: the baseline rows are reproductions under identical conditions — the full Mem-Gallery
-(20 tasks / 1,711 questions), the same `gpt-4.1-mini` answerer, the benchmark's native QA and
-scoring protocol, mean of 3 runs (source: a paper under double-blind review, not linked yet);
-the four MindMemOS rows are the current repository implementation (mean of 2 runs). That
-reproduction's LLM judge (`GPT-5.4-mini`) differs from ours (`gpt-4.1-mini`), so Judge scores
-cannot share the table — only F1 / B-1 are listed.
+Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The baseline rows are reproductions under identical conditions (mean of 3 runs; source: a paper under double-blind review, not linked yet); the four MindMemOS rows are this repository's implementation (mean of 2 runs, 2026-10). Judge scores are not comparable across the two groups (judge model differs: `gpt-4.1-mini` here vs `GPT-5.4-mini` there); MindMemOS Judge, b0 → enhanced_agentic: 26.26 / 47.80 / 50.80 / 53.30 on MemEye, 70.68 / 85.06 / 87.06 / 89.14 on Mem-Gallery. Step-by-step run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
 
 ## 🗺️ Coming Features
 

@@ -253,15 +253,8 @@ What the script does:
   a `summary.md` under `reports/multimodal/<tag>/` (`<tag>` defaults to the date, `smoke` for
   smoke tests); per-question details under `runs/mindmemos_eval/<run_id>/<benchmark>/`.
 
-**Time and usage** (single run, gpt-4.1-mini; wall time depends heavily on LLM latency):
-
-| | b0 | b1 | enhanced | enhanced_agentic |
-|---|---|---|---|---|
-| MemEye wall time | ~15 min | ~30 min | ~40 min | ~70–85 min |
-| Mem-Gallery wall time | ~30 min | ~40 min | ~55–70 min | ~95–125 min |
-| Answerer tokens (MemEye / Mem-Gallery) | 2 M / 2.5 M | 12 M / 8 M | 15 M / 9 M | 15 M / 9 M |
-
-One pass of both benchmarks × four configurations is about 7 hours.
+**Time:** one pass of both benchmarks × four configurations is about 7 hours (single run,
+gpt-4.1-mini; wall time depends heavily on LLM latency, `enhanced_agentic` being the slowest).
 
 ### 7. Running one configuration by hand
 
@@ -322,73 +315,29 @@ The `eval_result` in each manifest holds:
 
 ### 9. Reference results
 
-Setup: vanilla algorithm; answerer & judge both `gpt-4.1-mini` (the answerer must accept images);
-image embeddings local SigLIP2 (`siglip2-base-patch16-384`); mean of 2 runs unless marked
-"single run" (measured 2026-10 on the `feat_multimodal` branch).
+Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini` (the answerer must accept
+images); image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The MindMemOS rows are this
+repository's implementation (answerer & judge both `gpt-4.1-mini`, mean of 2 runs, measured
+2026-10); the baseline rows are the paper's reproductions under identical conditions with the same
+answerer (mean of 3 runs; source: a paper under double-blind review, not linked yet). Judge scores
+are not shared across the two groups — the judge model differs (`gpt-4.1-mini` here vs
+`GPT-5.4-mini` there); MindMemOS Judge, b0 → enhanced_agentic: 26.26 / 47.80 / 50.80 / 53.30 on
+MemEye and 70.68 / 85.06 / 87.06 / 89.14 on Mem-Gallery.
 
-| MemEye | EM | B-1 | Judge |
-|---|---|---|---|
-| b0 (mode off, text-only) | 43.03 | 20.32 | 26.26 |
-| b1 (basic) | 59.77 | 27.02 | 47.80 |
-| **enhanced** | **63.45** (63.08–63.81) | **25.49** | **50.80** (49.36–52.24) |
-| **enhanced_agentic** | **65.89** (65.35–66.43) | **27.09** | **53.30** (53.18–53.41) |
-| Comparison: enhanced before the image-numbering fix (single run) | 63.11 | 27.59 | 50.19 |
-| Comparison: enhanced_agentic before the image-numbering fix (single run) | 65.45 | 27.02 | 52.78 |
-
-| Mem-Gallery | F1 | B-1 | Judge |
-|---|---|---|---|
-| b0 (off) | 38.72 | 32.59 | 70.68 |
-| b1 (basic) | 54.73 | 47.75 | 85.06 |
-| **enhanced** | **55.66** | **48.98** | **87.06** (86.70–87.43) |
-| **enhanced_agentic** | **57.06** | **50.45** | **89.14** (88.98–89.30) |
-| Comparison: enhanced before the image-numbering fix | 56.72 | 49.89 | 87.61 |
-| Comparison: enhanced_agentic before the image-numbering fix | 56.95 | 50.14 | 87.84 |
-
-MemEye per task, EM / Judge:
-
-| Task | b0 | b1 | enhanced | enhanced_agentic |
+| Method | MemEye EM | MemEye B-1 | Mem-Gallery F1 | Mem-Gallery B-1 |
 |---|---|---|---|---|
-| Brand_Memory | 39.2 / 34.1 | 47.4 / 50.9 | 58.6 / 49.6 | 56.0 / 60.3 |
-| Card_Playlog | 41.7 / 33.3 | 39.6 / 29.2 | 41.7 / 35.4 | 39.8 / 31.2 |
-| Cartoon_Entertainment | 53.6 / 32.2 | 73.0 / 57.7 | 76.3 / 57.6 | 75.3 / 64.8 |
-| Home_Renovation | 40.1 / 26.9 | 72.4 / 63.0 | 72.4 / 57.0 | 76.4 / 57.9 |
-| Multi-Scene_Case_Archive | 36.2 / 33.5 | 65.2 / 62.8 | 73.0 / 66.0 | 78.5 / 68.2 |
-| Outdoor_Navigation | 62.5 / 7.6 | 85.3 / 35.7 | 82.6 / 41.5 | 83.0 / 39.3 |
-| Personal_Health | 25.5 / 18.1 | 35.8 / 30.9 | 37.5 / 47.3 | 50.7 / 49.8 |
-| Social_Chat | 45.3 / 24.3 | 59.5 / 52.4 | 65.5 / 52.0 | 67.2 / 54.7 |
-
-Mem-Gallery per question type, F1 / Judge:
-
-| Type | b0 | b1 | enhanced | enhanced_agentic |
-|---|---|---|---|---|
-| VS (image-to-image, answer is an image_id) | 9.2 / 15.8 | 79.2 / 75.7 | 89.2 / 89.5 | 91.3 / 93.9 |
-| VR (visual reasoning) | 23.5 / 45.0 | 50.0 / 69.1 | 39.6 / 60.5 | 50.3 / 71.6 |
-| KR (knowledge update) | 21.5 / 77.8 | 30.8 / 85.5 | 32.3 / 88.9 | 31.4 / 89.8 |
-| TTL (learn new knowledge from images) | 33.1 / 88.5 | 32.5 / 91.2 | 35.4 / 93.9 | 35.1 / 93.3 |
-| TR (temporal reasoning) | 43.5 / 81.1 | 45.6 / 84.3 | 46.5 / 81.5 | 47.3 / 86.0 |
-| CD (conflict detection) | 69.8 / 69.8 | 64.8 / 64.8 | 69.1 / 69.1 | 66.0 / 66.0 |
-| AR (refusal) | 89.5 / 94.8 | 90.6 / 93.3 | 85.9 / 90.1 | 88.6 / 92.9 |
-| FR / MR (fact / multi-entity) | 45 / 92–93 | 46 / 94 | 45–47 / 94 | 44–46 / 93 |
-
-Cost (mean per evaluation):
-
-| Config | add, mean | search, mean / p95 | add chat calls | chat calls per search | answerer tokens |
-|---|---|---|---|---|---|
-| MemEye b0 | 7.6 s | 3.7 s / 6.2 s | 221 | 0 | 2.0 M |
-| MemEye b1 | 8.5 s | 3.6 s / 6.0 s | 221 | 0 | 12.0 M |
-| MemEye enhanced | 18.5 s | 8.9 s / 13.2 s | 236 | 0 | 15.1 M |
-| MemEye enhanced_agentic | 14.1 s | 31.1 s / 69.2 s | 236 | ~2.8 | 15.1 M |
-| Mem-Gallery b0 | 16.0 s | 3.5 s / 6.0 s | 240 | 0 | 2.5 M |
-| Mem-Gallery b1 | 17.2 s | 3.4 s / 5.5 s | 240 | 0 | 8.2 M |
-| Mem-Gallery enhanced | 28.6 s | 8.3 s / 11.7 s | 302 | 0 | 9.2 M |
-| Mem-Gallery enhanced_agentic | 31.9 s | 20.9 s / 41.4 s | 302 | ~1.9 | 9.2 M |
-
-- Latency tracks the LLM service: the same configuration's mean add time moves between 14 s and
-  27 s across the day — read it as an order of magnitude.
-- Answerer tokens grow because retrieved images are attached to the answerer; that cost is on the
-  caller, not the server.
-- `basic` adds one multimodal embedding per stored image (~0.2 s/image on local SigLIP2) and one
-  per search (~0.04 s).
+| MemoryOS | 45.75 | 13.12 | 43.09 | 37.76 |
+| A-MEM | 49.73 | 21.11 | 44.08 | 38.37 |
+| SimpleMem | 50.34 | 9.42 | 34.73 | 28.90 |
+| HyperMem | 47.82 | 19.64 | 44.57 | 33.42 |
+| M2A | 52.31 | 6.31 | 15.04 | 10.28 |
+| MMA | 50.96 | 16.32 | 26.99 | 20.60 |
+| SRAG (multimodal semantic RAG) | 58.36 | 31.48 | 41.07 | 35.03 |
+| UniversalRAG | 60.49 | 11.23 | 48.36 | 41.90 |
+| MindMemOS b0 (mode off, text-only) | 43.03 | 20.32 | 38.72 | 32.59 |
+| MindMemOS b1 (basic) | 59.77 | 27.02 | 54.73 | 47.75 |
+| MindMemOS enhanced | 63.45 | 25.49 | 55.66 | 48.98 |
+| MindMemOS enhanced_agentic | **65.89** | 27.09 | **57.06** | **50.45** |
 
 **When comparing results:**
 
@@ -402,26 +351,6 @@ Cost (mean per evaluation):
 - **VR counting questions:** the Mem-Gallery answerer labels image results, facts and visual
   facts with image_ids (the VS type answers with image_ids). In fast retrieval the answerer
   sometimes counts repeated ids, over-counting on VR.
-
-Open-source baselines on Mem-Gallery under **identical conditions** (F1 / B-1 — deterministic,
-judge-free metrics; the full benchmark, the same `gpt-4.1-mini` answerer, the benchmark's native
-protocol, mean of 3 runs; source: a paper under double-blind review, not linked yet. That
-reproduction's judge model is `GPT-5.4-mini`, different from this guide's `gpt-4.1-mini`, so
-Judge scores cannot share the table):
-
-| Method | F1 | B-1 |
-|---|---|---|
-| MemoryOS | 43.09 | 37.76 |
-| A-MEM | 44.08 | 38.37 |
-| SimpleMem | 34.73 | 28.90 |
-| HyperMem | 44.57 | 33.42 |
-| M2A | 15.04 | 10.28 |
-| MMA | 26.99 | 20.60 |
-| SRAG (multimodal semantic RAG) | 41.07 | 35.03 |
-| UniversalRAG | 48.36 | 41.90 |
-
-Against MindMemOS's four configurations above: b0 38.72 / 32.59, b1 54.73 / 47.75, enhanced
-55.66 / 48.98, enhanced_agentic 57.06 / 50.45 (mean of 2 runs).
 
 ### 10. Approaches that were tried and did not work
 

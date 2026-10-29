@@ -362,15 +362,7 @@ uv run python scripts/run_multimodal_bench.py --benchmarks memgallery --configs 
 - **断点续跑：** 重新执行同一条命令时，已有有效结果的运行会自动跳过。
 - **输出位置：** `reports/multimodal/<tag>/` 下每次运行的 manifest（`<bench>_<config>_r<k>.jsonl`）、日志、生成的配置，以及汇总表 `summary.md`（`<tag>` 默认为日期，冒烟测试为 `smoke`）；逐题明细在 `runs/mindmemos_eval/<run_id>/<benchmark>/`。
 
-**耗时和用量参考**（单次运行，gpt-4.1-mini，耗时受 LLM 服务延迟影响很大）：
-
-| | b0 | b1 | enhanced | enhanced_agentic |
-|---|---|---|---|---|
-| MemEye 耗时 | ~15 min | ~30 min | ~40 min | ~70–85 min |
-| Mem-Gallery 耗时 | ~30 min | ~40 min | ~55–70 min | ~95–125 min |
-| 作答器 token（MemEye / Mem-Gallery） | 2 M / 2.5 M | 12 M / 8 M | 15 M / 9 M | 15 M / 9 M |
-
-两个 benchmark 的四组配置各跑一次，合计约 7 小时。
+**耗时：**两个 benchmark 的四组配置各跑一次，合计约 7 小时（单次运行，gpt-4.1-mini；耗时受 LLM 服务延迟影响很大，`enhanced_agentic` 最慢）。
 
 ### 7. 手动跑单个配置
 
@@ -409,68 +401,22 @@ manifest 中的 `eval_result` 包含：
 
 ### 9. 参考结果
 
-评测配置：vanilla 算法；作答器与 judge 均为 `gpt-4.1-mini`（作答器需支持看图）；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）；除标注"单次"外均为 2 次运行的均值（2026-10 测于 `feat_multimodal` 分支）。
+评测配置：`vanilla` 算法；所有行均以 `gpt-4.1-mini` 作答（作答器需支持看图）；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）。MindMemOS 各行为本仓库实现的评测（作答与 judge 均为 `gpt-4.1-mini`，2 次均值，2026-10）；基线行为论文在同一实验条件下、同作答器的复现（3 次均值；出处为双盲评审中的在投论文，暂不附链接）。两组 Judge 模型不同（本节 `gpt-4.1-mini`、基线 `GPT-5.4-mini`），Judge 分数不可同表比较；MindMemOS 的 Judge（b0 → enhanced_agentic）：MemEye 26.26 / 47.80 / 50.80 / 53.30，Mem-Gallery 70.68 / 85.06 / 87.06 / 89.14。
 
-| MemEye | EM | B-1 | Judge |
-|---|---|---|---|
-| b0（mode off，纯文本） | 43.03 | 20.32 | 26.26 |
-| b1（basic） | 59.77 | 27.02 | 47.80 |
-| **enhanced** | **63.45**（63.08–63.81） | **25.49** | **50.80**（49.36–52.24） |
-| **enhanced_agentic** | **65.89**（65.35–66.43） | **27.09** | **53.30**（53.18–53.41） |
-| 对照：图片编号解析修复前的 enhanced（单次） | 63.11 | 27.59 | 50.19 |
-| 对照：图片编号解析修复前的 enhanced_agentic（单次） | 65.45 | 27.02 | 52.78 |
-
-| Mem-Gallery | F1 | B-1 | Judge |
-|---|---|---|---|
-| b0（off） | 38.72 | 32.59 | 70.68 |
-| b1（basic） | 54.73 | 47.75 | 85.06 |
-| **enhanced** | **55.66** | **48.98** | **87.06**（86.70–87.43） |
-| **enhanced_agentic** | **57.06** | **50.45** | **89.14**（88.98–89.30） |
-| 对照：图片编号解析修复前的 enhanced | 56.72 | 49.89 | 87.61 |
-| 对照：图片编号解析修复前的 enhanced_agentic | 56.95 | 50.14 | 87.84 |
-
-MemEye 各任务的 EM / Judge：
-
-| 任务 | b0 | b1 | enhanced | enhanced_agentic |
+| 方法 | MemEye EM | MemEye B-1 | Mem-Gallery F1 | Mem-Gallery B-1 |
 |---|---|---|---|---|
-| Brand_Memory | 39.2 / 34.1 | 47.4 / 50.9 | 58.6 / 49.6 | 56.0 / 60.3 |
-| Card_Playlog | 41.7 / 33.3 | 39.6 / 29.2 | 41.7 / 35.4 | 39.8 / 31.2 |
-| Cartoon_Entertainment | 53.6 / 32.2 | 73.0 / 57.7 | 76.3 / 57.6 | 75.3 / 64.8 |
-| Home_Renovation | 40.1 / 26.9 | 72.4 / 63.0 | 72.4 / 57.0 | 76.4 / 57.9 |
-| Multi-Scene_Case_Archive | 36.2 / 33.5 | 65.2 / 62.8 | 73.0 / 66.0 | 78.5 / 68.2 |
-| Outdoor_Navigation | 62.5 / 7.6 | 85.3 / 35.7 | 82.6 / 41.5 | 83.0 / 39.3 |
-| Personal_Health | 25.5 / 18.1 | 35.8 / 30.9 | 37.5 / 47.3 | 50.7 / 49.8 |
-| Social_Chat | 45.3 / 24.3 | 59.5 / 52.4 | 65.5 / 52.0 | 67.2 / 54.7 |
-
-Mem-Gallery 各题型的 F1 / Judge：
-
-| 题型 | b0 | b1 | enhanced | enhanced_agentic |
-|---|---|---|---|---|
-| VS（以图找图，答 image_id） | 9.2 / 15.8 | 79.2 / 75.7 | 89.2 / 89.5 | 91.3 / 93.9 |
-| VR（视觉推理） | 23.5 / 45.0 | 50.0 / 69.1 | 39.6 / 60.5 | 50.3 / 71.6 |
-| KR（知识更新） | 21.5 / 77.8 | 30.8 / 85.5 | 32.3 / 88.9 | 31.4 / 89.8 |
-| TTL（看图学新知识） | 33.1 / 88.5 | 32.5 / 91.2 | 35.4 / 93.9 | 35.1 / 93.3 |
-| TR（时间推理） | 43.5 / 81.1 | 45.6 / 84.3 | 46.5 / 81.5 | 47.3 / 86.0 |
-| CD（冲突检测） | 69.8 / 69.8 | 64.8 / 64.8 | 69.1 / 69.1 | 66.0 / 66.0 |
-| AR（拒答） | 89.5 / 94.8 | 90.6 / 93.3 | 85.9 / 90.1 | 88.6 / 92.9 |
-| FR / MR（事实 / 多实体） | 45 / 92–93 | 46 / 94 | 45–47 / 94 | 44–46 / 93 |
-
-成本（每次评测的均值）：
-
-| 配置 | 单次 add 平均 | 单次 search 平均 / p95 | 写入 chat 调用 | 每次检索的 chat 调用 | 作答器 token |
-|---|---|---|---|---|---|
-| MemEye b0 | 7.6 s | 3.7 s / 6.2 s | 221 | 0 | 2.0 M |
-| MemEye b1 | 8.5 s | 3.6 s / 6.0 s | 221 | 0 | 12.0 M |
-| MemEye enhanced | 18.5 s | 8.9 s / 13.2 s | 236 | 0 | 15.1 M |
-| MemEye enhanced_agentic | 14.1 s | 31.1 s / 69.2 s | 236 | 约 2.8 | 15.1 M |
-| Mem-Gallery b0 | 16.0 s | 3.5 s / 6.0 s | 240 | 0 | 2.5 M |
-| Mem-Gallery b1 | 17.2 s | 3.4 s / 5.5 s | 240 | 0 | 8.2 M |
-| Mem-Gallery enhanced | 28.6 s | 8.3 s / 11.7 s | 302 | 0 | 9.2 M |
-| Mem-Gallery enhanced_agentic | 31.9 s | 20.9 s / 41.4 s | 302 | 约 1.9 | 9.2 M |
-
-- 延迟受 LLM 服务影响很大：同一配置在不同时段，add 的平均耗时可以从 14 s 变到 27 s，延迟只能看量级。
-- 作答器 token 增加，是因为检索返回的图片会附给作答器，这部分成本发生在调用方，不在服务端。
-- basic 写入只多一次多模态 embedding（本地 SigLIP2 约 0.2 s/张），检索多一次多模态 embedding（约 0.04 s）。
+| MemoryOS | 45.75 | 13.12 | 43.09 | 37.76 |
+| A-MEM | 49.73 | 21.11 | 44.08 | 38.37 |
+| SimpleMem | 50.34 | 9.42 | 34.73 | 28.90 |
+| HyperMem | 47.82 | 19.64 | 44.57 | 33.42 |
+| M2A | 52.31 | 6.31 | 15.04 | 10.28 |
+| MMA | 50.96 | 16.32 | 26.99 | 20.60 |
+| SRAG（多模态语义检索） | 58.36 | 31.48 | 41.07 | 35.03 |
+| UniversalRAG | 60.49 | 11.23 | 48.36 | 41.90 |
+| MindMemOS b0（mode off，纯文本） | 43.03 | 20.32 | 38.72 | 32.59 |
+| MindMemOS b1（basic） | 59.77 | 27.02 | 54.73 | 47.75 |
+| MindMemOS enhanced | 63.45 | 25.49 | 55.66 | 48.98 |
+| MindMemOS enhanced_agentic | **65.89** | 27.09 | **57.06** | **50.45** |
 
 **比较结果时注意：**
 
@@ -478,21 +424,6 @@ Mem-Gallery 各题型的 F1 / Judge：
 - **Mem-Gallery 较稳：** 单次 Judge 波动小于 0.6。
 - **不要同时跑两条评测：** 共用同一个 LLM 服务时，并发负载会把 MemEye 的 Judge 拉低约 5 分。上面的数字都是串行跑出来的。
 - **VR 计数题：** Mem-Gallery 作答器会给图片结果、事实和视觉事实都标上 image_id（VS 题需要用 image_id 作答）。快速检索模式下，作答器有时会按重复出现的 id 计数，导致 VR 计数题多数。
-
-Mem-Gallery 上**同条件**的开源基线（F1 / B-1 为与 judge 无关的确定性指标；同全量 bench、同作答器 `gpt-4.1-mini`、benchmark 原版协议、3 次均值，出处为双盲评审中的在投论文，暂不附链接。该复现的 Judge 模型为 `GPT-5.4-mini`，与本节 `gpt-4.1-mini` 不同，Judge 不可同表比较）：
-
-| 方法 | F1 | B-1 |
-|---|---|---|
-| MemoryOS | 43.09 | 37.76 |
-| A-MEM | 44.08 | 38.37 |
-| SimpleMem | 34.73 | 28.90 |
-| HyperMem | 44.57 | 33.42 |
-| M2A | 15.04 | 10.28 |
-| MMA | 26.99 | 20.60 |
-| SRAG（多模态语义检索） | 41.07 | 35.03 |
-| UniversalRAG | 48.36 | 41.90 |
-
-对照本节上方 MindMemOS 四组配置：b0 38.72 / 32.59，b1 54.73 / 47.75，enhanced 55.66 / 48.98，enhanced_agentic 57.06 / 50.45（2 次均值）。
 
 ### 10. 试过但无效、未合入的方案
 
