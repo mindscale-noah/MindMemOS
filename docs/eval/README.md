@@ -343,7 +343,6 @@ image embeddings local SigLIP2 (`siglip2-base-patch16-384`); mean of 2 runs unle
 | **enhanced_agentic** | **57.06** | **50.45** | **89.14** (88.98–89.30) |
 | Comparison: enhanced before the image-numbering fix | 56.72 | 49.89 | 87.61 |
 | Comparison: enhanced_agentic before the image-numbering fix | 56.95 | 50.14 | 87.84 |
-| Reference: the Mem-Gallery paper's original MHG implementation (different answering protocol — not directly comparable) | 52.48 | 45.41 | 84.80 |
 
 MemEye per task, EM / Judge:
 
@@ -403,25 +402,6 @@ Cost (mean per evaluation):
 - **VR counting questions:** the Mem-Gallery answerer labels image results, facts and visual
   facts with image_ids (the VS type answers with image_ids). In fast retrieval the answerer
   sometimes counts repeated ids, over-counting on VR.
-
-Reference comparison with open-source methods (reported by the MemEye
-[paper](https://arxiv.org/abs/2605.15128); **not directly comparable with the numbers above** —
-the paper answers with `gpt-5.4-mini` and judges with `gpt-5.2`, and aggregates differently):
-
-| Method (selected from 13; each method's average over the (X, Y) matrix) | EM | B-1 | Judge |
-|---|---|---|---|
-| FC-Text (full context, text-only) | 56.70 | 24.74 | 42.80 |
-| SRAG-Text (semantic RAG, text-only) | 54.84 | 25.88 | 39.09 |
-| MemoryOS | 48.66 | 21.80 | 33.26 |
-| A-MEM | 47.97 | 22.44 | 35.24 |
-| MIRIX | 46.74 | 18.00 | 33.23 |
-| MMA | 53.86 | 25.67 | 43.29 |
-| FC-Multimodal (full context, multimodal) | 60.38 | 27.58 | 43.91 |
-| SRAG-Multimodal (semantic RAG, multimodal — the paper's best) | **61.77** | **29.72** | **49.37** |
-
-The remaining methods (Reflexion, Generative Agents, SimpleMem, M2A, …) and the full matrices for
-three more backbones (`gpt-4.1-nano`, `Qwen3-VL-8B-Instruct`, `gemini-2.5-flash-lite`) are in the
-[paper](https://arxiv.org/abs/2605.15128) appendix ([code & data](https://github.com/MinghoKwok/MemEye)).
 
 Open-source baselines on Mem-Gallery under **identical conditions** (F1 / B-1 — deterministic,
 judge-free metrics; the full benchmark, the same `gpt-4.1-mini` answerer, the benchmark's native

@@ -428,7 +428,6 @@ manifest 中的 `eval_result` 包含：
 | **enhanced_agentic** | **57.06** | **50.45** | **89.14**（88.98–89.30） |
 | 对照：图片编号解析修复前的 enhanced | 56.72 | 49.89 | 87.61 |
 | 对照：图片编号解析修复前的 enhanced_agentic | 56.95 | 50.14 | 87.84 |
-| 参考：Mem-Gallery 原论文（MHG）方法的原版实现（作答协议不同，不可直接比较） | 52.48 | 45.41 | 84.80 |
 
 MemEye 各任务的 EM / Judge：
 
@@ -479,21 +478,6 @@ Mem-Gallery 各题型的 F1 / Judge：
 - **Mem-Gallery 较稳：** 单次 Judge 波动小于 0.6。
 - **不要同时跑两条评测：** 共用同一个 LLM 服务时，并发负载会把 MemEye 的 Judge 拉低约 5 分。上面的数字都是串行跑出来的。
 - **VR 计数题：** Mem-Gallery 作答器会给图片结果、事实和视觉事实都标上 image_id（VS 题需要用 image_id 作答）。快速检索模式下，作答器有时会按重复出现的 id 计数，导致 VR 计数题多数。
-
-与开源方法的参考对比（MemEye [原论文](https://arxiv.org/abs/2605.15128)报告；**与本节数字不可直接比较**——论文用 `gpt-5.4-mini` 作答、`gpt-5.2` judge，聚合口径也不同）：
-
-| 方法（13 个方法中选取，均为各方法在 (X, Y) 矩阵上的平均） | EM | B-1 | Judge |
-|---|---|---|---|
-| FC-Text（全文 · 纯文本） | 56.70 | 24.74 | 42.80 |
-| SRAG-Text（语义检索 · 纯文本） | 54.84 | 25.88 | 39.09 |
-| MemoryOS | 48.66 | 21.80 | 33.26 |
-| A-MEM | 47.97 | 22.44 | 35.24 |
-| MIRIX | 46.74 | 18.00 | 33.23 |
-| MMA | 53.86 | 25.67 | 43.29 |
-| FC-Multimodal（全文 · 多模态） | 60.38 | 27.58 | 43.91 |
-| SRAG-Multimodal（语义检索 · 多模态，论文最优） | **61.77** | **29.72** | **49.37** |
-
-其余方法（Reflexion、Generative Agents、SimpleMem、M2A 等）与另外三个模型后端（`gpt-4.1-nano`、`Qwen3-VL-8B-Instruct`、`gemini-2.5-flash-lite`）的完整结果矩阵见[原论文](https://arxiv.org/abs/2605.15128)附录（[代码与数据](https://github.com/MinghoKwok/MemEye)）。
 
 Mem-Gallery 上**同条件**的开源基线（F1 / B-1 为与 judge 无关的确定性指标；同全量 bench、同作答器 `gpt-4.1-mini`、benchmark 原版协议、3 次均值，出处为双盲评审中的在投论文，暂不附链接。该复现的 Judge 模型为 `GPT-5.4-mini`，与本节 `gpt-4.1-mini` 不同，Judge 不可同表比较）：
 

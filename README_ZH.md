@@ -414,21 +414,6 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 
 配置：vanilla 算法；作答与 judge 为 `gpt-4.1-mini`；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）；各 2 次均值（2026-10）。Mem-Gallery 结果、各任务/题型分解与完整运行指南见 [docs/eval/README_ZH.md 的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
 
-开源方法参考（MemEye [原论文](https://arxiv.org/abs/2605.15128)报告，**不可与本表直接比较**：原论文用 `gpt-5.4-mini` 作答、`gpt-5.2` judge，聚合口径也不同，仅作量级参考）：
-
-| 方法（13 个方法中选取，均为各方法在 (X, Y) 矩阵上的平均） | EM | B-1 | Judge |
-| :--- | :---: | :---: | :---: |
-| FC-Text（全文 · 纯文本） | 56.70 | 24.74 | 42.80 |
-| SRAG-Text（语义检索 · 纯文本） | 54.84 | 25.88 | 39.09 |
-| MemoryOS | 48.66 | 21.80 | 33.26 |
-| A-MEM | 47.97 | 22.44 | 35.24 |
-| MIRIX | 46.74 | 18.00 | 33.23 |
-| MMA | 53.86 | 25.67 | 43.29 |
-| FC-Multimodal（全文 · 多模态） | 60.38 | 27.58 | 43.91 |
-| SRAG-Multimodal（语义检索 · 多模态，论文最优） | **61.77** | **29.72** | **49.37** |
-
-其余方法（Reflexion、Generative Agents、SimpleMem、M2A 等）与另外三个模型后端（`gpt-4.1-nano`、`Qwen3-VL-8B-Instruct`、`gemini-2.5-flash-lite`）的完整结果矩阵见[原论文](https://arxiv.org/abs/2605.15128)（[代码与数据](https://github.com/MinghoKwok/MemEye)）。
-
 **Mem-Gallery：同条件开源基线对比**（F1 / B-1 为与 judge 无关的确定性指标）：
 
 | 方法 | F1 | B-1 |
