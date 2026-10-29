@@ -14,10 +14,15 @@ MemoryAlgorithm = Literal["vanilla", "schema"]
 class MemoryAlgorithmBinding:
     add_pipeline: str
     search_pipeline: str
+    supports_images: bool = False
+    """Images are accepted when the bound ``algo_config.multimodal.mode`` is not ``off``."""
 
 
 MEMORY_ALGORITHM_REGISTRY: dict[str, MemoryAlgorithmBinding] = {
-    "vanilla": MemoryAlgorithmBinding(add_pipeline="vanilla_add", search_pipeline="vanilla"),
+    # The multimodal wrapper runs plain vanilla while algo_config.multimodal.mode is off.
+    "vanilla": MemoryAlgorithmBinding(
+        add_pipeline="vanilla_multimodal_add", search_pipeline="vanilla", supports_images=True
+    ),
     "schema": MemoryAlgorithmBinding(add_pipeline="schema_add", search_pipeline="schema"),
 }
 

@@ -46,6 +46,7 @@
 
 ## 📰 News
 
+- **2026-10-31**: Multimodal memory is here — `memory.add` / `memory.search` accept images (stored on local disk or S3/MinIO, indexed by multimodal embeddings), with `enhanced` mode adding VLM visual-fact extraction and multimodal agent retrieval. Benchmark results and the run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
 - **2026-08-18**: We released the [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin), letting DeepSeek Harness (dsh) agents automatically recall and write MindMemOS memories.
 - **2026-08-14**: We released the [MindMemOS 1.0 technical report](https://arxiv.org/abs/2608.12428), *MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents*.
 - **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.
@@ -55,6 +56,7 @@
 
 - **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable assets, allowing OpenClaw, Hermes, Claude Code, OpenHands, and other agents to share or transfer the same long-term memory.
 - **Self-evolving memory system**: Continuously improve memory quality through schema learning, dreaming, and feedback by automatically learning frequent memory patterns, consolidating memories offline, and using interaction corrections to optimize add/search workflows.
+- **Multimodal memory**: Images ride alongside text in vanilla `add`/`search` — store originals on local disk or S3/MinIO, index them with a multimodal embedding model (SigLIP2-compatible), optionally extract visual facts with a VLM and retrieve through a multimodal agent. Image hits carry a direct link — a short-lived presigned URL on S3/MinIO, or an authenticated proxy route on local storage. Disabled by default, with byte-identical text-only behavior.
 - **Memory and Skills integration**: Experience memories can be distilled into skill candidates, while skill execution results, failure traces, and user feedback flow back into the memory system to drive continuous skill evolution.
 - **Plugin integrations**: Connect MindMemOS to different agents and workflows through plugins that retrieve and inject relevant memories before interactions and automatically write conversations back afterward. The [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) and [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) are currently available, with more integrations in progress.
 
@@ -410,6 +412,27 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 | Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
 | **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
 | **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
+
+### 🖼️ Multimodal Memory: MemEye & Mem-Gallery
+
+- **Benchmarks**: [MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye) (8 tasks, 742 questions — multi-turn dialogs interleaving images; EM on MCQ, BLEU-1 on open questions, macro-averaged over tasks) and [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery) (20 tasks, 1,711 open questions; token-level F1 and BLEU-1, micro-averaged over questions).
+
+| Method | MemEye EM | MemEye B-1 | Mem-Gallery F1 | Mem-Gallery B-1 |
+| :--- | :---: | :---: | :---: | :---: |
+| MemoryOS | 45.75 | 13.12 | 43.09 | 37.76 |
+| A-MEM | 49.73 | 21.11 | 44.08 | 38.37 |
+| SimpleMem | 50.34 | 9.42 | 34.73 | 28.90 |
+| HyperMem | 47.82 | 19.64 | 44.57 | 33.42 |
+| M2A | 52.31 | 6.31 | 15.04 | 10.28 |
+| MMA | 50.96 | 16.32 | 26.99 | 20.60 |
+| SRAG | 58.36 | 31.48 | 41.07 | 35.03 |
+| UniversalRAG | 60.49 | 11.23 | 48.36 | 41.90 |
+| MindMemOS b0 (text-only baseline) | 43.03 | 20.32 | 38.72 | 32.59 |
+| MindMemOS b1 (image-similarity retrieval) | 59.77 | 27.02 | 54.73 | 47.75 |
+| MindMemOS enhanced (VLM visual facts) | 63.45 | 25.49 | 55.66 | 48.98 |
+| MindMemOS enhanced_agentic (multimodal agent) | **65.89** | 27.09 | **57.06** | **50.45** |
+
+Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The baseline rows are reproductions under identical conditions (mean of 3 runs; source: a paper under double-blind review, not linked yet); the four MindMemOS rows are this repository's implementation (mean of 2 runs, 2026-10). Judge scores are not comparable across the two groups (judge model differs: `gpt-4.1-mini` here vs `GPT-5.4-mini` there); MindMemOS Judge, b0 → enhanced_agentic: 26.26 / 47.80 / 50.80 / 53.30 on MemEye, 70.68 / 85.06 / 87.06 / 89.14 on Mem-Gallery. Step-by-step run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
 
 ## 🗺️ Coming Features
 

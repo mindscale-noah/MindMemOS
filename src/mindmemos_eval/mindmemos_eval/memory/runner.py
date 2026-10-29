@@ -14,13 +14,21 @@ from mindmemos_sdk.transport import AsyncHttpTransport
 
 from mindmemos_eval.memory.envs.locomo import LocomoAdapter
 from mindmemos_eval.memory.envs.longmemeval.adapter import LongMemEvalAdapter
+from mindmemos_eval.memory.envs.memeye import MemEyeAdapter
+from mindmemos_eval.memory.envs.memgallery import MemGalleryAdapter
 from mindmemos_eval.memory.envs.memoryagentbench.adapter import MemoryAgentBenchAdapter
 from mindmemos_eval.memory.envs.personamem import PersonaMemAdapter
 
 from ..llm import LLMClient, LLMConfig
 from .base import BenchmarkAdapter, BenchmarkSpec, RunContext, RunnerConfig
-from .config import _merged_runner_config, _option, load_benchmark_specs, validate_memory_algorithm
-from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_collections
+from .config import (
+    _merged_runner_config,
+    _option,
+    check_image_sending_consistency,
+    load_benchmark_specs,
+    validate_memory_algorithm,
+)
+from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_blob_root, resolve_collections
 from .identity import RunIdentity, new_identity, write_api_keys
 from .manifest import BenchmarkRunManifest, write_manifests
 
@@ -249,7 +257,8 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Path to the MindMemOS server yaml config (e.g. config/mindmemos/dev.yaml). Used to read the actual "
         "Qdrant collection names so the add-stage cleanup clears exactly what the server writes, even when "
-        "collections are renamed away from the _v1 defaults. When omitted, the default collection names are used.",
+        "collections are renamed away from the _v1 defaults, and the local blob store root (stored images). When "
+        "omitted, the default collection names and blob root are used.",
     )
 
     parser.add_argument(
@@ -372,6 +381,8 @@ def default_adapters() -> dict[str, BenchmarkAdapter]:
     return {
         "locomo": LocomoAdapter(),
         "longmemeval": LongMemEvalAdapter(),
+        "memeye": MemEyeAdapter(),
+        "memgallery": MemGalleryAdapter(),
         "memoryagentbench": MemoryAgentBenchAdapter(),
         "personamem": PersonaMemAdapter(),
         "personamem_subset": PersonaMemAdapter(),
@@ -417,6 +428,7 @@ def _build_reset_config(args: argparse.Namespace) -> ResetConfig:
         neo4j_password=_option(args, "neo4j_password") or env.neo4j_password,
         neo4j_database=_option(args, "neo4j_database") or env.neo4j_database,
         collections=resolve_collections(_option(args, "server_config")),
+        blob_root=resolve_blob_root(_option(args, "server_config")),
     )
 
 
@@ -433,6 +445,9 @@ async def run_benchmark_matrix(
         args.benchmark_config,
         algorithm_override=_option(args, "algorithm"),
         memory_algorithm_override=_option(args, "memory_algorithm"),
+        # With --reuse-api-key the server applies the OLD key file's override, not the YAML's,
+        # so the spec-level check is deferred to the reuse branch below.
+        validate_image_sending=not _option(args, "reuse_api_key"),
     )
     runner = _merged_runner_config(args)
     setattr(args, "runner_config", runner)
@@ -453,6 +468,15 @@ async def run_benchmark_matrix(
         existing = _load_existing_identity(reuse_path, benchmark=benchmark_names[0])
         identities = [existing]
         setattr(args, "_reused_key_file", reuse_path)
+        # The reused key's override is what the server actually applies per request.
+        check_image_sending_consistency(
+            benchmark_names[0], specs[benchmark_names[0]].execution_params, existing.project_override_config
+        )
+        if specs[benchmark_names[0]].project_override_config != existing.project_override_config:
+            logger.warning(
+                "reused api key carries a different project_override_config than the benchmark yaml;"
+                " the reused key's override is what the server applies"
+            )
         logger.info(
             "reusing existing api key project_id=%s api_key_prefix=%s",
             existing.project_id,

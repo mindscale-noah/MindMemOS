@@ -29,7 +29,15 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 AddMode = Literal["sync", "async"]
 ConsistencyMode = Literal["fast", "strong"]
@@ -184,6 +192,57 @@ class UrlMessage(BaseModel):
     url: str
 
 
+IMAGE_DATA_REDACTED = "<redacted>"
+"""Placeholder written instead of inline image bytes when a request is persisted as a record."""
+
+
+class ImageRef(BaseModel):
+    """Purpose: Reference one image attached to a dialogue turn or a search query.
+
+    Used in: ``DialogueMessage.images`` and ``SearchPipelineInput.query_images``.
+    Exactly one of ``path`` / ``url`` / ``data`` / ``blob_id`` locates the bytes.
+    Accepted by ``vanilla`` when ``algo_config.multimodal.mode`` is basic or enhanced.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str | None = None
+    """Server-readable local path; accepted only under configured ``blob_store.allowed_path_roots``."""
+
+    url: str | None = None
+    """http(s) URL the server downloads."""
+
+    data: str | None = None
+    """Inline image bytes as base64 or a ``data:<mime>;base64,`` URI."""
+
+    blob_id: str | None = None
+    """Id of an image already stored for this project (returned by search results)."""
+
+    mime_type: str | None = None
+    """Optional MIME type hint; the server sniffs the real type from the bytes."""
+
+    image_id: str | None = None
+    """Caller-side image identifier, echoed back in search results."""
+
+    caption: str | None = None
+    """Optional caller-supplied caption."""
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> ImageRef:
+        sources = [name for name in ("path", "url", "data", "blob_id") if getattr(self, name)]
+        if len(sources) != 1:
+            raise ValueError("image must set exactly one of path, url, data, blob_id")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
+        data = handler(self)
+        # Records keep the reference but not the (possibly megabytes of) inline bytes.
+        if self.data and isinstance(info.context, dict) and info.context.get("redact_image_data"):
+            data["data"] = IMAGE_DATA_REDACTED
+        return data
+
+
 class DialogueMessage(BaseModel):
     """Purpose: Carry one conversational turn for memory add.
 
@@ -200,6 +259,17 @@ class DialogueMessage(BaseModel):
 
     timestamp: int | None = None
     """Dialogue event time as a 13-digit millisecond timestamp, or None when omitted."""
+
+    images: list[ImageRef] = Field(default_factory=list)
+    """Images attached to this turn; accepted by vanilla with ``algo_config.multimodal.mode`` basic or enhanced."""
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        # Text-only turns serialize exactly as before images existed (records, queue messages).
+        if not self.images:
+            data.pop("images", None)
+        return data
 
 
 class SourceRef(BaseModel):

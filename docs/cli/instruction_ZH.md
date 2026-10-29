@@ -92,6 +92,7 @@ mindmemos
 │   ├── add               写入一条对话消息作为记忆
 │   ├── search            检索记忆
 │   ├── get               列出 / 过滤当前项目下的记忆
+│   ├── get-image         按 blob id 下载已存储的图片
 │   ├── update            更新指定记忆内容
 │   ├── delete            删除指定记忆
 │   ├── feedback          提交显式 / 隐式反馈
@@ -152,10 +153,19 @@ mindmemos memory add --messages-json-file ./messages.json
 mindmemos memory add --content "我喜欢喝冰美式。" --async
 ```
 
+为 `--content` 消息附加图片（本地文件或 http(s) URL，可重复；需服务端开启多模态模式）：
+
+```bash
+mindmemos memory add --content "看看这张照片。" --image ./photo.png
+```
+
+> `--image` 只附加到 `--content` 消息上；多轮消息输入时，请把图片直接嵌入 `--messages-json`。
+
 其他可选参数：
 
 | 参数 | 说明 |
 | :--- | :--- |
+| `--image` | 为 `--content` 消息附加图片（本地文件或 http(s) URL），可重复 |
 | `--user-id` | 覆盖配置中的默认用户 |
 | `--app-id` / `--agent-id` / `--session-id` | 上下文标识，供细分与过滤使用 |
 | `--metadata-json` | 业务元数据（JSON 对象） |
@@ -175,6 +185,12 @@ Added 1 memory item(s):
 mindmemos memory search "用户喜欢喝什么咖啡？" --top-k 5
 ```
 
+以图搜图（需服务端开启多模态模式）：
+
+```bash
+mindmemos memory search "猫" --query-image ./query.png
+```
+
 常用参数：
 
 | 参数 | 说明 |
@@ -184,8 +200,12 @@ mindmemos memory search "用户喜欢喝什么咖啡？" --top-k 5
 | `--rerank` | 开启重排 |
 | `--score-threshold` | 重排相关度阈值（0-1），需配合 `--rerank` |
 | `--filter` | 过滤 DSL（JSON 对象字符串） |
+| `--query-image` | 为查询附加图片（本地文件或 http(s) URL），可重复，隐含 `--multimodal` |
+| `--multimodal` | 同时检索已存图片，需服务端开启多模态模式 |
 | `--user-id` 等 | 覆盖请求上下文 |
 | `--json` | 以 JSON 输出完整结果 |
+
+命中已存储图片的结果会多输出一行 `image: <url>` —— 这是一个短时效的 S3/MinIO 预签名链接；后端无法签名时回退为需鉴权的代理路由（`/v1/memory/images/{blob_id}`）。`--json` 模式下该 URL 位于 `metadata.image_url`，与 `metadata.blob_id`、`metadata.user_id` 一并返回；`blob_id` + `user_id` 正是下文 `memory get-image` 所需的输入，因此链接过期后仍可随时通过 API 重新下载。
 
 ### 5.3 列出与过滤 `get`
 
@@ -199,7 +219,20 @@ mindmemos memory get --top-k 20
 mindmemos memory get --filter '{"field":"value"}'
 ```
 
-### 5.4 更新与删除
+### 5.4 下载已存储图片 `get-image`
+
+下载 `memory search` 返回的图片。`--user-id` 必填，且必须是图片所有者（检索结果中的 `metadata.user_id`，服务端会校验）：
+
+```bash
+mindmemos memory get-image <blob_id> --user-id u_123
+
+# 也可显式指定输出路径
+mindmemos memory get-image <blob_id> --user-id u_123 -o out.png
+```
+
+`blob_id` 来自检索结果的 `metadata.blob_id`。默认输出路径为 `./{blob_id}{按内容类型确定的扩展名}`。当检索给出的 `image:` URL 已过期时（预签名链接天然短时效），可用该命令重新下载。
+
+### 5.5 更新与删除
 
 ```bash
 # 更新指定记忆的内容
@@ -209,7 +242,7 @@ mindmemos memory update <memory_id> --content "新内容"
 mindmemos memory delete <memory_id> --yes
 ```
 
-### 5.5 反馈 `feedback`
+### 5.6 反馈 `feedback`
 
 默认运行隐式反馈，由服务端分析近期写入并生成反馈；也可通过 `--text` 提交显式反馈：
 
@@ -222,7 +255,7 @@ mindmemos memory feedback --text "这条记忆不正确" \
   --messages-json '[{"role":"user","content":"..."}]'
 ```
 
-### 5.6 记忆演进 `dreaming`
+### 5.7 记忆演进 `dreaming`
 
 触发记忆演进（dreaming）管线，选择同步或异步：
 

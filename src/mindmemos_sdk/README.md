@@ -62,9 +62,26 @@ with MindMemOSClient(user_id="alice", app_id="my-agent") as client:
         print(memory.memory)
 ```
 
+When the project's multimodal mode is enabled, messages accept images (local
+path, URL, base64 data, or a stored `blob_id`) and search accepts `query_images`
+/ `multimodal`; image hits carry `metadata.image_url` (short-lived) plus
+`blob_id`, and `client.memory.get_image(blob_id, user_id)` re-downloads by id:
+
+```python
+from mindmemos_sdk import ImageRef
+
+client.memory.add(messages=[DialogueMessage(role="user", content="my desk",
+                                            images=[ImageRef(path="/data/desk.png")])])
+hits = client.memory.search("desk setup", multimodal=True, user_id="alice")
+data, mime_type = client.memory.get_image(blob_id, user_id="alice")
+```
+
 ## CLI
 
 ```bash
 mindmemos memory add --content "I prefer iced Americano" --user-id alice
 mindmemos memory search "coffee preference" --top-k 5 --user-id alice --token-budget 2000
+# multimodal (needs the server's multimodal mode)
+mindmemos memory add --content "my desk" --image ./desk.png --user-id alice
+mindmemos memory search "desk setup" --multimodal --user-id alice
 ```

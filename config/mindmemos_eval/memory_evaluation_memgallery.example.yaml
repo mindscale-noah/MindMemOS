@@ -1,0 +1,54 @@
+# Multimodal memory benchmark Mem-Gallery (20 tasks, 1711 OPEN questions) for vanilla with
+# algo_config.multimodal.mode off / basic / enhanced, same setup as memory_evaluation_multimodal
+# (MemEye). The mode is set per project through algorithm_profiles.vanilla.project_override_config
+# (this file: enhanced). Every configuration is answered by the same VLM (answer_llm) with the
+# benchmark's own answer prompts, from what search returns; scores are F1 / BLEU-1 / the Mem-Gallery
+# judge, micro means over all questions. Images are sent by path (server blob_store.allowed_path_roots
+# must cover the dataset). For mode off set execution_params.memgallery.send_images: false.
+runner:
+  base_url: http://127.0.0.1:8000
+  timeout_seconds: 3600
+  max_conv_concurrency: 8     # tasks built and evaluated in parallel (one project each)
+  max_qa_concurrency: 8       # questions answered concurrently within one task
+  max_score_concurrency: 8    # judge calls in flight
+  add: true
+  score: true
+  show_progress: true
+  llm:
+    model: gpt-4.1-mini
+    base_url: https://your-base-url/v1
+    temperature: 0.0
+    timeout: 600
+  answer_llm:                 # vision-capable answerer shared by all algorithms
+    model: gpt-4.1-mini
+    base_url: https://your-base-url/v1
+  judge_llm:                  # Mem-Gallery judge rubric
+    model: gpt-4.1-mini
+    base_url: https://your-base-url/v1
+
+benchmarks:
+  memgallery:
+    dataset: datasets/memgallery/data   # holds dialog/ and image/ (HF: Ethan-Bei/Mem-Gallery)
+    default_algorithm: vanilla
+    output_root: runs/mindmemos_eval
+    # tasks: [AI_Robotics_Automation_Future_Tech]   # subset of the 20 tasks
+
+execution_params:
+  memgallery:
+    max_answer_images: 8      # images attached to the answerer (question images first)
+    image_max_side: 1024      # images are downscaled to this many pixels on the long side
+    send_images: true         # send turn and question images (false for a text-only baseline)
+    # max_questions: 3        # smoke test: first N questions per task
+
+algorithm_profiles:
+  vanilla:
+    memory_algorithm: vanilla
+    project_override_config:
+      algo_config:
+        multimodal:
+          mode: enhanced      # off | basic | enhanced
+    search_params:
+      top_k: 20                # overrides the runner/CLI default (--top-k) for this benchmark
+      rerank: true
+      multimodal: true        # search stored images too (ignored while the mode is off)
+      # search_strategy: agentic   # enhanced: multimodal agentic retrieval

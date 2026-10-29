@@ -22,6 +22,7 @@ from ...logging import get_logger
 from .collections import (
     AddRecordRepository,
     EntityRepository,
+    ImageRepository,
     MemoryRepository,
     ProviderBindingRepository,
     SchemaAddBufferRepository,
@@ -60,6 +61,7 @@ class QdrantStore:
         self._schema_add_buffer = SchemaAddBufferRepository(self._engine, cfg)
         self._search_record = SearchRecordRepository(self._engine, cfg)
         self._provider_binding = ProviderBindingRepository(self._engine, cfg)
+        self._image = ImageRepository(self._engine, cfg)
 
     @property
     def engine(self) -> QdrantEngine:
@@ -114,6 +116,12 @@ class QdrantStore:
         """Repository for ``provider_binding_v1``."""
 
         return self._provider_binding
+
+    @property
+    def image(self) -> ImageRepository:
+        """Repository for the multimodal image collection."""
+
+        return self._image
 
     @property
     def memory_collection(self) -> str:

@@ -39,6 +39,7 @@ from .memory import (
     DSL_DATETIME_FIELDS,
     DSL_FILTERABLE_MEMORY_FIELDS,
     DSL_TEXT_FIELDS,
+    IMAGE_DATA_REDACTED,
     REL_DERIVED_FROM,
     REL_EXTRACTED_FROM,
     REL_HAS_PROPERTY_MEMORY,
@@ -67,6 +68,7 @@ from .memory import (
     GraphNodeKind,
     GraphNodeRef,
     GraphRelationship,
+    ImageRef,
     MemoryEdgeFilter,
     MemoryOperation,
     MemoryRelationType,
@@ -112,6 +114,7 @@ from .memory_db import (
     MemoryDbWriteResult,
     MemoryDbWriteSummary,
 )
+from .multimodal import ImageOccurrence, ImageRecord, ImageSearchHit
 from .service import (
     AddPipelineAsyncResult,
     AddPipelineInput,
@@ -187,6 +190,11 @@ __all__ = [
     "DeletePipelineInput",
     "DeletePipelineResult",
     "DialogueMessage",
+    "IMAGE_DATA_REDACTED",
+    "ImageOccurrence",
+    "ImageRecord",
+    "ImageRef",
+    "ImageSearchHit",
     "DirectRelatedMemory",
     "DreamingPipelineInput",
     "DreamingPipelineResult",

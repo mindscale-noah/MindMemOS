@@ -57,3 +57,8 @@ plugins/openclaw-plugin/dist/
 /results/
 /tmp/
 /data/
+
+# Benchmark data and evaluation outputs
+datasets/
+runs/
+reports/

@@ -5,12 +5,21 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from .memory import (
     AddMode,
     DialogueMessage,
     FileMessage,
+    ImageRef,
     MemoryOperation,
     MemoryType,
     TextMessage,
@@ -210,6 +219,12 @@ class SearchPipelineInput(BaseModel):
     query: str
     """Search query."""
 
+    query_images: list[ImageRef] = Field(default_factory=list)
+    """Images attached to the query; they make the search multimodal (vanilla, mode basic/enhanced)."""
+
+    multimodal: bool = False
+    """Search stored images too; implied by ``query_images``. False keeps the search text-only."""
+
     filters: dict[str, Any] | None = None
     """Public filter DSL parsed into an internal SearchFilter."""
 
@@ -236,6 +251,16 @@ class SearchPipelineInput(BaseModel):
 
     include_patches: bool = True
     """Deprecated compatibility flag; vanilla search owns archived-version lineage recall."""
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        # Text-only searches serialize exactly as before images existed (search records).
+        if not self.query_images:
+            data.pop("query_images", None)
+        if not self.multimodal:
+            data.pop("multimodal", None)
+        return data
 
 
 class SearchPipelineResult(BaseModel):

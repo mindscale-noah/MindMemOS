@@ -32,7 +32,7 @@ The main runtime-related directories are:
 │   ├── mindmemos/          # Server runtime and authentication configuration
 │   ├── mindmemos_eval/     # Evaluation task configuration
 │   └── presets/            # Algorithm preset resources
-├── dockers/                # Qdrant, Neo4j, Kafka, and observability components
+├── dockers/                # Qdrant, Neo4j, Kafka, MinIO, and observability components
 ├── plugins/                # Agent plugin integrations
 ├── Makefile                # Entry points for local services and dependencies
 └── pyproject.toml          # uv workspace and development dependencies
@@ -71,7 +71,10 @@ Default addresses:
 
 ```bash
 make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
+make dev-blobs         # MinIO alone (also started by make dev / make db); see section 8
+make db MINIO=0        # traditional mode: same stack without MinIO (dev-down / db-clean
+                       # with MINIO=0 also leave the MinIO container and its volume alone)
 ```
 
 Stop local dependencies:
@@ -118,6 +121,18 @@ Optional dependencies:
 | `MINDMEMOS_TELEMETRY_ENDPOINT` | OTel HTTP endpoint; telemetry is reported only when `telemetry.enabled=true` in the configuration. | `http://localhost:4318` |
 | `MINDMEMOS_CLICKHOUSE_USER` / `MINDMEMOS_CLICKHOUSE_PASSWORD` / `MINDMEMOS_CLICKHOUSE_DB` | ClickHouse/Grafana observability data configuration. | See `.env.example` |
 
+Image storage (S3/MinIO; used only when `blob_store.backend: s3`, see section 8):
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `MINDMEMOS_MINIO_PORT` | MinIO port exposed by Docker (9100 because ClickHouse native claims 9000). | `9100` |
+| `MINDMEMOS_S3_ENDPOINT` | S3/MinIO endpoint of the blob store; overrides `blob_store.s3_endpoint`. | `http://localhost:9100` |
+| `MINDMEMOS_S3_BUCKET` | Blob bucket name; overrides `blob_store.s3_bucket`. | `mindmemos-blobs` |
+| `MINDMEMOS_S3_ACCESS_KEY` / `MINDMEMOS_S3_SECRET_KEY` | S3 credentials; override `blob_store.s3_access_key` / `s3_secret_key`. | `minioadmin` / `minioadmin` |
+| `MINDMEMOS_S3_PUBLIC_BASE_URL` | Optional public mirror (CDN/ingress) for shareable image URLs. | Empty |
+| `MINDMEMOS_S3_PRESIGN_ENDPOINT` | External address baked into search's short-lived presigned image URLs; empty signs against `MINDMEMOS_S3_ENDPOINT`. | Empty |
+| `MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS` | Presigned URL lifetime in seconds (`1..604800`). | `3600` |
+
 API bind address:
 
 | Variable | Purpose | Default |
@@ -141,6 +156,7 @@ Core services in Docker Compose:
 - `neo4j`: stores graph relationships.
 - `kafka`: asynchronous task queue; it can run even when it is disabled in the default configuration.
 - `clickhouse` + `otel-collector` + `grafana`: observability stack; disable `telemetry.enabled` in the configuration when observability is not needed.
+- `minio` + `minio-init`: image blob storage and its bucket bootstrap, used by the multimodal pipeline's `s3` backend; started with `make dev` / `make db` (or standalone via `make dev-blobs`); `make dev MINIO=0` skips it.
 
 For local deployment, the port variables in `.env` must align with the connection addresses in `config/mindmemos/dev.yaml`. At startup, environment variables also override the following configuration fields:
 
@@ -153,6 +169,7 @@ For local deployment, the port variables in `.env` must align with the connectio
 - `database.neo4j.password`
 - `kafka.bootstrap_servers`
 - `telemetry.telemetry_endpoint`
+- `blob_store.s3_endpoint` / `s3_bucket` / `s3_access_key` / `s3_secret_key` / `s3_public_base_url` / `s3_presign_endpoint` / `s3_presign_expiry_seconds` (via the `MINDMEMOS_S3_*` variables; `s3_region` has no env override)
 
 ## 5. LLM Configuration
 
@@ -259,7 +276,40 @@ algo_config:
 
 `rerank` is an optional enhancement. For production, stabilize Docker, LLM, and Embedding first, then add rerank.
 
-## 8. Memory Algorithm Version (v1 / v2)
+## 8. Multimodal Image Storage (Optional)
+
+Images carried by memory messages are stored as content-addressed blobs (SHA-256 per project). The default `local` backend needs no setup — files land under `blob_store.local_root` (`data/blobs`). To store images in S3/MinIO instead:
+
+1. Start MinIO (local development):
+
+   ```bash
+   make dev-blobs   # MinIO at http://localhost:9100; the bucket is created automatically
+   ```
+
+2. Switch the backend in `config/mindmemos/dev.yaml`:
+
+   ```yaml
+   blob_store:
+     backend: s3
+     s3_endpoint: http://localhost:9100   # https:// enables TLS
+     s3_bucket: mindmemos-blobs           # created lazily on first use if missing
+     s3_region: us-east-1                 # required non-empty; baked into every presigned URL
+     s3_access_key: minioadmin
+     s3_secret_key: minioadmin
+     # s3_presign_endpoint: https://blobs.example.com  # external address for presigned URLs
+     # s3_presign_expiry_seconds: 3600                  # presigned URL lifetime, 1..604800
+   ```
+
+3. Restart the service.
+
+Notes:
+
+- The `s3` backend needs the `s3` extra: `pip install mindmemos[s3]` (the dev workspace already includes it).
+- With the `s3` backend, image search hits carry `metadata.image_url`: a short-lived presigned GET link that downloads the bytes directly from S3/MinIO without credentials. Set `s3_presign_endpoint` when the address clients use differs from the internal `s3_endpoint`. When signing is unavailable (or the backend is `local`), hits fall back to the authenticated proxy route `GET /v1/memory/images/{blob_id}?user_id=<owner>` — emitted as a relative path the client resolves against its own API origin.
+- Every `s3_*` field except `s3_region` can also be set through the `MINDMEMOS_S3_*` environment variables (see section 3).
+- Multimodal embedding and search modes (`algo_config.multimodal.mode`, `mm_embed_model_router`) are a separate concern; see the [config README](../config/README.md#algo_configmultimodal--images-in-vanilla-memory).
+
+## 9. Memory Algorithm Version (v1 / v2)
 
 Schema memory extraction has two selectable flows via `algo_config.add.schema.version`:
 
@@ -275,7 +325,7 @@ and updates v1 data and vice versa, mixed histories are safe. Output carries a
 stays distinguishable. v1 remains available for baseline comparison and rollback
 until v2 is validated on the LoCoMo/PersonaMem benchmarks.
 
-## 9. Authentication Configuration
+## 10. Authentication Configuration
 
 Local setup uses API keys by default:
 
@@ -296,7 +346,7 @@ Use this header when calling APIs:
 Authorization: Bearer <api_key>
 ```
 
-## 10. Minimal Checklist
+## 11. Minimal Checklist
 
 Before starting, confirm at least the following:
 
@@ -306,3 +356,4 @@ Before starting, confirm at least the following:
 - `embed_model_router.endpoints[0].api_key` / `api_base` / `model` are valid.
 - `database.qdrant.vector_size` equals the embedding output dimension.
 - If rerank is not needed, `rerank_model_router.endpoints` can remain empty and the related `use_reranker` flags should be disabled.
+- If `blob_store.backend: s3`, the S3/MinIO endpoint is reachable, `s3_region` is set non-empty, and the service has the `s3` extra installed (section 8).

@@ -10,12 +10,14 @@ from typing import Any
 from omegaconf.errors import ConfigAttributeError, MissingMandatoryValue
 
 from ..errors import InvalidConfigError, MissingConfigValueError
+from .algo.multimodal import IMAGE_DETAILS, MULTIMODAL_MODES
 from .algo.search.vanilla.vanilla import (
     VANILLA_DEDUP_MAX_CANDIDATES,
     VANILLA_HYBRID_PREFETCH_FACTOR_MAX,
     VANILLA_HYBRID_PREFETCH_MAX,
     VANILLA_RECALL_SIZE_MAX,
 )
+from .multimodal import BLOB_STORE_BACKENDS, MM_IMAGE_TRANSPORTS
 
 
 @dataclass(frozen=True)
@@ -451,6 +453,7 @@ def validate_config(cfg: Any, *, allow_project_embedding_dimensions: bool = Fals
     _validate_model_router("rerank_model_router", cfg.rerank_model_router)
     _validate_embedding_vector_size(cfg, allow_project_embedding_dimensions=allow_project_embedding_dimensions)
     _validate_algo(cfg)
+    _validate_multimodal(cfg)
     _validate_kafka(cfg.kafka)
 
 
@@ -602,6 +605,112 @@ def _validate_search(search: Any) -> None:
             "algo_config.search.schema_search.property.alloc_max_factor",
             support=">= algo_config.search.schema_search.property.alloc_min_factor",
         )
+
+
+def _validate_multimodal(cfg: Any) -> None:
+    dimensions: set[int] = set()
+    for index, endpoint in enumerate(cfg.mm_embed_model_router.endpoints):
+        prefix = f"mm_embed_model_router.endpoints[{index}]"
+        _require_string(f"{prefix}.model", _attr(endpoint, "model", f"{prefix}.model"))
+        _require_string(f"{prefix}.api_base", _attr(endpoint, "api_base", f"{prefix}.api_base"))
+        _validate_choice(f"{prefix}.image_transport", endpoint.image_transport, set(MM_IMAGE_TRANSPORTS))
+        if endpoint.dimensions is None:
+            raise MissingConfigValueError(f"{prefix}.dimensions", reason="it sizes the image collection")
+        _validate_range(f"{prefix}.dimensions", endpoint.dimensions, RangeRule(f"{prefix}.dimensions", min_value=1))
+        dimensions.add(int(endpoint.dimensions))
+        _validate_range(
+            f"{prefix}.timeout",
+            endpoint.timeout,
+            RangeRule(f"{prefix}.timeout", min_value=0, include_min=False, support="positive number"),
+        )
+        _validate_range(
+            f"{prefix}.num_retries",
+            endpoint.num_retries,
+            RangeRule(f"{prefix}.num_retries", min_value=0, support="non-negative integer"),
+        )
+        _validate_range(
+            f"{prefix}.max_batch_size",
+            endpoint.max_batch_size,
+            RangeRule(f"{prefix}.max_batch_size", min_value=1, support="positive integer >= 1"),
+        )
+    if len(dimensions) > 1:
+        raise InvalidConfigError(
+            "mm_embed_model_router.endpoints[].dimensions", support="one value shared by all endpoints"
+        )
+
+    blob = cfg.blob_store
+    _validate_choice("blob_store.backend", blob.backend, set(BLOB_STORE_BACKENDS))
+    if blob.backend == "s3":
+        _require_string("blob_store.s3_endpoint", blob.s3_endpoint)
+        if not blob.s3_endpoint.startswith(("http://", "https://")):
+            raise InvalidConfigError(
+                "blob_store.s3_endpoint", support="an http:// or https:// URL (the scheme decides TLS)"
+            )
+        _require_string("blob_store.s3_bucket", blob.s3_bucket)
+        _require_string("blob_store.s3_access_key", blob.s3_access_key, reason="the s3 backend signs every request")
+        _require_string("blob_store.s3_secret_key", blob.s3_secret_key, reason="the s3 backend signs every request")
+        # An explicit empty region yields a region-less client whose presigning does a live
+        # GetBucketLocation lookup — the exact network I/O presigning must avoid.
+        _require_string(
+            "blob_store.s3_region", blob.s3_region, reason="presigning stays offline only with an explicit region"
+        )
+    else:
+        _require_string("blob_store.local_root", blob.local_root)
+    if blob.s3_presign_endpoint and not blob.s3_presign_endpoint.startswith(("http://", "https://")):
+        raise InvalidConfigError(
+            "blob_store.s3_presign_endpoint",
+            support="an http:// or https:// URL (the scheme decides TLS), or leave it unset",
+        )
+    _validate_range(
+        "blob_store.s3_presign_expiry_seconds",
+        blob.s3_presign_expiry_seconds,
+        RangeRule(
+            "blob_store.s3_presign_expiry_seconds",
+            min_value=1,
+            max_value=604800,
+            support="1..604800 seconds (the S3 presign limit of 7 days)",
+        ),
+    )
+    _validate_range(
+        "blob_store.max_image_bytes", blob.max_image_bytes, RangeRule("blob_store.max_image_bytes", min_value=1)
+    )
+    _validate_range(
+        "blob_store.url_fetch_timeout",
+        blob.url_fetch_timeout,
+        RangeRule("blob_store.url_fetch_timeout", min_value=0, include_min=False, support="positive number"),
+    )
+
+    mm = cfg.algo_config.multimodal
+    if str(mm.mode) not in MULTIMODAL_MODES:
+        # YAML 1.1 reads a bare `off` as false.
+        raise InvalidConfigError(
+            "algo_config.multimodal.mode", support=", ".join(sorted(MULTIMODAL_MODES)) + ' (quote it in YAML: "off")'
+        )
+    for name, minimum in (
+        ("image_top_k", 1),
+        ("max_images_per_request", 1),
+        ("max_query_images", 1),
+        ("max_occurrences_per_image", 1),
+        ("image_context_chars", 0),
+        ("evidence_images", 0),
+        ("anchored_fact_limit", 0),
+        ("session_expansion_images", 0),
+        ("image_hit_margin", 0),
+        ("max_visual_facts_per_image", 0),
+        ("visual_fact_limit", 0),
+        ("visual_fact_images", 0),
+        ("max_extraction_images", 1),
+        ("max_concurrent_vlm_calls", 0),
+        ("agentic_max_steps", 1),
+    ):
+        path = f"algo_config.multimodal.{name}"
+        _validate_range(path, getattr(mm, name), RangeRule(path, min_value=minimum))
+    _validate_range(
+        "algo_config.multimodal.image_text_weight",
+        mm.image_text_weight,
+        RangeRule("algo_config.multimodal.image_text_weight", min_value=0, max_value=1),
+    )
+    _validate_choice("algo_config.multimodal.extraction_image_detail", mm.extraction_image_detail, set(IMAGE_DETAILS))
 
 
 def _validate_kafka(kafka: Any) -> None:

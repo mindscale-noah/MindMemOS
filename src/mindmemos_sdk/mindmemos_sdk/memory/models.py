@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 AddMode = Literal["sync", "async"]
 FeedbackMode = Literal["sync", "async"]
@@ -25,6 +25,30 @@ class TextMessage(BaseModel):
     text: str
 
 
+class ImageRef(BaseModel):
+    """An image attached to a dialogue turn or a search query.
+
+    Mirrors :class:`mindmemos.typing.memory.ImageRef`. Set exactly one of ``path`` (readable by
+    the server under its allowed roots), ``url``, ``data`` (base64 or a data URI) or ``blob_id``
+    (an image already stored for the project, as returned in search results). Images are
+    accepted by ``vanilla`` when the project's ``algo_config.multimodal.mode`` is basic or enhanced.
+    """
+
+    path: str | None = None
+    url: str | None = None
+    data: str | None = None
+    blob_id: str | None = None
+    mime_type: str | None = None
+    image_id: str | None = None
+    caption: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> ImageRef:
+        if sum(1 for value in (self.path, self.url, self.data, self.blob_id) if value) != 1:
+            raise ValueError("image must set exactly one of path, url, data, blob_id")
+        return self
+
+
 class DialogueMessage(BaseModel):
     """One conversational turn to add as memory.
 
@@ -35,6 +59,8 @@ class DialogueMessage(BaseModel):
     content: str
     timestamp: int | None = None
     """Dialogue timestamp in 13-digit milliseconds. Leave unset when unavailable."""
+    images: list[ImageRef] = Field(default_factory=list)
+    """Images attached to this turn (multimodal mode only). May be the only content."""
 
 
 class UrlMessage(BaseModel):
@@ -115,7 +141,12 @@ class MemorySearchHit(BaseModel):
     source_timestamp: str | None = None
     lineage: MemoryLineage | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    """Business metadata attached to the memory by the server."""
+    """Business metadata attached to the memory by the server.
+
+    Image hits carry ``blob_id`` (stable id for ``get_image`` / re-adding) and may carry
+    ``image_url`` — a short-lived direct-download URL; fetch it directly or fall back to
+    ``get_image(blob_id, metadata['user_id'])`` when it is absent or expired.
+    """
 
 
 class SearchResult(BaseModel):
@@ -185,11 +216,20 @@ def serialize_messages(messages: list[Message | dict[str, Any]]) -> list[dict[st
     """Serialize typed or raw message objects for request bodies."""
     result: list[dict[str, Any]] = []
     for msg in messages:
-        if isinstance(msg, BaseModel):
+        if isinstance(msg, DialogueMessage):
+            data = msg.model_dump(exclude={"images"})
+            if msg.images:
+                data["images"] = [_serialize_image(image) for image in msg.images]
+            result.append(data)
+        elif isinstance(msg, BaseModel):
             result.append(msg.model_dump())
         else:
             result.append(msg)
     return result
+
+
+def _serialize_image(image: ImageRef | dict[str, Any]) -> dict[str, Any]:
+    return image.model_dump(exclude_none=True) if isinstance(image, BaseModel) else dict(image)
 
 
 def serialize_feedback_recalled_memories(
@@ -264,6 +304,8 @@ def build_search_body(
     app_id: str | None = None,
     agent_id: str | None = None,
     session_id: str | None = None,
+    query_images: list[ImageRef | dict[str, Any]] | None = None,
+    multimodal: bool = False,
 ) -> dict[str, Any]:
     """Build a memory search request body without empty optional fields."""
     if not isinstance(rerank, bool):
@@ -286,6 +328,10 @@ def build_search_body(
         body["session_id"] = session_id
     if filters:
         body["filters"] = filters
+    if query_images:
+        body["query_images"] = [_serialize_image(image) for image in query_images]
+    if multimodal:
+        body["multimodal"] = True
     return body
 
 

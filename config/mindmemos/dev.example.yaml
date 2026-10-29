@@ -51,11 +51,49 @@ rerank_model_router:
       timeout: 600
       num_retries: 3
 
+# Multimodal (text + image) embedding for vanilla with algo_config.multimodal.mode basic/enhanced. Text and images must be
+# encoded into one vector space; `dimensions` sizes the Qdrant image collection and is checked at
+# startup. Requests route through litellm like the chat/embed/rerank routers: `model` carries a
+# litellm provider prefix (stripped on the wire), retries/cooldowns/failover are litellm's.
+# Leave endpoints empty to only store images (no image retrieval). Example:
+#   dimensions_supported_models: [siglip2]  # keep `dimensions` on the wire (litellm drops it otherwise)
+#   endpoints:
+#     - model: openai/siglip2-base-patch16-384
+#       api_base: http://127.0.0.1:8090/v1
+#       api_key:
+#       dimensions: 768
+#       image_transport: base64 # or url (send the original URL when the image came from one)
+mm_embed_model_router:
+  endpoints: []
+
+# Raw image storage for multimodal vanilla (content-addressed, per project).
+blob_store:
+  backend: local
+  local_root: data/blobs
+  # S3-compatible backend (MinIO/OSS-S3/R2): `make dev-blobs` then switch:
+  # backend: s3                  # requires the s3 extra: uv sync (dev env) or pip install mindmemos[s3]
+  # s3_endpoint: http://localhost:9100
+  # s3_region: us-east-1
+  # s3_bucket: mindmemos-blobs   # created lazily on first use if missing
+  # s3_access_key: minioadmin    # overridable via MINDMEMOS_S3_ACCESS_KEY
+  # s3_secret_key: minioadmin    # overridable via MINDMEMOS_S3_SECRET_KEY
+  # s3_public_base_url:          # e.g. https://cdn.example.com/minio for shareable URLs
+  # s3_presign_endpoint:         # external address baked into search's short-lived image URLs
+  #                              # (e.g. https://minio.example.com when the server talks to MinIO
+  #                              # over an internal host); unset signs against s3_endpoint
+  # s3_presign_expiry_seconds: 3600  # 1s..604800s (S3 max 7 days); MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS
+  max_image_bytes: 20971520
+  allowed_path_roots: []        # directories ImageRef.path may point into; empty disables paths
+  url_fetch_enabled: true
+  url_fetch_timeout: 20.0
+  url_allow_private_hosts: false
+
 database:
   qdrant:
     memory_collection: memory_item_v1
     entity_collection: entity_item_v1
     source_collection: source_item_v1
+    image_collection: image_item_v1
     semantic_vector_name: semantic
     bm25_vector_name: bm25
     vector_size: 2560
@@ -317,6 +355,29 @@ algo_config:
       top_m_guarantee: 5
       mmr_lambda: 0.7
   skill_evolution: {}
+  multimodal:
+    # off: plain vanilla, images rejected (400). basic: raw images stored, image similarity search.
+    # enhanced: VLM extraction (dialogue facts -> text memory anchored to images; visual facts and
+    # descriptions -> image records), image-recalled facts, evidence images, multimodal agentic.
+    # Searches are multimodal only with query_images or multimodal=true. Per project overridable.
+    mode: "off"
+    image_search: true
+    image_top_k: 5                # basic: image results appended after the text results
+    image_score_threshold:
+    image_context_chars: 500
+    max_images_per_request: 32
+    max_occurrences_per_image: 20
+    evidence_images: 6            # enhanced from here on
+    session_expansion_images: 4
+    anchored_fact_limit: 5
+    image_hit_margin: 0.03
+    image_text_weight: 0.5        # text vs. image similarity in image scores
+    visual_fact_limit: 10         # visual facts returned as separate results (0: inside image results)
+    visual_fact_images: 12
+    max_visual_facts_per_image: 30
+    extraction_image_detail: auto
+    max_extraction_images: 6
+    agentic_max_steps: 4
 
 kafka:
   enabled: true

@@ -200,7 +200,7 @@ async def test_add_async_message_round_trips_through_worker_deserialization(monk
     await memory_add_mod.handle_memory_add(msg)
 
     assert len(worker_calls) == 1
-    assert pipeline_names == ["vanilla_add"]
+    assert pipeline_names == ["vanilla_multimodal_add"]  # vanilla binds the multimodal wrapper
     assert worker_calls[0].context.request_id == "req-async-1"
     assert worker_calls[0].context.account_id == "acc-async-1"
     assert worker_calls[0].inp.mode == "sync"

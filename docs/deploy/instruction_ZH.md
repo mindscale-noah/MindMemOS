@@ -33,7 +33,7 @@ mindmemos_eval ─────────────────┘
 │   ├── mindmemos/          # 服务端运行与认证配置
 │   ├── mindmemos_eval/     # 评测任务配置
 │   └── presets/            # 算法预设资源
-├── dockers/                # Qdrant、Neo4j、Kafka 和观测组件
+├── dockers/                # Qdrant、Neo4j、Kafka、MinIO 和观测组件
 ├── plugins/                # Agent 插件集成
 ├── Makefile                # 本地服务与依赖启动入口
 └── pyproject.toml          # uv workspace 与开发依赖
@@ -73,7 +73,10 @@ make dev
 
 ```bash
 make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
+make dev-blobs         # 单独启动 MinIO（make dev / make db 也会一并启动），见第 8 节
+make db MINIO=0        # 传统模式：同上但不起 MinIO（MINIO=0 的 dev-down / db-clean
+                       # 同样不会动 MinIO 容器和它的数据卷）
 ```
 
 停止本地依赖：
@@ -120,6 +123,18 @@ Neo4j：
 | `MINDMEMOS_TELEMETRY_ENDPOINT` | OTel HTTP endpoint；只有 config 里 `telemetry.enabled=true` 时会上报 | `http://localhost:4318` |
 | `MINDMEMOS_CLICKHOUSE_USER` / `MINDMEMOS_CLICKHOUSE_PASSWORD` / `MINDMEMOS_CLICKHOUSE_DB` | ClickHouse/Grafana 观测数据配置 | 见 `.env.example` |
 
+图片存储（S3/MinIO；仅 `blob_store.backend: s3` 时使用，见第 8 节）：
+
+| 变量 | 作用 | 默认值 |
+| --- | --- | --- |
+| `MINDMEMOS_MINIO_PORT` | Docker 暴露的 MinIO 端口（用 9100 是因为 ClickHouse native 占了 9000） | `9100` |
+| `MINDMEMOS_S3_ENDPOINT` | blob store 的 S3/MinIO 地址；覆盖 `blob_store.s3_endpoint` | `http://localhost:9100` |
+| `MINDMEMOS_S3_BUCKET` | blob 桶名；覆盖 `blob_store.s3_bucket` | `mindmemos-blobs` |
+| `MINDMEMOS_S3_ACCESS_KEY` / `MINDMEMOS_S3_SECRET_KEY` | S3 凭证；覆盖 `blob_store.s3_access_key` / `s3_secret_key` | `minioadmin` / `minioadmin` |
+| `MINDMEMOS_S3_PUBLIC_BASE_URL` | 可选公开镜像（CDN/ingress），用于构造可分享的图片 URL | 空 |
+| `MINDMEMOS_S3_PRESIGN_ENDPOINT` | 检索返回的短时效预签名图片 URL 使用的外部地址；留空则按 `MINDMEMOS_S3_ENDPOINT` 签名 | 空 |
+| `MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS` | 预签名 URL 有效期（秒），`1..604800` | `3600` |
+
 API 监听地址：
 
 | 变量 | 作用 | 默认值 |
@@ -143,6 +158,7 @@ Docker Compose 内的核心服务：
 - `neo4j`: 存图关系。
 - `kafka`: 异步任务队列；默认 config 里未开启也可以先跑着。
 - `clickhouse` + `otel-collector` + `grafana`: 观测链路；不需要观测时可以在 config 里关掉 `telemetry.enabled`。
+- `minio` + `minio-init`: 图片对象存储及 bucket 初始化，供多模态的 `s3` 后端使用；`make dev` / `make db` 会一并启动（也可用 `make dev-blobs` 单独启动；`make dev MINIO=0` 跳过）。
 
 本地部署时，`.env` 里的端口变量要和 `config/mindmemos/dev.yaml` 里的连接地址对齐。代码启动时还会用环境变量覆盖这些连接字段：
 
@@ -155,6 +171,7 @@ Docker Compose 内的核心服务：
 - `database.neo4j.password`
 - `kafka.bootstrap_servers`
 - `telemetry.telemetry_endpoint`
+- `blob_store.s3_endpoint` / `s3_bucket` / `s3_access_key` / `s3_secret_key` / `s3_public_base_url` / `s3_presign_endpoint` / `s3_presign_expiry_seconds`（对应 `MINDMEMOS_S3_*` 变量；`s3_region` 无环境变量覆盖）
 
 ## 5. LLM 配置
 
@@ -261,7 +278,40 @@ algo_config:
 
 强调：`rerank` 是可选增强项。生产环境建议先把 Docker、LLM、Embedding 跑稳，再接入 rerank。
 
-## 8. 记忆算法版本（v1 / v2）
+## 8. 多模态图片存储（可选）
+
+记忆消息携带的图片按内容寻址（按项目 SHA-256 去重）存储为 blob。默认 `local` 后端零配置——文件落在 `blob_store.local_root`（`data/blobs`）。如需改用 S3/MinIO 存储：
+
+1. 启动 MinIO（本地开发）：
+
+   ```bash
+   make dev-blobs   # MinIO 位于 http://localhost:9100，bucket 自动创建
+   ```
+
+2. 在 `config/mindmemos/dev.yaml` 中切换后端：
+
+   ```yaml
+   blob_store:
+     backend: s3
+     s3_endpoint: http://localhost:9100   # https:// 开启 TLS
+     s3_bucket: mindmemos-blobs           # 缺失时首次使用自动创建
+     s3_region: us-east-1                 # 必填非空；会写进每个预签名 URL
+     s3_access_key: minioadmin
+     s3_secret_key: minioadmin
+     # s3_presign_endpoint: https://blobs.example.com  # 预签名 URL 的对外地址
+     # s3_presign_expiry_seconds: 3600                  # 预签名 URL 有效期，1..604800
+   ```
+
+3. 重启服务。
+
+注意：
+
+- `s3` 后端需要 `s3` extra：`pip install mindmemos[s3]`（开发 workspace 已包含）。
+- 使用 `s3` 后端时，图片检索结果会带 `metadata.image_url`：一个短时效的预签名 GET 链接，可免凭证直接从 S3/MinIO 下载图片字节。当客户端可达地址与内部 `s3_endpoint` 不同时，设置 `s3_presign_endpoint`。无法签名时（或后端为 `local`），结果回退为需鉴权的代理路由 `GET /v1/memory/images/{blob_id}?user_id=<owner>`——以相对路径下发，由客户端按自己的 API 地址解析。
+- 除 `s3_region` 外的所有 `s3_*` 字段都可以用 `MINDMEMOS_S3_*` 环境变量设置（见第 3 节）。
+- 多模态 embedding 与检索模式（`algo_config.multimodal.mode`、`mm_embed_model_router`）是另一件事，详见 [配置说明](../config/README.md#algo_configmultimodal--images-in-vanilla-memory)。
+
+## 9. 记忆算法版本（v1 / v2）
 
 Schema 记忆抽取有两套可选流程，通过 `algo_config.add.schema.version` 切换：
 
@@ -275,7 +325,7 @@ Schema 记忆抽取有两套可选流程，通过 `algo_config.add.schema.versio
 `schema_add_v1`），可区分来源。v1 保留用于基线对比和回退，直到 v2 在
 LoCoMo/PersonaMem 基准上验证完成。
 
-## 9. 认证配置
+## 10. 认证配置
 
 本地默认使用 API key：
 
@@ -296,7 +346,7 @@ auth:
 Authorization: Bearer <api_key>
 ```
 
-## 10. 最小检查清单
+## 11. 最小检查清单
 
 启动前至少确认：
 
@@ -306,3 +356,4 @@ Authorization: Bearer <api_key>
 - `embed_model_router.endpoints[0].api_key` / `api_base` / `model` 可用。
 - `database.qdrant.vector_size` 等于 embedding 输出维度。
 - 不需要 rerank 时，`rerank_model_router.endpoints` 可以留空，并关闭相关 `use_reranker`。
+- 若 `blob_store.backend: s3`，确认 S3/MinIO 端点可达、`s3_region` 已非空设置、且服务装了 `s3` extra（见第 8 节）。

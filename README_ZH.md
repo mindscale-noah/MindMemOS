@@ -46,6 +46,7 @@
 
 ## 📰 News
 
+- **2026-10-31**：多模态记忆发布——`memory.add` / `memory.search` 支持图片（原图存本地磁盘或 S3/MinIO，按多模态 embedding 建索引），`enhanced` 模式提供 VLM 视觉事实抽取与多模态 agent 检索；评测结果与复现指南见 [评测指南的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
 - **2026-08-18**：我们发布了 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，让 DeepSeek Harness（dsh）Agent 自动召回并写入 MindMemOS 记忆。
 - **2026-08-14**：我们发布了 [MindMemOS 1.0 技术报告](https://arxiv.org/abs/2608.12428)《MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents》。
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
@@ -55,6 +56,7 @@
 
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。
 - **记忆系统可自主演化**：通过 schema learning、dreaming、feedback 持续优化记忆质量，自动学习高频记忆点、离线巩固合并记忆，并从交互纠错中反向优化 add/search 流程。
+- **多模态记忆**：图片与文本一同进入 vanilla 的 add / search——原图存本地磁盘或 S3/MinIO，按多模态 embedding（SigLIP2 兼容协议）建索引；`enhanced` 模式可用 VLM 抽取视觉事实并做多模态 agent 检索，图片命中附带直链——S3/MinIO 上为短时效预签名 URL，本地存储为需鉴权的代理路由。默认关闭，纯文本行为逐字节不变。
 - **记忆与 Skills 联动**：经验记忆可以沉淀为 skill candidates；skills 的执行结果、失败轨迹和用户反馈也会回流到记忆系统，推动 skills 持续演进。
 - **插件集成能力**：支持通过插件将 MindMemOS 接入不同 Agent 与工作流，在交互前检索并注入相关记忆、回合结束后自动写回对话，当前已提供 [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) 和 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，并持续扩展更多集成。
 
@@ -398,6 +400,27 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 | Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
 | **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
 | **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
+
+### 🖼️ 多模态记忆：MemEye 与 Mem-Gallery
+
+- **评测基准**：[MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye)（8 任务共 742 题，多轮对话穿插图片；MCQ 计 EM、开放题计 BLEU-1，按任务宏平均）与 [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery)（20 任务共 1711 开放题；token 级 F1 与 BLEU-1，按题微平均）。
+
+| 方法 | MemEye EM | MemEye B-1 | Mem-Gallery F1 | Mem-Gallery B-1 |
+| :--- | :---: | :---: | :---: | :---: |
+| MemoryOS | 45.75 | 13.12 | 43.09 | 37.76 |
+| A-MEM | 49.73 | 21.11 | 44.08 | 38.37 |
+| SimpleMem | 50.34 | 9.42 | 34.73 | 28.90 |
+| HyperMem | 47.82 | 19.64 | 44.57 | 33.42 |
+| M2A | 52.31 | 6.31 | 15.04 | 10.28 |
+| MMA | 50.96 | 16.32 | 26.99 | 20.60 |
+| SRAG | 58.36 | 31.48 | 41.07 | 35.03 |
+| UniversalRAG | 60.49 | 11.23 | 48.36 | 41.90 |
+| MindMemOS b0（纯文本基线） | 43.03 | 20.32 | 38.72 | 32.59 |
+| MindMemOS b1（图片相似度检索） | 59.77 | 27.02 | 54.73 | 47.75 |
+| MindMemOS enhanced（VLM 视觉事实） | 63.45 | 25.49 | 55.66 | 48.98 |
+| MindMemOS enhanced_agentic（多模态 agent） | **65.89** | 27.09 | **57.06** | **50.45** |
+
+配置：vanilla 算法；所有行均以 `gpt-4.1-mini` 作答；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）。基线行为同一实验条件下的复现（3 次均值；出处为双盲评审中的在投论文，暂不附链接）；MindMemOS 四行为本仓库当前实现的评测（2 次均值，2026-10）。两组 Judge 模型不同（本文 `gpt-4.1-mini`、基线 `GPT-5.4-mini`），Judge 分数不可同表比较；MindMemOS 的 Judge（b0 → enhanced_agentic）：MemEye 26.26 / 47.80 / 50.80 / 53.30，Mem-Gallery 70.68 / 85.06 / 87.06 / 89.14。完整运行指南见 [docs/eval/README_ZH.md 的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
 
 ## 🗺️ Coming Features
 

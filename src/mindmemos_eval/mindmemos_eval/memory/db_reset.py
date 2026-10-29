@@ -13,8 +13,12 @@ environment-variable configuration as the server (``MINDMEMOS_QDRANT_URL``,
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 import os
+import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,7 +43,11 @@ DEFAULT_COLLECTIONS: tuple[str, ...] = (
     "add_record_v1",
     "schema_add_buffer_v1",
     "search_record_v1",
+    "image_item_v1",
 )
+DEFAULT_BLOB_ROOT = "data/blobs"
+"""Server default ``blob_store.local_root``; relative roots resolve against the process working
+directory on both sides, so they only line up when the runner starts from the server's root."""
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,9 @@ class ResetConfig:
     neo4j_password: str = field(default_factory=lambda: os.getenv("MINDMEMOS_NEO4J_PASSWORD", DEFAULT_NEO4J_PASSWORD))
     neo4j_database: str = field(default_factory=lambda: os.getenv("MINDMEMOS_NEO4J_DATABASE", DEFAULT_NEO4J_DATABASE))
     collections: tuple[str, ...] = DEFAULT_COLLECTIONS
+    blob_root: str | None = None
+    """Local blob store root of the server (images of multimodal vanilla); None skips blob cleanup.
+    The runner sets it from ``--server-config`` (``resolve_blob_root``)."""
 
 
 class ProjectResetError(RuntimeError):
@@ -90,6 +101,7 @@ _QDRANT_COLLECTION_FIELDS: tuple[tuple[str, str], ...] = (
     ("add_record_collection", "add_record_v1"),
     ("schema_add_buffer_collection", "schema_add_buffer_v1"),
     ("search_record_collection", "search_record_v1"),
+    ("image_collection", "image_item_v1"),
 )
 
 
@@ -142,8 +154,7 @@ def resolve_collections(server_config_path: str | Path | None = None) -> tuple[s
         return DEFAULT_COLLECTIONS
 
     collections = tuple(
-        str(qdrant.get(field_name, default_name))
-        for field_name, default_name in _QDRANT_COLLECTION_FIELDS
+        str(qdrant.get(field_name, default_name)) for field_name, default_name in _QDRANT_COLLECTION_FIELDS
     )
     logger.info("resolved_qdrant_collections path=%s collections=%s", path, collections)
     return collections
@@ -163,8 +174,66 @@ async def reset_project(cfg: ResetConfig, project_id: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     counts.update(await _reset_qdrant(cfg, project_id))
     counts.update(await _reset_neo4j(cfg, project_id))
+    counts.update(await asyncio.to_thread(_reset_blobs, cfg, project_id))
     logger.info("project_reset_done project_id=%s counts=%s", project_id, counts)
     return counts
+
+
+def resolve_blob_root(server_config_path: str | Path | None = None) -> str | None:
+    """The server's local blob root (``blob_store.local_root``); the default when it cannot be read."""
+
+    if server_config_path is None:
+        return DEFAULT_BLOB_ROOT
+    try:
+        raw = yaml.safe_load(Path(server_config_path).read_text(encoding="utf-8")) or {}
+    except (FileNotFoundError, yaml.YAMLError, OSError):
+        return DEFAULT_BLOB_ROOT
+    blob_store = raw.get("blob_store") if isinstance(raw, dict) else None
+    if not isinstance(blob_store, dict):
+        return DEFAULT_BLOB_ROOT
+    if blob_store.get("backend", "local") != "local":
+        return None
+    return str(blob_store.get("local_root") or DEFAULT_BLOB_ROOT)
+
+
+def blob_namespace_dir(namespace: str) -> str:
+    """Directory of one project's blobs; must match ``mindmemos.infra.blob.local._namespace_dir``."""
+
+    digest = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:12]
+    return f"{re.sub(r'[^A-Za-z0-9_.-]', '_', namespace)[:64]}-{digest}"
+
+
+def _reset_blobs(cfg: ResetConfig, project_id: str) -> dict[str, int]:
+    """Delete the project's stored images (blob files) and verify the directory is gone."""
+
+    if cfg.blob_root is None:
+        logger.warning(
+            "project_reset blob cleanup skipped: blob_store backend is not local, so the stored"
+            " image objects of project_id=%s stay in the object store",
+            project_id,
+        )
+        return {}
+    path = Path(cfg.blob_root).expanduser() / blob_namespace_dir(project_id)
+    if not path.exists():
+        # Zero files can mean two things; say which paths were checked so a wrong root is not
+        # mistaken for a clean project.
+        logger.warning(
+            "project_reset no blob directory at %s: either this project stored no images, or the"
+            " server resolved blob_store.local_root against a different working directory",
+            path,
+        )
+        return {"blob:images": 0}
+    count = sum(1 for item in path.rglob("*") if item.is_file() and item.suffix != ".json")
+    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        raise ProjectResetError(
+            project_id=project_id,
+            store="blob",
+            operation="delete",
+            resource=str(path),
+            reason="blob directory remains after delete",
+        )
+    return {"blob:images": count}
 
 
 async def _reset_qdrant(cfg: ResetConfig, project_id: str) -> dict[str, int]:
@@ -186,6 +255,10 @@ async def _reset_qdrant(cfg: ResetConfig, project_id: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     try:
         for collection in cfg.collections:
+            # Collections created on demand (e.g. the multimodal image collection) exist only once used.
+            if not await client.collection_exists(collection):
+                counts[f"qdrant:{collection}"] = 0
+                continue
             try:
                 counted = await client.count(collection_name=collection, count_filter=filter_, exact=True)
                 counted_before = int(counted.count)

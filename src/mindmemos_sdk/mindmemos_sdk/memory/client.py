@@ -17,6 +17,7 @@ from .models import (
     AddResult,
     FeedbackMode,
     GetResult,
+    ImageRef,
     MemoryPageResult,
     MemoryScrollResult,
     MemorySearchHit,
@@ -124,8 +125,15 @@ class MemoryClient:
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        query_images: list[ImageRef | dict[str, Any]] | None = None,
+        multimodal: bool = False,
     ) -> SearchResult:
-        """Search memories."""
+        """Search memories.
+
+        ``multimodal=True`` searches stored images too (image results and facts recalled through
+        them); ``query_images`` attaches images to the query and implies it. Both need the project's
+        ``algo_config.multimodal.mode`` to be basic or enhanced; otherwise the search is text-only.
+        """
         request = self._core.search(
             query,
             top_k=top_k,
@@ -138,9 +146,15 @@ class MemoryClient:
             app_id=app_id,
             agent_id=agent_id,
             session_id=session_id,
+            query_images=query_images,
+            multimodal=multimodal,
         )
         envelope = self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
+
+    def get_image(self, blob_id: str, user_id: str) -> tuple[bytes, str]:
+        """Download a stored image (``metadata.blob_id`` of an image result) of its owner ``user_id``."""
+        return self._transport.get_bytes(f"/v1/memory/images/{blob_id}", params={"user_id": user_id})
 
     def get(
         self,

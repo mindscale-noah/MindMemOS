@@ -3,10 +3,12 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
+from urllib.parse import quote
 from uuid import uuid4
 
 from ...config import get_config
-from ...errors import MemoryNotFoundError, ResourceNotFoundError
+from ...errors import BadRequestError, MemoryNotFoundError, ResourceNotFoundError
+from ...infra.blob import get_blob_store, is_valid_blob_id
 from ...logging import get_logger, traced
 from ...pipelines import create_pipeline
 from ...pipelines.add import AddPipeline
@@ -14,7 +16,13 @@ from ...pipelines.delete import DefaultDeletePipeline, DeletePipeline
 from ...pipelines.dreaming import DreamingPipeline
 from ...pipelines.feedback import FeedbackPipeline
 from ...pipelines.get import DefaultGetPipeline, GetPipeline
-from ...pipelines.memory_db import MemoryCatalog, MemoryOperationRecorder, suppress_recording_errors, utcnow
+from ...pipelines.memory_db import (
+    ImageMemoryStore,
+    MemoryCatalog,
+    MemoryOperationRecorder,
+    suppress_recording_errors,
+    utcnow,
+)
 from ...pipelines.search import SearchPipeline
 from ...pipelines.skill import SkillVersionStore, get_skill_version_store
 from ...pipelines.update import DefaultUpdatePipeline, UpdatePipeline
@@ -166,6 +174,7 @@ class MemoryService:
         # Stamp request identity onto the handler-root span so downstream LLM spans
         # (which live in this trace, not the auth dependency's trace) are attributable.
         annotate_request_trace(auth)
+        _reject_images_unless_supported(auth, request)
         pipeline, _add_pipeline_name = self._add_pipeline_for_auth(auth)
         if pipeline is None:
             raise NotImplementedError("add pipeline implementation is not wired yet")
@@ -197,6 +206,7 @@ class MemoryService:
         """Run sync add while streaming progress events."""
 
         annotate_request_trace(auth)
+        _reject_images_unless_supported(auth, request)
         pipeline, _add_pipeline_name = self._add_pipeline_for_auth(auth)
         if pipeline is None:
             raise NotImplementedError("add pipeline implementation is not wired yet")
@@ -450,13 +460,19 @@ class MemoryService:
         auth: AuthContext,
         request: SearchRequest,
     ) -> SearchPipelineResult:
-        """Run the search pipeline."""
+        """Run the search pipeline.
+
+        Image hits are decorated with ``metadata.image_url``: a presigned link when the
+        blob backend can sign, otherwise a relative proxy path (see ``_attach_image_urls``).
+        """
 
         # Stamp request identity onto the handler-root span so downstream LLM spans
         # (which live in this trace, not the auth dependency's trace) are attributable.
         annotate_request_trace(auth)
         ctx = to_memory_request_context(auth, request)
         binding = binding_for_memory_algorithm(auth.memory_algorithm)
+        if request.query_images and (reason := _images_unsupported_reason(auth)):
+            raise BadRequestError(f"query_images {reason}", code="search.images_unsupported")
         payload = to_search_pipeline_input(request, search_pipeline=binding.search_pipeline)
         pipeline = self._pipeline("_search")
         if pipeline is None:
@@ -465,7 +481,9 @@ class MemoryService:
         with config_ctx:
             return await self._search_with_context(pipeline, payload, ctx)
 
-    async def _search_with_context(self, pipeline: SearchPipeline, payload, ctx) -> SearchPipelineResult:
+    async def _search_with_context(
+        self, pipeline: SearchPipeline, payload, ctx
+    ) -> SearchPipelineResult:
         request_submitted_at = utcnow()
         try:
             result = await pipeline.search(payload, ctx)
@@ -493,7 +511,28 @@ class MemoryService:
             ),
             operation="search",
         )
+        # Decorated after recording: telemetry keeps signed URLs (short-lived secrets) out.
+        _attach_image_urls(result, project_id=ctx.project_id)
         return result
+
+    @traced("memory_service.get_image")
+    async def get_image(self, auth: AuthContext, blob_id: str, user_id: str) -> tuple[bytes, str]:
+        """Read one stored image of the caller's project, naming its owner.
+
+        The caller-declared ``user_id`` is verified against the project's image records; another
+        user's blob and a missing blob raise the same ``image.not_found``, so the response does
+        not reveal which blobs exist.
+        """
+
+        annotate_request_trace(auth)
+        ctx = to_memory_request_context(auth)
+        if not await ImageMemoryStore().blob_owned_by(ctx, blob_id, user_id):
+            raise ResourceNotFoundError(f"image {blob_id} not found", code="image.not_found")
+        found = await get_blob_store().get(auth.project_id, blob_id)
+        if found is None:
+            raise ResourceNotFoundError(f"image {blob_id} not found", code="image.not_found")
+        blob, data = found
+        return data, blob.mime_type
 
     @traced("memory_service.get")
     async def get(self, auth: AuthContext, request: GetRequest) -> GetPipelineResult:
@@ -603,6 +642,70 @@ class MemoryService:
 
 _service: MemoryService | None = None
 _service_key: tuple[str, ...] | None = None
+
+
+def _reject_images_unless_supported(auth: AuthContext, request: AddRequest) -> None:
+    """Keep images away from text-only configurations instead of silently dropping them."""
+
+    if not any(getattr(message, "images", None) for message in request.messages):
+        return
+    if reason := _images_unsupported_reason(auth):
+        raise BadRequestError(f"images {reason}", code="add.images_unsupported")
+
+
+def _images_unsupported_reason(auth: AuthContext) -> str | None:
+    """Why this request may not carry images, or None when it may (reads the request-bound config)."""
+
+    if not binding_for_memory_algorithm(auth.memory_algorithm).supports_images:
+        return f"are not supported by memory_algorithm {auth.memory_algorithm}"
+    if get_config().algo_config.multimodal.mode == "off":
+        return "require algo_config.multimodal.mode basic or enhanced; it is off for this project"
+
+
+def _attach_image_urls(
+    result: SearchPipelineResult,
+    *,
+    project_id: str,
+    store: Any | None = None,
+    expires_seconds: int | None = None,
+) -> None:
+    """Attach ``metadata.image_url`` to search hits that reference a stored image.
+
+    Backends with a public mirror (``blob_store.s3_public_base_url``) get that permanent
+    URL; other S3/MinIO backends get a short-lived presigned URL clients can GET directly
+    (lazy loading; bytes never transit this API); backends that cannot sign fall back to the
+    authenticated proxy route as a *relative* path (the client resolves it against its
+    own API origin) when the hit's ``user_id`` is known — never the request's Host
+    header, which is client-controlled and must not be reflected into a
+    credential-bearing URL. ``metadata.blob_id`` remains the stable canonical reference;
+    failures degrade silently — search results never break over URL decoration.
+    """
+
+    hits = [
+        item
+        for item in result.memories
+        if isinstance(getattr(item, "metadata", None), dict)
+        and is_valid_blob_id(item.metadata.get("blob_id") or "")
+    ]
+    if not hits:
+        return
+    try:
+        blob_store = store if store is not None else get_blob_store()
+        cfg = get_config().blob_store
+        expiry = expires_seconds if expires_seconds is not None else cfg.s3_presign_expiry_seconds
+        for item in hits:
+            blob_id = item.metadata["blob_id"]
+            url = blob_store.public_url(project_id, blob_id)
+            if url is None:
+                url = blob_store.presigned_get(project_id, blob_id, expires_seconds=expiry)
+            if url is None and item.metadata.get("user_id"):
+                # self-declared ids may hold '&'/'#'/non-ASCII; quote keeps the owner one query value
+                owner = quote(str(item.metadata["user_id"]), safe="")
+                url = f"/v1/memory/images/{blob_id}?user_id={owner}"
+            if url:
+                item.metadata["image_url"] = url
+    except Exception as exc:  # noqa: BLE001 - decoration must never fail the search (e.g. s3 extra missing)
+        logger.warning("search_image_url_decoration_failed", project_id=project_id, error=str(exc))
 
 
 def get_memory_service() -> MemoryService:

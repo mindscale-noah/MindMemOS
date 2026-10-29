@@ -17,6 +17,7 @@ from .errors import (
 )
 from .filters import (
     FILTERABLE_ENTITY_FIELDS,
+    FILTERABLE_IMAGE_FIELDS,
     FILTERABLE_MEMORY_FIELDS,
     build_filter,
     datetime_range,
@@ -33,6 +34,7 @@ from .models import (
     EntityNode,
     EntityPoint,
     GraphRelationship,
+    ImagePoint,
     MemoryNode,
     MemoryPoint,
     NodeRef,
@@ -89,8 +91,10 @@ __all__ = [
     "MemoryNotFoundError",
     "EntityNode",
     "EntityPoint",
+    "ImagePoint",
     "ENTITY_COLLECTION",
     "FILTERABLE_ENTITY_FIELDS",
+    "FILTERABLE_IMAGE_FIELDS",
     "FILTERABLE_MEMORY_FIELDS",
     "GraphRelationship",
     "MEMORY_COLLECTION",

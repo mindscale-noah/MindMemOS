@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC
+from typing import Any
 
+from ....components.multimodal.extraction import IMAGE_BLOB_IDS_KEY
 from ....components.searcher.vanilla import dedup_by_text_similarity
 from ....components.searcher.vanilla._executor import vanilla_dedup_executor
 from ....components.text import SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
@@ -483,7 +485,19 @@ def _to_memory_search_item(hit: MemoryDbSearchHit, *, lineage: MemoryLineage | N
         event_time=format_memory_event_time(memory, fallback_to_source_timestamp=True) if memory else None,
         source_timestamp=format_source_timestamp(memory) if memory else None,
         lineage=lineage,
+        metadata=_fact_anchor_metadata(memory),
     )
+
+
+def _fact_anchor_metadata(memory: MemoryView | None) -> dict[str, Any]:
+    """The blob ids a fact is anchored to, when it was extracted from image-bearing turns.
+
+    Only this one key is surfaced, and only when present: everything else on the stored view
+    stays internal, so text responses keep their exact shape for memories without anchors.
+    """
+
+    blob_ids = (memory.metadata or {}).get(IMAGE_BLOB_IDS_KEY) if memory else None
+    return {IMAGE_BLOB_IDS_KEY: blob_ids} if blob_ids else {}
 
 
 def _ordered_archived_ids(lineage_by_id: dict[str, list[str]], *, existing_ids: set[str]) -> list[str]:

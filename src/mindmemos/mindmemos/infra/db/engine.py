@@ -153,6 +153,8 @@ class QdrantEngine:
                     size=spec.vector_size,
                     distance=self._distance(spec.distance),
                 )
+                for name, size in spec.extra_dense_vectors:
+                    vectors_config[name] = qmodels.VectorParams(size=size, distance=self._distance(spec.distance))
             if spec.enable_sparse:
                 sparse_vectors_config = {
                     spec.sparse_vector_name: qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
@@ -220,6 +222,7 @@ class QdrantEngine:
             spec.enable_sparse,
             spec.on_disk_payload,
             tuple((index.field_name, repr(index.field_schema)) for index in spec.payload_indexes),
+            spec.extra_dense_vectors,
         )
 
     async def upsert(self, collection: str, points: list[qmodels.PointStruct]) -> None:
@@ -326,6 +329,13 @@ class QdrantEngine:
         if not point_ids:
             return
         await self._client.delete(collection_name=collection, points_selector=point_ids)
+
+    async def delete_by_filter(self, collection: str, filter_: qmodels.Filter) -> None:
+        """Delete every point matching ``filter_`` (caller gates on collection existence)."""
+
+        await self._client.delete(
+            collection_name=collection, points_selector=qmodels.FilterSelector(filter=filter_)
+        )
 
     async def batch_update(self, collection: str, operations: list[qmodels.UpdateOperation]) -> None:
         """Apply a batch of update operations against one collection."""
