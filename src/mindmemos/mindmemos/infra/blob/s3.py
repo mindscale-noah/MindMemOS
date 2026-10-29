@@ -65,7 +65,6 @@ class S3BlobStore:
         # Presigned URLs handed to clients must point at an endpoint they can reach; when the
         # server talks to MinIO over an internal address, sign against this external one instead.
         self._presign_endpoint = presign_endpoint
-        self._injected_presign_client = presign_client
         # Without a presign endpoint the main client signs; self._client, not the ctor
         # argument, which is None when no client was injected (the default path).
         self._presign_client: Any | None = presign_client or (None if presign_endpoint else self._client)

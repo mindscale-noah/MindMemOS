@@ -85,7 +85,8 @@ def _check_blob_store() -> None:
 
     The S3 backend imports ``minio`` lazily, so a missing ``mindmemos[s3]`` extra would
     otherwise pass validation and only surface as an ImportError -> HTTP 500 on the first
-    image add or get-image call.
+    image add or get-image call. The minio client also rejects some endpoints validation
+    cannot (e.g. a non-numeric port), as a bare ``ValueError``.
     """
 
     if get_config().blob_store.backend != "s3":
@@ -97,6 +98,8 @@ def _check_blob_store() -> None:
             "blob_store.backend",
             support=f"install the s3 extra (pip install 'mindmemos[s3]') or use the local backend: {exc}",
         ) from exc
+    except ValueError as exc:
+        raise InvalidConfigError("blob_store.s3_endpoint", support=str(exc)) from exc
 
 
 async def _check_multimodal_embedding() -> None:

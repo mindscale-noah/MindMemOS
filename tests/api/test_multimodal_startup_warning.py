@@ -43,8 +43,26 @@ def test_s3_backend_without_the_extra_fails_the_boot(monkeypatch) -> None:
 
     monkeypatch.setattr(app_module, "get_config", lambda: cfg)
     monkeypatch.setattr(app_module, "get_blob_store", missing_extra)
-    with pytest.raises(InvalidConfigError, match=r"mindmemos\[s3\]"):
+    with pytest.raises(InvalidConfigError, match=r"mindmemos\[s3\]") as excinfo:
         app_module._check_blob_store()
+    assert excinfo.value.field == "blob_store.backend"
+
+
+def test_s3_backend_with_an_endpoint_the_client_rejects_fails_the_boot(monkeypatch) -> None:
+    # The minio constructor validates more than config validation does (e.g. a non-numeric
+    # port raises a bare ValueError); the boot must name the config field, not crash raw.
+    from mindmemos.errors import InvalidConfigError
+
+    cfg = build(MemoryConfig, {"blob_store": {"backend": "s3", "s3_endpoint": "minio.internal:70003"}})
+
+    def bad_endpoint():
+        raise ValueError("Port could not be cast to integer value as '70003'")
+
+    monkeypatch.setattr(app_module, "get_config", lambda: cfg)
+    monkeypatch.setattr(app_module, "get_blob_store", bad_endpoint)
+    with pytest.raises(InvalidConfigError) as excinfo:
+        app_module._check_blob_store()
+    assert excinfo.value.field == "blob_store.s3_endpoint"
 
 
 def test_local_backend_and_a_working_s3_extra_boot_normally(monkeypatch) -> None:
