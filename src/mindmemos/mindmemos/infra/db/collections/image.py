@@ -134,9 +134,21 @@ class ImageRepository(CollectionRepository):
             self.collection, count_filter=self._engine.project_filter(project_id, filter_=filter_)
         )
 
-    async def delete_many(self, image_ids: list[str]) -> None:
+    async def delete_many(self, project_id: str, image_ids: list[str]) -> None:
+        """Delete points by id, but only where they belong to ``project_id``.
+
+        The project condition rides along as defense in depth: callers derive the ids from a
+        project-scoped scroll, and the filter keeps a future caller (or a reused id) from
+        deleting another project's point.
+        """
+
         if image_ids and await self._engine.collection_exists(self.collection):
-            await self._engine.delete(self.collection, image_ids)
+            await self._engine.delete_by_filter(
+                self.collection,
+                self._engine.project_filter(
+                    project_id, conditions=[qmodels.HasIdCondition(has_id=image_ids)]
+                ),
+            )
 
     async def search(
         self,

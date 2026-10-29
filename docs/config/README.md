@@ -223,6 +223,25 @@ without images, behaves exactly like vanilla in every mode: same results, same m
 image lookups, even for users who stored images. Vanilla text search, related-memory recall during
 add, dreaming and feedback never see visual facts.
 
+What each mode requires, and how a missing requirement shows up (nothing is a hard error at
+config load — the modes degrade, loudly in the logs):
+
+- **`basic` / `enhanced` need `mm_embed_model_router`** for similarity-based image results. With
+  no endpoints images are still stored, but never indexed: the server logs a **startup warning**
+  when the *global* mode is not `off` (a per-project `basic`/`enhanced` override only surfaces
+  through the per-add events below), every add logs `multimodal_images_stored_unindexed`, and
+  multimodal searches lose their similarity-based image recall (in `enhanced` mode, evidence
+  images anchored to text-recalled facts can still appear). `enhanced` additionally runs its VLM
+  extraction but then drops per-image descriptions and visual facts
+  (`multimodal_visual_facts_dropped`) — those VLM tokens are wasted.
+- **`enhanced` (and `search_strategy: agentic`) needs a chat model that accepts images** — the
+  VLM extractor and the multimodal agent attach image parts to chat calls. There is no capability
+  check: a provider that rejects the image parts fails the call
+  (`multimodal_extraction_failed`, fallback to plain text extraction), and a provider that
+  accepts and silently ignores them (typical for text-only OpenAI-compatible servers) returns no
+  `image_memories` (`multimodal_visuals_missing`) — text memory keeps working, but there are no
+  descriptions or visual facts. When image results look empty, check these log events first.
+
 Enhanced details:
 
 - **VLM extraction** uses the same number of chat calls as vanilla (the chat model must accept
@@ -263,6 +282,7 @@ Enhanced details:
 | `max_visual_facts_per_image` | `30` | Enhanced: visual facts kept per image (newest first). |
 | `extraction_image_detail` | `auto` | Enhanced: image detail for VLM extraction (`auto`, `low`, `high`). |
 | `max_extraction_images` | `6` | Enhanced: maximum images in one extraction call; a chunk with more also makes visual-only calls (this many images each) for the rest. |
+| `max_concurrent_vlm_calls` | `8` | Enhanced: VLM extraction calls in flight across the whole process (main and visual-only, every add); bounds endpoint load under bursts of image-heavy adds. `0` disables the cap. |
 | `agentic_max_steps` | `4` | Enhanced: tool calls in agentic retrieval before it must submit. |
 
 Deleting memory: archived memories are never recalled through images. Deleting a user's or a
@@ -272,20 +292,31 @@ project reset also deletes the project's blobs.
 
 ## `mm_embed_model_router` — multimodal embedding
 
-Same shape as the other routers. Each endpoint must encode text and images into one vector space.
+Same shape as the other routers, and like them requests route through a shared
+`litellm.Router`: retries, cooldowns and endpoint failover are litellm's. Each endpoint must
+encode text and images into one vector space; images ride the Jina-style extension of the
+OpenAI embeddings API (`input` items `{"image": "<data URI or URL>"}`), which litellm passes
+through to `openai/`-compatible endpoints verbatim.
 
 | Field | Default | Description |
 |---|---|---|
-| `model` | — | Model name sent to the endpoint. |
-| `api_base` | — | Base URL; the protocol appends its path (`/embeddings`). |
+| `model` | — | LiteLLM model identifier with a provider prefix, e.g. `openai/siglip2-base-patch16-384`; litellm strips the prefix on the wire. |
+| `api_base` | — | Base URL; litellm appends the embeddings path (`/embeddings`). |
 | `api_key` | `null` | Bearer token (optional for local endpoints). |
 | `dimensions` | — | Required. Sizes the `image` vector of `database.qdrant.image_collection` and is checked at startup. |
-| `protocol` | `openai` | Wire format. `openai`: `POST /embeddings` with `input` = strings, or `[{"image": "<data URI or URL>"}]`. |
-| `image_transport` | `base64` | `base64` data URIs, or `url` to send the original URL when an image came from one. |
-| `timeout` / `num_retries` / `max_batch_size` | `60` / `3` / `16` | Per-request timeout, retries before trying the next endpoint, inputs per request. |
+| `image_transport` | `base64` | `base64` data URIs, or `url` to send the original URL when an image came from one. Shared by all endpoints. |
+| `timeout` / `num_retries` / `max_batch_size` | `60` / `3` / `16` | Per-request timeout, retries, inputs per request. Retries/failover across endpoints are litellm's; `max_batch_size` is shared. |
+| `rpm` / `tpm` | `null` | Optional LiteLLM rate limits per endpoint. |
 | `extra_body` | `{}` | Extra request body fields. |
+| `routing_strategy` / `allowed_fails` / `cool_down` / `retry_after` | `simple-shuffle` / `null` / `null` / `0` | Router-level LiteLLM routing fields, as on the other routers. |
+| `dimensions_supported_models` | `[]` | Model name prefixes (provider prefix stripped) allowed to receive `dimensions` on the wire; litellm otherwise drops it for any openai-compatible model whose name lacks `text-embedding-3` (list `siglip2` to keep it). |
 
-With no endpoints, multimodal modes only store images. At startup the server embeds one probe text:
+For local development `scripts/mm_embed_server.py` serves SigLIP2 (`siglip2-base-patch16-384`,
+768 dimensions) behind this contract on `http://127.0.0.1:8090/v1` — see its docstring for the
+run command (`uv run --no-project --with torch --with transformers --with pillow ...`).
+
+With no endpoints, multimodal modes only store images (a startup warning fires when the *global*
+mode is not `off`; see the degradation log events above). At startup the server embeds one probe text:
 a dimension mismatch (endpoint vs `dimensions` vs an existing image collection) stops startup; an
 unreachable endpoint only logs a warning. Changing the model requires a new `image_collection`.
 
@@ -298,17 +329,36 @@ existing image collection has no `text` vector of that size (created by an older
 
 | Field | Default | Description |
 |---|---|---|
-| `backend` | `local` | Storage backend (the `BlobStore` interface is ready for object storage). |
+| `backend` | `local` | Storage backend: `local` or `s3` (any S3-compatible endpoint: MinIO, OSS S3 gateway, R2). |
 | `local_root` | `data/blobs` | Directory of the local backend; relative to the repository root. |
+| `s3_endpoint` | *(required for s3)* | Endpoint URL with scheme, e.g. `http://localhost:9100`; `https://` enables TLS. |
+| `s3_region` | `us-east-1` | Bucket region/location; required non-empty with `backend: s3` (an empty region fails validation — it would make presigning do a live location lookup). Baked into every presigned URL; also used when creating the bucket. |
+| `s3_bucket` | *(required for s3)* | Bucket name; created lazily on first use if missing. |
+| `s3_access_key` | *(required for s3)* | Access key (env: `MINDMEMOS_S3_ACCESS_KEY`). |
+| `s3_secret_key` | *(required for s3)* | Secret key (env: `MINDMEMOS_S3_SECRET_KEY`). |
+| `s3_public_base_url` | *(none)* | Optional public mirror (CDN) for the bucket; when set, image search hits carry permanent `base/bucket/<key>` URLs instead of short-lived presigned ones. |
+| `s3_presign_endpoint` | *(none)* | External address baked into the short-lived presigned URLs of `POST /v1/memory/search` hits; unset signs against `s3_endpoint` (env: `MINDMEMOS_S3_PRESIGN_ENDPOINT`). |
+| `s3_presign_expiry_seconds` | `3600` | Presigned URL lifetime, `1..604800` seconds (env: `MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS`). |
 | `max_image_bytes` | `20971520` | Larger images are rejected. |
-| `allowed_path_roots` | `[]` | Directories `ImageRef.path` may point into; empty disables path inputs. |
+| `allowed_path_roots` | `[]` | Directories `ImageRef.path` may point into; empty disables path inputs. Roots are not project-scoped: in multi-project deployments every project can read images under them. |
 | `url_fetch_enabled` | `true` | Download `ImageRef.url` inputs. |
 | `url_fetch_timeout` | `20.0` | Download timeout in seconds. |
-| `url_allow_private_hosts` | `false` | Allow URLs resolving to private/loopback addresses (SSRF guard; DNS rebinding is not covered). |
+| `url_allow_private_hosts` | `false` | Allow URLs resolving to private/loopback addresses (SSRF guard). Hosts are resolved once and the connection is dialed to the resolved IP, so DNS rebinding cannot bypass the check. |
 
 Images are deduplicated by SHA-256 per project (blob store) and per project+user (image
 collection). Only PNG, JPEG, GIF, WebP and BMP are accepted (checked by content, not extension).
-Stored images are readable by the project's keys at `GET /v1/memory/images/{blob_id}`.
+Stored images are readable by the project's keys at `GET /v1/memory/images/{blob_id}?user_id=<owner>`;
+the server verifies the declared owner against the image records, so another user's blob id 404s.
+On the `s3` backend, search hits instead carry `metadata.image_url` — a presigned GET link (signed
+locally, no store I/O) that downloads the bytes directly from MinIO without transiting this API;
+the proxy route above remains as the fallback when the backend cannot sign (e.g. `local`).
+
+The `s3` backend needs the `s3` extra (`pip install mindmemos[s3]`; the dev workspace already
+includes it). Object keys mirror the local layout (`<namespace-prefix>/<id[:2]>/<id>`); the MIME
+type rides on the object's content-type. For local development `make dev` / `make db` also start MinIO (`make dev-blobs` starts it alone) on
+port 9100 (ClickHouse native claims 9000) with credentials taken from the same `MINDMEMOS_S3_*`
+environment variables. All `s3_*` fields except `s3_region` can be set via environment
+(`MINDMEMOS_S3_ENDPOINT/BUCKET/ACCESS_KEY/SECRET_KEY/PUBLIC_BASE_URL/PRESIGN_ENDPOINT/PRESIGN_EXPIRY_SECONDS`).
 
 ## Validation
 

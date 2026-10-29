@@ -36,9 +36,11 @@ class FakeImageRepository:
             if payload["project_id"] == project_id and (filter_ is None or _matches(filter_, payload))
         ]
 
-    async def delete_many(self, image_ids):
+    async def delete_many(self, project_id, image_ids):
         for image_id in image_ids:
-            self.points.pop(image_id, None)
+            payload = self.points.get(image_id)
+            if payload is not None and payload["project_id"] == project_id:
+                self.points.pop(image_id)
 
     async def count(self, project_id, *, filter_=None):
         return len(await self.list_all(project_id, filter_=filter_))

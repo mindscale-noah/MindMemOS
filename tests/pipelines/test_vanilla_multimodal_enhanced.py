@@ -3,6 +3,7 @@ search, image-recalled facts, evidence images, agentic refine."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -159,7 +160,7 @@ def _record(blob: str, memory_ids=(), description=None, facts=()) -> ImageRecord
         project_id="p",
         user_id="u",
         created_at=NOW,
-        updated_at=NOW,
+        update_at=NOW,
         description=description,
         visual_facts=list(facts),
         anchored_memory_ids=list(memory_ids),
@@ -269,6 +270,21 @@ async def test_enhanced_search_returns_anchored_images_and_image_recalled_facts(
     assert images[1].memory == "[image] Ethos Water ad"
 
 
+@pytest.mark.asyncio
+async def test_query_text_vector_cache_is_cleared_after_the_search() -> None:
+    # One benchmark runner task runs every search of a suite in the same context; the cache
+    # set by search_candidates must die with the search instead of accumulating vectors.
+    from mindmemos.pipelines.search.vanilla_multimodal import engine as engine_module
+
+    engine = _engine(FakeReader([_view("m1", "The sofa is green velvet.")]), [])
+    engine_module._QUERY_TEXT_VECTORS.set({"stale": [0.1]})
+    inp = SearchPipelineInput(query="Ethos ad background", search_pipeline="vanilla", multimodal=True)
+
+    await engine.augment_results(inp, CTX, [_item("m1", "The sofa is green velvet.")])
+
+    assert engine_module._QUERY_TEXT_VECTORS.get() is None
+
+
 def test_request_local_image_labels_never_reach_memory() -> None:
     from mindmemos.components.multimodal.extraction import strip_labels
 
@@ -305,10 +321,19 @@ async def test_agentic_refine_puts_submitted_evidence_first_and_falls_back_on_fa
     assert [o.id for o in out if o.memory_type != "image"] == ["m2", "m1"]
     assert [o.metadata["blob_id"] for o in out if o.memory_type == "image"] == [ad]
     assert "Images found" in json.dumps(llm.seen[1][-1]["content"])
+    from mindmemos.pipelines.search.vanilla_multimodal import engine as engine_module
+
+    engine_module._QUERY_TEXT_VECTORS.set({"stale": [0.1]})
+    assert await engine.agentic_refine(
+        SearchPipelineInput(query="Ethos background?", search_pipeline="vanilla", multimodal=True), CTX, fast
+    )
+    assert engine_module._QUERY_TEXT_VECTORS.get() is None  # the agent is the cache's last consumer
 
     broken = _engine(FakeReader([]), hits, llm=ScriptedLlm([]))
     inp = SearchPipelineInput(query="q", search_pipeline="vanilla", multimodal=True)
+    engine_module._QUERY_TEXT_VECTORS.set({"stale": [0.1]})
     assert await broken.agentic_refine(inp, CTX, fast) == fast
+    assert engine_module._QUERY_TEXT_VECTORS.get() is None  # cleared even on the fallback path
 
 
 @pytest.mark.asyncio
@@ -386,7 +411,9 @@ async def test_text_channel_finds_images_by_their_visual_facts() -> None:
     engine._explicit_embed_client = embed
 
     hits = await engine.image_hits(
-        SearchPipelineInput(query="Ethos ad colour", search_pipeline="vanilla", multimodal=True), CTX, engine._config()
+        SearchPipelineInput(query="Ethos ad colour", search_pipeline="vanilla", multimodal=True),
+        CTX,
+        engine.multimodal_config(),
     )
 
     assert [h.record.blob_id for h in hits.ranked] == [ad, other]
@@ -636,3 +663,110 @@ async def test_images_beyond_the_call_limit_get_a_visual_only_call() -> None:
     sofa_fact, pasta_fact = result.memories
     assert sofa_fact.metadata[IMAGE_BLOB_IDS_KEY] == [sofa, lamp]
     assert pasta_fact.metadata[IMAGE_BLOB_IDS_KEY] == [pasta]
+
+
+@pytest.mark.asyncio
+async def test_overflow_calls_share_the_process_wide_vlm_cap() -> None:
+    class CountingVlm:
+        def __init__(self):
+            self.in_flight = 0
+            self.peak = 0
+
+        async def chat(self, *, task, messages, format_parser=None, **kwargs):
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            await asyncio.sleep(0.02)
+            self.in_flight -= 1
+            return SimpleNamespace(parsed={"memories": [], "image_memories": []}, content="{}")
+
+    vlm = CountingVlm()
+    inner = FakeInner()
+    images = RequestImages(
+        by_message={
+            0: [ExtractionImage(f"{k:064d}", "image/png", b"\x89PNG") for k in range(3)],
+            1: [ExtractionImage(f"{k:064d}", "image/png", b"\x89PNG") for k in range(3, 5)],
+            2: [ExtractionImage(f"{k:064d}", "image/png", b"\x89PNG") for k in range(5, 7)],
+        },
+        max_images=2,
+        max_concurrent_vlm_calls=2,
+    )
+
+    with request_images(images):
+        envelope = _envelope()
+        await MultimodalMemoryExtractor(inner, llm_client=vlm).extract_from_envelope(
+            envelope, _preprocessed(envelope), CTX
+        )
+
+    assert inner.calls == 0  # the VLM path ran, not the vanilla fallback
+    assert vlm.peak <= 2  # 1 main + 3 visual-only calls, never more than the cap in flight
+
+
+@pytest.mark.asyncio
+async def test_query_text_vector_cache_is_cleared_when_candidate_search_fails(monkeypatch) -> None:
+    # A candidate search that dies between setting the cache and its consumers must not
+    # leave the holder behind for whatever runs next in this context.
+    from mindmemos.pipelines.search import vanilla as vanilla_module
+    from mindmemos.pipelines.search.vanilla_multimodal import engine as engine_module
+
+    async def boom(self, inp, context, *, options=None):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(vanilla_module.VanillaSearchEngine, "search_candidates", boom)
+    engine = _engine(FakeReader([]), [])
+    inp = SearchPipelineInput(query="Ethos ad", search_pipeline="vanilla", multimodal=True)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        await engine.search_candidates(inp, CTX)
+
+    assert engine_module._QUERY_TEXT_VECTORS.get() is None
+
+
+@pytest.mark.asyncio
+async def test_agentic_step_budget_forces_submit_and_keeps_the_fast_result() -> None:
+    never = ScriptedLlm(['{"tool": "search_images", "args": {"query": "again"}}'] * 6)
+    hits = [ImageSearchHit(record=_record("d" * 64, description="Ethos Water ad"), score=0.25)]
+    engine = _engine(FakeReader([]), hits, llm=never, agentic_max_steps=2)
+    fast = [_item("m1", "sofa fact")]
+
+    out = await engine.agentic_refine(
+        SearchPipelineInput(query="Ethos background?", search_pipeline="vanilla", multimodal=True), CTX, fast
+    )
+
+    assert out == fast  # never submitted: the fast result is the answer
+    assert len(never.seen) == 3  # two tool turns, then the forced-submit turn
+    assert "Tool budget used up" in never.seen[2][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_agentic_view_images_returns_the_pixels_to_the_vlm() -> None:
+    import base64
+
+    ad = "d" * 64
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    hits = [ImageSearchHit(record=_record(ad, description="Ethos Water ad"), score=0.25)]
+    llm = ScriptedLlm(
+        [
+            '{"tool": "view_images", "args": {"images": ["I1"]}}',
+            '{"tool": "submit", "args": {"facts": [], "images": ["I1"]}}',
+        ]
+    )
+    engine = _engine(FakeReader([]), hits, llm=llm)
+
+    class Blobs:
+        async def get(self, namespace, blob_id):
+            return (StoredBlob(blob_id=blob_id, mime_type="image/png", size_bytes=len(png)), png)
+
+    engine._blob_store = Blobs()
+
+    out = await engine.agentic_refine(
+        SearchPipelineInput(query="Ethos background?", search_pipeline="vanilla", multimodal=True),
+        CTX,
+        [_to_search_item(hits[0])],
+    )
+
+    observation = llm.seen[1][-1]["content"]  # the view_images observation of the submit turn
+    texts = [part["text"] for part in observation if part.get("type") == "text"]
+    shown = [part for part in observation if part.get("type") == "image_url"]
+    assert any("Requested images" in text for text in texts)
+    assert [part["image_url"]["url"] for part in shown] == [f"data:image/png;base64,{base64.b64encode(png).decode()}"]
+    assert [o.metadata["blob_id"] for o in out if o.memory_type == "image"] == [ad]

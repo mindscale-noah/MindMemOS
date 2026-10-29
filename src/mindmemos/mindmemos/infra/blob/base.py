@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 _BLOB_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,14 @@ class BlobStore(Protocol):
         """Return a URL third parties can fetch (object storage); None for private backends."""
         ...
 
+    def presigned_get(self, namespace: str, blob_id: str, *, expires_seconds: int = 3600) -> str | None:
+        """Return a short-lived signed download URL, or None when the backend cannot sign one.
+
+        Signing is a local computation (no store I/O) and must never raise; callers fall back
+        to the authenticated proxy route when None comes back.
+        """
+        ...
+
 
 def blob_id_for(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -56,3 +65,12 @@ def blob_id_for(data: bytes) -> str:
 
 def is_valid_blob_id(blob_id: str) -> bool:
     return bool(_BLOB_ID_RE.match(blob_id or ""))
+
+
+def namespace_prefix(namespace: str) -> str:
+    """Readable, collision-free, traversal-safe prefix for a namespace (directory or object key)."""
+
+    if not namespace:
+        raise ValueError("blob namespace must not be empty")
+    digest = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:12]
+    return f"{_UNSAFE.sub('_', namespace)[:64]}-{digest}"

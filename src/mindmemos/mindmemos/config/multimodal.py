@@ -4,11 +4,8 @@ from dataclasses import dataclass, field
 
 from .base import secret_field
 
-MM_EMBED_PROTOCOLS = frozenset({"openai"})
-"""Wire protocols implemented by ``mindmemos.llm.mm_embedding`` adapters."""
-
 MM_IMAGE_TRANSPORTS = frozenset({"base64", "url"})
-BLOB_STORE_BACKENDS = frozenset({"local"})
+BLOB_STORE_BACKENDS = frozenset({"local", "s3"})
 
 
 @dataclass
@@ -16,19 +13,17 @@ class MmEmbedEndpointConfig:
     """One multimodal embedding endpoint: text and images are encoded into one vector space."""
 
     model: str
-    """Model name sent to the endpoint."""
+    """LiteLLM model identifier with a provider prefix, e.g. ``openai/siglip2-base-patch16-384``;
+    litellm strips the prefix on the wire, so the endpoint sees the bare model name."""
 
     api_base: str
-    """Endpoint base URL, e.g. ``http://127.0.0.1:8090/v1``; the protocol appends its path."""
+    """Endpoint base URL, e.g. ``http://127.0.0.1:8090/v1``; litellm appends the embeddings path."""
 
     api_key: str | None = secret_field(default=None)
     """Bearer token; may be empty for a local endpoint."""
 
     dimensions: int | None = None
     """Vector dimension; sizes the Qdrant image collection and is checked at startup."""
-
-    protocol: str = "openai"
-    """Wire protocol adapter, one of ``MM_EMBED_PROTOCOLS``."""
 
     image_transport: str = "base64"
     """How images are sent: ``base64`` data URIs, or ``url`` when the image has a public URL."""
@@ -37,10 +32,16 @@ class MmEmbedEndpointConfig:
     """Per-request timeout in seconds."""
 
     num_retries: int = 3
-    """Retries for transient failures before failing over to the next endpoint."""
+    """Retries for transient failures before failing over to the next endpoint (LiteLLM field)."""
 
     max_batch_size: int = 16
-    """Maximum inputs per request; larger batches are split."""
+    """Maximum inputs per request; larger batches are split. Shared by all endpoints."""
+
+    rpm: int | None = None
+    """Allowed requests per minute (LiteLLM field)."""
+
+    tpm: int | None = None
+    """Allowed tokens per minute (LiteLLM field)."""
 
     extra_body: dict = field(default_factory=dict)
     """Extra request body fields passed through to the endpoint."""
@@ -49,7 +50,25 @@ class MmEmbedEndpointConfig:
 @dataclass
 class MmEmbedRouterConfig:
     endpoints: list[MmEmbedEndpointConfig] = field(default_factory=list)
-    """Endpoints tried in order; an empty list disables image embedding (images are stored only)."""
+    """Endpoint deployments behind one LiteLLM alias; an empty list disables image
+    embedding (images are stored only)."""
+
+    routing_strategy: str = "simple-shuffle"
+    """Routing strategy across deployments, matching the other model routers."""
+
+    allowed_fails: int | None = None
+    """Cooldown a deployment after this many consecutive failures (LiteLLM field)."""
+
+    cool_down: int | float | None = None
+    """Cooldown window in seconds for a failed deployment (LiteLLM field)."""
+
+    retry_after: int | float = 0
+    """Minimum delay in seconds before LiteLLM retries a failed endpoint."""
+
+    dimensions_supported_models: list[str] = field(default_factory=list)
+    """Model name prefixes (provider prefix stripped) allowed to receive the ``dimensions``
+    request param. litellm otherwise drops ``dimensions`` for any openai-compatible model
+    whose name lacks the literal ``text-embedding-3``; list ``siglip2`` here to keep it."""
 
 
 @dataclass
@@ -57,10 +76,36 @@ class BlobStoreConfig:
     """Where raw images are kept and which image sources the server may read."""
 
     backend: str = "local"
-    """Storage backend, one of ``BLOB_STORE_BACKENDS``; the interface is ready for object storage."""
+    """Storage backend, one of ``BLOB_STORE_BACKENDS``; ``s3`` needs the ``s3`` extra (minio client)."""
 
     local_root: str = "data/blobs"
     """Root directory of the local backend; relative paths resolve against the repository root."""
+
+    s3_endpoint: str = ""
+    """S3-compatible endpoint as an ``http://`` or ``https://`` URL (the scheme decides TLS), e.g. ``http://localhost:9100``."""
+
+    s3_region: str = "us-east-1"
+    """S3 region/location used when creating the bucket."""
+
+    s3_bucket: str = ""
+    """S3 bucket name; created automatically when missing."""
+
+    s3_access_key: str | None = secret_field(default=None)
+    """S3 access key; required for the ``s3`` backend (every request is signed)."""
+
+    s3_secret_key: str | None = secret_field(default=None)
+    """S3 secret key; required for the ``s3`` backend (every request is signed)."""
+
+    s3_public_base_url: str | None = None
+    """Base URL of a public path-style mirror (e.g. a CDN); enables ``BlobStore.public_url``."""
+
+    s3_presign_endpoint: str | None = None
+    """Endpoint baked into presigned image URLs when clients cannot reach ``s3_endpoint``
+    (e.g. the server uses an internal MinIO address but clients fetch from a public gateway).
+    Unset signs against ``s3_endpoint`` itself."""
+
+    s3_presign_expiry_seconds: int = 3600
+    """Validity window of presigned image URLs returned in search results (1..604800 seconds)."""
 
     max_image_bytes: int = 20 * 1024 * 1024
     """Images larger than this are rejected."""

@@ -22,6 +22,10 @@ type MemoryHit = {
   last_update_at?: string | null;
   event_time?: string | null;
   source_timestamp?: string | null;
+  metadata?: {
+    image_url?: string;
+    [key: string]: unknown;
+  };
 };
 
 type MemorySearchResult = {
@@ -334,15 +338,22 @@ function computeSkillContentHash(content: string): string {
 }
 
 function formatMemoryContext(memories: MemoryHit[], userId: string | undefined, isSubagent: boolean): string {
+  let hasImage = false;
   const lines = memories
     .map((hit, index) => {
       const text = typeof hit.memory === "string" ? hit.memory.trim() : "";
-      if (!text) {
+      const imageUrl =
+        typeof hit.metadata?.image_url === "string" && hit.metadata.image_url
+          ? hit.metadata.image_url
+          : undefined;
+      if (!text && !imageUrl) {
         return null;
       }
+      hasImage = hasImage || Boolean(imageUrl);
       const label = hit.id ? `${index + 1}. [${hit.id}]` : `${index + 1}.`;
       const when = hit.last_update_at ?? hit.event_time ?? hit.source_timestamp;
-      return when ? `${label} ${text} (${when})` : `${label} ${text}`;
+      const body = [text || "[image memory]", imageUrl ? `<image: ${imageUrl}>` : ""].filter(Boolean).join(" ");
+      return when ? `${label} ${body} (${when})` : `${label} ${body}`;
     })
     .filter((line): line is string => line !== null);
 
@@ -350,7 +361,10 @@ function formatMemoryContext(memories: MemoryHit[], userId: string | undefined, 
     return "";
   }
   const preamble = buildPreamble(userId, isSubagent);
-  return [MEMORY_CONTEXT_OPEN, preamble, ...lines, MEMORY_CONTEXT_CLOSE].join("\n");
+  const imageHint = hasImage
+    ? "(<image: …> URLs point at the stored images; presigned links are directly fetchable; proxy paths are relative to the MindMemOS API base and need the project's API token)"
+    : "";
+  return [MEMORY_CONTEXT_OPEN, preamble, imageHint, ...lines, MEMORY_CONTEXT_CLOSE].filter(Boolean).join("\n");
 }
 
 /**

@@ -32,3 +32,8 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = "."
+
+# optional extras live at the end on purpose: develop added [project.scripts] right after
+# [project.dependencies], and a section there would textually conflict on every merge
+[project.optional-dependencies]
+s3 = ["minio>=7.2.15"]

@@ -1,98 +1,129 @@
-import json
+from types import SimpleNamespace
 
-import httpx
 import pytest
-from mindmemos.config import MmEmbedEndpointConfig, MmEmbedRouterConfig
+from mindmemos.config import MmEmbedEndpointConfig, MmEmbedRouterConfig, build
 from mindmemos.errors import EmbeddingDimensionError
-from mindmemos.llm.mm_embedding import ImageInput, MmEmbedClient, MmEmbedError
+from mindmemos.llm.mm_embedding import ImageInput, MmEmbedClient, MmEmbedError, _placeholder_key
 
 
-def _router(*endpoints: dict) -> MmEmbedRouterConfig:
+def _router_cfg(*endpoints: dict) -> MmEmbedRouterConfig:
     return MmEmbedRouterConfig(endpoints=[MmEmbedEndpointConfig(**ep) for ep in endpoints])
 
 
-def _ok(request: httpx.Request, dims: int = 3) -> httpx.Response:
-    body = json.loads(request.content)
-    return httpx.Response(
-        200, json={"data": [{"index": i, "embedding": [float(i)] * dims} for i in range(len(body["input"]))]}
-    )
+class _FakeRouter:
+    """Records aembedding calls; returns N vectors of the given dimension."""
+
+    def __init__(self, *, dims: int = 3, fail: Exception | None = None) -> None:
+        self.calls: list[dict] = []
+        self._dims = dims
+        self._fail = fail
+
+    async def aembedding(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._fail is not None:
+            raise self._fail
+        data = [
+            {"object": "embedding", "index": i, "embedding": [float(i)] * self._dims}
+            for i in range(len(kwargs["input"]))
+        ]
+        return SimpleNamespace(data=data)
 
 
 @pytest.mark.asyncio
-async def test_openai_protocol_request_shapes_and_batching() -> None:
-    seen = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append((str(request.url), request.headers.get("authorization"), json.loads(request.content)))
-        return _ok(request)
-
+async def test_request_shapes_and_batching() -> None:
+    router = _FakeRouter()
     client = MmEmbedClient(
-        _router({"model": "siglip", "api_base": "http://mm/v1/", "api_key": "k", "dimensions": 3, "max_batch_size": 2}),
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        _router_cfg(
+            {
+                "model": "openai/siglip",
+                "api_base": "http://mm/v1/",
+                "api_key": "k",
+                "dimensions": 3,
+                "max_batch_size": 2,
+            }
+        ),
+        router=router,
     )
     vectors = await client.embed_texts(["a", "b", "c"])
     await client.embed_images([ImageInput(data=b"\x89PNG", mime_type="image/png")])
 
     assert len(vectors) == 3
-    assert [s[0] for s in seen] == ["http://mm/v1/embeddings"] * 3
-    assert seen[0][1] == "Bearer k"
-    assert seen[0][2] == {"model": "siglip", "input": ["a", "b"], "encoding_format": "float", "dimensions": 3}
-    assert seen[2][2]["input"] == [{"image": "data:image/png;base64,iVBORw=="}]
+    assert [call["model"] for call in router.calls] == ["mm_embedding"] * 3
+    assert router.calls[0]["input"] == ["a", "b"]
+    assert router.calls[1]["input"] == ["c"]
+    assert router.calls[0]["encoding_format"] == "float"
+    assert router.calls[2]["input"] == [{"image": "data:image/png;base64,iVBORw=="}]
 
 
 @pytest.mark.asyncio
 async def test_url_transport_sends_known_urls() -> None:
-    bodies = []
-
-    def handler(request):
-        bodies.append(json.loads(request.content))
-        return _ok(request)
-
+    router = _FakeRouter()
     client = MmEmbedClient(
-        _router({"model": "m", "api_base": "http://mm", "dimensions": 3, "image_transport": "url"}),
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        _router_cfg({"model": "openai/m", "api_base": "http://mm", "dimensions": 3, "image_transport": "url"}),
+        router=router,
     )
     await client.embed_images([ImageInput(data=b"x", url="https://cdn/x.png"), ImageInput(data=b"y")])
-    assert bodies[0]["input"] == [{"image": "https://cdn/x.png"}, {"image": "data:image/png;base64,eQ=="}]
+    assert router.calls[0]["input"] == [{"image": "https://cdn/x.png"}, {"image": "data:image/png;base64,eQ=="}]
 
 
 @pytest.mark.asyncio
-async def test_retries_then_fails_over_to_the_next_endpoint(monkeypatch) -> None:
-    monkeypatch.setattr("mindmemos.llm.mm_embedding.asyncio.sleep", _no_sleep)
-    calls = []
-
-    def handler(request):
-        calls.append(request.url.host)
-        if request.url.host == "bad":
-            return httpx.Response(503, text="busy")
-        return _ok(request)
-
+async def test_provider_failure_maps_to_mm_embed_error() -> None:
     client = MmEmbedClient(
-        _router(
-            {"model": "m", "api_base": "http://bad", "dimensions": 3, "num_retries": 1},
-            {"model": "m", "api_base": "http://good", "dimensions": 3},
-        ),
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        _router_cfg({"model": "openai/m", "api_base": "http://mm", "dimensions": 3}),
+        router=_FakeRouter(fail=RuntimeError("HTTP 503: busy")),
     )
-    assert len(await client.embed_texts(["q"])) == 1
-    assert calls == ["bad", "bad", "good"]
+    with pytest.raises(MmEmbedError, match="busy"):
+        await client.embed_texts(["q"])
 
 
 @pytest.mark.asyncio
 async def test_errors_and_dimension_mismatch() -> None:
-    bad_request = MmEmbedClient(
-        _router({"model": "m", "api_base": "http://mm", "dimensions": 3}),
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(400, text="nope"))),
+    short_response = MmEmbedClient(
+        _router_cfg({"model": "openai/m", "api_base": "http://mm", "dimensions": 3}),
+        router=_FakeRouter(dims=3, fail=ValueError("expected 1 embeddings, got 0")),
     )
     with pytest.raises(MmEmbedError):
-        await bad_request.embed_texts(["q"])
+        await short_response.embed_texts(["q"])
     wrong_dims = MmEmbedClient(
-        _router({"model": "m", "api_base": "http://mm", "dimensions": 4}),
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(_ok)),
+        _router_cfg({"model": "openai/m", "api_base": "http://mm", "dimensions": 4}),
+        router=_FakeRouter(dims=3),
     )
     with pytest.raises(EmbeddingDimensionError):
         await wrong_dims.embed_texts(["q"])
 
 
-async def _no_sleep(_seconds):
-    return None
+@pytest.mark.asyncio
+async def test_empty_input_skips_the_router() -> None:
+    router = _FakeRouter()
+    client = MmEmbedClient(_router_cfg({"model": "openai/m", "api_base": "http://mm", "dimensions": 3}), router=router)
+    assert await client.embed_texts([]) == []
+    assert await client.embed_images([]) == []
+    assert router.calls == []
+
+
+def test_keyless_openai_endpoints_get_a_placeholder_key() -> None:
+    """litellm's openai provider builds an OpenAI SDK client that refuses a missing
+    api_key even for keyless local endpoints (e.g. the bundled mm_embed_server)."""
+
+    assert _placeholder_key(MmEmbedEndpointConfig(model="openai/siglip", api_base="http://mm")).api_key == "none"
+    assert (
+        _placeholder_key(MmEmbedEndpointConfig(model="openai/siglip", api_base="http://mm", api_key="real")).api_key
+        == "real"
+    )
+    # other providers keep their empty key: only openai/ is known to refuse it
+    assert _placeholder_key(MmEmbedEndpointConfig(model="jina/mm", api_base="http://mm")).api_key is None
+
+
+def test_omegaconf_backed_router_config_is_accepted() -> None:
+    """get_config hands out DictConfig nodes, not dataclasses; the client must not
+    crash on them (dataclasses.replace only works on dataclass instances)."""
+
+    cfg = build(
+        MmEmbedRouterConfig,
+        {"endpoints": [{"model": "openai/siglip", "api_base": "http://mm", "dimensions": 768}]},
+    )
+    client = MmEmbedClient(cfg)  # no router injected: builds the litellm Router for real
+
+    assert [ep.api_key for ep in client._endpoints] == ["none"]
+    assert client.dimensions == 768
+    assert client.model == "openai/siglip"

@@ -13,9 +13,10 @@ project dependencies, so run it with them added on the fly:
 
     uv run --no-project --with torch --with transformers --with pillow python scripts/mm_embed_server.py
 
-The model (~1.5 GB) is downloaded from Hugging Face on first start. Server config:
-``mm_embed_model_router.endpoints: [{model: siglip2-base-patch16-384, api_base: http://127.0.0.1:8090/v1,
-dimensions: 768, protocol: openai}]``.
+The model (~1.5 GB) is downloaded from Hugging Face on first start. Server config
+(requests route through litellm, which strips the provider prefix on the wire):
+``mm_embed_model_router.endpoints: [{model: openai/siglip2-base-patch16-384,
+api_base: http://127.0.0.1:8090/v1, dimensions: 768}]``.
 """
 
 from __future__ import annotations
@@ -93,17 +94,24 @@ def _load_image(ref: str):
     return Image.open(io.BytesIO(data)).convert("RGB")
 
 
-def make_handler(encoder: Siglip2, served_name: str):
+def make_handler(encoder: Siglip2, served_name: str, max_concurrent: int = 4):
+    # ThreadingHTTPServer spawns a thread per connection; without a cap a burst of requests
+    # (each decoding images in memory before queueing on the model lock) grows it unbounded.
+    # Over the cap the server answers 503 + Retry-After instead of falling behind.
+    limit = threading.Semaphore(max(1, max_concurrent))
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
         def log_message(self, fmt, *args):  # quiet default access log
             pass
 
-        def _send(self, status: int, payload: dict) -> None:
+        def _send(self, status: int, payload: dict, extra_headers: dict | None = None) -> None:
             body = json.dumps(payload).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
+            for key, value in (extra_headers or {}).items():
+                self.send_header(key, str(value))
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -118,6 +126,18 @@ def make_handler(encoder: Siglip2, served_name: str):
         def do_POST(self):
             if self.path not in ("/v1/embeddings", "/embeddings"):
                 return self._send(404, {"error": {"message": "not found"}})
+            if not limit.acquire(blocking=False):
+                return self._send(
+                    503,
+                    {"error": {"message": f"overloaded: {max(1, max_concurrent)} requests already running", "type": "overloaded"}},
+                    {"Retry-After": "2"},
+                )
+            try:
+                self._embed()
+            finally:
+                limit.release()
+
+        def _embed(self) -> None:
             started = time.perf_counter()
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
@@ -183,12 +203,19 @@ def main() -> None:
     parser.add_argument("--model", default=MODEL_ID)
     parser.add_argument("--served-name", default="siglip2-base-patch16-384")
     parser.add_argument("--device", default=os.environ.get("MM_EMBED_DEVICE", "auto"), help="auto, cuda, mps or cpu")
+    parser.add_argument(
+        "--max-concurrent", type=int, default=4, help="embedding requests served at once; further ones get 503"
+    )
     args = parser.parse_args()
     device = _device(args.device)
     encoder = Siglip2(args.model, device)
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(encoder, args.served_name))
+    server = ThreadingHTTPServer(
+        (args.host, args.port), make_handler(encoder, args.served_name, args.max_concurrent)
+    )
     print(
-        f"mm embed server: {args.served_name} ({encoder.dimensions}d, {device}) on {args.host}:{args.port}", flush=True
+        f"mm embed server: {args.served_name} ({encoder.dimensions}d, {device}, "
+        f"max {max(1, args.max_concurrent)} concurrent) on {args.host}:{args.port}",
+        flush=True,
     )
     server.serve_forever()
 

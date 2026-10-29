@@ -22,6 +22,12 @@ def has_images(inp: AddPipelineInput) -> bool:
     return any(isinstance(message, DialogueMessage) and message.images for message in inp.messages)
 
 
+def is_image_only_turn(message: object) -> bool:
+    """A dialogue turn carrying images and no text: dropped from the text-only input."""
+
+    return isinstance(message, DialogueMessage) and bool(message.images) and not message.content.strip()
+
+
 def without_images(inp: AddPipelineInput) -> AddPipelineInput:
     """The request exactly as a text-only client would have sent it.
 
@@ -31,7 +37,7 @@ def without_images(inp: AddPipelineInput) -> AddPipelineInput:
     messages = []
     for message in inp.messages:
         if isinstance(message, DialogueMessage) and message.images:
-            if not message.content.strip():
+            if is_image_only_turn(message):
                 continue
             message = message.model_copy(update={"images": []})
         messages.append(message)

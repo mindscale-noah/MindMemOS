@@ -92,6 +92,7 @@ mindmemos
 │   ├── add               Add a dialogue message as memory
 │   ├── search            Search memories
 │   ├── get               List / filter memories in the current project
+│   ├── get-image         Download a stored image by blob id
 │   ├── update            Update a memory's content
 │   ├── delete            Delete a memory
 │   ├── feedback          Submit explicit / implicit feedback
@@ -152,10 +153,19 @@ Async mode (returns a `request_id` immediately, without waiting for extraction):
 mindmemos memory add --content "I like iced Americanos." --async
 ```
 
+Attach an image to the `--content` message (local file or http(s) URL, repeatable; needs the server's multimodal mode):
+
+```bash
+mindmemos memory add --content "Look at this photo." --image ./photo.png
+```
+
+> `--image` attaches to the `--content` message only. For multi-message input, embed images inside `--messages-json` instead.
+
 Other options:
 
 | Option | Description |
 | :--- | :--- |
+| `--image` | Attach an image to the `--content` message (local file or http(s) URL); repeatable |
 | `--user-id` | Override the configured default user |
 | `--app-id` / `--agent-id` / `--session-id` | Context identifiers for scoping / filtering |
 | `--metadata-json` | Business metadata (JSON object) |
@@ -175,6 +185,12 @@ Added 1 memory item(s):
 mindmemos memory search "What kind of coffee does the user like?" --top-k 5
 ```
 
+Search by image (needs the server's multimodal mode):
+
+```bash
+mindmemos memory search "cats" --query-image ./query.png
+```
+
 Common options:
 
 | Option | Description |
@@ -184,8 +200,12 @@ Common options:
 | `--rerank` | Enable reranking |
 | `--score-threshold` | Rerank relevance threshold (0-1); only meaningful with `--rerank` |
 | `--filter` | Filter DSL (JSON object string) |
+| `--query-image` | Attach an image to the query (local file or http(s) URL); repeatable; implies `--multimodal` |
+| `--multimodal` | Also search stored images; needs the server's multimodal mode |
 | `--user-id` etc. | Override request context |
 | `--json` | Print the full result as JSON |
+
+Hits that reference a stored image print an extra `image: <url>` line — a short-lived presigned S3/MinIO link, or the authenticated proxy route (`/v1/memory/images/{blob_id}`) when the backend cannot sign. With `--json`, the URL is exposed as `metadata.image_url`, alongside `metadata.blob_id` and `metadata.user_id`; `blob_id` + `user_id` are exactly the inputs `memory get-image` (below) needs, so an expired link can always be re-downloaded through the API.
 
 ### 5.3 List and filter `get`
 
@@ -199,7 +219,20 @@ mindmemos memory get --top-k 20
 mindmemos memory get --filter '{"field":"value"}'
 ```
 
-### 5.4 Update and delete
+### 5.4 Download a stored image `get-image`
+
+Download an image returned by `memory search`. `--user-id` is required and is the image owner — `metadata.user_id` of the search hit, verified by the server:
+
+```bash
+mindmemos memory get-image <blob_id> --user-id u_123
+
+# Or write to an explicit path
+mindmemos memory get-image <blob_id> --user-id u_123 -o out.png
+```
+
+`blob_id` comes from the search hit's `metadata.blob_id`. The default output path is `./{blob_id}{extension by content type}`. Use this when the `image:` URL from a search has expired — presigned links are short-lived by design.
+
+### 5.5 Update and delete
 
 ```bash
 # Update a memory's content
@@ -209,7 +242,7 @@ mindmemos memory update <memory_id> --content "new content"
 mindmemos memory delete <memory_id> --yes
 ```
 
-### 5.5 Feedback `feedback`
+### 5.6 Feedback `feedback`
 
 By default this runs implicit feedback, letting the server analyze recent adds; pass `--text` for explicit feedback:
 
@@ -222,7 +255,7 @@ mindmemos memory feedback --text "This memory is inaccurate" \
   --messages-json '[{"role":"user","content":"..."}]'
 ```
 
-### 5.6 Dreaming `dreaming`
+### 5.7 Dreaming `dreaming`
 
 Trigger the dreaming pipeline, either synchronously or asynchronously:
 

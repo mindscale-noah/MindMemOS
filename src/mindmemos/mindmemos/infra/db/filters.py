@@ -155,6 +155,9 @@ IMAGE_PAYLOAD_INDEX_SCHEMA: tuple[PayloadIndexSpec, ...] = (
     PayloadIndexSpec(field_name="status", field_schema=qmodels.PayloadSchemaType.KEYWORD),
     PayloadIndexSpec(field_name="created_at", field_schema=qmodels.PayloadSchemaType.DATETIME),
     PayloadIndexSpec(field_name="event_time", field_schema=qmodels.PayloadSchemaType.DATETIME),
+    # Embedding-model provenance, like memory's mem_extract_version: lets a model swap
+    # find every image embedded with the old model without a full scan.
+    PayloadIndexSpec(field_name="embed_model", field_schema=qmodels.PayloadSchemaType.KEYWORD),
 )
 
 FILTERABLE_IMAGE_FIELDS: frozenset[str] = frozenset(

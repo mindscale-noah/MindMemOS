@@ -59,7 +59,7 @@
 ```bash
 git clone <MindMemOS 仓库地址> MindMemOS
 cd MindMemOS
-git checkout feat_multimodal
+git checkout develop   # 含多模态能力的分支；合入前可用 feat_multimodal_engineering
 make dev-setup        # uv sync + NLP 资源
 cp .env.example .env  # 数据库连接等环境变量
 ```
@@ -98,7 +98,7 @@ uv run --no-project --with torch --with transformers --with pillow \
 ```
 
 - 首次启动会从 Hugging Face 下载 `google/siglip2-base-patch16-384`（约 1.5 GB）。
-- 设备自动选择：CUDA → MPS → CPU；也可以用 `--device cpu` 指定。
+- 设备自动选择：CUDA → MPS → CPU；也可以用 `--device cpu` 指定。注意：Windows 上 PyPI 的 `torch` 轮子只有 CPU 版，`--with torch` 装不出 CUDA；GPU 机器请改用 `--torch-backend=cu128`（uv ≥ 0.7）或 `--with torch==2.9.1+cu128 --extra-index-url https://download.pytorch.org/whl/cu128`。CPU 也能跑，只是几千张图的 embedding 会慢一个数量级。
 - 检查服务是否正常：
 
   ```bash
@@ -124,11 +124,12 @@ cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
    ```yaml
    mm_embed_model_router:
      endpoints:
-       - model: siglip2-base-patch16-384
+       - model: openai/siglip2-base-patch16-384
          api_base: http://127.0.0.1:8090/v1
          dimensions: 768
-         protocol: openai
    ```
+
+   > `model` 是 LiteLLM 标识符，必须带 provider 前缀（`openai/...`，前缀不会发给服务）；不再有 `protocol` 字段——mm embedding 路由统一走 OpenAI 风格的 embeddings 协议。
 
 3. 允许服务端按路径读取数据集里的图片。评测以文件路径方式发送图片，这里必须写**绝对路径**，并且是软链接解析之后的真实路径：
 
@@ -206,9 +207,11 @@ uv run python scripts/run_multimodal_bench.py --benchmarks memgallery --configs 
 ## 8. 结果解读
 
 manifest 中的 `eval_result` 包含：
-- `metrics`：百分制总分、按任务（`per_task`）的分数，Mem-Gallery 另有按题型（`per_point`）的分数；
-- `cost`：客户端的写入和检索调用次数与延迟、作答器和 judge 的 token；
+- `metrics`：百分制总分、按任务（`per_task`）的分数，Mem-Gallery 另有按题型（`per_point`）的分数。另带 locomo 约定的汇总字段：`overall_accuracy`（0–1，MemEye 取 EM、Mem-Gallery 取 F1）、`total_questions`、`judge_runs_used` 和 locomo 命名的作答/judge token 字段，因此 `mindmemos_eval.memory.metrics` 汇总脚本可直接处理多模态 manifest；
+- `cost`：客户端的写入和检索调用次数与延迟、作答器和 judge 的 token（含 prompt/completion 拆分）；
 - `valid`：只要有作答或 judge 调用失败就为 false，这样的结果不可用。
+
+评测参数与其他 benchmark 共用同一套 runner 协议：检索默认参数（`top_k` / `rerank` / `search_strategy`）读 runner 配置和 CLI（`--top-k`、`--rerank` 等），profile/benchmark 的 `search_params` 可覆盖（本指南配置里固定 `top_k: 20`）；`--judge-runs N` 对每道 OPEN 题独立跑 N 次 judge 取平均（连续分数不做多数票）。
 
 **参考结果**（gpt-4.1-mini 作答和 judge，本地 SigLIP2，各 2 次均值；2026-10 测于 `feat_multimodal`）：
 

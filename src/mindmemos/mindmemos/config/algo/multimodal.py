@@ -79,5 +79,10 @@ class MultimodalConfig:
     """Enhanced: maximum images attached to one extraction call; a chunk with more images also makes
     visual-only calls (this many images each) for the rest."""
 
+    max_concurrent_vlm_calls: int = 8
+    """Enhanced: VLM extraction calls in flight at once across the whole process (main and
+    visual-only calls of every add). Concurrent requests each fan their overflow images out;
+    without a cap a burst of image-heavy adds stampedes the VLM endpoint. 0 disables the cap."""
+
     agentic_max_steps: int = 4
     """Enhanced: tool calls allowed in multimodal agentic retrieval before it must submit."""

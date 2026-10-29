@@ -36,7 +36,7 @@ class ImageRecord(BaseModel):
     user_id: str | None = None
     app_id: str | None = None
     created_at: datetime
-    updated_at: datetime
+    update_at: datetime
     event_time: datetime | None = None
     """Event time of the first occurrence."""
     embed_model: str | None = None

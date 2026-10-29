@@ -23,6 +23,14 @@ PRESERVE_ENV_VARS := \
 	MINDMEMOS_KAFKA_UI_PORT \
 	MINDMEMOS_KAFKA_EXPORTER_PORT \
 	MINDMEMOS_KAFKA_NUM_PARTITIONS \
+	MINDMEMOS_S3_ENDPOINT \
+	MINDMEMOS_S3_BUCKET \
+	MINDMEMOS_S3_ACCESS_KEY \
+	MINDMEMOS_S3_SECRET_KEY \
+	MINDMEMOS_S3_PUBLIC_BASE_URL \
+	MINDMEMOS_S3_PRESIGN_ENDPOINT \
+	MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS \
+	MINDMEMOS_MINIO_PORT \
 	MINDMEMOS_TELEMETRY_ENDPOINT \
 	MINDMEMOS_OTEL_HTTP_PORT \
 	MINDMEMOS_OTEL_GRPC_PORT \
@@ -66,7 +74,11 @@ export
 COMPOSE_ENV := $(if $(wildcard .env),--env-file .env,)
 COMPOSE := docker compose $(COMPOSE_ENV) -f dockers/docker-compose.memory.yml
 DEV_CORE_SERVICES := qdrant neo4j kafka kafka-ui kafka-exporter
-DB_OBSERVABILITY_SERVICES := $(DEV_CORE_SERVICES) clickhouse otel-collector grafana
+# MINIO=0 (or false/no/off) skips MinIO and its bucket bootstrap: `make dev MINIO=0`
+# for the pre-s3 layout (local blob backend, no MinIO container).
+MINIO ?= 1
+MINIO_SERVICES := $(if $(filter 0 false no off,$(MINIO)),,minio)
+DB_OBSERVABILITY_SERVICES := $(DEV_CORE_SERVICES) clickhouse otel-collector grafana $(MINIO_SERVICES)
 UV ?= $(shell command -v uv 2>/dev/null || printf uv)
 MINDMEMOS_GRAFANA_PORT ?= $(or $(MINDMEM_GRAFANA_PORT),$(MEMOS_GRAFANA_PORT),3000)
 MINDMEMOS_CLICKHOUSE_HTTP_PORT ?= $(or $(MINDMEM_CLICKHOUSE_HTTP_PORT),$(MEMOS_CLICKHOUSE_HTTP_PORT),8123)
@@ -83,6 +95,9 @@ MINDMEMOS_NEO4J_PASSWORD ?= $(or $(MINDMEM_NEO4J_PASSWORD),$(MEMOS_NEO4J_PASSWOR
 MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS ?= localhost:$(MINDMEMOS_KAFKA_PORT)
 MINDMEMOS_KAFKA_PORT ?= $(or $(MINDMEM_KAFKA_PORT),$(MEMOS_KAFKA_PORT),9092)
 MINDMEMOS_KAFKA_UI_PORT ?= $(or $(MINDMEM_KAFKA_UI_PORT),$(MEMOS_KAFKA_UI_PORT),8080)
+MINDMEMOS_S3_ENDPOINT ?= http://localhost:$(MINDMEMOS_MINIO_PORT)
+MINDMEMOS_S3_BUCKET ?= mindmemos-blobs
+MINDMEMOS_MINIO_PORT ?= 9100
 API_HOST ?= $(or $(MINDMEMOS_API_HOST),127.0.0.1)
 API_PORT ?= $(or $(MINDMEMOS_API_PORT),8000)
 API_RELOAD ?= 0
@@ -92,7 +107,7 @@ PROFILE_SECONDS ?= 60
 PROFILE_RATE ?= 100
 PROFILE_PID ?= $(PID)
 
-.PHONY: dev dev-setup hooks-install format lint dev-core api profile-api db db-observability db-clean dev-down
+.PHONY: dev dev-setup hooks-install format lint dev-core api profile-api db db-observability db-clean dev-blobs dev-down
 
 dev-setup:
 	$(UV) sync
@@ -142,15 +157,22 @@ dev-core:
 
 db-observability:
 	$(COMPOSE) up -d --wait $(DB_OBSERVABILITY_SERVICES)
+	$(if $(MINIO_SERVICES),$(COMPOSE) run --rm minio-init)
 	@echo "Grafana:    http://localhost:$(MINDMEMOS_GRAFANA_PORT) (dashboard: MindMemOS Observability)"
 	@echo "ClickHouse: http://localhost:$(MINDMEMOS_CLICKHOUSE_HTTP_PORT)"
 	@echo "Kafka:      $(MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS)"
 	@echo "Qdrant:     $(MINDMEMOS_QDRANT_URL)"
 	@echo "Neo4j:      $(MINDMEMOS_NEO4J_URI)"
 	@echo "OTel OTLP:  $(MINDMEMOS_TELEMETRY_ENDPOINT)"
+	$(if $(MINIO_SERVICES),@echo "MinIO:      $(MINDMEMOS_S3_ENDPOINT) (bucket: $(MINDMEMOS_S3_BUCKET))")
 
 db-clean:
 	$(COMPOSE) down -v
+
+dev-blobs:
+	$(COMPOSE) up -d --wait minio
+	$(COMPOSE) run --rm minio-init
+	@echo "MinIO:      $(MINDMEMOS_S3_ENDPOINT) (bucket: $(MINDMEMOS_S3_BUCKET))"
 
 dev-down:
 	$(COMPOSE) down

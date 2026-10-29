@@ -5,10 +5,14 @@
    same turns go without images (image-only turns are skipped), e.g. for a text-only baseline
    (vanilla with ``algo_config.multimodal.mode: off`` rejects images). Dataset captions are never sent.
 2. Retrieve: one ``memory.search`` per question (MCQ rotations share it), with the question images
-   when images are sent and ``search_params.multimodal`` passed through.
+   when images are sent and ``search_params.multimodal`` passed through. Search defaults
+   (``top_k`` / ``rerank`` / ``search_strategy``) come from the runner config (CLI ``--top-k`` /
+   ``--rerank`` / ``--search-strategy``) like every other benchmark; benchmark/profile
+   ``search_params`` still win over them.
 3. Answer: the shared VLM answerer (``answer.py``) sees the retrieved text, the returned images
    and the question images.
-4. Score: debiased MCQ EM over option rotations; OPEN BLEU-1 and the MemEye judge rubric.
+4. Score: debiased MCQ EM over option rotations; OPEN BLEU-1 and the MemEye judge rubric, the
+   judge run ``--judge-runs`` times per question with the scores averaged.
 
 Metrics are macro means over tasks (as the MemEye paper reports), plus micro means and client-side
 cost (call counts, latencies, answerer/judge tokens).
@@ -71,7 +75,7 @@ class MemEyeAdapter:
             bench_config=bench_config,
             args=args,
         )
-        result["metrics"] = _metrics(result.pop("per_task_results"))
+        result["metrics"] = _manifest_metrics(_metrics(result.pop("per_task_results")), result, headline="EM")
         _write_summary(result)
         logger.info("memeye_metrics %s", result["metrics"])
         return result
@@ -100,8 +104,16 @@ async def run_tasks(
     limit = bench_config.limit if bench_config.limit is not None else _option(args, "limit")
     if limit is not None:
         tasks = tasks[: int(limit)]
-    search = {"top_k": 20, "rerank": True, **dict(bench_config.search_params or {})}
-    strategy = search.pop("search_strategy", None) or search.pop("public_search_strategy", None) or "fast"
+    # Defaults come from the runner config (YAML ``runner:`` / CLI overrides) exactly like the
+    # other benchmarks; benchmark/profile search_params win over them.
+    search = {"top_k": runner.top_k, "rerank": runner.rerank, **dict(bench_config.search_params or {})}
+    strategy = (
+        search.pop("search_strategy", None)
+        or search.pop("public_search_strategy", None)
+        or ("agentic" if search.pop("agentic", None) is True else None)
+        or runner.search_strategy
+        or "fast"
+    )
     search["search_strategy"] = strategy if strategy in ("fast", "agentic") else "fast"
     run = run_cls(
         memory=memory,
@@ -115,6 +127,11 @@ async def run_tasks(
         encoder=ImageEncoder(memory, max_side=int(execution.get("image_max_side") or 1024)),
         qa_semaphore=asyncio.Semaphore(max(1, int(runner.max_qa_concurrency))),
         judge_semaphore=asyncio.Semaphore(max(1, int(runner.max_score_concurrency or 8))),
+        search_semaphore=(
+            asyncio.Semaphore(max(1, int(runner.max_search_concurrency))) if runner.max_search_concurrency else None
+        ),
+        judge_runs=max(1, int(runner.judge_runs)),
+        show_progress=runner.show_progress,
         output_dir=Path(raw.get("output_root") or "runs/mindmemos_eval") / ctx.identity.run_id / run_cls.bench,
     )
     run.output_dir.mkdir(parents=True, exist_ok=True)
@@ -131,6 +148,7 @@ async def run_tasks(
         # A run with failed answer or judge calls scores those questions as wrong: not comparable.
         "valid": not any(run.errors.values()),
         "cost": run.cost(),
+        "judge_runs": run.judge_runs,
         "per_task": {name: task["summary"] for name, task in per_task.items()},
         "output_dir": str(run.output_dir),
         "send_images": run.send_images,
@@ -144,14 +162,58 @@ def _write_summary(result: dict[str, Any]) -> None:
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False), "utf-8")
 
 
+def _manifest_metrics(metrics: dict[str, Any], result: dict[str, Any], *, headline: str) -> dict[str, Any]:
+    """Add the manifest fields every benchmark owes ``metrics.py`` and the reports consumers.
+
+    ``overall_accuracy`` follows the locomo convention (0-1 fraction) using the benchmark's
+    headline metric (MemEye ``EM``, Mem-Gallery ``F1``); the token/count fields mirror locomo's
+    names so the standard metrics collector fills its sheets from multimodal manifests too.
+    """
+
+    cost = result.get("cost") or {}
+    per_task = result.get("per_task") or {}
+    total = sum(
+        int(mode.get("n") or 0) for summary in per_task.values() for mode in summary.values() if isinstance(mode, dict)
+    )
+    headline_value = metrics.get(headline)
+    fields: dict[str, Any] = {
+        "overall_accuracy": None if headline_value is None else round(headline_value / 100, 6),
+        "total_questions": total,
+        "total": total,
+        "judge_runs_used": int(result.get("judge_runs") or 1),
+        "answer_llm_calls": cost.get("answer_calls"),
+        "answer_prompt_tokens": cost.get("answer_prompt_tokens"),
+        "answer_completion_tokens": cost.get("answer_completion_tokens"),
+        "answer_total_tokens": cost.get("answer_tokens"),
+        "judge_llm_calls": cost.get("judge_calls"),
+        "judge_prompt_tokens": cost.get("judge_prompt_tokens"),
+        "judge_completion_tokens": cost.get("judge_completion_tokens"),
+        "judge_total_tokens": cost.get("judge_tokens"),
+    }
+    return {**metrics, **{key: value for key, value in fields.items() if value is not None}}
+
+
 class _Run:
     bench = "memeye"
     """Prefix of the log keys (``<bench>_answer_failed`` etc.); the run scripts watch them."""
 
+    judge_runs = 1
+    search_semaphore: asyncio.Semaphore | None = None
+    show_progress = True
+
     def __init__(self, **kwargs: Any) -> None:
         self.__dict__.update(kwargs)
         self.timings: dict[str, list[float]] = {"add": [], "search": []}
-        self.tokens: dict[str, int] = {"answer_calls": 0, "answer_tokens": 0, "judge_calls": 0, "judge_tokens": 0}
+        self.tokens: dict[str, int] = {
+            "answer_calls": 0,
+            "answer_tokens": 0,
+            "answer_prompt_tokens": 0,
+            "answer_completion_tokens": 0,
+            "judge_calls": 0,
+            "judge_tokens": 0,
+            "judge_prompt_tokens": 0,
+            "judge_completion_tokens": 0,
+        }
         self.errors: dict[str, int] = {"answer": 0, "judge": 0}
 
     async def task(self, task: MemEyeTask) -> dict[str, Any]:
@@ -166,9 +228,10 @@ class _Run:
                             m, user_id=user_id, mode="sync", session_id=s.session_id
                         ),
                     )
-            logger.info(
-                "%s_build task=%s sessions=%d rounds=%d", self.bench, task.name, len(task.sessions), task.rounds
-            )
+            if self.show_progress:
+                logger.info(
+                    "%s_build task=%s sessions=%d rounds=%d", self.bench, task.name, len(task.sessions), task.rounds
+                )
         summary: dict[str, Any] = {"rounds": task.rounds}
         rows_by_mode: dict[str, list[dict[str, Any]]] = {}
         for mode, questions in task.questions.items():
@@ -179,7 +242,8 @@ class _Run:
             path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), "utf-8")
             summary[mode] = _phase_summary(mode, rows)
             rows_by_mode[mode] = rows
-            logger.info("%s_phase task=%s mode=%s %s", self.bench, task.name, mode, summary[mode])
+            if self.show_progress:
+                logger.info("%s_phase task=%s mode=%s %s", self.bench, task.name, mode, summary[mode])
         return {"summary": summary, "rows": rows_by_mode}
 
     def _session_messages(self, session: Session) -> list[DialogueMessage]:
@@ -201,14 +265,16 @@ class _Run:
         async with self.qa_semaphore:
             started = time.perf_counter()
             query_images = [ImageRef(path=str(path)) for path in q.images] if self.send_images else []
-            result = await self._timed(
-                "search",
-                lambda: self.memory.search(
-                    q.question,
-                    user_id=user_id,
-                    **self.search_params,
-                    **({"query_images": query_images} if query_images else {}),
-                ),
+            result = await self._gated_search(
+                lambda: self._timed(
+                    "search",
+                    lambda: self.memory.search(
+                        q.question,
+                        user_id=user_id,
+                        **self.search_params,
+                        **({"query_images": query_images} if query_images else {}),
+                    ),
+                )
             )
             search_ms = (time.perf_counter() - started) * 1000
             memories = list(result.memories)
@@ -286,24 +352,44 @@ class _Run:
             return "", attached
         self.tokens["answer_calls"] += 1
         self.tokens["answer_tokens"] += completion.total_tokens
+        self.tokens["answer_prompt_tokens"] += completion.prompt_tokens
+        self.tokens["answer_completion_tokens"] += completion.completion_tokens
         return completion.content, attached
 
     async def _judge(self, q: Question, pred: str) -> float | None:
+        """Mean of ``judge_runs`` independent judge scores (runner ``--judge-runs``).
+
+        Judge scores are continuous 0-1, so the analog of locomo's majority vote is the mean
+        over the N runs; the runs execute sequentially per question like locomo's.
+        """
+
         async with self.judge_semaphore:
-            for _ in range(3):
-                try:
-                    completion = await self.judge_llm.complete(
-                        self._judge_messages(q, pred), temperature=0.0, max_tokens=300
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("%s_judge_failed qid=%s error=%s", self.bench, q.question_id, str(exc)[:200])
-                    continue
-                self.tokens["judge_calls"] += 1
-                self.tokens["judge_tokens"] += completion.total_tokens
-                score = self._parse_judge(completion.content)
+            scores = []
+            for _ in range(self.judge_runs):
+                score = await self._judge_once(q, pred)
                 if score is not None:
-                    return score
-        self.errors["judge"] += 1
+                    scores.append(score)
+        if not scores:
+            self.errors["judge"] += 1
+            return None
+        return scores[0] if len(scores) == 1 else round(statistics.fmean(scores), 6)
+
+    async def _judge_once(self, q: Question, pred: str) -> float | None:
+        for _ in range(3):
+            try:
+                completion = await self.judge_llm.complete(
+                    self._judge_messages(q, pred), temperature=0.0, max_tokens=300
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("%s_judge_failed qid=%s error=%s", self.bench, q.question_id, str(exc)[:200])
+                continue
+            self.tokens["judge_calls"] += 1
+            self.tokens["judge_tokens"] += completion.total_tokens
+            self.tokens["judge_prompt_tokens"] += completion.prompt_tokens
+            self.tokens["judge_completion_tokens"] += completion.completion_tokens
+            score = self._parse_judge(completion.content)
+            if score is not None:
+                return score
         return None
 
     def _judge_messages(self, q: Question, pred: str) -> list[dict[str, Any]]:
@@ -311,6 +397,13 @@ class _Run:
 
     def _parse_judge(self, text: str) -> float | None:
         return parse_judge(text)
+
+    async def _gated_search(self, call) -> Any:
+        """Run one search under the runner's ``--max-search-concurrency`` when it is set."""
+        if self.search_semaphore is None:
+            return await call()
+        async with self.search_semaphore:
+            return await call()
 
     async def _timed(self, kind: str, call) -> Any:
         for attempt in range(RETRIES + 1):

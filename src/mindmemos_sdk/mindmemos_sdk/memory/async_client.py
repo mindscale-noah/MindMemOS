@@ -116,9 +116,9 @@ class AsyncMemoryClient:
         envelope = await self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
 
-    async def get_image(self, blob_id: str) -> tuple[bytes, str]:
-        """Download an image stored for this project (``metadata.blob_id`` of an image result)."""
-        return await self._transport.get_bytes(f"/v1/memory/images/{blob_id}")
+    async def get_image(self, blob_id: str, user_id: str) -> tuple[bytes, str]:
+        """Download a stored image (``metadata.blob_id`` of an image result) of its owner ``user_id``."""
+        return await self._transport.get_bytes(f"/v1/memory/images/{blob_id}", params={"user_id": user_id})
 
     async def get(
         self,

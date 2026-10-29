@@ -330,6 +330,13 @@ class QdrantEngine:
             return
         await self._client.delete(collection_name=collection, points_selector=point_ids)
 
+    async def delete_by_filter(self, collection: str, filter_: qmodels.Filter) -> None:
+        """Delete every point matching ``filter_`` (caller gates on collection existence)."""
+
+        await self._client.delete(
+            collection_name=collection, points_selector=qmodels.FilterSelector(filter=filter_)
+        )
+
     async def batch_update(self, collection: str, operations: list[qmodels.UpdateOperation]) -> None:
         """Apply a batch of update operations against one collection."""
 

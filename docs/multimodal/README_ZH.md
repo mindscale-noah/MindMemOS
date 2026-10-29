@@ -24,14 +24,14 @@
   | Mem-Gallery | enhanced agentic | F1 / B-1 / Judge | 57.06 / 50.45 / 89.14 |
 
   - 相对纯文本基线：MemEye EM 约 +20、Judge 约 +25；Mem-Gallery F1 约 +18、Judge 约 +18。
-  - 相对 basic：两个数据集的 Judge 再高 3–5 分。
+  - 相对 basic：两个数据集的 Judge 再高 2–6 分（Mem-Gallery 快速检索 +2.0 至 MemEye agentic +5.5）。
 - **代价：**
   - enhanced 写入时，含图的对话段用 VLM 抽取。单次 add 的耗时是纯文本时的 2–3 倍，chat 调用数基本不变；图片多的数据（Mem-Gallery）写入 chat 调用多约 23%。
   - 快速检索单次约 7–9 s，纯文本约 3.5 s。
   - agentic 检索单次约 20–30 s，每次搜索多 2–3 次 chat 调用。
 - **合入 main 前需要补的缺口：**
   1. 没有产品级的图片删除 API，见 §3.6；
-  2. 原图目前只能存本地磁盘；
+  2. 原图可存本地磁盘或 S3/MinIO（多实例/生产部署用 S3，见 §4.3），无需再补存储后端；
   3. 生产环境需要自备多模态 embedding API。
 
   其余已知限制见 §7.2。
@@ -98,10 +98,10 @@
 
 1. **分流。** 不带图的请求直接交给 `VanillaAddPipeline`。
 2. **加载图片（`ImageLoader`）。** `ImageRef` 必须恰好指定一种来源：`path`、`url`、`data`（base64）或 `blob_id`。安全限制：
-   - `path` 只能落在 `blob_store.allowed_path_roots` 下；
+   - `path` 只能落在 `blob_store.allowed_path_roots` 下（注意：roots 不区分项目——多项目/共享部署下，roots 内的图片对每个项目都可见，建议只在单项目部署启用）；
    - `url` 默认拒绝私网地址（防 SSRF）；
    - 单张图上限 20 MB；会嗅探真实 MIME 类型。
-3. **存原图（blob store）。** 按内容 sha256 去重，每个项目一个命名空间。目前只有本地磁盘实现，接口已为对象存储预留。
+3. **存原图（blob store）。** 按内容 sha256 去重，每个项目一个命名空间。支持本地磁盘与 S3/MinIO 两种后端（`blob_store.backend`）。
 4. **图片索引。** 通过 `mm_embed_model_router` 生成图片向量，写入 Qdrant `image_item_v1`：
    - 同一项目、同一用户的同一张图只有一条记录，point id = uuid5(project, user, blob_id)；
    - 每次出现追加一条 `occurrence`：session、时间、所在轮次与下一轮的对话上下文、调用方传入的 `image_id` 和 caption；
@@ -149,7 +149,7 @@
 
 ### 3.5 依赖的外部服务
 
-- **多模态 embedding**（`mm_embed_model_router`）：文本和图片映射到同一个向量空间。目前只实现了 OpenAI 兼容协议（`input: [{"image": dataURI}]`），支持多个端点按顺序故障转移和批量拆分。
+- **多模态 embedding**（`mm_embed_model_router`）：文本和图片映射到同一个向量空间。目前只实现了 OpenAI 兼容协议（`input: [{"image": dataURI}]`），支持多个端点按顺序故障转移和批量拆分。端点配置没有 `protocol` 字段（早期分支版本有过，已删除；升级时请删掉该行，模型名需带 `openai/` 等前缀）。
   - 开发和评测可以用 `scripts/mm_embed_server.py`，它把本地 SigLIP2 包装成 HTTP 服务（768 维）。
   - **生产环境需要自备这个 API。**
 - **VLM：** 复用 vanilla 的 chat 模型，要求能接收图片。评测使用 gpt-4.1-mini。
@@ -158,7 +158,7 @@
 ### 3.6 删除与数据生命周期
 
 - 删除单条文本记忆后它变为 archived；经图召回时会跳过 archived 的记忆。
-- 图片和原图的清理有 `ImageMemoryStore.purge_images`：可按项目或用户删除；用户级删除时，原图只有在项目内没有其他记录引用时才删。**目前只有评测的项目重置和测试在用它，没有对外的产品 API。** 纯文本侧本来也没有批量删除 API。
+- 图片和原图的清理有 `ImageMemoryStore.purge_images`：可按项目或用户删除；用户级删除时，原图只有在项目内没有其他记录引用时才删。**目前只有测试在用它，没有对外的产品 API**；评测的项目重置是直接按 blob 目录与 Qdrant 集合清库（因此 S3 后端下评测重置不会清理 S3 上的原图，需要手动处理）。纯文本侧本来也没有批量删除 API。
 - **缺口：** 用户或项目被删除时，产品侧无法删除他们的图片记录和原图。
 
 ---
@@ -171,7 +171,7 @@
 |---|---|
 | `POST /v1/memory/add` | `messages[].images: ImageRef[]`；允许只有图、没有文字的轮次 |
 | `POST /v1/memory/search` | 新增 `query_images: ImageRef[]`（隐含多模态）和 `multimodal: bool`（默认 false） |
-| `GET /v1/memory/images/{blob_id}` | 新增：返回本项目已存图片的原始字节，需要 `memory:read` 权限，私有缓存 1 天 |
+| `GET /v1/memory/images/{blob_id}` | 新增：返回本项目已存图片的原始字节，需要 `memory:read` 权限与 `?user_id=`（图片属主，服务端会对照图片记录校验，非属主一律 404 `image.not_found`），私有缓存 1 天 |
 
 **`ImageRef` 字段：** `path` / `url` / `data` / `blob_id`（四者恰好一个），以及可选的 `mime_type`、`image_id`（调用方的 id，检索结果会原样带回）、`caption`。持久化请求记录时，内联的 base64 会替换为 `<redacted>`。
 
@@ -189,9 +189,16 @@ POST /v1/memory/search
 ```
 
 **检索结果中新增的条目类型：**
-- `memory_type=image`：图片结果。`memory` 是 `[image] 描述或上下文`；`metadata` 包括 `blob_id`、`image_path`、`score`、`session_ids`、`caller_image_ids`、`occurrences`、`description`、`visual_facts`、`anchored_memory_ids`、`evidence`（query_image / session / anchored / similar），以及会话展开时的 `session_position`。
-- `memory_type=visual_fact`：单条视觉事实。`metadata` 包括 `blob_id`、`image_id` 和 rerank `score`。
+- `memory_type=image`：图片结果。`memory` 是 `[image] 描述或上下文`；`metadata` 包括 `blob_id`、`user_id`（属主，取原图时的必传参数）、`score`、`session_ids`、`caller_image_ids`、`occurrences`、`description`、`visual_facts`、`anchored_memory_ids`、`evidence`（query_image / session / anchored / similar），以及会话展开时的 `session_position`。
+- `memory_type=visual_fact`：单条视觉事实。`metadata` 包括 `blob_id`、`image_id`、`user_id` 和 rerank `score`。
 - 对话事实的 `metadata.image_blob_ids` 指向它锚定的图。
+
+**`metadata.image_url`（图片懒加载直链）：** 带 `blob_id` 的图片命中还会附带 `image_url`——
+`s3` 后端是短时效预签名 URL（本地 HMAC 签名，默认 1 小时，见 `blob_store.s3_presign_expiry_seconds`），
+客户端可直接 GET 原图，字节不过本 API;`local` 等无法签名的后端回落为上面的代理路由的**相对路径**
+（`/v1/memory/images/{blob_id}?user_id=<属主>`，客户端按自己的 API 地址拼全，仅当命中带属主时——
+不取请求的 Host 头，避免把凭据指向不可信源）。URL 过期或缺失时，
+仍用 `blob_id` + 属主 `user_id` 走 `get_image`。该字段在响应组装时注入、不落遥测。
 
 **错误码（400 或 404）：**
 - 写入与检索：`add.images_unsupported`、`search.images_unsupported`、`add.too_many_images`（单次最多 32 张）；
@@ -201,8 +208,8 @@ POST /v1/memory/search
 ### 4.2 SDK（`mindmemos_sdk`，同步和异步客户端都支持）
 
 - `add(messages)`：`DialogueMessage.images` 可以传 `ImageRef` 或 dict；
-- `search(query, query_images=..., multimodal=...)`；
-- `get_image(blob_id) -> (bytes, mime_type)`；
+- `search(query, query_images=..., multimodal=...)`：命中 `metadata.image_url` 随 `metadata` dict 原样透传；
+- `get_image(blob_id, user_id) -> (bytes, mime_type)`（`user_id` 为图片属主，即检索结果 `metadata.user_id`）；
 - 导出了 `ImageRef`。
 
 ### 4.3 配置
@@ -220,13 +227,14 @@ POST /v1/memory/search
 | `image_text_weight` | 0.5 | 图片打分中文本相似度的权重 |
 | `visual_fact_limit` / `visual_fact_images` | 10 / 12 | 返回的视觉事实条数 / 候选图片数 |
 | `max_extraction_images` | 6 | 单次抽取调用的图片数，超出部分另发调用 |
+| `max_concurrent_vlm_calls` | 8 | 全进程同时在飞的 VLM 抽取调用数（0 不限制） |
 | `extraction_image_detail` | auto | 传给 VLM 的图片精度 |
 | `agentic_max_steps` | 4 | agent 的工具调用步数 |
 | `max_images_per_request` | 32 | 单次 add 的图片上限 |
 
 基础设施配置（完整说明见 `docs/config/README.md`）：
-- `mm_embed_model_router.endpoints[]`：model、api_base、api_key、dimensions、protocol、超时、重试、批大小；
-- `blob_store`：backend、local_root、max_image_bytes、allowed_path_roots、URL 下载开关和私网限制；
+- `mm_embed_model_router.endpoints[]`：model、api_base、api_key、dimensions、超时、重试、批大小；
+- `blob_store`：backend（local / s3）、local_root、max_image_bytes、allowed_path_roots、URL 下载开关和私网限制；s3 后端还有 `s3_endpoint`/`s3_bucket`/`s3_region`/`s3_access_key`/`s3_secret_key`/`s3_public_base_url`，以及检索直链相关的 `s3_presign_endpoint`/`s3_presign_expiry_seconds`。从旧版本升级后需重跑 `make dev-setup`（uv sync）才能拿到 s3 extra 依赖；本地启用 s3 后端时 MinIO 已随 `make dev` / `make db` 一并启动（`make dev-blobs` 可单独启动）；
 - `database.qdrant.image_collection`：默认 `image_item_v1`。
 
 ---
@@ -240,16 +248,19 @@ POST /v1/memory/search
 | `tests/pipelines/test_vanilla_multimodal_enhanced.py` | VLM 抽取、锚定、编号兼容、溢出调用、混合打分、证据图、视觉事实、agentic |
 | `tests/pipelines/memory_db/test_image_purge.py` | 图片与原图的清理 |
 | `tests/api/test_multimodal_requests.py` | API 层校验与错误码 |
-| `tests/components/test_image_loader.py`、`test_mm_embedding_client.py` | 加载安全限制、embedding 协议与故障转移 |
-| `tests/infra/test_blob_store.py`、`tests/config/test_multimodal_config.py`、`tests/typing/test_multimodal_typing.py`、`tests/mindmemos_sdk/test_multimodal_sdk.py` | 基础设施、配置校验、类型、SDK |
+| `tests/components/test_image_loader.py` | 加载安全限制 |
+| `tests/components/test_mm_embedding_client.py` | mm embedding 客户端（litellm 路由、占位 key、OmegaConf、维度校验；纯单测，无需真实端点） |
+| `tests/infra/test_blob_store.py`、`test_blob_store_s3.py`（live 见文件头）、`tests/config/test_multimodal_config.py`、`tests/typing/test_multimodal_typing.py`、`tests/mindmemos_sdk/test_multimodal_sdk.py` | 基础设施（local/S3/presign）、配置校验、类型、SDK |
+| `tests/api/test_memory_image_route.py`、`test_memory_search_image_url.py` | 取图路由、search 的 `image_url` 注入 |
 | `tests/mindmemos_eval/test_memeye_adapter.py`、`test_memgallery_adapter.py`、`test_db_reset_blobs.py` | 评测 adapter（离线） |
+| `tests/mindmemos_sdk/test_model_contract.py` | SDK 与服务端 `ImageRef`/`DialogueMessage` 字段契约防漂移 |
 
-- **全量测试：** 1299 passed、86 skipped。另有 6 个 failed 和 6 个 errors，`main` 上本来就有、与本分支无关：
-  - architecture guard 测试 2 个；
-  - `test_dev_configs_keep_vanilla_settings_in_canonical_sections`；
-  - memoryarena、skill_runners、sdk package boundary、kafka load report 各 1 个；
-  - scripts 和 spreadsheetbench 的收集错误。
-- **architecture guard 的违规清单：** 与 `main` 相同，本分支没有新增违规。
+- **全量测试（Windows 开发机）：** 1321 passed、92 skipped。另有 11 个 failed 和 8 个 collection errors，均为本批之前就存在的环境/包问题，与本批改动无关：
+  - architecture guard 测试 2 个（违规在 `main` 既有代码，本批没有新增）；
+  - eval 侧 memoryagentbench/memoryarena（数据集 zip 缺失）、skill_runners（包结构）共 5 个；
+  - SDK 侧 package boundary、skill 检测共 4 个（Windows 路径分隔符 / CRLF / 测试顺序）；
+  - prompts（GBK 编码）、scripts（缺 `scripts/locomo`）、spreadsheetbench（ImportError）的收集错误。
+- **S3/MinIO live 用例：** `MINDMEMOS_TEST_S3_ENDPOINT=http://localhost:9100 uv run pytest tests/infra/test_blob_store_s3_live.py`（`make dev-blobs` 后），含预签名 URL 匿名 GET 回读。
 
 ---
 
@@ -361,7 +372,7 @@ POST /v1/memory/search
 ### 7.2 风险与限制
 
 1. **删除：** 没有产品级 API 删除用户或项目的图片和原图，合规上要补。
-2. **存储：** 原图目前只能存本地磁盘，多实例部署或生产环境需要实现对象存储后端。接口已预留。
+2. **存储：** 原图支持本地磁盘与 S3/MinIO 两种后端（`blob_store.backend`，含预签名 URL / 公网镜像直链，见 §4.3）；多实例部署用 S3。评测的项目重置只清本地 blob 目录，S3 后端下的原图需手动清理（重置时会有 WARNING）。
 3. **外部依赖：** 需要多模态 embedding API；仓库自带的 SigLIP2 服务只用于开发和评测。
 4. **同模板截图：** 视觉事实分不清出自哪张图，例如仪表盘、游戏截图类任务（MemEye 的 Personal_Health、Card_Playlog），这类任务仍然偏弱。
 5. **延迟：** enhanced 的写入和检索都明显变慢，agentic 检索在 20–30 s 量级，只适合对时延不敏感的场景。
@@ -370,5 +381,5 @@ POST /v1/memory/search
 
 ### 7.3 后续建议
 
-- 合入 `main` 前：补用户和项目级的图片删除，评估对象存储后端，补上线配置样例（多模态 embedding 端点）。
+- 合入 `main` 前：补用户和项目级的图片删除，补上线配置样例（多模态 embedding 端点；S3/MinIO 存储已交付，见 §4.3）。
 - 如需继续优化：用同期基线评估，优先考虑同模板截图的事实归属问题，以及 agentic 的重试。

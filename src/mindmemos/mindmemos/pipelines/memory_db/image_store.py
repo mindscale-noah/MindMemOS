@@ -33,9 +33,6 @@ class ImageMemoryStore:
 
         return self._clients.qdrant.image.text_vector_size
 
-    async def ensure_collection(self, vector_size: int) -> None:
-        await self._clients.qdrant.image.ensure(vector_size)
-
     @traced("memory_db.get_images", record_args=False)
     async def get_images(self, ctx: MemoryRequestContext, image_ids: list[str]) -> list[ImageRecord]:
         records = await self._clients.qdrant.image.get_many(ctx.project_id, image_ids)
@@ -107,6 +104,21 @@ class ImageMemoryStore:
         )
         return [ImageSearchHit(record=to_image_record(hit.payload), score=hit.score) for hit in hits]
 
+    @traced("memory_db.blob_owned_by", record_args=False)
+    async def blob_owned_by(self, ctx: MemoryRequestContext, blob_id: str, user_id: str) -> bool:
+        """Whether this project has an image record of ``blob_id`` owned by ``user_id``."""
+
+        conditions = [
+            FieldCondition(field="blob_id", op="match", value=blob_id),
+            FieldCondition(field="user_id", op="match", value=user_id),
+        ]
+        return (
+            await self._clients.qdrant.image.count(
+                ctx.project_id, filter_=search_filter_to_qdrant(ctx, SearchFilter(must=conditions), target="image")
+            )
+            > 0
+        )
+
     @traced("memory_db.purge_images", record_args=False)
     async def purge_images(self, ctx: MemoryRequestContext, blobs: BlobStore, *, user_id: str | None = None) -> int:
         """Delete the image records of the request project (or of one user in it) and their unused blobs.
@@ -122,7 +134,7 @@ class ImageMemoryStore:
         if user_id is not None:
             user_filter = search_filter_to_qdrant(ctx, _match("user_id", user_id), target="image")
         records = await repo.list_all(ctx.project_id, filter_=user_filter)
-        await repo.delete_many([record.point_id for record in records])
+        await repo.delete_many(ctx.project_id, [record.point_id for record in records])
         if user_id is None:
             await blobs.delete_namespace(ctx.project_id)
         else:

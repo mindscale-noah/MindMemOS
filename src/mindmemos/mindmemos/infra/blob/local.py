@@ -7,17 +7,14 @@ Writes go through a temp file and ``os.replace`` so readers never see partial bl
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
-import re
 import shutil
 import tempfile
 from pathlib import Path
 
 from .base import StoredBlob, blob_id_for, is_valid_blob_id
-
-_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
+from .base import namespace_prefix as _namespace_dir
 
 
 class LocalBlobStore:
@@ -48,6 +45,10 @@ class LocalBlobStore:
     def public_url(self, namespace: str, blob_id: str) -> str | None:
         del namespace, blob_id
         return None
+
+    def presigned_get(self, namespace: str, blob_id: str, *, expires_seconds: int = 3600) -> str | None:
+        del namespace, blob_id, expires_seconds
+        return None  # no object-storage signing on the local backend; callers use the proxy route
 
     def _delete(self, namespace: str, blob_id: str) -> bool:
         if not is_valid_blob_id(blob_id):
@@ -90,15 +91,6 @@ class LocalBlobStore:
         if not is_valid_blob_id(blob_id):
             raise ValueError("invalid blob id")
         return self._root / _namespace_dir(namespace) / blob_id[:2] / blob_id
-
-
-def _namespace_dir(namespace: str) -> str:
-    """Readable, collision-free, traversal-safe directory name for a namespace."""
-
-    if not namespace:
-        raise ValueError("blob namespace must not be empty")
-    digest = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:12]
-    return f"{_UNSAFE.sub('_', namespace)[:64]}-{digest}"
 
 
 def _atomic_write(path: Path, data: bytes) -> None:

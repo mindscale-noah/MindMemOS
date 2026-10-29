@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from starlette.responses import Response, StreamingResponse
 
 from .deps import require_scopes
@@ -177,10 +177,15 @@ async def dreaming_memory(
 @router.get("/images/{blob_id}", response_class=Response)
 async def get_memory_image(
     blob_id: str,
+    user_id: str = Query(min_length=1),
     auth: AuthContext = Depends(require_scopes(SCOPE_MEM_READ)),
     service: MemoryService = Depends(get_memory_service),
 ) -> Response:
-    """Return the raw bytes of an image stored for this project (multimodal algorithms)."""
+    """Return the raw bytes of an image stored for this project (multimodal algorithms).
 
-    data, mime_type = await service.get_image(auth, blob_id)
+    ``user_id`` must name the image's owner (``metadata.user_id`` of a search image result);
+    it is verified against the project's image records, so another user's blob id is not readable.
+    """
+
+    data, mime_type = await service.get_image(auth, blob_id, user_id)
     return Response(content=data, media_type=mime_type, headers={"Cache-Control": "private, max-age=86400"})

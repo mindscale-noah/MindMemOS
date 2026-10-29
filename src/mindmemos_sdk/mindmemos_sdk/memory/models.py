@@ -141,7 +141,12 @@ class MemorySearchHit(BaseModel):
     source_timestamp: str | None = None
     lineage: MemoryLineage | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    """Business metadata attached to the memory by the server."""
+    """Business metadata attached to the memory by the server.
+
+    Image hits carry ``blob_id`` (stable id for ``get_image`` / re-adding) and may carry
+    ``image_url`` — a short-lived direct-download URL; fetch it directly or fall back to
+    ``get_image(blob_id, metadata['user_id'])`` when it is absent or expired.
+    """
 
 
 class SearchResult(BaseModel):

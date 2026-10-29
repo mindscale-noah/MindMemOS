@@ -21,10 +21,10 @@ the add pipeline sets per request (``request_images``).
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextvars
 import json
 import re
+import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -40,6 +40,7 @@ from ..extractor.vanilla.memory import (
     _normalize_extraction_payload,
     parse_memory_extraction_json,
 )
+from .image_loader import image_data_uri
 
 logger = get_logger(__name__)
 IMAGE_BLOB_IDS_KEY = "image_blob_ids"
@@ -110,11 +111,44 @@ class RequestImages:
     detail: str = "auto"
     max_images: int = 6
     max_facts: int = 30
+    max_concurrent_vlm_calls: int = 8
+    """Process-wide cap of VLM calls in flight (0 disables); from ``algo_config.multimodal``."""
+
     visuals: dict[str, ImageVisuals] = field(default_factory=dict)
     """Filled by the extractor: blob_id -> description and visual facts."""
 
     def for_message(self, index: int) -> list[ExtractionImage]:
         return self.by_message.get(index, [])
+
+    def vlm_semaphore(self) -> asyncio.Semaphore | None:
+        """The process-wide VLM call limiter of the running event loop (None when uncapped)."""
+
+        return _vlm_semaphore(self.max_concurrent_vlm_calls)
+
+
+_VLM_SEMAPHORES: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[int, asyncio.Semaphore]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _vlm_semaphore(limit: int) -> asyncio.Semaphore | None:
+    """One semaphore per (event loop, limit): concurrent adds share it on the server's single
+    loop, while test runs (a fresh loop each) never touch a semaphore bound to a dead loop."""
+
+    if limit <= 0:
+        return None
+    loop = asyncio.get_running_loop()
+    per_loop = _VLM_SEMAPHORES.setdefault(loop, {})
+    semaphore = per_loop.get(limit)
+    if semaphore is None:
+        semaphore = per_loop[limit] = asyncio.Semaphore(limit)
+    return semaphore
+
+
+async def _data_uris(images: list[ExtractionImage]) -> list[str]:
+    """base64-encode images into data URIs off the event loop (megapixel encodes are CPU work)."""
+
+    return await asyncio.to_thread(lambda: [image_data_uri(image.data, image.mime_type) for image in images])
 
 
 _REQUEST_IMAGES: contextvars.ContextVar[RequestImages | None] = contextvars.ContextVar(
@@ -177,12 +211,14 @@ class MultimodalMemoryExtractor:
         prompt = _envelope_prompt_messages(
             envelope, preprocessed_texts, context, enable_entities=bool(getattr(self._inner, "_enable_entities", False))
         )
-        messages = _with_images(prompt, attached, detail=images.detail)
+        messages = _with_images(
+            prompt, attached, detail=images.detail, data_uris=await _data_uris([i.image for i in attached])
+        )
         try:
-            response = await self._llm_client.chat(
+            response = await self._vlm_chat(
+                images,
                 task="memory.add.extract_multimodal",
                 messages=messages,
-                format_parser=parse_memory_extraction_json,
             )
         except Exception:  # noqa: BLE001 - fall back to text-only vanilla extraction
             logger.warning("multimodal_extraction_failed", request_id=context.request_id, exc_info=True)
@@ -197,7 +233,16 @@ class MultimodalMemoryExtractor:
         result = result.model_copy(
             update={"memories": [m.model_copy(update={"content": strip_labels(m.content)}) for m in result.memories]}
         )
-        return _anchor(_mark_extractor(result, "multimodal_vlm"), envelope, chunk)
+        return _anchor(_mark_extractor(result, "multimodal_vlm"), chunk)
+
+    async def _vlm_chat(self, images: RequestImages, *, task: str, messages: list[dict[str, Any]]) -> Any:
+        """One VLM call, bounded by the process-wide cap when one is configured."""
+
+        semaphore = images.vlm_semaphore()
+        if semaphore is None:
+            return await self._llm_client.chat(task=task, messages=messages, format_parser=parse_memory_extraction_json)
+        async with semaphore:
+            return await self._llm_client.chat(task=task, messages=messages, format_parser=parse_memory_extraction_json)
 
     async def _describe(
         self,
@@ -211,23 +256,18 @@ class MultimodalMemoryExtractor:
         numbered = [
             _Attached(number=i, evidence_index=item.evidence_index, image=item.image) for i, item in enumerate(batch, 1)
         ]
+        uris = await _data_uris([item.image for item in numbered])
         parts: list[dict[str, Any]] = []
-        for item in numbered:
-            data = base64.b64encode(item.image.data).decode("ascii")
+        for item, uri in zip(numbered, uris):
             parts.append(
                 {"type": "text", "text": f"IMAGE {item.number}, {_turn_context(envelope, item.evidence_index)}"}
             )
-            parts.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{item.image.mime_type};base64,{data}", "detail": images.detail},
-                }
-            )
+            parts.append({"type": "image_url", "image_url": {"url": uri, "detail": images.detail}})
         try:
-            response = await self._llm_client.chat(
+            response = await self._vlm_chat(
+                images,
                 task="memory.add.describe_images",
                 messages=[{"role": "system", "content": OVERFLOW_PROMPT}, {"role": "user", "content": parts}],
-                format_parser=parse_memory_extraction_json,
             )
         except Exception:  # noqa: BLE001 - the images stay searchable by similarity
             logger.warning("multimodal_image_description_failed", request_id=context.request_id, exc_info=True)
@@ -256,7 +296,9 @@ def _chunk_images(envelope: ExtractionEnvelope, images: RequestImages) -> list[_
     return attached
 
 
-def _with_images(messages: list[dict[str, Any]], attached: list[_Attached], *, detail: str) -> list[dict[str, Any]]:
+def _with_images(
+    messages: list[dict[str, Any]], attached: list[_Attached], *, detail: str, data_uris: list[str]
+) -> list[dict[str, Any]]:
     system, user = messages[0], messages[1]
     payload = json.loads(user["content"])
     labels: dict[int, list[str]] = {}
@@ -266,12 +308,9 @@ def _with_images(messages: list[dict[str, Any]], attached: list[_Attached], *, d
         if entry.get("evidence_index") in labels:
             entry["images"] = labels[entry["evidence_index"]]
     parts: list[dict[str, Any]] = [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]
-    for item in attached:
-        data = base64.b64encode(item.image.data).decode("ascii")
+    for item, uri in zip(attached, data_uris):
         parts.append({"type": "text", "text": f"IMAGE {item.number} (evidence_index {item.evidence_index}):"})
-        parts.append(
-            {"type": "image_url", "image_url": {"url": f"data:{item.image.mime_type};base64,{data}", "detail": detail}}
-        )
+        parts.append({"type": "image_url", "image_url": {"url": uri, "detail": detail}})
     numbers = ", ".join(f"IMAGE {item.number}" for item in attached)
     parts.append({"type": "text", "text": REMINDER.format(numbers=numbers)})
     return [{"role": "system", "content": VISUAL_RULES + system["content"]}, {"role": "user", "content": parts}]
@@ -324,9 +363,7 @@ def _image_number(value: Any) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _anchor(
-    result: MemoryExtractionResult, envelope: ExtractionEnvelope, attached: list[_Attached]
-) -> MemoryExtractionResult:
+def _anchor(result: MemoryExtractionResult, attached: list[_Attached]) -> MemoryExtractionResult:
     """Anchor each fact to the images of its source messages and of the message they reply to."""
 
     by_evidence: dict[int, list[str]] = {}

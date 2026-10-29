@@ -17,7 +17,7 @@ from .algo.search.vanilla.vanilla import (
     VANILLA_HYBRID_PREFETCH_MAX,
     VANILLA_RECALL_SIZE_MAX,
 )
-from .multimodal import BLOB_STORE_BACKENDS, MM_EMBED_PROTOCOLS, MM_IMAGE_TRANSPORTS
+from .multimodal import BLOB_STORE_BACKENDS, MM_IMAGE_TRANSPORTS
 
 
 @dataclass(frozen=True)
@@ -613,7 +613,6 @@ def _validate_multimodal(cfg: Any) -> None:
         prefix = f"mm_embed_model_router.endpoints[{index}]"
         _require_string(f"{prefix}.model", _attr(endpoint, "model", f"{prefix}.model"))
         _require_string(f"{prefix}.api_base", _attr(endpoint, "api_base", f"{prefix}.api_base"))
-        _validate_choice(f"{prefix}.protocol", endpoint.protocol, set(MM_EMBED_PROTOCOLS))
         _validate_choice(f"{prefix}.image_transport", endpoint.image_transport, set(MM_IMAGE_TRANSPORTS))
         if endpoint.dimensions is None:
             raise MissingConfigValueError(f"{prefix}.dimensions", reason="it sizes the image collection")
@@ -641,7 +640,37 @@ def _validate_multimodal(cfg: Any) -> None:
 
     blob = cfg.blob_store
     _validate_choice("blob_store.backend", blob.backend, set(BLOB_STORE_BACKENDS))
-    _require_string("blob_store.local_root", blob.local_root)
+    if blob.backend == "s3":
+        _require_string("blob_store.s3_endpoint", blob.s3_endpoint)
+        if not blob.s3_endpoint.startswith(("http://", "https://")):
+            raise InvalidConfigError(
+                "blob_store.s3_endpoint", support="an http:// or https:// URL (the scheme decides TLS)"
+            )
+        _require_string("blob_store.s3_bucket", blob.s3_bucket)
+        _require_string("blob_store.s3_access_key", blob.s3_access_key, reason="the s3 backend signs every request")
+        _require_string("blob_store.s3_secret_key", blob.s3_secret_key, reason="the s3 backend signs every request")
+        # An explicit empty region yields a region-less client whose presigning does a live
+        # GetBucketLocation lookup — the exact network I/O presigning must avoid.
+        _require_string(
+            "blob_store.s3_region", blob.s3_region, reason="presigning stays offline only with an explicit region"
+        )
+    else:
+        _require_string("blob_store.local_root", blob.local_root)
+    if blob.s3_presign_endpoint and not blob.s3_presign_endpoint.startswith(("http://", "https://")):
+        raise InvalidConfigError(
+            "blob_store.s3_presign_endpoint",
+            support="an http:// or https:// URL (the scheme decides TLS), or leave it unset",
+        )
+    _validate_range(
+        "blob_store.s3_presign_expiry_seconds",
+        blob.s3_presign_expiry_seconds,
+        RangeRule(
+            "blob_store.s3_presign_expiry_seconds",
+            min_value=1,
+            max_value=604800,
+            support="1..604800 seconds (the S3 presign limit of 7 days)",
+        ),
+    )
     _validate_range(
         "blob_store.max_image_bytes", blob.max_image_bytes, RangeRule("blob_store.max_image_bytes", min_value=1)
     )
@@ -670,6 +699,7 @@ def _validate_multimodal(cfg: Any) -> None:
         ("visual_fact_limit", 0),
         ("visual_fact_images", 0),
         ("max_extraction_images", 1),
+        ("max_concurrent_vlm_calls", 0),
         ("agentic_max_steps", 1),
     ):
         path = f"algo_config.multimodal.{name}"

@@ -35,7 +35,6 @@ benchmarks:
 
 execution_params:
   memgallery:
-    top_k: 20                 # text memories per question
     max_answer_images: 8      # images attached to the answerer (question images first)
     image_max_side: 1024      # images are downscaled to this many pixels on the long side
     send_images: true         # send turn and question images (false for a text-only baseline)
@@ -49,7 +48,7 @@ algorithm_profiles:
         multimodal:
           mode: enhanced      # off | basic | enhanced
     search_params:
-      top_k: 20
+      top_k: 20                # overrides the runner/CLI default (--top-k) for this benchmark
       rerank: true
       multimodal: true        # search stored images too (ignored while the mode is off)
       # search_strategy: agentic   # enhanced: multimodal agentic retrieval

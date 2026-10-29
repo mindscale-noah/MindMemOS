@@ -9,12 +9,13 @@ fast path. Any failure falls back to the fast-path results.
 
 from __future__ import annotations
 
-import base64
+import asyncio
 import json
 import re
 from typing import Any
 
 from ....components.multimodal import ImageLoader
+from ....components.multimodal.image_loader import image_data_uri
 from ....config import MultimodalConfig, get_config
 from ....logging import get_logger
 from ....typing import MemoryRequestContext, MemorySearchItem, SearchPipelineInput
@@ -145,28 +146,37 @@ class MultimodalAgent:
     async def _show(self, handles: list[str], *, header: str) -> list[dict[str, Any]] | str:
         if not handles:
             return f"{header}: (none)"
-        parts: list[dict[str, Any]] = [{"type": "text", "text": f"{header}:"}]
         store = self._engine.blobs()
+        segments: list[tuple[list[dict[str, Any]], tuple[Any, bytes] | None]] = []
         for handle in handles:
             item = self._images[handle]
-            parts.append({"type": "text", "text": self._image_line(handle, item)})
+            line = [{"type": "text", "text": self._image_line(handle, item)}]
             blob_id = item.metadata.get("blob_id")
             found = await store.get(self._project_id, blob_id) if blob_id else None
+            segments.append((line, found))
+        # b64-encoding megapixel images is CPU work: encode every image of this view in one hop
+        encoded = await asyncio.to_thread(
+            lambda: [
+                image_data_uri(data, blob.mime_type)
+                for _, found in segments
+                if found is not None
+                for blob, data in (found,)
+            ]
+        )
+        uris = iter(encoded)
+        parts: list[dict[str, Any]] = [{"type": "text", "text": f"{header}:"}]
+        for line, found in segments:
+            parts += line
             if found is not None:
-                blob, data = found
-                uri = f"data:{blob.mime_type};base64,{base64.b64encode(data).decode('ascii')}"
-                parts.append({"type": "image_url", "image_url": {"url": uri, "detail": "low"}})
+                parts.append({"type": "image_url", "image_url": {"url": next(uris), "detail": "low"}})
         return parts
 
     async def _question_images(self, inp: SearchPipelineInput, context: MemoryRequestContext) -> list[str]:
         if not inp.query_images:
             return []
         loader = ImageLoader(get_config().blob_store, self._engine.blobs())
-        uris = []
-        for ref in inp.query_images[:2]:
-            loaded = await loader.load(ref, namespace=context.project_id)
-            uris.append(f"data:{loaded.mime_type};base64,{base64.b64encode(loaded.data).decode('ascii')}")
-        return uris
+        loaded = [await loader.load(ref, namespace=context.project_id) for ref in inp.query_images[:2]]
+        return await asyncio.to_thread(lambda: [image_data_uri(img.data, img.mime_type) for img in loaded])
 
     def _fact_handle(self, item: MemorySearchItem) -> str:
         for handle, existing in self._facts.items():
