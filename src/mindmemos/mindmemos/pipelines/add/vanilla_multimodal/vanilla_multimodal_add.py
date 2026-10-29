@@ -35,7 +35,7 @@ from ....components.multimodal.extraction import (
     RequestImages,
     request_images,
 )
-from ....config import MultimodalConfig, get_config
+from ....config import MultimodalConfig
 from ....errors import BadRequestError
 from ....infra.blob import BlobStore, StoredBlob
 from ....llm import ImageInput, MmEmbedClient, get_embed_client
@@ -100,6 +100,14 @@ def image_point_id(project_id: str, user_id: str | None, blob_id: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"mindmemos:image:{project_id}:{user_id or ''}:{blob_id}"))
 
 
+_CALLER_TEXT_CAP = 500
+"""Caller-supplied strings kept on image records are capped, mirroring ``image_context_chars``."""
+
+
+def _capped(text: str | None) -> str | None:
+    return text[:_CALLER_TEXT_CAP] if text else text
+
+
 @register(type="add", name="vanilla_multimodal_add")
 class VanillaMultimodalAddPipeline(MultimodalDepsMixin, VanillaAddPipeline):
     """Vanilla add for text, plus raw-image storage and image indexing when multimodal mode is on."""
@@ -157,6 +165,14 @@ class VanillaMultimodalAddPipeline(MultimodalDepsMixin, VanillaAddPipeline):
             )
         if not text_inp.messages:
             result = AddPipelineSyncResult(status="ok")
+            if images is not None:
+                # Enhanced extraction needs a kept text turn to anchor facts to; an image-only
+                # request stores and indexes its images but reads nothing from the pixels.
+                logger.info(
+                    "multimodal_enhanced_extraction_skipped",
+                    reason="no_text_turns",
+                    request_id=context.request_id,
+                )
         elif images is not None:
             with request_images(images):
                 result = await super().add_sync(text_inp, context, add_record_id=None)
@@ -182,7 +198,9 @@ class VanillaMultimodalAddPipeline(MultimodalDepsMixin, VanillaAddPipeline):
         """Queue the request with images already stored, so queue messages carry blob ids only."""
 
         if has_images(inp):
-            _require_multimodal(self.multimodal_config())
+            cfg = self.multimodal_config()
+            _require_multimodal(cfg)
+            _require_image_limit(inp, cfg)
             inp = await self._with_stored_blobs(inp, context)
         return await super().add_async(inp, context, add_record_id=add_record_id, record_metadata=record_metadata)
 
@@ -212,21 +230,26 @@ class VanillaMultimodalAddPipeline(MultimodalDepsMixin, VanillaAddPipeline):
             return
         store = self.images()
         ids = {image_point_id(context.project_id, context.user_id, blob_id): blob_id for blob_id in blob_ids}
-        updates: list[ImageRecord] = []
-        for record in await store.get_images(context, list(ids)):
-            blob_id = ids[record.image_id]
-            merged = list(dict.fromkeys([*record.anchored_memory_ids, *anchored.get(blob_id, [])]))[:100]
-            update: dict[str, Any] = {"anchored_memory_ids": merged}
-            visuals = images.visuals.get(blob_id)
-            if visuals is not None:
-                update["description"] = visuals.description or record.description
-                facts = list(dict.fromkeys([*visuals.facts, *record.visual_facts]))
-                update["visual_facts"] = facts[: cfg.max_visual_facts_per_image]
-            updates.append(record.model_copy(update=update))
-        text_vectors = await self._text_vectors(
-            context, [record for record in updates if record.blob_id in images.visuals], store
-        )
-        await store.update_images(context, updates, text_vectors=text_vectors)
+        stripes = _lock_stripes()
+        locks = sorted({zlib.crc32(image_id.encode()) % len(stripes) for image_id in ids})
+        # The same stripes as ``_index``: a concurrent add of the same image must not interleave
+        # its read-modify-write with this one, or one side's anchors/visual facts are lost.
+        async with _MultiLock([stripes[i] for i in locks]):
+            updates: list[ImageRecord] = []
+            for record in await store.get_images(context, list(ids)):
+                blob_id = ids[record.image_id]
+                merged = list(dict.fromkeys([*record.anchored_memory_ids, *anchored.get(blob_id, [])]))[:100]
+                update: dict[str, Any] = {"anchored_memory_ids": merged}
+                visuals = images.visuals.get(blob_id)
+                if visuals is not None:
+                    update["description"] = visuals.description or record.description
+                    facts = list(dict.fromkeys([*visuals.facts, *record.visual_facts]))
+                    update["visual_facts"] = facts[: cfg.max_visual_facts_per_image]
+                updates.append(record.model_copy(update=update))
+            text_vectors = await self._text_vectors(
+                context, [record for record in updates if record.blob_id in images.visuals], store
+            )
+            await store.update_images(context, updates, text_vectors=text_vectors)
 
     async def _text_vectors(
         self, context: MemoryRequestContext, records: list[ImageRecord], store: ImageMemoryStore
@@ -260,11 +283,8 @@ class VanillaMultimodalAddPipeline(MultimodalDepsMixin, VanillaAddPipeline):
         self, inp: AddPipelineInput, context: MemoryRequestContext
     ) -> tuple[list[MemoryAddEventItem], list[tuple[StoredBlob, bytes, AttachedImage]]]:
         cfg = self.multimodal_config()
+        _require_image_limit(inp, cfg)
         images = attached_images(inp, context_chars=cfg.image_context_chars)
-        if len(images) > cfg.max_images_per_request:
-            raise BadRequestError(
-                f"at most {cfg.max_images_per_request} images per add request", code="add.too_many_images"
-            )
         stored = await self._store_blobs(images, context)
         client = self.mm_client()
         if client is None:
@@ -278,7 +298,7 @@ class VanillaMultimodalAddPipeline(MultimodalDepsMixin, VanillaAddPipeline):
     async def _store_blobs(
         self, images: list[AttachedImage], context: MemoryRequestContext
     ) -> list[tuple[StoredBlob, bytes, AttachedImage]]:
-        loader = self._loader()
+        loader = self.image_loader()
         blobs = self.blobs()
         semaphore = _image_io_semaphore()
 
@@ -357,7 +377,7 @@ class VanillaMultimodalAddPipeline(MultimodalDepsMixin, VanillaAddPipeline):
         return events
 
     async def _with_stored_blobs(self, inp: AddPipelineInput, context: MemoryRequestContext) -> AddPipelineInput:
-        loader = self._loader()
+        loader = self.image_loader()
         blobs = self.blobs()
         messages = []
         for message in inp.messages:
@@ -374,11 +394,6 @@ class VanillaMultimodalAddPipeline(MultimodalDepsMixin, VanillaAddPipeline):
                 message = message.model_copy(update={"images": refs})
             messages.append(message)
         return inp.model_copy(update={"messages": messages})
-
-    def _loader(self) -> ImageLoader:
-        if self._image_loader is None:
-            self._image_loader = ImageLoader(get_config().blob_store, self.blobs())
-        return self._image_loader
 
 
 class _MultiLock:
@@ -412,6 +427,16 @@ def _require_multimodal(cfg: MultimodalConfig) -> None:
         )
 
 
+def _require_image_limit(inp: AddPipelineInput, cfg: MultimodalConfig) -> None:
+    # Enforced before blobs are stored and the request is queued, matching what ``add_sync`` counts
+    # (one attached image per reference).
+    count = sum(len(message.images) for message in inp.messages if isinstance(message, DialogueMessage))
+    if count > cfg.max_images_per_request:
+        raise BadRequestError(
+            f"at most {cfg.max_images_per_request} images per add request", code="add.too_many_images"
+        )
+
+
 def image_index_text(record: ImageRecord) -> str:
     """The text an image is found by in the text channel: its description, visual facts and dialogue."""
 
@@ -421,7 +446,7 @@ def image_index_text(record: ImageRecord) -> str:
 
 
 def _source_url(images: list[AttachedImage]) -> str | None:
-    return next((image.ref.url for image in images if image.ref.url), None)
+    return _capped(next((image.ref.url for image in images if image.ref.url), None))
 
 
 def _occurrence(image: AttachedImage, context: MemoryRequestContext) -> ImageOccurrence:
@@ -433,8 +458,8 @@ def _occurrence(image: AttachedImage, context: MemoryRequestContext) -> ImageOcc
         message_index=image.message_index,
         event_timestamp_ms=image.timestamp_ms,
         context=image.context,
-        caller_image_id=image.ref.image_id,
-        caption=image.ref.caption,
+        caller_image_id=_capped(image.ref.image_id),
+        caption=_capped(image.ref.caption),
     )
 
 
