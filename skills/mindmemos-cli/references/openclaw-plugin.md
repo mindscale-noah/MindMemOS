@@ -78,6 +78,13 @@ openclaw config set plugins.entries.mindmemos-memory.config.userId alice
 openclaw gateway restart
 ```
 
+## Image memories
+
+Multimodal search hits can carry `metadata.image_url` — a short-lived direct
+link to the stored image. When present, the injected memory context keeps it as
+`<image: URL>` the model may fetch to view the image; a hit with no text but a
+link still appears, rendered as `[image memory] <image: URL>`.
+
 ## Subagent behavior
 
 In subagent sessions (session key contains `:subagent:`), recalled memories are

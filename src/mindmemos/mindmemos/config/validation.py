@@ -689,6 +689,7 @@ def _validate_multimodal(cfg: Any) -> None:
     for name, minimum in (
         ("image_top_k", 1),
         ("max_images_per_request", 1),
+        ("max_query_images", 1),
         ("max_occurrences_per_image", 1),
         ("image_context_chars", 0),
         ("evidence_images", 0),

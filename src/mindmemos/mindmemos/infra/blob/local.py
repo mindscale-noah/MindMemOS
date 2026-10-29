@@ -63,12 +63,14 @@ class LocalBlobStore:
         blob_id = blob_id_for(data)
         blob = StoredBlob(blob_id=blob_id, mime_type=mime_type, size_bytes=len(data))
         path = self._path(namespace, blob_id)
-        if path.exists():
-            return self._stat(namespace, blob_id) or blob
+        stored = self._stat(namespace, blob_id)
+        if stored is not None:
+            return stored
+        # Not yet written, or the descriptor was lost or corrupted: write both again. The
+        # content-addressed path makes concurrent identical puts harmless (see ``_atomic_write``).
         path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(path, data)
-        meta = {"mime_type": mime_type, "size_bytes": len(data)}
-        _atomic_write(path.with_suffix(".json"), json.dumps(meta).encode("utf-8"))
+        _atomic_write(path.with_suffix(".json"), _descriptor(mime_type, len(data)))
         return blob
 
     def _get(self, namespace: str, blob_id: str) -> tuple[StoredBlob, bytes] | None:
@@ -84,8 +86,14 @@ class LocalBlobStore:
         meta_path = path.with_suffix(".json")
         if not path.exists() or not meta_path.exists():
             return None
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        return StoredBlob(blob_id=blob_id, mime_type=str(meta["mime_type"]), size_bytes=int(meta["size_bytes"]))
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            return StoredBlob(
+                blob_id=blob_id, mime_type=str(meta["mime_type"]), size_bytes=int(meta["size_bytes"])
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            # A truncated or corrupt descriptor reads as missing; the next put rewrites it.
+            return None
 
     def _path(self, namespace: str, blob_id: str) -> Path:
         if not is_valid_blob_id(blob_id):
@@ -93,12 +101,23 @@ class LocalBlobStore:
         return self._root / _namespace_dir(namespace) / blob_id[:2] / blob_id
 
 
+def _descriptor(mime_type: str, size_bytes: int) -> bytes:
+    return json.dumps({"mime_type": mime_type, "size_bytes": size_bytes}).encode("utf-8")
+
+
 def _atomic_write(path: Path, data: bytes) -> None:
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
-        os.replace(tmp, path)
+        try:
+            os.replace(tmp, path)
+        except PermissionError:
+            # Windows briefly denies replacing a target another thread just replaced. The path
+            # names the content it holds, so a target that exists now carries these exact bytes.
+            if not path.exists():
+                raise
+            Path(tmp).unlink(missing_ok=True)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise

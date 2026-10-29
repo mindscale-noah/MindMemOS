@@ -1,5 +1,6 @@
 import dataclasses
 import hashlib
+import os
 
 import pytest
 from mindmemos.config import BlobStoreConfig
@@ -19,6 +20,48 @@ async def test_put_is_content_addressed_and_idempotent(tmp_path) -> None:
     assert len([p for p in tmp_path.rglob("*") if p.is_file()]) == 2  # bytes + descriptor
     blob, data = await store.get("proj-a", first.blob_id)
     assert data == b"\x89PNG data" and blob.mime_type == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_put_rewrites_a_lost_or_corrupt_descriptor(tmp_path) -> None:
+    """Bytes without a readable descriptor used to read as missing forever; re-put heals them."""
+
+    store = LocalBlobStore(tmp_path)
+    blob = await store.put("proj-a", b"\x89PNG data", mime_type="image/png")
+    descriptor = next(p for p in tmp_path.rglob("*.json"))
+    descriptor.write_text("{not json", encoding="utf-8")
+    assert await store.stat("proj-a", blob.blob_id) is None
+
+    healed = await store.put("proj-a", b"\x89PNG data", mime_type="image/png")
+
+    assert healed.blob_id == blob.blob_id
+    stored, data = await store.get("proj-a", blob.blob_id)
+    assert data == b"\x89PNG data" and stored.mime_type == "image/png"
+
+    descriptor.unlink()
+    assert await store.stat("proj-a", blob.blob_id) is None
+    await store.put("proj-a", b"\x89PNG data", mime_type="image/png")
+    assert await store.get("proj-a", blob.blob_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_put_tolerates_a_concurrent_replace_of_identical_bytes(tmp_path, monkeypatch) -> None:
+    """Windows denies replacing a target another thread just replaced; the path already names
+    these exact bytes, so the loser of that race must still succeed."""
+
+    real_replace = os.replace
+
+    def racing_replace(src, dst):
+        real_replace(src, dst)  # the rival writer lands first
+        raise PermissionError(5, "Access is denied")
+
+    monkeypatch.setattr(os, "replace", racing_replace)
+    store = LocalBlobStore(tmp_path)
+    blob = await store.put("proj-a", b"\x89PNG data", mime_type="image/png")
+
+    monkeypatch.undo()
+    stored, data = await store.get("proj-a", blob.blob_id)
+    assert data == b"\x89PNG data" and stored.mime_type == "image/png"
 
 
 @pytest.mark.asyncio

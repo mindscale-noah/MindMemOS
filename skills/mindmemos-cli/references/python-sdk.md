@@ -104,6 +104,31 @@ except MindMemOSSDKError as exc:
     print("memory call failed:", exc, getattr(exc, "request_id", None))
 ```
 
+## Images (multimodal mode)
+
+When the project's multimodal mode is enabled, `DialogueMessage` accepts `images`
+and `search` accepts `query_images` / `multimodal`. An image sets exactly one
+source: `path` (readable by the server), `url`, `data` (base64 / data URI), or
+`blob_id` (an image already stored, e.g. from a previous search hit).
+
+```python
+from mindmemos_sdk import DialogueMessage, ImageRef
+
+client.memory.add(messages=[
+    DialogueMessage(role="user", content="look at this photo of my desk",
+                    images=[ImageRef(path="/data/desk.png", caption="my desk")]),
+])
+
+# by image, or by text with stored images included in the results
+result = client.memory.search("what does the user's desk look like?",
+                              query_images=[ImageRef(path="/data/query.png")], user_id="alice")
+result = client.memory.search("desk setup", multimodal=True, user_id="alice")
+
+# image hits carry metadata.blob_id (+ user_id) and may carry a short-lived
+# metadata.image_url; when it is absent or expired:
+data, mime_type = client.memory.get_image(blob_id, user_id)
+```
+
 ## Asynchronous client
 
 There is no async root client; build an `AsyncHttpTransport` and pass it to

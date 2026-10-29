@@ -95,10 +95,9 @@ class ImagePoint:
     image_id: str
     payload: dict[str, Any]
     vector: list[float]
-    # Reserved, not yet written: the text embedding of the image's description / visual facts.
-    # The collection schema and set_payload(text_vector=...) plumbing carry it, but no writer
-    # populates it today — the text channel of image search embeds the query with the
-    # multimodal model instead. Kept so filling it later needs no schema migration.
+    # The text embedding of the image's description / visual facts (enhanced mode writes it
+    # on add via ``update_images(text_vectors=...)``), searched by the text channel of image
+    # search; None when the text embedding is unavailable and only the image vector remains.
     text_vector: list[float] | None = None
 
 

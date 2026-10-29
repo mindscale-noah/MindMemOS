@@ -204,7 +204,11 @@ class ImageLoader:
         ``url_allow_private_hosts`` there is nothing to enforce, so the URL is dialed as-is.
         """
 
-        parts = urlsplit(url)
+        try:
+            parts = urlsplit(url)
+        except ValueError as exc:
+            # e.g. an unterminated IPv6 literal such as ``http://[::1/x``.
+            raise ImageLoadError("image URL is not valid", code="image.invalid") from exc
         if parts.scheme not in {"http", "https"} or not parts.hostname:
             raise ImageLoadError("image URL must be http(s)", code="image.url_denied")
         try:
@@ -216,10 +220,14 @@ class ImageLoader:
             return _DialTarget(url=url, host_header=None, hostname=None)
         try:
             infos = await asyncio.get_running_loop().getaddrinfo(parts.hostname, port or 443, type=socket.SOCK_STREAM)
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
+            # UnicodeError: getaddrinfo refuses non-ASCII (non-IDN) hostnames before any lookup.
             raise ImageLoadError("image URL host does not resolve", code="image.fetch_failed") from exc
         for info in infos:
-            address = ipaddress.ip_address(info[4][0])
+            try:
+                address = ipaddress.ip_address(info[4][0])
+            except ValueError as exc:
+                raise ImageLoadError("image URL resolved to an unusable address", code="image.fetch_failed") from exc
             if not address.is_global:
                 raise ImageLoadError("image URL resolves to a non-public address", code="image.url_denied")
         pinned_ip = infos[0][4][0]

@@ -91,7 +91,9 @@ maxConversationMessages: 80
 
 - **Recall** hooks `agent/pre-step` (step 1 only). It extracts the real human
   prompt, runs `mindmemos memory search`, and injects the hits under a
-  `<relevant-memories>` banner. Injected messages are stamped
+  `<relevant-memories>` banner. Image hits that carry `metadata.image_url` keep
+  the link in the injected text as `<image: URL>` — a short-lived direct link
+  the agent may fetch to view the stored image. Injected messages are stamped
   `source.kind === "plugin"` so the store step can tell them apart from real
   input.
 - **Store** hooks `session/event` and reacts to `turn/end` with

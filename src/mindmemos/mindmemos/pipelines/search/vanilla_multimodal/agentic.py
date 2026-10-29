@@ -14,9 +14,8 @@ import json
 import re
 from typing import Any
 
-from ....components.multimodal import ImageLoader
 from ....components.multimodal.image_loader import image_data_uri
-from ....config import MultimodalConfig, get_config
+from ....config import MultimodalConfig
 from ....logging import get_logger
 from ....typing import MemoryRequestContext, MemorySearchItem, SearchPipelineInput
 
@@ -174,7 +173,7 @@ class MultimodalAgent:
     async def _question_images(self, inp: SearchPipelineInput, context: MemoryRequestContext) -> list[str]:
         if not inp.query_images:
             return []
-        loader = ImageLoader(get_config().blob_store, self._engine.blobs())
+        loader = self._engine.image_loader()
         loaded = [await loader.load(ref, namespace=context.project_id) for ref in inp.query_images[:2]]
         return await asyncio.to_thread(lambda: [image_data_uri(img.data, img.mime_type) for img in loaded])
 

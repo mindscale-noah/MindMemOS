@@ -271,6 +271,7 @@ Enhanced details:
 | `image_score_threshold` | `null` | Basic: minimum text-image similarity; `null` keeps the top hits. |
 | `image_context_chars` | `500` | Characters of surrounding dialogue stored with each image. |
 | `max_images_per_request` | `32` | Add requests with more images are rejected (`add.too_many_images`). |
+| `max_query_images` | `4` | Search requests with more `query_images` are rejected (`search.too_many_images`). |
 | `max_occurrences_per_image` | `20` | Appearances remembered per deduplicated image. |
 | `evidence_images` | `6` | Enhanced: maximum evidence images per search. |
 | `session_expansion_images` | `4` | Enhanced: images from the session of the best image match (in order, the match included); `0` disables. |
@@ -289,6 +290,31 @@ Deleting memory: archived memories are never recalled through images. Deleting a
 project's images (`ImageMemoryStore.purge_images`) removes their image records and the blobs no
 other image record of the project uses (a project purge drops the whole blob namespace); the eval
 project reset also deletes the project's blobs.
+
+Image requests over HTTP and SDK:
+
+- `POST /v1/memory/add` takes `messages[].images: ImageRef[]`; a turn may carry images with no
+  text (the images pass to the next turn that keeps text). `POST /v1/memory/search` takes
+  `query_images: ImageRef[]` (implies a multimodal search) and `multimodal: true` (search text
+  memories plus images without query images).
+- An `ImageRef` sets exactly one source — `path` (under `blob_store.allowed_path_roots`), `url`
+  (private addresses refused), `data` (base64) or `blob_id` — plus optional `mime_type`,
+  `image_id` (caller's id, echoed in results) and `caption`. Stored request records redact inline
+  base64.
+- Image hits come back as `memory_type: image` / `visual_fact` results. Their `metadata` carries
+  `blob_id`, the owner `user_id`, `score`, `session_ids`, `caller_image_ids`, `occurrences`,
+  `description`, `visual_facts`, `anchored_memory_ids` and `evidence`; dialogue facts carry
+  `metadata.image_blob_ids` for the images they are anchored to.
+- `metadata.image_url` on an image hit is a lazy-load direct link: with `blob_store.backend: s3`
+  a short-lived presigned URL (`s3_presign_expiry_seconds`), otherwise the relative proxy route
+  `/v1/memory/images/{blob_id}?user_id=<owner>`. `GET /v1/memory/images/{blob_id}` returns the
+  stored bytes (`memory:read`, owner check, `404 image.not_found`).
+- Error codes: `add.images_unsupported`, `search.images_unsupported`,
+  `add.too_many_images`, `image.path_denied`, `image.path_disabled`, `image.url_denied`,
+  `image.url_disabled`, `image.fetch_failed`, `image.too_large`, `image.unsupported`,
+  `image.not_found`.
+- SDK (`mindmemos_sdk`, sync and async): `DialogueMessage.images`, `search(query_images=...,
+  multimodal=...)`, `get_image(blob_id, user_id) -> (bytes, mime_type)`; `ImageRef` is exported.
 
 ## `mm_embed_model_router` — multimodal embedding
 

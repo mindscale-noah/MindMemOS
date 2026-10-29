@@ -75,7 +75,8 @@ make dev
 make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
 make dev-blobs         # 单独启动 MinIO（make dev / make db 也会一并启动），见第 8 节
-make db MINIO=0        # 传统模式：同上但不起 MinIO
+make db MINIO=0        # 传统模式：同上但不起 MinIO（MINIO=0 的 dev-down / db-clean
+                       # 同样不会动 MinIO 容器和它的数据卷）
 ```
 
 停止本地依赖：
@@ -308,7 +309,7 @@ algo_config:
 - `s3` 后端需要 `s3` extra：`pip install mindmemos[s3]`（开发 workspace 已包含）。
 - 使用 `s3` 后端时，图片检索结果会带 `metadata.image_url`：一个短时效的预签名 GET 链接，可免凭证直接从 S3/MinIO 下载图片字节。当客户端可达地址与内部 `s3_endpoint` 不同时，设置 `s3_presign_endpoint`。无法签名时（或后端为 `local`），结果回退为需鉴权的代理路由 `GET /v1/memory/images/{blob_id}?user_id=<owner>`——以相对路径下发，由客户端按自己的 API 地址解析。
 - 除 `s3_region` 外的所有 `s3_*` 字段都可以用 `MINDMEMOS_S3_*` 环境变量设置（见第 3 节）。
-- 多模态 embedding 与检索模式（`algo_config.multimodal.mode`、`mm_embed_model_router`）是另一件事，详见 [多模态指南](../multimodal/README_ZH.md)。
+- 多模态 embedding 与检索模式（`algo_config.multimodal.mode`、`mm_embed_model_router`）是另一件事，详见 [配置说明](../config/README.md#algo_configmultimodal--images-in-vanilla-memory)。
 
 ## 9. 记忆算法版本（v1 / v2）
 

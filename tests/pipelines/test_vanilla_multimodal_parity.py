@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -23,6 +24,7 @@ import pytest
 from mindmemos.components.multimodal import ImageLoader
 from mindmemos.config import BlobStoreConfig, MultimodalConfig, TextProcessingConfig
 from mindmemos.config.algo.search import VanillaSearchConfig
+from mindmemos.errors import BadRequestError
 from mindmemos.infra.blob import LocalBlobStore
 from mindmemos.llm import EmbeddingResponse
 from mindmemos.pipelines.add.vanilla import VanillaAddPipeline
@@ -30,7 +32,7 @@ from mindmemos.pipelines.add.vanilla_multimodal import VanillaMultimodalAddPipel
 from mindmemos.pipelines.search.pipeline import SearchPipelineImpl
 from mindmemos.pipelines.search.vanilla import VanillaSearchEngine
 from mindmemos.pipelines.search.vanilla_multimodal import VanillaMultimodalSearchEngine
-from mindmemos.typing import AddPipelineInput, MemoryRequestContext, SearchPipelineInput
+from mindmemos.typing import AddPipelineInput, ImageRef, MemoryRequestContext, SearchPipelineInput
 
 from tests.pipelines.add.test_default_add_pipeline import InMemoryVanillaStore as _BaseStore
 
@@ -415,3 +417,157 @@ async def test_visual_facts_stay_out_of_text_memory(monkeypatch, tmp_path) -> No
         "multimodal.add.image_text",
         [f"A green velvet sofa.\n{VISUAL_FACT}\nuser: Look at the sofa I bought\nassistant: It looks comfortable."],
     ) in harness.embed.calls
+
+
+@pytest.mark.asyncio
+async def test_concurrent_adds_of_the_same_image_keep_every_anchor(monkeypatch, tmp_path) -> None:
+    """Two enhanced adds of the same image racing on ``_link_images`` must not lose an anchor."""
+
+    class _RacyImageStore(RecordingImageStore):
+        # Yield inside every read and write: unless the read-modify-write is striped the same way
+        # as ``_index``, the two writes interleave and the later one drops the other's anchor.
+        async def get_images(self, ctx, image_ids):
+            await asyncio.sleep(0)
+            return await super().get_images(ctx, image_ids)
+
+        async def update_images(self, ctx, records, *, text_vectors=None):
+            await asyncio.sleep(0)
+            await super().update_images(ctx, records, text_vectors=text_vectors)
+
+    class _PerCallLlm(RecordingLlm):
+        # A distinct dialogue fact per concurrent add, so the two memories cannot be merged.
+        def __init__(self) -> None:
+            super().__init__()
+            self.image_extractions = 0
+
+        async def chat(self, *, task, messages, **kwargs):
+            response = await super().chat(task=task, messages=messages, **kwargs)
+            if isinstance(messages[-1].get("content"), list):
+                self.image_extractions += 1
+                response.parsed["memories"][0]["content"] = f"The user bought a new sofa. #{self.image_extractions}"
+            return response
+
+    harness = _Harness(monkeypatch, tmp_path)
+    harness.llm = _PerCallLlm()
+    harness.images = _RacyImageStore()
+    add = harness.add_pipeline("enhanced")
+    inp = AddPipelineInput(messages=IMAGE_DIALOGUE, event_timestamp_ms=1717000300000)
+
+    await asyncio.gather(add.add_sync(inp, _context(1)), add.add_sync(inp.model_copy(), _context(2)))
+
+    anchored = {m.memory_id for m in harness.store.memories.values() if m.metadata.get("image_blob_ids")}
+    assert len(anchored) == 2, "each add must anchor its own dialogue fact to the image"
+    [record] = harness.images.records.values()
+    assert set(record.anchored_memory_ids) == anchored
+
+
+@pytest.mark.asyncio
+async def test_add_async_rejects_over_limit_images_before_storing(monkeypatch, tmp_path) -> None:
+    harness = _Harness(monkeypatch, tmp_path)
+    add = VanillaMultimodalAddPipeline(
+        db_reader=harness.store,
+        db_writer=harness.store,
+        text_config=TEXT_CONFIG,
+        consistency="fast",
+        llm_client=harness.llm,
+        embed_client=harness.embed,
+        recorder=harness.recorder,
+        image_store=harness.images,
+        blob_store=harness.blobs,
+        image_loader=ImageLoader(BlobStoreConfig(), harness.blobs),
+        mm_embed_client=harness.mm,
+        multimodal_config=MultimodalConfig(mode="basic", max_images_per_request=1),
+    )
+    inp = AddPipelineInput(
+        messages=[
+            {
+                "role": "user",
+                "content": "look at these sofas",
+                "timestamp": 1717000300000,
+                "images": [
+                    {"data": base64.b64encode(PNG).decode()},
+                    {"data": base64.b64encode(PNG).decode()},
+                ],
+            }
+        ],
+        event_timestamp_ms=1717000300000,
+    )
+
+    with pytest.raises(BadRequestError) as caught:
+        await add.add_async(inp, _context(3))
+
+    assert caught.value.code == "add.too_many_images"
+    # Rejected before anything is stored or queued.
+    assert harness.images.calls == []
+    assert not [path for path in (tmp_path / "blobs").rglob("*") if path.is_file()]
+
+
+@pytest.mark.asyncio
+async def test_image_only_enhanced_add_skips_extraction_loudly(monkeypatch, tmp_path) -> None:
+    """Enhanced extraction needs a kept text turn; an image-only request must say it stored
+    the pixels without reading them, not stay silent about it."""
+
+    from structlog.testing import capture_logs
+
+    harness = _Harness(monkeypatch, tmp_path)
+    add = harness.add_pipeline("enhanced")
+    inp = AddPipelineInput(
+        messages=[
+            {
+                "role": "user",
+                "content": "",
+                "timestamp": 1717000300000,
+                "images": [{"data": base64.b64encode(PNG).decode()}],
+            }
+        ],
+        event_timestamp_ms=1717000300000,
+    )
+
+    with capture_logs() as logs:
+        result = await add.add_sync(inp, _context(4))
+
+    assert [m.operation for m in result.memories] == ["add"]  # the stored image only
+    [record] = harness.images.records.values()
+    assert record.description is None and record.visual_facts == []  # no VLM extraction ran
+    assert any(entry["event"] == "multimodal_enhanced_extraction_skipped" for entry in logs)
+
+
+def test_caller_supplied_image_strings_are_capped_at_write_time() -> None:
+    from mindmemos.components.multimodal.messages import AttachedImage
+    from mindmemos.pipelines.add.vanilla_multimodal.vanilla_multimodal_add import _occurrence, _source_url
+
+    image = AttachedImage(ImageRef(data="eA==", image_id="i" * 600, caption="c" * 600), 0, "user", 0, "ctx")
+    occurrence = _occurrence(image, _context(9))
+    assert occurrence.caller_image_id == "i" * 500
+    assert occurrence.caption == "c" * 500
+    from_url = AttachedImage(ImageRef(url="http://x.example/" + "u" * 600), 0, "user", 0, "")
+    assert _source_url([from_url]) == ("http://x.example/" + "u" * 600)[:500]
+
+
+def test_the_image_loader_is_cached_per_pipeline(monkeypatch) -> None:
+    # One loader per pipeline (add and search alike) so the HTTP pool of query-image fetches
+    # is reused instead of being rebuilt per call.
+    from mindmemos.pipelines import multimodal_deps
+
+    monkeypatch.setattr(multimodal_deps, "get_config", lambda: SimpleNamespace(blob_store=BlobStoreConfig()))
+    engine = VanillaMultimodalSearchEngine(
+        db_reader=object(),
+        db_writer=object(),
+        text_config=TEXT_CONFIG,
+        embed_client=object(),
+        blob_store=LocalBlobStore("nowhere"),
+        multimodal_config=MultimodalConfig(mode="enhanced"),
+    )
+    first = engine.image_loader()
+    assert engine.image_loader() is first
+    explicit = ImageLoader(BlobStoreConfig(), LocalBlobStore("nowhere"))
+    add = VanillaMultimodalAddPipeline(
+        db_reader=object(),
+        db_writer=object(),
+        text_config=TEXT_CONFIG,
+        llm_client=object(),
+        embed_client=object(),
+        image_loader=explicit,
+        multimodal_config=MultimodalConfig(mode="enhanced"),
+    )
+    assert add.image_loader() is explicit  # an injected loader is never replaced
