@@ -46,7 +46,7 @@
 
 ## 📰 News
 
-- **2026-10-28**: Multimodal memory is here — `memory.add` / `memory.search` now accept images: originals are stored on local disk or S3/MinIO, indexed with a multimodal embedding model (SigLIP2-compatible), and `enhanced` mode adds VLM visual-fact extraction and multimodal agent retrieval. Benchmarked on MemEye / Mem-Gallery; see the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide and the [config reference](docs/config/README.md#algo_configmultimodal--images-in-vanilla-memory).
+- **2026-10-31**: Multimodal memory is here — `memory.add` / `memory.search` accept images (stored on local disk or S3/MinIO, indexed by multimodal embeddings), with `enhanced` mode adding VLM visual-fact extraction and multimodal agent retrieval. Benchmark results and the run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
 - **2026-08-18**: We released the [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin), letting DeepSeek Harness (dsh) agents automatically recall and write MindMemOS memories.
 - **2026-08-14**: We released the [MindMemOS 1.0 technical report](https://arxiv.org/abs/2608.12428), *MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents*.
 - **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.

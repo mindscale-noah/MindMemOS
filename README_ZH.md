@@ -46,7 +46,7 @@
 
 ## 📰 News
 
-- **2026-10-28**：多模态记忆发布——`memory.add` / `memory.search` 支持图片：原图存本地磁盘或 S3/MinIO，用多模态 embedding 模型（SigLIP2 兼容协议）建立图片索引；`enhanced` 模式提供 VLM 视觉事实抽取与多模态 agent 检索。MemEye / Mem-Gallery 评测结果与一键复现指南见 [评测指南的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)，配置与接口见 [docs/config/README.md](docs/config/README.md#algo_configmultimodal--images-in-vanilla-memory)。
+- **2026-10-31**：多模态记忆发布——`memory.add` / `memory.search` 支持图片（原图存本地磁盘或 S3/MinIO，按多模态 embedding 建索引），`enhanced` 模式提供 VLM 视觉事实抽取与多模态 agent 检索；评测结果与复现指南见 [评测指南的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
 - **2026-08-18**：我们发布了 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，让 DeepSeek Harness（dsh）Agent 自动召回并写入 MindMemOS 记忆。
 - **2026-08-14**：我们发布了 [MindMemOS 1.0 技术报告](https://arxiv.org/abs/2608.12428)《MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents》。
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
