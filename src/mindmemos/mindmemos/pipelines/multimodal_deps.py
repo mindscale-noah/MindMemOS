@@ -6,6 +6,7 @@ singletons the same way; one implementation keeps the two resolution rules from 
 
 from __future__ import annotations
 
+from ..components.multimodal import ImageLoader
 from ..config import MultimodalConfig, get_config
 from ..errors import ConfigNotInitializedError
 from ..infra.blob import BlobStore, get_blob_store
@@ -17,17 +18,20 @@ MM_CLIENT_UNSET: object = object()
 
 
 class MultimodalDepsMixin:
-    """Resolve the multimodal config, mm-embed client, blob store and image store on first use.
+    """Resolve the multimodal config, mm-embed client, blob store, image store and image loader
+    on first use.
 
-    Subclasses assign ``_explicit_multimodal_config``, ``_explicit_mm_client``, ``_blob_store``
-    and ``_image_store`` in ``__init__``; nothing is touched at import or construction time, so
-    a pipeline can exist before any external service is configured.
+    Subclasses assign ``_explicit_multimodal_config``, ``_explicit_mm_client``, ``_blob_store``,
+    ``_image_store`` and (where it is injectable) ``_image_loader`` in ``__init__``; nothing is
+    touched at import or construction time, so a pipeline can exist before any external service
+    is configured.
     """
 
     _explicit_multimodal_config: MultimodalConfig | None
     _explicit_mm_client: MmEmbedClient | None | object
     _blob_store: BlobStore | None
     _image_store: ImageMemoryStore | None
+    _image_loader: ImageLoader | None = None
 
     def multimodal_config(self) -> MultimodalConfig:
         if self._explicit_multimodal_config is not None:
@@ -51,3 +55,11 @@ class MultimodalDepsMixin:
         if self._image_store is None:
             self._image_store = ImageMemoryStore()
         return self._image_store
+
+    def image_loader(self) -> ImageLoader:
+        """One loader per pipeline, like the other collaborators (query images of a request
+        then reuse its HTTP pool)."""
+
+        if self._image_loader is None:
+            self._image_loader = ImageLoader(get_config().blob_store, self.blobs())
+        return self._image_loader

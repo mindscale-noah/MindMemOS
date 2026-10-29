@@ -195,6 +195,25 @@ async def test_out_of_range_url_port_is_a_400_not_a_500(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_malformed_urls_and_hostnames_are_400s_not_500s(monkeypatch, tmp_path) -> None:
+    loader = _loader(tmp_path)
+
+    # An unterminated IPv6 literal makes urlsplit itself raise ValueError.
+    with pytest.raises(ImageLoadError, match="not valid") as broken:
+        await loader.load(ImageRef(url="http://[::1/x.png"), namespace="p")
+    assert broken.value.code == "image.invalid"
+
+    # A non-ASCII hostname makes getaddrinfo raise UnicodeError before any lookup.
+    async def unicode_getaddrinfo(host, port, **kwargs):  # noqa: ARG001 - signature per getaddrinfo
+        raise UnicodeEncodeError("idna", "café", 0, 1, "not an ASCII hostname")
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", unicode_getaddrinfo)
+    with pytest.raises(ImageLoadError, match="does not resolve") as unresolvable:
+        await loader.load(ImageRef(url="http://café.example/x.png"), namespace="p")
+    assert unresolvable.value.code == "image.fetch_failed"
+
+
+@pytest.mark.asyncio
 async def test_url_follows_one_redirect_and_stops_loops(tmp_path) -> None:
     import httpx
 

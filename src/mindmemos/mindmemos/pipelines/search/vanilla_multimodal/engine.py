@@ -29,9 +29,10 @@ from datetime import UTC, datetime
 from itertools import zip_longest
 from typing import Any
 
-from ....components.multimodal import ImageLoader, text_only_search
+from ....components.multimodal import text_only_search
 from ....components.multimodal.extraction import IMAGE_BLOB_IDS_KEY
-from ....config import MultimodalConfig, get_config
+from ....config import MultimodalConfig
+from ....errors import BadRequestError, InvalidFilterError
 from ....infra.blob import BlobStore
 from ....llm import ImageInput, MmEmbedClient, RerankClient, get_llm_client, get_rerank_client
 from ....logging import get_logger, traced
@@ -156,6 +157,11 @@ class VanillaMultimodalSearchEngine(MultimodalDepsMixin, VanillaSearchEngine):
             return memories
         try:
             return await self._augment(inp, context, memories)
+        except BadRequestError:
+            raise  # invalid input (e.g. an unresolvable query image) still surfaces as a 400
+        except Exception:  # noqa: BLE001 - the text results stand on their own; images are additive
+            logger.warning("multimodal_augment_failed", request_id=context.request_id, exc_info=True)
+            return memories
         finally:
             # The per-request embedding cache dies with its last consumer: the agent still
             # reuses the query vectors when it refines right after, and resets them itself.
@@ -366,8 +372,12 @@ class VanillaMultimodalSearchEngine(MultimodalDepsMixin, VanillaSearchEngine):
             hits.by_image = by_image
             hits.ranked = _mix(by_text, by_image, cfg.image_text_weight)
         if inp.query_images:
-            loader = ImageLoader(get_config().blob_store, self.blobs())
-            loaded = [await loader.load(ref, namespace=context.project_id) for ref in inp.query_images[:4]]
+            if len(inp.query_images) > cfg.max_query_images:
+                raise BadRequestError(
+                    f"at most {cfg.max_query_images} query_images per search", code="search.too_many_images"
+                )
+            loader = self.image_loader()
+            loaded = [await loader.load(ref, namespace=context.project_id) for ref in inp.query_images]
             vectors = await client.embed_images(
                 [ImageInput(data=item.data, mime_type=item.mime_type) for item in loaded],
                 task="multimodal.search.query_image",

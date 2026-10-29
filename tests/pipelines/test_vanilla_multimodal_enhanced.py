@@ -22,7 +22,7 @@ from mindmemos.config import MultimodalConfig, TextProcessingConfig
 from mindmemos.infra.blob import StoredBlob
 from mindmemos.pipelines.add.vanilla_multimodal.vanilla_multimodal_add import _images_by_text_index
 from mindmemos.pipelines.search.vanilla_multimodal import VanillaMultimodalSearchEngine
-from mindmemos.pipelines.search.vanilla_multimodal.engine import _mix, _strong, _to_search_item
+from mindmemos.pipelines.search.vanilla_multimodal.engine import _image_filter, _mix, _strong, _to_search_item
 from mindmemos.typing import (
     AddPipelineInput,
     ExtractionEnvelope,
@@ -770,3 +770,45 @@ async def test_agentic_view_images_returns_the_pixels_to_the_vlm() -> None:
     assert any("Requested images" in text for text in texts)
     assert [part["image_url"]["url"] for part in shown] == [f"data:image/png;base64,{base64.b64encode(png).decode()}"]
     assert [o.metadata["blob_id"] for o in out if o.memory_type == "image"] == [ad]
+
+
+def test_image_filter_drops_a_dsl_it_cannot_parse() -> None:
+    # An unparseable/disallowed filter means "no image filter", not a failed search
+    # (this also pins the InvalidFilterError import the except clause relies on).
+    assert _image_filter({"not_a_field": {"$eq": "x"}}) is None
+
+
+@pytest.mark.asyncio
+async def test_augment_failure_degrades_to_the_text_results() -> None:
+    # The image channel is additive: an image-store or embedding outage mid-augment must
+    # return the text results, not fail the search that already computed them.
+    class ExplodingImages:
+        async def search_images(self, ctx, vector, **kwargs):
+            raise RuntimeError("image collection down")
+
+    engine = _engine(FakeReader([_view("m1", "The sofa is green velvet.")]), [])
+    engine._image_store = ExplodingImages()
+
+    out = await engine.augment_results(
+        SearchPipelineInput(query="Ethos ad background", search_pipeline="vanilla", multimodal=True),
+        CTX,
+        [_item("m1", "The sofa is green velvet.")],
+    )
+
+    assert [o.id for o in out] == ["m1"]
+
+
+@pytest.mark.asyncio
+async def test_too_many_query_images_is_rejected_up_front() -> None:
+    from mindmemos.errors import BadRequestError
+
+    engine = _engine(FakeReader([]), [])
+    inp = SearchPipelineInput(
+        query="sofa",
+        search_pipeline="vanilla",
+        multimodal=True,
+        query_images=[ImageRef(data="eA==")] * 5,
+    )
+    with pytest.raises(BadRequestError) as caught:
+        await engine.augment_results(inp, CTX, [])
+    assert caught.value.code == "search.too_many_images"

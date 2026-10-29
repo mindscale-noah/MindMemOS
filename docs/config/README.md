@@ -271,6 +271,7 @@ Enhanced details:
 | `image_score_threshold` | `null` | Basic: minimum text-image similarity; `null` keeps the top hits. |
 | `image_context_chars` | `500` | Characters of surrounding dialogue stored with each image. |
 | `max_images_per_request` | `32` | Add requests with more images are rejected (`add.too_many_images`). |
+| `max_query_images` | `4` | Search requests with more `query_images` are rejected (`search.too_many_images`). |
 | `max_occurrences_per_image` | `20` | Appearances remembered per deduplicated image. |
 | `evidence_images` | `6` | Enhanced: maximum evidence images per search. |
 | `session_expansion_images` | `4` | Enhanced: images from the session of the best image match (in order, the match included); `0` disables. |

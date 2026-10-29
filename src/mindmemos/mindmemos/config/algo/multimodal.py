@@ -14,7 +14,7 @@ class MultimodalConfig:
 
     - ``off``: plain vanilla; requests carrying images are rejected (400).
     - ``basic``: raw images are stored and embedded; a multimodal search appends the images found by
-      text-to-image and image-to-image similarity after the text results.
+      text-to-image similarity after the text results (query images are used from ``enhanced`` on).
     - ``enhanced``: turns with images are extracted by a VLM; dialogue facts go to text memory,
       anchored to their images, while visual facts and image descriptions stay on the image records
       (with a text vector, so image search scores text and image similarity together). A multimodal
@@ -43,6 +43,9 @@ class MultimodalConfig:
 
     max_images_per_request: int = 32
     """Add requests carrying more images are rejected."""
+
+    max_query_images: int = 4
+    """Search requests carrying more ``query_images`` are rejected."""
 
     max_occurrences_per_image: int = 20
     """Contexts remembered per deduplicated image (oldest kept first)."""
