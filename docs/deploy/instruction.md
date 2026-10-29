@@ -307,7 +307,7 @@ Notes:
 - The `s3` backend needs the `s3` extra: `pip install mindmemos[s3]` (the dev workspace already includes it).
 - With the `s3` backend, image search hits carry `metadata.image_url`: a short-lived presigned GET link that downloads the bytes directly from S3/MinIO without credentials. Set `s3_presign_endpoint` when the address clients use differs from the internal `s3_endpoint`. When signing is unavailable (or the backend is `local`), hits fall back to the authenticated proxy route `GET /v1/memory/images/{blob_id}?user_id=<owner>` — emitted as a relative path the client resolves against its own API origin.
 - Every `s3_*` field except `s3_region` can also be set through the `MINDMEMOS_S3_*` environment variables (see section 3).
-- Multimodal embedding and search modes (`algo_config.multimodal.mode`, `mm_embed_model_router`) are a separate concern; see [config README](../config/README.md#blob_store--raw-image-storage) and the [multimodal guide (ZH)](../multimodal/README_ZH.md).
+- Multimodal embedding and search modes (`algo_config.multimodal.mode`, `mm_embed_model_router`) are a separate concern; see the [config README](../config/README.md#algo_configmultimodal--images-in-vanilla-memory).
 
 ## 9. Memory Algorithm Version (v1 / v2)
 

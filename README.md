@@ -46,7 +46,7 @@
 
 ## 📰 News
 
-- **2026-10-28**: Multimodal memory is here — `memory.add` / `memory.search` now accept images: originals are stored on local disk or S3/MinIO, indexed with a multimodal embedding model (SigLIP2-compatible), and `enhanced` mode adds VLM visual-fact extraction and multimodal agent retrieval. Benchmarked on MemEye / Mem-Gallery; see the [multimodal guide](docs/multimodal/README_ZH.md) and [benchmark guide](docs/eval/multimodal_benchmark_ZH.md) (ZH).
+- **2026-10-28**: Multimodal memory is here — `memory.add` / `memory.search` now accept images: originals are stored on local disk or S3/MinIO, indexed with a multimodal embedding model (SigLIP2-compatible), and `enhanced` mode adds VLM visual-fact extraction and multimodal agent retrieval. Benchmarked on MemEye / Mem-Gallery; see the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide and the [config reference](docs/config/README.md#algo_configmultimodal--images-in-vanilla-memory).
 - **2026-08-18**: We released the [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin), letting DeepSeek Harness (dsh) agents automatically recall and write MindMemOS memories.
 - **2026-08-14**: We released the [MindMemOS 1.0 technical report](https://arxiv.org/abs/2608.12428), *MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents*.
 - **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.
@@ -424,7 +424,22 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 | enhanced (VLM visual facts) | 63.45 | 25.49 | 50.80 |
 | enhanced_agentic (multimodal agent) | **65.89** | **27.09** | **53.30** |
 
-Setup: vanilla algorithm; answerer & judge `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`); mean of 2 runs (2026-10). Mem-Gallery results and the step-by-step run guide: [docs/eval/multimodal_benchmark_ZH.md](docs/eval/multimodal_benchmark_ZH.md) (ZH).
+Setup: vanilla algorithm; answerer & judge `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`); mean of 2 runs (2026-10). Mem-Gallery results, per-task/per-type breakdowns and the step-by-step run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
+
+Open-source method reference (reported by the MemEye [paper](https://arxiv.org/abs/2605.15128); **not directly comparable** — the paper answers with `gpt-5.4-mini` and judges with `gpt-5.2`, and aggregates differently; magnitude reference only):
+
+| Method (selected from 13; each method's average over the (X, Y) matrix) | EM | B-1 | Judge |
+| :--- | :---: | :---: | :---: |
+| FC-Text (full context, text-only) | 56.70 | 24.74 | 42.80 |
+| SRAG-Text (semantic RAG, text-only) | 54.84 | 25.88 | 39.09 |
+| MemoryOS | 48.66 | 21.80 | 33.26 |
+| A-MEM | 47.97 | 22.44 | 35.24 |
+| MIRIX | 46.74 | 18.00 | 33.23 |
+| MMA | 53.86 | 25.67 | 43.29 |
+| FC-Multimodal (full context, multimodal) | 60.38 | 27.58 | 43.91 |
+| SRAG-Multimodal (semantic RAG, multimodal — the paper's best) | **61.77** | **29.72** | **49.37** |
+
+The remaining methods (Reflexion, Generative Agents, SimpleMem, M2A, …) and the full matrices for three more backbones (`gpt-4.1-nano`, `Qwen3-VL-8B-Instruct`, `gemini-2.5-flash-lite`) are in the [paper](https://arxiv.org/abs/2605.15128) ([code & data](https://github.com/MinghoKwok/MemEye)).
 
 ## 🗺️ Coming Features
 

@@ -18,7 +18,8 @@ over runs) is printed and written to reports/multimodal/<tag>/summary.md.
     uv run python scripts/run_multimodal_bench.py --smoke              # 1 task, 2 questions per phase
     uv run python scripts/run_multimodal_bench.py --benchmarks memgallery --configs enhanced --runs 2
 
-See docs/eval/multimodal_benchmark_ZH.md for the setup (datasets, server config, embedding API).
+See the multimodal section of docs/eval/README_ZH.md for the setup (datasets, server config,
+embedding API).
 """
 
 from __future__ import annotations

@@ -46,7 +46,7 @@
 
 ## 📰 News
 
-- **2026-10-28**：多模态记忆发布——`memory.add` / `memory.search` 支持图片：原图存本地磁盘或 S3/MinIO，用多模态 embedding 模型（SigLIP2 兼容协议）建立图片索引；`enhanced` 模式提供 VLM 视觉事实抽取与多模态 agent 检索。MemEye / Mem-Gallery 评测结果与一键复现指南见 [benchmark 指南](docs/eval/multimodal_benchmark_ZH.md)与[多模态说明](docs/multimodal/README_ZH.md)。
+- **2026-10-28**：多模态记忆发布——`memory.add` / `memory.search` 支持图片：原图存本地磁盘或 S3/MinIO，用多模态 embedding 模型（SigLIP2 兼容协议）建立图片索引；`enhanced` 模式提供 VLM 视觉事实抽取与多模态 agent 检索。MemEye / Mem-Gallery 评测结果与一键复现指南见 [评测指南的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)，配置与接口见 [docs/config/README.md](docs/config/README.md#algo_configmultimodal--images-in-vanilla-memory)。
 - **2026-08-18**：我们发布了 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，让 DeepSeek Harness（dsh）Agent 自动召回并写入 MindMemOS 记忆。
 - **2026-08-14**：我们发布了 [MindMemOS 1.0 技术报告](https://arxiv.org/abs/2608.12428)《MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents》。
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
@@ -412,7 +412,22 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 | enhanced（VLM 视觉事实） | 63.45 | 25.49 | 50.80 |
 | enhanced_agentic（多模态 agent） | **65.89** | **27.09** | **53.30** |
 
-配置：vanilla 算法；作答与 judge 为 `gpt-4.1-mini`；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）；各 2 次均值（2026-10）。Mem-Gallery 结果与完整运行指南见 [docs/eval/multimodal_benchmark_ZH.md](docs/eval/multimodal_benchmark_ZH.md)，能力实现细节见 [docs/multimodal/README_ZH.md](docs/multimodal/README_ZH.md)。
+配置：vanilla 算法；作答与 judge 为 `gpt-4.1-mini`；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）；各 2 次均值（2026-10）。Mem-Gallery 结果、各任务/题型分解与完整运行指南见 [docs/eval/README_ZH.md 的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
+
+开源方法参考（MemEye [原论文](https://arxiv.org/abs/2605.15128)报告，**不可与本表直接比较**：原论文用 `gpt-5.4-mini` 作答、`gpt-5.2` judge，聚合口径也不同，仅作量级参考）：
+
+| 方法（13 个方法中选取，均为各方法在 (X, Y) 矩阵上的平均） | EM | B-1 | Judge |
+| :--- | :---: | :---: | :---: |
+| FC-Text（全文 · 纯文本） | 56.70 | 24.74 | 42.80 |
+| SRAG-Text（语义检索 · 纯文本） | 54.84 | 25.88 | 39.09 |
+| MemoryOS | 48.66 | 21.80 | 33.26 |
+| A-MEM | 47.97 | 22.44 | 35.24 |
+| MIRIX | 46.74 | 18.00 | 33.23 |
+| MMA | 53.86 | 25.67 | 43.29 |
+| FC-Multimodal（全文 · 多模态） | 60.38 | 27.58 | 43.91 |
+| SRAG-Multimodal（语义检索 · 多模态，论文最优） | **61.77** | **29.72** | **49.37** |
+
+其余方法（Reflexion、Generative Agents、SimpleMem、M2A 等）与另外三个模型后端（`gpt-4.1-nano`、`Qwen3-VL-8B-Instruct`、`gemini-2.5-flash-lite`）的完整结果矩阵见[原论文](https://arxiv.org/abs/2605.15128)（[代码与数据](https://github.com/MinghoKwok/MemEye)）。
 
 ## 🗺️ Coming Features
 
