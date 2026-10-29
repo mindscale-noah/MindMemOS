@@ -429,6 +429,25 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 
 其余方法（Reflexion、Generative Agents、SimpleMem、M2A 等）与另外三个模型后端（`gpt-4.1-nano`、`Qwen3-VL-8B-Instruct`、`gemini-2.5-flash-lite`）的完整结果矩阵见[原论文](https://arxiv.org/abs/2605.15128)（[代码与数据](https://github.com/MinghoKwok/MemEye)）。
 
+**Mem-Gallery：同条件开源基线对比**（F1 / B-1 为与 judge 无关的确定性指标）：
+
+| 方法 | F1 | B-1 |
+| :--- | :---: | :---: |
+| MemoryOS | 43.09 | 37.76 |
+| A-MEM | 44.08 | 38.37 |
+| SimpleMem | 34.73 | 28.90 |
+| HyperMem | 44.57 | 33.42 |
+| M2A | 15.04 | 10.28 |
+| MMA | 26.99 | 20.60 |
+| SRAG（多模态语义检索） | 41.07 | 35.03 |
+| UniversalRAG | 48.36 | 41.90 |
+| MindMemOS b0（纯文本基线） | 38.72 | 32.59 |
+| MindMemOS b1（图片相似度检索） | 54.73 | 47.75 |
+| MindMemOS enhanced（VLM 视觉事实） | 55.66 | 48.98 |
+| MindMemOS enhanced_agentic（多模态 agent） | **57.06** | **50.45** |
+
+条件说明：基线行为同一实验条件下的复现——同全量 Mem-Gallery（20 任务 / 1711 题）、同作答器 `gpt-4.1-mini`、benchmark 原版 QA 与评分协议、3 次均值（出处为双盲评审中的在投论文，暂不附链接）；MindMemOS 四行为本仓库当前实现的评测（2 次均值）。该复现的 LLM Judge 模型（`GPT-5.4-mini`）与本文（`gpt-4.1-mini`）不同，Judge 分数不可同表比较，故只列 F1 / B-1。
+
 ## 🗺️ Coming Features
 
 - **Lite 模式**：以低依赖、可替换、易嵌入为设计理念，将数据库后端、异步任务和日志存储解耦为灵活的轻量组件，支持 in-memory 调用与简化部署。

@@ -495,6 +495,21 @@ Mem-Gallery 各题型的 F1 / Judge：
 
 其余方法（Reflexion、Generative Agents、SimpleMem、M2A 等）与另外三个模型后端（`gpt-4.1-nano`、`Qwen3-VL-8B-Instruct`、`gemini-2.5-flash-lite`）的完整结果矩阵见[原论文](https://arxiv.org/abs/2605.15128)附录（[代码与数据](https://github.com/MinghoKwok/MemEye)）。
 
+Mem-Gallery 上**同条件**的开源基线（F1 / B-1 为与 judge 无关的确定性指标；同全量 bench、同作答器 `gpt-4.1-mini`、benchmark 原版协议、3 次均值，出处为双盲评审中的在投论文，暂不附链接。该复现的 Judge 模型为 `GPT-5.4-mini`，与本节 `gpt-4.1-mini` 不同，Judge 不可同表比较）：
+
+| 方法 | F1 | B-1 |
+|---|---|---|
+| MemoryOS | 43.09 | 37.76 |
+| A-MEM | 44.08 | 38.37 |
+| SimpleMem | 34.73 | 28.90 |
+| HyperMem | 44.57 | 33.42 |
+| M2A | 15.04 | 10.28 |
+| MMA | 26.99 | 20.60 |
+| SRAG（多模态语义检索） | 41.07 | 35.03 |
+| UniversalRAG | 48.36 | 41.90 |
+
+对照本节上方 MindMemOS 四组配置：b0 38.72 / 32.59，b1 54.73 / 47.75，enhanced 55.66 / 48.98，enhanced_agentic 57.06 / 50.45（2 次均值）。
+
 ### 10. 试过但无效、未合入的方案
 
 | 方案 | 结果 | 原因 |

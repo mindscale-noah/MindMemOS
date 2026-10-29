@@ -423,6 +423,26 @@ The remaining methods (Reflexion, Generative Agents, SimpleMem, M2A, …) and th
 three more backbones (`gpt-4.1-nano`, `Qwen3-VL-8B-Instruct`, `gemini-2.5-flash-lite`) are in the
 [paper](https://arxiv.org/abs/2605.15128) appendix ([code & data](https://github.com/MinghoKwok/MemEye)).
 
+Open-source baselines on Mem-Gallery under **identical conditions** (F1 / B-1 — deterministic,
+judge-free metrics; the full benchmark, the same `gpt-4.1-mini` answerer, the benchmark's native
+protocol, mean of 3 runs; source: a paper under double-blind review, not linked yet. That
+reproduction's judge model is `GPT-5.4-mini`, different from this guide's `gpt-4.1-mini`, so
+Judge scores cannot share the table):
+
+| Method | F1 | B-1 |
+|---|---|---|
+| MemoryOS | 43.09 | 37.76 |
+| A-MEM | 44.08 | 38.37 |
+| SimpleMem | 34.73 | 28.90 |
+| HyperMem | 44.57 | 33.42 |
+| M2A | 15.04 | 10.28 |
+| MMA | 26.99 | 20.60 |
+| SRAG (multimodal semantic RAG) | 41.07 | 35.03 |
+| UniversalRAG | 48.36 | 41.90 |
+
+Against MindMemOS's four configurations above: b0 38.72 / 32.59, b1 54.73 / 47.75, enhanced
+55.66 / 48.98, enhanced_agentic 57.06 / 50.45 (mean of 2 runs).
+
 ### 10. Approaches that were tried and did not work
 
 | Approach | Result | Why |

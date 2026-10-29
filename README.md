@@ -441,6 +441,30 @@ Open-source method reference (reported by the MemEye [paper](https://arxiv.org/a
 
 The remaining methods (Reflexion, Generative Agents, SimpleMem, M2A, …) and the full matrices for three more backbones (`gpt-4.1-nano`, `Qwen3-VL-8B-Instruct`, `gemini-2.5-flash-lite`) are in the [paper](https://arxiv.org/abs/2605.15128) ([code & data](https://github.com/MinghoKwok/MemEye)).
 
+**Mem-Gallery: open-source baselines under identical conditions** (F1 / B-1 — deterministic, judge-free metrics):
+
+| Method | F1 | B-1 |
+| :--- | :---: | :---: |
+| MemoryOS | 43.09 | 37.76 |
+| A-MEM | 44.08 | 38.37 |
+| SimpleMem | 34.73 | 28.90 |
+| HyperMem | 44.57 | 33.42 |
+| M2A | 15.04 | 10.28 |
+| MMA | 26.99 | 20.60 |
+| SRAG (multimodal semantic RAG) | 41.07 | 35.03 |
+| UniversalRAG | 48.36 | 41.90 |
+| MindMemOS b0 (text-only baseline) | 38.72 | 32.59 |
+| MindMemOS b1 (image-similarity retrieval) | 54.73 | 47.75 |
+| MindMemOS enhanced (VLM visual facts) | 55.66 | 48.98 |
+| MindMemOS enhanced_agentic (multimodal agent) | **57.06** | **50.45** |
+
+Conditions: the baseline rows are reproductions under identical conditions — the full Mem-Gallery
+(20 tasks / 1,711 questions), the same `gpt-4.1-mini` answerer, the benchmark's native QA and
+scoring protocol, mean of 3 runs (source: a paper under double-blind review, not linked yet);
+the four MindMemOS rows are the current repository implementation (mean of 2 runs). That
+reproduction's LLM judge (`GPT-5.4-mini`) differs from ours (`gpt-4.1-mini`), so Judge scores
+cannot share the table — only F1 / B-1 are listed.
+
 ## 🗺️ Coming Features
 
 - **Lite mode**: Designed around low dependencies, replaceable components, and easy embedding, with database backends, async tasks, and log storage decoupled into flexible lightweight components that support in-memory calls and simplified deployment.
