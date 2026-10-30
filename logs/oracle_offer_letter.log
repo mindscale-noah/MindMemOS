@@ -1,0 +1,23 @@
+{
+  "environment": "skillsbench",
+  "mode": "no_skill",
+  "planned": 1,
+  "attempted": 1,
+  "completed": 0,
+  "not_started": 0,
+  "errors": 1,
+  "successful": 0,
+  "success_rate": null,
+  "wall_seconds": 924.2396069881506,
+  "input_tokens": null,
+  "output_tokens": null,
+  "total_tokens": null,
+  "reported_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0
+  },
+  "usage_missing": 1,
+  "trajectory_file": "/home/guo/project/mindmemos-skill/output/mindmemos_eval/test/oracle_offer_letter/tasks/trajectories.jsonl"
+}
+Report: /home/guo/project/mindmemos-skill/output/mindmemos_eval/test/oracle_offer_letter/report.md
