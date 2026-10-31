@@ -377,7 +377,7 @@ function formatMemoryContext(memories: MemoryHit[], userId: string | undefined, 
   }
   const preamble = buildPreamble(userId, isSubagent);
   const imageHint = hasImage
-    ? "(<image: …> URLs point at the stored images and expire; fetch them directly — a relative proxy path resolves against the MindMemOS API base)"
+    ? "(<image: …> URLs point at the stored images, fetch directly with no API key, and expire; relative paths resolve against the MindMemOS API base)"
     : "";
   return [MEMORY_CONTEXT_OPEN, preamble, imageHint, ...lines, MEMORY_CONTEXT_CLOSE].filter(Boolean).join("\n");
 }

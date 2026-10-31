@@ -445,7 +445,16 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 | MindMemOS enhanced (VLM visual facts) | 63.45 | 25.49 | 55.66 | 48.98 |
 | MindMemOS enhanced_agentic (multimodal agent) | **65.89** | 27.09 | **57.06** | **50.45** |
 
-Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The baseline rows are reproductions under identical conditions (mean of 3 runs; source: a paper under double-blind review, not linked yet); the four MindMemOS rows are this repository's implementation (mean of 2 runs, 2026-10). Judge scores are not comparable across the two groups (judge model differs: `gpt-4.1-mini` here vs `GPT-5.4-mini` there); MindMemOS Judge, b0 → enhanced_agentic: 26.26 / 47.80 / 50.80 / 53.30 on MemEye, 70.68 / 85.06 / 87.06 / 89.14 on Mem-Gallery. Step-by-step run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
+LLM-Judge scores, MindMemOS rows only (the baseline reproductions were judged by a different model, `GPT-5.4-mini`, so their Judge scores cannot share the table):
+
+| Configuration | MemEye Judge | Mem-Gallery Judge |
+| :--- | :---: | :---: |
+| b0 (text-only baseline) | 26.26 | 70.68 |
+| b1 (image-similarity retrieval) | 47.80 | 85.06 |
+| enhanced (VLM visual facts) | 50.80 | 87.06 |
+| enhanced_agentic (multimodal agent) | **53.30** | **89.14** |
+
+Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The baseline rows are reproductions under identical conditions (mean of 3 runs; source: a paper under double-blind review, not linked yet); the four MindMemOS rows are this repository's implementation (mean of 2 runs, 2026-10). Judge scores are not comparable across the two groups (judge model differs: `gpt-4.1-mini` here vs `GPT-5.4-mini` there); the MindMemOS judge scores are in the table above. Step-by-step run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
 
 ## 🗺️ Coming Features
 
