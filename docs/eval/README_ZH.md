@@ -297,7 +297,7 @@ cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
    ```yaml
    mm_embed_model_router:
      endpoints:
-       - model: siglip2-base-patch16-384
+       - model: openai/siglip2-base-patch16-384
          api_base: http://127.0.0.1:8090/v1
          dimensions: 768
    ```
@@ -482,11 +482,13 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
   --judge-runs 1
 ```
 
-> **add 前清库**：add 阶段开始前，eval 进程会按本次 run 的 `project_id` 直接清空 Qdrant 和
-> Neo4j 中对应的数据，确保每次 run 从干净状态开始（每次 run 都有独立的 `project_id`）。这要求
-> eval 进程能访问 Qdrant 和 Neo4j；用与服务端相同的环境变量配置（`MINDMEMOS_QDRANT_URL`、
-> `MINDMEMOS_NEO4J_URI`、`MINDMEMOS_NEO4J_USERNAME`、`MINDMEMOS_NEO4J_PASSWORD`、
-> `MINDMEMOS_NEO4J_DATABASE`），或用 `--qdrant-url` / `--neo4j-*` 参数。`--no-add` 跳过清库、
+> **add 前清库**：add 阶段开始前，eval 进程会按本次 run 的 `project_id` 直接清空 Qdrant、
+> Neo4j 以及 S3/MinIO blob 存储中该项目的已存图片对象，确保每次 run 从干净状态开始（每次
+> run 都有独立的 `project_id`）。这要求 eval 进程能访问 Qdrant、Neo4j 和 S3/MinIO 端点；
+> 用与服务端相同的环境变量配置（`MINDMEMOS_QDRANT_URL`、`MINDMEMOS_NEO4J_URI`、
+> `MINDMEMOS_NEO4J_USERNAME`、`MINDMEMOS_NEO4J_PASSWORD`、`MINDMEMOS_NEO4J_DATABASE`、
+> `MINDMEMOS_S3_*`），或用 `--qdrant-url` / `--neo4j-*` 参数（S3 配置取自 `--server-config`
+> 的 `blob_store.s3_*`；blob 存储不可达会直接中止评测）。`--no-add` 跳过清库、
 > 复用已有数据；`--skip-clean` 跳过清库但仍执行 add。
 
 ### 只跑部分 benchmark

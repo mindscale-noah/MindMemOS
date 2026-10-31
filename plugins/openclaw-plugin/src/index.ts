@@ -57,7 +57,9 @@ const DEFAULT_CONFIG: PluginConfig = {
   cli: "mindmemos",
   topK: 5,
   multimodal: true,
-  addMode: "async",
+  // sync by default: async enqueues through Kafka and silently stores nothing on a
+  // server without kafka.enabled=true — sync works on every deployment.
+  addMode: "sync",
   appId: "openclaw",
   minQueryLength: 2,
   maxConversationMessages: 80,
@@ -176,7 +178,7 @@ function register(api: OpenClawPluginApi): void {
 
 function loadConfig(raw: unknown): PluginConfig {
   const obj = isRecord(raw) ? raw : {};
-  const addMode = obj.addMode === "sync" ? "sync" : "async";
+  const addMode = obj.addMode === "async" ? "async" : DEFAULT_CONFIG.addMode;
   return {
     enabled: obj.enabled !== false,
     cli: typeof obj.cli === "string" && obj.cli.trim() ? obj.cli.trim() : DEFAULT_CONFIG.cli,

@@ -111,8 +111,9 @@ Optional plugin config:
   "enabled": true,
   "cli": "mindmemos",
   "topK": 5,
+  "multimodal": true,
   "tokenBudget": 2000,
-  "addMode": "async",
+  "addMode": "sync",
   "userId": "alice",
   "appId": "openclaw",
   "sessionId": "optional-session-override",
@@ -124,7 +125,11 @@ Optional plugin config:
 `userId` scopes both recall and storage to the same user. `tokenBudget` is
 optional: when set, recall runs with `memory search --token-budget` so the
 injected memories are capped by estimated tokens (token-budget retention) in
-addition to `topK`; omit it to keep legacy behavior. Configure the user with:
+addition to `topK`; omit it to keep legacy behavior. `multimodal` (default
+`true`) adds `--multimodal` to `memory search` so stored images are searched
+too; the server ignores it while the project's multimodal mode is off. `addMode`
+defaults to `sync`; `async` enqueues through the server's Kafka queue and
+requires `kafka.enabled=true`. Configure the user with:
 
 ```bash
 openclaw config set plugins.entries.mindmemos-memory.config.userId alice
@@ -146,10 +151,12 @@ openclaw config set plugins.entries.mindmemos-memory.config.cli \
 ```
 
 The `.venv/bin/mindmemos` shim has an absolute-path shebang, so it runs without
-activating the venv. Alternatively set `cli` to a wrapper such as
-`uv run mindmemos`, but only if the gateway can resolve `uv` and the repo
-working directory. If memory add/search silently does nothing, check the gateway
-log for `ENOENT` — that means the `cli` path is wrong.
+activating the venv. `cli` is passed verbatim as the executable to
+`child_process.spawn` (no shell), so a multi-word value like
+`uv run mindmemos` does **not** work (it fails with `ENOENT`) — if you need
+indirection, point `cli` at an executable wrapper script. If memory add/search
+silently does nothing, check the gateway log for `ENOENT` — that means the
+`cli` path is wrong.
 
 ## Image Memories
 
@@ -161,9 +168,11 @@ keeps it as `<image: URL>` (with a hint that the model may fetch the link to
 view the image); a hit with no text but a link still appears, rendered as
 `[image memory] <image: URL>`.
 
-Two honesty notes: as shipped this plugin issues text-only searches (no
-`--multimodal` / `--query-image`), so image hits do not occur through it — the
-wiring above applies the moment a multimodal search is enabled. And adds are
+Two honesty notes: recall is multimodal by default — the `multimodal` config
+(default `true`) adds `--multimodal` to every `memory search` — but the server
+silently ignores that flag while the project's multimodal mode is off, so image
+hits occur through the plugin only once that mode is enabled (the plugin never
+sends query images via `--query-image`). And adds are
 text-only too: conversation image attachments are not persisted; images enter
 MindMemOS via the SDK/CLI `memory add --image`.
 

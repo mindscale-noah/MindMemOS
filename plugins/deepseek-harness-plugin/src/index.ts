@@ -99,7 +99,9 @@ export const Config: z<Config> = z.object({
   topK: z.natural().min(1).default(5),
   multimodal: z.boolean().default(true),
   tokenBudget: z.natural().min(1),
-  addMode: z.union([z.const("sync"), z.const("async")]).default("async"),
+  // sync by default: async enqueues through Kafka and silently stores nothing on a
+  // server without kafka.enabled=true — sync works on every deployment.
+  addMode: z.union([z.const("sync"), z.const("async")]).default("sync"),
   userId: z.string(),
   appId: z.string().default("deepseek-harness"),
   sessionId: z.string(),

@@ -8,7 +8,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from ...config import get_config
-from ...errors import BadRequestError, MemoryNotFoundError, ResourceNotFoundError
+from ...errors import BadRequestError, ConfigNotInitializedError, MemoryNotFoundError, ResourceNotFoundError
 from ...infra.blob import get_blob_store, is_valid_blob_id
 from ...infra.blob.signed_url import image_url_signature, resolve_signing_secret
 from ...logging import get_logger, traced
@@ -390,6 +390,19 @@ class MemoryService:
     ):
         try:
             if payload.mode == "async":
+                try:
+                    kafka_enabled = get_config().kafka.enabled
+                except ConfigNotInitializedError:
+                    # no bootstrapped config (unit tests): the pipeline enforces its own rule
+                    kafka_enabled = True
+                if not kafka_enabled:
+                    # a client-selectable mode the server cannot serve is a request error,
+                    # not a 500: the pipeline would raise a bare RuntimeError downstream
+                    raise BadRequestError(
+                        "async add requires Kafka to be enabled (kafka.enabled=true); "
+                        "use mode='sync' or enable Kafka in config",
+                        code="add.async_unavailable",
+                    )
                 record_metadata = {
                     "request_submitted_at": request_submitted_at.isoformat(),
                     "skill_bindings": [binding.model_dump(mode="json") for binding in skill_bindings or []],

@@ -175,7 +175,7 @@ In `config/mindmemos/dev.yaml`:
    ```yaml
    mm_embed_model_router:
      endpoints:
-       - model: siglip2-base-patch16-384
+       - model: openai/siglip2-base-patch16-384
          api_base: http://127.0.0.1:8090/v1
          dimensions: 768
    ```
@@ -418,12 +418,15 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 ```
 
 > **Pre-add cleanup**: before the add stage the eval process clears the run's
-> `project_id` directly from Qdrant and Neo4j, so each run starts from a clean project
-> (each run gets its own `project_id`). This requires Qdrant and Neo4j reachable from the
+> `project_id` directly from Qdrant, Neo4j and the S3/MinIO blob store (the project's
+> stored image objects), so each run starts from a clean project (each run gets its own
+> `project_id`). This requires Qdrant, Neo4j and the S3/MinIO endpoint reachable from the
 > eval process; configure them via the same env vars as the server (`MINDMEMOS_QDRANT_URL`,
 > `MINDMEMOS_NEO4J_URI`, `MINDMEMOS_NEO4J_USERNAME`, `MINDMEMOS_NEO4J_PASSWORD`,
-> `MINDMEMOS_NEO4J_DATABASE`) or the `--qdrant-url` / `--neo4j-*` flags. `--no-add` skips
-> cleanup and reuses existing data; `--skip-clean` skips cleanup while still adding.
+> `MINDMEMOS_NEO4J_DATABASE`, `MINDMEMOS_S3_*`) or the `--qdrant-url` / `--neo4j-*` flags
+> (S3 settings come from `--server-config`'s `blob_store.s3_*`; an unreachable blob store
+> aborts the run). `--no-add` skips cleanup and reuses existing data; `--skip-clean`
+> skips cleanup while still adding.
 
 ### Reuse previously added memories (skip the add stage)
 

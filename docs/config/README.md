@@ -17,13 +17,22 @@ into the repository.
 
 ## Environment variables
 
-Connection endpoints and credentials are the only env-configurable fields.
+Connection endpoints and credentials are the only env-configurable fields
+outside `blob_store` (whose `MINDMEMOS_S3_*` / `MINDMEMOS_PROXY_*` /
+`MINDMEMOS_URL_SIGNING_SECRET` overlays are listed under `blob_store` below).
 They are read at load time (`.env` at the repository root is honoured):
 
 | Variable | Applies to | Default |
 |---|---|---|
 | `MINDMEMOS_QDRANT_URL` | `database.qdrant.url` | `http://localhost:6333` |
+| `MINDMEMOS_QDRANT_API_KEY` | `database.qdrant.api_key` | *(none)* |
+| `MINDMEMOS_QDRANT_GRPC_PORT` | `database.qdrant.grpc_port` | `6334` |
+| `MINDMEMOS_QDRANT_PREFER_GRPC` | `database.qdrant.prefer_grpc` | `false` |
 | `MINDMEMOS_NEO4J_URI` | `database.neo4j.uri` | `bolt://localhost:7687` |
+| `MINDMEMOS_NEO4J_USERNAME` | `database.neo4j.username` | `neo4j` |
+| `MINDMEMOS_NEO4J_PASSWORD` | `database.neo4j.password` | `mindmemos_dev_password` |
+| `MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS` | `kafka.bootstrap_servers` | `localhost:9092` |
+| `MINDMEMOS_TELEMETRY_ENDPOINT` | `telemetry.telemetry_endpoint` | `http://localhost:4318` |
 
 ## `algo_config` top-level sections
 
@@ -401,6 +410,7 @@ environment variables. All `s3_*` fields except `s3_region` can be set via envir
 
 ## Validation
 
-`mindmemos.config.validation.validate_config` enforces choice and range rules
-for every documented field; invalid values fail fast at startup with the
+`mindmemos.config.validation.validate_config` enforces the choice and range
+rules of the fields documented above (booleans, free-form strings and file
+paths carry no such rule); invalid values fail fast at startup with the
 offending config path.

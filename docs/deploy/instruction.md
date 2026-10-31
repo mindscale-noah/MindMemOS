@@ -171,6 +171,7 @@ For local deployment, the port variables in `.env` must align with the connectio
 - `kafka.bootstrap_servers`
 - `telemetry.telemetry_endpoint`
 - `blob_store.s3_endpoint` / `s3_bucket` / `s3_access_key` / `s3_secret_key` / `s3_public_base_url` / `s3_presign_endpoint` / `s3_presign_expiry_seconds` (via the `MINDMEMOS_S3_*` variables; `s3_region` has no env override)
+- `blob_store.proxy_url_expiry_seconds` / `proxy_public_base_url` / `url_signing_secret` (via `MINDMEMOS_PROXY_URL_EXPIRY_SECONDS` / `MINDMEMOS_PROXY_PUBLIC_BASE_URL` / `MINDMEMOS_URL_SIGNING_SECRET`)
 
 ## 5. LLM Configuration
 
