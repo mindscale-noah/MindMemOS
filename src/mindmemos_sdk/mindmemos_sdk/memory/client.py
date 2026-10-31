@@ -66,7 +66,13 @@ class MemoryClient:
         score: float | None = None,
         task_id: str | None = None,
     ) -> AddResult:
-        """Add content to the memory store."""
+        """Add content to the memory store.
+
+        Messages accept images (``DialogueMessage.images`` with ``ImageRef`` path/url/data/blob_id
+        sources) when the project's ``algo_config.multimodal.mode`` is basic or enhanced; in off
+        mode image sends are rejected with error code ``add.images_unsupported``, and server-side
+        ``path`` sources outside ``blob_store.allowed_path_roots`` fail with ``image.path_denied``.
+        """
         if self._skill_manager is not None:
             if skill_context is None:
                 skill_context = self._detect_and_ensure_skill_context(messages)
@@ -131,8 +137,11 @@ class MemoryClient:
         """Search memories.
 
         ``multimodal=True`` searches stored images too (image results and facts recalled through
-        them); ``query_images`` attaches images to the query and implies it. Both need the project's
-        ``algo_config.multimodal.mode`` to be basic or enhanced; otherwise the search is text-only.
+        them); ``query_images`` attaches images to the query and implies it. ``query_images`` needs
+        the project's ``algo_config.multimodal.mode`` to be basic or enhanced — in off mode it is
+        rejected with error code ``search.images_unsupported`` — while a bare ``multimodal=True``
+        is silently ignored (text-only) in off mode. Image hits carry ``metadata.blob_id`` and may
+        carry ``metadata.image_url`` (see ``MemorySearchHit.metadata``).
         """
         request = self._core.search(
             query,

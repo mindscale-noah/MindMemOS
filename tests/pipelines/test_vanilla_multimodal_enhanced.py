@@ -218,10 +218,10 @@ def _view(memory_id, content, blobs=()):
 
 
 def _engine(reader, hits, llm=None, **cfg):
-    from mindmemos.infra.blob import LocalBlobStore
+    from tests.blob_fakes import MemoryBlobStore
 
     return VanillaMultimodalSearchEngine(
-        blob_store=LocalBlobStore("/nonexistent-blob-root"),
+        blob_store=MemoryBlobStore(),
         db_reader=reader,
         db_writer=object(),
         embed_client=object(),

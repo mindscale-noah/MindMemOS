@@ -17,7 +17,7 @@ from .algo.search.vanilla.vanilla import (
     VANILLA_HYBRID_PREFETCH_MAX,
     VANILLA_RECALL_SIZE_MAX,
 )
-from .multimodal import BLOB_STORE_BACKENDS, MM_IMAGE_TRANSPORTS
+from .multimodal import MM_IMAGE_TRANSPORTS
 
 
 @dataclass(frozen=True)
@@ -608,6 +608,13 @@ def _validate_search(search: Any) -> None:
 
 
 def _validate_multimodal(cfg: Any) -> None:
+    mm = cfg.algo_config.multimodal
+    if str(mm.mode) not in MULTIMODAL_MODES:
+        # YAML 1.1 reads a bare `off` as false.
+        raise InvalidConfigError(
+            "algo_config.multimodal.mode", support=", ".join(sorted(MULTIMODAL_MODES)) + ' (quote it in YAML: "off")'
+        )
+
     dimensions: set[int] = set()
     for index, endpoint in enumerate(cfg.mm_embed_model_router.endpoints):
         prefix = f"mm_embed_model_router.endpoints[{index}]"
@@ -639,23 +646,22 @@ def _validate_multimodal(cfg: Any) -> None:
         )
 
     blob = cfg.blob_store
-    _validate_choice("blob_store.backend", blob.backend, set(BLOB_STORE_BACKENDS))
-    if blob.backend == "s3":
+    if cfg.algo_config.multimodal.mode != "off":
+        # Images are stored as S3 blobs, so any multimodal deployment must point at
+        # MinIO/another S3 endpoint; with mode off the blob store is never touched.
         _require_string("blob_store.s3_endpoint", blob.s3_endpoint)
         if not blob.s3_endpoint.startswith(("http://", "https://")):
             raise InvalidConfigError(
                 "blob_store.s3_endpoint", support="an http:// or https:// URL (the scheme decides TLS)"
             )
         _require_string("blob_store.s3_bucket", blob.s3_bucket)
-        _require_string("blob_store.s3_access_key", blob.s3_access_key, reason="the s3 backend signs every request")
-        _require_string("blob_store.s3_secret_key", blob.s3_secret_key, reason="the s3 backend signs every request")
+        _require_string("blob_store.s3_access_key", blob.s3_access_key, reason="every s3 request is signed")
+        _require_string("blob_store.s3_secret_key", blob.s3_secret_key, reason="every s3 request is signed")
         # An explicit empty region yields a region-less client whose presigning does a live
         # GetBucketLocation lookup — the exact network I/O presigning must avoid.
         _require_string(
             "blob_store.s3_region", blob.s3_region, reason="presigning stays offline only with an explicit region"
         )
-    else:
-        _require_string("blob_store.local_root", blob.local_root)
     if blob.s3_presign_endpoint and not blob.s3_presign_endpoint.startswith(("http://", "https://")):
         raise InvalidConfigError(
             "blob_store.s3_presign_endpoint",
@@ -671,6 +677,22 @@ def _validate_multimodal(cfg: Any) -> None:
             support="1..604800 seconds (the S3 presign limit of 7 days)",
         ),
     )
+    if blob.proxy_public_base_url and not blob.proxy_public_base_url.startswith(("http://", "https://")):
+        raise InvalidConfigError(
+            "blob_store.proxy_public_base_url",
+            support="an http:// or https:// URL (the scheme decides TLS), or leave it unset",
+        )
+    if blob.proxy_url_expiry_seconds is not None:
+        _validate_range(
+            "blob_store.proxy_url_expiry_seconds",
+            blob.proxy_url_expiry_seconds,
+            RangeRule(
+                "blob_store.proxy_url_expiry_seconds",
+                min_value=1,
+                max_value=604800,
+                support="1..604800 seconds, or leave it unset to reuse s3_presign_expiry_seconds",
+            ),
+        )
     _validate_range(
         "blob_store.max_image_bytes", blob.max_image_bytes, RangeRule("blob_store.max_image_bytes", min_value=1)
     )
@@ -681,11 +703,6 @@ def _validate_multimodal(cfg: Any) -> None:
     )
 
     mm = cfg.algo_config.multimodal
-    if str(mm.mode) not in MULTIMODAL_MODES:
-        # YAML 1.1 reads a bare `off` as false.
-        raise InvalidConfigError(
-            "algo_config.multimodal.mode", support=", ".join(sorted(MULTIMODAL_MODES)) + ' (quote it in YAML: "off")'
-        )
     for name, minimum in (
         ("image_top_k", 1),
         ("max_images_per_request", 1),

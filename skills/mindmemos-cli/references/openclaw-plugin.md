@@ -51,8 +51,9 @@ Optional plugin config:
   "enabled": true,
   "cli": "mindmemos",
   "topK": 5,
+  "multimodal": true,
   "tokenBudget": 2000,
-  "addMode": "async",
+  "addMode": "sync",
   "userId": "alice",
   "appId": "openclaw",
   "sessionId": "optional-session-override",
@@ -61,10 +62,11 @@ Optional plugin config:
 }
 ```
 
-- `cli` — command used to invoke the CLI. Defaults to `mindmemos`. If OpenClaw does not run with the CLI on its PATH, set this to an absolute path or a wrapper command (e.g. `uv run mindmemos` inside the repo).
+- `cli` — command used to invoke the CLI. Defaults to `mindmemos`. The value is passed verbatim as the executable to `child_process.spawn` (no shell), so it must be a single executable — an absolute path or a name resolvable on the OpenClaw process's PATH. A multi-word command such as `uv run mindmemos` does **not** work (it fails with `ENOENT`); if you need indirection, point `cli` at an executable wrapper script.
 - `topK` — number of memories injected per turn.
+- `multimodal` — also search stored images by passing `memory search --multimodal`; default `true`. Image hits carry a short-lived directly-fetchable `metadata.image_url`; the server ignores the flag while the project's multimodal mode is off. Set `false` for text-only recall.
 - `tokenBudget` — optional strict token budget for recall; when set, `memory search --token-budget` caps the injected memories by estimated tokens (token-budget retention) instead of only by `topK` count. Omit to keep legacy behavior.
-- `addMode` — `sync` blocks until extraction finishes; `async` (default) enqueues and returns immediately. Note: in `async` mode the plugin only sees CLI-level failures — a server-side add failure that happens after the CLI exits 0 is not logged by the plugin.
+- `addMode` — `sync` (default) blocks until extraction finishes; `async` enqueues and returns immediately. In `async` mode the plugin only sees CLI-level failures — async requires the server's Kafka queue (`kafka.enabled=true`; without it adds are rejected), which is why `sync` is the default.
 - `userId` — scopes both search and add to one user. If omitted, search is project-wide, while add inherits the
   default user from the local `mindmemos` CLI config. If neither location supplies a user, add fails.
 - `appId` / `sessionId` — override the corresponding plugin context values.
@@ -80,10 +82,18 @@ openclaw gateway restart
 
 ## Image memories
 
-Multimodal search hits can carry `metadata.image_url` — a short-lived direct
-link to the stored image. When present, the injected memory context keeps it as
-`<image: URL>` the model may fetch to view the image; a hit with no text but a
-link still appears, rendered as `[image memory] <image: URL>`.
+Multimodal search hits can carry `metadata.image_url` — a permanent mirror URL, a short-lived presigned link, or a short-lived *signed*
+proxy URL (`/v1/memory/images/{blob_id}?…&signature=…`) — all three download directly
+with no MindMemOS API token;
+`metadata.blob_id` is the stable id. When present, the injected memory context
+keeps it as `<image: URL>` the model may fetch to view the image; a hit with no
+text but a link still appears, rendered as `[image memory] <image: URL>`. Note:
+as shipped the plugin runs multimodal searches — it appends `--multimodal` to
+every `memory search` by default (disable with `"multimodal": false` in the
+plugin config; the server silently ignores the flag while the project's
+multimodal mode is off), so image hits do occur through it. The query itself
+stays text-only (no `--query-image`), and adds are text-only too — conversation
+images are not persisted.
 
 ## Subagent behavior
 
@@ -161,12 +171,17 @@ Fix (pick one):
 - **Point `cli` at an absolute path** (most reliable, no PATH dependency):
   set the plugin config `"cli": "/Users/you/.local/bin/mindmemos"` (use the path
   from `which mindmemos`).
-- **Use a wrapper that resolves the CLI itself**, e.g. `"cli": "uv run mindmemos"`
-  when OpenClaw's working directory is this repo.
+- **Use a wrapper script that resolves the CLI itself** — create an executable
+  script, e.g. `~/bin/mindmemos-repo` containing `#!/bin/sh` +
+  `exec uv run --project /path/to/MindMemOS mindmemos "$@"`, then set `"cli"` to
+  its absolute path. (A multi-word value like `"cli": "uv run mindmemos"` does
+  not work — the plugin spawns the `cli` value as one executable with no shell
+  and fails with `ENOENT`.)
 - **Install the CLI somewhere already on the GUI PATH** — `uv tool install
-  mindmemos` / `pipx install mindmemos` put it in `~/.local/bin`; ensure that dir
-  is on the PATH the OpenClaw process inherits (for GUI apps on macOS this means
-  the login environment, not just `~/.zshrc`).
+  mindmemos-sdk` / `pipx install mindmemos-sdk` put the `mindmemos` console
+  script in `~/.local/bin`; ensure that dir is on the PATH the OpenClaw process
+  inherits (for GUI apps on macOS this means the login environment, not just
+  `~/.zshrc`).
 
 After changing `cli`, re-run a turn and confirm the gateway log no longer shows
 the spawn error.

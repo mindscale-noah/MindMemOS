@@ -9,7 +9,7 @@ This guide explains how to run the three standard benchmarks (LoCoMo, LongMemEva
 ### 1. Start dependency services
 
 ```bash
-make db          # starts Qdrant / Neo4j / Kafka / ClickHouse / Grafana
+make db          # starts Qdrant / Neo4j / Kafka / ClickHouse / Grafana / MinIO
 ```
 
 > **Important**: If you previously ran `make db-clean` (which deletes all volumes), you must also restart the MindMemOS server. Otherwise the server's stale connection pool will cause search requests to return HTTP 500.
@@ -175,7 +175,7 @@ In `config/mindmemos/dev.yaml`:
    ```yaml
    mm_embed_model_router:
      endpoints:
-       - model: siglip2-base-patch16-384
+       - model: openai/siglip2-base-patch16-384
          api_base: http://127.0.0.1:8090/v1
          dimensions: 768
    ```
@@ -185,9 +185,8 @@ In `config/mindmemos/dev.yaml`:
 
    ```yaml
    blob_store:
-     local_root: data/blobs                 # where originals are stored
      allowed_path_roots:
-       - /absolute/path/to/MindMemOS/datasets
+       - /absolute/path/to/MindMemOS/datasets   # originals are stored in S3/MinIO (s3_endpoint/...)
    ```
 
 4. Point the server at the evaluation's key file (written by the runner, auto-reloaded by the
@@ -265,6 +264,10 @@ sets `algo_config.multimodal.mode`, and `search_params.multimodal: true` makes e
 stored images. With `execution_params.memeye.send_images: true` the dialogue and question images
 are sent by path, so the server's `blob_store.allowed_path_roots` must cover the dataset; mode
 `off` rejects images, so its baseline sets `send_images: false`. Dataset captions are never sent.
+The config loader rejects unknown `search_params` / `execution_params` keys at load time (the
+known keys per benchmark live in `src/mindmemos_eval/mindmemos_eval/memory/config.py`), and
+`send_images: true` against an off-mode project fails the same load-time consistency check —
+the conflict surfaces before any request is made, not as a mid-run `add.images_unsupported`.
 
 1. Download `MemEyeBench/MemEye` from Hugging Face and link it so `datasets/memeye/data` holds
    `dialog/` and `image/`.
@@ -284,9 +287,8 @@ uv run python -m mindmemos_eval.cli memory \
   --server-config config/mindmemos/dev.yaml
 ```
 
-`--server-config` lets the project reset find the server's collections and blob root (local blob
-backend only), so stored images are deleted with the project; with `blob_store.backend: s3` the
-reset still clears the collections but leaves the bucket objects untouched.
+`--server-config` lets the project reset find the server's collections and its S3/MinIO blob
+settings, so stored image objects are deleted with the project's other records.
 
 `eval_result.metrics` reports, in percent: `EM` (MCQ exact match averaged over the four option
 rotations, macro mean over tasks), `B-1` (OPEN BLEU-1) and `Judge` (OPEN, MemEye 0–1 judge rubric),
@@ -319,25 +321,24 @@ Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini` (the answerer 
 images); image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The MindMemOS rows are this
 repository's implementation (answerer & judge both `gpt-4.1-mini`, mean of 2 runs, measured
 2026-10); the baseline rows are the paper's reproductions under identical conditions with the same
-answerer (mean of 3 runs; source: a paper under double-blind review, not linked yet). Judge scores
-are not shared across the two groups — the judge model differs (`gpt-4.1-mini` here vs
-`GPT-5.4-mini` there); MindMemOS Judge, b0 → enhanced_agentic: 26.26 / 47.80 / 50.80 / 53.30 on
-MemEye and 70.68 / 85.06 / 87.06 / 89.14 on Mem-Gallery.
+answerer (mean of 3 runs; source: a paper under double-blind review, not linked yet). Judge models
+differ between the groups (`gpt-4.1-mini` here vs `GPT-5.4-mini` for the baselines), so compare
+Judge scores within a group, not across.
 
-| Method | MemEye EM | MemEye B-1 | Mem-Gallery F1 | Mem-Gallery B-1 |
-|---|---|---|---|---|
-| MemoryOS | 45.75 | 13.12 | 43.09 | 37.76 |
-| A-MEM | 49.73 | 21.11 | 44.08 | 38.37 |
-| SimpleMem | 50.34 | 9.42 | 34.73 | 28.90 |
-| HyperMem | 47.82 | 19.64 | 44.57 | 33.42 |
-| M2A | 52.31 | 6.31 | 15.04 | 10.28 |
-| MMA | 50.96 | 16.32 | 26.99 | 20.60 |
-| SRAG (multimodal semantic RAG) | 58.36 | 31.48 | 41.07 | 35.03 |
-| UniversalRAG | 60.49 | 11.23 | 48.36 | 41.90 |
-| MindMemOS b0 (mode off, text-only) | 43.03 | 20.32 | 38.72 | 32.59 |
-| MindMemOS b1 (basic) | 59.77 | 27.02 | 54.73 | 47.75 |
-| MindMemOS enhanced | 63.45 | 25.49 | 55.66 | 48.98 |
-| MindMemOS enhanced_agentic | **65.89** | 27.09 | **57.06** | **50.45** |
+| Method | MemEye EM | MemEye B-1 | MemEye Judge | Mem-Gallery F1 | Mem-Gallery B-1 | Mem-Gallery Judge |
+|---|---|---|---|---|---|---|
+| MemoryOS | 45.75 | 13.12 | 34.91 | 43.09 | 37.76 | 64.64 |
+| A-MEM | 49.73 | 21.11 | 38.27 | 44.08 | 38.37 | 64.35 |
+| SimpleMem | 50.34 | 9.42 | 42.59 | 34.73 | 28.90 | 58.33 |
+| HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
+| M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
+| MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
+| SRAG (multimodal semantic RAG) | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
+| MindMemOS b0 (mode off, text-only) | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| MindMemOS b1 (basic) | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| MindMemOS enhanced | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| MindMemOS enhanced_agentic | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
 
 **When comparing results:**
 
@@ -369,7 +370,7 @@ MemEye and 70.68 / 85.06 / 87.06 / 89.14 on Mem-Gallery.
 | Smoke test stuck in add, or slow | enhanced ingestion calls a VLM; tens of seconds per add is normal. Check the embedding and LLM service latency |
 | Result `valid: false` | An answer or judge call failed — usually LLM throttling or instability. Rerun the same command once the service recovers; only the failed run repeats |
 | Dimension mismatch after switching the multimodal embedding model | The image collection is built per `dimensions`. Delete the `image_item_v1` collection in Qdrant (or use a new `database.qdrant.image_collection` name) and restart |
-| Disk usage growth | Every evaluation uses a fresh project id; originals land in `data/blobs/<project>/`, records stay in Qdrant and Neo4j. Delete old projects' blob directories in dev; `make db-clean` wipes all database volumes — careful |
+| Storage growth | Every evaluation uses a fresh project id; originals land in the MinIO bucket under the project's prefix, records stay in Qdrant and Neo4j. The next run of the same project resets them; `make db-clean` wipes all database volumes (MinIO included) — careful |
 | `multimodal_agentic_failed` warning | One of the agent's LLM calls failed; that search falls back to fast-retrieval results. Run validity is unaffected; occasional occurrences are normal |
 
 ---
@@ -416,12 +417,15 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
 ```
 
 > **Pre-add cleanup**: before the add stage the eval process clears the run's
-> `project_id` directly from Qdrant and Neo4j, so each run starts from a clean project
-> (each run gets its own `project_id`). This requires Qdrant and Neo4j reachable from the
+> `project_id` directly from Qdrant, Neo4j and the S3/MinIO blob store (the project's
+> stored image objects), so each run starts from a clean project (each run gets its own
+> `project_id`). This requires Qdrant, Neo4j and the S3/MinIO endpoint reachable from the
 > eval process; configure them via the same env vars as the server (`MINDMEMOS_QDRANT_URL`,
 > `MINDMEMOS_NEO4J_URI`, `MINDMEMOS_NEO4J_USERNAME`, `MINDMEMOS_NEO4J_PASSWORD`,
-> `MINDMEMOS_NEO4J_DATABASE`) or the `--qdrant-url` / `--neo4j-*` flags. `--no-add` skips
-> cleanup and reuses existing data; `--skip-clean` skips cleanup while still adding.
+> `MINDMEMOS_NEO4J_DATABASE`, `MINDMEMOS_S3_*`) or the `--qdrant-url` / `--neo4j-*` flags
+> (S3 settings come from `--server-config`'s `blob_store.s3_*`; an unreachable blob store
+> aborts the run). `--no-add` skips cleanup and reuses existing data; `--skip-clean`
+> skips cleanup while still adding.
 
 ### Reuse previously added memories (skip the add stage)
 

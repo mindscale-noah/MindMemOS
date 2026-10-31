@@ -18,6 +18,7 @@ from ..config import get_config, init_config_from_env
 from ..errors import ApiError, InvalidConfigError
 from ..infra import shutdown_tracer_provider
 from ..infra.blob import get_blob_store
+from ..infra.blob.signed_url import resolve_signing_secret
 from ..infra.db import close_database_clients, ensure_database_schema
 from ..infra.kafka import start_kafka, stop_kafka
 from ..llm import (
@@ -83,23 +84,38 @@ async def lifespan(app: FastAPI):
 def _check_blob_store() -> None:
     """Construct the configured blob store once at startup.
 
+    Only when images are possible: with ``algo_config.multimodal.mode: off`` the
+    server stores and serves no images, so a text-only deployment boots without
+    the ``s3`` extra or a reachable blob store — matching config validation,
+    which exempts mode ``off`` from every ``blob_store`` field.
+
     The S3 backend imports ``minio`` lazily, so a missing ``mindmemos[s3]`` extra would
     otherwise pass validation and only surface as an ImportError -> HTTP 500 on the first
     image add or get-image call. The minio client also rejects some endpoints validation
     cannot (e.g. a non-numeric port), as a bare ``ValueError``.
     """
 
-    if get_config().blob_store.backend != "s3":
+    if get_config().algo_config.multimodal.mode == "off":
+        logger.info("multimodal mode off: blob store not constructed at boot")
         return
+
     try:
         get_blob_store()
     except ImportError as exc:
         raise InvalidConfigError(
-            "blob_store.backend",
-            support=f"install the s3 extra (pip install 'mindmemos[s3]') or use the local backend: {exc}",
+            "blob_store.s3_endpoint",
+            support=f"install the s3 extra (pip install 'mindmemos[s3]'): {exc}",
         ) from exc
     except ValueError as exc:
         raise InvalidConfigError("blob_store.s3_endpoint", support=str(exc)) from exc
+    cfg = get_config()
+    if not resolve_signing_secret(cfg.blob_store.url_signing_secret, cfg.auth.gateway_jwt_secret):
+        # not fatal: presigned/public-mirror image URLs still work, but the signed
+        # proxy tier is disabled rather than minted with a forgeable empty-key HMAC
+        logger.warning(
+            "image url signing disabled: set blob_store.url_signing_secret (or auth.gateway_jwt_secret); "
+            "search hits fall back to presigned/public-mirror links only"
+        )
 
 
 async def _check_multimodal_embedding() -> None:

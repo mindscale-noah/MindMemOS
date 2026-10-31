@@ -9,7 +9,7 @@
 ### 1. 启动依赖服务
 
 ```bash
-make db          # 启动 Qdrant / Neo4j / Kafka / ClickHouse / Grafana 等
+make db          # 启动 Qdrant / Neo4j / Kafka / ClickHouse / Grafana / MinIO 等（MINIO=0 跳过 MinIO，纯文本布局专用）
 ```
 
 > **注意**：若之前执行过 `make db-clean`（会删除所有 volume），务必同时重启 MindMemOS server，否则 server 的旧连接池会导致 search 返回 500。
@@ -297,7 +297,7 @@ cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
    ```yaml
    mm_embed_model_router:
      endpoints:
-       - model: siglip2-base-patch16-384
+       - model: openai/siglip2-base-patch16-384
          api_base: http://127.0.0.1:8090/v1
          dimensions: 768
    ```
@@ -306,9 +306,8 @@ cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
 
    ```yaml
    blob_store:
-     local_root: data/blobs                 # 原图存放位置
      allowed_path_roots:
-       - /绝对路径/MindMemOS/datasets      # 或数据集的真实所在目录
+       - /绝对路径/MindMemOS/datasets      # 或数据集的真实所在目录；原图统一存 S3/MinIO（s3_endpoint 等）
    ```
 
 4. 让服务端使用评测生成的 key 文件。评测时会自动写入这个文件，服务端会自动重新加载：
@@ -366,11 +365,7 @@ uv run python scripts/run_multimodal_bench.py --benchmarks memgallery --configs 
 
 ### 7. 手动跑单个配置
 
-MemEye（8 个任务，MCQ + OPEN，对话中含图片）使用同一个作答器：`answer_llm`（需支持看图）只看到检索返回的文本记忆和图片，以及题目自带的图片。算法固定为 `vanilla`；由 profile 的 `project_override_config` 设置 `algo_config.multimodal.mode`，`search_params.multimodal: true` 让每次检索都使用已存的图片。`execution_params.memeye.send_images: true` 时，对话图片和题目图片以路径方式发送，因此服务端 `blob_store.allowed_path_roots` 需要覆盖数据集目录；`off` 模式会拒绝图片，所以其基线设 `send_images: false`。数据集自带的图片描述不会发送给记忆系统。
-
-1. 从 Hugging Face 下载 `MemEyeBench/MemEye`，链接到 `datasets/memeye/data`（包含 `dialog/` 和 `image/`）。
-2. 跑 `basic` / `enhanced` 模式时，在服务端配置 `mm_embed_model_router`（见 `docs/config/README.md`）。
-3. 复制 `config/mindmemos_eval/memory_evaluation_multimodal.example.yaml` 为 `memory_evaluation_multimodal.yaml`，填好 LLM key 并设置模式（示例为 `enhanced`；B0 用 `"off"` 并设 `send_images: false`，B1 用 `basic`；加 `search_strategy: agentic` 使用多模态 agent），然后运行：
+MemEye（8 个任务，MCQ + OPEN，对话中含图片）使用同一个作答器：`answer_llm`（需支持看图）只看到检索返回的文本记忆和图片，以及题目自带的图片。算法固定为 `vanilla`；由 profile 的 `project_override_config` 设置 `algo_config.multimodal.mode`，`search_params.multimodal: true` 让每次检索都使用已存的图片。`execution_params.memeye.send_images: true` 时，对话图片和题目图片以路径方式发送，因此服务端 `blob_store.allowed_path_roots` 需要覆盖数据集目录；`off` 模式会拒绝图片，所以其基线设 `send_images: false`。数据集自带的图片描述不会发送给记忆系统。评测配置在装载时会拒绝未知的 `search_params` / `execution_params` 键（各 benchmark 的合法键见 `src/mindmemos_eval/mindmemos_eval/memory/config.py`）；`send_images: true` 配上 off 模式项目同样在装载期即报一致性错误——冲突在发出任何请求前就会暴露，而不是跑到一半才出现 `add.images_unsupported`。
 
 1. 从 Hugging Face 下载 `MemEyeBench/MemEye`，链接到 `datasets/memeye/data`（包含 `dialog/` 和 `image/`）。
 2. 跑 `basic` / `enhanced` 模式时，在服务端配置 `mm_embed_model_router`（见 `docs/config/README.md`）。
@@ -385,7 +380,7 @@ uv run python -m mindmemos_eval.cli memory \
   --server-config config/mindmemos/dev.yaml
 ```
 
-`--server-config` 让项目重置找到服务端的集合名和 blob 根目录（仅 local 存储后端），从而连同已存图片一起删除；若 `blob_store.backend: s3`，重置仍会清掉集合，但不会删除桶中的图片对象。
+`--server-config` 让项目重置找到服务端的集合名与 S3/MinIO blob 配置，重置时把该项目的已存图片对象连同其他记录一起删除。
 
 `eval_result.metrics` 给出百分制指标：`EM`（MCQ 四种选项轮换的平均精确匹配，按任务宏平均）、`B-1`（OPEN 的 BLEU-1）、`Judge`（OPEN，MemEye 的 0–1 评分标准），以及逐任务数值。`eval_result.cost` 记录客户端的写入/检索调用次数与延迟、作答器和 judge 的 token 用量；只要有作答或 judge 调用失败，`eval_result.valid` 即为 false。逐题明细写在 `output_root/<run_id>/memeye/`。冒烟测试可设 `execution_params.memeye.max_questions: 2`、`benchmarks.memeye.tasks: [Brand_Memory_Test]`。
 
@@ -401,22 +396,22 @@ manifest 中的 `eval_result` 包含：
 
 ### 9. 参考结果
 
-评测配置：`vanilla` 算法；所有行均以 `gpt-4.1-mini` 作答（作答器需支持看图）；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）。MindMemOS 各行为本仓库实现的评测（作答与 judge 均为 `gpt-4.1-mini`，2 次均值，2026-10）；基线行为论文在同一实验条件下、同作答器的复现（3 次均值；出处为双盲评审中的在投论文，暂不附链接）。两组 Judge 模型不同（本节 `gpt-4.1-mini`、基线 `GPT-5.4-mini`），Judge 分数不可同表比较；MindMemOS 的 Judge（b0 → enhanced_agentic）：MemEye 26.26 / 47.80 / 50.80 / 53.30，Mem-Gallery 70.68 / 85.06 / 87.06 / 89.14。
+评测配置：`vanilla` 算法；所有行均以 `gpt-4.1-mini` 作答（作答器需支持看图）；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）。MindMemOS 各行为本仓库实现的评测（作答与 judge 均为 `gpt-4.1-mini`，2 次均值，2026-10）；基线行为论文在同一实验条件下、同作答器的复现（3 次均值；出处为双盲评审中的在投论文，暂不附链接）。两组 Judge 模型不同（本节 `gpt-4.1-mini`、基线 `GPT-5.4-mini`），Judge 分数请各组内比较、勿跨组对比。
 
-| 方法 | MemEye EM | MemEye B-1 | Mem-Gallery F1 | Mem-Gallery B-1 |
-|---|---|---|---|---|
-| MemoryOS | 45.75 | 13.12 | 43.09 | 37.76 |
-| A-MEM | 49.73 | 21.11 | 44.08 | 38.37 |
-| SimpleMem | 50.34 | 9.42 | 34.73 | 28.90 |
-| HyperMem | 47.82 | 19.64 | 44.57 | 33.42 |
-| M2A | 52.31 | 6.31 | 15.04 | 10.28 |
-| MMA | 50.96 | 16.32 | 26.99 | 20.60 |
-| SRAG（多模态语义检索） | 58.36 | 31.48 | 41.07 | 35.03 |
-| UniversalRAG | 60.49 | 11.23 | 48.36 | 41.90 |
-| MindMemOS b0（mode off，纯文本） | 43.03 | 20.32 | 38.72 | 32.59 |
-| MindMemOS b1（basic） | 59.77 | 27.02 | 54.73 | 47.75 |
-| MindMemOS enhanced | 63.45 | 25.49 | 55.66 | 48.98 |
-| MindMemOS enhanced_agentic | **65.89** | 27.09 | **57.06** | **50.45** |
+| 方法 | MemEye EM | MemEye B-1 | MemEye Judge | Mem-Gallery F1 | Mem-Gallery B-1 | Mem-Gallery Judge |
+|---|---|---|---|---|---|---|
+| MemoryOS | 45.75 | 13.12 | 34.91 | 43.09 | 37.76 | 64.64 |
+| A-MEM | 49.73 | 21.11 | 38.27 | 44.08 | 38.37 | 64.35 |
+| SimpleMem | 50.34 | 9.42 | 42.59 | 34.73 | 28.90 | 58.33 |
+| HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
+| M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
+| MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
+| SRAG（多模态语义检索） | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
+| MindMemOS b0（mode off，纯文本） | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| MindMemOS b1（basic） | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| MindMemOS enhanced | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| MindMemOS enhanced_agentic | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
 
 **比较结果时注意：**
 
@@ -442,7 +437,7 @@ manifest 中的 `eval_result` 包含：
 | 冒烟测试卡在 add 或很慢 | enhanced 写入要调用 VLM，单次 add 需要十几到几十秒，属正常；检查 embedding 服务和 LLM 服务的延迟 |
 | 结果 `valid: false` | 作答或 judge 调用失败，多半是 LLM 服务限流或不稳定。服务恢复后重新执行同一条命令，失败的那次会重跑 |
 | 更换多模态 embedding 模型后报维度不一致 | 图片集合按 `dimensions` 建立。换模型时需要删除 Qdrant 中的 `image_item_v1` 集合（或改用新的 `database.qdrant.image_collection` 名称），并重启服务 |
-| 磁盘占用增长 | 每次评测使用新的项目 id，原图存放在 `data/blobs/<项目>/`，记录留在 Qdrant 和 Neo4j 中。开发环境用完可以删除旧项目对应的原图目录；`make db-clean` 会清空所有数据库卷，请谨慎使用 |
+| 存储增长 | 每次评测使用新的项目 id，原图按项目前缀存进 MinIO bucket，记录留在 Qdrant 和 Neo4j 中。同一项目下次重跑会先清掉；`make db-clean` 会清空所有数据库卷（含 MinIO），请谨慎使用 |
 | `multimodal_agentic_failed` 警告 | agent 的某次 LLM 调用失败，本次搜索退回快速检索结果，不影响运行有效性；偶发属正常 |
 
 ---
@@ -487,11 +482,13 @@ caffeinate -si uv run python -m mindmemos_eval.cli memory \
   --judge-runs 1
 ```
 
-> **add 前清库**：add 阶段开始前，eval 进程会按本次 run 的 `project_id` 直接清空 Qdrant 和
-> Neo4j 中对应的数据，确保每次 run 从干净状态开始（每次 run 都有独立的 `project_id`）。这要求
-> eval 进程能访问 Qdrant 和 Neo4j；用与服务端相同的环境变量配置（`MINDMEMOS_QDRANT_URL`、
-> `MINDMEMOS_NEO4J_URI`、`MINDMEMOS_NEO4J_USERNAME`、`MINDMEMOS_NEO4J_PASSWORD`、
-> `MINDMEMOS_NEO4J_DATABASE`），或用 `--qdrant-url` / `--neo4j-*` 参数。`--no-add` 跳过清库、
+> **add 前清库**：add 阶段开始前，eval 进程会按本次 run 的 `project_id` 直接清空 Qdrant、
+> Neo4j 以及 S3/MinIO blob 存储中该项目的已存图片对象，确保每次 run 从干净状态开始（每次
+> run 都有独立的 `project_id`）。这要求 eval 进程能访问 Qdrant、Neo4j 和 S3/MinIO 端点；
+> 用与服务端相同的环境变量配置（`MINDMEMOS_QDRANT_URL`、`MINDMEMOS_NEO4J_URI`、
+> `MINDMEMOS_NEO4J_USERNAME`、`MINDMEMOS_NEO4J_PASSWORD`、`MINDMEMOS_NEO4J_DATABASE`、
+> `MINDMEMOS_S3_*`），或用 `--qdrant-url` / `--neo4j-*` 参数（S3 配置取自 `--server-config`
+> 的 `blob_store.s3_*`；blob 存储不可达会直接中止评测）。`--no-add` 跳过清库、
 > 复用已有数据；`--skip-clean` 跳过清库但仍执行 add。
 
 ### 只跑部分 benchmark

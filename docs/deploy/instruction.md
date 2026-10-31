@@ -73,8 +73,9 @@ Default addresses:
 make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
 make dev-blobs         # MinIO alone (also started by make dev / make db); see section 8
-make db MINIO=0        # traditional mode: same stack without MinIO (dev-down / db-clean
-                       # with MINIO=0 also leave the MinIO container and its volume alone)
+make db MINIO=0        # text-only layout: same stack without MinIO — set algo_config.multimodal.mode: "off"
+                       # (images are always stored in S3/MinIO, so multimodal needs the container;
+                       # with MINIO=0, dev-down / db-clean leave the MinIO container and volume alone)
 ```
 
 Stop local dependencies:
@@ -121,7 +122,7 @@ Optional dependencies:
 | `MINDMEMOS_TELEMETRY_ENDPOINT` | OTel HTTP endpoint; telemetry is reported only when `telemetry.enabled=true` in the configuration. | `http://localhost:4318` |
 | `MINDMEMOS_CLICKHOUSE_USER` / `MINDMEMOS_CLICKHOUSE_PASSWORD` / `MINDMEMOS_CLICKHOUSE_DB` | ClickHouse/Grafana observability data configuration. | See `.env.example` |
 
-Image storage (S3/MinIO; used only when `blob_store.backend: s3`, see section 8):
+Image storage (S3/MinIO — the only image backend; required for any multimodal mode, see section 8):
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
@@ -156,7 +157,7 @@ Core services in Docker Compose:
 - `neo4j`: stores graph relationships.
 - `kafka`: asynchronous task queue; it can run even when it is disabled in the default configuration.
 - `clickhouse` + `otel-collector` + `grafana`: observability stack; disable `telemetry.enabled` in the configuration when observability is not needed.
-- `minio` + `minio-init`: image blob storage and its bucket bootstrap, used by the multimodal pipeline's `s3` backend; started with `make dev` / `make db` (or standalone via `make dev-blobs`); `make dev MINIO=0` skips it.
+- `minio` + `minio-init`: image blob storage and its bucket bootstrap — every multimodal deployment stores its images here (there is no other image backend); started with `make dev` / `make db` (or standalone via `make dev-blobs`); `make dev MINIO=0` skips it for text-only layouts. The pinned `bitnamilegacy/minio` image ships no web console — manage buckets with `mc` or the `minio-init` service.
 
 For local deployment, the port variables in `.env` must align with the connection addresses in `config/mindmemos/dev.yaml`. At startup, environment variables also override the following configuration fields:
 
@@ -170,6 +171,7 @@ For local deployment, the port variables in `.env` must align with the connectio
 - `kafka.bootstrap_servers`
 - `telemetry.telemetry_endpoint`
 - `blob_store.s3_endpoint` / `s3_bucket` / `s3_access_key` / `s3_secret_key` / `s3_public_base_url` / `s3_presign_endpoint` / `s3_presign_expiry_seconds` (via the `MINDMEMOS_S3_*` variables; `s3_region` has no env override)
+- `blob_store.proxy_url_expiry_seconds` / `proxy_public_base_url` / `url_signing_secret` (via `MINDMEMOS_PROXY_URL_EXPIRY_SECONDS` / `MINDMEMOS_PROXY_PUBLIC_BASE_URL` / `MINDMEMOS_URL_SIGNING_SECRET`)
 
 ## 5. LLM Configuration
 
@@ -276,9 +278,9 @@ algo_config:
 
 `rerank` is an optional enhancement. For production, stabilize Docker, LLM, and Embedding first, then add rerank.
 
-## 8. Multimodal Image Storage (Optional)
+## 8. Multimodal Image Storage (S3/MinIO)
 
-Images carried by memory messages are stored as content-addressed blobs (SHA-256 per project). The default `local` backend needs no setup — files land under `blob_store.local_root` (`data/blobs`). To store images in S3/MinIO instead:
+Images carried by memory messages are stored as content-addressed blobs (SHA-256 per project) in S3-compatible object storage only — MinIO in the compose stack, or any S3 endpoint (OSS S3 gateway, R2, AWS S3) elsewhere. Any multimodal mode (`algo_config.multimodal.mode` `basic`/`enhanced`) requires the settings below; with mode `off` the blob store is unused and they may be omitted.
 
 1. Start MinIO (local development):
 
@@ -286,26 +288,29 @@ Images carried by memory messages are stored as content-addressed blobs (SHA-256
    make dev-blobs   # MinIO at http://localhost:9100; the bucket is created automatically
    ```
 
-2. Switch the backend in `config/mindmemos/dev.yaml`:
+2. Point `blob_store` at it in `config/mindmemos/dev.yaml` (already the default):
 
    ```yaml
    blob_store:
-     backend: s3
      s3_endpoint: http://localhost:9100   # https:// enables TLS
      s3_bucket: mindmemos-blobs           # created lazily on first use if missing
      s3_region: us-east-1                 # required non-empty; baked into every presigned URL
      s3_access_key: minioadmin
      s3_secret_key: minioadmin
-     # s3_presign_endpoint: https://blobs.example.com  # external address for presigned URLs
-     # s3_presign_expiry_seconds: 3600                  # presigned URL lifetime, 1..604800
+     # s3_public_base_url: https://cdn.example.com/minio   # permanent mirror URLs instead of presigned
+     # s3_presign_endpoint: https://blobs.example.com      # external address for presigned URLs
+     # s3_presign_expiry_seconds: 3600                     # presigned URL lifetime, 1..604800
+     # proxy_url_expiry_seconds: 3600                      # signed proxy URL lifetime; unset reuses the presign one
+     # proxy_public_base_url: https://memory.example.com   # absolute base for signed proxy URLs; unset keeps them relative
+     # url_signing_secret:                                 # HMAC secret; unset derives from auth.gateway_jwt_secret
    ```
 
 3. Restart the service.
 
 Notes:
 
-- The `s3` backend needs the `s3` extra: `pip install mindmemos[s3]` (the dev workspace already includes it).
-- With the `s3` backend, image search hits carry `metadata.image_url`: a short-lived presigned GET link that downloads the bytes directly from S3/MinIO without credentials. Set `s3_presign_endpoint` when the address clients use differs from the internal `s3_endpoint`. When signing is unavailable (or the backend is `local`), hits fall back to the authenticated proxy route `GET /v1/memory/images/{blob_id}?user_id=<owner>` — emitted as a relative path the client resolves against its own API origin.
+- The store needs the `s3` extra: `pip install mindmemos[s3]` (the dev workspace already includes it).
+- Image search hits carry `metadata.image_url`: a short-lived presigned GET link that downloads the bytes directly from S3/MinIO without credentials. Set `s3_presign_endpoint` when the address clients use differs from the internal `s3_endpoint`. When presigning is unavailable, hits fall back to an equally short-lived *signed* proxy URL `GET /v1/memory/images/{blob_id}?user_id=…&project_id=…&expires=…&signature=…` that also needs no API key — absolute under `proxy_public_base_url`, relative otherwise.
 - Every `s3_*` field except `s3_region` can also be set through the `MINDMEMOS_S3_*` environment variables (see section 3).
 - Multimodal embedding and search modes (`algo_config.multimodal.mode`, `mm_embed_model_router`) are a separate concern; see the [config README](../config/README.md#algo_configmultimodal--images-in-vanilla-memory).
 
@@ -356,7 +361,7 @@ Before starting, confirm at least the following:
 - `embed_model_router.endpoints[0].api_key` / `api_base` / `model` are valid.
 - `database.qdrant.vector_size` equals the embedding output dimension.
 - If rerank is not needed, `rerank_model_router.endpoints` can remain empty and the related `use_reranker` flags should be disabled.
-- If `blob_store.backend: s3`, the S3/MinIO endpoint is reachable, `s3_region` is set non-empty, and the service has the `s3` extra installed (section 8).
+- If a multimodal mode is on, the S3/MinIO endpoint is reachable, `s3_region` is set non-empty, and the service has the `s3` extra installed (section 8).
 
 ## Internal Console reads
 

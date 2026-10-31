@@ -17,13 +17,22 @@ into the repository.
 
 ## Environment variables
 
-Connection endpoints and credentials are the only env-configurable fields.
+Connection endpoints and credentials are the only env-configurable fields
+outside `blob_store` (whose `MINDMEMOS_S3_*` / `MINDMEMOS_PROXY_*` /
+`MINDMEMOS_URL_SIGNING_SECRET` overlays are listed under `blob_store` below).
 They are read at load time (`.env` at the repository root is honoured):
 
 | Variable | Applies to | Default |
 |---|---|---|
 | `MINDMEMOS_QDRANT_URL` | `database.qdrant.url` | `http://localhost:6333` |
+| `MINDMEMOS_QDRANT_API_KEY` | `database.qdrant.api_key` | *(none)* |
+| `MINDMEMOS_QDRANT_GRPC_PORT` | `database.qdrant.grpc_port` | `6334` |
+| `MINDMEMOS_QDRANT_PREFER_GRPC` | `database.qdrant.prefer_grpc` | `false` |
 | `MINDMEMOS_NEO4J_URI` | `database.neo4j.uri` | `bolt://localhost:7687` |
+| `MINDMEMOS_NEO4J_USERNAME` | `database.neo4j.username` | `neo4j` |
+| `MINDMEMOS_NEO4J_PASSWORD` | `database.neo4j.password` | `mindmemos_dev_password` |
+| `MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS` | `kafka.bootstrap_servers` | `localhost:9092` |
+| `MINDMEMOS_TELEMETRY_ENDPOINT` | `telemetry.telemetry_endpoint` | `http://localhost:4318` |
 
 ## `algo_config` top-level sections
 
@@ -305,10 +314,15 @@ Image requests over HTTP and SDK:
   `blob_id`, the owner `user_id`, `score`, `session_ids`, `caller_image_ids`, `occurrences`,
   `description`, `visual_facts`, `anchored_memory_ids` and `evidence`; dialogue facts carry
   `metadata.image_blob_ids` for the images they are anchored to.
-- `metadata.image_url` on an image hit is a lazy-load direct link: with `blob_store.backend: s3`
-  a short-lived presigned URL (`s3_presign_expiry_seconds`), otherwise the relative proxy route
-  `/v1/memory/images/{blob_id}?user_id=<owner>`. `GET /v1/memory/images/{blob_id}` returns the
-  stored bytes (`memory:read`, owner check, `404 image.not_found`).
+- `metadata.image_url` on an image hit is a lazy-load direct link with three shapes: a permanent
+  public-mirror URL when `s3_public_base_url` is set, else a short-lived presigned URL
+  (`s3_presign_expiry_seconds`), else a short-lived *signed* proxy URL on
+  `/v1/memory/images/{blob_id}?user_id=…&project_id=…&expires=…&signature=…` that needs no API
+  key (relative, or absolute under `blob_store.proxy_public_base_url`). `GET /v1/memory/images/{blob_id}`
+  returns the stored bytes (`memory:read` via Authorization, or the URL signature — either way an
+  owner check applies, `404 image.not_found`). A hit may carry `blob_id` with no `image_url` at
+  all — hits whose metadata lacks `user_id`, or a blob store that failed to load (e.g. the `s3`
+  extra missing), get no URL, and without the owner id there is no signed-proxy fallback either.
 - Error codes: `add.images_unsupported`, `search.images_unsupported`,
   `add.too_many_images`, `image.path_denied`, `image.path_disabled`, `image.url_denied`,
   `image.url_disabled`, `image.fetch_failed`, `image.too_large`, `image.unsupported`,
@@ -355,16 +369,23 @@ existing image collection has no `text` vector of that size (created by an older
 
 | Field | Default | Description |
 |---|---|---|
-| `backend` | `local` | Storage backend: `local` or `s3` (any S3-compatible endpoint: MinIO, OSS S3 gateway, R2). |
-| `local_root` | `data/blobs` | Directory of the local backend; relative to the repository root. |
-| `s3_endpoint` | *(required for s3)* | Endpoint URL with scheme, e.g. `http://localhost:9100`; `https://` enables TLS. |
-| `s3_region` | `us-east-1` | Bucket region/location; required non-empty with `backend: s3` (an empty region fails validation — it would make presigning do a live location lookup). Baked into every presigned URL; also used when creating the bucket. |
-| `s3_bucket` | *(required for s3)* | Bucket name; created lazily on first use if missing. |
-| `s3_access_key` | *(required for s3)* | Access key (env: `MINDMEMOS_S3_ACCESS_KEY`). |
-| `s3_secret_key` | *(required for s3)* | Secret key (env: `MINDMEMOS_S3_SECRET_KEY`). |
+Storage is S3-compatible only (MinIO, OSS S3 gateway, R2, AWS S3); the fields below are
+required whenever `algo_config.multimodal.mode` is not `off` (with mode `off` the blob store
+is never touched).
+
+| Field | Default | Description |
+|---|---|---|
+| `s3_endpoint` | *(required)* | Endpoint URL with scheme, e.g. `http://localhost:9100`; `https://` enables TLS. |
+| `s3_region` | `us-east-1` | Bucket region/location; required non-empty (an empty region fails validation — it would make presigning do a live location lookup). Baked into every presigned URL; also used when creating the bucket. |
+| `s3_bucket` | *(required)* | Bucket name; created lazily on first use if missing. |
+| `s3_access_key` | *(required)* | Access key (env: `MINDMEMOS_S3_ACCESS_KEY`). |
+| `s3_secret_key` | *(required)* | Secret key (env: `MINDMEMOS_S3_SECRET_KEY`). |
 | `s3_public_base_url` | *(none)* | Optional public mirror (CDN) for the bucket; when set, image search hits carry permanent `base/bucket/<key>` URLs instead of short-lived presigned ones. |
 | `s3_presign_endpoint` | *(none)* | External address baked into the short-lived presigned URLs of `POST /v1/memory/search` hits; unset signs against `s3_endpoint` (env: `MINDMEMOS_S3_PRESIGN_ENDPOINT`). |
 | `s3_presign_expiry_seconds` | `3600` | Presigned URL lifetime, `1..604800` seconds (env: `MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS`). |
+| `proxy_url_expiry_seconds` | *(none)* | Lifetime of signed proxy image URLs; unset reuses `s3_presign_expiry_seconds` (env: `MINDMEMOS_PROXY_URL_EXPIRY_SECONDS`). |
+| `proxy_public_base_url` | *(none)* | Trusted absolute base (e.g. `https://memory.example.com`) for signed proxy URLs; unset keeps them relative. Never derived from the request Host header (env: `MINDMEMOS_PROXY_PUBLIC_BASE_URL`). |
+| `url_signing_secret` | *(none)* | HMAC secret for signed proxy URLs; unset derives from `auth.gateway_jwt_secret` (env: `MINDMEMOS_URL_SIGNING_SECRET`). |
 | `max_image_bytes` | `20971520` | Larger images are rejected. |
 | `allowed_path_roots` | `[]` | Directories `ImageRef.path` may point into; empty disables path inputs. Roots are not project-scoped: in multi-project deployments every project can read images under them. |
 | `url_fetch_enabled` | `true` | Download `ImageRef.url` inputs. |
@@ -375,19 +396,21 @@ Images are deduplicated by SHA-256 per project (blob store) and per project+user
 collection). Only PNG, JPEG, GIF, WebP and BMP are accepted (checked by content, not extension).
 Stored images are readable by the project's keys at `GET /v1/memory/images/{blob_id}?user_id=<owner>`;
 the server verifies the declared owner against the image records, so another user's blob id 404s.
-On the `s3` backend, search hits instead carry `metadata.image_url` — a presigned GET link (signed
-locally, no store I/O) that downloads the bytes directly from MinIO without transiting this API;
-the proxy route above remains as the fallback when the backend cannot sign (e.g. `local`).
+Search hits instead carry `metadata.image_url` — a presigned GET link (signed locally, no store
+I/O) that downloads the bytes directly from MinIO without transiting this API. When presigning
+is unavailable, hits fall back to the equally short-lived signed proxy URL on that same route
+(no API key needed), described above.
 
-The `s3` backend needs the `s3` extra (`pip install mindmemos[s3]`; the dev workspace already
-includes it). Object keys mirror the local layout (`<namespace-prefix>/<id[:2]>/<id>`); the MIME
-type rides on the object's content-type. For local development `make dev` / `make db` also start MinIO (`make dev-blobs` starts it alone) on
+The S3 store needs the `s3` extra (`pip install mindmemos[s3]`; the dev workspace already
+includes it). Object keys are `<namespace-prefix>/<id[:2]>/<id>`; the MIME type rides on the
+object's content-type. For local development `make dev` / `make db` also start MinIO (`make dev-blobs` starts it alone) on
 port 9100 (ClickHouse native claims 9000) with credentials taken from the same `MINDMEMOS_S3_*`
 environment variables. All `s3_*` fields except `s3_region` can be set via environment
 (`MINDMEMOS_S3_ENDPOINT/BUCKET/ACCESS_KEY/SECRET_KEY/PUBLIC_BASE_URL/PRESIGN_ENDPOINT/PRESIGN_EXPIRY_SECONDS`).
 
 ## Validation
 
-`mindmemos.config.validation.validate_config` enforces choice and range rules
-for every documented field; invalid values fail fast at startup with the
+`mindmemos.config.validation.validate_config` enforces the choice and range
+rules of the fields documented above (booleans, free-form strings and file
+paths carry no such rule); invalid values fail fast at startup with the
 offending config path.

@@ -1,11 +1,11 @@
-"""S3-compatible blob store (MinIO, Cloudflare R2, OSS/R2 S3 gateways).
+"""S3-compatible blob store (MinIO, Cloudflare R2, OSS/R2 S3 gateways) — the only backend.
 
-Object layout mirrors the local backend: ``<namespace-prefix>/<id[:2]>/<id>``; the MIME type
-rides on the object's content-type (no sidecar object). The bucket is created lazily on first
-use so a missing bucket self-heals in non-compose deployments too.
+Object layout: ``<namespace-prefix>/<id[:2]>/<id>``; the MIME type rides on the object's
+content-type (no sidecar object). The bucket is created lazily on first use so a missing
+bucket self-heals in non-compose deployments too.
 
 Requires the ``s3`` extra (``pip install mindmemos[s3]``); the import stays optional so the
-local backend never pulls the minio client.
+package core does not pull the minio client until blob storage is first used.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ class S3BlobStore:
     ) -> None:
         host, secure = _parse_endpoint(endpoint)
         if client is None and Minio is None:
-            raise ImportError("blob_store.backend 's3' requires the 's3' extra (pip install mindmemos[s3])")
+            raise ImportError("the S3 blob store requires the 's3' extra (pip install mindmemos[s3])")
         self._client = client or Minio(
             host, access_key=access_key, secret_key=secret_key, secure=secure, region=region or None
         )
@@ -86,6 +86,9 @@ class S3BlobStore:
 
     async def delete_namespace(self, namespace: str) -> None:
         await asyncio.to_thread(self._delete_namespace, namespace)
+
+    async def count_namespace(self, namespace: str) -> int:
+        return await asyncio.to_thread(self._count_namespace, namespace)
 
     def public_url(self, namespace: str, blob_id: str) -> str | None:
         if not self._public_base_url or not is_valid_blob_id(blob_id):
@@ -182,7 +185,7 @@ class S3BlobStore:
 
     def _delete(self, namespace: str, blob_id: str) -> bool:
         if self._stat(namespace, blob_id) is None:
-            return False  # S3 DELETE is silent for missing objects; report existence like the local store
+            return False  # S3 DELETE is silent for missing objects; report non-existence plainly
         self._client.remove_object(self._bucket, self._key(namespace, blob_id))
         return True
 
@@ -199,6 +202,15 @@ class S3BlobStore:
                 batch.clear()
         if batch:
             self._drain(self._client.remove_objects(self._bucket, batch))
+
+    def _count_namespace(self, namespace: str) -> int:
+        """Objects under one namespace's prefix (the eval project reset reports its work with it)."""
+
+        self._ensure_bucket()
+        prefix = f"{namespace_prefix(namespace)}/"
+        return sum(
+            1 for obj in self._client.list_objects(self._bucket, prefix=prefix, recursive=True) if not obj.is_dir
+        )
 
     def _drain(self, errors: Any) -> None:
         # remove_objects is lazy: the deletes only happen as the error iterator is consumed.

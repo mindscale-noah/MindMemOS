@@ -66,22 +66,24 @@ rerank_model_router:
 mm_embed_model_router:
   endpoints: []
 
-# Raw image storage for multimodal vanilla (content-addressed, per project).
+# Raw image storage for multimodal vanilla (content-addressed, per project) — S3-compatible only.
+# `make dev` / `make dev-blobs` starts MinIO on :9100 with the bucket bootstrapped; the
+# connection needs the s3 extra: uv sync (dev env) or pip install mindmemos[s3]
 blob_store:
-  backend: local
-  local_root: data/blobs
-  # S3-compatible backend (MinIO/OSS-S3/R2): `make dev-blobs` then switch:
-  # backend: s3                  # requires the s3 extra: uv sync (dev env) or pip install mindmemos[s3]
-  # s3_endpoint: http://localhost:9100
-  # s3_region: us-east-1
-  # s3_bucket: mindmemos-blobs   # created lazily on first use if missing
-  # s3_access_key: minioadmin    # overridable via MINDMEMOS_S3_ACCESS_KEY
-  # s3_secret_key: minioadmin    # overridable via MINDMEMOS_S3_SECRET_KEY
-  # s3_public_base_url:          # e.g. https://cdn.example.com/minio for shareable URLs
-  # s3_presign_endpoint:         # external address baked into search's short-lived image URLs
-  #                              # (e.g. https://minio.example.com when the server talks to MinIO
-  #                              # over an internal host); unset signs against s3_endpoint
+  s3_endpoint: http://localhost:9100
+  s3_region: us-east-1
+  s3_bucket: mindmemos-blobs   # created lazily on first use if missing
+  s3_access_key: minioadmin    # overridable via MINDMEMOS_S3_ACCESS_KEY
+  s3_secret_key: minioadmin    # overridable via MINDMEMOS_S3_SECRET_KEY
+  # s3_public_base_url:        # e.g. https://cdn.example.com/minio for shareable permanent URLs
+  # s3_presign_endpoint:       # external address baked into search's short-lived image URLs
+  #                            # (e.g. https://minio.example.com when the server talks to MinIO
+  #                            # over an internal host); unset signs against s3_endpoint
   # s3_presign_expiry_seconds: 3600  # 1s..604800s (S3 max 7 days); MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS
+  # Signed no-API-key download links for the proxy tier (presign fallback):
+  # proxy_url_expiry_seconds: 3600    # lifetime of signed /v1/memory/images links; unset reuses s3_presign_expiry_seconds
+  # proxy_public_base_url: http://127.0.0.1:8000  # absolute base for those links; unset keeps them relative
+  # url_signing_secret:               # HMAC secret for those links; unset derives from auth.gateway_jwt_secret
   max_image_bytes: 20971520
   allowed_path_roots: []        # directories ImageRef.path may point into; empty disables paths
   url_fetch_enabled: true

@@ -81,7 +81,7 @@ Extracts durable facts from messages and persists them (with dedup/merge against
 | `--user-id`, `--app-id`, `--agent-id`, `--session-id` | scoping |
 | `--metadata-json '{...}'` | business metadata object |
 | `--skill-context-json '[...]'` | explicit skill trace context |
-| `--async` | enqueue and return immediately (no extracted memories in response) |
+| `--async` | enqueue and return immediately (no extracted memories in response); needs the server's Kafka (`kafka.enabled=true`) — otherwise rejected with `add.async_unavailable` |
 | `--json` | machine-readable output |
 
 ```bash
@@ -114,7 +114,7 @@ project facts, decisions, or past experience related to the current request.
 | `--rerank` | rerank candidates for precision |
 | `--score-threshold N` | minimum rerank relevance score (0–1); only effective with `--rerank` |
 | `--token-budget N` | strict token budget for the result set; enables token-budget retention (packing under a token limit) — the result is still capped by `--top-k`, whichever limit is tighter |
-| `--filter '{...}'` | structured filter DSL, JSON object (e.g. `{"memory_type":"semantic"}`) |
+| `--filter '{...}'` | structured filter DSL, JSON object over allowed fields such as `user_id`, `app_id`, `session_id`, `mem_type`, `created_at` (e.g. `{"mem_type":"fact"}`) |
 | `--query-image PATH_OR_URL` | attach an image to the query (local file or http(s) URL); repeatable; implies `--multimodal` |
 | `--multimodal` | also search stored images; needs the server's multimodal mode |
 | `--user-id`, `--app-id`, `--agent-id`, `--session-id` | scoping; omit `--user-id` for project-wide search |
@@ -124,10 +124,22 @@ project facts, decisions, or past experience related to the current request.
 mindmemos memory search "what are the user's dietary restrictions?" --top-k 5 --user-id alice
 mindmemos memory search "travel prefs" --rerank --search-strategy agentic --token-budget 2000 --user-id alice --json
 # project-wide search across all users in the API-key project
-mindmemos memory search "project notes" --filter '{"memory_type":"semantic"}'
+mindmemos memory search "project notes" --filter '{"mem_type":"fact"}'
 # search by image, or include stored images in text search results
 mindmemos memory search "cats" --query-image ./query.png --user-id alice
 ```
+
+> **Multimodal mode**: the image options above need the server project's
+> `algo_config.multimodal.mode` to be `basic` or `enhanced` (per-project
+> overridable). In `off` mode image sends are rejected with
+> `add.images_unsupported` / `search.images_unsupported` — tell the user to
+> enable multimodal mode for the project instead of retrying. `basic` needs the
+> server's `mm_embed_model_router` endpoints (when empty, images are stored but
+> not searchable); `enhanced` also uses the chat model as a VLM. Images are
+> stored as S3 blobs — MinIO (started by `make dev` / `make db`) is the only
+> image backend; `MINIO=0` skips MinIO for the text-only layout — set
+> `algo_config.multimodal.mode: "off"` in that layout too (images always need
+> the MinIO/S3 blob store).
 
 ### `memory get` — list / filter (no query)
 
@@ -143,7 +155,7 @@ mindmemos memory get --filter '{"app_id":"openclaw"}' --top-k 20
 
 ### `memory get-image` — download a stored image
 
-Image hits from `memory search` carry a short-lived `image:` URL (presigned S3/MinIO link, or the authenticated proxy route) plus `metadata.blob_id` / `metadata.user_id`. Use `get-image` to re-download by id when the link is absent or expired; `--user-id` must be the image owner and is verified by the server.
+Image hits from `memory search` carry a short-lived `image:` URL (presigned S3/MinIO link, or a signed proxy URL — both download without an API key) plus `metadata.blob_id` / `metadata.user_id`. Use `get-image` to re-download by id when the link is absent or expired; `--user-id` must be the image owner and is verified by the server.
 
 ```bash
 mindmemos memory get-image <blob_id> --user-id alice        # writes ./{blob_id}{ext}
@@ -217,7 +229,7 @@ mindmemos memory dreaming --sync --app-id openclaw
 ### Other groups
 
 - `mindmemos auth` / `config show [--show-secret]` / `config reset [-y]` — credentials & local settings.
-- `mindmemos skill <register|list|show|pull|push|update|rollback|history|diff|unregister>` — SDK-managed skills. Use `register <skill_dir_or_SKILL.md> --alias <alias>` to save a local alias, then use that alias anywhere a skill id is accepted. Use `push <skill>` after editing local `SKILL.md` to upload a new version. Use `update <skill|--all> [--yes]` to checkout published heads, `rollback <skill> --to <version_id> [--yes]` to restore a cached/downloaded version after reviewing the replacement plan, and `diff <skill> [--from <version_id>] --to <version_id>` for a read-only unified diff.
+- `mindmemos skill <register|list|show|pull|evolve|push|update|rollback|history|diff|unregister>` — SDK-managed skills. Use `register <skill_dir_or_SKILL.md> --alias <alias>` to save a local alias, then use that alias anywhere a skill id is accepted. Use `push <skill>` after editing local `SKILL.md` to upload a new version. Use `update <skill|--all> [--yes]` to checkout published heads, `rollback <skill> --to <version_id> [--yes]` to restore a cached/downloaded version after reviewing the replacement plan, and `diff <skill> [--from <version_id>] --to <version_id>` for a read-only unified diff.
 - `mindmemos memory add ... --skill-context-json '[...]'` — optional explicit skill trace context. When omitted, the SDK has a best-effort fallback for OpenClaw-style `SKILL.md` tool-call text in the add messages; host integrations such as the OpenClaw plugin may still provide their own detection and pass this flag explicitly.
 - `mindmemos doctor` — config/connectivity check.
 
