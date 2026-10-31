@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from typing import Any
 
 from qdrant_client import models as qmodels
@@ -20,6 +21,7 @@ from qdrant_client import models as qmodels
 from ....config import QdrantConfig
 from ..engine import QdrantEngine
 from ..models import PayloadIndexSpec, QdrantCollectionSpec, QdrantRecord
+from ..read_cache import ProjectReadCache
 
 
 class CollectionRepository:
@@ -28,6 +30,10 @@ class CollectionRepository:
     def __init__(self, engine: QdrantEngine, cfg: QdrantConfig) -> None:
         self._engine = engine
         self._cfg = cfg
+        self._project_collections_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
+        self._project_collections_cache_ttl_seconds = 30.0
+        self._project_collections_cache_max_entries = 4096
+        self.read_cache: ProjectReadCache[Any] = ProjectReadCache()
 
     @property
     def collection(self) -> str:
@@ -104,6 +110,15 @@ class CollectionRepository:
         if not self._cfg.project_collection_namespace_enabled or not self._is_vector_repository:
             return [self.collection]
         preferred = self.collection_for_vector_size(vector_size) if vector_size else None
+        now = time.monotonic()
+        cached = self._project_collections_cache.get(project_id)
+        if cached is not None and cached[0] > now:
+            collections = list(cached[1])
+            if preferred in collections:
+                collections.remove(preferred)
+                collections.insert(0, preferred)
+            return collections
+        self._project_collections_cache.pop(project_id, None)
         candidates = await self._dimension_collection_names()
         if preferred in candidates:
             candidates.remove(preferred)
@@ -117,7 +132,22 @@ class CollectionRepository:
             )
             if count:
                 collections.append(collection)
+        if len(self._project_collections_cache) >= self._project_collections_cache_max_entries:
+            oldest = min(
+                self._project_collections_cache,
+                key=lambda cache_key: self._project_collections_cache[cache_key][0],
+            )
+            self._project_collections_cache.pop(oldest, None)
+        self._project_collections_cache[project_id] = (
+            now + self._project_collections_cache_ttl_seconds,
+            tuple(collections),
+        )
         return collections
+
+    def _invalidate_project_collection_cache(self, project_id: str) -> None:
+        self.read_cache.invalidate(project_id)
+        if project_id:
+            self._project_collections_cache.pop(project_id, None)
 
     async def _collections_holding_record(self, project_id: str, point_id: str) -> list[str]:
         """Return all project-owned physical collections containing ``point_id``."""
@@ -159,7 +189,12 @@ class CollectionRepository:
         return records[0] if records else None
 
     async def _retrieve_scoped(
-        self, project_id: str, point_ids: list[str], *, with_vectors: bool = False
+        self,
+        project_id: str,
+        point_ids: list[str],
+        *,
+        with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> list[QdrantRecord]:
         """Retrieve points by id, keeping only those owned by ``project_id``."""
 
@@ -168,7 +203,12 @@ class CollectionRepository:
         )
         records_by_id: dict[str, QdrantRecord] = {}
         for collection in collections:
-            records = await self._engine.retrieve(collection, point_ids, with_vectors=with_vectors)
+            options = (
+                {"payload_fields": list(dict.fromkeys([*payload_fields, "project_id"]))}
+                if payload_fields is not None
+                else {}
+            )
+            records = await self._engine.retrieve(collection, point_ids, with_vectors=with_vectors, **options)
             for record in records:
                 if record.payload.get("project_id") == project_id:
                     records_by_id.setdefault(record.point_id, record)
@@ -183,6 +223,7 @@ class CollectionRepository:
         cursor: Any | None = None,
         order_by: Any | None = None,
         with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll the collection inside one project."""
 
@@ -199,6 +240,7 @@ class CollectionRepository:
                 offset=cursor,
                 order_by=order_by,
                 with_vectors=with_vectors,
+                payload_fields=payload_fields,
             )
 
         collection_index, offset = self._decode_dimension_cursor(cursor)
@@ -215,6 +257,7 @@ class CollectionRepository:
                 offset=offset if index == collection_index else None,
                 order_by=order_by,
                 with_vectors=with_vectors,
+                payload_fields=payload_fields,
             )
             for record in page:
                 if record.point_id not in seen:

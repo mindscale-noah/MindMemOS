@@ -187,6 +187,7 @@ SOURCE_PAYLOAD_INDEX_SCHEMA: tuple[PayloadIndexSpec, ...] = (
 
 ADD_RECORD_PAYLOAD_INDEX_SCHEMA: tuple[PayloadIndexSpec, ...] = (
     PayloadIndexSpec(field_name="add_record_id", field_schema=qmodels.PayloadSchemaType.UUID),
+    PayloadIndexSpec(field_name="memories[].memory_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
     PayloadIndexSpec(field_name="account_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
     PayloadIndexSpec(field_name="project_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
     PayloadIndexSpec(field_name="api_key_uuid", field_schema=qmodels.PayloadSchemaType.KEYWORD),

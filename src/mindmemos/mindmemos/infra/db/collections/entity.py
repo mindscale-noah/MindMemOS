@@ -38,6 +38,8 @@ class EntityRepository(CollectionRepository):
                 collection,
                 [self._point(point, vector_size=vector_size) for point in collection_points],
             )
+        for project_id in {str(point.payload.get("project_id") or "") for point in points}:
+            self._invalidate_project_collection_cache(project_id)
 
     async def get(self, project_id: str, entity_id: str, *, with_vectors: bool = False) -> QdrantRecord | None:
         """Retrieve one entity by project and id."""
