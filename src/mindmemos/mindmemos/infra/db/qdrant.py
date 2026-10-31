@@ -580,6 +580,13 @@ class QdrantStore:
 
         return await self._add_record.retrieve(project_id, add_record_ids)
 
+    async def get_memory_provenance(
+        self, project_id: str, memory_id: str, *, add_record_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Read only allowlisted provenance, scoped and cached by project."""
+
+        return await self._add_record.memory_provenance(project_id, memory_id, add_record_id=add_record_id)
+
     async def scroll_add_records_global(
         self,
         *,

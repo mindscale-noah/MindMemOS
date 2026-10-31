@@ -167,6 +167,7 @@ class MemoryRepository(CollectionRepository):
             return
         for collection in await self._collections_holding_record(project_id, memory_id):
             await self._engine.set_payload(collection, memory_id, payload)
+        self.read_cache.invalidate(project_id)
 
     async def patch(
         self,
@@ -213,6 +214,7 @@ class MemoryRepository(CollectionRepository):
                 )
                 for collection in record_collections:
                     await self._engine.delete(collection, [memory_id])
+                self.read_cache.invalidate(project_id)
                 return
         operations: list[qmodels.UpdateOperation] = [
             qmodels.SetPayloadOperation(
@@ -235,6 +237,7 @@ class MemoryRepository(CollectionRepository):
                 await self._engine.delete(collection, [memory_id])
                 continue
             await self._engine.batch_update(collection, operations)
+        self.read_cache.invalidate(project_id)
 
     async def delete(self, project_id: str, memory_id: str) -> None:
         """Delete one memory after project ownership is checked."""

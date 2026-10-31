@@ -70,3 +70,10 @@ class AddRecordStore:
         """Patch one add-record payload."""
 
         await self._clients.qdrant.patch_add_record(project_id, add_record_id, payload)
+
+    async def memory_provenance(
+        self, project_id: str, memory_id: str, *, add_record_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Load a source association without retrieving raw Add inputs."""
+
+        return await self._clients.qdrant.get_memory_provenance(project_id, memory_id, add_record_id=add_record_id)

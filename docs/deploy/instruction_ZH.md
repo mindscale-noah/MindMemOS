@@ -357,3 +357,7 @@ Authorization: Bearer <api_key>
 - `database.qdrant.vector_size` 等于 embedding 输出维度。
 - 不需要 rerank 时，`rerank_model_router.endpoints` 可以留空，并关闭相关 `use_reranker`。
 - 若 `blob_store.backend: s3`，确认 S3/MinIO 端点可达、`s3_region` 已非空设置、且服务装了 `s3` extra（见第 8 节）。
+
+## Console 内部读取接口
+
+库存列表字段迁移、生命周期来源信息以及缓存与刷新语义见 [内部记忆 API 契约](internal-memory-api.md)。

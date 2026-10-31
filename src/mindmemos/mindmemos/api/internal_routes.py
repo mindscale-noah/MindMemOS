@@ -7,15 +7,13 @@ tokens instead of standalone memory-system API keys.
 
 from __future__ import annotations
 
-from asyncio import gather
-from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel
 
 from ..errors import BadRequestError, MemoryNotFoundError, PermissionDeniedError, ResourceNotFoundError
-from ..infra.db import QdrantRecord, build_filter, datetime_range, match_text, match_value
+from ..infra.db import QdrantRecord, build_filter, match_text, match_value
 from ..pipelines.memory_db import (
     MemoryDbReader,
     MemoryGraph,
@@ -28,7 +26,6 @@ from ..pipelines.memory_db import (
     VectorRepairStatus,
     project_inventory_item,
     project_memory_lifecycle,
-    summarize_memory_insights,
 )
 from ..provider_bindings import get_provider_binding_service
 from .deps import ensure_scopes, get_internal_request_context
@@ -118,59 +115,14 @@ async def get_project_memory_insights(
     project_id: str = Path(min_length=1),
     scan_limit: int = Query(default=5000, ge=1, le=10000),
     range_days: int = Query(default=30, ge=1, le=90),
+    refresh: bool = Query(default=False),
     ctx: AuthContext = Depends(get_internal_request_context),
 ) -> InternalMemoryInsightsResponse:
     """Return bounded, evidence-backed lifecycle totals for one project."""
 
     _ensure_internal_read(ctx, project_id)
-    reader = MemoryDbReader()
-    as_of = datetime.now(UTC)
-    recent_filter = build_filter(
-        should=[
-            datetime_range("created_at", gte=as_of - timedelta(days=range_days)),
-            datetime_range("update_at", gte=as_of - timedelta(days=range_days)),
-            datetime_range("status_changed_at", gte=as_of - timedelta(days=range_days)),
-        ]
-    )
-    total, active, archived, vector_pending, recent_page = await gather(
-        reader.count_memory_records(ctx),
-        reader.count_memory_records(ctx, filters=build_filter(must=[match_value("status", "active")])),
-        reader.count_memory_records(ctx, filters=build_filter(must=[match_value("status", "archived")])),
-        reader.count_memory_records(
-            ctx,
-            filters=build_filter(must=[match_value("status", "vector_pending")]),
-        ),
-        reader.list_memory_records(
-            ctx,
-            filters=recent_filter,
-            limit=scan_limit,
-            cursor=None,
-            payload_fields=[
-                "status",
-                "created_at",
-                "update_at",
-                "updated_at",
-                "status_changed_at",
-                "reinforcement_count",
-                "metadata",
-                "request_id",
-                "source_add_record_id",
-                "add_record_id",
-            ],
-        ),
-    )
-    records, next_cursor = recent_page
-    result = summarize_memory_insights(
-        [(str(record.point_id), record.payload) for record in records],
-        scanned_all=next_cursor is None,
-        counts_override={
-            "active": active,
-            "archived": archived,
-            "vector_pending": vector_pending,
-            "total": total,
-        },
-        range_days=range_days,
-        as_of=as_of.isoformat().replace("+00:00", "Z"),
+    result = await MemoryDbReader().get_memory_insights(
+        ctx, scan_limit=scan_limit, range_days=range_days, refresh=refresh
     )
     return InternalMemoryInsightsResponse(request_id=ctx.request_id, data=result)
 
@@ -192,7 +144,7 @@ async def get_project_memory_lifecycle(
     if record is None:
         raise ResourceNotFoundError(str(MemoryNotFoundError(memory_id)), code="memory.not_found")
     lineage = (await reader.get_memory_lineage(ctx, [memory_id])).get(memory_id, [])
-    add_record = await _load_source_add_record(reader, ctx, memory_id, record.payload)
+    add_record = await reader.get_memory_provenance(ctx, memory_id, record.payload)
     result = project_memory_lifecycle(record.payload, add_record=add_record, lineage=lineage)
     return InternalMemoryLifecycleResponse(request_id=ctx.request_id, data=result)
 
@@ -360,45 +312,3 @@ def _inventory_filter(*, q: str | None, status: str | None, algorithm: str | Non
     if mem_type:
         conditions.append(match_value("mem_type", mem_type))
     return build_filter(must=conditions) if conditions else None
-
-
-async def _load_source_add_record(
-    reader: MemoryDbReader,
-    ctx: AuthContext,
-    memory_id: str,
-    payload: dict[str, Any],
-):
-    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-    add_record_id = (
-        payload.get("source_add_record_id") or payload.get("add_record_id") or metadata.get("source_add_record_id")
-    )
-    if add_record_id:
-        records = await reader.get_add_records_by_ids(ctx, [str(add_record_id)])
-        if records:
-            item = dict(records[0].payload)
-            item.setdefault("add_record_id", str(records[0].point_id))
-            return item
-
-    # Legacy writers kept the association only in the Add Record result. A
-    # bounded detail-only scan recovers that evidence without putting this cost
-    # on inventory or search requests.
-    cursor = None
-    inspected = 0
-    while inspected < 1000:
-        records, cursor = await reader.list_add_records(ctx, limit=min(200, 1000 - inspected), cursor=cursor)
-        inspected += len(records)
-        for record in records:
-            if _add_record_contains_memory(record.payload, memory_id):
-                item = dict(record.payload)
-                item.setdefault("add_record_id", str(record.point_id))
-                return item
-        if cursor is None or not records:
-            break
-    return None
-
-
-def _add_record_contains_memory(payload: dict[str, Any], memory_id: str) -> bool:
-    memories = payload.get("memories")
-    if not isinstance(memories, list):
-        return False
-    return any(isinstance(item, dict) and str(item.get("memory_id") or "") == memory_id for item in memories)

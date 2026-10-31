@@ -6,6 +6,7 @@ import hmac
 import json
 import time
 import uuid
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -14,6 +15,8 @@ from mindmemos.api.internal_routes import router
 from mindmemos.config import init_config, reset_config
 from mindmemos.errors import ApiError, BadRequestError
 from mindmemos.infra.db import QdrantRecord
+from mindmemos.infra.db.read_cache import ProjectReadCache
+from mindmemos.pipelines.memory_db import MemoryDbReader
 
 
 def write_config(tmp_path, *, secret: str) -> None:
@@ -346,6 +349,113 @@ def test_internal_memory_insight_scan_is_bounded(tmp_path, monkeypatch) -> None:
         reset_config()
 
 
+def test_internal_insights_cache_and_force_refresh_preserve_project_authorization(tmp_path, monkeypatch) -> None:
+    write_config(tmp_path, secret="cache-test-secret")
+    token = make_gateway_token(
+        secret="cache-test-secret",
+        account_id="account",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:read", "memory:visualize"],
+    )
+    qdrant = FakeQdrant()
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        with TestClient(make_app(monkeypatch, clients=FakeClients(qdrant=qdrant))) as client:
+            headers = {"authorization": f"Bearer {token}"}
+            path = "/internal/v1/projects/proj_001/memory-insights"
+            first = client.get(path, headers=headers)
+            second = client.get(path, headers=headers)
+            assert first.status_code == second.status_code == 200
+            assert first.json()["data"]["as_of"] == second.json()["data"]["as_of"]
+            assert qdrant.count_calls == 4
+            assert client.get(path, headers=headers, params={"refresh": True}).status_code == 200
+            assert qdrant.count_calls == 8
+            assert client.get(path, headers=headers, params={"range_days": 7}).status_code == 200
+            assert qdrant.count_calls == 12
+            assert client.get(path.replace("proj_001", "other"), headers=headers).status_code == 403
+            assert qdrant.count_calls == 12
+            assert "metadata" not in qdrant.last_payload_fields
+    finally:
+        reset_config()
+
+
+def test_internal_lifecycle_does_not_serialize_original_add_input(tmp_path, monkeypatch) -> None:
+    write_config(tmp_path, secret="projection-test-secret")
+    token = make_gateway_token(
+        secret="projection-test-secret",
+        account_id="account",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:read", "memory:visualize"],
+    )
+    qdrant = FakeQdrant()
+    qdrant.provenance = {
+        "add_record_id": "add-1",
+        "request_id": "request-1",
+        "source_type": "chat",
+        "messages": ["PRIVATE_ORIGINAL_INPUT"],
+    }
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        response = TestClient(make_app(monkeypatch, clients=FakeClients(qdrant=qdrant))).get(
+            "/internal/v1/projects/proj_001/memories/memory-1/lifecycle",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+        assert "PRIVATE_ORIGINAL_INPUT" not in response.text
+        assert set(response.json()["data"]["provenance"]) == {
+            "available",
+            "add_record_id",
+            "request_id",
+            "source_type",
+            "submitted_at",
+        }
+    finally:
+        reset_config()
+
+
+def test_internal_inventory_projects_legacy_fields_without_changing_pagination(tmp_path, monkeypatch) -> None:
+    write_config(tmp_path, secret="inventory-contract-secret")
+    token = make_gateway_token(
+        secret="inventory-contract-secret",
+        account_id="account",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:read", "memory:visualize"],
+    )
+    qdrant = FakeQdrant(
+        unfiltered_records=[
+            QdrantRecord(
+                point_id="memory-1",
+                payload={
+                    "project_id": "proj_001",
+                    "content": "memory",
+                    "mem_extract_type": "vanilla",
+                    "update_at": "2026-10-31T00:00:00Z",
+                    "metadata": {"input": "PRIVATE_METADATA"},
+                },
+            )
+        ]
+    )
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        response = TestClient(make_app(monkeypatch, clients=FakeClients(qdrant=qdrant))).get(
+            "/internal/v1/projects/proj_001/memories?limit=1",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        item = data["items"][0]
+        assert item["algorithm"] == "vanilla" and item["updated_at"] == "2026-10-31T00:00:00Z"
+        assert item["memory_id"] == "memory-1"
+        assert "mem_extract_type" not in item and "update_at" not in item and "id" not in item
+        assert "PRIVATE_METADATA" not in response.text
+        assert "next_cursor" in data
+    finally:
+        reset_config()
+
+
 def test_internal_vector_repair_is_project_scoped_and_bounded(tmp_path, monkeypatch) -> None:
     secret = "test-internal-secret"
     write_config(tmp_path, secret=secret)
@@ -498,8 +608,9 @@ class FakeClients:
         self.qdrant = qdrant or FakeQdrant()
 
 
-class FakeMemoryDbReader:
+class FakeMemoryDbReader(MemoryDbReader):
     def __init__(self, clients: FakeClients) -> None:
+        super().__init__(clients=clients)
         self.clients = clients
 
     async def list_memory_records(self, ctx, *, filters=None, limit=50, cursor=None, payload_fields=None):
@@ -547,11 +658,17 @@ class FakeMemoryDbReader:
 
 class FakeQdrant:
     def __init__(self, *, unfiltered_records=None, filtered_records=None) -> None:
+        self.memory = SimpleNamespace(read_cache=ProjectReadCache())
+        self.provenance = None
+        self.count_calls = 0
         self.unfiltered_records = unfiltered_records
         self.filtered_records = filtered_records
         self.last_filter = None
         self.last_limit = None
         self.last_payload_fields = None
+
+    async def get_memory_provenance(self, project_id, memory_id, *, add_record_id=None):
+        return self.provenance
 
     async def scroll_memories(
         self, project_id, *, filter_=None, limit=50, cursor=None, with_vectors=False, payload_fields=None
@@ -595,6 +712,7 @@ class FakeQdrant:
         ], None
 
     async def count_memories(self, project_id, *, filter_=None):
+        self.count_calls += 1
         del project_id
         if filter_ is None:
             return 37

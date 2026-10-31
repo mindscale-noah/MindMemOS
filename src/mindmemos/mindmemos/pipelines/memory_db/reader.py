@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from qdrant_client import models as qmodels
@@ -15,6 +16,9 @@ from ...infra.db import (
     QdrantRecord,
     QdrantSearchRecord,
     SparseVectorData,
+    build_filter,
+    datetime_range,
+    match_value,
     resolve_database_clients,
 )
 from ...logging import get_logger, traced
@@ -50,8 +54,10 @@ from .lifecycle import (
     MemoryGraph,
     MemoryGraphEdge,
     MemoryGraphNode,
+    MemoryInsights,
     decode_memory_graph_cursor,
     encode_memory_graph_cursor,
+    summarize_memory_insights,
 )
 
 logger = get_logger(__name__)
@@ -550,6 +556,72 @@ class MemoryDbReader:
             filters=filters,
             limit=limit,
             cursor=cursor,
+        )
+
+    async def get_memory_insights(
+        self, ctx: MemoryRequestContext, *, scan_limit: int = 5000, range_days: int = 30, refresh: bool = False
+    ) -> MemoryInsights:
+        """Cache bounded statistics until their TTL expires or memory state changes."""
+
+        scan_limit = min(max(1, scan_limit), 10000)
+        range_days = min(max(1, range_days), 90)
+
+        async def load() -> MemoryInsights:
+            as_of = datetime.now(UTC)
+            recent_filter = build_filter(
+                should=[
+                    datetime_range(field, gte=as_of - timedelta(days=range_days))
+                    for field in ("created_at", "update_at", "status_changed_at")
+                ]
+            )
+            total, active, archived, pending, page = await asyncio.gather(
+                self.count_memory_records(ctx),
+                self.count_memory_records(ctx, filters=build_filter(must=[match_value("status", "active")])),
+                self.count_memory_records(ctx, filters=build_filter(must=[match_value("status", "archived")])),
+                self.count_memory_records(ctx, filters=build_filter(must=[match_value("status", "vector_pending")])),
+                self.list_memory_records(
+                    ctx,
+                    filters=recent_filter,
+                    limit=scan_limit,
+                    payload_fields=[
+                        "status",
+                        "created_at",
+                        "update_at",
+                        "updated_at",
+                        "status_changed_at",
+                        "reinforcement_count",
+                        "metadata.vector_pending",
+                        "metadata.source_add_record_id",
+                        "request_id",
+                        "source_add_record_id",
+                        "add_record_id",
+                    ],
+                ),
+            )
+            records, cursor = page
+            return summarize_memory_insights(
+                [(str(record.point_id), record.payload) for record in records],
+                scanned_all=cursor is None,
+                counts_override={"active": active, "archived": archived, "vector_pending": pending, "total": total},
+                range_days=range_days,
+                as_of=as_of.isoformat().replace("+00:00", "Z"),
+            )
+
+        return await self._clients.qdrant.memory.read_cache.get(
+            ctx.project_id, ("insights", range_days, scan_limit), load, force=refresh
+        )
+
+    async def get_memory_provenance(
+        self, ctx: MemoryRequestContext, memory_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Read projected provenance through an indexed, project-scoped lookup."""
+
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        add_record_id = (
+            payload.get("source_add_record_id") or payload.get("add_record_id") or metadata.get("source_add_record_id")
+        )
+        return await self._add_records.memory_provenance(
+            ctx.project_id, memory_id, add_record_id=str(add_record_id) if add_record_id else None
         )
 
     @traced("memory_db.get_add_records_by_ids")

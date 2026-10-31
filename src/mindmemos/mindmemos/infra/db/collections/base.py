@@ -21,6 +21,7 @@ from qdrant_client import models as qmodels
 from ....config import QdrantConfig
 from ..engine import QdrantEngine
 from ..models import PayloadIndexSpec, QdrantCollectionSpec, QdrantRecord
+from ..read_cache import ProjectReadCache
 
 
 class CollectionRepository:
@@ -32,6 +33,7 @@ class CollectionRepository:
         self._project_collections_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
         self._project_collections_cache_ttl_seconds = 30.0
         self._project_collections_cache_max_entries = 4096
+        self.read_cache: ProjectReadCache[Any] = ProjectReadCache()
 
     @property
     def collection(self) -> str:
@@ -143,6 +145,7 @@ class CollectionRepository:
         return collections
 
     def _invalidate_project_collection_cache(self, project_id: str) -> None:
+        self.read_cache.invalidate(project_id)
         if project_id:
             self._project_collections_cache.pop(project_id, None)
 
@@ -186,7 +189,12 @@ class CollectionRepository:
         return records[0] if records else None
 
     async def _retrieve_scoped(
-        self, project_id: str, point_ids: list[str], *, with_vectors: bool = False
+        self,
+        project_id: str,
+        point_ids: list[str],
+        *,
+        with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> list[QdrantRecord]:
         """Retrieve points by id, keeping only those owned by ``project_id``."""
 
@@ -195,7 +203,12 @@ class CollectionRepository:
         )
         records_by_id: dict[str, QdrantRecord] = {}
         for collection in collections:
-            records = await self._engine.retrieve(collection, point_ids, with_vectors=with_vectors)
+            options = (
+                {"payload_fields": list(dict.fromkeys([*payload_fields, "project_id"]))}
+                if payload_fields is not None
+                else {}
+            )
+            records = await self._engine.retrieve(collection, point_ids, with_vectors=with_vectors, **options)
             for record in records:
                 if record.payload.get("project_id") == project_id:
                     records_by_id.setdefault(record.point_id, record)

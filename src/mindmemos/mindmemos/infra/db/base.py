@@ -197,6 +197,11 @@ class QdrantStore(Protocol):
     async def get_add_records_by_ids(self, project_id: str, add_record_ids: list[str]) -> list[QdrantRecord]:
         """Retrieve add records by IDs."""
 
+    async def get_memory_provenance(
+        self, project_id: str, memory_id: str, *, add_record_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Retrieve allowlisted provenance for a memory in one project."""
+
     async def scroll_add_records_global(
         self,
         *,

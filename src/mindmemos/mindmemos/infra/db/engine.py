@@ -235,7 +235,14 @@ class QdrantEngine:
             return
         await self._raw_upsert(collection, points)
 
-    async def retrieve(self, collection: str, ids: list[str], *, with_vectors: bool = False) -> list[QdrantRecord]:
+    async def retrieve(
+        self,
+        collection: str,
+        ids: list[str],
+        *,
+        with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
+    ) -> list[QdrantRecord]:
         """Retrieve points by id and map them to :class:`QdrantRecord`."""
 
         if not ids:
@@ -243,7 +250,7 @@ class QdrantEngine:
         records = await self._client.retrieve(
             collection_name=collection,
             ids=ids,
-            with_payload=True,
+            with_payload=qmodels.PayloadSelectorInclude(include=payload_fields) if payload_fields is not None else True,
             with_vectors=with_vectors,
         )
         return [self.record_from(record) for record in records]

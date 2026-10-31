@@ -357,3 +357,7 @@ Before starting, confirm at least the following:
 - `database.qdrant.vector_size` equals the embedding output dimension.
 - If rerank is not needed, `rerank_model_router.endpoints` can remain empty and the related `use_reranker` flags should be disabled.
 - If `blob_store.backend: s3`, the S3/MinIO endpoint is reachable, `s3_region` is set non-empty, and the service has the `s3` extra installed (section 8).
+
+## Internal Console reads
+
+See [the internal memory API contract](internal-memory-api.md) for inventory field migration, lifecycle provenance, and cache/refresh semantics.
