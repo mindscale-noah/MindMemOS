@@ -539,11 +539,17 @@ class QdrantStore:
         limit: int = 50,
         cursor: Any | None = None,
         with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll memories in one project."""
 
         return await self._memory.scroll(
-            project_id, filter_=filter_, limit=limit, cursor=cursor, with_vectors=with_vectors
+            project_id,
+            filter_=filter_,
+            limit=limit,
+            cursor=cursor,
+            with_vectors=with_vectors,
+            payload_fields=payload_fields,
         )
 
     async def count_memories(
@@ -573,6 +579,13 @@ class QdrantStore:
         """Retrieve add-record points by id inside one project."""
 
         return await self._add_record.retrieve(project_id, add_record_ids)
+
+    async def get_memory_provenance(
+        self, project_id: str, memory_id: str, *, add_record_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Read only allowlisted provenance, scoped and cached by project."""
+
+        return await self._add_record.memory_provenance(project_id, memory_id, add_record_id=add_record_id)
 
     async def scroll_add_records_global(
         self,

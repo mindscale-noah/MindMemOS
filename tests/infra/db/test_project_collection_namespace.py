@@ -171,6 +171,47 @@ async def test_project_reads_and_mutations_span_all_dimension_collections() -> N
 
 
 @pytest.mark.asyncio
+async def test_project_dimension_route_is_cached_and_invalidated_by_a_new_dimension(monkeypatch) -> None:
+    client = AsyncQdrantClient(":memory:")
+    cfg = QdrantConfig(
+        url="http://unused",
+        memory_collection="cached_memos",
+        entity_collection="cached_entities",
+        source_collection="cached_sources",
+        vector_size=2,
+        project_collection_namespace_enabled=True,
+    )
+    store = QdrantStore(cfg, client=client)
+    first_id = "00000000-0000-0000-0000-000000000061"
+    second_id = "00000000-0000-0000-0000-000000000062"
+
+    try:
+        await store.ensure_schema()
+        await store.upsert_memory(_memory_point("proj-a", first_id, [1.0, 0.0]))
+        await store.upsert_memory(_memory_point("other-project", second_id, [1.0, 0.0, 0.0]))
+        original_count = store.engine.count
+        count_calls = 0
+
+        async def counted(*args, **kwargs):
+            nonlocal count_calls
+            count_calls += 1
+            return await original_count(*args, **kwargs)
+
+        monkeypatch.setattr(store.engine, "count", counted)
+        await store.scroll_memories("proj-a", limit=10)
+        first_probe_calls = count_calls
+        await store.scroll_memories("proj-a", limit=10)
+        assert count_calls == first_probe_calls
+
+        await store.upsert_memory(_memory_point("proj-a", second_id, [1.0, 0.0, 0.0]))
+        records, _ = await store.scroll_memories("proj-a", limit=10)
+        assert count_calls > first_probe_calls
+        assert {record.point_id for record in records} == {first_id, second_id}
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_pending_memory_uses_embedding_configuration_dimension_hint() -> None:
     client = AsyncQdrantClient(":memory:")
     cfg = QdrantConfig(

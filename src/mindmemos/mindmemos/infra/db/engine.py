@@ -235,7 +235,14 @@ class QdrantEngine:
             return
         await self._raw_upsert(collection, points)
 
-    async def retrieve(self, collection: str, ids: list[str], *, with_vectors: bool = False) -> list[QdrantRecord]:
+    async def retrieve(
+        self,
+        collection: str,
+        ids: list[str],
+        *,
+        with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
+    ) -> list[QdrantRecord]:
         """Retrieve points by id and map them to :class:`QdrantRecord`."""
 
         if not ids:
@@ -243,7 +250,7 @@ class QdrantEngine:
         records = await self._client.retrieve(
             collection_name=collection,
             ids=ids,
-            with_payload=True,
+            with_payload=qmodels.PayloadSelectorInclude(include=payload_fields) if payload_fields is not None else True,
             with_vectors=with_vectors,
         )
         return [self.record_from(record) for record in records]
@@ -257,6 +264,7 @@ class QdrantEngine:
         offset: Any | None = None,
         order_by: Any | None = None,
         with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll a collection with an already-built filter."""
 
@@ -266,7 +274,9 @@ class QdrantEngine:
             limit=limit,
             offset=offset,
             order_by=order_by,
-            with_payload=True,
+            with_payload=(
+                qmodels.PayloadSelectorInclude(include=payload_fields) if payload_fields is not None else True
+            ),
             with_vectors=with_vectors,
         )
         return [self.record_from(record) for record in records], next_offset
@@ -333,9 +343,7 @@ class QdrantEngine:
     async def delete_by_filter(self, collection: str, filter_: qmodels.Filter) -> None:
         """Delete every point matching ``filter_`` (caller gates on collection existence)."""
 
-        await self._client.delete(
-            collection_name=collection, points_selector=qmodels.FilterSelector(filter=filter_)
-        )
+        await self._client.delete(collection_name=collection, points_selector=qmodels.FilterSelector(filter=filter_))
 
     async def batch_update(self, collection: str, operations: list[qmodels.UpdateOperation]) -> None:
         """Apply a batch of update operations against one collection."""
