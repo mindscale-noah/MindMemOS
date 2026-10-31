@@ -68,8 +68,9 @@ path, URL, base64 data, or a stored `blob_id`) and search accepts `query_images`
 `add.images_unsupported` / `search.images_unsupported`. Image hits carry
 `metadata.blob_id` and may carry `metadata.image_url` — a permanent
 public-mirror URL or short-lived presigned link you can fetch directly, or a
-relative `/v1/memory/images/{blob_id}` proxy path to resolve against your
-`base_url` (API key required) — and `client.memory.get_image(blob_id, user_id)`
+signed `/v1/memory/images/{blob_id}?...&expires=<unix>&signature=<hmac>` proxy
+path (resolve against your `base_url`; also fetchable directly with no API key,
+until it expires) — and `client.memory.get_image(blob_id, user_id)`
 re-downloads by id regardless of shape or expiry:
 
 ```python

@@ -91,6 +91,20 @@ def config_proxy_expiry_720(tmp_path: Path) -> None:
     reset_config()
 
 
+@pytest.fixture
+def config_dedicated_signing_secret(tmp_path: Path) -> None:
+    """Both secrets set, distinct: the dedicated one must win on mint and on verify."""
+    path = tmp_path / "dev.yaml"
+    path.write_text(
+        "auth:\n  mode: gateway_jwt\n  gateway_jwt_secret: test-jwt-secret\n"
+        "blob_store:\n  url_signing_secret: dedicated-signing-secret\n",
+        encoding="utf-8",
+    )
+    init_config(config_path=path)
+    yield
+    reset_config()
+
+
 class _NoopRecorder:
     async def record_search(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -185,6 +199,37 @@ def test_presign_failure_falls_back_to_the_signed_proxy_url(monkeypatch, auth_co
     assert "image_url" not in by_id["img-bad"]["metadata"]
 
 
+def test_dedicated_signing_secret_round_trips_the_image_route(
+    monkeypatch, auth_context, config_dedicated_signing_secret
+) -> None:
+    """url_signing_secret must win over gateway_jwt_secret on BOTH sides of the link.
+
+    Search mints the signature and the image route verifies it; every other fixture leaves
+    url_signing_secret unset, so a swapped argument or wrong-secret lookup on either side
+    would go unnoticed. Here the two secrets differ, the mint must sign with the dedicated
+    one, and the minted link must then pass the route's own verification with no API key.
+    """
+    service = _service(monkeypatch, MemoryBlobStore())
+
+    async def _get_image(_auth, _blob_id, _user_id):
+        return PNG_BYTES, "image/png"
+
+    monkeypatch.setattr(service, "get_image", _get_image)
+    client = _client(auth_context, service)  # get_optional_request_context stays real: verify runs
+
+    memories = _search(client)
+    parsed = urlparse(memories[1]["metadata"]["image_url"])
+    query = parse_qs(parsed.query)
+    expires = int(query["expires"][0])
+    assert query["signature"] == [image_url_signature("project-1", BLOB_ID, OWNER, expires, "dedicated-signing-secret")]
+    assert query["signature"] != [image_url_signature("project-1", BLOB_ID, OWNER, expires, "test-jwt-secret")]
+
+    # round trip: the same server verifies its own mint with the dedicated secret, keyless
+    response = client.get(f"{parsed.path}?{parsed.query}")
+    assert response.status_code == 200
+    assert response.content == PNG_BYTES
+
+
 def test_no_signing_secret_skips_the_signed_tier_instead_of_minting_with_an_empty_key(
     monkeypatch, auth_context, tmp_path
 ) -> None:
@@ -204,9 +249,7 @@ def test_no_signing_secret_skips_the_signed_tier_instead_of_minting_with_an_empt
     assert "image_url" not in by_id["img-1"]["metadata"]  # tier skipped, not minted with secret=""
 
 
-def test_signed_proxy_url_is_absolute_under_proxy_public_base_url(
-    monkeypatch, auth_context, config_proxy_base
-) -> None:
+def test_signed_proxy_url_is_absolute_under_proxy_public_base_url(monkeypatch, auth_context, config_proxy_base) -> None:
     client = _client(auth_context, _service(monkeypatch, MemoryBlobStore()))
 
     memories = _search(client)
@@ -221,9 +264,7 @@ def test_signed_proxy_url_is_absolute_under_proxy_public_base_url(
     ]
 
 
-def test_signed_proxy_url_honours_proxy_url_expiry_seconds(
-    monkeypatch, auth_context, config_proxy_expiry_720
-) -> None:
+def test_signed_proxy_url_honours_proxy_url_expiry_seconds(monkeypatch, auth_context, config_proxy_expiry_720) -> None:
     client = _client(auth_context, _service(monkeypatch, MemoryBlobStore()))
 
     memories = _search(client)

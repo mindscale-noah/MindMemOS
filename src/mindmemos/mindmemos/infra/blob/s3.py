@@ -53,7 +53,7 @@ class S3BlobStore:
     ) -> None:
         host, secure = _parse_endpoint(endpoint)
         if client is None and Minio is None:
-            raise ImportError("blob_store.backend 's3' requires the 's3' extra (pip install mindmemos[s3])")
+            raise ImportError("the S3 blob store requires the 's3' extra (pip install mindmemos[s3])")
         self._client = client or Minio(
             host, access_key=access_key, secret_key=secret_key, secure=secure, region=region or None
         )
@@ -208,7 +208,9 @@ class S3BlobStore:
 
         self._ensure_bucket()
         prefix = f"{namespace_prefix(namespace)}/"
-        return sum(1 for obj in self._client.list_objects(self._bucket, prefix=prefix, recursive=True) if not obj.is_dir)
+        return sum(
+            1 for obj in self._client.list_objects(self._bucket, prefix=prefix, recursive=True) if not obj.is_dir
+        )
 
     def _drain(self, errors: Any) -> None:
         # remove_objects is lazy: the deletes only happen as the error iterator is consumed.

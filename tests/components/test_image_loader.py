@@ -113,6 +113,21 @@ async def test_url_is_dialed_on_the_resolved_ip_with_original_host(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_nat64_resolved_addresses_are_rejected(monkeypatch, tmp_path) -> None:
+    # 64:ff9b::/96 (RFC 6052) maps IPv4 into IPv6: 64:ff9b::c0a8:101 IS 192.168.1.1, yet
+    # reads as a globally-routed IPv6 address. The explicit prefix check is what stands
+    # between that and the loader dialing a private address.
+    async def nat64_getaddrinfo(host, port, **kwargs):  # noqa: ARG001 - signature per getaddrinfo
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("64:ff9b::c0a8:101", port))]
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", nat64_getaddrinfo)
+
+    with pytest.raises(ImageLoadError, match="non-public") as blocked:
+        await _loader().load(ImageRef(url="https://nat64.example.com/a.png"), namespace="p")
+    assert blocked.value.code == "image.url_denied"
+
+
+@pytest.mark.asyncio
 async def test_url_with_private_hosts_allowed_dials_the_hostname(monkeypatch, tmp_path) -> None:
     import httpx
 

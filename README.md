@@ -171,7 +171,7 @@ Multimodal projects accept images on both calls (the server-side mode requiremen
 curl -sS -X POST "$BASE_URL/v1/memory/search" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"query": "What did the user's desk look like?", "top_k": 3, "multimodal": true}'
+  -d '{"query": "Describe the user desk setup", "top_k": 3, "multimodal": true}'
 ```
 
 A `code` of `ok` with readable memory content means the access works. curl is just a smoke-test helper; the shown format is for bash. Other environments / languages and the remaining endpoints (get / list / delete / update / feedback / dreaming / skills, etc.) are all covered in the [API docs](https://mindmemos.cn/api-docs).

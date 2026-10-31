@@ -206,14 +206,14 @@ def test_signed_url_tampered_signature_is_rejected(monkeypatch: pytest.MonkeyPat
     assert response.json()["code"] == "image.signature_invalid"
 
 
-def test_signed_url_non_ascii_signature_is_rejected_not_a_500(
-    monkeypatch: pytest.MonkeyPatch, config: None
-) -> None:
+def test_signed_url_non_ascii_signature_is_rejected_not_a_500(monkeypatch: pytest.MonkeyPatch, config: None) -> None:
     async def _get_image(_auth, _blob_id, _user_id):
         raise AssertionError("get_image must not run on a malformed link")
 
     params = _signed_params()
-    params["signature"] = "签名" * 20  # non-ASCII would crash compare_digest without the hex pre-check
+    # exactly 64 non-ASCII chars: passes the length check and reaches the hex
+    # pre-check, which is what stands between us and compare_digest's TypeError -> 500
+    params["signature"] = "签" * 64
     response = _client(None, _service(monkeypatch, _get_image)).get(f"/v1/memory/images/{BLOB_ID}", params=params)
 
     assert response.status_code == 401

@@ -84,11 +84,20 @@ async def lifespan(app: FastAPI):
 def _check_blob_store() -> None:
     """Construct the configured blob store once at startup.
 
+    Only when images are possible: with ``algo_config.multimodal.mode: off`` the
+    server stores and serves no images, so a text-only deployment boots without
+    the ``s3`` extra or a reachable blob store — matching config validation,
+    which exempts mode ``off`` from every ``blob_store`` field.
+
     The S3 backend imports ``minio`` lazily, so a missing ``mindmemos[s3]`` extra would
     otherwise pass validation and only surface as an ImportError -> HTTP 500 on the first
     image add or get-image call. The minio client also rejects some endpoints validation
     cannot (e.g. a non-numeric port), as a bare ``ValueError``.
     """
+
+    if get_config().algo_config.multimodal.mode == "off":
+        logger.info("multimodal mode off: blob store not constructed at boot")
+        return
 
     try:
         get_blob_store()
@@ -100,9 +109,7 @@ def _check_blob_store() -> None:
     except ValueError as exc:
         raise InvalidConfigError("blob_store.s3_endpoint", support=str(exc)) from exc
     cfg = get_config()
-    if cfg.algo_config.multimodal.mode != "off" and not resolve_signing_secret(
-        cfg.blob_store.url_signing_secret, cfg.auth.gateway_jwt_secret
-    ):
+    if not resolve_signing_secret(cfg.blob_store.url_signing_secret, cfg.auth.gateway_jwt_secret):
         # not fatal: presigned/public-mirror image URLs still work, but the signed
         # proxy tier is disabled rather than minted with a forgeable empty-key HMAC
         logger.warning(

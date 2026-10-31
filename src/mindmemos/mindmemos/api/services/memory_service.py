@@ -477,8 +477,9 @@ class MemoryService:
     ) -> SearchPipelineResult:
         """Run the search pipeline.
 
-        Image hits are decorated with ``metadata.image_url``: a presigned link when the
-        blob backend can sign, otherwise a relative proxy path (see ``_attach_image_urls``).
+        Image hits are decorated with ``metadata.image_url``: a public-mirror or presigned
+        link when the blob backend can address the bytes, otherwise a signed keyless proxy
+        path (see ``_attach_image_urls``).
         """
 
         # Stamp request identity onto the handler-root span so downstream LLM spans

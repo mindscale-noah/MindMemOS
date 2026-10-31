@@ -99,8 +99,9 @@ export const Config: z<Config> = z.object({
   topK: z.natural().min(1).default(5),
   multimodal: z.boolean().default(true),
   tokenBudget: z.natural().min(1),
-  // sync by default: async enqueues through Kafka and silently stores nothing on a
-  // server without kafka.enabled=true — sync works on every deployment.
+  // sync by default: async needs kafka.enabled=true on the server — without Kafka the
+  // add is rejected with a clean 400 (add.async_unavailable) rather than stored;
+  // sync works on every deployment.
   addMode: z.union([z.const("sync"), z.const("async")]).default("sync"),
   userId: z.string(),
   appId: z.string().default("deepseek-harness"),

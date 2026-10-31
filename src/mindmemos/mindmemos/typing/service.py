@@ -139,8 +139,9 @@ class MemorySearchItem(BaseModel):
             "Business metadata for management views. Image hits additionally carry blob_id (the "
             "stable re-download id) and, when the blob backend can address the bytes, image_url: a "
             "permanent public-mirror URL (blob_store.s3_public_base_url), a short-lived presigned "
-            "S3 URL, or a relative /v1/memory/images/{blob_id}?user_id=<owner> proxy path to "
-            "resolve against the client's own API origin (API key required)."
+            "S3 URL, or a signed /v1/memory/images/{blob_id}?user_id=<owner>&expires=<unix>&"
+            "signature=<hmac> proxy path. All three fetch directly with no API key, the signed "
+            "proxy path until it expires."
         ),
     )
 

@@ -145,9 +145,10 @@ class MemorySearchHit(BaseModel):
 
     Image hits carry ``blob_id`` (stable id for ``get_image`` / re-adding) and may carry
     ``image_url`` — a permanent public-mirror URL or a short-lived presigned link you can fetch
-    directly, or a relative ``/v1/memory/images/{blob_id}?user_id=...`` proxy path to resolve
-    against your ``base_url`` (API key required). ``get_image(blob_id, metadata['user_id'])``
-    re-downloads by id whatever the shape or expiry.
+    directly, or a signed ``/v1/memory/images/{blob_id}?...&expires=<unix>&signature=<hmac>``
+    proxy path (resolve against your ``base_url``; also fetchable directly with no API key,
+    until it expires). ``get_image(blob_id, metadata['user_id'])`` re-downloads by id whatever
+    the shape or expiry.
     """
 
 

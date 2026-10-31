@@ -33,10 +33,11 @@ def test_off_mode_without_mm_endpoints_stays_info(monkeypatch) -> None:
 
 def test_s3_store_without_the_extra_fails_the_boot(monkeypatch) -> None:
     # The S3 store imports minio lazily; without the mindmemos[s3] extra that ImportError
-    # must fail startup, not surface as a 500 on the first image request.
+    # must fail startup of an image-capable deployment, not surface as a 500 on the first
+    # image request.
     from mindmemos.errors import InvalidConfigError
 
-    cfg = build(MemoryConfig)
+    cfg = build(MemoryConfig, {"algo_config": {"multimodal": {"mode": "basic"}}})
 
     def missing_extra():
         raise ImportError("No module named 'minio'")
@@ -53,7 +54,13 @@ def test_s3_endpoint_the_client_rejects_fails_the_boot(monkeypatch) -> None:
     # port raises a bare ValueError); the boot must name the config field, not crash raw.
     from mindmemos.errors import InvalidConfigError
 
-    cfg = build(MemoryConfig, {"blob_store": {"s3_endpoint": "minio.internal:70003"}})
+    cfg = build(
+        MemoryConfig,
+        {
+            "algo_config": {"multimodal": {"mode": "basic"}},
+            "blob_store": {"s3_endpoint": "minio.internal:70003"},
+        },
+    )
 
     def bad_endpoint():
         raise ValueError("Port could not be cast to integer value as '70003'")
@@ -68,9 +75,30 @@ def test_s3_endpoint_the_client_rejects_fails_the_boot(monkeypatch) -> None:
 def test_a_working_s3_extra_boots_normally(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(app_module, "get_blob_store", lambda: (calls.append(1), object())[1])
-    monkeypatch.setattr(app_module, "get_config", lambda: build(MemoryConfig))  # mode off: no signing warning
-    app_module._check_blob_store()  # the store is built once on every boot
+    monkeypatch.setattr(
+        app_module, "get_config", lambda: build(MemoryConfig, {"algo_config": {"multimodal": {"mode": "basic"}}})
+    )
+    app_module._check_blob_store()  # the store is built once on every image-capable boot
     assert calls == [1]
+
+
+def test_off_mode_boots_without_the_s3_extra(monkeypatch) -> None:
+    # A text-only deployment (multimodal off) must boot without the s3 extra and
+    # without ever constructing the blob store — validation already exempts mode
+    # "off" from every blob_store field, so the boot check must not contradict it.
+    calls = []
+
+    def missing_extra():
+        calls.append(1)
+        raise ImportError("No module named 'minio'")
+
+    monkeypatch.setattr(app_module, "get_config", lambda: build(MemoryConfig))  # mode defaults to off
+    monkeypatch.setattr(app_module, "get_blob_store", missing_extra)
+    with capture_logs() as logs:
+        app_module._check_blob_store()
+    assert calls == []  # never constructed
+    assert not [event for event in logs if event.get("log_level") in ("warning", "error")]
+    assert any("blob store not constructed" in event["event"] for event in logs)
 
 
 def test_multimodal_without_a_signing_secret_warns_off_mode_stays_quiet(monkeypatch) -> None:
