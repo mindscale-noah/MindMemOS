@@ -46,6 +46,8 @@ class MemoryRepository(CollectionRepository):
                 collection,
                 [self._point(point, vector_size=vector_size) for point in collection_points],
             )
+        for project_id in {str(point.payload.get("project_id") or "") for point in points}:
+            self._invalidate_project_collection_cache(project_id)
 
     async def get(self, project_id: str, memory_id: str, *, with_vectors: bool = False) -> QdrantRecord | None:
         """Retrieve one memory by project and id."""
@@ -242,6 +244,7 @@ class MemoryRepository(CollectionRepository):
             return
         for collection in await self._collections_holding_record(project_id, memory_id):
             await self._engine.delete(collection, [memory_id])
+        self._invalidate_project_collection_cache(project_id)
 
     async def scroll(
         self,
@@ -251,11 +254,17 @@ class MemoryRepository(CollectionRepository):
         limit: int = 50,
         cursor: Any | None = None,
         with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll memories in one project."""
 
         return await self._scroll_scoped(
-            project_id, filter_=filter_, limit=limit, cursor=cursor, with_vectors=with_vectors
+            project_id,
+            filter_=filter_,
+            limit=limit,
+            cursor=cursor,
+            with_vectors=with_vectors,
+            payload_fields=payload_fields,
         )
 
     async def count(self, project_id: str, *, filter_: qmodels.Filter | None = None) -> int:

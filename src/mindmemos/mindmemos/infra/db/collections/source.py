@@ -33,6 +33,8 @@ class SourceRepository(CollectionRepository):
                 collection,
                 [self._dense_point(point.source_id, point.vector, point.payload) for point in collection_points],
             )
+        for project_id in {str(point.payload.get("project_id") or "") for point in points}:
+            self._invalidate_project_collection_cache(project_id)
 
     async def get(self, project_id: str, source_id: str, *, with_vectors: bool = False) -> QdrantRecord | None:
         """Retrieve one source by project and id."""

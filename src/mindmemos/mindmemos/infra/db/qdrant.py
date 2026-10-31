@@ -539,11 +539,17 @@ class QdrantStore:
         limit: int = 50,
         cursor: Any | None = None,
         with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll memories in one project."""
 
         return await self._memory.scroll(
-            project_id, filter_=filter_, limit=limit, cursor=cursor, with_vectors=with_vectors
+            project_id,
+            filter_=filter_,
+            limit=limit,
+            cursor=cursor,
+            with_vectors=with_vectors,
+            payload_fields=payload_fields,
         )
 
     async def count_memories(

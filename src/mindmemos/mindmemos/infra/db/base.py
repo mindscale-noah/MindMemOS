@@ -176,6 +176,7 @@ class QdrantStore(Protocol):
         limit: int = 50,
         cursor: Any | None = None,
         with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll memories."""
 
@@ -315,7 +316,6 @@ class Neo4jStore(Protocol):
 
     async def close(self) -> None:
         """Close the underlying driver."""
-
 
 
 class AddRecordStore(Protocol):

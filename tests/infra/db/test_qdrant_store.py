@@ -250,6 +250,22 @@ async def test_qdrant_filtering_is_caller_owned(qdrant_store):
 
 
 @pytest.mark.asyncio
+async def test_qdrant_scroll_can_select_only_lifecycle_payload_fields(qdrant_store):
+    await qdrant_store.upsert_memories(
+        [_point("00000000-0000-0000-0000-000000000004", "large memory body", [1.0, 0.0], 4)]
+    )
+
+    records, _ = await qdrant_store.scroll_memories(
+        "proj",
+        limit=10,
+        payload_fields=["status", "created_at", "reinforcement_count"],
+    )
+
+    assert records[0].payload["status"] == "active"
+    assert "content" not in records[0].payload
+
+
+@pytest.mark.asyncio
 async def test_qdrant_upserts_add_and_search_records(qdrant_store):
     await qdrant_store.upsert_add_record(
         AddRecordPoint(

@@ -45,6 +45,14 @@ from ...typing import (
     combine_search_filters,
 )
 from .add_record_store import AddRecordStore
+from .lifecycle import (
+    LifecycleAvailability,
+    MemoryGraph,
+    MemoryGraphEdge,
+    MemoryGraphNode,
+    decode_memory_graph_cursor,
+    encode_memory_graph_cursor,
+)
 
 logger = get_logger(__name__)
 
@@ -223,7 +231,6 @@ class MemoryDbReader:
 
         records = await self._clients.qdrant.get_memories(ctx.project_id, memory_ids)
         return [to_memory_view_from_record(record) for record in records]
-
 
     @traced("memory_db.list_memories_by_shared_entities")
     async def list_memories_by_shared_entities(
@@ -503,6 +510,7 @@ class MemoryDbReader:
         filters: qmodels.Filter | None = None,
         limit: int = 50,
         cursor: Any | None = None,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """List raw memory records in the request project."""
 
@@ -512,6 +520,7 @@ class MemoryDbReader:
             limit=limit,
             cursor=cursor,
             with_vectors=False,
+            payload_fields=payload_fields,
         )
 
     @traced("memory_db.count_memory_records")
@@ -582,6 +591,126 @@ class MemoryDbReader:
                 continue
             result[memory_id] = _dedupe_ids(row.get("derived_from_memory_ids", []))
         return result
+
+    @traced("memory_db.get_memory_graph")
+    async def get_memory_graph(
+        self,
+        ctx: MemoryRequestContext,
+        memory_id: str,
+        *,
+        limit: int = 100,
+    ) -> MemoryGraph:
+        """Load one bounded, project-scoped semantic neighborhood.
+
+        Only relationships written by the memory storage contract are exposed;
+        unknown node labels and relationship types are discarded defensively.
+        """
+
+        return await self.get_node_graph(ctx, memory_id, node_type="memory", limit=limit)
+
+    @traced("memory_db.get_node_graph")
+    async def get_node_graph(
+        self,
+        ctx: MemoryRequestContext,
+        node_id: str,
+        *,
+        node_type: str,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> MemoryGraph:
+        """Load one deterministic page of an allowlisted graph node's stored neighbors."""
+
+        node_contracts = {
+            "memory": ("Memory", "memory_id", "seed.content", "seed.status"),
+            "entity": ("Entity", "entity_id", "seed.entity_name", "null"),
+            "source": ("Source", "source_id", "coalesce(seed.file_name, seed.source_id)", "null"),
+        }
+        if node_type not in node_contracts:
+            raise ValueError(f"unsupported memory graph node type: {node_type}")
+        node_label, id_property, seed_label_expression, seed_status_expression = node_contracts[node_type]
+        bounded_limit = min(max(1, limit), 2000)
+        row_offset = decode_memory_graph_cursor(cursor, node_type=node_type, node_id=node_id) if cursor else 0
+        rows = await self._clients.neo4j.run_read(
+            f"""
+            MATCH (seed:{node_label} {{project_id: $project_id, {id_property}: $node_id}})
+            OPTIONAL MATCH (seed)-[r]-(neighbor)
+            WHERE neighbor.project_id = $project_id
+              AND type(r) IN ['MENTIONS', 'EXTRACTED_FROM', 'DERIVED_FROM', 'HAS_PROPERTY_MEMORY']
+              AND any(label IN labels(neighbor) WHERE label IN ['Memory', 'Entity', 'Source'])
+            WITH seed, r, neighbor,
+                 labels(neighbor) AS neighbor_labels,
+                 coalesce(neighbor.memory_id, neighbor.entity_id, neighbor.source_id) AS neighbor_id,
+                 type(r) AS relation
+            ORDER BY relation, neighbor_id
+            SKIP $row_offset
+            LIMIT $row_limit
+            RETURN seed.{id_property} AS seed_id,
+                   {seed_label_expression} AS seed_label,
+                   {seed_status_expression} AS seed_status,
+                   neighbor_labels,
+                   neighbor_id,
+                   coalesce(neighbor.content, neighbor.entity_name, neighbor.file_name, neighbor.source_id) AS neighbor_label,
+                   neighbor.status AS neighbor_status,
+                   relation,
+                   CASE WHEN startNode(r) = seed THEN true ELSE false END AS seed_is_source
+            """,
+            project_id=ctx.project_id,
+            node_id=node_id,
+            row_offset=row_offset,
+            row_limit=bounded_limit + 1,
+        )
+        allowed_nodes = {"Memory": "memory", "Entity": "entity", "Source": "source"}
+        allowed_edges = {
+            "MENTIONS": "mentions",
+            "EXTRACTED_FROM": "extracted_from",
+            "DERIVED_FROM": "derived_from",
+            "HAS_PROPERTY_MEMORY": "has_property_memory",
+        }
+        nodes: dict[str, MemoryGraphNode] = {}
+        edges: list[MemoryGraphEdge] = []
+        for row in rows[:bounded_limit]:
+            seed_id = str(row.get("seed_id") or node_id)
+            nodes.setdefault(
+                seed_id,
+                MemoryGraphNode(
+                    id=seed_id,
+                    node_type=node_type,
+                    label=str(row.get("seed_label") or seed_id),
+                    status=row.get("seed_status"),
+                ),
+            )
+            neighbor_id = row.get("neighbor_id")
+            relation = allowed_edges.get(str(row.get("relation") or ""))
+            labels = row.get("neighbor_labels") or []
+            neighbor_node_type = next((allowed_nodes[label] for label in labels if label in allowed_nodes), None)
+            if not neighbor_id or not relation or neighbor_node_type is None:
+                continue
+            neighbor_key = str(neighbor_id)
+            nodes.setdefault(
+                neighbor_key,
+                MemoryGraphNode(
+                    id=neighbor_key,
+                    node_type=neighbor_node_type,
+                    label=str(row.get("neighbor_label") or neighbor_key),
+                    status=row.get("neighbor_status"),
+                ),
+            )
+            source, target = (seed_id, neighbor_key) if row.get("seed_is_source") else (neighbor_key, seed_id)
+            edge = MemoryGraphEdge(source=source, target=target, edge_type=relation)
+            if edge not in edges:
+                edges.append(edge)
+        next_cursor = (
+            encode_memory_graph_cursor(node_type=node_type, node_id=node_id, offset=row_offset + bounded_limit)
+            if len(rows) > bounded_limit
+            else None
+        )
+        return MemoryGraph(
+            nodes=list(nodes.values()),
+            edges=edges,
+            truncated=next_cursor is not None,
+            next_cursor=next_cursor,
+            availability=LifecycleAvailability(graph_available=True),
+        )
 
     @traced("memory_db.search_dense", record_args=False)
     async def search_dense(

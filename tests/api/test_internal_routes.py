@@ -215,6 +215,137 @@ def test_internal_memory_list_rejects_malformed_gateway_token_as_401(tmp_path, m
         reset_config()
 
 
+def test_internal_memory_insights_are_project_scoped_and_evidence_backed(tmp_path, monkeypatch) -> None:
+    secret = "test-internal-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret,
+        account_id="acct_001",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:read", "memory:visualize"],
+    )
+
+    qdrant = FakeQdrant()
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        response = TestClient(make_app(monkeypatch, clients=FakeClients(qdrant=qdrant))).get(
+            "/internal/v1/projects/proj_001/memory-insights",
+            headers={"authorization": f"Bearer {token}"},
+            params={"range_days": 30},
+        )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["counts"] == {"active": 29, "archived": 5, "vector_pending": 3, "total": 37}
+        assert data["actions"]["created"] == 3
+        assert data["actions"]["reinforced"] == 2
+        assert data["availability"]["scanned_all"] is True
+        assert data["range_days"] == 30
+        assert data["as_of"].endswith("Z")
+        assert qdrant.last_payload_fields is not None
+        assert "content" not in qdrant.last_payload_fields
+        assert {"status", "created_at", "update_at", "status_changed_at", "reinforcement_count"}.issubset(
+            set(qdrant.last_payload_fields)
+        )
+        assert qdrant.last_filter is not None
+        assert qdrant.last_filter.should
+    finally:
+        reset_config()
+
+
+def test_internal_memory_graph_rejects_cross_project_and_enforces_bounds(tmp_path, monkeypatch) -> None:
+    secret = "test-internal-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret,
+        account_id="acct_001",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:read", "memory:visualize"],
+    )
+
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        client = TestClient(make_app(monkeypatch))
+        denied = client.get(
+            "/internal/v1/projects/proj_002/memories/mem_001/graph",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        too_large = client.get(
+            "/internal/v1/projects/proj_001/memories/mem_001/graph",
+            params={"limit": 201},
+            headers={"authorization": f"Bearer {token}"},
+        )
+
+        assert denied.status_code == 403
+        assert too_large.status_code == 422
+    finally:
+        reset_config()
+
+
+def test_internal_node_graph_is_additive_owned_and_bounded(tmp_path, monkeypatch) -> None:
+    secret = "test-internal-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret,
+        account_id="acct_001",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:read", "memory:visualize"],
+    )
+
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        client = TestClient(make_app(monkeypatch))
+        response = client.get(
+            "/internal/v1/projects/proj_001/graph/neighbors",
+            params={"node_type": "entity", "node_id": "entity-1", "limit": 500},
+            headers={"authorization": f"Bearer {token}"},
+        )
+        denied = client.get(
+            "/internal/v1/projects/proj_002/graph/neighbors",
+            params={"node_type": "entity", "node_id": "entity-1"},
+            headers={"authorization": f"Bearer {token}"},
+        )
+        too_large = client.get(
+            "/internal/v1/projects/proj_001/graph/neighbors",
+            params={"node_type": "entity", "node_id": "entity-1", "limit": 2001},
+            headers={"authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["nodes"][0]["node_type"] == "entity"
+        assert denied.status_code == 403
+        assert too_large.status_code == 422
+    finally:
+        reset_config()
+
+
+def test_internal_memory_insight_scan_is_bounded(tmp_path, monkeypatch) -> None:
+    secret = "test-internal-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret,
+        account_id="acct_001",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:read", "memory:visualize"],
+    )
+
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        response = TestClient(make_app(monkeypatch)).get(
+            "/internal/v1/projects/proj_001/memory-insights",
+            params={"scan_limit": 10001},
+            headers={"authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 422
+    finally:
+        reset_config()
+
+
 def test_internal_vector_repair_is_project_scoped_and_bounded(tmp_path, monkeypatch) -> None:
     secret = "test-internal-secret"
     write_config(tmp_path, secret=secret)
@@ -371,17 +502,47 @@ class FakeMemoryDbReader:
     def __init__(self, clients: FakeClients) -> None:
         self.clients = clients
 
-    async def list_memory_records(self, ctx, *, filters=None, limit=50, cursor=None):
+    async def list_memory_records(self, ctx, *, filters=None, limit=50, cursor=None, payload_fields=None):
+        self.last_payload_fields = payload_fields
         return await self.clients.qdrant.scroll_memories(
             ctx.project_id,
             filter_=filters,
             limit=limit,
             cursor=cursor,
             with_vectors=False,
+            payload_fields=payload_fields,
         )
+
+    async def count_memory_records(self, ctx, *, filters=None):
+        return await self.clients.qdrant.count_memories(ctx.project_id, filter_=filters)
 
     async def get_memory_record(self, ctx, memory_id):
         return await self.clients.qdrant.get_memory(ctx.project_id, memory_id, with_vectors=False)
+
+    async def get_memory_lineage(self, ctx, memory_ids):
+        return {memory_id: [] for memory_id in memory_ids}
+
+    async def get_add_records_by_ids(self, ctx, add_record_ids):
+        return []
+
+    async def list_add_records(self, ctx, *, filters=None, limit=50, cursor=None):
+        return [], None
+
+    async def get_memory_graph(self, ctx, memory_id, *, limit=100):
+        from mindmemos.pipelines.memory_db import LifecycleAvailability, MemoryGraph, MemoryGraphNode
+
+        return MemoryGraph(
+            nodes=[MemoryGraphNode(id=memory_id, node_type="memory", label="hello memory")],
+            availability=LifecycleAvailability(graph_available=True),
+        )
+
+    async def get_node_graph(self, ctx, node_id, *, node_type, limit=100, cursor=None):
+        from mindmemos.pipelines.memory_db import LifecycleAvailability, MemoryGraph, MemoryGraphNode
+
+        return MemoryGraph(
+            nodes=[MemoryGraphNode(id=node_id, node_type=node_type, label=f"{node_type} label")],
+            availability=LifecycleAvailability(graph_available=True),
+        )
 
 
 class FakeQdrant:
@@ -390,10 +551,14 @@ class FakeQdrant:
         self.filtered_records = filtered_records
         self.last_filter = None
         self.last_limit = None
+        self.last_payload_fields = None
 
-    async def scroll_memories(self, project_id, *, filter_=None, limit=50, cursor=None, with_vectors=False):
+    async def scroll_memories(
+        self, project_id, *, filter_=None, limit=50, cursor=None, with_vectors=False, payload_fields=None
+    ):
         self.last_filter = filter_
         self.last_limit = limit
+        self.last_payload_fields = payload_fields
         if filter_ is not None and self.filtered_records is not None:
             return self.filtered_records, None
         if filter_ is None and self.unfiltered_records is not None:
@@ -401,9 +566,42 @@ class FakeQdrant:
         return [
             QdrantRecord(
                 point_id="mem_001",
-                payload={"project_id": project_id, "content": "hello memory"},
-            )
+                payload={
+                    "project_id": project_id,
+                    "content": "hello memory",
+                    "status": "active",
+                    "created_at": "2026-08-01T08:00:00Z",
+                    "reinforcement_count": 2,
+                },
+            ),
+            QdrantRecord(
+                point_id="mem_002",
+                payload={
+                    "project_id": project_id,
+                    "content": "archived memory",
+                    "status": "archived",
+                    "created_at": "2026-08-02T08:00:00Z",
+                },
+            ),
+            QdrantRecord(
+                point_id="mem_003",
+                payload={
+                    "project_id": project_id,
+                    "content": "pending memory",
+                    "status": "vector_pending",
+                    "created_at": "2026-08-03T08:00:00Z",
+                },
+            ),
         ], None
+
+    async def count_memories(self, project_id, *, filter_=None):
+        del project_id
+        if filter_ is None:
+            return 37
+        for condition in filter_.must or []:
+            if getattr(condition, "key", None) == "status":
+                return {"active": 29, "archived": 5, "vector_pending": 3}.get(condition.match.value, 0)
+        return 0
 
     async def get_memory(self, project_id, memory_id, *, with_vectors=False):
         return QdrantRecord(point_id=memory_id, payload={"project_id": project_id, "content": "hello memory"})
