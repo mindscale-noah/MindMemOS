@@ -31,12 +31,12 @@ def test_off_mode_without_mm_endpoints_stays_info(monkeypatch) -> None:
     assert any("stores images without indexing" in event["event"] for event in logs)
 
 
-def test_s3_backend_without_the_extra_fails_the_boot(monkeypatch) -> None:
-    # The S3 backend imports minio lazily; without the mindmemos[s3] extra that ImportError
+def test_s3_store_without_the_extra_fails_the_boot(monkeypatch) -> None:
+    # The S3 store imports minio lazily; without the mindmemos[s3] extra that ImportError
     # must fail startup, not surface as a 500 on the first image request.
     from mindmemos.errors import InvalidConfigError
 
-    cfg = build(MemoryConfig, {"blob_store": {"backend": "s3"}})
+    cfg = build(MemoryConfig)
 
     def missing_extra():
         raise ImportError("No module named 'minio'")
@@ -45,15 +45,15 @@ def test_s3_backend_without_the_extra_fails_the_boot(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "get_blob_store", missing_extra)
     with pytest.raises(InvalidConfigError, match=r"mindmemos\[s3\]") as excinfo:
         app_module._check_blob_store()
-    assert excinfo.value.field == "blob_store.backend"
+    assert excinfo.value.field == "blob_store.s3_endpoint"
 
 
-def test_s3_backend_with_an_endpoint_the_client_rejects_fails_the_boot(monkeypatch) -> None:
+def test_s3_endpoint_the_client_rejects_fails_the_boot(monkeypatch) -> None:
     # The minio constructor validates more than config validation does (e.g. a non-numeric
     # port raises a bare ValueError); the boot must name the config field, not crash raw.
     from mindmemos.errors import InvalidConfigError
 
-    cfg = build(MemoryConfig, {"blob_store": {"backend": "s3", "s3_endpoint": "minio.internal:70003"}})
+    cfg = build(MemoryConfig, {"blob_store": {"s3_endpoint": "minio.internal:70003"}})
 
     def bad_endpoint():
         raise ValueError("Port could not be cast to integer value as '70003'")
@@ -65,17 +65,30 @@ def test_s3_backend_with_an_endpoint_the_client_rejects_fails_the_boot(monkeypat
     assert excinfo.value.field == "blob_store.s3_endpoint"
 
 
-def test_local_backend_and_a_working_s3_extra_boot_normally(monkeypatch) -> None:
+def test_a_working_s3_extra_boots_normally(monkeypatch) -> None:
     calls = []
-
-    monkeypatch.setattr(app_module, "get_config", lambda: build(MemoryConfig))
     monkeypatch.setattr(app_module, "get_blob_store", lambda: (calls.append(1), object())[1])
-    app_module._check_blob_store()  # local backend: the store is never constructed
-    assert calls == []
-
-    monkeypatch.setattr(app_module, "get_config", lambda: build(MemoryConfig, {"blob_store": {"backend": "s3"}}))
-    app_module._check_blob_store()  # s3 backend with the extra importable: green boot
+    monkeypatch.setattr(app_module, "get_config", lambda: build(MemoryConfig))  # mode off: no signing warning
+    app_module._check_blob_store()  # the store is built once on every boot
     assert calls == [1]
+
+
+def test_multimodal_without_a_signing_secret_warns_off_mode_stays_quiet(monkeypatch) -> None:
+    # with no secret the signed-URL tier is disabled, and the boot must say so instead of
+    # letting search mint empty-key (forgeable) links; text-only (mode off) never warns.
+    monkeypatch.setattr(app_module, "get_blob_store", lambda: object())
+
+    cfg = build(MemoryConfig, {"algo_config": {"multimodal": {"mode": "basic"}}})
+    monkeypatch.setattr(app_module, "get_config", lambda: cfg)
+    with capture_logs() as logs:
+        app_module._check_blob_store()
+    assert any("image url signing disabled" in event["event"] for event in logs if event.get("log_level") == "warning")
+
+    cfg = build(MemoryConfig)  # mode defaults to off
+    monkeypatch.setattr(app_module, "get_config", lambda: cfg)
+    with capture_logs() as logs:
+        app_module._check_blob_store()
+    assert not [event for event in logs if event.get("log_level") in ("warning", "error")]
 
 
 def test_mm_embed_probe_timeout_warns_instead_of_stalling_the_boot(monkeypatch) -> None:

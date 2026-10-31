@@ -80,9 +80,9 @@ openclaw gateway restart
 
 ## Image memories
 
-Multimodal search hits can carry `metadata.image_url` — a permanent mirror URL
-or a short-lived presigned link the agent may fetch directly, or a relative
-`/v1/memory/images/{blob_id}` proxy path that needs the MindMemOS API token;
+Multimodal search hits can carry `metadata.image_url` — a permanent mirror URL, a short-lived presigned link, or a short-lived *signed*
+proxy URL (`/v1/memory/images/{blob_id}?…&signature=…`) — all three download directly
+with no MindMemOS API token;
 `metadata.blob_id` is the stable id. When present, the injected memory context
 keeps it as `<image: URL>` the model may fetch to view the image; a hit with no
 text but a link still appears, rendered as `[image memory] <image: URL>`. Note:

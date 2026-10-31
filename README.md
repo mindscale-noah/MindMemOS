@@ -46,7 +46,7 @@
 
 ## 📰 News
 
-- **2026-10-31**: Multimodal memory is here — `memory.add` / `memory.search` accept images (stored on local disk or S3/MinIO, indexed by multimodal embeddings), with `enhanced` mode adding VLM visual-fact extraction and multimodal agent retrieval. Benchmark results and the run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
+- **2026-10-31**: Multimodal memory is here — `memory.add` / `memory.search` accept images (originals stored in S3-compatible object storage / MinIO, indexed by multimodal embeddings), with `enhanced` mode adding VLM visual-fact extraction and multimodal agent retrieval. Benchmark results and the run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
 - **2026-08-18**: We released the [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin), letting DeepSeek Harness (dsh) agents automatically recall and write MindMemOS memories.
 - **2026-08-14**: We released the [MindMemOS 1.0 technical report](https://arxiv.org/abs/2608.12428), *MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents*.
 - **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.
@@ -56,7 +56,7 @@
 
 - **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable assets, allowing OpenClaw, Hermes, Claude Code, OpenHands, and other agents to share or transfer the same long-term memory.
 - **Self-evolving memory system**: Continuously improve memory quality through schema learning, dreaming, and feedback by automatically learning frequent memory patterns, consolidating memories offline, and using interaction corrections to optimize add/search workflows.
-- **Multimodal memory**: Images ride alongside text in vanilla `add`/`search` under `algo_config.multimodal.mode` (`off`/`basic`/`enhanced`, per-project overridable) — store originals on local disk or S3/MinIO, index them with a multimodal embedding model (`mm_embed_model_router`, SigLIP2-compatible), and in `enhanced` extract visual facts with a VLM and retrieve through a multimodal agent. Image hits carry `metadata.image_url` — a permanent mirror URL when configured, else a short-lived presigned URL on S3/MinIO, else an authenticated proxy route — plus `metadata.blob_id` for re-download. Disabled by default (`off`), with byte-identical text-only behavior.
+- **Multimodal memory**: Images ride alongside text in vanilla `add`/`search` under `algo_config.multimodal.mode` (`off`/`basic`/`enhanced`, per-project overridable) — store originals in S3/MinIO (the only image backend), index them with a multimodal embedding model (`mm_embed_model_router`, SigLIP2-compatible), and in `enhanced` extract visual facts with a VLM and retrieve through a multimodal agent. Image hits carry `metadata.image_url` — a permanent mirror URL when configured, else a short-lived presigned URL on S3/MinIO, else an equally short-lived signed proxy URL that needs no API key — plus `metadata.blob_id` for re-download. Disabled by default (`off`), with byte-identical text-only behavior.
 - **Memory and Skills integration**: Experience memories can be distilled into skill candidates, while skill execution results, failure traces, and user feedback flow back into the memory system to drive continuous skill evolution.
 - **Plugin integrations**: Connect MindMemOS to different agents and workflows through plugins that retrieve and inject relevant memories before interactions and automatically write conversations back afterward. The [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) and [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) are currently available, with more integrations in progress.
 
@@ -115,7 +115,7 @@ make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
 ```
 
-`make dev` / `make db` also start MinIO (blob storage for multimodal images) with its bucket bootstrap; pass `MINIO=0` to skip it for a text-only layout — `dev-down` / `db-clean` then leave the MinIO container and its volume untouched (see the [deploy guide](docs/deploy/instruction.md)).
+`make dev` / `make db` also start MinIO (the S3-compatible store for multimodal images) with its bucket bootstrap; pass `MINIO=0` to skip it for a text-only layout — images always need MinIO, so that layout also sets `algo_config.multimodal.mode: "off"`. `dev-down` / `db-clean` with `MINIO=0` leave the MinIO container and its volume untouched (see the [deploy guide](docs/deploy/instruction.md)).
 
 The default local service port is 8000:
 

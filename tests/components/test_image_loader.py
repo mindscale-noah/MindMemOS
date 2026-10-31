@@ -1,20 +1,20 @@
 import asyncio
 import base64
 import socket
-from pathlib import Path
 
 import pytest
 from mindmemos.components.multimodal import ImageLoader, ImageLoadError, sniff_image_mime
 from mindmemos.config import BlobStoreConfig
-from mindmemos.infra.blob import LocalBlobStore
 from mindmemos.typing import ImageRef
+
+from tests.blob_fakes import MemoryBlobStore
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
 
 
-def _loader(tmp_path, **cfg) -> ImageLoader:
-    return ImageLoader(BlobStoreConfig(**cfg), LocalBlobStore(tmp_path / "blobs"))
+def _loader(**cfg) -> ImageLoader:
+    return ImageLoader(BlobStoreConfig(**cfg), MemoryBlobStore())
 
 
 def test_sniff_recognizes_supported_formats_only() -> None:
@@ -28,7 +28,7 @@ def test_sniff_recognizes_supported_formats_only() -> None:
 
 @pytest.mark.asyncio
 async def test_base64_and_data_uri(tmp_path) -> None:
-    loader = _loader(tmp_path)
+    loader = _loader()
     raw = base64.b64encode(PNG).decode()
     assert (await loader.load(ImageRef(data=raw), namespace="p")).data == PNG
     loaded = await loader.load(ImageRef(data=f"data:image/png;base64,{raw}"), namespace="p")
@@ -48,8 +48,8 @@ async def test_paths_need_an_allowed_root(tmp_path) -> None:
     secret.write_bytes(PNG)
 
     with pytest.raises(ImageLoadError, match="disabled"):
-        await _loader(tmp_path).load(ImageRef(path=str(images / "a.png")), namespace="p")
-    loader = _loader(tmp_path, allowed_path_roots=[str(images)])
+        await _loader().load(ImageRef(path=str(images / "a.png")), namespace="p")
+    loader = _loader(allowed_path_roots=[str(images)])
     assert (await loader.load(ImageRef(path=str(images / "a.png")), namespace="p")).data == PNG
     with pytest.raises(ImageLoadError, match="outside"):
         await loader.load(ImageRef(path=str(images / ".." / "secret.png")), namespace="p")
@@ -57,19 +57,19 @@ async def test_paths_need_an_allowed_root(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_size_limit_and_private_urls(tmp_path) -> None:
-    loader = _loader(tmp_path, max_image_bytes=16)
+    loader = _loader(max_image_bytes=16)
     with pytest.raises(ImageLoadError, match="exceeds"):
         await loader.load(ImageRef(data=base64.b64encode(PNG).decode()), namespace="p")
     for url in ("http://127.0.0.1/x.png", "http://169.254.169.254/latest", "file:///etc/passwd"):
         with pytest.raises(ImageLoadError):
-            await _loader(tmp_path).load(ImageRef(url=url), namespace="p")
+            await _loader().load(ImageRef(url=url), namespace="p")
 
 
 @pytest.mark.asyncio
 async def test_base64_is_rejected_before_decoding_when_oversized(tmp_path) -> None:
     # The check must fire on the encoded length: a payload far beyond the limit is refused
     # without ever being expanded in memory.
-    loader = _loader(tmp_path, max_image_bytes=64)
+    loader = _loader(max_image_bytes=64)
     huge = base64.b64encode(PNG + b"\x00" * 1_000_000).decode()
     assert len(huge) > 1_300_000
     with pytest.raises(ImageLoadError, match="exceeds"):
@@ -95,7 +95,7 @@ async def test_url_is_dialed_on_the_resolved_ip_with_original_host(monkeypatch, 
 
     loader = ImageLoader(
         BlobStoreConfig(),
-        LocalBlobStore(tmp_path / "blobs"),
+        MemoryBlobStore(),
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 
@@ -125,7 +125,7 @@ async def test_url_with_private_hosts_allowed_dials_the_hostname(monkeypatch, tm
 
     loader = ImageLoader(
         BlobStoreConfig(url_allow_private_hosts=True),
-        LocalBlobStore(tmp_path / "blobs"),
+        MemoryBlobStore(),
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 
@@ -142,9 +142,10 @@ async def test_url_with_private_hosts_allowed_dials_the_hostname(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_blob_ids_resolve_within_the_project_only(tmp_path) -> None:
-    loader = _loader(tmp_path)
-    blob = await LocalBlobStore(tmp_path / "blobs").put("p", PNG, mime_type="image/png")
+async def test_blob_ids_resolve_within_the_project_only() -> None:
+    store = MemoryBlobStore()
+    loader = ImageLoader(BlobStoreConfig(), store)
+    blob = await store.put("p", PNG, mime_type="image/png")
     assert (await loader.load(ImageRef(blob_id=blob.blob_id), namespace="p")).data == PNG
     with pytest.raises(ImageLoadError, match="unknown blob_id"):
         await loader.load(ImageRef(blob_id=blob.blob_id), namespace="other")
@@ -160,7 +161,7 @@ def test_image_ref_needs_exactly_one_source() -> None:
 def test_owned_http_client_is_one_per_event_loop() -> None:
     # Fetches of one request reuse their connections; a client binds to the loop it first ran
     # on, so a fresh loop (every test, or a restarted server) must get its own client.
-    loader = _loader(Path("nowhere"))
+    loader = _loader()
 
     async def twice() -> tuple[object, object]:
         return loader._client_for(), loader._client_for()
@@ -187,7 +188,7 @@ async def test_out_of_range_url_port_is_a_400_not_a_500(tmp_path) -> None:
     # urlsplit defers port parsing to first access: an out-of-range port raises ValueError
     # there, not an httpx error — it must surface as the image.* 400 envelope like any
     # other invalid image input, not escape as a 500.
-    loader = _loader(tmp_path)
+    loader = _loader()
     for url in ("http://example.com:70000/a.png", "https://h:99999/x"):
         with pytest.raises(ImageLoadError, match="invalid port") as error:
             await loader.load(ImageRef(url=url), namespace="p")
@@ -196,7 +197,7 @@ async def test_out_of_range_url_port_is_a_400_not_a_500(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_malformed_urls_and_hostnames_are_400s_not_500s(monkeypatch, tmp_path) -> None:
-    loader = _loader(tmp_path)
+    loader = _loader()
 
     # An unterminated IPv6 literal makes urlsplit itself raise ValueError.
     with pytest.raises(ImageLoadError, match="not valid") as broken:
@@ -226,7 +227,7 @@ async def test_url_follows_one_redirect_and_stops_loops(tmp_path) -> None:
 
     loader = ImageLoader(
         BlobStoreConfig(url_allow_private_hosts=True),
-        LocalBlobStore(tmp_path / "blobs"),
+        MemoryBlobStore(),
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 
@@ -249,7 +250,7 @@ async def test_url_fetch_failures_are_reported_as_image_errors(tmp_path) -> None
 
     loader = ImageLoader(
         BlobStoreConfig(url_allow_private_hosts=True),
-        LocalBlobStore(tmp_path / "blobs"),
+        MemoryBlobStore(),
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 

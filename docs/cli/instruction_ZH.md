@@ -205,7 +205,7 @@ mindmemos memory search "猫" --query-image ./query.png
 | `--user-id` 等 | 覆盖请求上下文 |
 | `--json` | 以 JSON 输出完整结果 |
 
-命中已存储图片的结果会多输出一行 `image: <url>` —— 服务端配置了公共镜像（`blob_store.s3_public_base_url`）时为永久 URL，否则是短时效的 S3/MinIO 预签名链接，再否则回退为需鉴权代理路由的**相对路径**（`/v1/memory/images/{blob_id}?user_id=…`，需按配置的 `base_url` 拼接）。`--json` 模式下该 URL 位于 `metadata.image_url`，与 `metadata.blob_id`、`metadata.user_id` 一并返回；`blob_id` + `user_id` 正是下文 `memory get-image` 所需的输入，因此链接过期或不可直接访问时仍可随时通过 API 重新下载。
+命中已存储图片的结果会多输出一行 `image: <url>` —— 服务端配置了公共镜像（`blob_store.s3_public_base_url`）时为永久 URL，否则是短时效的 S3/MinIO 预签名链接，再否则回退为同样短时效的**签名**代理 URL（`/v1/memory/images/{blob_id}?user_id=…&project_id=…&expires=…&signature=…`，配置了 `blob_store.proxy_public_base_url` 时为绝对地址，否则为相对路径、按配置的 `base_url` 拼接），无需任何 API key 即可下载。`--json` 模式下该 URL 位于 `metadata.image_url`，与 `metadata.blob_id`、`metadata.user_id` 一并返回；`blob_id` + `user_id` 正是下文 `memory get-image` 所需的输入，因此链接过期或不可直接访问时仍可随时通过 API 重新下载。
 
 ### 5.3 列出与过滤 `get`
 

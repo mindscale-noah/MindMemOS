@@ -101,9 +101,9 @@ the row.
   listener. It extracts the real human prompt, runs `mindmemos memory search`,
   and appends one `createUserMessage` carrying the hits under a
   `<relevant-memories>` banner. Image hits that carry `metadata.image_url` keep
-  the link in the injected text as `<image: URL>` — a permanent mirror URL or a
-  short-lived presigned link the agent may fetch directly, or a relative
-  `/v1/memory/images/{blob_id}` proxy path that needs the MindMemOS API token;
+  the link in the injected text as `<image: URL>` — a permanent mirror URL, a short-lived presigned link, or a short-lived *signed*
+  proxy URL (`/v1/memory/images/{blob_id}?…&signature=…`) — all three download directly
+  with no MindMemOS API token;
   `metadata.blob_id` is the stable id. (As shipped the plugin issues text-only
   searches — no `--multimodal` / `--query-image` — so image hits do not occur
   through it; the wiring applies once a multimodal search is enabled.) The

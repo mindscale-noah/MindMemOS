@@ -8,6 +8,8 @@ type PluginConfig = {
   cli: string;
   topK: number;
   tokenBudget?: number;
+  /** Search stored images too; image hits carry a short-lived directly-fetchable image_url. */
+  multimodal: boolean;
   addMode: "sync" | "async";
   userId?: string;
   appId: string;
@@ -54,6 +56,7 @@ const DEFAULT_CONFIG: PluginConfig = {
   enabled: true,
   cli: "mindmemos",
   topK: 5,
+  multimodal: true,
   addMode: "async",
   appId: "openclaw",
   minQueryLength: 2,
@@ -73,6 +76,10 @@ const CONFIG_SCHEMA = {
     topK: {
       type: "integer",
       minimum: 1,
+    },
+    multimodal: {
+      type: "boolean",
+      description: "Search stored images too (image hits carry a short-lived fetchable image_url).",
     },
     tokenBudget: {
       type: "integer",
@@ -174,6 +181,7 @@ function loadConfig(raw: unknown): PluginConfig {
     enabled: obj.enabled !== false,
     cli: typeof obj.cli === "string" && obj.cli.trim() ? obj.cli.trim() : DEFAULT_CONFIG.cli,
     topK: positiveInteger(obj.topK, DEFAULT_CONFIG.topK),
+    multimodal: obj.multimodal !== false,
     tokenBudget: optionalPositiveInteger(obj.tokenBudget),
     addMode,
     appId: typeof obj.appId === "string" && obj.appId.trim() ? obj.appId.trim() : DEFAULT_CONFIG.appId,
@@ -189,6 +197,11 @@ function loadConfig(raw: unknown): PluginConfig {
 
 async function searchMemories(config: PluginConfig, query: string, sessionId: string): Promise<MemorySearchResult> {
   const args = ["memory", "search", query, "--top-k", String(config.topK), "--json"];
+  if (config.multimodal) {
+    // Image hits carry metadata.blob_id + a short-lived image_url the agent can GET directly;
+    // the server silently ignores this flag while the project's multimodal mode is off.
+    args.push("--multimodal");
+  }
   if (config.tokenBudget) {
     args.push("--token-budget", String(config.tokenBudget));
   }
@@ -362,7 +375,7 @@ function formatMemoryContext(memories: MemoryHit[], userId: string | undefined, 
   }
   const preamble = buildPreamble(userId, isSubagent);
   const imageHint = hasImage
-    ? "(<image: …> URLs point at the stored images; presigned links are directly fetchable; proxy paths are relative to the MindMemOS API base and need the project's API token)"
+    ? "(<image: …> URLs point at the stored images and expire; fetch them directly — a relative proxy path resolves against the MindMemOS API base)"
     : "";
   return [MEMORY_CONTEXT_OPEN, preamble, imageHint, ...lines, MEMORY_CONTEXT_CLOSE].filter(Boolean).join("\n");
 }

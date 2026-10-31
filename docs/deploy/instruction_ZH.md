@@ -75,7 +75,8 @@ make dev
 make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
 make dev-blobs         # 单独启动 MinIO（make dev / make db 也会一并启动），见第 8 节
-make db MINIO=0        # 传统模式：同上但不起 MinIO（MINIO=0 的 dev-down / db-clean
+make db MINIO=0        # 纯文本布局：同上但不起 MinIO——需设 algo_config.multimodal.mode: "off"
+                       #（图片一律存 S3/MinIO，多模态离不开该容器；MINIO=0 时 dev-down / db-clean
                        # 同样不会动 MinIO 容器和它的数据卷）
 ```
 
@@ -123,7 +124,7 @@ Neo4j：
 | `MINDMEMOS_TELEMETRY_ENDPOINT` | OTel HTTP endpoint；只有 config 里 `telemetry.enabled=true` 时会上报 | `http://localhost:4318` |
 | `MINDMEMOS_CLICKHOUSE_USER` / `MINDMEMOS_CLICKHOUSE_PASSWORD` / `MINDMEMOS_CLICKHOUSE_DB` | ClickHouse/Grafana 观测数据配置 | 见 `.env.example` |
 
-图片存储（S3/MinIO；仅 `blob_store.backend: s3` 时使用，见第 8 节）：
+图片存储（S3/MinIO——唯一的图片后端；任何多模态模式都需要，见第 8 节）：
 
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
@@ -158,7 +159,7 @@ Docker Compose 内的核心服务：
 - `neo4j`: 存图关系。
 - `kafka`: 异步任务队列；默认 config 里未开启也可以先跑着。
 - `clickhouse` + `otel-collector` + `grafana`: 观测链路；不需要观测时可以在 config 里关掉 `telemetry.enabled`。
-- `minio` + `minio-init`: 图片对象存储及 bucket 初始化，供多模态的 `s3` 后端使用；`make dev` / `make db` 会一并启动（也可用 `make dev-blobs` 单独启动；`make dev MINIO=0` 跳过）。锁定的`bitnamilegacy/minio` 镜像不含 web 控制台——用`mc`或`minio-init`服务管理 bucket。
+- `minio` + `minio-init`: 图片对象存储及 bucket 初始化——多模态部署的图片全在这里（没有其他图片后端）；`make dev` / `make db` 会一并启动（也可用 `make dev-blobs` 单独启动；`make dev MINIO=0` 为纯文本布局跳过）。锁定的`bitnamilegacy/minio` 镜像不含 web 控制台——用`mc`或`minio-init`服务管理 bucket。
 
 本地部署时，`.env` 里的端口变量要和 `config/mindmemos/dev.yaml` 里的连接地址对齐。代码启动时还会用环境变量覆盖这些连接字段：
 
@@ -278,9 +279,9 @@ algo_config:
 
 强调：`rerank` 是可选增强项。生产环境建议先把 Docker、LLM、Embedding 跑稳，再接入 rerank。
 
-## 8. 多模态图片存储（可选）
+## 8. 多模态图片存储（S3/MinIO）
 
-记忆消息携带的图片按内容寻址（按项目 SHA-256 去重）存储为 blob。默认 `local` 后端零配置——文件落在 `blob_store.local_root`（`data/blobs`）。如需改用 S3/MinIO 存储：
+记忆消息携带的图片按内容寻址（按项目 SHA-256 去重）存储为 blob，一律放在 S3 兼容对象存储——compose 栈里是 MinIO，其他环境可用任意 S3 端点（OSS S3 网关、R2、AWS S3）。任何多模态模式（`algo_config.multimodal.mode` 为 `basic`/`enhanced`）都需要以下配置；`off` 模式不碰 blob 存储，可省略。
 
 1. 启动 MinIO（本地开发）：
 
@@ -288,26 +289,29 @@ algo_config:
    make dev-blobs   # MinIO 位于 http://localhost:9100，bucket 自动创建
    ```
 
-2. 在 `config/mindmemos/dev.yaml` 中切换后端：
+2. 在 `config/mindmemos/dev.yaml` 中把 `blob_store` 指向它（默认已配好）：
 
    ```yaml
    blob_store:
-     backend: s3
      s3_endpoint: http://localhost:9100   # https:// 开启 TLS
      s3_bucket: mindmemos-blobs           # 缺失时首次使用自动创建
      s3_region: us-east-1                 # 必填非空；会写进每个预签名 URL
      s3_access_key: minioadmin
      s3_secret_key: minioadmin
-     # s3_presign_endpoint: https://blobs.example.com  # 预签名 URL 的对外地址
-     # s3_presign_expiry_seconds: 3600                  # 预签名 URL 有效期，1..604800
+     # s3_public_base_url: https://cdn.example.com/minio   # 用永久镜像 URL 取代预签名
+     # s3_presign_endpoint: https://blobs.example.com      # 预签名 URL 的对外地址
+     # s3_presign_expiry_seconds: 3600                     # 预签名 URL 有效期，1..604800
+     # proxy_url_expiry_seconds: 3600                      # 签名代理 URL 有效期；缺省复用预签名值
+     # proxy_public_base_url: https://memory.example.com   # 签名代理 URL 的绝对前缀；缺省为相对路径
+     # url_signing_secret:                                 # HMAC 密钥；缺省从 auth.gateway_jwt_secret 派生
    ```
 
 3. 重启服务。
 
 注意：
 
-- `s3` 后端需要 `s3` extra：`pip install mindmemos[s3]`（开发 workspace 已包含）。
-- 使用 `s3` 后端时，图片检索结果会带 `metadata.image_url`：一个短时效的预签名 GET 链接，可免凭证直接从 S3/MinIO 下载图片字节。当客户端可达地址与内部 `s3_endpoint` 不同时，设置 `s3_presign_endpoint`。无法签名时（或后端为 `local`），结果回退为需鉴权的代理路由 `GET /v1/memory/images/{blob_id}?user_id=<owner>`——以相对路径下发，由客户端按自己的 API 地址解析。
+- 存储需要 `s3` extra：`pip install mindmemos[s3]`（开发 workspace 已包含）。
+- 图片检索结果会带 `metadata.image_url`：一个短时效的预签名 GET 链接，可免凭证直接从 S3/MinIO 下载图片字节。当客户端可达地址与内部 `s3_endpoint` 不同时，设置 `s3_presign_endpoint`。无法预签名时，结果回退为同样短时效的**签名**代理 URL `GET /v1/memory/images/{blob_id}?user_id=…&project_id=…&expires=…&signature=…`——同样免 API key；配置了 `proxy_public_base_url` 时为绝对地址，否则为相对路径。
 - 除 `s3_region` 外的所有 `s3_*` 字段都可以用 `MINDMEMOS_S3_*` 环境变量设置（见第 3 节）。
 - 多模态 embedding 与检索模式（`algo_config.multimodal.mode`、`mm_embed_model_router`）是另一件事，详见 [配置说明](../config/README.md#algo_configmultimodal--images-in-vanilla-memory)。
 
@@ -356,4 +360,4 @@ Authorization: Bearer <api_key>
 - `embed_model_router.endpoints[0].api_key` / `api_base` / `model` 可用。
 - `database.qdrant.vector_size` 等于 embedding 输出维度。
 - 不需要 rerank 时，`rerank_model_router.endpoints` 可以留空，并关闭相关 `use_reranker`。
-- 若 `blob_store.backend: s3`，确认 S3/MinIO 端点可达、`s3_region` 已非空设置、且服务装了 `s3` extra（见第 8 节）。
+- 若开启了多模态模式，确认 S3/MinIO 端点可达、`s3_region` 已非空设置、且服务装了 `s3` extra（见第 8 节）。

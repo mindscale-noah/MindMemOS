@@ -28,7 +28,7 @@ from .config import (
     load_benchmark_specs,
     validate_memory_algorithm,
 )
-from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_blob_root, resolve_collections
+from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_collections, resolve_s3_blob_settings
 from .identity import RunIdentity, new_identity, write_api_keys
 from .manifest import BenchmarkRunManifest, write_manifests
 
@@ -257,8 +257,8 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Path to the MindMemOS server yaml config (e.g. config/mindmemos/dev.yaml). Used to read the actual "
         "Qdrant collection names so the add-stage cleanup clears exactly what the server writes, even when "
-        "collections are renamed away from the _v1 defaults, and the local blob store root (stored images). When "
-        "omitted, the default collection names and blob root are used.",
+        "collections are renamed away from the _v1 defaults, and the S3/MinIO blob settings (stored images). "
+        "When omitted, the default collection names and blob settings are used.",
     )
 
     parser.add_argument(
@@ -428,7 +428,7 @@ def _build_reset_config(args: argparse.Namespace) -> ResetConfig:
         neo4j_password=_option(args, "neo4j_password") or env.neo4j_password,
         neo4j_database=_option(args, "neo4j_database") or env.neo4j_database,
         collections=resolve_collections(_option(args, "server_config")),
-        blob_root=resolve_blob_root(_option(args, "server_config")),
+        s3_blobs=resolve_s3_blob_settings(_option(args, "server_config")),
     )
 
 
@@ -480,7 +480,7 @@ async def run_benchmark_matrix(
         logger.info(
             "reusing existing api key project_id=%s api_key_prefix=%s",
             existing.project_id,
-            existing.api_key[:40],
+            existing.api_key[:8],
         )
     else:
         if not _option(args, "api_key_output"):

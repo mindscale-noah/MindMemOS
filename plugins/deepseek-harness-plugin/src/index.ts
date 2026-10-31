@@ -75,6 +75,8 @@ export interface Config {
   cli: string;
   /** Number of memories injected per turn. */
   topK: number;
+  /** Search stored images too; image hits carry a short-lived directly-fetchable image_url. */
+  multimodal: boolean;
   /** Optional strict token budget for recall; enables token-budget retention when set. */
   tokenBudget?: number;
   /** `sync` blocks until extraction finishes; `async` enqueues and returns. */
@@ -95,6 +97,7 @@ export interface Config {
 export const Config: z<Config> = z.object({
   cli: z.string().default("mindmemos"),
   topK: z.natural().min(1).default(5),
+  multimodal: z.boolean().default(true),
   tokenBudget: z.natural().min(1),
   addMode: z.union([z.const("sync"), z.const("async")]).default("async"),
   userId: z.string(),
@@ -188,6 +191,11 @@ export function apply(ctx: Context, config: Config): void {
 
 async function searchMemories(config: Config, query: string, sessionId: string): Promise<MemorySearchResult> {
   const args = ["memory", "search", query, "--top-k", String(config.topK), "--json"];
+  if (config.multimodal) {
+    // Image hits carry metadata.blob_id + a short-lived image_url the agent can GET directly;
+    // the server silently ignores this flag while the project's multimodal mode is off.
+    args.push("--multimodal");
+  }
   if (config.tokenBudget) {
     args.push("--token-budget", String(config.tokenBudget));
   }
@@ -243,7 +251,7 @@ function formatMemoryContext(memories: MemoryHit[], userId: string | undefined):
   }
   const preamble = userId ? `Relevant memories for ${userId}:` : "Relevant memories:";
   const imageHint = hasImage
-    ? "(<image: …> URLs point at the stored images; presigned links are directly fetchable; proxy paths are relative to the MindMemOS API base and need the project's API token)"
+    ? "(<image: …> URLs point at the stored images and expire; fetch them directly — a relative proxy path resolves against the MindMemOS API base)"
     : "";
   return [MEMORY_CONTEXT_OPEN, preamble, imageHint, ...lines, MEMORY_CONTEXT_CLOSE].filter(Boolean).join("\n");
 }

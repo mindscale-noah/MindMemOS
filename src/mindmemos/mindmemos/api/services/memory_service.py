@@ -1,6 +1,7 @@
 """Memory HTTP business logic."""
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 from urllib.parse import quote
@@ -9,6 +10,7 @@ from uuid import uuid4
 from ...config import get_config
 from ...errors import BadRequestError, MemoryNotFoundError, ResourceNotFoundError
 from ...infra.blob import get_blob_store, is_valid_blob_id
+from ...infra.blob.signed_url import image_url_signature, resolve_signing_secret
 from ...logging import get_logger, traced
 from ...pipelines import create_pipeline
 from ...pipelines.add import AddPipeline
@@ -481,9 +483,7 @@ class MemoryService:
         with config_ctx:
             return await self._search_with_context(pipeline, payload, ctx)
 
-    async def _search_with_context(
-        self, pipeline: SearchPipeline, payload, ctx
-    ) -> SearchPipelineResult:
+    async def _search_with_context(self, pipeline: SearchPipeline, payload, ctx) -> SearchPipelineResult:
         request_submitted_at = utcnow()
         try:
             result = await pipeline.search(payload, ctx)
@@ -671,37 +671,57 @@ def _attach_image_urls(
 ) -> None:
     """Attach ``metadata.image_url`` to search hits that reference a stored image.
 
-    Backends with a public mirror (``blob_store.s3_public_base_url``) get that permanent
-    URL; other S3/MinIO backends get a short-lived presigned URL clients can GET directly
-    (lazy loading; bytes never transit this API); backends that cannot sign fall back to the
-    authenticated proxy route as a *relative* path (the client resolves it against its
-    own API origin) when the hit's ``user_id`` is known — never the request's Host
-    header, which is client-controlled and must not be reflected into a
-    credential-bearing URL. ``metadata.blob_id`` remains the stable canonical reference;
-    failures degrade silently — search results never break over URL decoration.
+    An S3 backend with a public mirror (``blob_store.s3_public_base_url``) gets that
+    permanent URL; otherwise the store returns a short-lived presigned URL clients can
+    GET directly (lazy loading; bytes never transit this API). When presigning yields
+    nothing, the hit falls back to an equally short-lived *signed* proxy URL — the same
+    ``/v1/memory/images/{blob_id}`` route, plus ``project_id``/``expires``/``signature``
+    query params, so it too is a direct GET without an API key. Signed proxy URLs are
+    absolute when ``blob_store.proxy_public_base_url`` is configured (a trusted
+    deployment value — never the request's Host header, which is client-controlled and
+    must not be reflected into a credential-bearing URL) and relative otherwise.
+    ``metadata.blob_id`` remains the stable canonical reference; failures degrade
+    silently — search results never break over URL decoration.
     """
 
     hits = [
         item
         for item in result.memories
-        if isinstance(getattr(item, "metadata", None), dict)
-        and is_valid_blob_id(item.metadata.get("blob_id") or "")
+        if isinstance(getattr(item, "metadata", None), dict) and is_valid_blob_id(item.metadata.get("blob_id") or "")
     ]
     if not hits:
         return
     try:
         blob_store = store if store is not None else get_blob_store()
         cfg = get_config().blob_store
-        expiry = expires_seconds if expires_seconds is not None else cfg.s3_presign_expiry_seconds
+        proxy_expiry = (
+            expires_seconds
+            if expires_seconds is not None
+            else (cfg.proxy_url_expiry_seconds or cfg.s3_presign_expiry_seconds)
+        )
+        secret = resolve_signing_secret(cfg.url_signing_secret, get_config().auth.gateway_jwt_secret)
+        base = (cfg.proxy_public_base_url or "").rstrip("/")
         for item in hits:
             blob_id = item.metadata["blob_id"]
             url = blob_store.public_url(project_id, blob_id)
             if url is None:
-                url = blob_store.presigned_get(project_id, blob_id, expires_seconds=expiry)
-            if url is None and item.metadata.get("user_id"):
-                # self-declared ids may hold '&'/'#'/non-ASCII; quote keeps the owner one query value
-                owner = quote(str(item.metadata["user_id"]), safe="")
-                url = f"/v1/memory/images/{blob_id}?user_id={owner}"
+                url = blob_store.presigned_get(
+                    project_id,
+                    blob_id,
+                    expires_seconds=expires_seconds if expires_seconds is not None else cfg.s3_presign_expiry_seconds,
+                )
+            # with no signing secret the tier is skipped, not minted with an empty key
+            # (an empty-key HMAC is forgeable by anyone — see resolve_signing_secret)
+            if url is None and secret and item.metadata.get("user_id"):
+                owner = str(item.metadata["user_id"])
+                expires_at = int(time.time()) + proxy_expiry
+                # self-declared ids may hold '&'/'#'/non-ASCII; quote keeps each id one query value
+                signature = image_url_signature(project_id, blob_id, owner, expires_at, secret)
+                url = (
+                    f"{base}/v1/memory/images/{blob_id}"
+                    f"?user_id={quote(owner, safe='')}&project_id={quote(project_id, safe='')}"
+                    f"&expires={expires_at}&signature={signature}"
+                )
             if url:
                 item.metadata["image_url"] = url
     except Exception as exc:  # noqa: BLE001 - decoration must never fail the search (e.g. s3 extra missing)

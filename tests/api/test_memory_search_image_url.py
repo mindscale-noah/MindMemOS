@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import FastAPI
@@ -18,8 +20,10 @@ from mindmemos.api.services import get_memory_service
 from mindmemos.api.services import memory_service as memory_service_module
 from mindmemos.api.services.memory_service import MemoryService
 from mindmemos.config import init_config, reset_config
-from mindmemos.infra.blob import LocalBlobStore
+from mindmemos.infra.blob.signed_url import image_url_signature
 from mindmemos.typing import MemorySearchItem, SearchPipelineResult
+
+from tests.blob_fakes import MemoryBlobStore, MirroredBlobStore, PresigningBlobStore
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"fake-png-body"
 BLOB_ID = hashlib.sha256(PNG_BYTES).hexdigest()
@@ -62,6 +66,31 @@ def config_expiry_7200(tmp_path: Path) -> None:
     reset_config()
 
 
+@pytest.fixture
+def config_proxy_base(tmp_path: Path) -> None:
+    path = tmp_path / "dev.yaml"
+    path.write_text(
+        "auth:\n  mode: gateway_jwt\n  gateway_jwt_secret: test-secret\n"
+        "blob_store:\n  proxy_public_base_url: https://memory.example.com\n",
+        encoding="utf-8",
+    )
+    init_config(config_path=path)
+    yield
+    reset_config()
+
+
+@pytest.fixture
+def config_proxy_expiry_720(tmp_path: Path) -> None:
+    path = tmp_path / "dev.yaml"
+    path.write_text(
+        "auth:\n  mode: gateway_jwt\n  gateway_jwt_secret: test-secret\nblob_store:\n  proxy_url_expiry_seconds: 720\n",
+        encoding="utf-8",
+    )
+    init_config(config_path=path)
+    yield
+    reset_config()
+
+
 class _NoopRecorder:
     async def record_search(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -73,25 +102,6 @@ class _FakeSearchPipeline:
 
     async def search(self, payload, ctx) -> SearchPipelineResult:
         return self._result
-
-
-class _PresigningStore(LocalBlobStore):
-    """Local store that pretends to be an S3 backend able to sign."""
-
-    def __init__(self, root: Path) -> None:
-        super().__init__(root)
-        self.presigned: list[tuple[str, str, int]] = []
-
-    def presigned_get(self, namespace: str, blob_id: str, *, expires_seconds: int = 3600) -> str | None:
-        self.presigned.append((namespace, blob_id, expires_seconds))
-        return f"https://minio.example.com/blobs/{namespace}/{blob_id}?X-Amz-Signature=fake&expires={expires_seconds}"
-
-
-class _MirroredStore(_PresigningStore):
-    """S3 backend with a public mirror (``s3_public_base_url``): signing stays unused."""
-
-    def public_url(self, namespace: str, blob_id: str) -> str | None:
-        return f"https://cdn.example.com/mirror/{namespace}/{blob_id}"
 
 
 def _image_result(*, owner: str = OWNER) -> SearchPipelineResult:
@@ -153,32 +163,93 @@ def _search(client: TestClient) -> list[dict]:
     return response.json()["data"]["memories"]
 
 
-def test_local_backend_falls_back_to_the_relative_proxy_route(tmp_path, monkeypatch, auth_context, config) -> None:
-    client = _client(auth_context, _service(monkeypatch, LocalBlobStore(tmp_path)))
+def test_presign_failure_falls_back_to_the_signed_proxy_url(monkeypatch, auth_context, config) -> None:
+    client = _client(auth_context, _service(monkeypatch, MemoryBlobStore()))
 
     memories = _search(client)
     by_id = {item["id"]: item for item in memories}
 
     assert "image_url" not in by_id["mem-1"]["metadata"]  # text hit untouched
-    assert by_id["img-1"]["metadata"]["image_url"] == f"/v1/memory/images/{BLOB_ID}?user_id={OWNER}"
+    url = by_id["img-1"]["metadata"]["image_url"]
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    assert parsed.path == f"/v1/memory/images/{BLOB_ID}"  # relative: no trusted public base configured
+    assert query["user_id"] == [OWNER]
+    assert query["project_id"] == ["project-1"]
+    assert int(query["expires"][0]) > int(time.time())
+    assert query["signature"] == [
+        image_url_signature("project-1", BLOB_ID, OWNER, int(query["expires"][0]), "test-secret")
+    ]
     # bare hit has no owner to name on the proxy route -> stays undecorated
     assert "image_url" not in by_id[BLOB_ID]["metadata"]
     assert "image_url" not in by_id["img-bad"]["metadata"]
 
 
-def test_proxy_fallback_quotes_special_owner_ids(tmp_path, monkeypatch, auth_context, config) -> None:
-    """An owner like ``a&b=张三`` must stay one query value, not corrupt the URL."""
-    client = _client(auth_context, _service(monkeypatch, LocalBlobStore(tmp_path), owner="a&b=张三"))
+def test_no_signing_secret_skips_the_signed_tier_instead_of_minting_with_an_empty_key(
+    monkeypatch, auth_context, tmp_path
+) -> None:
+    """Presign fails and no secret is configured: the link is absent, never forgeable-empty."""
+
+    path = tmp_path / "dev.yaml"
+    path.write_text("auth:\n  mode: api_key\n", encoding="utf-8")  # no gateway_jwt_secret / url_signing_secret
+    init_config(config_path=path)
+    try:
+        client = _client(auth_context, _service(monkeypatch, MemoryBlobStore()))
+        memories = _search(client)
+    finally:
+        reset_config()
+
+    by_id = {item["id"]: item for item in memories}
+    assert "image_url" not in by_id["mem-1"]["metadata"]
+    assert "image_url" not in by_id["img-1"]["metadata"]  # tier skipped, not minted with secret=""
+
+
+def test_signed_proxy_url_is_absolute_under_proxy_public_base_url(
+    monkeypatch, auth_context, config_proxy_base
+) -> None:
+    client = _client(auth_context, _service(monkeypatch, MemoryBlobStore()))
 
     memories = _search(client)
 
-    assert memories[1]["metadata"]["image_url"] == (
-        f"/v1/memory/images/{BLOB_ID}?user_id=a%26b%3D%E5%BC%A0%E4%B8%89"
-    )
+    url = memories[1]["metadata"]["image_url"]
+    assert url.startswith("https://memory.example.com/v1/memory/images/")
+    parsed = urlparse(url)
+    assert parsed.scheme == "https" and parsed.netloc == "memory.example.com"
+    query = parse_qs(parsed.query)
+    assert query["signature"] == [
+        image_url_signature("project-1", BLOB_ID, OWNER, int(query["expires"][0]), "test-secret")
+    ]
 
 
-def test_presigning_backend_decorates_every_valid_image_hit(tmp_path, monkeypatch, auth_context, config) -> None:
-    store = _PresigningStore(tmp_path)
+def test_signed_proxy_url_honours_proxy_url_expiry_seconds(
+    monkeypatch, auth_context, config_proxy_expiry_720
+) -> None:
+    client = _client(auth_context, _service(monkeypatch, MemoryBlobStore()))
+
+    memories = _search(client)
+
+    query = parse_qs(urlparse(memories[1]["metadata"]["image_url"]).query)
+    remaining = int(query["expires"][0]) - int(time.time())
+    assert 700 < remaining <= 720  # proxy knob wins over the 3600 s3 default
+
+
+def test_proxy_fallback_quotes_special_owner_ids(monkeypatch, auth_context, config) -> None:
+    """An owner like ``a&b=张三`` must stay one query value, not corrupt the URL."""
+    client = _client(auth_context, _service(monkeypatch, MemoryBlobStore(), owner="a&b=张三"))
+
+    memories = _search(client)
+
+    parsed = urlparse(memories[1]["metadata"]["image_url"])
+    query = parse_qs(parsed.query)
+    assert parsed.path == f"/v1/memory/images/{BLOB_ID}"
+    assert query["user_id"] == ["a&b=张三"]  # parse_qs decodes exactly one value back
+    assert query["signature"] == [
+        image_url_signature("project-1", BLOB_ID, "a&b=张三", int(query["expires"][0]), "test-secret")
+    ]
+
+
+def test_presigning_backend_decorates_every_valid_image_hit(monkeypatch, auth_context, config) -> None:
+    store = PresigningBlobStore()
     client = _client(auth_context, _service(monkeypatch, store))
 
     memories = _search(client)
@@ -194,9 +265,9 @@ def test_presigning_backend_decorates_every_valid_image_hit(tmp_path, monkeypatc
     ]
 
 
-def test_public_mirror_url_wins_over_presigning(tmp_path, monkeypatch, auth_context, config) -> None:
+def test_public_mirror_url_wins_over_presigning(monkeypatch, auth_context, config) -> None:
     """A configured s3_public_base_url serves permanent URLs; no signing round per hit."""
-    store = _MirroredStore(tmp_path)
+    store = MirroredBlobStore()
     client = _client(auth_context, _service(monkeypatch, store))
 
     memories = _search(client)
@@ -207,20 +278,27 @@ def test_public_mirror_url_wins_over_presigning(tmp_path, monkeypatch, auth_cont
     assert store.presigned == []  # the mirror makes presigning unnecessary
 
 
-def test_internal_caller_gets_the_relative_proxy_path(tmp_path, monkeypatch, auth_context, config) -> None:
-    """Internal callers (no HTTP request) get the same inert relative path, never a bogus absolute origin."""
-    service = _service(monkeypatch, LocalBlobStore(tmp_path))
+def test_internal_caller_gets_the_signed_proxy_path(monkeypatch, auth_context, config) -> None:
+    """Internal callers (no HTTP request) get the same relative signed path, never a bogus absolute origin."""
+    service = _service(monkeypatch, MemoryBlobStore())
 
     result = asyncio.run(service.search(auth_context, SearchRequest(query="q")))
 
     by_id = {item.id: item for item in result.memories}
-    assert by_id["img-1"].metadata["image_url"] == f"/v1/memory/images/{BLOB_ID}?user_id={OWNER}"
+    url = by_id["img-1"].metadata["image_url"]
+    parsed = urlparse(url)
+    assert parsed.path == f"/v1/memory/images/{BLOB_ID}"
+    query = parse_qs(parsed.query)
+    assert query["user_id"] == [OWNER]
+    assert query["signature"] == [
+        image_url_signature("project-1", BLOB_ID, OWNER, int(query["expires"][0]), "test-secret")
+    ]
     assert "image_url" not in by_id[BLOB_ID].metadata  # bare hit stays undecorated
 
 
-def test_expiry_flows_from_config_into_the_signed_urls(tmp_path, monkeypatch, auth_context, config_expiry_7200) -> None:
+def test_expiry_flows_from_config_into_the_signed_urls(monkeypatch, auth_context, config_expiry_7200) -> None:
     """s3_presign_expiry_seconds is plumbed through, not just the 3600 default."""
-    store = _PresigningStore(tmp_path)
+    store = PresigningBlobStore()
     client = _client(auth_context, _service(monkeypatch, store))
 
     _search(client)
@@ -231,14 +309,14 @@ def test_expiry_flows_from_config_into_the_signed_urls(tmp_path, monkeypatch, au
     ]
 
 
-def test_decoration_failure_never_breaks_the_search(tmp_path, monkeypatch, auth_context, config) -> None:
-    """A broken blob store (e.g. backend s3 without the extra) degrades to no image_url."""
+def test_decoration_failure_never_breaks_the_search(monkeypatch, auth_context, config) -> None:
+    """A broken blob store (e.g. the minio client missing its extra) degrades to no image_url."""
 
-    class _ExplodingStore(LocalBlobStore):
+    class _ExplodingStore(MemoryBlobStore):
         def presigned_get(self, *args, **kwargs):
             raise ImportError("mindmemos[s3] extra missing")
 
-    client = _client(auth_context, _service(monkeypatch, _ExplodingStore(tmp_path)))
+    client = _client(auth_context, _service(monkeypatch, _ExplodingStore()))
 
     memories = _search(client)  # 200, not 500
 

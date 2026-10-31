@@ -46,7 +46,7 @@
 
 ## 📰 News
 
-- **2026-10-31**：多模态记忆发布——`memory.add` / `memory.search` 支持图片（原图存本地磁盘或 S3/MinIO，按多模态 embedding 建索引），`enhanced` 模式提供 VLM 视觉事实抽取与多模态 agent 检索；评测结果与复现指南见 [评测指南的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
+- **2026-10-31**：多模态记忆发布——`memory.add` / `memory.search` 支持图片（原图存 S3 兼容对象存储 / MinIO，按多模态 embedding 建索引），`enhanced` 模式提供 VLM 视觉事实抽取与多模态 agent 检索；评测结果与复现指南见 [评测指南的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
 - **2026-08-18**：我们发布了 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，让 DeepSeek Harness（dsh）Agent 自动召回并写入 MindMemOS 记忆。
 - **2026-08-14**：我们发布了 [MindMemOS 1.0 技术报告](https://arxiv.org/abs/2608.12428)《MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents》。
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
@@ -56,7 +56,7 @@
 
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。
 - **记忆系统可自主演化**：通过 schema learning、dreaming、feedback 持续优化记忆质量，自动学习高频记忆点、离线巩固合并记忆，并从交互纠错中反向优化 add/search 流程。
-- **多模态记忆**：在 `algo_config.multimodal.mode`（`off`/`basic`/`enhanced`，可按项目覆盖）下，图片与文本一同进入 vanilla 的 add / search——原图存本地磁盘或 S3/MinIO，按多模态 embedding（`mm_embed_model_router`，SigLIP2 兼容协议）建索引；`enhanced` 模式可用 VLM 抽取视觉事实并做多模态 agent 检索。图片命中附带 `metadata.image_url`——配置了公共镜像时为永久 URL，否则 S3/MinIO 上为短时效预签名 URL，否则为需鉴权的代理路由——并附 `metadata.blob_id` 供重新下载。默认关闭（`off`），纯文本行为逐字节不变。
+- **多模态记忆**：在 `algo_config.multimodal.mode`（`off`/`basic`/`enhanced`，可按项目覆盖）下，图片与文本一同进入 vanilla 的 add / search——原图一律存 S3/MinIO（唯一的图片后端），按多模态 embedding（`mm_embed_model_router`，SigLIP2 兼容协议）建索引；`enhanced` 模式可用 VLM 抽取视觉事实并做多模态 agent 检索。图片命中附带 `metadata.image_url`——配置了公共镜像时为永久 URL，否则 S3/MinIO 上为短时效预签名 URL，否则回退为同样短时效、免 API key 的签名代理 URL——并附 `metadata.blob_id` 供重新下载。默认关闭（`off`），纯文本行为逐字节不变。
 - **记忆与 Skills 联动**：经验记忆可以沉淀为 skill candidates；skills 的执行结果、失败轨迹和用户反馈也会回流到记忆系统，推动 skills 持续演进。
 - **插件集成能力**：支持通过插件将 MindMemOS 接入不同 Agent 与工作流，在交互前检索并注入相关记忆、回合结束后自动写回对话，当前已提供 [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) 和 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，并持续扩展更多集成。
 
@@ -110,7 +110,7 @@ make dev-core          # Qdrant + Neo4j + Kafka
 make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
 ```
 
-`make dev` / `make db` 也会一并启动 MinIO（多模态图片的 blob 存储）并完成建桶；传 `MINIO=0` 可跳过（纯文本布局），此时 `dev-down` / `db-clean` 不会动 MinIO 容器和数据卷（详见[部署指南](docs/deploy/instruction_ZH.md)）。
+`make dev` / `make db` 也会一并启动 MinIO（多模态图片的 S3 对象存储）并完成建桶；传 `MINIO=0` 可跳过（纯文本布局）——图片一律依赖 MinIO，该布局需同时设 `algo_config.multimodal.mode: "off"`。`MINIO=0` 时 `dev-down` / `db-clean` 不会动 MinIO 容器和数据卷（详见[部署指南](docs/deploy/instruction_ZH.md)）。
 
 #### 1.3 停止服务
 

@@ -8,17 +8,14 @@ a prior run of the same project.
 This mirrors the direct-DB access already used by
 :mod:`mindmemos_eval.memory.metrics` (Qdrant + ClickHouse) and reuses the same
 environment-variable configuration as the server (``MINDMEMOS_QDRANT_URL``,
-``MINDMEMOS_NEO4J_*``), so eval and server share one config source in local dev.
+``MINDMEMOS_NEO4J_*``, ``MINDMEMOS_S3_*``), so eval and server share one config
+source in local dev.
 """
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import logging
 import os
-import re
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,14 +42,22 @@ DEFAULT_COLLECTIONS: tuple[str, ...] = (
     "search_record_v1",
     "image_item_v1",
 )
-DEFAULT_BLOB_ROOT = "data/blobs"
-"""Server default ``blob_store.local_root``; relative roots resolve against the process working
-directory on both sides, so they only line up when the runner starts from the server's root."""
+
+
+@dataclass(frozen=True)
+class S3BlobSettings:
+    """Where the server's S3-compatible blob store (MinIO) lives; images live only there."""
+
+    endpoint: str = field(default_factory=lambda: os.getenv("MINDMEMOS_S3_ENDPOINT", "http://localhost:9100"))
+    bucket: str = field(default_factory=lambda: os.getenv("MINDMEMOS_S3_BUCKET", "mindmemos-blobs"))
+    access_key: str = field(default_factory=lambda: os.getenv("MINDMEMOS_S3_ACCESS_KEY", "minioadmin"))
+    secret_key: str = field(default_factory=lambda: os.getenv("MINDMEMOS_S3_SECRET_KEY", "minioadmin"))
+    region: str = field(default_factory=lambda: os.getenv("MINDMEMOS_S3_REGION", "us-east-1"))
 
 
 @dataclass(frozen=True)
 class ResetConfig:
-    """Connection settings for direct Qdrant/Neo4j cleanup.
+    """Connection settings for direct Qdrant/Neo4j/S3 cleanup.
 
     Defaults read the same environment variables as the server config, so eval and
     server share one configuration source in local dev.
@@ -65,9 +70,9 @@ class ResetConfig:
     neo4j_password: str = field(default_factory=lambda: os.getenv("MINDMEMOS_NEO4J_PASSWORD", DEFAULT_NEO4J_PASSWORD))
     neo4j_database: str = field(default_factory=lambda: os.getenv("MINDMEMOS_NEO4J_DATABASE", DEFAULT_NEO4J_DATABASE))
     collections: tuple[str, ...] = DEFAULT_COLLECTIONS
-    blob_root: str | None = None
-    """Local blob store root of the server (images of multimodal vanilla); None skips blob cleanup.
-    The runner sets it from ``--server-config`` (``resolve_blob_root``)."""
+    s3_blobs: S3BlobSettings | None = None
+    """S3 settings matching the server's ``blob_store``; None skips blob cleanup.
+    The runner sets it from ``--server-config`` (``resolve_s3_blob_settings``)."""
 
 
 class ProjectResetError(RuntimeError):
@@ -164,9 +169,10 @@ async def reset_project(cfg: ResetConfig, project_id: str) -> dict[str, int]:
     """Physically delete every memory record scoped to ``project_id``.
 
     Qdrant: delete-by-filter on each configured collection. Neo4j: DETACH DELETE
-    all nodes carrying this project_id. Returns per-store deletion counts. Raises
-    ``ValueError`` if project_id is empty and :class:`ProjectResetError` whenever
-    either store cannot be proven empty.
+    all nodes carrying this project_id. S3: every object of the project's blob
+    namespace. Returns per-store deletion counts. Raises ``ValueError`` if
+    project_id is empty and :class:`ProjectResetError` whenever a store cannot
+    be proven empty.
     """
     if not project_id:
         raise ValueError("project_id is required to reset a project")
@@ -174,66 +180,105 @@ async def reset_project(cfg: ResetConfig, project_id: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     counts.update(await _reset_qdrant(cfg, project_id))
     counts.update(await _reset_neo4j(cfg, project_id))
-    counts.update(await asyncio.to_thread(_reset_blobs, cfg, project_id))
+    counts.update(await _reset_blobs(cfg, project_id))
     logger.info("project_reset_done project_id=%s counts=%s", project_id, counts)
     return counts
 
 
-def resolve_blob_root(server_config_path: str | Path | None = None) -> str | None:
-    """The server's local blob root (``blob_store.local_root``); the default when it cannot be read."""
+def resolve_s3_blob_settings(server_config_path: str | Path | None = None) -> S3BlobSettings:
+    """The server's ``blob_store`` S3 settings; the environment defaults when they cannot be read.
 
-    if server_config_path is None:
-        return DEFAULT_BLOB_ROOT
-    try:
-        raw = yaml.safe_load(Path(server_config_path).read_text(encoding="utf-8")) or {}
-    except (FileNotFoundError, yaml.YAMLError, OSError):
-        return DEFAULT_BLOB_ROOT
-    blob_store = raw.get("blob_store") if isinstance(raw, dict) else None
-    if not isinstance(blob_store, dict):
-        return DEFAULT_BLOB_ROOT
-    if blob_store.get("backend", "local") != "local":
-        return None
-    return str(blob_store.get("local_root") or DEFAULT_BLOB_ROOT)
+    Reads the same ``blob_store.s3_*`` fields the server validates, so the reset deletes
+    exactly the objects the server wrote — even when eval and server run with different
+    env vars. The env-var defaults match the compose dev stack. Like the server's config
+    loader, an explicit ``MINDMEMOS_S3_*`` env var wins over the yaml field; a read or
+    parse failure logs a warning and falls back (this drives a destructive cleanup, so
+    the fallback must never be silent).
+    """
+
+    defaults = S3BlobSettings()
+
+    def _merged(yaml_key: str, env_name: str, default: str) -> str:
+        # server precedence: env over yaml (config/app.py _merge_blob_env)
+        env_value = os.getenv(env_name)
+        if env_value:
+            return env_value
+        yaml_value = blob_store.get(yaml_key) if isinstance(blob_store, dict) else None
+        return str(yaml_value) if yaml_value else default
+
+    blob_store: dict | None = None
+    if server_config_path is not None:
+        try:
+            raw = yaml.safe_load(Path(server_config_path).read_text(encoding="utf-8")) or {}
+        except (FileNotFoundError, yaml.YAMLError, OSError) as exc:
+            logger.warning(
+                "resolve_s3_blob_settings_failed path=%s error=%s fallback=env_defaults bucket=%s",
+                server_config_path,
+                f"{type(exc).__name__}: {exc}",
+                defaults.bucket,
+            )
+            raw = {}
+        if isinstance(raw, dict):
+            maybe = raw.get("blob_store")
+            if not isinstance(maybe, dict):
+                logger.warning(
+                    "resolve_s3_blob_settings_failed path=%s error=blob_store_not_mapping fallback=env_defaults bucket=%s",
+                    server_config_path,
+                    defaults.bucket,
+                )
+            blob_store = maybe if isinstance(maybe, dict) else None
+    return S3BlobSettings(
+        endpoint=_merged("s3_endpoint", "MINDMEMOS_S3_ENDPOINT", defaults.endpoint),
+        bucket=_merged("s3_bucket", "MINDMEMOS_S3_BUCKET", defaults.bucket),
+        access_key=_merged("s3_access_key", "MINDMEMOS_S3_ACCESS_KEY", defaults.access_key),
+        secret_key=_merged("s3_secret_key", "MINDMEMOS_S3_SECRET_KEY", defaults.secret_key),
+        region=_merged("s3_region", "MINDMEMOS_S3_REGION", defaults.region),
+    )
 
 
-def blob_namespace_dir(namespace: str) -> str:
-    """Directory of one project's blobs; must match ``mindmemos.infra.blob.local._namespace_dir``."""
+async def _reset_blobs(cfg: ResetConfig, project_id: str) -> dict[str, int]:
+    """Delete the project's stored image objects from S3 and verify the namespace is empty."""
 
-    digest = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:12]
-    return f"{re.sub(r'[^A-Za-z0-9_.-]', '_', namespace)[:64]}-{digest}"
-
-
-def _reset_blobs(cfg: ResetConfig, project_id: str) -> dict[str, int]:
-    """Delete the project's stored images (blob files) and verify the directory is gone."""
-
-    if cfg.blob_root is None:
+    if cfg.s3_blobs is None:
         logger.warning(
-            "project_reset blob cleanup skipped: blob_store backend is not local, so the stored"
-            " image objects of project_id=%s stay in the object store",
+            "project_reset blob cleanup skipped: no S3 settings resolved, so the stored image"
+            " objects of project_id=%s stay in the object store",
             project_id,
         )
         return {}
-    path = Path(cfg.blob_root).expanduser() / blob_namespace_dir(project_id)
-    if not path.exists():
-        # Zero files can mean two things; say which paths were checked so a wrong root is not
-        # mistaken for a clean project.
-        logger.warning(
-            "project_reset no blob directory at %s: either this project stored no images, or the"
-            " server resolved blob_store.local_root against a different working directory",
-            path,
+    from mindmemos.infra.blob.s3 import S3BlobStore
+
+    try:
+        store = S3BlobStore(
+            endpoint=cfg.s3_blobs.endpoint,
+            bucket=cfg.s3_blobs.bucket,
+            access_key=cfg.s3_blobs.access_key,
+            secret_key=cfg.s3_blobs.secret_key,
+            region=cfg.s3_blobs.region,
         )
-        return {"blob:images": 0}
-    count = sum(1 for item in path.rglob("*") if item.is_file() and item.suffix != ".json")
-    shutil.rmtree(path, ignore_errors=True)
-    if path.exists():
+        count = await store.count_namespace(project_id)
+        if count:
+            await store.delete_namespace(project_id)
+        remaining = await store.count_namespace(project_id)
+    except ProjectResetError:
+        raise
+    except Exception as exc:
         raise ProjectResetError(
             project_id=project_id,
-            store="blob",
+            store="s3",
             operation="delete",
-            resource=str(path),
-            reason="blob directory remains after delete",
+            resource=cfg.s3_blobs.bucket,
+            reason=f"{type(exc).__name__}: {exc}",
+        ) from exc
+    if remaining:
+        raise ProjectResetError(
+            project_id=project_id,
+            store="s3",
+            operation="verify_empty",
+            resource=cfg.s3_blobs.bucket,
+            reason=f"{remaining} image objects remain after delete",
         )
-    return {"blob:images": count}
+    return {"s3:images": count}
 
 
 async def _reset_qdrant(cfg: ResetConfig, project_id: str) -> dict[str, int]:

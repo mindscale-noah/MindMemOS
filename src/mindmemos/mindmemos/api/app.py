@@ -18,6 +18,7 @@ from ..config import get_config, init_config_from_env
 from ..errors import ApiError, InvalidConfigError
 from ..infra import shutdown_tracer_provider
 from ..infra.blob import get_blob_store
+from ..infra.blob.signed_url import resolve_signing_secret
 from ..infra.db import close_database_clients, ensure_database_schema
 from ..infra.kafka import start_kafka, stop_kafka
 from ..llm import (
@@ -89,17 +90,25 @@ def _check_blob_store() -> None:
     cannot (e.g. a non-numeric port), as a bare ``ValueError``.
     """
 
-    if get_config().blob_store.backend != "s3":
-        return
     try:
         get_blob_store()
     except ImportError as exc:
         raise InvalidConfigError(
-            "blob_store.backend",
-            support=f"install the s3 extra (pip install 'mindmemos[s3]') or use the local backend: {exc}",
+            "blob_store.s3_endpoint",
+            support=f"install the s3 extra (pip install 'mindmemos[s3]'): {exc}",
         ) from exc
     except ValueError as exc:
         raise InvalidConfigError("blob_store.s3_endpoint", support=str(exc)) from exc
+    cfg = get_config()
+    if cfg.algo_config.multimodal.mode != "off" and not resolve_signing_secret(
+        cfg.blob_store.url_signing_secret, cfg.auth.gateway_jwt_secret
+    ):
+        # not fatal: presigned/public-mirror image URLs still work, but the signed
+        # proxy tier is disabled rather than minted with a forgeable empty-key HMAC
+        logger.warning(
+            "image url signing disabled: set blob_store.url_signing_secret (or auth.gateway_jwt_secret); "
+            "search hits fall back to presigned/public-mirror links only"
+        )
 
 
 async def _check_multimodal_embedding() -> None:

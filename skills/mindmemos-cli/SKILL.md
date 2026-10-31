@@ -135,9 +135,9 @@ mindmemos memory search "cats" --query-image ./query.png --user-id alice
 > `add.images_unsupported` / `search.images_unsupported` — tell the user to
 > enable multimodal mode for the project instead of retrying. `basic` needs the
 > server's `mm_embed_model_router` endpoints (when empty, images are stored but
-> not searchable); `enhanced` also uses the chat model as a VLM. Server-side,
-> `make dev` / `make db` start a local MinIO blob store for image bytes
-> (`MINIO=0` skips it).
+> not searchable); `enhanced` also uses the chat model as a VLM. Images are
+> stored as S3 blobs — MinIO (started by `make dev` / `make db`) is the only
+> image backend; `MINIO=0` builds the text-only layout with multimodal mode off.
 
 ### `memory get` — list / filter (no query)
 
@@ -153,7 +153,7 @@ mindmemos memory get --filter '{"app_id":"openclaw"}' --top-k 20
 
 ### `memory get-image` — download a stored image
 
-Image hits from `memory search` carry a short-lived `image:` URL (presigned S3/MinIO link, or the authenticated proxy route) plus `metadata.blob_id` / `metadata.user_id`. Use `get-image` to re-download by id when the link is absent or expired; `--user-id` must be the image owner and is verified by the server.
+Image hits from `memory search` carry a short-lived `image:` URL (presigned S3/MinIO link, or a signed proxy URL — both download without an API key) plus `metadata.blob_id` / `metadata.user_id`. Use `get-image` to re-download by id when the link is absent or expired; `--user-id` must be the image owner and is verified by the server.
 
 ```bash
 mindmemos memory get-image <blob_id> --user-id alice        # writes ./{blob_id}{ext}

@@ -9,7 +9,7 @@
 ### 1. 启动依赖服务
 
 ```bash
-make db          # 启动 Qdrant / Neo4j / Kafka / ClickHouse / Grafana / MinIO 等（MINIO=0 跳过 MinIO）
+make db          # 启动 Qdrant / Neo4j / Kafka / ClickHouse / Grafana / MinIO 等（MINIO=0 跳过 MinIO，纯文本布局专用）
 ```
 
 > **注意**：若之前执行过 `make db-clean`（会删除所有 volume），务必同时重启 MindMemOS server，否则 server 的旧连接池会导致 search 返回 500。
@@ -306,9 +306,8 @@ cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
 
    ```yaml
    blob_store:
-     local_root: data/blobs                 # 原图存放位置
      allowed_path_roots:
-       - /绝对路径/MindMemOS/datasets      # 或数据集的真实所在目录
+       - /绝对路径/MindMemOS/datasets      # 或数据集的真实所在目录；原图统一存 S3/MinIO（s3_endpoint 等）
    ```
 
 4. 让服务端使用评测生成的 key 文件。评测时会自动写入这个文件，服务端会自动重新加载：
@@ -381,7 +380,7 @@ uv run python -m mindmemos_eval.cli memory \
   --server-config config/mindmemos/dev.yaml
 ```
 
-`--server-config` 让项目重置找到服务端的集合名和 blob 根目录（仅 local 存储后端），从而连同已存图片一起删除；若 `blob_store.backend: s3`，重置仍会清掉集合，但不会删除桶中的图片对象。
+`--server-config` 让项目重置找到服务端的集合名与 S3/MinIO blob 配置，重置时把该项目的已存图片对象连同其他记录一起删除。
 
 `eval_result.metrics` 给出百分制指标：`EM`（MCQ 四种选项轮换的平均精确匹配，按任务宏平均）、`B-1`（OPEN 的 BLEU-1）、`Judge`（OPEN，MemEye 的 0–1 评分标准），以及逐任务数值。`eval_result.cost` 记录客户端的写入/检索调用次数与延迟、作答器和 judge 的 token 用量；只要有作答或 judge 调用失败，`eval_result.valid` 即为 false。逐题明细写在 `output_root/<run_id>/memeye/`。冒烟测试可设 `execution_params.memeye.max_questions: 2`、`benchmarks.memeye.tasks: [Brand_Memory_Test]`。
 
@@ -438,7 +437,7 @@ manifest 中的 `eval_result` 包含：
 | 冒烟测试卡在 add 或很慢 | enhanced 写入要调用 VLM，单次 add 需要十几到几十秒，属正常；检查 embedding 服务和 LLM 服务的延迟 |
 | 结果 `valid: false` | 作答或 judge 调用失败，多半是 LLM 服务限流或不稳定。服务恢复后重新执行同一条命令，失败的那次会重跑 |
 | 更换多模态 embedding 模型后报维度不一致 | 图片集合按 `dimensions` 建立。换模型时需要删除 Qdrant 中的 `image_item_v1` 集合（或改用新的 `database.qdrant.image_collection` 名称），并重启服务 |
-| 磁盘占用增长 | 每次评测使用新的项目 id，原图存放在 `data/blobs/<项目>/`，记录留在 Qdrant 和 Neo4j 中。开发环境用完可以删除旧项目对应的原图目录；`make db-clean` 会清空所有数据库卷，请谨慎使用 |
+| 存储增长 | 每次评测使用新的项目 id，原图按项目前缀存进 MinIO bucket，记录留在 Qdrant 和 Neo4j 中。同一项目下次重跑会先清掉；`make db-clean` 会清空所有数据库卷（含 MinIO），请谨慎使用 |
 | `multimodal_agentic_failed` 警告 | agent 的某次 LLM 调用失败，本次搜索退回快速检索结果，不影响运行有效性；偶发属正常 |
 
 ---

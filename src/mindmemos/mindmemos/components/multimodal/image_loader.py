@@ -30,6 +30,9 @@ from ...infra.blob import BlobStore
 from ...typing import ImageRef
 
 _MAX_REDIRECTS = 3
+# is_global treats NAT64-mapped IPv4 (64:ff9b::/96) as global, but such an address IS a
+# private IPv4 host in disguise on DNS64 networks — refuse it like the private host it wraps
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 
 
 class ImageLoadError(BadRequestError):
@@ -228,7 +231,7 @@ class ImageLoader:
                 address = ipaddress.ip_address(info[4][0])
             except ValueError as exc:
                 raise ImageLoadError("image URL resolved to an unusable address", code="image.fetch_failed") from exc
-            if not address.is_global:
+            if not address.is_global or address in _NAT64_PREFIX:
                 raise ImageLoadError("image URL resolves to a non-public address", code="image.url_denied")
         pinned_ip = infos[0][4][0]
         netloc = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip

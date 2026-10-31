@@ -185,9 +185,8 @@ In `config/mindmemos/dev.yaml`:
 
    ```yaml
    blob_store:
-     local_root: data/blobs                 # where originals are stored
      allowed_path_roots:
-       - /absolute/path/to/MindMemOS/datasets
+       - /absolute/path/to/MindMemOS/datasets   # originals are stored in S3/MinIO (s3_endpoint/...)
    ```
 
 4. Point the server at the evaluation's key file (written by the runner, auto-reloaded by the
@@ -288,9 +287,8 @@ uv run python -m mindmemos_eval.cli memory \
   --server-config config/mindmemos/dev.yaml
 ```
 
-`--server-config` lets the project reset find the server's collections and blob root (local blob
-backend only), so stored images are deleted with the project; with `blob_store.backend: s3` the
-reset still clears the collections but leaves the bucket objects untouched.
+`--server-config` lets the project reset find the server's collections and its S3/MinIO blob
+settings, so stored image objects are deleted with the project's other records.
 
 `eval_result.metrics` reports, in percent: `EM` (MCQ exact match averaged over the four option
 rotations, macro mean over tasks), `B-1` (OPEN BLEU-1) and `Judge` (OPEN, MemEye 0–1 judge rubric),
@@ -373,7 +371,7 @@ MemEye and 70.68 / 85.06 / 87.06 / 89.14 on Mem-Gallery.
 | Smoke test stuck in add, or slow | enhanced ingestion calls a VLM; tens of seconds per add is normal. Check the embedding and LLM service latency |
 | Result `valid: false` | An answer or judge call failed — usually LLM throttling or instability. Rerun the same command once the service recovers; only the failed run repeats |
 | Dimension mismatch after switching the multimodal embedding model | The image collection is built per `dimensions`. Delete the `image_item_v1` collection in Qdrant (or use a new `database.qdrant.image_collection` name) and restart |
-| Disk usage growth | Every evaluation uses a fresh project id; originals land in `data/blobs/<project>/`, records stay in Qdrant and Neo4j. Delete old projects' blob directories in dev; `make db-clean` wipes all database volumes — careful |
+| Storage growth | Every evaluation uses a fresh project id; originals land in the MinIO bucket under the project's prefix, records stay in Qdrant and Neo4j. The next run of the same project resets them; `make db-clean` wipes all database volumes (MinIO included) — careful |
 | `multimodal_agentic_failed` warning | One of the agent's LLM calls failed; that search falls back to fast-retrieval results. Run validity is unaffected; occasional occurrences are normal |
 
 ---

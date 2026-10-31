@@ -205,7 +205,7 @@ Common options:
 | `--user-id` etc. | Override request context |
 | `--json` | Print the full result as JSON |
 
-Hits that reference a stored image print an extra `image: <url>` line — a permanent public-mirror URL when the server configures one (`blob_store.s3_public_base_url`), otherwise a short-lived presigned S3/MinIO link, otherwise the authenticated proxy route as a *relative* path (`/v1/memory/images/{blob_id}?user_id=…`) to resolve against the configured `base_url`. With `--json`, the URL is exposed as `metadata.image_url`, alongside `metadata.blob_id` and `metadata.user_id`; `blob_id` + `user_id` are exactly the inputs `memory get-image` (below) needs, so an expired or unfetchable link can always be re-downloaded through the API.
+Hits that reference a stored image print an extra `image: <url>` line — a permanent public-mirror URL when the server configures one (`blob_store.s3_public_base_url`), otherwise a short-lived presigned S3/MinIO link, otherwise a short-lived *signed* proxy URL (`/v1/memory/images/{blob_id}?user_id=…&project_id=…&expires=…&signature=…`, absolute under `blob_store.proxy_public_base_url`, relative otherwise) that downloads without any API key. With `--json`, the URL is exposed as `metadata.image_url`, alongside `metadata.blob_id` and `metadata.user_id`; `blob_id` + `user_id` are exactly the inputs `memory get-image` (below) needs, so an expired or unfetchable link can always be re-downloaded through the API.
 
 ### 5.3 List and filter `get`
 
