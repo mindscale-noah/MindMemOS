@@ -92,8 +92,12 @@ maxConversationMessages: 80
 - **Recall** hooks `agent/pre-step` (step 1 only). It extracts the real human
   prompt, runs `mindmemos memory search`, and injects the hits under a
   `<relevant-memories>` banner. Image hits that carry `metadata.image_url` keep
-  the link in the injected text as `<image: URL>` — a short-lived direct link
-  the agent may fetch to view the stored image. Injected messages are stamped
+  the link in the injected text as `<image: URL>` — a permanent mirror URL or a
+  short-lived presigned link the agent may fetch directly, or a relative
+  `/v1/memory/images/{blob_id}` proxy path that needs the MindMemOS API token;
+  `metadata.blob_id` is the stable id. (As shipped the plugin issues text-only
+  searches, so image hits do not occur through it; adds are text-only too —
+  conversation images are not persisted.) Injected messages are stamped
   `source.kind === "plugin"` so the store step can tell them apart from real
   input.
 - **Store** hooks `session/event` and reacts to `turn/end` with

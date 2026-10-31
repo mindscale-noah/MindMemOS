@@ -129,6 +129,16 @@ mindmemos memory search "project notes" --filter '{"memory_type":"semantic"}'
 mindmemos memory search "cats" --query-image ./query.png --user-id alice
 ```
 
+> **Multimodal mode**: the image options above need the server project's
+> `algo_config.multimodal.mode` to be `basic` or `enhanced` (per-project
+> overridable). In `off` mode image sends are rejected with
+> `add.images_unsupported` / `search.images_unsupported` — tell the user to
+> enable multimodal mode for the project instead of retrying. `basic` needs the
+> server's `mm_embed_model_router` endpoints (when empty, images are stored but
+> not searchable); `enhanced` also uses the chat model as a VLM. Server-side,
+> `make dev` / `make db` start a local MinIO blob store for image bytes
+> (`MINIO=0` skips it).
+
 ### `memory get` — list / filter (no query)
 
 Use for inspection, audits, dashboards, or manual curation when you need to

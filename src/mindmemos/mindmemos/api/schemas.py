@@ -161,13 +161,22 @@ class SearchRequest(ActorIdentityRequest):
     query: NonEmptyStr
     """Search query."""
 
-    query_images: list[ImageRef] = Field(default_factory=list)
-    """Images attached to the query; they make the search multimodal. Rejected (400) while the
-    project's ``algo_config.multimodal.mode`` is off or the algorithm has no image support."""
-
-    multimodal: bool = False
-    """Search stored images too (image results, image-recalled facts). Implied by ``query_images``;
-    ignored while ``algo_config.multimodal.mode`` is off. False: text search only, exactly vanilla."""
+    query_images: list[ImageRef] = Field(
+        default_factory=list,
+        description=(
+            "Images attached to the query; they make the search multimodal. Rejected (400, "
+            "search.images_unsupported) while the project's algo_config.multimodal.mode is off or "
+            "the algorithm has no image support."
+        ),
+    )
+    multimodal: bool = Field(
+        default=False,
+        description=(
+            "Search stored images too (image results, image-recalled facts). Implied by "
+            "query_images; silently ignored (text search) while algo_config.multimodal.mode is "
+            "off. False: text search only, exactly vanilla."
+        ),
+    )
 
     filters: dict[str, Any] | None = None
     """Custom structured filter DSL parsed by ``mappers.api.parse_search_dsl``."""

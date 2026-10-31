@@ -9,7 +9,7 @@
 ### 1. 启动依赖服务
 
 ```bash
-make db          # 启动 Qdrant / Neo4j / Kafka / ClickHouse / Grafana 等
+make db          # 启动 Qdrant / Neo4j / Kafka / ClickHouse / Grafana / MinIO 等（MINIO=0 跳过 MinIO）
 ```
 
 > **注意**：若之前执行过 `make db-clean`（会删除所有 volume），务必同时重启 MindMemOS server，否则 server 的旧连接池会导致 search 返回 500。
@@ -366,11 +366,7 @@ uv run python scripts/run_multimodal_bench.py --benchmarks memgallery --configs 
 
 ### 7. 手动跑单个配置
 
-MemEye（8 个任务，MCQ + OPEN，对话中含图片）使用同一个作答器：`answer_llm`（需支持看图）只看到检索返回的文本记忆和图片，以及题目自带的图片。算法固定为 `vanilla`；由 profile 的 `project_override_config` 设置 `algo_config.multimodal.mode`，`search_params.multimodal: true` 让每次检索都使用已存的图片。`execution_params.memeye.send_images: true` 时，对话图片和题目图片以路径方式发送，因此服务端 `blob_store.allowed_path_roots` 需要覆盖数据集目录；`off` 模式会拒绝图片，所以其基线设 `send_images: false`。数据集自带的图片描述不会发送给记忆系统。
-
-1. 从 Hugging Face 下载 `MemEyeBench/MemEye`，链接到 `datasets/memeye/data`（包含 `dialog/` 和 `image/`）。
-2. 跑 `basic` / `enhanced` 模式时，在服务端配置 `mm_embed_model_router`（见 `docs/config/README.md`）。
-3. 复制 `config/mindmemos_eval/memory_evaluation_multimodal.example.yaml` 为 `memory_evaluation_multimodal.yaml`，填好 LLM key 并设置模式（示例为 `enhanced`；B0 用 `"off"` 并设 `send_images: false`，B1 用 `basic`；加 `search_strategy: agentic` 使用多模态 agent），然后运行：
+MemEye（8 个任务，MCQ + OPEN，对话中含图片）使用同一个作答器：`answer_llm`（需支持看图）只看到检索返回的文本记忆和图片，以及题目自带的图片。算法固定为 `vanilla`；由 profile 的 `project_override_config` 设置 `algo_config.multimodal.mode`，`search_params.multimodal: true` 让每次检索都使用已存的图片。`execution_params.memeye.send_images: true` 时，对话图片和题目图片以路径方式发送，因此服务端 `blob_store.allowed_path_roots` 需要覆盖数据集目录；`off` 模式会拒绝图片，所以其基线设 `send_images: false`。数据集自带的图片描述不会发送给记忆系统。评测配置在装载时会拒绝未知的 `search_params` / `execution_params` 键（各 benchmark 的合法键见 `src/mindmemos_eval/mindmemos_eval/memory/config.py`）；`send_images: true` 配上 off 模式项目同样在装载期即报一致性错误——冲突在发出任何请求前就会暴露，而不是跑到一半才出现 `add.images_unsupported`。
 
 1. 从 Hugging Face 下载 `MemEyeBench/MemEye`，链接到 `datasets/memeye/data`（包含 `dialog/` 和 `image/`）。
 2. 跑 `basic` / `enhanced` 模式时，在服务端配置 `mm_embed_model_router`（见 `docs/config/README.md`）。

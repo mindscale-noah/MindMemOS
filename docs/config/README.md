@@ -305,10 +305,14 @@ Image requests over HTTP and SDK:
   `blob_id`, the owner `user_id`, `score`, `session_ids`, `caller_image_ids`, `occurrences`,
   `description`, `visual_facts`, `anchored_memory_ids` and `evidence`; dialogue facts carry
   `metadata.image_blob_ids` for the images they are anchored to.
-- `metadata.image_url` on an image hit is a lazy-load direct link: with `blob_store.backend: s3`
-  a short-lived presigned URL (`s3_presign_expiry_seconds`), otherwise the relative proxy route
-  `/v1/memory/images/{blob_id}?user_id=<owner>`. `GET /v1/memory/images/{blob_id}` returns the
-  stored bytes (`memory:read`, owner check, `404 image.not_found`).
+- `metadata.image_url` on an image hit is a lazy-load direct link with three shapes: a permanent
+  public-mirror URL when `s3_public_base_url` is set, else with `blob_store.backend: s3` a
+  short-lived presigned URL (`s3_presign_expiry_seconds`), else the relative proxy route
+  `/v1/memory/images/{blob_id}?user_id=<owner>` resolved against the client's own API origin.
+  `GET /v1/memory/images/{blob_id}` returns the stored bytes (`memory:read`, owner check,
+  `404 image.not_found`). A hit may carry `blob_id` with no `image_url` at all — hits whose
+  metadata lacks `user_id`, or a blob store that failed to load (e.g. backend `s3` without the
+  `s3` extra), get no URL, and without the owner id there is no proxy fallback either.
 - Error codes: `add.images_unsupported`, `search.images_unsupported`,
   `add.too_many_images`, `image.path_denied`, `image.path_disabled`, `image.url_denied`,
   `image.url_disabled`, `image.fetch_failed`, `image.too_large`, `image.unsupported`,

@@ -56,7 +56,7 @@
 
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。
 - **记忆系统可自主演化**：通过 schema learning、dreaming、feedback 持续优化记忆质量，自动学习高频记忆点、离线巩固合并记忆，并从交互纠错中反向优化 add/search 流程。
-- **多模态记忆**：图片与文本一同进入 vanilla 的 add / search——原图存本地磁盘或 S3/MinIO，按多模态 embedding（SigLIP2 兼容协议）建索引；`enhanced` 模式可用 VLM 抽取视觉事实并做多模态 agent 检索，图片命中附带直链——S3/MinIO 上为短时效预签名 URL，本地存储为需鉴权的代理路由。默认关闭，纯文本行为逐字节不变。
+- **多模态记忆**：在 `algo_config.multimodal.mode`（`off`/`basic`/`enhanced`，可按项目覆盖）下，图片与文本一同进入 vanilla 的 add / search——原图存本地磁盘或 S3/MinIO，按多模态 embedding（`mm_embed_model_router`，SigLIP2 兼容协议）建索引；`enhanced` 模式可用 VLM 抽取视觉事实并做多模态 agent 检索。图片命中附带 `metadata.image_url`——配置了公共镜像时为永久 URL，否则 S3/MinIO 上为短时效预签名 URL，否则为需鉴权的代理路由——并附 `metadata.blob_id` 供重新下载。默认关闭（`off`），纯文本行为逐字节不变。
 - **记忆与 Skills 联动**：经验记忆可以沉淀为 skill candidates；skills 的执行结果、失败轨迹和用户反馈也会回流到记忆系统，推动 skills 持续演进。
 - **插件集成能力**：支持通过插件将 MindMemOS 接入不同 Agent 与工作流，在交互前检索并注入相关记忆、回合结束后自动写回对话，当前已提供 [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) 和 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，并持续扩展更多集成。
 
@@ -107,8 +107,10 @@ make dev  # 会先启动全量 Docker 依赖，再启动 FastAPI。
 
 ```bash
 make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
 ```
+
+`make dev` / `make db` 也会一并启动 MinIO（多模态图片的 blob 存储）并完成建桶；传 `MINIO=0` 可跳过（纯文本布局），此时 `dev-down` / `db-clean` 不会动 MinIO 容器和数据卷（详见[部署指南](docs/deploy/instruction_ZH.md)）。
 
 #### 1.3 停止服务
 
@@ -148,6 +150,16 @@ curl -sS -X POST "$BASE_URL/v1/memory/search" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"query": "用户喜欢喝什么咖啡？", "top_k": 3}'
+```
+
+多模态项目在这两个接口上均可带图（服务端模式要求见[配置文档](docs/config/README.md)）；图片命中会返回
+`metadata.image_url` 与 `metadata.blob_id`：
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/memory/search" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "用户的桌面是什么样子？", "top_k": 3, "multimodal": true}'
 ```
 
 PowerShell 等其他环境 / 语言的 HTTP 调用格式，以及其余接口（get / list / delete / update / feedback / dreaming / skills 等）都见 [API 文档](https://mindmemos.cn/api-docs)。

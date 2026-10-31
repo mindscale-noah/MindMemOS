@@ -56,7 +56,7 @@
 
 - **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable assets, allowing OpenClaw, Hermes, Claude Code, OpenHands, and other agents to share or transfer the same long-term memory.
 - **Self-evolving memory system**: Continuously improve memory quality through schema learning, dreaming, and feedback by automatically learning frequent memory patterns, consolidating memories offline, and using interaction corrections to optimize add/search workflows.
-- **Multimodal memory**: Images ride alongside text in vanilla `add`/`search` — store originals on local disk or S3/MinIO, index them with a multimodal embedding model (SigLIP2-compatible), optionally extract visual facts with a VLM and retrieve through a multimodal agent. Image hits carry a direct link — a short-lived presigned URL on S3/MinIO, or an authenticated proxy route on local storage. Disabled by default, with byte-identical text-only behavior.
+- **Multimodal memory**: Images ride alongside text in vanilla `add`/`search` under `algo_config.multimodal.mode` (`off`/`basic`/`enhanced`, per-project overridable) — store originals on local disk or S3/MinIO, index them with a multimodal embedding model (`mm_embed_model_router`, SigLIP2-compatible), and in `enhanced` extract visual facts with a VLM and retrieve through a multimodal agent. Image hits carry `metadata.image_url` — a permanent mirror URL when configured, else a short-lived presigned URL on S3/MinIO, else an authenticated proxy route — plus `metadata.blob_id` for re-download. Disabled by default (`off`), with byte-identical text-only behavior.
 - **Memory and Skills integration**: Experience memories can be distilled into skill candidates, while skill execution results, failure traces, and user feedback flow back into the memory system to drive continuous skill evolution.
 - **Plugin integrations**: Connect MindMemOS to different agents and workflows through plugins that retrieve and inject relevant memories before interactions and automatically write conversations back afterward. The [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) and [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) are currently available, with more integrations in progress.
 
@@ -112,8 +112,10 @@ To start only core dependencies:
 
 ```bash
 make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana + MinIO
 ```
+
+`make dev` / `make db` also start MinIO (blob storage for multimodal images) with its bucket bootstrap; pass `MINIO=0` to skip it for a text-only layout — `dev-down` / `db-clean` then leave the MinIO container and its volume untouched (see the [deploy guide](docs/deploy/instruction.md)).
 
 The default local service port is 8000:
 
@@ -159,6 +161,17 @@ curl -sS -X POST "$BASE_URL/v1/memory/search" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"query": "What kind of coffee does the user like?", "top_k": 3}'
+```
+
+Multimodal projects accept images on both calls (the server-side mode requirement is in the
+[config docs](docs/config/README.md)); image hits answer with `metadata.image_url` and
+`metadata.blob_id`:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/memory/search" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What did the user's desk look like?", "top_k": 3, "multimodal": true}'
 ```
 
 A `code` of `ok` with readable memory content means the access works. curl is just a smoke-test helper; the shown format is for bash. Other environments / languages and the remaining endpoints (get / list / delete / update / feedback / dreaming / skills, etc.) are all covered in the [API docs](https://mindmemos.cn/api-docs).

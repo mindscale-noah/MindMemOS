@@ -101,14 +101,21 @@ the row.
   listener. It extracts the real human prompt, runs `mindmemos memory search`,
   and appends one `createUserMessage` carrying the hits under a
   `<relevant-memories>` banner. Image hits that carry `metadata.image_url` keep
-  the link in the injected text as `<image: URL>` — a short-lived direct link
-  the agent may fetch to view the stored image. The injected message is stamped
+  the link in the injected text as `<image: URL>` — a permanent mirror URL or a
+  short-lived presigned link the agent may fetch directly, or a relative
+  `/v1/memory/images/{blob_id}` proxy path that needs the MindMemOS API token;
+  `metadata.blob_id` is the stable id. (As shipped the plugin issues text-only
+  searches — no `--multimodal` / `--query-image` — so image hits do not occur
+  through it; the wiring applies once a multimodal search is enabled.) The
+  injected message is stamped
   `source.kind === "plugin"` so the store step can tell it apart from real input.
 - **Store** hooks the `session/event` firehose and reacts to `turn/end` with
   `reason.kind === "completed"`. It walks that turn's log back to its
   `turn/start`, collecting the surface `user`/`assistant`/`tool` messages, and
   runs `mindmemos memory add --messages-json-file -`. Plugin-injected context
   (`source.kind !== "user"`) is excluded so recalled memories are not re-stored.
+  Only text is persisted: image attachments in the conversation are dropped by
+  design — images enter MindMemOS through `memory add --image` (SDK / CLI).
 
 ## Verify
 

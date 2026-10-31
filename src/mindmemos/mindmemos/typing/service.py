@@ -133,8 +133,16 @@ class MemorySearchItem(BaseModel):
     lineage: MemoryLineage | None = None
     """Version lineage metadata populated by vanilla search."""
 
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    """Business metadata for management views."""
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Business metadata for management views. Image hits additionally carry blob_id (the "
+            "stable re-download id) and, when the blob backend can address the bytes, image_url: a "
+            "permanent public-mirror URL (blob_store.s3_public_base_url), a short-lived presigned "
+            "S3 URL, or a relative /v1/memory/images/{blob_id}?user_id=<owner> proxy path to "
+            "resolve against the client's own API origin (API key required)."
+        ),
+    )
 
     status: str | None = None
     """Lifecycle status for management views."""
@@ -366,6 +374,7 @@ class DeletePipelineInput(BaseModel):
 
     id: str = Field(alias="memory_id")
     """Memory ID."""
+
 
 class DeletePipelineResult(BaseModel):
     status: ServiceResultStatus

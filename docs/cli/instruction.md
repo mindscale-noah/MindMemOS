@@ -159,7 +159,7 @@ Attach an image to the `--content` message (local file or http(s) URL, repeatabl
 mindmemos memory add --content "Look at this photo." --image ./photo.png
 ```
 
-> `--image` attaches to the `--content` message only. For multi-message input, embed images inside `--messages-json` instead.
+> `--image` attaches to the `--content` message only. For multi-message input, embed images inside `--messages-json` instead, e.g. `--messages-json '[{"role":"user","content":"Look at this photo.","images":[{"url":"https://example.com/photo.png"}]}]'`.
 
 Other options:
 
@@ -205,7 +205,7 @@ Common options:
 | `--user-id` etc. | Override request context |
 | `--json` | Print the full result as JSON |
 
-Hits that reference a stored image print an extra `image: <url>` line — a short-lived presigned S3/MinIO link, or the authenticated proxy route (`/v1/memory/images/{blob_id}`) when the backend cannot sign. With `--json`, the URL is exposed as `metadata.image_url`, alongside `metadata.blob_id` and `metadata.user_id`; `blob_id` + `user_id` are exactly the inputs `memory get-image` (below) needs, so an expired link can always be re-downloaded through the API.
+Hits that reference a stored image print an extra `image: <url>` line — a permanent public-mirror URL when the server configures one (`blob_store.s3_public_base_url`), otherwise a short-lived presigned S3/MinIO link, otherwise the authenticated proxy route as a *relative* path (`/v1/memory/images/{blob_id}?user_id=…`) to resolve against the configured `base_url`. With `--json`, the URL is exposed as `metadata.image_url`, alongside `metadata.blob_id` and `metadata.user_id`; `blob_id` + `user_id` are exactly the inputs `memory get-image` (below) needs, so an expired or unfetchable link can always be re-downloaded through the API.
 
 ### 5.3 List and filter `get`
 
@@ -341,6 +341,7 @@ The config file lives at `~/.mindmemos/settings.json`; set the `MINDMEMOS_CONFIG
 | transport: not ready … | `doctor` found the service unreachable. Confirm the service is up and `base_url` is correct: `http://127.0.0.1:8000` for local, `https://mindmemos.cn` for cloud |
 | Authentication error from the service | The API key is invalid or disabled; check the cloud key or an enabled key in `config/mindmemos/api_keys.yaml` |
 | `ENOENT` in a plugin environment | A GUI-launched process does not inherit the terminal PATH; configure `mindmemos` as an absolute path or wrap it with `uv run mindmemos`. See [OpenClaw plugin integration](../../skills/mindmemos-cli/references/openclaw-plugin.md) |
+| `add.images_unsupported` / `search.images_unsupported` from the service | The project's multimodal mode is off; set `algo_config.multimodal.mode` to `basic`/`enhanced` (or per-project `project_override_config`) — see the [config docs](../config/README.md) |
 
 Run `mindmemos doctor` anytime as a one-shot config / connectivity check.
 

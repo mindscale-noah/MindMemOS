@@ -159,7 +159,7 @@ mindmemos memory add --content "我喜欢喝冰美式。" --async
 mindmemos memory add --content "看看这张照片。" --image ./photo.png
 ```
 
-> `--image` 只附加到 `--content` 消息上；多轮消息输入时，请把图片直接嵌入 `--messages-json`。
+> `--image` 只附加到 `--content` 消息上；多轮消息输入时，请把图片直接嵌入 `--messages-json`（如 `--messages-json '[{"role":"user","content":"看看这张照片。","images":[{"url":"https://example.com/photo.png"}]}]'`）。
 
 其他可选参数：
 
@@ -205,7 +205,7 @@ mindmemos memory search "猫" --query-image ./query.png
 | `--user-id` 等 | 覆盖请求上下文 |
 | `--json` | 以 JSON 输出完整结果 |
 
-命中已存储图片的结果会多输出一行 `image: <url>` —— 这是一个短时效的 S3/MinIO 预签名链接；后端无法签名时回退为需鉴权的代理路由（`/v1/memory/images/{blob_id}`）。`--json` 模式下该 URL 位于 `metadata.image_url`，与 `metadata.blob_id`、`metadata.user_id` 一并返回；`blob_id` + `user_id` 正是下文 `memory get-image` 所需的输入，因此链接过期后仍可随时通过 API 重新下载。
+命中已存储图片的结果会多输出一行 `image: <url>` —— 服务端配置了公共镜像（`blob_store.s3_public_base_url`）时为永久 URL，否则是短时效的 S3/MinIO 预签名链接，再否则回退为需鉴权代理路由的**相对路径**（`/v1/memory/images/{blob_id}?user_id=…`，需按配置的 `base_url` 拼接）。`--json` 模式下该 URL 位于 `metadata.image_url`，与 `metadata.blob_id`、`metadata.user_id` 一并返回；`blob_id` + `user_id` 正是下文 `memory get-image` 所需的输入，因此链接过期或不可直接访问时仍可随时通过 API 重新下载。
 
 ### 5.3 列出与过滤 `get`
 
@@ -341,6 +341,7 @@ mindmemos config reset --yes          # 跳过确认
 | transport: not ready … | `doctor` 检测到服务不可达。确认服务已启动，且 `base_url` 正确：本地自部署为 `http://127.0.0.1:8000`，云端为 `https://mindmemos.cn` |
 | 服务返回认证错误 | API key 无效或未启用，核对云端的 key 或 `config/mindmemos/api_keys.yaml` 中的本地 key |
 | 插件环境报 `ENOENT` | GUI 启动的进程不继承终端 PATH，`mindmemos` 需显式配置绝对路径或用 `uv run mindmemos` 包装，详见 [OpenClaw 插件集成](../../skills/mindmemos-cli/references/openclaw-plugin.md) |
+| 服务返回 `add.images_unsupported` / `search.images_unsupported` | 项目多模态模式未开启；将 `algo_config.multimodal.mode` 设为 `basic`/`enhanced`（或按项目 `project_override_config` 覆盖），见[配置文档](../config/README.md) |
 
 可随时运行 `mindmemos doctor` 一键检查配置与连通性。
 

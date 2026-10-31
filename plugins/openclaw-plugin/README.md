@@ -153,11 +153,19 @@ log for `ENOENT` — that means the `cli` path is wrong.
 
 ## Image Memories
 
-Multimodal search hits can carry `metadata.image_url` — a short-lived direct
-link to the stored image. When present, the injected memory context keeps it as
-`<image: URL>` (with a hint that the model may fetch the link to view the
-image); a hit with no text but a link still appears, rendered as
+Multimodal search hits can carry `metadata.image_url` — a permanent mirror URL
+or a short-lived presigned link the agent may fetch directly, or a relative
+`/v1/memory/images/{blob_id}` proxy path that needs the MindMemOS API token;
+`metadata.blob_id` is the stable id. When present, the injected memory context
+keeps it as `<image: URL>` (with a hint that the model may fetch the link to
+view the image); a hit with no text but a link still appears, rendered as
 `[image memory] <image: URL>`.
+
+Two honesty notes: as shipped this plugin issues text-only searches (no
+`--multimodal` / `--query-image`), so image hits do not occur through it — the
+wiring above applies the moment a multimodal search is enabled. And adds are
+text-only too: conversation image attachments are not persisted; images enter
+MindMemOS via the SDK/CLI `memory add --image`.
 
 ## Subagent Behavior
 

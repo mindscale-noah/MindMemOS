@@ -183,8 +183,12 @@ async def get_memory_image(
 ) -> Response:
     """Return the raw bytes of an image stored for this project (multimodal algorithms).
 
-    ``user_id`` must name the image's owner (``metadata.user_id`` of a search image result);
-    it is verified against the project's image records, so another user's blob id is not readable.
+    Requires the same Authorization: Bearer key as every other memory:read endpoint. ``user_id``
+    must name the image's owner (``metadata.user_id`` of a search image result); it is verified
+    against the project's image records, so another user's blob id is not readable (404
+    image.not_found). A search hit's ``metadata.image_url`` is the lazy-load alternative: its
+    public-mirror / presigned shapes need no API key, while this route (and the relative
+    ``/v1/memory/images/...`` fallback shape) does.
     """
 
     data, mime_type = await service.get_image(auth, blob_id, user_id)

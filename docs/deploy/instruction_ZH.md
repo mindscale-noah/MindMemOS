@@ -158,7 +158,7 @@ Docker Compose 内的核心服务：
 - `neo4j`: 存图关系。
 - `kafka`: 异步任务队列；默认 config 里未开启也可以先跑着。
 - `clickhouse` + `otel-collector` + `grafana`: 观测链路；不需要观测时可以在 config 里关掉 `telemetry.enabled`。
-- `minio` + `minio-init`: 图片对象存储及 bucket 初始化，供多模态的 `s3` 后端使用；`make dev` / `make db` 会一并启动（也可用 `make dev-blobs` 单独启动；`make dev MINIO=0` 跳过）。
+- `minio` + `minio-init`: 图片对象存储及 bucket 初始化，供多模态的 `s3` 后端使用；`make dev` / `make db` 会一并启动（也可用 `make dev-blobs` 单独启动；`make dev MINIO=0` 跳过）。锁定的`bitnamilegacy/minio` 镜像不含 web 控制台——用`mc`或`minio-init`服务管理 bucket。
 
 本地部署时，`.env` 里的端口变量要和 `config/mindmemos/dev.yaml` 里的连接地址对齐。代码启动时还会用环境变量覆盖这些连接字段：
 

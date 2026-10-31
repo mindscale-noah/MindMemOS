@@ -156,7 +156,7 @@ Core services in Docker Compose:
 - `neo4j`: stores graph relationships.
 - `kafka`: asynchronous task queue; it can run even when it is disabled in the default configuration.
 - `clickhouse` + `otel-collector` + `grafana`: observability stack; disable `telemetry.enabled` in the configuration when observability is not needed.
-- `minio` + `minio-init`: image blob storage and its bucket bootstrap, used by the multimodal pipeline's `s3` backend; started with `make dev` / `make db` (or standalone via `make dev-blobs`); `make dev MINIO=0` skips it.
+- `minio` + `minio-init`: image blob storage and its bucket bootstrap, used by the multimodal pipeline's `s3` backend; started with `make dev` / `make db` (or standalone via `make dev-blobs`); `make dev MINIO=0` skips it. The pinned `bitnamilegacy/minio` image ships no web console — manage buckets with `mc` or the `minio-init` service.
 
 For local deployment, the port variables in `.env` must align with the connection addresses in `config/mindmemos/dev.yaml`. At startup, environment variables also override the following configuration fields:
 

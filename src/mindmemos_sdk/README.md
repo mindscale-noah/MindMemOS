@@ -64,8 +64,13 @@ with MindMemOSClient(user_id="alice", app_id="my-agent") as client:
 
 When the project's multimodal mode is enabled, messages accept images (local
 path, URL, base64 data, or a stored `blob_id`) and search accepts `query_images`
-/ `multimodal`; image hits carry `metadata.image_url` (short-lived) plus
-`blob_id`, and `client.memory.get_image(blob_id, user_id)` re-downloads by id:
+/ `multimodal`; in off mode image sends are rejected with error codes
+`add.images_unsupported` / `search.images_unsupported`. Image hits carry
+`metadata.blob_id` and may carry `metadata.image_url` — a permanent
+public-mirror URL or short-lived presigned link you can fetch directly, or a
+relative `/v1/memory/images/{blob_id}` proxy path to resolve against your
+`base_url` (API key required) — and `client.memory.get_image(blob_id, user_id)`
+re-downloads by id regardless of shape or expiry:
 
 ```python
 from mindmemos_sdk import ImageRef

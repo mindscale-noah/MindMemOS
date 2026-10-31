@@ -9,7 +9,7 @@ This guide explains how to run the three standard benchmarks (LoCoMo, LongMemEva
 ### 1. Start dependency services
 
 ```bash
-make db          # starts Qdrant / Neo4j / Kafka / ClickHouse / Grafana
+make db          # starts Qdrant / Neo4j / Kafka / ClickHouse / Grafana / MinIO
 ```
 
 > **Important**: If you previously ran `make db-clean` (which deletes all volumes), you must also restart the MindMemOS server. Otherwise the server's stale connection pool will cause search requests to return HTTP 500.
@@ -265,6 +265,10 @@ sets `algo_config.multimodal.mode`, and `search_params.multimodal: true` makes e
 stored images. With `execution_params.memeye.send_images: true` the dialogue and question images
 are sent by path, so the server's `blob_store.allowed_path_roots` must cover the dataset; mode
 `off` rejects images, so its baseline sets `send_images: false`. Dataset captions are never sent.
+The config loader rejects unknown `search_params` / `execution_params` keys at load time (the
+known keys per benchmark live in `src/mindmemos_eval/mindmemos_eval/memory/config.py`), and
+`send_images: true` against an off-mode project fails the same load-time consistency check —
+the conflict surfaces before any request is made, not as a mid-run `add.images_unsupported`.
 
 1. Download `MemEyeBench/MemEye` from Hugging Face and link it so `datasets/memeye/data` holds
    `dialog/` and `image/`.
