@@ -415,33 +415,24 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 
 ### 🖼️ 多模态记忆：MemEye 与 Mem-Gallery
 
-- **评测基准**：[MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye)（8 任务共 742 题，多轮对话穿插图片；MCQ 计 EM、开放题计 BLEU-1，按任务宏平均）与 [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery)（20 任务共 1711 开放题；token 级 F1 与 BLEU-1，按题微平均）。
+- **评测基准**：[MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye)（8 任务共 742 题，多轮对话穿插图片；MCQ 计 EM、开放题计 BLEU-1 与 LLM Judge，按任务宏平均）与 [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery)（20 任务共 1711 开放题；token 级 F1、BLEU-1 与 LLM Judge，按题微平均）。
 
-| 方法 | MemEye EM | MemEye B-1 | Mem-Gallery F1 | Mem-Gallery B-1 |
-| :--- | :---: | :---: | :---: | :---: |
-| MemoryOS | 45.75 | 13.12 | 43.09 | 37.76 |
-| A-MEM | 49.73 | 21.11 | 44.08 | 38.37 |
-| SimpleMem | 50.34 | 9.42 | 34.73 | 28.90 |
-| HyperMem | 47.82 | 19.64 | 44.57 | 33.42 |
-| M2A | 52.31 | 6.31 | 15.04 | 10.28 |
-| MMA | 50.96 | 16.32 | 26.99 | 20.60 |
-| SRAG | 58.36 | 31.48 | 41.07 | 35.03 |
-| UniversalRAG | 60.49 | 11.23 | 48.36 | 41.90 |
-| MindMemOS b0（纯文本基线） | 43.03 | 20.32 | 38.72 | 32.59 |
-| MindMemOS b1（图片相似度检索） | 59.77 | 27.02 | 54.73 | 47.75 |
-| MindMemOS enhanced（VLM 视觉事实） | 63.45 | 25.49 | 55.66 | 48.98 |
-| MindMemOS enhanced_agentic（多模态 agent） | **65.89** | 27.09 | **57.06** | **50.45** |
+| 方法 | MemEye EM | MemEye B-1 | MemEye Judge | Mem-Gallery F1 | Mem-Gallery B-1 | Mem-Gallery Judge |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| MemoryOS | 45.75 | 13.12 | 34.91 | 43.09 | 37.76 | 64.64 |
+| A-MEM | 49.73 | 21.11 | 38.27 | 44.08 | 38.37 | 64.35 |
+| SimpleMem | 50.34 | 9.42 | 42.59 | 34.73 | 28.90 | 58.33 |
+| HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
+| M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
+| MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
+| SRAG | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
+| MindMemOS b0（纯文本基线） | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| MindMemOS b1（图片相似度检索） | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| MindMemOS enhanced（VLM 视觉事实） | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| MindMemOS enhanced_agentic（多模态 agent） | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
 
-LLM Judge 分数（仅 MindMemOS 各行——基线复现的 judge 模型是 `GPT-5.4-mini`，两组 Judge 不可同表）：
-
-| 配置 | MemEye Judge | Mem-Gallery Judge |
-| :--- | :---: | :---: |
-| b0（纯文本基线） | 26.26 | 70.68 |
-| b1（图片相似度检索） | 47.80 | 85.06 |
-| enhanced（VLM 视觉事实） | 50.80 | 87.06 |
-| enhanced_agentic（多模态 agent） | **53.30** | **89.14** |
-
-配置：vanilla 算法；所有行均以 `gpt-4.1-mini` 作答；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）。基线行为同一实验条件下的复现（3 次均值；出处为双盲评审中的在投论文，暂不附链接）；MindMemOS 四行为本仓库当前实现的评测（2 次均值，2026-10）。两组 Judge 模型不同（本文 `gpt-4.1-mini`、基线 `GPT-5.4-mini`），Judge 分数不可同表比较；MindMemOS 的 Judge 分数见上表。完整运行指南见 [docs/eval/README_ZH.md 的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
+配置：vanilla 算法；所有行均以 `gpt-4.1-mini` 作答；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）。基线行为同一实验条件下的复现（3 次均值；出处为双盲评审中的在投论文，暂不附链接）；MindMemOS 四行为本仓库当前实现的评测（2 次均值，2026-10）。两组 Judge 模型不同（本文 `gpt-4.1-mini`、基线 `GPT-5.4-mini`），Judge 分数请各组内比较、勿跨组对比。完整运行指南见 [docs/eval/README_ZH.md 的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
 
 ## 🗺️ Coming Features
 

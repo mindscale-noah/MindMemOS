@@ -321,25 +321,24 @@ Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini` (the answerer 
 images); image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The MindMemOS rows are this
 repository's implementation (answerer & judge both `gpt-4.1-mini`, mean of 2 runs, measured
 2026-10); the baseline rows are the paper's reproductions under identical conditions with the same
-answerer (mean of 3 runs; source: a paper under double-blind review, not linked yet). Judge scores
-are not shared across the two groups — the judge model differs (`gpt-4.1-mini` here vs
-`GPT-5.4-mini` there); MindMemOS Judge, b0 → enhanced_agentic: 26.26 / 47.80 / 50.80 / 53.30 on
-MemEye and 70.68 / 85.06 / 87.06 / 89.14 on Mem-Gallery.
+answerer (mean of 3 runs; source: a paper under double-blind review, not linked yet). Judge models
+differ between the groups (`gpt-4.1-mini` here vs `GPT-5.4-mini` for the baselines), so compare
+Judge scores within a group, not across.
 
-| Method | MemEye EM | MemEye B-1 | Mem-Gallery F1 | Mem-Gallery B-1 |
-|---|---|---|---|---|
-| MemoryOS | 45.75 | 13.12 | 43.09 | 37.76 |
-| A-MEM | 49.73 | 21.11 | 44.08 | 38.37 |
-| SimpleMem | 50.34 | 9.42 | 34.73 | 28.90 |
-| HyperMem | 47.82 | 19.64 | 44.57 | 33.42 |
-| M2A | 52.31 | 6.31 | 15.04 | 10.28 |
-| MMA | 50.96 | 16.32 | 26.99 | 20.60 |
-| SRAG (multimodal semantic RAG) | 58.36 | 31.48 | 41.07 | 35.03 |
-| UniversalRAG | 60.49 | 11.23 | 48.36 | 41.90 |
-| MindMemOS b0 (mode off, text-only) | 43.03 | 20.32 | 38.72 | 32.59 |
-| MindMemOS b1 (basic) | 59.77 | 27.02 | 54.73 | 47.75 |
-| MindMemOS enhanced | 63.45 | 25.49 | 55.66 | 48.98 |
-| MindMemOS enhanced_agentic | **65.89** | 27.09 | **57.06** | **50.45** |
+| Method | MemEye EM | MemEye B-1 | MemEye Judge | Mem-Gallery F1 | Mem-Gallery B-1 | Mem-Gallery Judge |
+|---|---|---|---|---|---|---|
+| MemoryOS | 45.75 | 13.12 | 34.91 | 43.09 | 37.76 | 64.64 |
+| A-MEM | 49.73 | 21.11 | 38.27 | 44.08 | 38.37 | 64.35 |
+| SimpleMem | 50.34 | 9.42 | 42.59 | 34.73 | 28.90 | 58.33 |
+| HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
+| M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
+| MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
+| SRAG (multimodal semantic RAG) | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
+| MindMemOS b0 (mode off, text-only) | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| MindMemOS b1 (basic) | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| MindMemOS enhanced | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| MindMemOS enhanced_agentic | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
 
 **When comparing results:**
 
