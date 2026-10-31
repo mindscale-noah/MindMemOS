@@ -128,6 +128,10 @@ class MemoryDbMemoryUpdateCommand(BaseModel):
     """Precomputed BM25 sparse indices; values default to 1.0 for API-side commands."""
     graph_content_sync: bool = False
     """If True, also update the Neo4j memory node content property."""
+    refresh_vectors: bool = False
+    """Rebuild vectors from stored content without rewriting content or graph data."""
+    touch_update_at: bool = True
+    """Whether this operational mutation changes the user-visible update timestamp."""
 
 
 class MemoryDbEntityUpdateCommand(BaseModel):

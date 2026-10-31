@@ -442,6 +442,40 @@ async def test_update_content_refreshes_metadata_and_bm25_index():
 
 
 @pytest.mark.asyncio
+async def test_refresh_vectors_uses_stored_content_without_rewriting_content_or_graph():
+    qdrant = FakeQdrant(
+        record=SimpleNamespace(payload={"content": "stored canonical content", "metadata": {"source": "test"}})
+    )
+    neo4j = FakeNeo4j()
+    embed = FakeEmbedClient()
+    writer = MemoryDbWriter(
+        clients=SimpleNamespace(qdrant=qdrant, neo4j=neo4j),
+        text_config=make_text_config(),
+        embed_client=embed,
+    )
+
+    result = await writer.update_memory(
+        make_context(),
+        MemoryDbUpdateCommand(
+            memory_id="mem-1",
+            refresh_vectors=True,
+            touch_update_at=False,
+            metadata_patch={"vector_pending": False},
+        ),
+    )
+
+    assert result.changed is True
+    patch = qdrant.patches[0]
+    assert "content" not in patch["payload"]
+    assert patch["payload"]["metadata"]["source"] == "test"
+    assert patch["payload"]["metadata"]["vector_pending"] is False
+    assert "update_at" not in patch["payload"]
+    assert embed.calls == [("memory.update", "stored canonical content")]
+    assert patch["dense_vector"] == [0.1, 0.2, 0.3]
+    assert neo4j.content_updates == []
+
+
+@pytest.mark.asyncio
 async def test_update_content_uses_precomputed_vectors_when_provided():
     qdrant = FakeQdrant(record=SimpleNamespace(payload={"metadata": {}}))
     neo4j = FakeNeo4j()

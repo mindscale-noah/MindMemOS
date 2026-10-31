@@ -27,6 +27,9 @@ class EmbedClient(Protocol):
     returns ``EmbeddingResponse`` (vector at ``response.embeddings[0]``).
     """
 
+    @property
+    def expected_dimension(self) -> int | None: ...
+
     async def embed(self, task: str, text: str | list[str], **kwargs) -> EmbeddingResponse: ...
 
 
@@ -169,6 +172,7 @@ class MemoryVectorizer:
         sparse = self._sparse_encoder.encode_document(preprocessed.tokens)
         return VectorWrite(
             memory_id=memory_id,
+            semantic_dimension=self._configured_embedding_dimension(),
             bm25_indices=list(sparse.indices),
             bm25_values=list(sparse.values),
         )
@@ -232,11 +236,20 @@ class MemoryVectorizer:
                 EntityVectorWrite(
                     entity_id=entity_id,
                     semantic_vector=semantic_vectors[index],
+                    semantic_dimension=self._configured_embedding_dimension(),
                     bm25_indices=list(sparse.indices),
                     bm25_values=list(sparse.values),
                 )
             )
         return writes
+
+    def _configured_embedding_dimension(self) -> int | None:
+        """Read the active model configuration without coupling to its concrete client."""
+
+        dimension = getattr(self._embed_client, "expected_dimension", None)
+        if isinstance(dimension, int) and dimension > 0:
+            return dimension
+        return None
 
     def _tokens_for_text(self, text: str) -> list[str]:
         if self._text_preprocessor is not None:

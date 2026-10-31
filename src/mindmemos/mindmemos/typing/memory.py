@@ -612,6 +612,7 @@ class VectorWrite(BaseModel):
 
     memory_id: str
     semantic_vector: list[float] | None = None
+    semantic_dimension: int | None = Field(default=None, gt=0)
     bm25_indices: list[int] = Field(default_factory=list)
     bm25_values: list[float] = Field(default_factory=list)
 
@@ -625,6 +626,7 @@ class EntityVectorWrite(BaseModel):
 
     entity_id: str
     semantic_vector: list[float] | None = None
+    semantic_dimension: int | None = Field(default=None, gt=0)
     bm25_indices: list[int] | None = None
     bm25_values: list[float] | None = None
 

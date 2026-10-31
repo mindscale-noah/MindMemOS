@@ -47,6 +47,7 @@ from ...memory_modeling.vanilla import (
     build_relates_to_edge,
 )
 from ...text import TextPreprocessor
+from ...text.vector_repair_state import initial_vector_repair_metadata
 from ...text.vectorizer import MemoryVectorizer
 from ._dedup import CandidateDeduplicator
 from ._entity import (
@@ -936,7 +937,7 @@ class AddCoreBuilder:
                             "entities": [e.name for e in updated_preprocessed.entities],
                         }
                         if updated_vector_pending:
-                            metadata_refresh["vector_pending"] = True
+                            metadata_refresh.update(initial_vector_repair_metadata(updated_vw.semantic_dimension))
                         update_commands.append(
                             build_update_command(
                                 planned.target_memory_id,
@@ -1118,7 +1119,13 @@ class AddCoreBuilder:
         vectors.extend(memory_vectors)
         for pending, is_pending in zip(pending_memory_vectors, memory_vector_pending, strict=True):
             if is_pending:
-                pending.memory.metadata["vector_pending"] = True
+                vector = next(
+                    (item for item in memory_vectors if item.memory_id == pending.memory.memory_id),
+                    None,
+                )
+                pending.memory.metadata.update(
+                    initial_vector_repair_metadata(vector.semantic_dimension if vector is not None else None)
+                )
 
         if entity_values:
             if entity_vector_pending:

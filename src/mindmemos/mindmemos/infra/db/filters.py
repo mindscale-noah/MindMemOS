@@ -109,6 +109,9 @@ MEMORY_PAYLOAD_INDEX_SCHEMA: tuple[PayloadIndexSpec, ...] = (
     PayloadIndexSpec(field_name="entity_id", field_schema=qmodels.PayloadSchemaType.KEYWORD),
     PayloadIndexSpec(field_name="entity_type", field_schema=qmodels.PayloadSchemaType.KEYWORD),
     PayloadIndexSpec(field_name="content", field_schema=qmodels.PayloadSchemaType.TEXT),
+    PayloadIndexSpec(field_name="metadata.vector_pending", field_schema=qmodels.PayloadSchemaType.BOOL),
+    PayloadIndexSpec(field_name="metadata.vector_retry_count", field_schema=qmodels.PayloadSchemaType.INTEGER),
+    PayloadIndexSpec(field_name="metadata.vector_next_retry_at_ms", field_schema=qmodels.PayloadSchemaType.INTEGER),
 )
 
 # Fields a caller-supplied SearchFilter may reference. Derived from the indexed

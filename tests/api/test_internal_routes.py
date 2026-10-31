@@ -58,6 +58,21 @@ def make_app_with_provider_service(monkeypatch, service) -> FastAPI:
     return app
 
 
+def make_app_with_vector_repair_service(monkeypatch, service) -> FastAPI:
+    app = FastAPI()
+
+    @app.exception_handler(ApiError)
+    async def _handle_api_error(request, exc):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"code": exc.code, "message": exc.message, "data": None},
+        )
+
+    app.include_router(router)
+    monkeypatch.setattr("mindmemos.api.internal_routes.get_vector_repair_service", lambda: service)
+    return app
+
+
 def test_internal_memory_list_uses_gateway_token_project_scope(tmp_path, monkeypatch) -> None:
     secret = "test-internal-secret"
     write_config(tmp_path, secret=secret)
@@ -196,6 +211,85 @@ def test_internal_memory_list_rejects_malformed_gateway_token_as_401(tmp_path, m
 
         assert response.status_code == 401
         assert response.json()["code"] == "auth.invalid_internal_token"
+    finally:
+        reset_config()
+
+
+def test_internal_vector_repair_is_project_scoped_and_bounded(tmp_path, monkeypatch) -> None:
+    secret = "test-internal-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret,
+        account_id="acct_001",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:write"],
+    )
+    service = FakeVectorRepairService()
+
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        response = TestClient(make_app_with_vector_repair_service(monkeypatch, service)).post(
+            "/internal/v1/projects/proj_001/vector-repairs",
+            headers={"authorization": f"Bearer {token}"},
+            json={"limit": 3, "memory_ids": ["mem-1"], "force": True},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["repaired"] == 1
+        assert service.repair_calls[0][0].project_id == "proj_001"
+        assert service.repair_calls[0][1].limit == 3
+        assert service.repair_calls[0][1].memory_ids == ["mem-1"]
+    finally:
+        reset_config()
+
+
+def test_internal_vector_repair_rejects_other_project(tmp_path, monkeypatch) -> None:
+    secret = "test-internal-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret,
+        account_id="acct_001",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:write"],
+    )
+
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        response = TestClient(make_app_with_vector_repair_service(monkeypatch, FakeVectorRepairService())).post(
+            "/internal/v1/projects/proj_002/vector-repairs",
+            headers={"authorization": f"Bearer {token}"},
+            json={"limit": 1},
+        )
+
+        assert response.status_code == 403
+        assert response.json()["code"] == "auth.project_scope_mismatch"
+    finally:
+        reset_config()
+
+
+def test_internal_vector_repair_status_requires_read_scope(tmp_path, monkeypatch) -> None:
+    secret = "test-internal-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret,
+        account_id="acct_001",
+        project_id="proj_001",
+        api_key_uuid="console",
+        scopes=["memory:read"],
+    )
+    service = FakeVectorRepairService()
+
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        response = TestClient(make_app_with_vector_repair_service(monkeypatch, service)).get(
+            "/internal/v1/projects/proj_001/vector-repairs/status",
+            headers={"authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["data"] == {"pending": 2, "due": 1, "exhausted": 0}
     finally:
         reset_config()
 
@@ -342,6 +436,22 @@ class FakeProviderBindingService:
 
     async def list_bindings(self, *, project_id):
         return []
+
+
+class FakeVectorRepairService:
+    def __init__(self) -> None:
+        self.repair_calls = []
+
+    async def repair(self, ctx, request):
+        from mindmemos.pipelines.memory_db.vector_repair import VectorRepairResult
+
+        self.repair_calls.append((ctx, request))
+        return VectorRepairResult(selected=1, repaired=1)
+
+    async def status(self, ctx):
+        from mindmemos.pipelines.memory_db.vector_repair import VectorRepairStatus
+
+        return VectorRepairStatus(pending=2, due=1, exhausted=0)
 
 
 def _content_match_text(filter_) -> str | None:
