@@ -8,12 +8,13 @@ import time
 import uuid
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from mindmemos.api.internal_routes import router
 from mindmemos.config import init_config, reset_config
-from mindmemos.errors import ApiError, BadRequestError
+from mindmemos.errors import ApiError, BadRequestError, PermissionDeniedError
 from mindmemos.infra.db import QdrantRecord
 from mindmemos.infra.db.read_cache import ProjectReadCache
 from mindmemos.pipelines.memory_db import MemoryDbReader
@@ -103,7 +104,8 @@ def test_internal_memory_list_uses_gateway_token_project_scope(tmp_path, monkeyp
         reset_config()
 
 
-def test_internal_memory_detail_missing_uses_standard_memory_not_found_envelope(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("suffix", ["", "/lifecycle"])
+def test_internal_memory_detail_missing_uses_standard_memory_not_found_envelope(tmp_path, monkeypatch, suffix) -> None:
     secret = "test-internal-secret"
     write_config(tmp_path, secret=secret)
     token = make_gateway_token(
@@ -122,7 +124,7 @@ def test_internal_memory_detail_missing_uses_standard_memory_not_found_envelope(
     try:
         init_config(config_path=tmp_path / "dev.yaml")
         response = TestClient(make_app(monkeypatch, clients=FakeClients(qdrant=qdrant))).get(
-            "/internal/v1/projects/proj_001/memories/missing",
+            f"/internal/v1/projects/proj_001/memories/missing{suffix}",
             headers={"authorization": f"Bearer {token}"},
         )
 
@@ -214,6 +216,42 @@ def test_internal_memory_list_rejects_malformed_gateway_token_as_401(tmp_path, m
 
         assert response.status_code == 401
         assert response.json()["code"] == "auth.invalid_internal_token"
+    finally:
+        reset_config()
+
+
+@pytest.mark.parametrize(
+    ("scopes", "expected_status"),
+    [
+        ([], 403),
+        (["memory:visualize"], 403),
+        (["memory:read"], 200),
+        (["memory:read", "memory:visualize"], 200),
+        (["memory:*"], 200),
+    ],
+)
+def test_internal_console_reads_require_read_scope(tmp_path, monkeypatch, scopes, expected_status) -> None:
+    secret = "scope-contract-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret, account_id="account", project_id="proj_001", api_key_uuid="console", scopes=scopes
+    )
+    paths = [
+        "/memories",
+        "/memories/memory-1",
+        "/memory-insights",
+        "/memories/memory-1/lifecycle",
+        "/memories/memory-1/graph",
+        "/graph/neighbors?node_type=memory&node_id=memory-1",
+    ]
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        with TestClient(make_app(monkeypatch)) as client:
+            for path in paths:
+                response = client.get(
+                    f"/internal/v1/projects/proj_001{path}", headers={"authorization": f"Bearer {token}"}
+                )
+                assert response.status_code == expected_status, path
     finally:
         reset_config()
 
@@ -411,6 +449,86 @@ def test_internal_lifecycle_does_not_serialize_original_add_input(tmp_path, monk
             "source_type",
             "submitted_at",
         }
+    finally:
+        reset_config()
+
+
+@pytest.mark.parametrize("source_id", [None, "add-1"])
+def test_internal_lifecycle_preserves_timeline_when_provenance_read_fails(tmp_path, monkeypatch, source_id) -> None:
+    secret = "degraded-provenance-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret, account_id="account", project_id="proj_001", api_key_uuid="console", scopes=["memory:read"]
+    )
+    qdrant = FakeQdrant()
+
+    async def memory(*args, **kwargs):
+        return QdrantRecord(
+            point_id="memory-1",
+            payload={
+                "project_id": "proj_001",
+                "created_at": "2026-10-31T00:00:00Z",
+                "reinforcement_count": 2,
+                "metadata": {"source_add_record_id": source_id},
+            },
+        )
+
+    async def provenance(*args, **kwargs):
+        raise TimeoutError("PRIVATE_DATABASE_ERROR")
+
+    async def lineage(self, ctx, memory_ids):
+        return {"memory-1": ["parent-1"]}
+
+    qdrant.get_memory = memory
+    qdrant.get_memory_provenance = provenance
+    monkeypatch.setattr(FakeMemoryDbReader, "get_memory_lineage", lineage)
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        with TestClient(
+            make_app(monkeypatch, clients=FakeClients(qdrant=qdrant)), raise_server_exceptions=False
+        ) as client:
+            path = "/internal/v1/projects/proj_001/memories/memory-1/lifecycle"
+            headers = {"authorization": f"Bearer {token}"}
+            response = client.get(path, headers=headers)
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["provenance"]["available"] is False
+            assert data["provenance"]["add_record_id"] == source_id
+            assert [event["event_type"] for event in data["events"]] == ["created", "reinforced"]
+            assert data["lineage"] == ["parent-1"]
+            assert data["availability"]["lifecycle_complete"] is False
+            assert data["availability"]["missing_fields"] == ["provenance"]
+            assert "PRIVATE_DATABASE_ERROR" not in response.text
+            # A transient failure is not retained as an unavailable provenance snapshot.
+
+            async def recovered(*args, **kwargs):
+                return {"add_record_id": "add-1"}
+
+            qdrant.get_memory_provenance = recovered
+            assert client.get(path, headers=headers).json()["data"]["provenance"]["available"] is True
+    finally:
+        reset_config()
+
+
+def test_internal_lifecycle_does_not_degrade_permission_errors(tmp_path, monkeypatch) -> None:
+    secret = "provenance-permission-secret"
+    write_config(tmp_path, secret=secret)
+    token = make_gateway_token(
+        secret=secret, account_id="account", project_id="proj_001", api_key_uuid="console", scopes=["memory:read"]
+    )
+    qdrant = FakeQdrant()
+
+    async def denied(*args, **kwargs):
+        raise PermissionDeniedError("provenance access denied")
+
+    qdrant.get_memory_provenance = denied
+    try:
+        init_config(config_path=tmp_path / "dev.yaml")
+        response = TestClient(make_app(monkeypatch, clients=FakeClients(qdrant=qdrant))).get(
+            "/internal/v1/projects/proj_001/memories/memory-1/lifecycle",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
     finally:
         reset_config()
 

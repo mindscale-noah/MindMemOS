@@ -1,9 +1,11 @@
 # Internal Console memory reads
 
 These gateway-authenticated endpoints are private to the Console BFF. They require
-`memory:read` and `memory:visualize`, and the gateway token's project must match
+`memory:read` (or `memory:*`), and the gateway token's project must match
 `{project_id}`. Responses use the standard `request_id` / `code` / `message` / `data`
 envelope. Never expose the gateway signing credential to a browser.
+The BFF also sends `memory:visualize`, but it is not an additional required scope;
+`memory:visualize` alone does not authorize these reads.
 
 ## Inventory contract
 
@@ -59,13 +61,20 @@ patches invalidate that project's cache. The current memory and its lifecycle
 state are still read separately; a provenance cache hit never freezes an old
 memory status or reinforcement count.
 
+If the optional provenance read fails, the endpoint still returns the memory's
+events and lineage with `provenance.available=false`,
+`availability.lifecycle_complete=false`, and `provenance` in `missing_fields`.
+A known source ID may still be included, but does not imply the read succeeded.
+Authentication and permission failures retain their error responses.
+
 ## Insights and caching
 
 `GET /internal/v1/projects/{project_id}/memory-insights`
 
 - `range_days`: 1–90, default 30.
 - `scan_limit`: 1–10,000, default 5,000; applies only to the bounded trend scan.
-- `refresh`: default false; true bypasses the cached snapshot.
+- `refresh`: default false; true starts a new read, bypassing both the cached
+  snapshot and any older in-flight loader.
 
 Status totals use exact project-scoped counts. Trends use selected timestamp and
 state fields, excluding memory content and unrestricted metadata. If the scan
@@ -77,7 +86,10 @@ limit. Identical in-flight reads share one loader; cold loaders are limited to
 five concurrent requests per cache. Returned values are copied so callers
 cannot modify the cached snapshot. Memory upserts, payload updates, patches, and
 deletes invalidate that project's snapshots. An older read already in flight
-cannot repopulate the cache after invalidation. Failed reads are not cached.
+cannot repopulate the cache after invalidation or supersede a newer refresh.
+Failed reads are not cached. A failed refresh returns an error to its caller
+while preserving any previous snapshot until its original expiration or write
+invalidation; it does not extend that snapshot's lifetime.
 
 Caches are local to each event loop/process. Writes in another process become
 visible within the TTL, and deployments start with cold caches. `as_of` is the

@@ -160,6 +160,7 @@ def project_memory_lifecycle(
     *,
     add_record: dict[str, Any] | None,
     lineage: list[str],
+    provenance_unavailable: bool = False,
 ) -> MemoryLifecycleProjection:
     """Build a truthful timeline from persisted evidence only."""
 
@@ -172,7 +173,7 @@ def project_memory_lifecycle(
 
     add_record_id = _source_add_record_id(payload, metadata, add_record)
     provenance = MemoryProvenance(
-        available=bool(add_record_id or add_record),
+        available=not provenance_unavailable and bool(add_record_id or add_record),
         add_record_id=add_record_id,
         request_id=_optional_text((add_record or {}).get("request_id") or payload.get("request_id")),
         source_type=_optional_text(

@@ -12,8 +12,15 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel
 
-from ..errors import BadRequestError, MemoryNotFoundError, PermissionDeniedError, ResourceNotFoundError
+from ..errors import (
+    AuthenticationError,
+    BadRequestError,
+    MemoryNotFoundError,
+    PermissionDeniedError,
+    ResourceNotFoundError,
+)
 from ..infra.db import QdrantRecord, build_filter, match_text, match_value
+from ..logging import get_logger
 from ..pipelines.memory_db import (
     MemoryDbReader,
     MemoryGraph,
@@ -33,6 +40,7 @@ from .mappers import to_memory_request_context
 from .schemas import ApiResponse, AuthContext
 
 router = APIRouter(prefix="/internal/v1", tags=["internal-memory"])
+logger = get_logger(__name__)
 
 
 class InternalMemoryListData(BaseModel):
@@ -144,8 +152,24 @@ async def get_project_memory_lifecycle(
     if record is None:
         raise ResourceNotFoundError(str(MemoryNotFoundError(memory_id)), code="memory.not_found")
     lineage = (await reader.get_memory_lineage(ctx, [memory_id])).get(memory_id, [])
-    add_record = await reader.get_memory_provenance(ctx, memory_id, record.payload)
-    result = project_memory_lifecycle(record.payload, add_record=add_record, lineage=lineage)
+    provenance_unavailable = False
+    try:
+        add_record = await reader.get_memory_provenance(ctx, memory_id, record.payload)
+    except (AuthenticationError, PermissionDeniedError):
+        raise
+    except Exception as exc:
+        add_record = None
+        provenance_unavailable = True
+        logger.warning(
+            "memory provenance read unavailable",
+            request_id=ctx.request_id,
+            project_id=project_id,
+            memory_id=memory_id,
+            error_type=type(exc).__name__,
+        )
+    result = project_memory_lifecycle(
+        record.payload, add_record=add_record, lineage=lineage, provenance_unavailable=provenance_unavailable
+    )
     return InternalMemoryLifecycleResponse(request_id=ctx.request_id, data=result)
 
 

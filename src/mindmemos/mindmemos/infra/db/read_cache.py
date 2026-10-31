@@ -31,10 +31,14 @@ class ProjectReadCache(Generic[T]):
     ) -> T:
         cache_key = (project_id, key)
         cached = self._cache.get(cache_key)
-        if not force and cached is not None and cached[0] > monotonic():
-            return deepcopy(cached[1])
-        self._cache.pop(cache_key, None)
-        task = self._inflight.get(cache_key)
+        if cached is not None:
+            if cached[0] <= monotonic():
+                self._cache.pop(cache_key, None)
+            elif not force:
+                return deepcopy(cached[1])
+        # Refresh owns a new task identity; superseded loaders still serve their
+        # existing readers but cannot overwrite the refreshed snapshot.
+        task = None if force else self._inflight.get(cache_key)
         if task is None:
             task = create_task(self._load(cache_key, loader))
             self._inflight[cache_key] = task
