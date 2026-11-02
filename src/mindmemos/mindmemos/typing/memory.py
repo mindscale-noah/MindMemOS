@@ -206,8 +206,13 @@ class ImageRef(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str | None = None
-    """Server-readable local path; accepted only under configured ``blob_store.allowed_path_roots``."""
+    path: str | None = Field(
+        default=None,
+        description=(
+            "Server-readable local path; accepted only under configured blob_store.allowed_path_roots "
+            "(else 400 image.path_denied)."
+        ),
+    )
 
     url: str | None = None
     """http(s) URL the server downloads."""
@@ -260,8 +265,14 @@ class DialogueMessage(BaseModel):
     timestamp: int | None = None
     """Dialogue event time as a 13-digit millisecond timestamp, or None when omitted."""
 
-    images: list[ImageRef] = Field(default_factory=list)
-    """Images attached to this turn; accepted by vanilla with ``algo_config.multimodal.mode`` basic or enhanced."""
+    images: list[ImageRef] = Field(
+        default_factory=list,
+        description=(
+            "Images attached to this turn; accepted by vanilla with algo_config.multimodal.mode "
+            "basic or enhanced, rejected (400, add.images_unsupported) while it is off. Server "
+            "path sources must fall under blob_store.allowed_path_roots (image.path_denied)."
+        ),
+    )
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:

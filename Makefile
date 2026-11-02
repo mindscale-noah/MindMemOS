@@ -75,8 +75,9 @@ COMPOSE_ENV := $(if $(wildcard .env),--env-file .env,)
 COMPOSE := docker compose $(COMPOSE_ENV) -f dockers/docker-compose.memory.yml
 DEV_CORE_SERVICES := qdrant neo4j kafka kafka-ui kafka-exporter
 # MINIO=0 (or false/no/off) skips MinIO and its bucket bootstrap: `make dev MINIO=0`
-# for the pre-s3 layout (local blob backend, no MinIO container). dev-down / db-clean
-# honor the flag too: they leave the MinIO container and its volume untouched.
+# builds the text-only layout (multimodal mode off — image memory always needs the
+# MinIO/S3 blob store, the only image backend). dev-down / db-clean honor the flag
+# too: they leave the MinIO container and its volume untouched.
 MINIO ?= 1
 MINIO_SERVICES := $(if $(filter 0 false no off,$(MINIO)),,minio)
 DB_OBSERVABILITY_SERVICES := $(DEV_CORE_SERVICES) clickhouse otel-collector grafana $(MINIO_SERVICES)

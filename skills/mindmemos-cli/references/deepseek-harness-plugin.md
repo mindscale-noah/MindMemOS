@@ -58,8 +58,9 @@ Optional plugin config:
 ```yaml
 cli: mindmemos
 topK: 5
+multimodal: true
 tokenBudget: 2000
-addMode: async
+addMode: sync
 userId: alice
 appId: deepseek-harness
 sessionId: optional-session-override
@@ -73,12 +74,18 @@ maxConversationMessages: 80
   inside the repo). It is a single executable path, not a shell command, so a
   wrapper like `uv run mindmemos` will fail with `ENOENT`.
 - `topK` — number of memories injected per turn.
+- `multimodal` — also search stored images; default `true`. When on, recall passes
+  `--multimodal` to `memory search` and image hits carry a short-lived
+  directly-fetchable `metadata.image_url`; the server ignores the flag while the
+  project's multimodal mode is off. Set `false` for text-only recall.
 - `tokenBudget` — optional strict token budget for recall; when set,
   `memory search --token-budget` caps the injected memories by estimated tokens
   (token-budget retention) in addition to `topK` — whichever limit is tighter
   applies. Omit to keep legacy behavior.
-- `addMode` — `sync` blocks until extraction finishes; `async` (default) enqueues
-  and returns. In `async` mode only CLI-level failures are visible to the plugin.
+- `addMode` — `sync` (default) blocks until extraction finishes; `async` enqueues
+  and returns. In `async` mode only CLI-level failures are visible to the plugin
+  (async requires the server's Kafka queue — `kafka.enabled=true`; without it adds
+  are rejected — which is why `sync` is the default).
 - `userId` — scopes both search and add to one user. If omitted, search is
   project-wide, while add inherits the default user from the local `mindmemos`
   CLI config.
@@ -92,8 +99,14 @@ maxConversationMessages: 80
 - **Recall** hooks `agent/pre-step` (step 1 only). It extracts the real human
   prompt, runs `mindmemos memory search`, and injects the hits under a
   `<relevant-memories>` banner. Image hits that carry `metadata.image_url` keep
-  the link in the injected text as `<image: URL>` — a short-lived direct link
-  the agent may fetch to view the stored image. Injected messages are stamped
+  the link in the injected text as `<image: URL>` — a permanent mirror URL, a short-lived presigned link, or a short-lived *signed*
+  proxy URL (`/v1/memory/images/{blob_id}?…&signature=…`) — all three download directly
+  with no MindMemOS API token;
+  `metadata.blob_id` is the stable id. (By default the plugin searches
+  multimodally — config `multimodal` defaults to `true` and recall adds
+  `--multimodal` to `memory search`; the server silently ignores that flag while
+  the project's multimodal mode is off. Adds are text-only — conversation images
+  are not persisted.) Injected messages are stamped
   `source.kind === "plugin"` so the store step can tell them apart from real
   input.
 - **Store** hooks `session/event` and reacts to `turn/end` with

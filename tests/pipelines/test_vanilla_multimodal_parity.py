@@ -25,7 +25,6 @@ from mindmemos.components.multimodal import ImageLoader
 from mindmemos.config import BlobStoreConfig, MultimodalConfig, TextProcessingConfig
 from mindmemos.config.algo.search import VanillaSearchConfig
 from mindmemos.errors import BadRequestError
-from mindmemos.infra.blob import LocalBlobStore
 from mindmemos.llm import EmbeddingResponse
 from mindmemos.pipelines.add.vanilla import VanillaAddPipeline
 from mindmemos.pipelines.add.vanilla_multimodal import VanillaMultimodalAddPipeline
@@ -34,6 +33,7 @@ from mindmemos.pipelines.search.vanilla import VanillaSearchEngine
 from mindmemos.pipelines.search.vanilla_multimodal import VanillaMultimodalSearchEngine
 from mindmemos.typing import AddPipelineInput, ImageRef, MemoryRequestContext, SearchPipelineInput
 
+from tests.blob_fakes import MemoryBlobStore
 from tests.pipelines.add.test_default_add_pipeline import InMemoryVanillaStore as _BaseStore
 
 TEXT_CONFIG = TextProcessingConfig(
@@ -252,7 +252,7 @@ class _Harness:
         self.store = InMemoryVanillaStore()
         self.llm, self.embed, self.mm = RecordingLlm(), RecordingEmbed(), RecordingMmClient()
         self.images, self.recorder = RecordingImageStore(), RecordingRecorder()
-        self.blobs = LocalBlobStore(tmp_path / "blobs")
+        self.blobs = MemoryBlobStore()
 
     def add_pipeline(self, mode: str | None):
         common = dict(
@@ -555,12 +555,12 @@ def test_the_image_loader_is_cached_per_pipeline(monkeypatch) -> None:
         db_writer=object(),
         text_config=TEXT_CONFIG,
         embed_client=object(),
-        blob_store=LocalBlobStore("nowhere"),
+        blob_store=MemoryBlobStore(),
         multimodal_config=MultimodalConfig(mode="enhanced"),
     )
     first = engine.image_loader()
     assert engine.image_loader() is first
-    explicit = ImageLoader(BlobStoreConfig(), LocalBlobStore("nowhere"))
+    explicit = ImageLoader(BlobStoreConfig(), MemoryBlobStore())
     add = VanillaMultimodalAddPipeline(
         db_reader=object(),
         db_writer=object(),

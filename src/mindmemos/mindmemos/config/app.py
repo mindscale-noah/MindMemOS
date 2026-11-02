@@ -100,6 +100,9 @@ def _merge_blob_env(data: dict) -> dict:
     _set_if_env(blob, "s3_public_base_url", "MINDMEMOS_S3_PUBLIC_BASE_URL")
     _set_if_env(blob, "s3_presign_endpoint", "MINDMEMOS_S3_PRESIGN_ENDPOINT")
     _set_if_env(blob, "s3_presign_expiry_seconds", "MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS", caster=int)
+    _set_if_env(blob, "proxy_url_expiry_seconds", "MINDMEMOS_PROXY_URL_EXPIRY_SECONDS", caster=int)
+    _set_if_env(blob, "proxy_public_base_url", "MINDMEMOS_PROXY_PUBLIC_BASE_URL")
+    _set_if_env(blob, "url_signing_secret", "MINDMEMOS_URL_SIGNING_SECRET")
     return data
 
 

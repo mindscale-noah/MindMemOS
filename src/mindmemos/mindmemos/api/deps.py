@@ -19,14 +19,16 @@ API deployments use ``api_key``; product deployments use ``gateway_jwt``.
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Sequence
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Query
 from opentelemetry import trace
 
-from ..config import update_config
+from ..config import get_config, update_config
 from ..errors import AuthenticationError, PermissionDeniedError
+from ..infra.blob.signed_url import resolve_signing_secret, verify_image_url_signature
 from ..logging import get_logger, traced
 from ..pipelines.memory_db import MemoryDbReader, MemoryDbWriter
 from .auth import GatewayJwtAuthProvider, get_auth_provider
@@ -146,6 +148,58 @@ def require_scopes(*required_scopes: str):
         return ctx
 
     return dependency
+
+
+async def get_optional_request_context(authorization: str | None = Header(default=None)) -> AuthContext | None:
+    """``get_request_context`` that yields None instead of raising when no header is sent."""
+
+    if not authorization:
+        return None
+    return await get_request_context(authorization=authorization)
+
+
+async def get_image_access_context(
+    blob_id: str,
+    user_id: str = Query(min_length=1),
+    project_id: str | None = Query(default=None),
+    expires: int | None = Query(default=None),
+    signature: str | None = Query(default=None),
+    bearer_ctx: AuthContext | None = Depends(get_optional_request_context),
+) -> AuthContext:
+    """Authenticate ``GET /v1/memory/images/{blob_id}`` by Bearer key **or** URL signature.
+
+    An ``Authorization: Bearer`` header takes the standard path (api key, ``memory:read``
+    scope); without a header the query parameters ``project_id`` / ``expires`` /
+    ``signature`` must form a valid unexpired signature minted by ``_attach_image_urls``.
+    The signed branch synthesizes a minimal context — the signature already binds
+    ``project_id``/``blob_id``/``user_id``/``expires``, and the service still re-verifies
+    blob ownership, so the placeholder identity fields are never consulted for access.
+    """
+
+    if bearer_ctx is not None:
+        ensure_scopes(bearer_ctx, ("memory:read",))
+        return bearer_ctx
+    if signature is None or expires is None or project_id is None:
+        raise AuthenticationError(
+            "missing Authorization header or image url signature",
+            code="auth.missing_authorization",
+        )
+    cfg = get_config()
+    secret = resolve_signing_secret(cfg.blob_store.url_signing_secret, cfg.auth.gateway_jwt_secret)
+    if not verify_image_url_signature(
+        project_id, blob_id, user_id, expires, signature, secret, now=int(time.time())
+    ):
+        raise AuthenticationError("invalid or expired image url signature", code="image.signature_invalid")
+    ctx = AuthContext(
+        request_id=str(uuid.uuid4()),
+        account_id=STANDALONE_ACCOUNT_ID,
+        project_id=project_id,
+        api_key_uuid="image-url-signature",
+        memory_algorithm="vanilla",
+        scopes=["memory:read"],
+    )
+    annotate_request_trace(ctx)
+    return ctx
 
 
 def ensure_scopes(ctx: AuthContext, required_scopes: Sequence[str]) -> None:

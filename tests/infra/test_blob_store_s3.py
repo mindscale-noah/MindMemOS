@@ -4,107 +4,18 @@ from __future__ import annotations
 
 import hashlib
 from datetime import timedelta
-from types import SimpleNamespace
 
 import pytest
 from mindmemos.infra.blob import is_valid_blob_id
 from mindmemos.infra.blob.s3 import S3BlobStore, namespace_prefix
-from minio.error import S3Error
+
+from tests.blob_fakes import FakeMinio, no_such_key
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"fake-png-body"
 
 
-def _no_such_key() -> S3Error:
-    return S3Error(None, "NoSuchKey", "The specified key does not exist.", "resource", "request-id", "host-id")
-
-
-class _FakeResponse:
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-        self.closed = False
-        self.released = False
-
-    def read(self) -> bytes:
-        return self._data
-
-    def close(self) -> None:
-        self.closed = True
-
-    def release_conn(self) -> None:
-        self.released = True
-
-
-class _FakeMinio:
-    """In-memory stand-in for minio.Minio: dict storage plus call counters."""
-
-    def __init__(self) -> None:
-        self.objects: dict[tuple[str, str], tuple[bytes, str]] = {}
-        self.buckets: set[str] = set()
-        self.delete_batches: list[list[str]] = []
-        self.last_response: _FakeResponse | None = None
-        self.exists_answers: list[bool] | None = None
-        self.race_on_make = False
-        self.presigned_args: list[tuple[str, str, object]] = []
-        self.presign_error: Exception | None = None
-        self.calls = {"put_object": 0, "bucket_exists": 0, "make_bucket": 0}
-
-    def bucket_exists(self, bucket: str) -> bool:
-        self.calls["bucket_exists"] += 1
-        if self.exists_answers is not None:
-            return self.exists_answers.pop(0)
-        return bucket in self.buckets
-
-    def make_bucket(self, bucket: str, location: str | None = None) -> None:
-        self.calls["make_bucket"] += 1
-        already = bucket in self.buckets
-        self.buckets.add(bucket)
-        if already or self.race_on_make:  # race_on_make: someone else created it between check and create
-            raise S3Error(None, "BucketAlreadyOwnedByYou", "own bucket", "resource", "request-id", "host-id")
-
-    def put_object(
-        self, bucket: str, name: str, data, length: int, content_type: str = "application/octet-stream"
-    ) -> None:
-        payload = data.read()
-        assert len(payload) == length
-        self.calls["put_object"] += 1
-        self.objects[(bucket, name)] = (payload, content_type)
-
-    def stat_object(self, bucket: str, name: str):
-        entry = self.objects.get((bucket, name))
-        if entry is None:
-            raise _no_such_key()
-        return SimpleNamespace(size=len(entry[0]), content_type=entry[1], is_dir=False)
-
-    def get_object(self, bucket: str, name: str) -> _FakeResponse:
-        entry = self.objects[(bucket, name)]
-        self.last_response = _FakeResponse(entry[0])
-        return self.last_response
-
-    def remove_object(self, bucket: str, name: str) -> None:
-        self.objects.pop((bucket, name), None)
-
-    def remove_objects(self, bucket: str, delete_object_list):
-        batch = [obj.name for obj in delete_object_list]
-        self.delete_batches.append(batch)
-        for name in batch:
-            self.objects.pop((bucket, name), None)
-        return iter(())  # no errors
-
-    def list_objects(self, bucket: str, prefix: str | None = None, recursive: bool = False):
-        for b, name in sorted(self.objects):
-            if b == bucket and name.startswith(prefix or ""):
-                yield SimpleNamespace(object_name=name, is_dir=False)
-
-    def presigned_get_object(self, bucket, name, expires=None, **kwargs):
-        self.calls["presigned_get_object"] = self.calls.get("presigned_get_object", 0) + 1
-        self.presigned_args.append((bucket, name, expires))
-        if self.presign_error is not None:
-            raise self.presign_error
-        return f"http://localhost:9100/{bucket}/{name}?X-Amz-Signature=fake"
-
-
-def _store(client: _FakeMinio | None = None, **kwargs) -> tuple[S3BlobStore, _FakeMinio]:
-    client = client or _FakeMinio()
+def _store(client: FakeMinio | None = None, **kwargs) -> tuple[S3BlobStore, FakeMinio]:
+    client = client or FakeMinio()
     store = S3BlobStore(
         endpoint="http://localhost:9100",
         bucket="blobs",
@@ -181,14 +92,14 @@ def test_presigned_get_rejects_bad_ids_and_never_raises() -> None:
     assert store.presigned_get("proj-a", "not-an-id", expires_seconds=60) is None
     assert client.calls.get("presigned_get_object", 0) == 0  # invalid ids never reach the client
 
-    client.presign_error = S3Error(None, "InternalError", "boom", "resource", "request-id", "host-id")
+    client.presign_error = no_such_key()  # any signing failure must degrade to None
     blob_id = hashlib.sha256(PNG_BYTES).hexdigest()
     assert store.presigned_get("proj-a", blob_id) is None  # signing failure degrades to None
 
 
 def test_presigned_get_uses_the_presign_client_when_configured() -> None:
-    main = _FakeMinio()
-    presign = _FakeMinio()
+    main = FakeMinio()
+    presign = FakeMinio()
     store, _ = _store(client=main, presign_endpoint="https://blobs.example.com", presign_client=presign)
     blob_id = hashlib.sha256(PNG_BYTES).hexdigest()
 
@@ -301,7 +212,7 @@ async def test_bucket_is_ensured_once() -> None:
 
 @pytest.mark.asyncio
 async def test_bucket_creation_race_is_swallowed_when_the_bucket_exists() -> None:
-    client = _FakeMinio()
+    client = FakeMinio()
     client.race_on_make = True  # another writer creates the bucket between check and create
     client.exists_answers = [False, True]  # missing at the check, present at the re-check
     store, _ = _store(client)

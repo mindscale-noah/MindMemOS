@@ -42,7 +42,8 @@ with MindMemOSClient(
             DialogueMessage(role="user", content="I'm allergic to peanuts"),
             DialogueMessage(role="assistant", content="Noted — I'll avoid peanuts."),
         ],
-        # mode="async",            # enqueue and return; memories will be empty
+        # mode="async",            # enqueue via Kafka; requires kafka.enabled=true on
+        #                          # the server - rejected with an API error otherwise
         # metadata={"channel": "chat"},
     )
     print(add_result.code, add_result.request_id)
@@ -75,7 +76,9 @@ with MindMemOSClient(
             DialogueMessage(role="assistant", content="Sorry, I will avoid spicy lunch recommendations."),
         ],
     )
-    client.memory.dreaming()        # background consolidation, no inputs
+    client.memory.dreaming(mode="sync")  # background consolidation; "async" (the SDK
+                                         # default) enqueues via Kafka and needs
+                                         # kafka.enabled=true - use "sync" there
 ```
 
 `messages` accepts typed objects (`DialogueMessage`, `TextMessage`, `UrlMessage`,
@@ -91,7 +94,7 @@ Useful memory kwargs:
 - `search(..., search_strategy="fast"|"agentic", rerank=True, score_threshold=0.5, token_budget=2000, filters={...})`
 - `feedback(feedback="...", mode="sync"|"async", messages=[...], recalled_memories=[...])`;
   explicit feedback text requires `messages`, while omitting `feedback` runs implicit feedback from recent adds.
-- `dreaming(mode="async"|"sync")`
+- `dreaming(mode="async"|"sync")` — `"async"` (the default) requires a Kafka-enabled deployment
 
 Error handling — all API/SDK failures raise `MindMemOSSDKError` (subclasses:
 `AuthRequiredError`, `TransportError`, `ApiError`); `ApiError` carries
@@ -164,7 +167,7 @@ asyncio.run(main())
 
 ## Result shapes
 
-- `add` → `AddResult(code, request_id, memories=[{operation, memory_id, content}])`. In `async` mode `memories` is empty and `code` is `"queued"`.
+- `add` → `AddResult(code, request_id, memories=[{operation, memory_id, content}])`. In `async` mode `memories` is empty and `code` is `"queued"` (async mode requires a Kafka-enabled deployment; with `kafka.enabled=false` the server rejects the request with "async add requires Kafka to be enabled").
 - `search` / `get` → `SearchResult` / `GetResult` with `memories=[{id, memory, last_update_at, ...}]`.
 - `update` / `delete` / `feedback` / `dreaming` → `StatusResult(code, message, request_id)`.
 

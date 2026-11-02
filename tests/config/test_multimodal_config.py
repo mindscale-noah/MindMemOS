@@ -4,7 +4,6 @@ from mindmemos.errors import InvalidConfigError, MissingConfigValueError
 
 MM = {"model": "siglip", "api_base": "http://mm/v1", "dimensions": 768}
 S3 = {
-    "backend": "s3",
     "s3_endpoint": "http://localhost:9100",
     "s3_bucket": "mindmemos-blobs",
     "s3_access_key": "minioadmin",
@@ -35,8 +34,12 @@ def test_mm_endpoint_validation() -> None:
 
 
 def test_multimodal_mode_ranges_and_choices_are_validated() -> None:
-    for mode in ("off", "basic", "enhanced"):
-        _validate({"algo_config": {"multimodal": {"mode": mode}}})
+    # mode off never touches the blob store, so it needs no s3 settings; the image modes do
+    _validate({"algo_config": {"multimodal": {"mode": "off"}}})
+    for mode in ("basic", "enhanced"):
+        _validate({"algo_config": {"multimodal": {"mode": mode}}, "blob_store": S3})
+        with pytest.raises(MissingConfigValueError, match="blob_store.s3_endpoint"):
+            _validate({"algo_config": {"multimodal": {"mode": mode}}})
     with pytest.raises(InvalidConfigError, match="quote it"):
         _validate({"algo_config": {"multimodal": {"mode": False}}})  # YAML 1.1 reads a bare `off` as false
     with pytest.raises(InvalidConfigError):
@@ -47,28 +50,28 @@ def test_multimodal_mode_ranges_and_choices_are_validated() -> None:
         _validate({"algo_config": {"multimodal": {"image_text_weight": 1.5}}})
 
 
-def test_blob_store_s3_backend_validation() -> None:
-    _validate({"blob_store": S3})  # local_root not required for the s3 backend
+def test_blob_store_s3_validation() -> None:
+    basic = {"algo_config": {"multimodal": {"mode": "basic"}}}
+    _validate({**basic, "blob_store": S3})
     for missing in ("s3_endpoint", "s3_bucket", "s3_access_key", "s3_secret_key"):
         partial = {key: value for key, value in S3.items() if key != missing}
         with pytest.raises(MissingConfigValueError, match=f"blob_store.{missing}"):
-            _validate({"blob_store": partial})
+            _validate({**basic, "blob_store": partial})
     with pytest.raises(InvalidConfigError, match="http://"):
-        _validate({"blob_store": {**S3, "s3_endpoint": "localhost:9100"}})
+        _validate({**basic, "blob_store": {**S3, "s3_endpoint": "localhost:9100"}})
     with pytest.raises(MissingConfigValueError, match="blob_store.s3_region"):
         # an explicit empty region builds a region-less client whose presigning hits the network
-        _validate({"blob_store": {**S3, "s3_region": ""}})
-    with pytest.raises(InvalidConfigError):
-        _validate({"blob_store": {"backend": "gcs"}})
+        _validate({**basic, "blob_store": {**S3, "s3_region": ""}})
 
 
 def test_blob_store_presign_validation() -> None:
-    _validate({"blob_store": {**S3, "s3_presign_endpoint": "https://blobs.example.com", "s3_presign_expiry_seconds": 300}})
-    _validate({"blob_store": {**S3, "s3_presign_expiry_seconds": 604800}})  # exactly 7 days, the S3 maximum
-    _validate({"blob_store": S3})  # both fields optional; defaults apply
+    basic = {"algo_config": {"multimodal": {"mode": "basic"}}}
+    _validate({**basic, "blob_store": {**S3, "s3_presign_endpoint": "https://blobs.example.com", "s3_presign_expiry_seconds": 300}})
+    _validate({**basic, "blob_store": {**S3, "s3_presign_expiry_seconds": 604800}})  # exactly 7 days, the S3 maximum
+    _validate({**basic, "blob_store": S3})  # both fields optional; defaults apply
 
     with pytest.raises(InvalidConfigError, match="s3_presign_endpoint"):
-        _validate({"blob_store": {**S3, "s3_presign_endpoint": "blobs.example.com"}})  # no scheme
+        _validate({**basic, "blob_store": {**S3, "s3_presign_endpoint": "blobs.example.com"}})  # no scheme
     for bad_expiry in (0, -1, 604801):
         with pytest.raises(InvalidConfigError, match="s3_presign_expiry_seconds"):
             _validate({"blob_store": {**S3, "s3_presign_expiry_seconds": bad_expiry}})
@@ -81,7 +84,6 @@ def test_blob_store_presign_env_overlay(tmp_path, monkeypatch) -> None:
     config_path.write_text(
         """
 blob_store:
-  backend: s3
   s3_endpoint: http://minio.example:9100
   s3_bucket: blobs
   s3_access_key: access
@@ -105,7 +107,6 @@ def test_blob_store_s3_env_overlay(tmp_path, monkeypatch) -> None:
     config_path.write_text(
         """
 blob_store:
-  backend: s3
   s3_endpoint: http://yaml.example:9100
   s3_bucket: yaml-blobs
   s3_access_key: yaml-access
@@ -116,7 +117,6 @@ blob_store:
 
     cfg = build_config(config_path=config_path)
 
-    assert cfg.blob_store.backend == "s3"
     assert cfg.blob_store.s3_endpoint == "http://minio.example:9100"
     assert cfg.blob_store.s3_bucket == "yaml-blobs"
     assert cfg.blob_store.s3_access_key == "yaml-access"

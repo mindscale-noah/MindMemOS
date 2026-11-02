@@ -87,8 +87,9 @@ the row.
 | --- | --- | --- |
 | `cli` | `mindmemos` | Executable used to invoke the CLI — a name on dsh's `PATH` or an absolute path. It is not a shell command, so a wrapper like `uv run mindmemos` will not work; point it at the real executable instead. |
 | `topK` | `5` | Number of memories injected per turn. |
+| `multimodal` | `true` | Also search stored images by passing `memory search --multimodal`; set `false` for text-only recall. The server ignores the flag when the project's multimodal mode is off. |
 | `tokenBudget` | *(none)* | Optional strict token budget for recall; when set, `memory search --token-budget` caps the injected memories by estimated tokens (token-budget retention) in addition to `topK` — whichever limit is tighter applies. |
-| `addMode` | `async` | `sync` blocks until extraction finishes; `async` enqueues and returns. In `async` mode only CLI-level failures are visible to the plugin. |
+| `addMode` | `sync` | `sync` blocks until extraction finishes; `async` enqueues and returns. In `async` mode only CLI-level failures are visible to the plugin, and async requires the server's Kafka queue (`kafka.enabled=true`; without it adds are rejected) — which is why `sync` is the default. |
 | `userId` | *(none)* | Scopes both search and add to one user. Omit for project-wide search; add then inherits the CLI's default user. |
 | `appId` | `deepseek-harness` | Application scope attached to every search and add. |
 | `sessionId` | *(none)* | Override the harness session id used as the CLI session scope. |
@@ -101,14 +102,23 @@ the row.
   listener. It extracts the real human prompt, runs `mindmemos memory search`,
   and appends one `createUserMessage` carrying the hits under a
   `<relevant-memories>` banner. Image hits that carry `metadata.image_url` keep
-  the link in the injected text as `<image: URL>` — a short-lived direct link
-  the agent may fetch to view the stored image. The injected message is stamped
+  the link in the injected text as `<image: URL>` — a permanent mirror URL, a short-lived presigned link, or a short-lived *signed*
+  proxy URL (`/v1/memory/images/{blob_id}?…&signature=…`) — all three download directly
+  with no MindMemOS API token;
+  `metadata.blob_id` is the stable id. (The recall query itself is text-only — the
+  plugin never passes `--query-image` — but searches run with `--multimodal` by
+  default (`multimodal`, default `true`), so image hits do occur through it
+  whenever the project's multimodal mode is enabled; the server ignores the flag
+  when it is off.) The
+  injected message is stamped
   `source.kind === "plugin"` so the store step can tell it apart from real input.
 - **Store** hooks the `session/event` firehose and reacts to `turn/end` with
   `reason.kind === "completed"`. It walks that turn's log back to its
   `turn/start`, collecting the surface `user`/`assistant`/`tool` messages, and
   runs `mindmemos memory add --messages-json-file -`. Plugin-injected context
   (`source.kind !== "user"`) is excluded so recalled memories are not re-stored.
+  Only text is persisted: image attachments in the conversation are dropped by
+  design — images enter MindMemOS through `memory add --image` (SDK / CLI).
 
 ## Verify
 

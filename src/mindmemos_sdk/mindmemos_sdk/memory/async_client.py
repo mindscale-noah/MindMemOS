@@ -95,8 +95,11 @@ class AsyncMemoryClient:
         """Search memories.
 
         ``multimodal=True`` searches stored images too (image results and facts recalled through
-        them); ``query_images`` attaches images to the query and implies it. Both need the project's
-        ``algo_config.multimodal.mode`` to be basic or enhanced; otherwise the search is text-only.
+        them); ``query_images`` attaches images to the query and implies it. ``query_images`` needs
+        the project's ``algo_config.multimodal.mode`` to be basic or enhanced — in off mode it is
+        rejected with error code ``search.images_unsupported`` — while a bare ``multimodal=True``
+        is silently ignored (text-only) in off mode. Image hits carry ``metadata.blob_id`` and may
+        carry ``metadata.image_url`` (see ``MemorySearchHit.metadata``).
         """
         request = self._core.search(
             query,

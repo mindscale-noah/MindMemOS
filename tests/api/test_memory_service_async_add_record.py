@@ -71,6 +71,43 @@ class _Recorder:
 
 
 @pytest.mark.asyncio
+async def test_async_add_without_kafka_is_a_clean_request_error(tmp_path) -> None:
+    """mode=async on a server without Kafka must 400 with a precise code, not a 500."""
+
+    import yaml
+    from mindmemos.config import init_config, reset_config
+    from mindmemos.errors import BadRequestError
+
+    config_path = tmp_path / "dev.yaml"
+    config_path.write_text(yaml.safe_dump({"kafka": {"enabled": False}}), encoding="utf-8")
+    init_config(config_path=config_path)
+    try:
+        pipeline = _AsyncAddPipeline()
+        service = MemoryService(
+            add_pipeline=pipeline,
+            get_pipeline=object(),
+            delete_pipeline=object(),
+            update_pipeline=object(),
+            operation_recorder=_Recorder(),
+            skill_store=object(),
+        )
+
+        with pytest.raises(BadRequestError) as excinfo:
+            await service.add(
+                _auth(),
+                AddRequest(
+                    user_id="user-1",
+                    mode="async",
+                    messages=[DialogueMessage(role="user", content="remember this", timestamp=1770000000000)],
+                ),
+            )
+        assert excinfo.value.code == "add.async_unavailable"
+        assert pipeline.calls == []  # rejected before any queueing
+    finally:
+        reset_config()
+
+
+@pytest.mark.asyncio
 async def test_async_add_records_input_before_queue_ack() -> None:
     recorder = _Recorder()
     pipeline = _AsyncAddPipeline()

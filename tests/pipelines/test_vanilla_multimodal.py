@@ -10,7 +10,7 @@ import pytest
 from mindmemos.components.multimodal import ImageLoader, LoadedImage, attached_images
 from mindmemos.config import BlobStoreConfig, MultimodalConfig, TextProcessingConfig
 from mindmemos.errors import BadRequestError
-from mindmemos.infra.blob import LocalBlobStore, StoredBlob
+from mindmemos.infra.blob import StoredBlob
 from mindmemos.pipelines.add.vanilla_multimodal import VanillaMultimodalAddPipeline, image_point_id
 from mindmemos.pipelines.search.vanilla_multimodal import VanillaMultimodalSearchEngine
 from mindmemos.pipelines.search.vanilla_multimodal.engine import _image_filter
@@ -25,6 +25,8 @@ from mindmemos.typing import (
     MemoryView,
     SearchPipelineInput,
 )
+
+from tests.blob_fakes import MemoryBlobStore
 
 TEXT_CONFIG = TextProcessingConfig(bm25_use_spacy_lemma=False, spacy_en_model="x", spacy_zh_model="y")
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
@@ -99,8 +101,8 @@ class StubVanillaAdd(VanillaMultimodalAddPipeline):
         )
 
 
-def _pipeline(tmp_path, *, mm=None, store=None):
-    blobs = LocalBlobStore(tmp_path / "blobs")
+def _pipeline(*, mm=None, store=None):
+    blobs = MemoryBlobStore()
     pipeline = StubVanillaAdd(
         db_reader=object(),
         db_writer=object(),
@@ -128,7 +130,7 @@ def _stub_vanilla(monkeypatch):
 @pytest.mark.asyncio
 async def test_images_are_stored_indexed_and_removed_from_the_vanilla_input(tmp_path) -> None:
     mm, store = FakeMm(), FakeImageStore()
-    pipeline, blobs = _pipeline(tmp_path, mm=mm, store=store)
+    pipeline, blobs = _pipeline(mm=mm, store=store)
     inp = AddPipelineInput(
         messages=[
             {"role": "user", "content": "Look at my new sofa", "images": [{"data": _b64(PNG), "image_id": "IMG1"}]},
@@ -159,7 +161,7 @@ async def test_images_are_stored_indexed_and_removed_from_the_vanilla_input(tmp_
 @pytest.mark.asyncio
 async def test_same_image_again_adds_an_occurrence_without_reembedding(tmp_path) -> None:
     mm, store = FakeMm(), FakeImageStore()
-    pipeline, _ = _pipeline(tmp_path, mm=mm, store=store)
+    pipeline, _ = _pipeline(mm=mm, store=store)
     message = {"role": "user", "content": "the sofa", "images": [{"data": _b64(PNG)}]}
 
     await pipeline.add_sync(AddPipelineInput(messages=[message]), _context("r1", "s1"))
@@ -175,7 +177,7 @@ async def test_same_image_again_adds_an_occurrence_without_reembedding(tmp_path)
 @pytest.mark.asyncio
 async def test_without_mm_router_images_are_only_stored(tmp_path) -> None:
     store = FakeImageStore()
-    pipeline, blobs = _pipeline(tmp_path, mm=None, store=store)
+    pipeline, blobs = _pipeline(mm=None, store=store)
     inp = AddPipelineInput(messages=[{"role": "user", "content": "hi", "images": [{"data": _b64(PNG)}]}])
 
     result = await pipeline.add_sync(inp, _context())
@@ -187,7 +189,7 @@ async def test_without_mm_router_images_are_only_stored(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_too_many_images_are_rejected(tmp_path) -> None:
-    pipeline, _ = _pipeline(tmp_path, mm=FakeMm())
+    pipeline, _ = _pipeline(mm=FakeMm())
     pipeline._explicit_multimodal_config = MultimodalConfig(mode="basic", max_images_per_request=1)
     inp = AddPipelineInput(
         messages=[{"role": "user", "content": "x", "images": [{"data": _b64(PNG)}, {"data": _b64(PNG_B)}]}]
@@ -198,7 +200,7 @@ async def test_too_many_images_are_rejected(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_async_add_queues_blob_references_not_bytes(tmp_path, monkeypatch) -> None:
-    pipeline, blobs = _pipeline(tmp_path, mm=FakeMm())
+    pipeline, blobs = _pipeline(mm=FakeMm())
     queued = []
 
     async def fake_super_add_async(self, inp, context, *, add_record_id=None, record_metadata=None):
@@ -234,7 +236,7 @@ TEXT_RESULT = MemorySearchItem(id="m1", memory="text fact", last_update_at="2024
 @pytest.mark.asyncio
 async def test_image_results_follow_the_text_results(tmp_path) -> None:
     mm, store = FakeMm(), FakeImageStore()
-    pipeline, _ = _pipeline(tmp_path, mm=mm, store=store)
+    pipeline, _ = _pipeline(mm=mm, store=store)
     await pipeline.add_sync(
         AddPipelineInput(
             messages=[{"role": "user", "content": "my sofa", "images": [{"data": _b64(PNG), "image_id": "I"}]}]
@@ -283,7 +285,7 @@ def test_image_filter_keeps_session_and_user_conditions() -> None:
 @pytest.mark.asyncio
 async def test_mode_off_rejects_images_and_leaves_text_to_vanilla(tmp_path) -> None:
     mm, store = FakeMm(), FakeImageStore()
-    pipeline, blobs = _pipeline(tmp_path, mm=mm, store=store)
+    pipeline, blobs = _pipeline(mm=mm, store=store)
     pipeline._explicit_multimodal_config = MultimodalConfig(mode="off")
     inp = AddPipelineInput(messages=[{"role": "user", "content": "x", "images": [{"data": _b64(PNG)}]}])
 
@@ -389,7 +391,7 @@ async def test_store_blobs_fan_out_is_capped_process_wide(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_occurrences_are_trimmed_to_max_occurrences_per_image(tmp_path) -> None:
     mm, store = FakeMm(), FakeImageStore()
-    pipeline, _ = _pipeline(tmp_path, mm=mm, store=store)
+    pipeline, _ = _pipeline(mm=mm, store=store)
     pipeline._explicit_multimodal_config = MultimodalConfig(mode="basic", max_occurrences_per_image=2)
     message = {"role": "user", "content": "the sofa", "images": [{"data": _b64(PNG)}]}
 

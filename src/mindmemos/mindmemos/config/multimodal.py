@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from .base import secret_field
 
 MM_IMAGE_TRANSPORTS = frozenset({"base64", "url"})
-BLOB_STORE_BACKENDS = frozenset({"local", "s3"})
 
 
 @dataclass
@@ -73,13 +72,11 @@ class MmEmbedRouterConfig:
 
 @dataclass
 class BlobStoreConfig:
-    """Where raw images are kept and which image sources the server may read."""
+    """Where raw images are kept and which image sources the server may read.
 
-    backend: str = "local"
-    """Storage backend, one of ``BLOB_STORE_BACKENDS``; ``s3`` needs the ``s3`` extra (minio client)."""
-
-    local_root: str = "data/blobs"
-    """Root directory of the local backend; relative paths resolve against the repository root."""
+    Storage is S3-compatible only (MinIO, R2, OSS, AWS S3, …); the server talks
+    to it through the minio client shipped with the ``s3`` extra.
+    """
 
     s3_endpoint: str = ""
     """S3-compatible endpoint as an ``http://`` or ``https://`` URL (the scheme decides TLS), e.g. ``http://localhost:9100``."""
@@ -91,10 +88,10 @@ class BlobStoreConfig:
     """S3 bucket name; created automatically when missing."""
 
     s3_access_key: str | None = secret_field(default=None)
-    """S3 access key; required for the ``s3`` backend (every request is signed)."""
+    """S3 access key; every request is signed with it."""
 
     s3_secret_key: str | None = secret_field(default=None)
-    """S3 secret key; required for the ``s3`` backend (every request is signed)."""
+    """S3 secret key; every request is signed with it."""
 
     s3_public_base_url: str | None = None
     """Base URL of a public path-style mirror (e.g. a CDN); enables ``BlobStore.public_url``."""
@@ -106,6 +103,17 @@ class BlobStoreConfig:
 
     s3_presign_expiry_seconds: int = 3600
     """Validity window of presigned image URLs returned in search results (1..604800 seconds)."""
+
+    proxy_url_expiry_seconds: int | None = None
+    """Validity window of signed proxy image URLs (1..604800 seconds); None reuses
+    ``s3_presign_expiry_seconds``."""
+
+    proxy_public_base_url: str | None = None
+    """Trusted absolute base (e.g. ``https://memory.example.com``) prepended to signed proxy
+    image URLs; unset keeps them relative. Never derived from the request Host header."""
+
+    url_signing_secret: str | None = secret_field(default=None)
+    """HMAC secret for signed proxy image URLs; unset derives from ``auth.gateway_jwt_secret``."""
 
     max_image_bytes: int = 20 * 1024 * 1024
     """Images larger than this are rejected."""

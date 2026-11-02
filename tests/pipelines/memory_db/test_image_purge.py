@@ -4,10 +4,11 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from mindmemos.infra.blob import LocalBlobStore
 from mindmemos.infra.db.models import QdrantRecord
 from mindmemos.pipelines.memory_db import ImageMemoryStore
 from mindmemos.typing import MemoryRequestContext
+
+from tests.blob_fakes import MemoryBlobStore
 
 NOW = datetime(2024, 1, 5, tzinfo=UTC)
 CTX = MemoryRequestContext(request_id="r", account_id="a", project_id="p", api_key_uuid="k")
@@ -50,8 +51,8 @@ def _payload(image_id: str, user_id: str, blob_id: str, project_id: str = "p") -
     return {"image_id": image_id, "project_id": project_id, "user_id": user_id, "blob_id": blob_id}
 
 
-async def _setup(tmp_path):
-    blobs = LocalBlobStore(tmp_path)
+async def _setup():
+    blobs = MemoryBlobStore()
     shared = await blobs.put("p", b"shared", mime_type="image/png")
     own = await blobs.put("p", b"own", mime_type="image/png")
     unindexed = await blobs.put("p", b"unindexed", mime_type="image/png")
@@ -69,8 +70,8 @@ async def _setup(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_user_purge_deletes_their_records_and_the_blobs_nobody_else_uses(tmp_path) -> None:
-    store, repo, blobs, b = await _setup(tmp_path)
+async def test_user_purge_deletes_their_records_and_the_blobs_nobody_else_uses() -> None:
+    store, repo, blobs, b = await _setup()
 
     assert await store.purge_images(CTX, blobs, user_id="alice") == 2
 
@@ -81,8 +82,8 @@ async def test_user_purge_deletes_their_records_and_the_blobs_nobody_else_uses(t
 
 
 @pytest.mark.asyncio
-async def test_project_purge_deletes_every_record_and_the_whole_blob_namespace(tmp_path) -> None:
-    store, repo, blobs, b = await _setup(tmp_path)
+async def test_project_purge_deletes_every_record_and_the_whole_blob_namespace() -> None:
+    store, repo, blobs, b = await _setup()
 
     assert await store.purge_images(CTX, blobs) == 3
 

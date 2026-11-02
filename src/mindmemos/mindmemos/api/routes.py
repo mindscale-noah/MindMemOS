@@ -9,11 +9,12 @@ input via the typed request body, delegate to the service, wrap the result in
 from __future__ import annotations
 
 import json
+import time
 
 from fastapi import APIRouter, Depends, Query
 from starlette.responses import Response, StreamingResponse
 
-from .deps import require_scopes
+from .deps import get_image_access_context, require_scopes
 from .mappers import (
     to_add_api_response,
     to_memory_list_api_response,
@@ -178,14 +179,28 @@ async def dreaming_memory(
 async def get_memory_image(
     blob_id: str,
     user_id: str = Query(min_length=1),
-    auth: AuthContext = Depends(require_scopes(SCOPE_MEM_READ)),
+    project_id: str | None = Query(default=None, description="Signed-URL mode: project the signature was minted for."),
+    expires: int | None = Query(default=None, description="Signed-URL mode: unix seconds until the link dies."),
+    signature: str | None = Query(default=None, description="Signed-URL mode: HMAC over project/blob/owner/expiry."),
+    auth: AuthContext = Depends(get_image_access_context),
     service: MemoryService = Depends(get_memory_service),
 ) -> Response:
     """Return the raw bytes of an image stored for this project (multimodal algorithms).
 
-    ``user_id`` must name the image's owner (``metadata.user_id`` of a search image result);
-    it is verified against the project's image records, so another user's blob id is not readable.
+    Two authentication shapes: ``Authorization: Bearer`` key with ``memory:read`` (the SDK's
+    ``get_image``), or — with no header — a valid unexpired ``project_id`` / ``expires`` /
+    ``signature`` triple, i.e. exactly the short-lived link a search hit's ``metadata.image_url``
+    carries in its signed-proxy shape (all three of ``metadata.image_url``'s shapes — public
+    mirror, presigned, signed proxy — are directly fetchable without an API key; the signed
+    proxy one is relative until ``blob_store.proxy_public_base_url`` is set). ``user_id`` must
+    name the image's owner (``metadata.user_id`` of a search image result); it is verified
+    against the project's image records, so another user's blob id is not readable (404
+    image.not_found).
     """
 
     data, mime_type = await service.get_image(auth, blob_id, user_id)
-    return Response(content=data, media_type=mime_type, headers={"Cache-Control": "private, max-age=86400"})
+    # a signed link must not outlive its signature in the receiving browser's cache
+    max_age = 86400
+    if signature is not None and expires is not None:
+        max_age = max(0, min(86400, expires - int(time.time())))
+    return Response(content=data, media_type=mime_type, headers={"Cache-Control": f"private, max-age={max_age}"})
