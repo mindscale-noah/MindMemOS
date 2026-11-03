@@ -13,6 +13,10 @@ class SkillVersionNotFoundError(SkillNotFoundError):
     """The requested exact Skill version does not exist in this project."""
 
 
+class TrajectoryNotFoundError(SkillNotFoundError):
+    """The requested exact trajectory does not exist in this project."""
+
+
 class SkillConflictError(MindMemosSkillError):
     """A reference is ambiguous, an alias conflicts, or the current version moved."""
 

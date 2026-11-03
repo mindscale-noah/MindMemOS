@@ -13,7 +13,7 @@ from ..envs import Environment
 from ..envs.data import DataSample
 from ..infra import Infrastructure
 from ..infra.database import Database
-from ..pipelines import EvolutionPipeline, ManagePipeline, Pipeline, TrainingPipeline
+from ..pipelines import AnalyzePipeline, EvolutionPipeline, ManagePipeline, Pipeline, TrainingPipeline
 from ..pipelines.builtin_pipelines.evolve.config import SimpleEvolutionPipelineConfig
 from ..pipelines.builtin_pipelines.repository.repository import RepositoryPipeline
 from ..pipelines.builtin_pipelines.training.config import TrainingPipelineConfig
@@ -107,6 +107,7 @@ def skill_config_schema() -> dict[str, Any]:
         observability=_field(ServiceConfig, "observability", observability | None),
         repository_pipeline=_field(ServiceConfig, "repository_pipeline", _choice(Pipeline, RepositoryPipeline) | None),
         manage_pipeline=_field(ServiceConfig, "manage_pipeline", _choice(Pipeline, ManagePipeline) | None),
+        analyze_pipeline=_field(ServiceConfig, "analyze_pipeline", _choice(Pipeline, AnalyzePipeline) | None),
         training_pipelines=_field(
             ServiceConfig, "training_pipelines", dict[Name, _choice(Pipeline, TrainingPipeline, overrides)]
         ),

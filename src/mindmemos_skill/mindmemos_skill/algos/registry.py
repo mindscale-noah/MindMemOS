@@ -3,6 +3,8 @@
 from importlib import import_module
 
 _BUILTIN_MODULES = (
+    ".analyze.skill_judge.algorithm",
+    ".analyze.trajectory_judge.algorithm",
     ".manage.skill_manage.algorithm",
     ".train.treeskill.trainer",
     ".train.skill_forest.trainer",

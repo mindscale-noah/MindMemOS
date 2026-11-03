@@ -38,6 +38,7 @@ from ..typing import (
     AddGraphMembersRequest,
     CommitRequest,
     DiffRequest,
+    EvaluationQueryRequest,
     HistoryRequest,
     ListTrajectoriesRequest,
     OrganizeRequest,
@@ -48,9 +49,11 @@ from ..typing import (
     SetMetaRequest,
     ShowRequest,
     ShowTrajectoryRequest,
+    SkillAnalyzeRequest,
     SkillHistoryCursor,
     SkillPageRequest,
     SkillRequest,
+    TrajectoryAnalyzeRequest,
     TrajectoryStatisticsRequest,
     VersionResolveRequest,
 )
@@ -63,6 +66,7 @@ from .typing import (
     CommitHttpRequest,
     DeleteHttpRequest,
     DiffHttpRequest,
+    EvaluationQueryHttpRequest,
     EvolveHttpRequest,
     GraphResolveHttpRequest,
     GraphSnapshotHttpRequest,
@@ -78,9 +82,11 @@ from .typing import (
     RemoveGraphMembersHttpRequest,
     ServiceFactory,
     ShowHttpRequest,
+    SkillAnalyzeHttpRequest,
     SkillResolveHttpRequest,
     TaskShowHttpRequest,
     TrainingHttpRequest,
+    TrajectoryAnalyzeHttpRequest,
     TrajectoryListCursor,
     TrajectoryListHttpRequest,
     TrajectoryReportHttpRequest,
@@ -921,6 +927,66 @@ def create_app(
         item = await service.get_graph_snapshot(graph_id, version_id, identity.project_id)
         return envelope(request, item)
 
+    @app.post("/v1/skills/algos/analyze/skill")
+    async def analyze_skill(
+        request: Request, body: SkillAnalyzeHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+    ):
+        """Run or reuse static analysis for one project-owned Skill version."""
+        try:
+            result = await service.analyze_skill(
+                SkillAnalyzeRequest(
+                    project_id=identity.project_id,
+                    skill_version_id=body.skill_version_id,
+                    request_id=body.request_id,
+                    force_refresh=body.force_refresh,
+                )
+            )
+        except NotImplementedError as exc:
+            raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
+        return envelope(request, result.model_dump(mode="json"))
+
+    @app.post("/v1/skills/algos/analyze/trajectory")
+    async def analyze_trajectory(
+        request: Request,
+        body: TrajectoryAnalyzeHttpRequest,
+        identity: SkillHttpIdentity = Depends(require("skill:write")),
+    ):
+        """Run or reuse analysis for one project-owned trajectory."""
+        try:
+            result = await service.analyze_trajectory(
+                TrajectoryAnalyzeRequest(
+                    project_id=identity.project_id,
+                    trajectory_id=body.trajectory_id,
+                    request_id=body.request_id,
+                    attribute=body.attribute,
+                    verifier_score=body.verifier_score,
+                    force_refresh=body.force_refresh,
+                )
+            )
+        except NotImplementedError as exc:
+            raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
+        return envelope(request, result.model_dump(mode="json"))
+
+    @app.post("/v1/skills/algos/evaluations/query")
+    async def query_evaluations(
+        request: Request,
+        body: EvaluationQueryHttpRequest,
+        identity: SkillHttpIdentity = Depends(require("skill:read")),
+    ):
+        """Read completed evaluations for exact project-owned versions."""
+        try:
+            result = await service.query_evaluations(
+                EvaluationQueryRequest(
+                    project_id=identity.project_id,
+                    skill_version_ids=body.skill_version_ids,
+                    judge_types=body.judge_types,
+                    limit=body.limit,
+                )
+            )
+        except NotImplementedError as exc:
+            raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
+        return envelope(request, result.model_dump(mode="json"))
+
     @app.post("/v1/skills/algos/recommend")
     async def recommend(
         request: Request, body: RecommendHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
@@ -939,11 +1005,16 @@ def create_app(
                     top_k=body.top_k or 5,
                     strategy=body.strategy,
                     include_scenes=body.include_scenes,
+                    include_evaluation=body.include_evaluation,
                 )
             )
         except NotImplementedError as exc:
             raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc
-        data = result.model_dump(mode="json")
+        data = (
+            result.model_dump(mode="json", exclude={"evaluations"})
+            if not body.include_evaluation
+            else result.model_dump(mode="json")
+        )
         return envelope(request, data)
 
     def evolution_pipeline(requested: str | None) -> str:

@@ -15,6 +15,7 @@ from mindmemos_skill.persistence import (
     ensure_collection,
 )
 from mindmemos_skill.persistence.constants import (
+    SKILL_EVALUATIONS_TABLE,
     SKILL_GRAPH_EDGES_TABLE,
     SKILL_GRAPH_NODES_TABLE,
     SKILL_GRAPH_VERSIONS_TABLE,
@@ -140,7 +141,7 @@ async def test_registration_is_lazy_and_all_columns_are_documented(tmp_path):
     try:
         persistence = create_persistence(database)
         assert not path.exists()
-        assert len(database.tables.values()) == 10
+        assert len(database.tables.values()) == 11
         for spec in database.tables.values():
             assert all(column.comment for column in spec.table.columns)
             assert set(spec.insert_model.model_fields) == set(spec.table.c.keys())
@@ -227,13 +228,14 @@ async def test_core_only_and_no_global_registry_state(tmp_path):
             SKILL_VERSIONS_TABLE,
             TRAJECTORIES_TABLE,
             SKILL_GRAPHS_TABLE,
+            SKILL_EVALUATIONS_TABLE,
             SKILL_GRAPH_VERSIONS_TABLE,
             SKILL_GRAPH_NODES_TABLE,
             SKILL_GRAPH_EDGES_TABLE,
             SKILL_TASKS_TABLE,
             SKILL_TASK_LOGS_TABLE,
         }
-        assert len(build_persistence_tables().values()) == 10
+        assert len(build_persistence_tables().values()) == 11
         (await ensure_collection(persistence))
         with persistence.maintenance():
             await persistence.skills.add(version())

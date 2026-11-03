@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-from mindmemos_sdk.skills.files import export_skill_files
-
 from .typing import SkillContent
 
 
@@ -53,6 +51,8 @@ def export_skill(source: SkillContent, directory: str | Path, *, overwrite: bool
     Raises:
         ValueError: Destination is unsafe or already populated without overwrite.
     """
+    from mindmemos_sdk.skills.files import export_skill_files
+
     source = SkillContent.model_validate(source.model_dump())
     return export_skill_files(
         source.content,

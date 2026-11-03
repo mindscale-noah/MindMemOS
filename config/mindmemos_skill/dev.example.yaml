@@ -134,6 +134,28 @@ service:
         sdk_max_retries: 0
         base_url: https://api.openai.com/v1
         api_key: null
+    skill_judge_deepseek_v4_flash:
+      class_name: openai_chat
+      config:
+        class_name: openai_chat
+        parse_retry_mode: feedback
+        model: deepseek-v4-flash
+        max_completion_tokens: 32768
+        timeout_s: 1200.0
+        sdk_max_retries: 0
+        base_url: https://api.openai.com/v1
+        api_key: null
+    trajectory_judge_deepseek_v4_flash:
+      class_name: openai_chat
+      config:
+        class_name: openai_chat
+        parse_retry_mode: feedback
+        model: deepseek-v4-flash
+        max_completion_tokens: 32768
+        timeout_s: 1200.0
+        sdk_max_retries: 0
+        base_url: https://api.openai.com/v1
+        api_key: null
   persistence:
     config:
       prefixed_ids: true
@@ -207,6 +229,34 @@ service:
           relation_weighting: type_confidence
           relation_validation: strict
           dependency_match_threshold: 0.6
+
+  # Optional static Skill and trajectory analysis with a shared result cache.
+  analyze_pipeline:
+    class_name: analyze
+    config:
+      skill_judge:
+        class_name: skill_judge
+        config:
+          judge: skill_judge_deepseek_v4_flash
+          algorithm_version: "1"
+          prompt_version: skill-judge-v1
+          per_file_cap: 6000
+          total_cap: 30000
+          max_md_lines: 2000
+          max_findings: 20
+          window_overlap: 500
+          max_windows: 60
+      trajectory_judge:
+        class_name: trajectory_judge
+        config:
+          judge: trajectory_judge_deepseek_v4_flash
+          algorithm_version: "1"
+          prompt_version: trajectory-judge-v1
+          max_trajectory_chars: 30000
+          max_event_chars: 4000
+          attribute_failures: false
+          attribute_on_partial_success: false
+      evaluation_query_limit: 200
 
   # Select a named trainer through TrainingRequest.algo; comment out either child independently.
   training_pipelines:

@@ -26,7 +26,7 @@ def test_deployment_example_covers_pipeline_fields_and_nondefault_agent_options(
     value = yaml.safe_load(EXAMPLE.read_text())
     deployment = load_skill_config(EXAMPLE.read_text())
     service = value["service"]
-    specs = [service["repository_pipeline"], service["manage_pipeline"]]
+    specs = [service["repository_pipeline"], service["manage_pipeline"], service["analyze_pipeline"]]
     specs.extend(service["training_pipelines"].values())
     specs.extend(service["evolution_pipelines"].values())
     assert {spec["class_name"] for spec in specs} == {
@@ -52,6 +52,15 @@ def test_deployment_example_covers_pipeline_fields_and_nondefault_agent_options(
         if isinstance(actual, str) and isinstance(complete, dict) and actual in service["agents"]:
             actual = service["agents"][actual]["config"]
         if isinstance(complete, dict):
+            if isinstance(actual, dict):
+                actual = {
+                    key: (
+                        service["agents"][value]["config"]
+                        if isinstance(value, str) and value in service["agents"] and isinstance(complete.get(key), dict)
+                        else value
+                    )
+                    for key, value in actual.items()
+                }
             assert isinstance(actual, dict), path
             if "model" in complete and "max_completion_tokens" in complete:
                 for key in complete.keys() - actual.keys():

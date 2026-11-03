@@ -6,7 +6,14 @@ from typing import Any
 
 from ..infra.task_manager import TaskSnapshot
 from ..logging.typing import TaskLog
-from ..persistence import SkillRecord, SkillVersionRecord, SkillVersionSummary, TrajectoryRecord, TrajectorySummary
+from ..persistence import (
+    EvaluationRecord,
+    SkillRecord,
+    SkillVersionRecord,
+    SkillVersionSummary,
+    TrajectoryRecord,
+    TrajectorySummary,
+)
 from ..persistence.db_services.trajectories.typing import TrajectoryStatistics
 from ..registry import Registrable
 from ..skill.typing import DiffResult
@@ -17,6 +24,8 @@ from .typing import (
     CommitFromLocalRequest,
     CommitRequest,
     DiffRequest,
+    EvaluationQueryRequest,
+    EvaluationQueryResult,
     EvolutionRequest,
     EvolutionResult,
     ExportRequest,
@@ -35,11 +44,13 @@ from .typing import (
     SetMetaRequest,
     ShowRequest,
     ShowTrajectoryRequest,
+    SkillAnalyzeRequest,
     SkillDetail,
     SkillPage,
     SkillPageRequest,
     SkillRequest,
     TrainingRequest,
+    TrajectoryAnalyzeRequest,
     TrajectoryStatisticsRequest,
     VersionResolution,
     VersionResolveRequest,
@@ -163,6 +174,51 @@ class MindMemOSSkill(ABC):
 
         Returns:
             Ordered exact Skill version identities.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def analyze_skill(self, request: SkillAnalyzeRequest) -> EvaluationRecord:
+        """Run or reuse static analysis for one exact Skill version.
+
+        Args:
+            request: Authorized project and exact immutable version.
+
+        Returns:
+            Stored completed or failed evaluation result.
+
+        Raises:
+            NotImplementedError: Analysis is not configured.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def analyze_trajectory(self, request: TrajectoryAnalyzeRequest) -> EvaluationRecord:
+        """Run or reuse analysis for one exact trajectory.
+
+        Args:
+            request: Authorized project, trajectory, and optional overrides.
+
+        Returns:
+            Stored completed or failed evaluation result.
+
+        Raises:
+            NotImplementedError: Analysis is not configured.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def query_evaluations(self, request: EvaluationQueryRequest) -> EvaluationQueryResult:
+        """Read completed analysis rows for exact project-owned versions.
+
+        Args:
+            request: Authorized project, exact versions, and optional filters.
+
+        Returns:
+            Completed stored evaluations in requested version order.
+
+        Raises:
+            NotImplementedError: Analysis is not configured.
         """
         raise NotImplementedError
 

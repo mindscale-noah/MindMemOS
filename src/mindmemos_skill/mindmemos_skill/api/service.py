@@ -22,11 +22,18 @@ from ..logging import get_logger, log_context, stage, traced
 from ..logging.context import _context
 from ..logging.tracing import bind_tracer
 from ..logging.typing import TaskLog
-from ..persistence import SkillRecord, SkillVersionRecord, SkillVersionSummary, TrajectoryRecord, TrajectorySummary
+from ..persistence import (
+    EvaluationRecord,
+    SkillRecord,
+    SkillVersionRecord,
+    SkillVersionSummary,
+    TrajectoryRecord,
+    TrajectorySummary,
+)
 from ..persistence.db_services.trajectories.typing import TrajectoryStatistics
 from ..persistence.observability import AlgorithmAuditPersistence, AuditLog, AuditRun, AuditSpan
 from ..persistence.store import SkillPersistence, validate_skill_scope
-from ..pipelines import EvolutionPipeline, ManagePipeline, Pipeline, TrainingPipeline
+from ..pipelines import AnalyzePipeline, EvolutionPipeline, ManagePipeline, Pipeline, TrainingPipeline
 from ..pipelines.builtin_pipelines.repository.repository import RepositoryPipeline
 from ..pipelines.builtin_pipelines.training.training import training_run_id
 from ..skill.typing import DiffResult
@@ -40,6 +47,8 @@ from .typing import (
     CommitFromLocalRequest,
     CommitRequest,
     DiffRequest,
+    EvaluationQueryRequest,
+    EvaluationQueryResult,
     EvolutionRequest,
     EvolutionResult,
     ExportRequest,
@@ -49,6 +58,7 @@ from .typing import (
     OrganizeRequest,
     OrganizeResult,
     ProjectRequest,
+    RecommendationEvaluation,
     RecommendRequest,
     RecommendResult,
     RegisterFromLocalRequest,
@@ -60,6 +70,7 @@ from .typing import (
     SetMetaRequest,
     ShowRequest,
     ShowTrajectoryRequest,
+    SkillAnalyzeRequest,
     SkillDetail,
     SkillListCursor,
     SkillPage,
@@ -67,6 +78,7 @@ from .typing import (
     SkillPipelineRequest,
     SkillRequest,
     TrainingRequest,
+    TrajectoryAnalyzeRequest,
     TrajectoryStatisticsRequest,
     VersionResolution,
     VersionResolveRequest,
@@ -133,6 +145,7 @@ class SkillService(MindMemOSSkill):
         observability: Algorithm audit sink owned by this service.
         repository: Selected repository operations, or None when unconfigured.
         manage_pipeline: Skill Set management operations, or None when unconfigured.
+        analyze_pipeline: Cache-first Skill and trajectory analysis, or None when unconfigured.
         training_pipelines: Named training instances available to requests.
         evolution_pipelines: Named evolution instances available to requests.
         default_project_id: Project bound only in explicitly configured unauthenticated mode.
@@ -149,6 +162,7 @@ class SkillService(MindMemOSSkill):
         observability: AlgorithmAuditPersistence,
         repository: RepositoryPipeline | None = None,
         manage_pipeline: ManagePipeline | None = None,
+        analyze_pipeline: AnalyzePipeline | None = None,
         training_pipelines: dict[str, TrainingPipeline] | None = None,
         evolution_pipelines: dict[str, EvolutionPipeline] | None = None,
         default_project_id: str | None = None,
@@ -160,6 +174,7 @@ class SkillService(MindMemOSSkill):
         self._backends = backends.copy()
         self._repository = repository
         self._manage_pipeline = manage_pipeline
+        self._analyze_pipeline = analyze_pipeline
         self._training_pipelines = dict(training_pipelines or {})
         self._evolution_pipelines = dict(evolution_pipelines or {})
         self._observability = observability
@@ -682,12 +697,84 @@ class SkillService(MindMemOSSkill):
             request: Graph snapshot, public task, and selection limit.
 
         Returns:
-            Ordered exact version IDs from the pinned snapshot.
+            Ordered exact version IDs and optional evaluation rows.
         """
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         scoped = self._scoped(RecommendRequest.model_validate(request))
-        return await self._execute(scoped.project_id, self._manage_pipeline.recommend, scoped)
+        if scoped.include_evaluation and self._analyze_pipeline is None:
+            raise NotImplementedError("Analyze pipeline is not configured")
+        if not scoped.include_evaluation:
+            return await self._execute(scoped.project_id, self._manage_pipeline.recommend, scoped)
+        return await self._execute(scoped.project_id, self._recommend_with_evaluations, scoped)
+
+    async def _recommend_with_evaluations(self, request: RecommendRequest) -> RecommendResult:
+        """Attach stored evaluations without changing recommendation behavior."""
+
+        manage_pipeline = self._manage_pipeline
+        analyze_pipeline = self._analyze_pipeline
+        if manage_pipeline is None:
+            raise NotImplementedError("Management pipeline is not configured")
+        if analyze_pipeline is None:
+            raise NotImplementedError("Analyze pipeline is not configured")
+        result = await manage_pipeline.recommend(request)
+        query = EvaluationQueryRequest(
+            project_id=request.project_id,
+            skill_version_ids=[skill.version_id for skill in result.skills],
+            limit=analyze_pipeline.evaluation_query_limit,
+        )
+        try:
+            stored = await analyze_pipeline.query(query)
+        except Exception:
+            get_logger(__name__).warning("recommend.evaluations.query_failed", exc_info=True)
+            return result.model_copy(update={"evaluations": []})
+        evaluations = [RecommendationEvaluation.model_validate(item.model_dump(mode="python")) for item in stored.items]
+        return result.model_copy(update={"evaluations": evaluations})
+
+    @_service_call
+    async def analyze_skill(self, request: SkillAnalyzeRequest) -> EvaluationRecord:
+        """Run or reuse static analysis for one exact Skill version.
+
+        Args:
+            request: Authorized project and exact immutable version.
+
+        Returns:
+            Stored completed or failed evaluation result.
+        """
+        if self._analyze_pipeline is None:
+            raise NotImplementedError("Analyze pipeline is not configured")
+        scoped = self._scoped(SkillAnalyzeRequest.model_validate(request))
+        return await self._execute(scoped.project_id, self._analyze_pipeline.analyze_skill, scoped)
+
+    @_service_call
+    async def analyze_trajectory(self, request: TrajectoryAnalyzeRequest) -> EvaluationRecord:
+        """Run or reuse analysis for one exact trajectory.
+
+        Args:
+            request: Authorized project, trajectory, and optional overrides.
+
+        Returns:
+            Stored completed or failed evaluation result.
+        """
+        if self._analyze_pipeline is None:
+            raise NotImplementedError("Analyze pipeline is not configured")
+        scoped = self._scoped(TrajectoryAnalyzeRequest.model_validate(request))
+        return await self._execute(scoped.project_id, self._analyze_pipeline.analyze_trajectory, scoped)
+
+    @_service_call
+    async def query_evaluations(self, request: EvaluationQueryRequest) -> EvaluationQueryResult:
+        """Read completed evaluations for exact project-owned versions.
+
+        Args:
+            request: Authorized project, exact versions, and optional filters.
+
+        Returns:
+            Completed stored evaluations in requested version order.
+        """
+        if self._analyze_pipeline is None:
+            raise NotImplementedError("Analyze pipeline is not configured")
+        scoped = self._scoped(EvaluationQueryRequest.model_validate(request))
+        return await self._execute(scoped.project_id, self._analyze_pipeline.query, scoped)
 
     @_service_call
     async def add_graph_members(self, request: AddGraphMembersRequest) -> OrganizeResult:
