@@ -1,6 +1,7 @@
 """Verify the public Skill HTTP entry and explicit backend capability boundaries."""
 
 import base64
+import os
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ import pytest
 import pytest_asyncio
 import yaml
 from fastapi.testclient import TestClient
+from mindmemos_skill.algos.analyze.typing import SkillAnalysisResult
 from mindmemos_skill.api.auth import GatewayJwtResolver, SkillHttpIdentity
 from mindmemos_skill.api.constants import SKILL_API_HOST_ENV, SKILL_CONFIG_PATH_ENV
 from mindmemos_skill.api.entries.fastapi import build_http_service, create_app
@@ -25,12 +27,54 @@ from mindmemos_skill.persistence.constants import (
     SKILLS_TABLE,
     TRAJECTORIES_TABLE,
 )
+from mindmemos_skill.pipelines import BuiltinAnalyzePipeline
+from mindmemos_skill.pipelines.builtin_pipelines.analyze.config import AnalyzePipelineConfig
+from pydantic import BaseModel
 
 from mindmemos_skill import MindMemOSSkill, create_service
 
 from .service_config import deployment_config, repository_config
 
 GATEWAY_SECRET = "test-gateway-secret-with-at-least-64-bytes-for-all-test-algorithms"
+
+
+class _OfflineJudgeConfig(BaseModel):
+    """Minimal analyzer configuration supplying stable version metadata."""
+
+    algorithm_version: str = "1"
+    prompt_version: str = "1"
+
+
+class _OfflineJudge:
+    """Deterministic analyzer that records offline HTTP invocations."""
+
+    def __init__(self):
+        self.algorithm_name = "offline_judge"
+        self.config = _OfflineJudgeConfig()
+        self.calls = 0
+
+    async def analyze(self, request):
+        """Return a stable completed analysis without external calls."""
+
+        self.calls += 1
+        return SkillAnalysisResult(
+            summary="Offline evaluation",
+            metrics={"score_mean": 4.0, "success": True},
+        )
+
+
+def install_offline_analyze(service):
+    """Attach an offline Analyze pipeline to an assembled test service."""
+
+    judge = _OfflineJudge()
+    analyze = BuiltinAnalyzePipeline(
+        AnalyzePipelineConfig(),
+        persistence=service.repository.persistence,
+    )
+    analyze.skill_judge = judge
+    analyze.trajectory_judge = judge
+    service._analyze_pipeline = analyze
+    return analyze, judge
 
 
 def gateway_token(
@@ -101,6 +145,9 @@ def test_public_route_discovery_and_no_legacy_export(service):
     assert "/v1/skills/trajectories/report" in paths
     assert "/v1/skills/algos/organize" in paths
     assert "/v1/skills/algos/recommend" in paths
+    assert "/v1/skills/algos/analyze/skill" in paths
+    assert "/v1/skills/algos/analyze/trajectory" in paths
+    assert "/v1/skills/algos/evaluations/query" in paths
     assert "/v1/skills/algos/evolve" in paths
     assert "/v1/skills/tasks/show" in paths
     assert "201" in paths["/v1/skills/register"]["post"]["responses"]
@@ -184,6 +231,9 @@ def test_unavailable_backends_return_stable_errors(service):
                 "query": "hello",
             },
             "/v1/skills/algos/evolve": {"skill_version_id": "v"},
+            "/v1/skills/algos/analyze/skill": {"skill_version_id": "v"},
+            "/v1/skills/algos/analyze/trajectory": {"trajectory_id": "t"},
+            "/v1/skills/algos/evaluations/query": {"skill_version_ids": ["v"]},
             "/v1/skills/tasks/show": {"task_id": "t"},
         }
         for path, body in requests.items():
@@ -399,6 +449,7 @@ async def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(
         assert record.n_turn == 1
         assert record.trajectory[0]["role"] == "system"
         assert record.skill_bindings[0]["version_id"] == version_id
+        assert record.skill_bindings[0]["name"] == "reported-skill"
         assert response["stored_at"] == record.received_at.isoformat()
         protected = client.post("/v1/skills/delete", json={"skill_id": detail["skill_id"]})
         assert protected.status_code == 200
@@ -1028,7 +1079,7 @@ def test_local_import_does_not_load_http_dependencies():
             "assert service.backends == {}; "
             "assert 'fastapi' not in sys.modules; assert 'uvicorn' not in sys.modules; assert 'mindmemos_sdk' not in sys.modules",
         ],
-        env={"PYTHONPATH": str(source)},
+        env={**os.environ, "PYTHONPATH": str(source)},
         check=True,
     )
 
@@ -1072,3 +1123,213 @@ async def test_complete_yaml_installs_authentication_without_host_overrides(tmp_
         assert client.post("/v1/skills/list", json={}, headers={"Authorization": "Bearer invalid"}).status_code == 401
         accepted = client.post("/v1/skills/list", json={}, headers={"Authorization": f"Bearer {credential}"})
         assert accepted.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/v1/skills/algos/analyze/skill", {"skill_version_id": "v", "unexpected": 1}),
+        ("/v1/skills/algos/analyze/trajectory", {"trajectory_id": "t", "unexpected": 1}),
+        ("/v1/skills/algos/evaluations/query", {"skill_version_ids": ["v"], "unexpected": 1}),
+    ],
+)
+def test_analyze_routes_reject_unknown_fields(service, path, body):
+    """Keep the new Analyze and Evaluation contracts closed to unknown fields."""
+    with TestClient(create_app(service)) as client:
+        response = client.post(path, json=body)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
+async def test_analyze_http_runs_offline_and_queries_both_judge_types(service):
+    """Exercise the Analyze and Evaluation routes with an injected offline judge."""
+    _, judge = install_offline_analyze(service)
+    with TestClient(create_app(service)) as client:
+        registered = client.post(
+            "/v1/skills/register",
+            json={
+                "alias": "analyzed",
+                "skill": {
+                    "content": "---\nname: analyzed\ndescription: Example\n---\nBody",
+                    "name": "analyzed",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        version_id = registered.json()["data"]["skill_version_id"]
+
+        static = client.post("/v1/skills/algos/analyze/skill", json={"skill_version_id": version_id})
+        assert static.status_code == 200, static.text
+        assert static.json()["data"]["status"] == "completed"
+        assert static.json()["data"]["judge_type"] == "static_skill"
+
+        report = client.post(
+            "/v1/skills/trajectories/report",
+            json={
+                "user_id": "user-1",
+                "agent_id": "agent-1",
+                "skill_version_id": version_id,
+                "messages": [{"role": "user", "content": "Summarize the file"}],
+            },
+        )
+        assert report.status_code == 201, report.text
+        trajectory_id = report.json()["data"]["trajectory_id"]
+
+        analyzed = client.post("/v1/skills/algos/analyze/trajectory", json={"trajectory_id": trajectory_id})
+        assert analyzed.status_code == 200, analyzed.text
+        assert analyzed.json()["data"]["judge_type"] == "trajectory"
+        assert analyzed.json()["data"]["status"] == "completed"
+
+        cached = client.post("/v1/skills/algos/analyze/skill", json={"skill_version_id": version_id})
+        assert cached.status_code == 200, cached.text
+        assert cached.json()["data"]["evaluation_id"] == static.json()["data"]["evaluation_id"]
+
+        queried = client.post("/v1/skills/algos/evaluations/query", json={"skill_version_ids": [version_id]})
+        assert queried.status_code == 200, queried.text
+        judge_types = {item["judge_type"] for item in queried.json()["data"]["items"]}
+    assert judge_types == {"static_skill", "trajectory"}
+    assert judge.calls == 2
+
+
+def test_gateway_jwt_isolates_analyze_results_by_project(authenticated_service):
+    """Keep Analyze writes and Evaluation reads within the credential's project."""
+    install_offline_analyze(authenticated_service)
+    config = FastAPIConfig(auth=HttpAuthConfig(mode="gateway_jwt", gateway_jwt_secret=GATEWAY_SECRET))
+    writer_a = gateway_token(project_id="project-a", scopes=["skill:write", "skill:read"])
+    reader_b = gateway_token(project_id="project-b", scopes=["skill:read"])
+    with TestClient(create_app(authenticated_service, api_config=config)) as client:
+        registered = client.post(
+            "/v1/skills/register",
+            headers={"Authorization": f"Bearer {writer_a}"},
+            json={
+                "alias": "scoped",
+                "skill": {
+                    "content": "---\nname: scoped\ndescription: Scoped\n---\nBody",
+                    "name": "scoped",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        version_id = registered.json()["data"]["skill_version_id"]
+        analyzed = client.post(
+            "/v1/skills/algos/analyze/skill",
+            headers={"Authorization": f"Bearer {writer_a}"},
+            json={"skill_version_id": version_id},
+        )
+        assert analyzed.status_code == 200, analyzed.text
+        mine = client.post(
+            "/v1/skills/algos/evaluations/query",
+            headers={"Authorization": f"Bearer {writer_a}"},
+            json={"skill_version_ids": [version_id]},
+        )
+        assert mine.status_code == 200, mine.text
+        assert len(mine.json()["data"]["items"]) == 1
+        other = client.post(
+            "/v1/skills/algos/evaluations/query",
+            headers={"Authorization": f"Bearer {reader_b}"},
+            json={"skill_version_ids": [version_id]},
+        )
+        assert other.status_code == 200, other.text
+        assert other.json()["data"]["items"] == []
+
+
+def _publish_recommend_graph(client, headers) -> tuple[list[str], str]:
+    """Register two versioned Skills and organize them into one graph snapshot."""
+    versions: list[str] = []
+    for name, description in (("csv", "Parse CSV tables"), ("images", "Draw pictures")):
+        registered = client.post(
+            "/v1/skills/register",
+            headers=headers,
+            json={
+                "alias": name,
+                "skill": {
+                    "content": f"---\nname: {name}\ndescription: {description}\n---\n{description}",
+                    "name": name,
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        versions.append(registered.json()["data"]["skill_version_id"])
+    organized = client.post(
+        "/v1/skills/algos/organize",
+        headers=headers,
+        json={"alias": "collection", "commit_message": "Initial organization", "skill_refs": versions},
+    )
+    assert organized.status_code == 200, organized.text
+    return versions, organized.json()["data"]["graph_version_id"]
+
+
+async def test_recommend_attaches_evaluations_without_changing_ranking(management_service):
+    """include_evaluation appends stored rows while keeping order and scores stable."""
+    _, judge = install_offline_analyze(management_service)
+
+    def resolver(token):
+        return SkillHttpIdentity(project_id="project", scopes={"skill:write"}, actor_id="account-1")
+
+    headers = {"Authorization": "Bearer admin"}
+    with TestClient(create_app(management_service, identity_from_bearer=resolver)) as client:
+        versions, snapshot = _publish_recommend_graph(client, headers)
+        for version_id in versions:
+            analyzed = client.post(
+                "/v1/skills/algos/analyze/skill", headers=headers, json={"skill_version_id": version_id}
+            )
+            assert analyzed.status_code == 200, analyzed.text
+
+        query = {"graph_ref": "collection", "graph_version_id": snapshot, "query": "Parse CSV records", "top_k": 2}
+        plain = client.post("/v1/skills/algos/recommend", headers=headers, json=query)
+        assert plain.status_code == 200, plain.text
+        assert "evaluations" not in plain.json()["data"]
+        plain_data = plain.json()["data"]
+
+        enriched = client.post("/v1/skills/algos/recommend", headers=headers, json=query | {"include_evaluation": True})
+        assert enriched.status_code == 200, enriched.text
+        enriched_data = enriched.json()["data"]
+        assert [item["version_id"] for item in enriched_data["skills"]] == [
+            item["version_id"] for item in plain_data["skills"]
+        ]
+        assert enriched_data["scores"] == plain_data["scores"]
+        assert {item["skill_version_id"] for item in enriched_data["evaluations"]} == set(versions)
+        assert all(item["status"] == "completed" for item in enriched_data["evaluations"])
+    assert judge.calls == 2
+
+
+async def test_recommend_keeps_results_when_evaluation_query_fails(management_service, monkeypatch):
+    """A stored-evaluation read failure degrades to an empty list without failing Recommend."""
+    _, judge = install_offline_analyze(management_service)
+
+    def resolver(token):
+        return SkillHttpIdentity(project_id="project", scopes={"skill:write"}, actor_id="account-1")
+
+    headers = {"Authorization": "Bearer admin"}
+    with TestClient(create_app(management_service, identity_from_bearer=resolver)) as client:
+        versions, snapshot = _publish_recommend_graph(client, headers)
+        for version_id in versions:
+            analyzed = client.post(
+                "/v1/skills/algos/analyze/skill", headers=headers, json={"skill_version_id": version_id}
+            )
+            assert analyzed.status_code == 200, analyzed.text
+
+        async def broken_query(request):
+            raise RuntimeError("evaluation storage offline")
+
+        monkeypatch.setattr(management_service._analyze_pipeline, "query", broken_query)
+        response = client.post(
+            "/v1/skills/algos/recommend",
+            headers=headers,
+            json={
+                "graph_ref": "collection",
+                "graph_version_id": snapshot,
+                "query": "Parse CSV records",
+                "top_k": 2,
+                "include_evaluation": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["evaluations"] == []
+    assert judge.calls == 2

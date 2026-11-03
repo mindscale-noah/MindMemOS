@@ -9,6 +9,7 @@ from .base import Persistence
 from .config import SkillPersistenceConfig
 from .constants import OPTIONAL_SCOPE_FIELDS, REQUIRED_SCOPE_FIELDS
 from .db_services.audit.service import AuditDataService
+from .db_services.evaluations.service import EvaluationDataService
 from .db_services.graphs.service import GraphDataService
 from .db_services.skills.service import SkillDataService
 from .db_services.tasks.service import TaskDataService
@@ -132,6 +133,12 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
     def tasks(self) -> TaskDataService:
         """Return project task operations without worker scheduling capabilities."""
         return self._session().tasks
+
+    @property
+    def evaluations(self) -> EvaluationDataService:
+        """Return independent judge result operations for the active project scope."""
+
+        return self._session().evaluations
 
     @property
     def audit(self) -> AuditDataService | None:

@@ -7,6 +7,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    FiniteFloat,
     JsonValue,
     SecretStr,
     StringConstraints,
@@ -22,7 +23,7 @@ from mindmemos_skill.skill.typing import SkillSnapshot, parse_skill_header
 
 from ..envs.config import EnvironmentConfig
 from ..envs.data.typing import DataSample, SplitManifest
-from ..persistence import SkillRecord, SkillVersionRecord
+from ..persistence import EvaluationRecord, SkillRecord, SkillVersionRecord
 from ..persistence.db_services.graphs.typing import GraphNodeType
 
 Nonempty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -875,6 +876,62 @@ class OrganizeResult(BaseModel):
     """Exact versions of all members in the resulting graph."""
 
 
+class SkillAnalyzeRequest(RequestAuth):
+    """Run or reuse static analysis for one exact stored Skill version."""
+
+    skill_version_id: Nonempty
+    """Exact version belonging to the authorized project."""
+
+    request_id: Nonempty | None = None
+    """Optional trace identity excluded from the reusable result key."""
+
+    force_refresh: bool = Field(default=False, strict=True)
+    """Skip a completed cache hit and execute the configured analyzer again."""
+
+
+class TrajectoryAnalyzeRequest(RequestAuth):
+    """Run or reuse analysis for one exact stored trajectory."""
+
+    trajectory_id: Nonempty
+    """Exact physical attempt belonging to the authorized project."""
+
+    request_id: Nonempty | None = None
+    """Optional trace identity excluded from the reusable result key."""
+
+    attribute: bool | None = None
+    """Optional per-request override for failure attribution."""
+
+    verifier_score: FiniteFloat | None = None
+    """Optional finite verifier score that overrides the stored reward."""
+
+    force_refresh: bool = Field(default=False, strict=True)
+    """Skip a completed cache hit and execute the configured analyzer again."""
+
+
+class EvaluationQueryRequest(RequestAuth):
+    """Read completed evaluations for exact Skill versions."""
+
+    skill_version_ids: list[Nonempty] = Field(min_length=1)
+    """Exact versions returned by the caller or a preceding recommendation."""
+
+    judge_types: list[Literal["static_skill", "trajectory"]] | None = None
+    """Optional analysis families to include."""
+
+    limit: int = Field(default=200, ge=1, le=1000, strict=True)
+    """Maximum number of evaluation rows returned."""
+
+
+class EvaluationQueryResult(BaseModel):
+    """Completed evaluation rows in requested version order."""
+
+    items: list[EvaluationRecord]
+    """Stored results with stable version, judge type, and recency ordering."""
+
+
+class RecommendationEvaluation(EvaluationRecord):
+    """Public evaluation projection attached to recommended versions."""
+
+
 class RecommendRequest(RequestAuth):
     """Retrieve Skills from one pinned graph using a public instruction."""
 
@@ -895,6 +952,9 @@ class RecommendRequest(RequestAuth):
 
     include_scenes: bool = Field(default=False, strict=True)
     """Vector-only option allowing Scene nodes to contribute owner matches."""
+
+    include_evaluation: bool = Field(default=False, strict=True)
+    """Opt in to completed evaluation rows attached after retrieval."""
 
     @model_validator(mode="after")
     def validate_strategy(self):
@@ -971,6 +1031,9 @@ class RecommendResult(BaseModel):
     include_scenes: bool = False
     """Whether vector retrieval searched Scene nodes."""
 
+    evaluations: list[RecommendationEvaluation] | None = None
+    """Optional completed evaluations in recommendation version order."""
+
     @model_validator(mode="after")
     def validate_scores(self):
         """Keep score types, version identities, and result order consistent."""
@@ -985,6 +1048,12 @@ class RecommendResult(BaseModel):
             raise ValueError("Scores must match selected versions in order")
         if len({skill.version_id for skill in self.skills}) != len(self.skills):
             raise ValueError("Recommended versions must be unique")
+        selected = {skill.version_id for skill in self.skills}
+        if self.evaluations is not None:
+            if any(item.skill_version_id not in selected for item in self.evaluations):
+                raise ValueError("Evaluations must reference recommended versions")
+            if len({item.evaluation_id for item in self.evaluations}) != len(self.evaluations):
+                raise ValueError("Recommendation evaluations must be unique")
         return self
 
 

@@ -137,6 +137,11 @@ async def _assemble_service(
             if config.manage_pipeline is not None and "manage" not in disabled
             else None
         )
+        analyze = (
+            build_pipeline("analyze_pipeline", config.analyze_pipeline)
+            if config.analyze_pipeline is not None and "analyze" not in disabled
+            else None
+        )
         training = {
             name: build_pipeline(f"training_pipelines.{name}", spec)
             for name, spec in config.training_pipelines.items()
@@ -151,6 +156,7 @@ async def _assemble_service(
             backends=backends,
             repository=repository,
             manage_pipeline=manage,
+            analyze_pipeline=analyze,
             training_pipelines=training,
             evolution_pipelines=evolution,
             observability=observability,
