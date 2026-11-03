@@ -85,7 +85,7 @@ class FastAPIConfig(BaseModel):
     """Evolution pipeline names permitted through the HTTP endpoint."""
 
 
-ServiceName = Literal["training",]
+ServiceName = Literal["training", "analyze"]
 
 
 class ImplementationConfig(BaseModel):
@@ -223,6 +223,9 @@ class ServiceConfig(BaseModel):
 
     manage_pipeline: ImplementationConfig | None = None
     """Optional Skill Set query, graph publication, and recommendation definition."""
+
+    analyze_pipeline: ImplementationConfig | None = None
+    """Optional cache-first Skill and trajectory analysis definition."""
 
     training_pipelines: dict[Name, ImplementationConfig] = Field(default_factory=dict)
     """Request names mapped to training algorithms."""

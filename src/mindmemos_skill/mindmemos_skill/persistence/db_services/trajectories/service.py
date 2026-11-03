@@ -391,6 +391,7 @@ class TrajectoryDataService:
                 env_ref="unknown",
                 skill_bindings=[
                     {
+                        "name": version.name,
                         "skill_id": version.skill_id,
                         "version_id": version.version_id,
                         "content_hash": version.content_hash,

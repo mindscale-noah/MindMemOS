@@ -4,8 +4,6 @@ from copy import copy
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
-from mindmemos_sdk.skills.files import resolve_skill_export_directory
-
 from .io import export_skill, read_skill
 from .typing import SkillContent, SkillSnapshot
 
@@ -137,6 +135,8 @@ class Skill:
         Returns:
             Absolute path of the named Skill child directory.
         """
+        from mindmemos_sdk.skills.files import resolve_skill_export_directory
+
         return resolve_skill_export_directory(
             self._source.content,
             directory,
