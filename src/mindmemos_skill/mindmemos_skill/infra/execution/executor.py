@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import BinaryIO
 
 from .config import ExecutionConfig
 from .constants import PATH_ENV, PYTHON_IO_ENCODING_ENV, PYTHON_UNBUFFERED_ENV
@@ -67,7 +68,12 @@ async def _terminate(process: asyncio.subprocess.Process) -> None:
 
 
 async def execute(
-    command: list[str], workspace: Path, config: ExecutionConfig, *, input_text: str | None = None
+    command: list[str],
+    workspace: Path,
+    config: ExecutionConfig,
+    *,
+    input_text: str | None = None,
+    output: BinaryIO | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute locally with persistent workspace files and the chosen Python.
 
@@ -76,6 +82,7 @@ async def execute(
         workspace: Current directory for the subprocess, not an OS sandbox.
         config: Python launcher, shell, and timeout settings.
         input_text: Optional UTF-8 content supplied on stdin.
+        output: Optional caller-owned stdout stream; None captures stdout as before.
 
     Returns:
         Captured UTF-8 stdout, stderr, and exit status.
@@ -102,7 +109,7 @@ async def execute(
             cwd=workspace.resolve(),
             env=env,
             stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
+            stdout=output if output is not None else subprocess.PIPE,
             stderr=subprocess.PIPE,
             **options,
         )
@@ -120,6 +127,6 @@ async def execute(
     return subprocess.CompletedProcess(
         invocation,
         process.returncode,
-        stdout.decode("utf-8", errors="replace"),
+        (stdout or b"").decode("utf-8", errors="replace"),
         stderr.decode("utf-8", errors="replace"),
     )

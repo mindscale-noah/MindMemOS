@@ -39,14 +39,18 @@ from ..pipelines.builtin_pipelines.training.training import training_run_id
 from ..skill.typing import DiffResult
 from .base import MindMemOSSkill
 from .typing import (
+    EVOLUTION_REQUEST_ADAPTER,
     ActiveRequest,
     AddGraphMembersRequest,
     AlgoSkillEvolveResult,
+    CollectionEvolutionRequest,
     CommitFromLocalRequest,
     CommitRequest,
     DiffRequest,
     EvaluationQueryRequest,
     EvaluationQueryResult,
+    EvolutionRequest,
+    EvolutionResult,
     ExportRequest,
     HistoryRequest,
     ListRequest,
@@ -383,15 +387,24 @@ class SkillService(MindMemOSSkill):
 
     @_service_call
     async def submit_evolution(
-        self, project_id: str | None, version_id: str, *, pipeline: str | None = None, auto_accept: bool = True
+        self,
+        project_id: str | None,
+        version_id: str | list[str],
+        *,
+        pipeline: str | None = None,
+        auto_accept: bool = True,
+        editable_skills: list[str] | None = None,
+        allow_create_skills: bool = True,
     ) -> TaskSnapshot:
-        """Validate one owned baseline and queue its configured evolution pipeline.
+        """Validate owned input versions and queue their configured evolution pipeline.
 
         Args:
             project_id: Authorized project or the configured default project.
-            version_id: Exact baseline version identity.
+            version_id: One exact baseline version or an ordered collection of exact versions.
             pipeline: Configured evolution pipeline name; omission requires one pipeline.
             auto_accept: Whether to select the evolved version as active.
+            editable_skills: Editable collection member IDs; None allows all input members.
+            allow_create_skills: Whether collection evolution may create independent Skills.
 
         Returns:
             Project-owned task state.
@@ -410,13 +423,24 @@ class SkillService(MindMemOSSkill):
         pipeline_name = pipeline or next(iter(self._evolution_pipelines))
         project_id = self._project_id(project_id)
 
-        async def prepare() -> SkillPipelineRequest:
-            """Resolve the exact baseline within the authorized storage session."""
+        async def prepare() -> EvolutionRequest:
+            """Resolve supported inputs within the authorized storage session."""
+            if isinstance(version_id, list) or editable_skills is not None or not allow_create_skills:
+                request = CollectionEvolutionRequest(
+                    project_id=project_id,
+                    pipeline=pipeline_name,
+                    skill_version_ids=version_id if isinstance(version_id, list) else [version_id],
+                    editable_skills=editable_skills,
+                    allow_create_skills=allow_create_skills,
+                    auto_accept=auto_accept,
+                    run_id=generate_id("evolve_"),
+                )
+                return await selected_pipeline.prepare_request(request)
             try:
                 version = await self._persistence.skills.get(version_id)
             except SkillNotFoundError as exc:
                 raise SkillVersionNotFoundError("Skill version not found in this project") from exc
-            return SkillPipelineRequest(
+            request = SkillPipelineRequest(
                 pipeline=pipeline_name,
                 run_id=generate_id("evolve_"),
                 project_id=project_id,
@@ -424,6 +448,7 @@ class SkillService(MindMemOSSkill):
                 base_version_id=version.version_id,
                 auto_accept=auto_accept,
             )
+            return await selected_pipeline.prepare_request(request)
 
         request = await self._execute(project_id, prepare)
         spec = TaskSpec(
@@ -491,7 +516,7 @@ class SkillService(MindMemOSSkill):
             ):
                 raise ValueError("Training configuration changed after task submission")
         elif spec.kind == "skill.evolve":
-            request = SkillPipelineRequest.model_validate(spec.payload["request"])
+            request = EVOLUTION_REQUEST_ADAPTER.validate_python(spec.payload["request"])
         else:
             raise ValueError("Unknown Skill task kind")
         if request.project_id != spec.project_id:
@@ -1085,7 +1110,7 @@ class SkillService(MindMemOSSkill):
         return await self._execute(request.project_id, self.repository.delete_skill, request)
 
     @_service_call
-    async def run_evolution(self, request: SkillPipelineRequest | None = None) -> AlgoSkillEvolveResult:
+    async def run_evolution(self, request: EvolutionRequest | None = None) -> EvolutionResult:
         """Run the selected evolution pipeline and return its result.
 
         Args:
@@ -1102,15 +1127,14 @@ class SkillService(MindMemOSSkill):
             raise NotImplementedError("Automatic Skill evolution is not implemented")
         if request is None:
             raise ValueError("An evolution request is required")
-        request = SkillPipelineRequest.model_validate(request)
+        request = EVOLUTION_REQUEST_ADAPTER.validate_python(request)
         scoped = request.model_copy(update={"project_id": self._project_id(request.project_id)})
         pipeline = _select_pipeline(self._evolution_pipelines, request.pipeline)
         return await self._execute(scoped.project_id, self._run_evolution, scoped, pipeline=pipeline)
 
-    async def _run_evolution(
-        self, request: SkillPipelineRequest, *, pipeline: EvolutionPipeline
-    ) -> AlgoSkillEvolveResult:
+    async def _run_evolution(self, request: EvolutionRequest, *, pipeline: EvolutionPipeline) -> EvolutionResult:
         """Record direct and worker evolution attempts through the shared audit sink."""
+        request = await pipeline.prepare_request(request)
         if self._persistence is None:
             return await pipeline.evolve(request)
         request = request.model_copy(update={"run_id": request.run_id or generate_id("evolve_")})
@@ -1119,6 +1143,8 @@ class SkillService(MindMemOSSkill):
         )
         if previous is not None:
             base_version_id = previous.base_version_id
+        elif isinstance(request, CollectionEvolutionRequest):
+            base_version_id = request.skill_version_ids[0]
         else:
             owner = await self._persistence.skills.resolve_family(request.skill_ref)
             base = await self._persistence.skills.version(owner, request.base_version_id)
@@ -1131,7 +1157,18 @@ class SkillService(MindMemOSSkill):
             operation="evolve",
         ) as audit:
             result = await pipeline.evolve(request)
-            audit.published_version_id = result.version_id
+            audit.published_version_id = (
+                result.version_id
+                if isinstance(result, AlgoSkillEvolveResult)
+                else next(
+                    (
+                        member.version_id
+                        for member in result.members
+                        if member.base_version_id == base_version_id and member.action == "updated"
+                    ),
+                    None,
+                )
+            )
             return result
 
     @_service_call

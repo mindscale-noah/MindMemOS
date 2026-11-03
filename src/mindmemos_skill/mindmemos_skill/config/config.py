@@ -84,6 +84,19 @@ class FastAPIConfig(BaseModel):
     evolution_pipelines: set[Name] = Field(default_factory=set)
     """Evolution pipeline names permitted through the HTTP endpoint."""
 
+    default_evolution_pipeline: Name | None = None
+    """Pipeline used when HTTP requests omit pipeline; None requires a sole allowed pipeline."""
+
+    @model_validator(mode="after")
+    def validate_evolution_default(self) -> "FastAPIConfig":
+        """Require the HTTP default to belong to the permitted evolution pipelines."""
+        if (
+            self.default_evolution_pipeline is not None
+            and self.default_evolution_pipeline not in self.evolution_pipelines
+        ):
+            raise ValueError("default_evolution_pipeline must be permitted by evolution_pipelines")
+        return self
+
 
 ServiceName = Literal["training", "analyze"]
 

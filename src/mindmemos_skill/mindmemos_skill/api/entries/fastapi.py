@@ -1017,17 +1017,32 @@ def create_app(
         )
         return envelope(request, data)
 
+    def evolution_pipeline(requested: str | None) -> str:
+        """Resolve an explicitly permitted pipeline or the configured HTTP default."""
+        selected = requested or policy.default_evolution_pipeline
+        if selected is None:
+            if len(policy.evolution_pipelines) != 1:
+                raise SkillHttpError(422, "pipeline_unavailable", "An evolution pipeline must be selected")
+            selected = next(iter(policy.evolution_pipelines))
+        if selected not in policy.evolution_pipelines:
+            raise SkillHttpError(422, "pipeline_unavailable", "The evolution pipeline is not permitted")
+        return selected
+
     @app.post("/v1/skills/algos/evolve", status_code=202)
     async def evolve(
         request: Request, body: EvolveHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
     ):
-        """Accept one evolution task for the authorized project."""
-        if len(policy.evolution_pipelines) != 1:
-            raise SkillHttpError(422, "pipeline_unavailable", "A single Skill evolution pipeline is required")
-        pipeline = next(iter(policy.evolution_pipelines))
+        """Accept evolution of one exact version or an authorized version collection."""
+        pipeline = evolution_pipeline(body.pipeline)
+        version_id = body.skill_version_ids if body.skill_version_ids is not None else body.skill_version_id
+        options = {}
+        if body.editable_skills is not None:
+            options["editable_skills"] = body.editable_skills
+        if not body.allow_create_skills:
+            options["allow_create_skills"] = False
         try:
             snapshot = await service.submit_evolution(
-                identity.project_id, body.skill_version_id, pipeline=pipeline, auto_accept=body.auto_accept
+                identity.project_id, version_id, pipeline=pipeline, auto_accept=body.auto_accept, **options
             )
         except (NotImplementedError, ValueError) as exc:
             raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc

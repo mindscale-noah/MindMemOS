@@ -26,6 +26,8 @@ from .typing import (
     DiffRequest,
     EvaluationQueryRequest,
     EvaluationQueryResult,
+    EvolutionRequest,
+    EvolutionResult,
     ExportRequest,
     HistoryRequest,
     ListRequest,
@@ -46,7 +48,6 @@ from .typing import (
     SkillDetail,
     SkillPage,
     SkillPageRequest,
-    SkillPipelineRequest,
     SkillRequest,
     TrainingRequest,
     TrajectoryAnalyzeRequest,
@@ -270,15 +271,24 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     async def submit_evolution(
-        self, project_id: str | None, version_id: str, *, pipeline: str | None = None, auto_accept: bool = True
+        self,
+        project_id: str | None,
+        version_id: str | list[str],
+        *,
+        pipeline: str | None = None,
+        auto_accept: bool = True,
+        editable_skills: list[str] | None = None,
+        allow_create_skills: bool = True,
     ) -> TaskSnapshot:
-        """Submit evolution of one exact stored Skill version.
+        """Submit evolution from exact stored Skill versions.
 
         Args:
             project_id: Authorized project or local bound scope.
-            version_id: Exact baseline version identity.
+            version_id: One exact version identity or an ordered collection of exact versions.
             pipeline: Configured evolution pipeline name; omission requires one pipeline.
             auto_accept: Whether to select the evolved version as active.
+            editable_skills: Editable input member IDs; None permits all input members.
+            allow_create_skills: Whether collection evolution may create independent Skills.
 
         Returns:
             Accepted task state.
@@ -531,7 +541,7 @@ class MindMemOSSkill(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def run_evolution(self, request: SkillPipelineRequest | None = None) -> AlgoSkillEvolveResult:
+    async def run_evolution(self, request: EvolutionRequest | None = None) -> EvolutionResult:
         """Run the configured evolution pipeline and return its result.
 
         Args:

@@ -325,10 +325,10 @@ class AsyncSkillClient:
         return await self._post(SkillRoute.RECOMMEND, request)
 
     async def evolve(self, request: EvolveRequest) -> SkillData:
-        """Request evolution from an exact version.
+        """Submit one version or a collection through the evolution endpoint.
 
         Args:
-            request: Baseline version identity.
+            request: Exact input versions, permissions and activation choice.
 
         Returns:
             Accepted task data when the pipeline is available.

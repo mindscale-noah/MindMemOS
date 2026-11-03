@@ -59,7 +59,7 @@ class CodexAgent(Agent[CodexConfig]):
             command.extend(["--config", f"developer_instructions={json.dumps(system)}"])
         command.extend([*self.config.extra_args, "-"])
         stream = parse_json_lines(
-            (await run_cli(command, workspace, self.config, environment(self.config, CODEX_API_KEY_ENV), user)),
+            (await self._run_cli(command, workspace, environment(self.config, CODEX_API_KEY_ENV), user)),
             cli_name="Codex",
         )
         terminal = next(
@@ -80,3 +80,7 @@ class CodexAgent(Agent[CodexConfig]):
             trajectory=[{"role": "developer", "content": system}, {"role": "user", "content": user}, *stream],
             usage=token_usage(terminal.get("usage")),
         )
+
+    async def _run_cli(self, command: list[str], workspace: Path, overrides: dict[str, str], prompt: str) -> str:
+        """Execute the prepared command; subclasses may specialize invocation options."""
+        return await run_cli(command, workspace, self.config, overrides, prompt)

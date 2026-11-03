@@ -5,11 +5,10 @@
 # Within each config: connections/behavior/concurrency first, advanced tuning/audit last.
 # Fill api_key and base_url in each enabled service.agents preset before model calls.
 # Replace the embedding model, endpoint and dimensions with values from your provider.
-# Each pipeline block is independent: comment out the whole block when not needed.
-# Keep training_pipelines: {} / evolution_pipelines: {} if removing all their children;
-# alternatively comment out the parent mapping as well. A bare key means null and is invalid.
-# When removing simple evolution, also set fastapi.evolution_pipelines: [].
-# Environment, tasks, split and initial Skill version are per-request inputs, not service config.
+# Each pipeline block is independent; remove blocks that are not needed.
+# Keep empty training_pipelines and evolution_pipelines as {}; bare keys are invalid.
+# Configure allowed HTTP evolution pipelines and an explicit default when enabling several.
+# Training environment, tasks, split and initial Skill version are per-request inputs.
 # SpreadsheetBench text-action requires soffice on the system PATH.
 # Its managed Python helper calls LibreOffice directly; no UNO or executable-path config is needed.
 # Optional implementation alternatives are shown at the end; do not enable both alternatives.
@@ -98,6 +97,32 @@ service:
         base_url: null
         timeout_s: 180.0
         max_retries: 3
+
+    offline_evolution_codex:
+      class_name: codex
+      config:
+        class_name: codex
+        api_key: null
+        base_url: null
+        model: gpt-5.4-mini
+        cli_path: codex
+        reasoning_effort: medium
+        timeout_s: 3600.0
+        extra_args: []
+
+    offline_evolution_claude:
+      class_name: claude
+      config:
+        class_name: claude
+        api_key: null
+        base_url: null
+        model: claude-opus-4-6
+        cli_path: claude
+        reasoning_effort: null
+        max_turns: null
+        max_completion_tokens: null
+        timeout_s: 3600.0
+        extra_args: []
 
     skill_manage_deepseek_v4_flash:
       class_name: openai_chat
@@ -308,6 +333,21 @@ service:
             prompt_version: treeskill-v1
         evaluation_concurrency: 16
   evolution_pipelines:
+    offline:
+      class_name: offline_evolution
+      config:
+        evolver:
+          class_name: offline_evolution
+          config:
+            agent: offline_evolution_claude
+            retries: 1
+            script_timeout_s: 900.0
+            max_invalid_share: 0.1
+            python: python
+        work_dir: ./output/offline_evolution
+        traj_collect:
+          trajectory_limit: null
+          max_page_size: 200
     simple:
       class_name: simple_evolution
       config:
@@ -368,9 +408,11 @@ fastapi:
     gateway_jwt_issuer: mindmemos-gateway
     gateway_jwt_audience: memory-data-plane
 
-  # Allow HTTP evolution only for these configured names; use [] after removing simple.
+  # Permit configured pipelines while preserving the original single-Skill default.
   evolution_pipelines:
   - simple
+  - offline
+  default_evolution_pipeline: simple
 
 # Alternative database (replace persistence.database; also supported by observability.backend):
 # class_name: sqlite

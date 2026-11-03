@@ -43,7 +43,8 @@ def test_deployment_example_covers_pipeline_fields_and_nondefault_agent_options(
     assert {spec["config"]["evolver"]["class_name"] for spec in service["evolution_pipelines"].values()} == {
         name
         for name, implementation in algorithms.items()
-        if issubclass(implementation, SkillEvolver) and ".demos." not in implementation.__module__
+        if (issubclass(implementation, SkillEvolver) or name == "offline_evolution")
+        and ".demos." not in implementation.__module__
     }
 
     def assert_fields_explicit(actual, complete, path):

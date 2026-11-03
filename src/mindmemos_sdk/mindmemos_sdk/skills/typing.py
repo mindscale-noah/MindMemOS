@@ -385,13 +385,37 @@ class RemoveGraphMembersRequest(GraphMembersRequest):
 
 
 class EvolveRequest(SkillRequestBody):
-    """Request evolution from one exact stored version."""
+    """Submit exact Skill versions to one configured evolution pipeline."""
 
-    skill_version_id: str
-    """Exact baseline version identity."""
+    skill_version_id: str | None = None
+    """Single baseline version; exclusive with skill_version_ids."""
 
     auto_accept: bool = True
     """Whether to activate the published candidate version."""
+
+    pipeline: str | None = Field(default=None, min_length=1)
+    """Allowed server pipeline name; omission uses the configured HTTP default."""
+
+    skill_version_ids: list[str] | None = Field(default=None, min_length=1)
+    """Collection of exact readable versions; exclusive with skill_version_id."""
+
+    editable_skills: list[str] | None = None
+    """Input Skill IDs whose contents may change; None permits all, [] permits none."""
+
+    allow_create_skills: bool = True
+    """Whether independent new Skill candidates may be created."""
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        """Validate the selection shape and newly supported collection options."""
+        if (self.skill_version_id is None) == (self.skill_version_ids is None):
+            raise ValueError("Provide exactly one of skill_version_id or skill_version_ids")
+        if self.pipeline is not None and not self.pipeline.strip():
+            raise ValueError("Evolution pipeline must not be blank")
+        for values in (self.skill_version_ids, self.editable_skills):
+            if values is not None and (any(not value.strip() for value in values) or len(values) != len(set(values))):
+                raise ValueError("Evolution identities must be nonempty and unique")
+        return self
 
 
 class TaskShowRequest(SkillRequestBody):
