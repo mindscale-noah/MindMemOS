@@ -20,6 +20,10 @@ def add_skill_args(parser: argparse.ArgumentParser) -> None:
         parser: Skill subparser owned by the evaluation CLI.
     """
     commands = parser.add_subparsers(dest="skill_command", required=True)
+    evolve = commands.add_parser("evolve", help="Collect initial-Skill evidence, evolve, and retest matched cases.")
+    evolve.add_argument("--config", type=Path, default=ROOT / "config/mindmemos_eval/skill_evolve/dev.yaml")
+    evolve.add_argument("--check", action="store_true", help="Validate selected tasks and Skill sources without model calls.")
+    evolve.add_argument("--output-dir", type=Path)
     treeskill = commands.add_parser(
         "treeskill", help="Run the reference TreeSkill SpreadsheetBench protocol through the UI service."
     )
@@ -71,6 +75,22 @@ def run_skill_benchmark(args: argparse.Namespace) -> int:
         Zero for complete results; one for preflight, runtime, or incomplete outcomes.
     """
     try:
+        if args.skill_command == "evolve":
+            from .config import SkillEvolveConfig
+            from .evolve import prepare
+            from .evolve import run as run_evolve
+
+            payload = yaml.safe_load(args.config.expanduser().read_text(encoding="utf-8"))
+            if args.output_dir is not None:
+                payload["output_dir"] = args.output_dir
+            config = SkillEvolveConfig.model_validate(payload)
+            if args.check:
+                _, samples, skills = prepare(config)
+                print(f"Prepared {len(samples)} cases; {sum(len(items) for items in skills.values())} initial Skills.", flush=True)
+                return 0
+            summary = asyncio.run(run_evolve(config))
+            print(f"Report: {summary['output_dir']}/report.md", flush=True)
+            return int(summary["errors"] > 0)
         if args.skill_command == "treeskill":
             from .treeskill import prepare
             from .treeskill import run as run_treeskill

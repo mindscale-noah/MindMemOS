@@ -24,6 +24,11 @@ def _case(task_id: str, result: RolloutResult, path: Path) -> CaseResult:
         "output_tokens": result.usage.output_tokens,
         "total_tokens": result.usage.total_tokens,
     }
+    extras = result.usage.model_extra or {}
+    for key in ("cache_read_input_tokens", "cost_usd"):
+        value = extras.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            usage[key] = value
     return CaseResult(
         task_id=task_id,
         score=result.reward.score,
