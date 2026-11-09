@@ -56,8 +56,8 @@ class CaseResult(BaseModel):
     duration_s: float | None = Field(default=None, ge=0)
     """Elapsed task time in seconds, including failed attempts when measured."""
 
-    usage: dict[str, int] | None = None
-    """Reported input/output/total token counts; None when unavailable."""
+    usage: dict[str, int | float] | None = None
+    """Reported token counts and optional numeric cost in USD; None when unavailable."""
 
     started_at: AwareDatetime | None = None
     """Recorded rollout start time; None when execution did not publish timing."""

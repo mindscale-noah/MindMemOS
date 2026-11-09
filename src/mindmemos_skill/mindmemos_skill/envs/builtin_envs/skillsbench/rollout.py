@@ -100,6 +100,7 @@ class SkillsBenchEnvironment(Environment[SkillsBenchConfig]):
             "n_concurrent_trials": 1,
             "quiet": True,
             "retry": {"max_retries": 0},
+            "agent_setup_timeout_multiplier": 5,
             "environment": {"type": "docker", "delete": True},
             "agents": [agent],
             "tasks": [{"path": str(prepared)}],

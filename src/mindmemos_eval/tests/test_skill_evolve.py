@@ -1,0 +1,393 @@
+"""Exercise matched evolution evaluation without model calls."""
+
+from contextlib import asynccontextmanager
+
+import pytest
+from mindmemos_eval.skills import evolve
+from mindmemos_eval.skills.config import SkillEvolveConfig
+from mindmemos_skill.common.json import write_json
+from mindmemos_skill.envs import Environment
+from mindmemos_skill.envs.typing import Reward, RolloutResult, Usage
+from pydantic import BaseModel
+
+
+class FixtureConfig(BaseModel):
+    """Configure deterministic evaluation fixtures."""
+
+
+@Environment.register("evolve_fixture")
+class FixtureEnvironment(Environment[FixtureConfig]):
+    """Produce deterministic successful, timed-out, and retryable results."""
+
+    config_type = FixtureConfig
+    """Fixture configuration accepted by the registry."""
+
+    calls = {}
+    """Execution counts keyed by task identity."""
+
+    async def _run(self, *, task, reward_data, skills, workspace):
+        self.calls[task.id] = self.calls.get(task.id, 0) + 1
+        if task.id == "timeout":
+            raise RuntimeError("Harbor AgentTimeoutError: timed out")
+        if task.id == "setup":
+            raise RuntimeError("Harbor AgentSetupTimeoutError: timed out")
+        if task.id == "network" and self.calls[task.id] == 1:
+            raise RuntimeError("API error: connection closed")
+        score = float(task.id == "perfect" or any("Improved" in skill.content for skill in skills))
+        return RolloutResult(
+            output="answer",
+            trajectory=[{"role": "user", "content": task.instruction}, {"role": "assistant", "content": "answer"}],
+            reward=Reward(score=score, success=score == 1, detail="fixture"),
+            usage=Usage(input_tokens=10, output_tokens=2, total_tokens=12),
+        )
+
+
+class FakeService:
+    """Track exact-source registrations and publication actions."""
+
+    def __init__(self, mode):
+        self.mode = mode
+        self.skills = {}
+        self.reports = []
+
+    async def register(self, skill, alias):
+        self.skills[alias] = skill
+        return dict(skill_id=alias, skill_version_id=alias)
+
+    async def report(self, version_id, messages, session_id):
+        self.reports.append((version_id, messages))
+
+    async def evolve(self, registrations):
+        if self.mode == "fail":
+            raise RuntimeError("fixture evolution failure")
+        return [
+            dict(
+                skill_id=item["skill_id"],
+                version_id="new",
+                base_version_id=item["skill_version_id"],
+                action="unchanged" if self.mode == "unchanged" else "updated",
+                snapshot=(
+                    self.skills[item["skill_id"]]
+                    if self.mode == "unchanged"
+                    else self.skills[item["skill_id"]].with_content(
+                        self.skills[item["skill_id"]].content + "\nImproved\n"
+                    )
+                )
+                .snapshot()
+                .model_dump(mode="json"),
+            )
+            for item in registrations
+        ]
+
+
+@pytest.fixture
+def setup_run(tmp_path, monkeypatch):
+    FixtureEnvironment.calls = {}
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: fixture\ndescription: Fixture skill\n---\nInitial\n")
+    samples = tmp_path / "samples.json"
+    write_json(
+        samples,
+        [
+            {"task": {"id": key, "instruction": "Answer"}, "reward_data": {}}
+            for key in ("perfect", "zero", "timeout", "setup", "network")
+        ],
+    )
+    service = FakeService("updated")
+
+    @asynccontextmanager
+    async def connection(config, directory, project_id):
+        yield service
+
+    monkeypatch.setattr(evolve, "evolution_connection", connection)
+    config = SkillEvolveConfig(
+        environment={"class_name": "evolve_fixture"},
+        samples_file=samples,
+        skills=[skill],
+        repeats=1,
+        output_dir=tmp_path / "run",
+    )
+    return config, service
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_and_resume(setup_run):
+    config, service = setup_run
+    result = await evolve.run(config)
+    rows = {row["case"]: row for row in result["cases"]}
+    assert rows["perfect"]["status"] == "perfect"
+    assert rows["timeout"]["collect_stats"]["mean_score"] == 0
+    assert rows["setup"]["status"] == "excluded"
+    assert rows["zero"]["test_stats"]["mean_score"] == 1
+    assert FixtureEnvironment.calls["network"] == 3
+    assert result["metrics"]["collect"]["mean_score"] == 0.25
+    assert result["metrics"]["test"]["mean_score"] == 0.75
+    assert len(service.reports) == 2
+    previous = dict(FixtureEnvironment.calls)
+    await evolve.run(config)
+    assert FixtureEnvironment.calls == previous
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["fail", "unchanged"])
+async def test_fallback_without_test_calls(setup_run, mode):
+    config, service = setup_run
+    config.cases = ["zero"]
+    service.mode = mode
+    result = await evolve.run(config)
+    assert result["cases"][0]["status"] == ("evolution_failed" if mode == "fail" else "unchanged")
+    assert FixtureEnvironment.calls["zero"] == 1
+    assert result["metrics"]["test"]["mean_score"] == 0
+
+
+def test_sanitize_and_error_categories():
+    original = [{"content": "x" * 450}]
+    assert evolve.sanitize_trajectory(original)[0]["content"] == "[omitted binary]"
+    assert original[0]["content"] == "x" * 450
+    assert evolve.classify_error("VerifierTimeoutError") == "timeout"
+    assert evolve.classify_error("AgentAuthenticationError") == "retryable"
+    assert evolve.classify_error("unexpected failure") == "error"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "InternalServerError: Error code: 503 - {'error': {'code': 'model_not_found'}}",
+        "RateLimitError: Error code: 429 - too many requests",
+        "upstream returned HTTP 502",
+        "API Error: 503 - service unavailable",
+        "status code: 503",
+        "HTTP status code: 503",
+        "response status code: 429",
+        "HTTP/1.1 503 Service Unavailable",
+        "HTTP 401 unauthorized",
+        "HTTP 403 forbidden",
+        "HTTP 408 request timeout",
+        "RuntimeError: Harbor NetworkConnectionError: Command failed (exit 28)",
+        "Harness exited with status 1: API Error: Connection closed mid-response.",
+        "所有分组均无可用渠道",
+    ],
+)
+def test_transient_errors_are_retryable(error):
+    assert evolve.classify_error(error) == "retryable"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "BadRequestError: Error code: 400 - invalid request",
+        "upstream returned HTTP 404",
+        "API Error: 400 - invalid request",
+        "API Error: 404 - not found",
+        "HTTP 400 authentication field is required",
+        "HTTP 404: API Error",
+        "HTTP 422 authentication field is required",
+        "status code: 400 connection reset",
+        "HTTP/1.1 404 Not Found",
+        "HTTP 503 wrapping API Error: 400 - invalid request",
+        "ValueError: missing connection string in task config",
+    ],
+)
+def test_request_errors_are_not_retried(error):
+    assert evolve.classify_error(error) == "error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("step", ["register", "report"])
+async def test_evolution_retry_resumes_failed_step(setup_run, tmp_path, step):
+    config, service = setup_run
+    config.cases = ["zero"]
+    other = tmp_path / "second"
+    other.mkdir()
+    (other / "SKILL.md").write_text("---\nname: second\ndescription: Second fixture\n---\nInitial\n")
+    config.skills.append(other)
+    calls = []
+    original = getattr(service, step)
+
+    async def flaky(*args):
+        calls.append(args)
+        # The second call fails once, after the first call's progress is saved.
+        if len(calls) == 2:
+            raise RuntimeError(f"{step} failure")
+        return await original(*args)
+
+    setattr(service, step, flaky)
+    result = await evolve.run(config)
+    assert result["cases"][0]["status"] == "evolved"
+    assert len(calls) == 3
+    assert len(service.skills) == 2
+    assert len(service.reports) == 2
+
+
+def test_missing_skillsbench_skills_directory(tmp_path, monkeypatch):
+    sample = type("Sample", (), {})()
+    sample.task = type("Task", (), {"id": "case"})()
+    sample.reward_data = type("Data", (), {"task_dir": tmp_path})()
+    monkeypatch.setattr(evolve, "_load_samples", lambda base, env: [sample])
+    monkeypatch.setattr(evolve.Environment, "build", lambda *args: None)
+    config = SkillEvolveConfig.model_construct(
+        environment=type("Env", (), {"class_name": "skillsbench", "config": {}})(),
+        cases=None,
+        cases_file=None,
+        exclude_cases=[],
+        case_skills={},
+        skills=[],
+        limit=None,
+    )
+    monkeypatch.setattr(evolve.EnvTestConfig, "model_validate", lambda payload: type("Base", (), {})())
+    monkeypatch.setattr(SkillEvolveConfig, "model_dump", lambda self, **kwargs: {})
+    with pytest.raises(ValueError, match="No initial Skills configured for case"):
+        evolve.prepare(config)
+
+
+@pytest.mark.asyncio
+async def test_multiple_skills_report_each_version(setup_run, tmp_path):
+    config, service = setup_run
+    config.cases = ["zero"]
+    other = tmp_path / "second"
+    other.mkdir()
+    (other / "SKILL.md").write_text("---\nname: second\ndescription: Second fixture\n---\nInitial\n")
+    config.skills.append(other)
+    result = await evolve.run(config)
+    assert len(service.reports) == 2
+    assert len(result["cases"][0]["members"]) == 2
+    assert all("score" not in message for _, messages in service.reports for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_exhausted_network_errors_are_not_scored(setup_run):
+    config, service = setup_run
+    config.cases = ["network"]
+    config.network_retries = 0
+    result = await evolve.run(config)
+    assert result["errors"] == 1
+    assert result["included_cases"] == 0
+    assert result["metrics"]["collect"]["mean_score"] is None
+    assert not service.reports
+
+
+@pytest.mark.asyncio
+async def test_simple_automatic_sample_size(setup_run, monkeypatch):
+    config, service = setup_run
+    config.cases = ["zero"]
+    config.pipeline = "simple"
+    observed = []
+
+    @asynccontextmanager
+    async def connection(settings, directory, project_id):
+        observed.append(settings.pipeline_overrides["traj_collect"]["sample_size"])
+        yield service
+
+    monkeypatch.setattr(evolve, "evolution_connection", connection)
+    await evolve.run(config)
+    assert observed == [1]
+    assert config.pipeline_overrides == {}
+
+
+@pytest.mark.asyncio
+async def test_simple_explicit_sample_size(setup_run, monkeypatch):
+    config, service = setup_run
+    config.cases = ["zero"]
+    config.pipeline = "simple"
+    config.pipeline_overrides = {"traj_collect": {"sample_size": 1}}
+
+    @asynccontextmanager
+    async def connection(settings, directory, project_id):
+        assert settings.pipeline_overrides["traj_collect"]["sample_size"] == 1
+        yield service
+
+    monkeypatch.setattr(evolve, "evolution_connection", connection)
+    await evolve.run(config)
+
+
+def test_optional_usage_preserves_cost_and_missing(tmp_path):
+    from mindmemos_eval.skills.evaluation import _case
+
+    result = RolloutResult(
+        output="answer",
+        trajectory=[],
+        reward=Reward(score=1, success=True, detail="ok"),
+        usage=Usage(input_tokens=10, output_tokens=2, total_tokens=12, cache_read_input_tokens=8, cost_usd=0.125),
+    )
+    case = _case("fixture", result, tmp_path)
+    assert case.usage["cost_usd"] == 0.125
+    assert case.usage["cache_read_input_tokens"] == 8
+    slots = [
+        {"status": "completed", "outcome": {"usage": case.usage}},
+        {"status": "timeout", "outcome": {"usage": None}},
+    ]
+    rows = [
+        {
+            "case": "fixture",
+            "status": "perfect",
+            "collect": slots,
+            "test": [],
+            "collect_stats": {"mean_score": 1, "accuracy": 1},
+            "test_stats": {"mean_score": 1, "accuracy": 1},
+        }
+    ]
+    from types import SimpleNamespace
+
+    metrics = evolve._summary(rows, SimpleNamespace(reference_file=None))["metrics"]["collect"]
+    assert metrics["reported_usage"]["cost_usd"] == 0.125
+    assert metrics["average_usage"]["input_tokens"] == 10
+    assert metrics["usage_field_missing"]["cost_usd"] == 1
+
+
+def test_progress_categories(capsys):
+    evolve._progress(
+        "collect", [{"status": status} for status in ["completed", "timeout", "retryable", "excluded"]], 5, reused=1
+    )
+    output = capsys.readouterr().out
+    assert "4/5 done" in output
+    assert "ok 1 | timeout->0 1 | errors 1 | excluded 1 | reused 1" in output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrency", [1, 2])
+async def test_case_concurrency_and_stage_barriers(setup_run, monkeypatch, concurrency):
+    import asyncio
+
+    config, service = setup_run
+    config.cases = ["zero", "network", "perfect"]
+    config.repeats = 2
+    config.concurrency = concurrency
+    original = evolve._slot
+    active = set()
+    maximum = {"collect": 0, "test": 0}
+    events = []
+
+    async def observed_slot(settings, env, sample, skills, directory):
+        phase = directory.parent.name
+        assert sample.task.id not in active
+        if phase == "test":
+            assert len([event for event in events if event == "evolve"]) == 2
+        active.add(sample.task.id)
+        maximum[phase] = max(maximum[phase], len(active))
+        try:
+            await asyncio.sleep(0.01)
+            return await original(settings, env, sample, skills, directory)
+        finally:
+            active.remove(sample.task.id)
+            events.append(phase)
+
+    original_evolve = service.evolve
+
+    async def observed_evolve(registrations):
+        assert not active
+        assert events.count("collect") == 6
+        assert events.count("test") == 0
+        events.append("evolve")
+        return await original_evolve(registrations)
+
+    monkeypatch.setattr(evolve, "_slot", observed_slot)
+    monkeypatch.setattr(service, "evolve", observed_evolve)
+    result = await evolve.run(config)
+    assert maximum == {"collect": concurrency, "test": concurrency}
+    assert [row["case"] for row in result["cases"]] == config.cases
+    assert result["cases"][2]["status"] == "perfect"
+    assert (config.output_dir / "network/collect/repeat-000/attempts/attempt-000").exists()
+    previous = dict(FixtureEnvironment.calls)
+    await evolve.run(config)
+    assert FixtureEnvironment.calls == previous

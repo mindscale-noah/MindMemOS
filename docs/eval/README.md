@@ -4,6 +4,23 @@ This guide explains how to run the three standard benchmarks (LoCoMo, LongMemEva
 
 ---
 
+## Skill evolution
+
+Run `mindmemos-eval skill evolve --config config/mindmemos_eval/skill_evolve/dev.yaml --check`
+to validate inputs, then omit `--check` to collect initial-Skill runs, evolve, export complete
+published members, and retest the same cases. See `dev.example.yaml` and the Chinese guide
+for configuration. The default connection uses isolated SQLite; SDK connections are optional.
+`concurrency` bounds concurrent cases during collection and retesting; repeats within each
+case stay sequential. All collection finishes before sequential evolution/export, and all
+evolution finishes before retesting. Evolution itself is never parallelized.
+Evolution retries cover registration, reporting, and evolution, resuming after saved steps.
+Execution retries apply only to network/API/authentication faults; retryable HTTP statuses
+are 401/403/408/429/5xx, so other 4xx request errors are not retried.
+Only collection and test execution tokens are counted. This matched-task protocol measures
+feedback-driven improvement, not held-out generalization. Use a user systemd unit for long runs.
+
+---
+
 ## TreeSkill: SpreadsheetBench text_action
 
 `mindmemos-eval skill treeskill` registers a Skill through the public HTTP SDK and submits

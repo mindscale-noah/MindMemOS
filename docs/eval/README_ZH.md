@@ -4,6 +4,42 @@
 
 ---
 
+## Skill 演进：采集 → 演进 → 发布 → 测试
+
+```bash
+.venv/bin/mindmemos-eval skill evolve --config config/mindmemos_eval/skill_evolve/dev.yaml --check
+.venv/bin/mindmemos-eval skill evolve --config config/mindmemos_eval/skill_evolve/dev.yaml
+```
+
+配置示例见 `config/mindmemos_eval/skill_evolve/dev.example.yaml`。本地 `dev.yaml` 不提交。
+默认使用独立 SQLite 服务，演进模型从 `config/mindmemos_skill/dev.yaml` 读取；
+设置 `connection: sdk` 和 `sdk_home` 可连接已运行服务。`pipeline` 支持 `offline` / `simple`。
+进程内模式的 `pipeline_overrides` 递归覆盖演进配置；SDK 模式须在服务端配置对应 profile。
+
+- 环境、数据、执行模型通过 `environment` / `data` 配置；非 SkillsBench 环境需提供 `skills` 或 `case_skills`。
+- `cases` 或 `cases_file` 选择任务；后者支持字符串数组或包含 `name` 的对象数组。
+- `concurrency` 控制采集、复测同时执行的不同 case 数；同题 repeats 串行。全部采集结束后，串行演进和导出全部 case，再并行复测有变化的 case。默认 1，不并行演进。
+- SkillsBench 默认读取各题 `environment/skills/` 下完整 Skill；`case_skills` 可以覆盖单题来源。
+- 采集结果即初始 Skill 对照，不额外运行 no-skill。默认同题采集、同题测试各 3 次，
+  先计算每题 Avg@N，再对题目求均值。这是同题反馈演进协议，不代表未见题泛化能力。
+- 正常完成的标准消息轨迹上报至每个输入 Skill 版本；剥离长 base64，不附加 verifier 分数。
+- 满分默认跳过；无可用轨迹、演进无变化或失败重试一次后仍失败，沿用初始分并标记状态。
+  演进重试覆盖注册、上报和演进，从失败步骤续做，不重复注册或上报。
+- Agent / Verifier 超时记零；Setup 超时剔除整题；网络/API/认证异常最多额外重跑 3 次，
+  仍失败记执行错误并不计分。失败 attempt 留在输出中，不纳入成绩。
+  可重试状态码仅限 401/403/408/429/5xx，400/404 等请求错误不重试。
+- `auto_accept=false`，导出完整发布成员（包括新增 Skill），不更改初始 Skill 的活动版本。
+- 仅统计采集和测试的执行 token；缺失单独记录，复用初始分不重复累计 token。
+- 指定固定 `output_dir` 可以恢复已保存槽位；改变配置时必须使用新目录。
+- 可选 `reference_file` 是 `{任务名: {baseline: 分数, offline-evolution: 分数}}`。
+  参考运行条件未核实时，仅作分数参考，不宣称严格可比。
+
+输出包含 `summary.json`、`report.md`、逐题 `results.json`、发布 Skill 及原始 attempt。
+长评测应以 `systemd-run --user` 托管，并按实际存在的凭据环境变量用 `--setenv=变量名` 透传；
+日志可用 `journalctl --user -u <unit>` 查看，进度只报告实际完成槽位。
+
+---
+
 ## TreeSkill：SpreadsheetBench text_action
 
 `mindmemos-eval skill treeskill` 通过公共 HTTP SDK 注册 Skill、提交原生 TreeSkill 训练，

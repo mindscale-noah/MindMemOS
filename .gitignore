@@ -91,3 +91,4 @@ AGENTS.md
 src/mindmemos_ui/frontend/node_modules/
 
 config/mindmemos_eval/treeskill/dev.yaml
+config/mindmemos_eval/skill_evolve/dev.yaml

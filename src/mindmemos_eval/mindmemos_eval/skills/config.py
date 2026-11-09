@@ -213,6 +213,66 @@ class EnvTestConfig(BaseModel):
         return self
 
 
+class SkillEvolveConfig(EnvTestConfig):
+    """Configure repeated collection, isolated evolution, and matched retesting."""
+
+    cases: list[str] | None = None
+    """Ordered task IDs; exclusive with cases_file."""
+
+    cases_file: Path | None = None
+    """JSON array of task IDs or objects containing a name field."""
+
+    exclude_cases: list[str] = Field(default_factory=list)
+    """Task IDs omitted from both comparison arms."""
+
+    case_skills: dict[str, list[Path]] = Field(default_factory=dict)
+    """Complete initial Skill directories keyed by task ID."""
+
+    repeats: int = Field(default=3, ge=1)
+    """Independent executions per task and comparison arm."""
+
+    connection: Literal["inprocess", "sdk"] = "inprocess"
+    """Use isolated SQLite storage or an existing SDK service connection."""
+
+    service_config: Path = ROOT / "config/mindmemos_skill/dev.yaml"
+    """Existing service configuration supplying agents and evolution profiles."""
+
+    sdk_home: Path | None = None
+    """SDK configuration directory; None uses the SDK default."""
+
+    pipeline: Literal["offline", "simple"] = "offline"
+    """Evolution profile selected from the service configuration."""
+
+    pipeline_overrides: dict[str, JsonValue] = Field(default_factory=dict)
+    """Recursively merged profile overrides, excluding credentials."""
+
+    skip_perfect: bool = True
+    """Reuse perfect collection scores without evolution or retesting."""
+
+    network_retries: int = Field(default=3, ge=0)
+    """Additional attempts after network, API, or authentication errors."""
+
+    evolution_retries: int = Field(default=1, ge=0)
+    """Additional evolution attempts before reusing initial scores."""
+
+    reference_file: Path | None = None
+    """Optional per-task baseline and offline-evolution reference scores."""
+
+    poll_interval: float = Field(default=5, ge=1)
+    """Seconds between SDK task status reads."""
+
+    @model_validator(mode="after")
+    def validate_evolution(self) -> Self:
+        """Reject ambiguous task selection and unsupported source transformations."""
+        if self.cases is not None and self.cases_file is not None:
+            raise ValueError("Provide cases or cases_file, not both")
+        if self.skill_body_only:
+            raise ValueError("Evolution requires complete Skills, not skill_body_only")
+        if self.cases is not None and len(set(self.cases)) != len(self.cases):
+            raise ValueError("Case IDs must be unique")
+        return self
+
+
 class TreeSkillEvalConfig(BaseModel):
     """Submit registered environments to TreeSkill through the UI's Skill service."""
 
