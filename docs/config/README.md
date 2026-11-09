@@ -11,9 +11,8 @@ every algorithm-config field means.
   here and adjust values for your environment.
 - Any path can be passed explicitly via `build_config(config_path=...)`.
 
-YAML files under `config/` are gitignored except `*.example.yaml` and
-`config/mindmemos/api_keys.yaml`, so benchmark and local configs never leak
-into the repository.
+In `config/mindmemos/`, only the example YAML files are tracked.
+Local API keys and service settings are ignored by Git.
 
 ## Environment variables
 

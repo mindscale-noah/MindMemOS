@@ -32,7 +32,7 @@ jobs:
           enable-cache: true
 
       - name: Check SDK
-        run: uv run pytest tests/mindmemos_sdk -q
+        run: uv run --locked --package mindmemos-sdk --with 'pytest>=9.0.3' --with 'pytest-asyncio>=1.3.0' pytest src/mindmemos_sdk/tests -q
 
       - name: Build SDK package
         run: uv build --package mindmemos-sdk --out-dir dist

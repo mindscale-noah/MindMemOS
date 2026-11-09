@@ -8,14 +8,29 @@ wheels/
 .idea/
 .DS_Store
 tmp/
+.vscode/
+*.txt
+# Required packaged prompts, runtime locks, and initial Skill license.
+!src/mindmemos_skill/mindmemos_skill/algos/train/treeskill/construction/prompts/*.txt
+!src/mindmemos_skill/mindmemos_skill/envs/builtin_envs/spreadsheetbench/text_action_mode/prompts/*.txt
+!src/mindmemos_skill/mindmemos_skill/envs/builtin_envs/spreadsheetbench/*/requirements/*.txt
+!resources/mindmemos_skill_eval/treeskill-spreadsheetbench/initial_skill/LICENSE.txt
 
 config/*.yaml
 !config/*.example.yaml
 config/mindmemos/*.yaml
 !config/mindmemos/*.example.yaml
-!config/mindmemos/api_keys.yaml
-config/mindmemos_eval/*.yaml
-!config/mindmemos_eval/*.example.yaml
+config/mindmemos_skill/*.yaml
+!config/mindmemos_skill/*.example.yaml
+config/mindmemos_eval/memory_evaluation/*.yaml
+config/mindmemos_eval/dev.yaml
+config/mindmemos_eval/forest_select/dev.yaml
+config/mindmemos_eval/forest_merge/dev.yaml
+config/mindmemos_eval/env_test/dev.yaml
+config/mindmemos_eval/env_test/paper_repro/**/dev.yaml
+!config/mindmemos_eval/memory_evaluation/*.example.yaml
+config/mindmemos_eval/dreaming_evaluation/*.yaml
+!config/mindmemos_eval/dreaming_evaluation/*.example.yaml
 
 # Virtual environments
 .venv
@@ -43,9 +58,14 @@ scripts/locomo/locomo_eval.env
 .locomo-runs/
 
 # Eval / run outputs
+/logs/
+/memory/
 data/
+!src/mindmemos_skill/mindmemos_skill/envs/data/
+!src/mindmemos_skill/mindmemos_skill/envs/data/*.py
 results/
 outputs/
+/output/
 docs/paper/
 docs/superpowers/
 resources/memory/
@@ -57,3 +77,20 @@ plugins/openclaw-plugin/dist/
 /results/
 /tmp/
 /data/
+.tmp/
+.local_doc/
+.local/
+/.mindmemos/
+config/presets/*.project.yaml
+!config/presets/*.project.example.yaml
+local_doc/
+/third_party/
+
+# Agent
+AGENTS.md
+
+# MindMemOS UI frontend dependencies
+src/mindmemos_ui/frontend/node_modules/
+
+config/mindmemos_eval/treeskill/dev.yaml
+config/mindmemos_eval/skill_evolve/dev.yaml

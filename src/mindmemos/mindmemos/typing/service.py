@@ -109,6 +109,9 @@ class MemorySearchItem(BaseModel):
     memory: str
     """Memory content."""
 
+    user_id: str | None = None
+    """Business user associated with this memory, when available."""
+
     memory_type: MemoryType | str = "fact"
     """Standard displayed memory type."""
 
@@ -341,6 +344,7 @@ class DeletePipelineInput(BaseModel):
 
     id: str = Field(alias="memory_id")
     """Memory ID."""
+
 
 class DeletePipelineResult(BaseModel):
     status: ServiceResultStatus

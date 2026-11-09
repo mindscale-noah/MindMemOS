@@ -99,6 +99,7 @@ class MemoryLineage(BaseModel):
     role: Literal["current", "archived"] = "current"
     derived_from_memory_ids: list[str] = Field(default_factory=list)
     """Ancestor memory IDs, newest first."""
+
     derived_to_memory_ids: list[str] = Field(default_factory=list)
 
 
@@ -109,6 +110,9 @@ class MemorySearchHit(BaseModel):
 
     id: str
     memory: str
+    user_id: str | None = None
+    """Business user associated with the returned memory, when available."""
+
     memory_type: str = "fact"
     last_update_at: str | None = None
     event_time: str | None = None
@@ -203,7 +207,7 @@ def serialize_feedback_recalled_memories(
     """
     result: list[dict[str, Any]] = []
     for memory in memories:
-        item = memory.model_dump(mode="json") if isinstance(memory, BaseModel) else dict(memory)
+        item = memory.model_dump(mode="json", exclude={"user_id"}) if isinstance(memory, BaseModel) else dict(memory)
         if item.get("memory_type") is None:
             item["memory_type"] = "fact"
         if item.get("last_update_at") is None:

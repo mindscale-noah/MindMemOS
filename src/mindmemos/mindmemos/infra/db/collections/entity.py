@@ -21,10 +21,8 @@ class EntityRepository(CollectionRepository):
 
         by_collection: dict[str, list[EntityPoint]] = {}
         for point in points:
-            project_id = str(point.payload.get("project_id") or "")
             vector_size = len(point.vector or []) or self._cfg.vector_size
             collection = await self._ensure_project_vector_collection(
-                project_id,
                 vector_size=vector_size,
                 enable_sparse=True,
                 payload_indexes=list(ENTITY_PAYLOAD_INDEX_SCHEMA),
@@ -54,9 +52,7 @@ class EntityRepository(CollectionRepository):
         """Search entities via dense semantic vector."""
 
         collection = self.collection_for_vector_size(len(vector))
-        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(
-            collection
-        ):
+        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(collection):
             return []
         return await self._engine.query(
             collection,
@@ -108,9 +104,7 @@ class EntityRepository(CollectionRepository):
         """Run Qdrant-side RRF over dense and sparse entity prefetches."""
 
         collection = self.collection_for_vector_size(len(dense_vector))
-        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(
-            collection
-        ):
+        if self._cfg.project_collection_namespace_enabled and not await self._engine.collection_exists(collection):
             return []
         scoped_filter = self._engine.project_filter(project_id, filter_=filter_)
         return await self._engine.query(

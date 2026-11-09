@@ -104,7 +104,10 @@ class FallbackEntityExtractor:
         except Exception as exc:
             lang = langs[0] if langs else "unknown"
             logger.warning("ner_entity_extract_failed", lang=lang, error=str(exc))
-            return [self.fallback.extract(text, lang)[: self.config.max_entity_count] for text, lang in zip(texts, langs, strict=True)]
+            return [
+                self.fallback.extract(text, lang)[: self.config.max_entity_count]
+                for text, lang in zip(texts, langs, strict=True)
+            ]
 
         results: list[list[Entity]] = []
         for text, lang, entities in zip(texts, langs, primary_results, strict=True):
@@ -129,7 +132,7 @@ class SpacyEntityExtractor:
         return self._entities_from_doc(doc)
 
     def extract_many(self, texts: list[str], langs: list[str]) -> list[list[Entity]]:
-        del langs
+        # EntityExtractor requires langs; this instance already binds a language-specific spaCy model.
         docs = run_nlp_with_retry(
             lambda: list(self._load().pipe(texts)),
             config=self.config,

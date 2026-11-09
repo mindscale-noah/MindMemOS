@@ -317,7 +317,6 @@ class Neo4jStore(Protocol):
         """Close the underlying driver."""
 
 
-
 class AddRecordStore(Protocol):
     """Low-level operations for the durable add-record collection."""
 

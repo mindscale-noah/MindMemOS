@@ -93,7 +93,7 @@ class PlatformGatewayRouter:
         self._retry_after = max(0.0, float(retry_after))
 
     async def acompletion(self, *, model: str, messages: list[dict[str, Any]], **kwargs: Any) -> GatewayResponse:
-        del model
+        # The Router interface supplies model; the hydrated endpoint determines the actual model.
         payload = self._request_payload(
             {
                 "model": self._endpoint.model,
@@ -105,7 +105,7 @@ class PlatformGatewayRouter:
         return await self._post("chat/completions", payload)
 
     async def aembedding(self, *, model: str, input: str | list[str], **kwargs: Any) -> GatewayResponse:
-        del model
+        # The Router interface supplies model; the hydrated endpoint determines the actual model.
         payload = self._request_payload(
             {
                 "model": self._endpoint.model,
@@ -125,7 +125,7 @@ class PlatformGatewayRouter:
         top_n: int,
         **kwargs: Any,
     ) -> GatewayResponse:
-        del model
+        # The Router interface supplies model; the hydrated endpoint determines the actual model.
         payload = self._request_payload(
             {
                 "model": self._endpoint.model,
@@ -254,12 +254,7 @@ def build_platform_gateway_router(router_cfg: ModelRouterConfig, alias: str) -> 
         raise ValueError("platform_gateway router requires a platform_gateway endpoint")
     api_base = str(endpoint.api_base)
     api_key = str(endpoint.api_key)
-    if (
-        not is_trusted_platform_gateway_url(api_base)
-        or "{userId}" in api_base
-        or not api_key
-        or api_key == "EMPTY"
-    ):
+    if not is_trusted_platform_gateway_url(api_base) or "{userId}" in api_base or not api_key or api_key == "EMPTY":
         raise ValueError("platform_gateway router requires a hydrated private Platform route")
     if alias not in {"chat", "embedding", "rerank"}:
         raise ValueError(f"unsupported platform_gateway alias: {alias}")

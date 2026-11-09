@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..skills import SkillManager, detect_skill_context
 from ..transport import HttpTransport
 from .core import MemoryCore, MemoryDefaults
 from .models import (
@@ -38,10 +37,8 @@ class MemoryClient:
         default_app_id: str | None = None,
         default_agent_id: str | None = None,
         default_session_id: str | None = None,
-        skill_manager: SkillManager | None = None,
     ) -> None:
         self._transport = transport
-        self._skill_manager = skill_manager
         self._core = MemoryCore(
             MemoryDefaults(
                 user_id=default_user_id,
@@ -66,12 +63,6 @@ class MemoryClient:
         task_id: str | None = None,
     ) -> AddResult:
         """Add content to the memory store."""
-        if self._skill_manager is not None:
-            if skill_context is None:
-                skill_context = self._detect_and_ensure_skill_context(messages)
-            else:
-                skill_context = self._ensure_provided_skill_context(skill_context)
-
         request = self._core.add(
             messages,
             user_id=user_id,
@@ -86,29 +77,6 @@ class MemoryClient:
         )
         envelope = self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
-
-    def _detect_and_ensure_skill_context(self, messages: list[Message | dict[str, Any]]) -> list[Any]:
-        contexts = detect_skill_context(messages, registry=self._skill_manager.registry)
-        return self._ensure_provided_skill_context(contexts)
-
-    def _ensure_provided_skill_context(self, skill_context: list[Any]) -> list[Any]:
-        ensured: list[Any] = []
-        for raw_context in skill_context:
-            context = raw_context if hasattr(raw_context, "name") else self._skill_context_from_dict(raw_context)
-            skill_id = self._skill_manager.skill_id_for_context(context)
-            if skill_id:
-                ensured.append(self._skill_manager.ensure_skill_context(skill_id, usage=context.usage))
-            else:
-                ensured.append(context)
-        if ensured:
-            self._skill_manager.flush_pending_uploads()
-        return ensured
-
-    @staticmethod
-    def _skill_context_from_dict(value: Any) -> Any:
-        from ..skills import SkillContext
-
-        return SkillContext.model_validate(value) if isinstance(value, dict) else value
 
     def search(
         self,

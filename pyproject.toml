@@ -6,9 +6,11 @@ authors = [
 ]
 requires-python = ">=3.11,<3.14"
 dependencies = [
+    "gdown>=6.4.2",
     "mindmemos",
     "mindmemos-eval",
     "mindmemos-sdk",
+    "mindmemos-ui",
 ]
 
 [dependency-groups]
@@ -31,12 +33,16 @@ python-preference = "system"
 mindmemos = { workspace = true }
 mindmemos-eval = { workspace = true }
 mindmemos-sdk = { workspace = true }
+mindmemos-ui = { workspace = true }
+mindmemos-skill = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "src/mindmemos",
     "src/mindmemos_eval",
     "src/mindmemos_sdk",
+    "src/mindmemos_ui",
+    "src/mindmemos_skill",
 ]
 
 [tool.ruff]
@@ -58,6 +64,18 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = [
+    "src/mindmemos/tests",
+    "src/mindmemos_eval/tests",
+    "src/mindmemos_sdk/tests",
+    "src/mindmemos_skill/tests",
+    "src/mindmemos_ui/tests",
+    "tests/scripts",
+    "tests/integration",
+]
+addopts = "--import-mode=importlib"
 markers = [
     "llm: tests that call a live LLM (requires LLM_API_KEY or dev.yaml config)",
 ]

@@ -1,3 +1,7 @@
+# MindMemOS
+
+**Long-term memory and manageable, trainable, evolving Skills for AI agents.**
+
 <p align="center">
   <img src="./assets/mindmemos-readme-hero.png" alt="MindMemOS Memory For AI Agents">
 </p>
@@ -39,7 +43,7 @@
 </p>
 
 <p align="center">
-  Accurately remember user and task context and reuse it across agents; evolve memory through ongoing interactions, automatically distill Skills, and connect with file-based knowledge systems so experience truly becomes capability.
+  Store and retrieve user and task context across agents; manage Skill versions and improve Skills through tasks and execution trajectories.
 </p>
 
 > ⭐ **Star us on GitHub to automatically upgrade to a Pro quota membership.**
@@ -55,16 +59,27 @@
 
 - **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable assets, allowing OpenClaw, Hermes, Claude Code, OpenHands, and other agents to share or transfer the same long-term memory.
 - **Self-evolving memory system**: Continuously improve memory quality through schema learning, dreaming, and feedback by automatically learning frequent memory patterns, consolidating memories offline, and using interaction corrections to optimize add/search workflows.
-- **Memory and Skills integration**: Experience memories can be distilled into skill candidates, while skill execution results, failure traces, and user feedback flow back into the memory system to drive continuous skill evolution.
+- **Independent Skill service**: Register and manage Skill versions, save execution trajectories, configure TreeSkill or Skill-Forest training, and evolve new versions from trajectories. Use the Python Service directly or deploy its FastAPI interface. Training and evolution require explicit calls and configured models, data, and environments.
+- **Local Web workbench**: Connect to Memory and Skill through the SDK to search and edit memories, manage Skill versions, inspect graphs, preview dynamic Skills, and edit connections. Published graph queries, snapshots, and soft deletion are available; graph construction, recommendation, and member updates await full algorithm integration.
 - **Plugin integrations**: Connect MindMemOS to different agents and workflows through plugins that retrieve and inject relevant memories before interactions and automatically write conversations back afterward. The [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) and [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) are currently available, with more integrations in progress.
 
-<p align="center">
-  <img src="./assets/mindmemos-benchmark-overview.png" alt="MindMemOS benchmark results overview">
-</p>
+### Packages and services
+
+| Package | Capabilities | Access |
+| --- | --- | --- |
+| `src/mindmemos` | Memory write, search, query, update, deletion, feedback, and consolidation (dreaming) | Memory HTTP API |
+| `src/mindmemos_skill` | Skill registration, versions, trajectories, training, evolution, and published graph queries and management | Python Service, local CLI, or Skill HTTP API |
+| `src/mindmemos_sdk` | Call Memory and Skill APIs and manage connections and credentials | Python SDK and `mindmemos` CLI |
+| `src/mindmemos_eval` | Memory and Skill evaluation, scores, timings, and model usage | `mindmemos-eval` and evaluation configuration |
+| `src/mindmemos_ui` | Local Web workbench for Memory and Skill | Browser UI whose backend calls services through the SDK |
+
+Memory and Skill manage their own business data and can be deployed independently. The default local deployment uses Qdrant and Neo4j for Memory and a separate PostgreSQL database for Skill. Direct Skill Python Service integrations can use SQLite. Both APIs can share Kafka and monitoring infrastructure; the UI accesses business data through the SDK.
+
+Compared with MindMemOS 1.0, the current repository adds Skill training and version management, an independent Skill service, a Web UI, shared model settings through `.env`, and switches for Kafka and monitoring. See the [deployment guide](docs/deploy/instruction.md) for setup details.
 
 ## 🚀 Quick Start
 
-MindMemOS offers **two deployment modes** (official cloud service, local self-hosting) and **three access methods** (HTTP API, Python SDK / CLI, agent plugin). Any combination works — server and client speak the same protocol:
+Use Memory through the official cloud service or a local deployment, with HTTP, Python SDK / CLI, or agent plugins. The table below lists Memory connections. The independent local Skill API defaults to `http://127.0.0.1:8001` and has its own SDK connection settings.
 
 | Access Method | Use Case | Cloud base_url | Local base_url |
 | :--- | :--- | :--- | :--- |
@@ -73,7 +88,7 @@ MindMemOS offers **two deployment modes** (official cloud service, local self-ho
 | [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) | Agent auto-recalls / writes memory | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
 | [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) | Agent auto-recalls / writes memory (dsh) | `https://mindmemos.cn` | `http://127.0.0.1:8000` |
 
-To try it without deploying, use the official cloud service (request an API key on the [website](https://mindmemos.cn)); for on-premises or offline use, start with Local Deployment below.
+To try memory features without deployment, request a cloud API key on the [website](https://mindmemos.cn). For self-hosting, follow the steps below. For Skill alone, deploy the Skill API independently or call its Python Service using the [local Skill guide](docs/skill/user-guide.md). Prepare model, dataset, and environment dependencies for your use case.
 
 ### 1. Local Deployment
 
@@ -81,53 +96,122 @@ MindMemOS uses `uv` to manage dependencies and run local commands. For detailed 
 
 #### 1.1 Prepare Configuration Files
 
+Install workspace dependencies, create `.env`, fill model connections, and initialize configuration. Skip the copy step if `.env` already exists:
+
 ```bash
+uv sync --all-packages --extra postgres --extra kafka
 cp .env.example .env
-cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
+# Edit .env: Chat, Embedding, and optional Rerank settings
+make init
 ```
 
-Before startup, configure at least the following three model routers in `config/mindmemos/dev.yaml`:
+Optionally configure Chat, Embedding, and Rerank API keys, base URLs, and model names in `.env` first. `make init` replaces the corresponding fields in all actual configurations under `config/`; Embedding also requires output dimensions. Complete unset fields manually. See [Initialize local configuration](docs/deploy/instruction.md#12-initialize-local-configuration) for variable names and overwrite behavior.
 
-- `chat_model_router`: supports memory extraction, Skill evolution, and other generation tasks.
-- `embed_model_router`: generates semantic embeddings; make sure its dimensions match the Qdrant dimension configuration.
-- `rerank_model_router`: optional; reranks memory retrieval results.
+Complete the following configuration before startup:
 
-The schema memory-extraction flow is versioned: `algo_config.add.schema.version` defaults to `v2` (rule-based graph fusion) and can be pinned to `v1` (develop-compatible flow) per project. Storage is compatible in both directions; see the deployment guide for binding and effective timing.
+| Configuration file | Settings to complete |
+|---|---|
+| `config/mindmemos/dev.yaml` | `model`, `api_base`, and `api_key` for chat, embedding, and optional rerank routers. The embedding output dimension, `dimensions`, and `database.qdrant.vector_size` must match. |
+| `config/mindmemos_skill/dev.yaml` | Specify `model`, `base_url`, and `api_key` for graph management, training, and evolution models as needed. Also specify embedding `dimensions`. |
+| `config/presets/local.project.yaml` | **Customize your local API key**: edit `projects.<name>.api_key`. `default_project` selects the default UI/SDK project. Override it with `PROJECT=<name>`. Services identify the project from each request’s API key. |
 
-Configure an API key and its bound `project_id` in `config/mindmemos/api_keys.yaml`.
+`make dev` generates local authentication configurations and `.mindmemos/settings.json`. You do not need to specify a Skill token manually. Configure model service keys and local API keys separately. Restart the services after changing the project file. For more project and authentication settings, see the [deployment guide](docs/deploy/instruction.md).
 
-#### 1.2 Start the Service
+#### 1.2 Startup and Management Commands
 
-Start the local service:
+You need Python 3.11–3.13, Git, Make, uv, and a running Docker engine. Building the UI also requires Node.js/npm. Before using Memory and the UI for the first time, prepare their resources:
 
 ```bash
-make dev
+uv run --no-sync python scripts/install_nlp_assets.py
+uv run --no-sync python scripts/check_nlp_assets.py
+make ui-build
 ```
 
-`make dev` starts the full Docker dependency stack before starting FastAPI.
-
-To start only core dependencies:
+`make dev` does not build the UI automatically. Skill includes Python dependencies for its built-in environments; training may also require datasets, agent programs, and system tools. See [environment requirements](docs/mindmemos_skill/benchmark_environments.md).
 
 ```bash
-make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+make dev                                # Memory + Skill + UI, all features
+make dev FEATURE=core                    # Sync Memory, local async Skill; no Kafka or OTel
+make dev FEATURE=async                   # Core + async tasks, without OTel
+make dev SERVICE=memory                  # Memory + UI, all features
+make dev SERVICE=skill FEATURE=core      # Skill + UI, core features
+make dev PLAN=1                          # Validate and preview without starting
 ```
 
-The default local service port is 8000:
+| Command | Purpose |
+| --- | --- |
+| `make dev` | Start the selected Docker dependencies, APIs and UI; defaults to all features |
+| `make docker` | Start only the selected Docker dependencies |
+| `make api` | Start APIs against existing dependencies; UI is off by default |
+| `make ui` | Start only the UI using its existing SDK configuration |
+| `make status` | Show managed application status, addresses, features and the current Compose project's containers |
+| `make stop` | Stop managed APIs/UI and remove Compose containers and networks; preserve volumes |
+| `make clean` | List volumes, then stop services and delete Docker volumes after typing `DELETE` |
+| `make help` | Show commands and options; bare `make` also shows help |
 
-```text
-FastAPI:   http://127.0.0.1:8000
-```
+The singular options `SERVICE` and `FEATURE` apply to `dev`, `docker` and `api`:
 
-Stop the local service:
+| Option | Values and default behavior |
+| --- | --- |
+| `SERVICE` | Defaults to `all` (Memory + Skill); accepts `memory` or `skill` |
+| `FEATURE` | Defaults to `all` (Kafka tasks + OTel); `core` disables Kafka and OTel, with sync Memory and local async Skill tasks; `async` enables Kafka without OTel |
+| `UI=0` / `UI=1` | Override the UI switch for `dev` or `api`; `docker` cannot enable UI |
+| `PLAN=1` | Validate and preview startup without starting services or writing SDK settings |
+| `API_PORT` / `SKILL_PORT` / `UI_PORT` | Override ports; defaults are `8000` / `8001` / `8765` |
+| `API_HOST` / `SKILL_HOST` | Override API bind addresses; defaults to `127.0.0.1` |
+| `MEMORY_CONFIG` / `SKILL_CONFIG` | Select application YAML files; otherwise use the service's configured path |
+| `PROJECT` / `PROJECT_CONFIG` | Select the default client project or project file; default file is `config/presets/local.project.yaml` |
+| `SERVICE_AUTH=1` | Keep authentication from each service YAML; skip shared local project settings and automatic UI connection setup |
+| `UI_HOME` | Select the UI SDK configuration directory; shared local project mode defaults to the repository's `.mindmemos/` |
+| `API_RELOAD=1` / `SKILL_RELOAD=1` | Enable code reload for the corresponding API |
+
+Use matching service and feature options when starting dependencies and APIs separately:
 
 ```bash
-make dev-down
+make docker SERVICE=skill FEATURE=async
+make api SERVICE=skill FEATURE=async UI=1
 ```
+
+Application feature switches and container selection come from the same effective configuration. Local dependency ports and credentials are applied from `.env`, so you do not need to edit matching ports in YAML. Source YAML files stay unchanged; private runtime snapshots are removed on normal exit. SQLite and external dependencies do not provision corresponding local database containers. See [Docker configuration](dockers/README.md) for container and configuration details.
+
+Once all selected applications pass their health checks, the launcher reports addresses and async/OTel status. Default addresses:
+
+| Service | Address | API documentation |
+| --- | --- | --- |
+| Memory | <http://127.0.0.1:8000> | <http://127.0.0.1:8000/docs> |
+| Skill | <http://127.0.0.1:8001> | <http://127.0.0.1:8001/docs> |
+| UI | <http://127.0.0.1:8765> | — |
+
+Check that the selected services respond:
+
+```bash
+curl -f http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1:8001/health
+make status
+```
+
+Then make a business request to verify model connections. When running one service, check only its address.
+
+`Ctrl+C` stops the current APIs/UI and leaves containers running. `make stop` stops this workspace's managed applications and the current Compose project's containers. Stop manually launched applications separately. Selecting fewer features does not stop existing extra containers; run `make stop` first for a complete switch.
+
+`make clean` deletes Docker volumes holding database, Kafka and monitoring data. It preserves host SQLite files, YAML, `.env` and SDK settings. Restart after changing `.env` or source YAML.
+
+#### 1.3 Development Tools
+
+| Command | Purpose |
+| --- | --- |
+| `make setup` | Sync dependencies, install Git hooks, and prepare and check NLP assets |
+| `make hook` | Install Git pre-commit hooks |
+| `make lint` | Check Python code without changing files |
+| `make format` | Fix lint issues and format Python code |
+| `make ui-build` | Install frontend dependencies and build UI assets; requires Node.js/npm |
+| `make profile` | Record a Memory API CPU flame graph; use `PID` to select a process |
+
+Profiling options default to `PROFILE_SECONDS=60`, `PROFILE_RATE=100` and `PROFILE_OUT=tmp/profile.svg`. Set `UV` to override the uv executable.
 
 ### 2. Access Methods
 
-Cloud and local self-hosting use the same access protocol. Local keys come from `config/mindmemos/api_keys.yaml`; cloud keys are obtained from the [website](https://mindmemos.cn).
+Cloud and local self-hosting use the same access protocol. Local keys come from `config/presets/local.project.yaml`; cloud keys are obtained from the [website](https://mindmemos.cn).
 
 #### 2.1 HTTP API
 
@@ -156,10 +240,10 @@ Search memories:
 curl -sS -X POST "$BASE_URL/v1/memory/search" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"query": "What kind of coffee does the user like?", "top_k": 3}'
+  -d '{"query": "What kind of coffee does the user like?", "user_id": "u_123", "top_k": 5}'
 ```
 
-A `code` of `ok` with readable memory content means the access works. curl is just a smoke-test helper; the shown format is for bash. Other environments / languages and the remaining endpoints (get / list / delete / update / feedback / dreaming / skills, etc.) are all covered in the [API docs](https://mindmemos.cn/api-docs).
+Specify `user_id` to search the same user's memories; omitting it in HTTP searches the entire project. See the [interface usage guide (Chinese)](docs/interfaces/usage_ZH.md) for filters, reranking, token budgets, and response formats, and the [API docs](https://mindmemos.cn/#/api-docs) for other Memory endpoints.
 
 #### 2.2 Configure the SDK
 
@@ -169,16 +253,26 @@ Install the Python SDK:
 pip install mindmemos-sdk
 ```
 
-Run the authentication command and configure the service address, API key, and default user when prompted:
+Run the authentication command, choose official or custom deployment, and fill the service addresses, API keys, and default user:
 
 ```bash
 mindmemos auth
 ```
 
+For two independent local APIs, specify addresses first and enter credentials interactively:
+
+```bash
+mindmemos auth --service-type custom \
+  --memory-base-url http://127.0.0.1:8000 \
+  --skill-base-url http://127.0.0.1:8001
+```
+
+An independent Skill address requires its own API key. Leaving the Skill address empty reuses the Memory address and credentials. The SDK resolves each connection separately; see the [SDK guide](src/mindmemos_sdk/README.md).
+
 | Setting | Local Service | Cloud Service |
 | :--- | :--- | :--- |
 | `base_url` | `http://127.0.0.1:8000` | `https://mindmemos.cn` |
-| `api_key` | An enabled API key from `config/mindmemos/api_keys.yaml` | An API key obtained from the [MindMemOS website](https://mindmemos.cn) |
+| `api_key` | An enabled project API key from `config/presets/local.project.yaml` | An API key obtained from the [MindMemOS website](https://mindmemos.cn) |
 | `user_id` | A stable identifier for the current end user, such as `u_123` | A stable identifier for the current end user, such as `u_123` |
 
 The configuration is saved to `~/.mindmemos/settings.json`. Check the current configuration with:
@@ -236,21 +330,9 @@ with MindMemOSClient() as client:
         print(memory.id, memory.memory)
 ```
 
-Trigger cloud evolution for a registered Skill:
+Skill registration, version commits, and evolution use dedicated request models. Evolution uses a specific version and saved trajectories and returns a background task. See the [SDK guide](src/mindmemos_sdk/README.md) for current examples and the [local Skill guide](docs/skill/user-guide.md) for Python Service training and custom environments.
 
-```python
-from mindmemos_sdk import MindMemOSClient
-
-with MindMemOSClient() as client:
-    result = client.skills.evolve("my-skill", mode="sync")
-
-    print("evolved:", result.evolved)
-    print("pending:", result.pending_count)
-    print("threshold:", result.threshold)
-    print("new versions:", result.new_version_ids)
-```
-
-Local and cloud services use the same SDK call pattern. To switch between them, reconfigure only the `base_url` and corresponding API key.
+Use `mindmemos auth` to update service connections and credentials when switching deployments.
 
 #### 2.4 Use the CLI
 
@@ -261,7 +343,9 @@ mindmemos memory add --content "I like iced Americanos"
 mindmemos memory search "coffee preferences" --top-k 5
 ```
 
-The `memory` subcommand also supports get / update / delete / feedback / dreaming, and the `skill` subcommand supports register / list / evolve / push / pull / history and more. For the full command list, parameter reference, and troubleshooting, see the [CLI Guide](docs/cli/instruction.md).
+The CLI uses the SDK default user when `--user-id` is omitted. Add `--user-id u_123` to match the HTTP example. Search parameters and output are documented in the [interface usage guide (Chinese)](docs/interfaces/usage_ZH.md).
+
+The `memory` subcommand also supports get / update / delete / feedback / dreaming. The `skill` subcommand supports register / commit / export / history / diff / activate and train / evolve / task / trajectory / graph. Check `mindmemos skill --help` for current commands; see the [SDK guide](src/mindmemos_sdk/README.md) and [CLI guide](docs/cli/instruction.md) for details.
 
 #### 2.5 OpenClaw Plugin
 
@@ -356,6 +440,27 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 
 ## 📊 Benchmark
 
+### Dataset downloads
+
+Use the shared downloader for both benchmark groups (Python 3.12+; install `huggingface_hub` for Hugging Face sources):
+
+```bash
+python scripts/download_datasets.py list memory
+python scripts/download_datasets.py list skill
+python scripts/download_datasets.py download memory --name locomo
+python scripts/download_datasets.py download skill --name spreadsheetbench
+```
+
+Memory datasets: `locomo`, `personamem` (v1), `memoryagentbench` (all four official partitions),
+and `longmemeval` (official cleaned release). Sources and pinned revisions are in
+[`config/presets/dataset_download_sources.json`](config/presets/dataset_download_sources.json).
+Downloads go to `data/mindmemos_memory/<dataset>/` or `data/mindmemos_skill/<dataset>/`;
+use `--data-root` to change the parent directory and `--verify-only` on `download` to verify existing files.
+Set evaluation config paths to these downloaded files. Official formats are preserved; MemoryAgentBench
+remains Parquet and requires conversion for the current evaluator's local JSON/JSONL input.
+Experiment split manifests are maintained in the repository and are not downloaded or generated.
+
+
 ### 💬 Conversational Memory: LoCoMo
 
 - **Benchmark**: [LoCoMo](https://arxiv.org/abs/2402.17753), a mainstream benchmark for long-conversation memory covering single-hop, multi-hop, temporal, and open-domain question answering.
@@ -400,21 +505,35 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 | MindMemOS-MindVanilla              | 0.900 | — | 0.190 | — |
 | **MindMemOS-MindVanilla + Dreaming** | 0.920 | 23.5% | 0.250 | 21.5% |
 
-### 🧠 Skill Self-Evolution: SpreadsheetBench-Verified
+### Skill Benchmark (results pending)
 
-- **Benchmark**: [SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz), a 400-task verified subset of SpreadsheetBench covering diverse real-world spreadsheet operations.
+The current Skill service has no complete benchmark results ready for publication. A shared Skill-Forest evaluation entry point covers LiveMath, ALFWorld, SpreadsheetBench, SearchQA, and OfficeQA, comparing `no_skill`, `initial_skill`, and `trained_skill` on fixed splits. Success rates, timings, and token comparisons will be added when results are ready.
 
-| Method | Success Rate | Time / Task (s) | Agent Tokens | Evolve Tokens |
-| :----- | :----------: | :-------------: | :----------: | :-----------: |
-| No-skill | 51.3% ± 0.8% | 11.227 | 10.4M | - |
-| Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
-| **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
-| **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
+After preparing dependencies, model settings, and data, start with a smoke test:
+
+```bash
+uv run --no-sync python scripts/download_datasets.py download skill --name livemath
+uv run --no-sync mindmemos-eval skill run --smoke
+```
+
+Model and concurrency settings live in `config/mindmemos_eval/dev.yaml`, created by `make init`. Skill-Forest evaluation creates an isolated local service in the evaluation process; it does not require a Memory API or Skill HTTP API. A smoke test checks a small workflow and does not establish benchmark performance. See the [Skill evaluation guide](docs/evaluation/skill_evaluation.md#skill-forest) for full commands, environment requirements, and reports.
+
+## Documentation
+
+| Goal | Guide |
+| --- | --- |
+| Deploy services, configure models, and select features | [Deployment](docs/deploy/instruction.md) |
+| Check Memory search HTTP / CLI parameters and results | [Interface usage (Chinese)](docs/interfaces/usage_ZH.md) |
+| Use the full CLI, configure connections, and troubleshoot | [CLI guide](docs/cli/instruction.md) |
+| Integrate the Python SDK and independent Skill API | [SDK guide](src/mindmemos_sdk/README.md) |
+| Manage, train, and evolve local Skills or add an environment | [Local Skill guide](docs/skill/user-guide.md) |
+| Use the local Web workbench | [UI guide](docs/mindmemos_ui/usage.md) |
+| Download datasets and reproduce Memory or Skill evaluations | [Memory evaluation](docs/evaluation/memory_evaluation.md) · [Skill evaluation](docs/evaluation/skill_evaluation.md) |
 
 ## 🗺️ Coming Features
 
-- **Lite mode**: Designed around low dependencies, replaceable components, and easy embedding, with database backends, async tasks, and log storage decoupled into flexible lightweight components that support in-memory calls and simplified deployment.
-- **Skills system**: Govern large and redundant skill libraries and distribute them intelligently; continuously evolve and optimize skills based on real usage; automatically synthesize new skills from frequent user scenarios and refine them through offline simulation.
+- **Simpler deployment**: Further reduce dependencies and improve embedded use, building on the existing Kafka / OTel switches, local asynchronous Skill tasks, and SQLite backend.
+- **Skill graph organization and recommendation**: Integrate complete graph construction, recommendation, and member management algorithms for larger Skill libraries.
 - **File system memory**: Structure scattered knowledge from local files, documents, project artifacts, and agent outputs into searchable and connected file knowledge objects or knowledge graphs, helping agents complete user tasks more effectively.
 - **Agent integrations**: Continue expanding support for coding agents, OpenClaw, Codex-style workflows, and long-running multi-agent systems.
 

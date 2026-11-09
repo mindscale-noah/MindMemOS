@@ -1,0 +1,139 @@
+{
+  "skill": {
+    "livemath": {
+      "kind": "huggingface",
+      "url": "https://huggingface.co/datasets/LiveMathematicianBench/LiveMathematicianBench",
+      "repo": "LiveMathematicianBench/LiveMathematicianBench",
+      "revision": "b72450f6ce96c26158d64d945a5d31ef7727be41",
+      "files": [
+        "data/202511/qa_202511_final.json",
+        "data/202512/qa_202512_final.json",
+        "data/202601/qa_202601_final.json",
+        "data/202602/qa_202602_final.json"
+      ]
+    },
+    "officeqa": {
+      "kind": "huggingface",
+      "url": "https://huggingface.co/datasets/databricks/officeqa",
+      "repo": "databricks/officeqa",
+      "revision": "8ecbf18d3833daf4750a903d14963e4c4c1d4cd8",
+      "files": [
+        "officeqa_full.csv",
+        "treasury_bulletins_parsed/transformed/*.txt",
+        "treasury_bulletins_parsed/jsons/*.json"
+      ]
+    },
+    "spreadsheetbench": {
+      "kind": "huggingface",
+      "url": "https://huggingface.co/datasets/KAKA22/SpreadsheetBench",
+      "repo": "KAKA22/SpreadsheetBench",
+      "revision": "ab0b742b0fc95b946f212d80ac7771b5531272e4",
+      "files": [
+        "spreadsheetbench_verified_400.tar.gz"
+      ],
+      "extract": [
+        "spreadsheetbench_verified_400.tar.gz"
+      ]
+    },
+    "hitab": {
+      "kind": "archive",
+      "url": "https://github.com/microsoft/HiTab",
+      "revision": "d179602662b490249baf068a76fbe4137029126e",
+      "archives": {
+        "source.zip": "https://codeload.github.com/microsoft/HiTab/zip/d179602662b490249baf068a76fbe4137029126e"
+      },
+      "strip_root": true
+    },
+    "wikitq": {
+      "kind": "archive",
+      "url": "https://github.com/ppasupat/WikiTableQuestions",
+      "revision": "7d455a5a707b96341ef72aff9428749d443d8aa9",
+      "archives": {
+        "source.zip": "https://codeload.github.com/ppasupat/WikiTableQuestions/zip/7d455a5a707b96341ef72aff9428749d443d8aa9"
+      },
+      "strip_root": true
+    },
+    "spreadsheetbench_full": {
+      "kind": "archive",
+      "url": "https://github.com/RUCKBReasoning/SpreadsheetBench",
+      "revision": "49b73a94775fb489063f60ca1865e3a650079a79",
+      "archives": {
+        "spreadsheetbench_912_v0.1.tar.gz": "https://raw.githubusercontent.com/RUCKBReasoning/SpreadsheetBench/49b73a94775fb489063f60ca1865e3a650079a79/data/spreadsheetbench_912_v0.1.tar.gz"
+      }
+    },
+    "alfworld": {
+      "kind": "archive",
+      "url": "https://github.com/alfworld/alfworld",
+      "revision": "json_2.1.1 + json_2.1.2_tw-pddl; logic 0.4.2",
+      "archives": {
+        "json_2.1.1_json.zip": "https://github.com/alfworld/alfworld/releases/download/0.2.2/json_2.1.1_json.zip",
+        "json_2.1.1_pddl.zip": "https://github.com/alfworld/alfworld/releases/download/0.2.2/json_2.1.1_pddl.zip",
+        "json_2.1.2_tw-pddl.zip": "https://github.com/alfworld/alfworld/releases/download/0.4.0/json_2.1.2_tw-pddl.zip"
+      },
+      "files": {
+        "configs/base_config.yaml": "https://raw.githubusercontent.com/alfworld/alfworld/0.4.2/configs/base_config.yaml",
+        "logic/alfred.pddl": "https://raw.githubusercontent.com/alfworld/alfworld/0.4.2/alfworld/data/alfred.pddl",
+        "logic/alfred.twl2": "https://raw.githubusercontent.com/alfworld/alfworld/0.4.2/alfworld/data/alfred.twl2"
+      }
+    },
+    "searchqa": {
+      "kind": "huggingface",
+      "url": "https://huggingface.co/datasets/lucadiliello/searchqa",
+      "repo": "lucadiliello/searchqa",
+      "revision": "c1a979068ba118d85467179b704031d113d689cc",
+      "files": [
+        "data/*.parquet"
+      ]
+    },
+    "skillsbench": {
+      "kind": "archive",
+      "url": "https://github.com/benchflow-ai/skillsbench/releases/tag/v1.0",
+      "revision": "14f3396760786d4ec9ea28e7b865f2ce4d199fdf",
+      "archives": {
+        "source.tar.gz": "https://codeload.github.com/benchflow-ai/skillsbench/tar.gz/14f3396760786d4ec9ea28e7b865f2ce4d199fdf"
+      },
+      "strip_root": true
+    }
+  },
+  "memory": {
+    "locomo": {
+      "kind": "files",
+      "url": "https://github.com/snap-research/locomo",
+      "revision": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+      "files": {
+        "locomo10.json": "https://raw.githubusercontent.com/snap-research/locomo/3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376/data/locomo10.json"
+      }
+    },
+    "personamem": {
+      "kind": "huggingface",
+      "url": "https://huggingface.co/datasets/bowen-upenn/PersonaMem-v1",
+      "repo": "bowen-upenn/PersonaMem-v1",
+      "revision": "a8076d5608c93ba2a28983cd78aa99b01a163ae7",
+      "files": [
+        "questions_*.csv",
+        "shared_contexts_*.jsonl"
+      ]
+    },
+    "memoryagentbench": {
+      "kind": "huggingface",
+      "url": "https://huggingface.co/datasets/ai-hyz/MemoryAgentBench",
+      "repo": "ai-hyz/MemoryAgentBench",
+      "revision": "7ea066982b140a19337e17e60d45d4076e042faf",
+      "files": [
+        "data/*.parquet",
+        "entity2id.json"
+      ]
+    },
+    "longmemeval": {
+      "kind": "huggingface",
+      "url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned",
+      "repo": "xiaowu0162/longmemeval-cleaned",
+      "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+      "files": [
+        "longmemeval_m_cleaned.json",
+        "longmemeval_s_cleaned.json",
+        "longmemeval_oracle.json"
+      ]
+    }
+  }
+}

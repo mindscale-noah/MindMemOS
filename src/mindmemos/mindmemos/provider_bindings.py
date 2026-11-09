@@ -325,10 +325,7 @@ def _hydrate_memory_gateway_routers(routers: dict[str, Any], ctx: MemoryRequestC
         for router_name in ("chat_model_router", "embed_model_router", "rerank_model_router")
         for endpoint in _router_endpoints(hydrated, router_name)
         if endpoint.get("transport") == "platform_gateway"
-        or (
-            endpoint.get("transport") is None
-            and MEMORY_GATEWAY_ROUTE_MARKER in str(endpoint.get("api_base") or "")
-        )
+        or (endpoint.get("transport") is None and MEMORY_GATEWAY_ROUTE_MARKER in str(endpoint.get("api_base") or ""))
     ]
     if not memory_endpoints:
         return hydrated

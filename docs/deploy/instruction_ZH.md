@@ -1,308 +1,249 @@
-# MindMemOS 部署&配置说明
+# MindMemOS 部署指南
+
+[English](instruction.md) | 简体中文
+
+本文说明如何本地拉起MindMemOS的记忆和Skill服务。
+
+## 0. Overview：包与服务架构
+
+MindMemOS 当前包含五个 Python 包。其中`mindmemos` 和 `mindmemos_skill` 分别提供 Memory 和 Skill 两个算法核心服务。SDK、评测工具和 UI 负责接入及使用这些服务。
+
+### 0.1 包与功能
 
 
-<p align="center">
-  <strong><a href="instruction.md">English</a></strong>
-  &nbsp;&nbsp;│&nbsp;&nbsp;
-  <strong><a href="instruction_ZH.md">简体中文</a></strong>
-</p>
+| 包 | 主要功能 |
+| --- | --- |
+| `src/mindmemos` | 提供 Memory 服务。支持记忆写入、检索、查询、修改、删除、反馈和记忆巩固（dreaming）。支持Fastapi方式部署和使用。 |
+| `src/mindmemos_skill` | 提供独立 Skill 服务。支持 Skill 注册、版本管理、轨迹保存、训练、自动演化、图组织和推荐。 支持fastapi和python直接调用。|
+| `src/mindmemos_sdk` | 提供接入Memory、Skill的fastapi服务的SDK接口和CLI命令，并支持管理服务连接地址、凭据和鉴权。 |
+| `src/mindmemos_eval` | 执行 Memory 和 Skill 评测，汇总评分、耗时和模型用量。服务调用通过 SDK 完成。 |
+| `src/mindmemos_ui` | 提供本机 Web 工作台，通过 SDK 调用对接 Memory 和 Skill 服务。支持 Memory管理和搜索，Skill 和图谱管理，动态 Skill 预览，以及 SDK 配置编辑。|
 
-## 1. Overview
+### 0.2 服务启动后的架构
 
-MindMemOS采用 `uv workspace` 管理 3 个核心 Python 包，并按照“服务端、客户端、评测工具”分层：
+| 层次 | 服务连接与职责 |
+| --- | --- |
+| 接入 | 业务应用通过 HTTP 或 SDK 调用两个 API。浏览器连接 UI，UI 后端通过 SDK 调用两个 API。默认地址为 Memory `:8000`、Skill `:8001`、UI `:8765`。 |
+| Memory 服务 | Memory API 执行记忆 pipeline，调用模型服务，并访问 Qdrant 和 Neo4j。Qdrant 提供向量存储与检索，Neo4j 保存图数据。 |
+| Skill 服务 | Skill API 执行版本管理、训练、演化和图管理流程。默认部署使用独立 PostgreSQL，保存 Skill 正文、辅助文件、版本和轨迹等数据。本地目录保存运行产物。单独使用 Python Service 时也可配置 SQLite。 |
+| 异步任务 | 两个服务使用同一套 Kafka 基础设施，各自处理任务消息。默认启动会启用相应消费者，Skill worker 随 Skill 服务启动。Worker 是任务执行组件，不是另一个 HTTP API。Kafka UI 用于查看消息。 |
+| 监控 | 两个服务将监控数据发送到 OpenTelemetry Collector，再写入 ClickHouse，由 Grafana 展示。Kafka Exporter 提供 Kafka 指标。 |
+| 外部能力 | 按配置连接 Chat、Embedding、可选的 Rerank 服务。Skill 训练还可能需要数据集、Agent 程序及任务环境依赖。 |
 
-```text
-业务应用 / Agent ───────────────┐
-Agent 插件 ─────── CLI ─────────┼──> mindmemos_sdk ── HTTP ──> mindmemos
-mindmemos_eval ─────────────────┘
+两个服务各自管理业务数据，UI 不直接访问业务数据库。共享 Kafka 和监控组件不意味着共享业务存储。
+
+独立 Skill 服务可单独部署，不要求先启动 Memory API。
+
+
+### 0.3 与 MindMemOS 1.0 的服务架构差异
+
+1. 新增 skill 全链路算法能力。从原有的只支持 根据轨迹自动演化skill，变为支持skill训练、演化、组织的全流程算法。
+2. 独立部署、独立存储。对于只需要skill服务的用户，支持本地独立部署skill服务，支持自定义环境和数据在自己的场景下使用算法训练skill。
+3. 新增 UI 操作界面，支持切换对接 我们的官方服务和本地部署服务，方便记忆和Skill的查看、管理和编辑。
+4. 降低部署难度，配置env后可自动分发模型api到config，不再需要配置繁复的config文件；支持关闭kafka、otel监控等额外功能。
+
+
+## 1. 通过FastAPI启动服务
+
+我们建议使用FastAPI启动服务。同时考虑到Skill训练能力需要本地部署，`mindmemos_skill` 还提供代码访问服务（见xxx节）。
+
+### 1.1 软件与Python依赖
+
+部署前需要安装以下软件：
+- Git、Make 和 uv
+- Docker 和 Docker Compose
+- Node.js 和 npm，用于构建 UI
+
+安装全量Python依赖：
+
+```bash
+uv sync --all-packages --extra postgres --extra kafka
 ```
 
-- `mindmemos` 是服务端算法核心包，负责 FastAPI 接口、记忆与 Skill 业务流程、模型调用、数据持久化和异步任务。
-- `mindmemos_sdk` 是面向业务应用和插件的 Python SDK 与 CLI，通过 HTTP 调用 `mindmemos`，不依赖服务端内部实现。
-- `mindmemos_eval` 是独立评测包，依赖 `mindmemos_sdk` 调用服务，负责加载数据集、执行评测流程并统计结果。
+其中：
+- kafka负责记忆、Skill服务的异步任务管理
+- postgres为Skill服务的默认后端数据库
 
-运行相关的主要目录如下：
-
-```text
-.
-├── src/
-│   ├── mindmemos/          # 服务端核心包
-│   ├── mindmemos_sdk/      # Python SDK 与 mindmemos CLI
-│   └── mindmemos_eval/     # Benchmark 评测工具
-├── config/
-│   ├── mindmemos/          # 服务端运行与认证配置
-│   ├── mindmemos_eval/     # 评测任务配置
-│   └── presets/            # 算法预设资源
-├── dockers/                # Qdrant、Neo4j、Kafka 和观测组件
-├── plugins/                # Agent 插件集成
-├── Makefile                # 本地服务与依赖启动入口
-└── pyproject.toml          # uv workspace 与开发依赖
-```
-
-主要配置入口如下：
-
-| 适用范围             | 配置文件                             | 说明 |
-|------------------|----------------------------------| --- |
-| `mindmemos`      | `.env`                           | Docker 依赖、服务端口和连接地址。 |
-| `mindmemos`      | `config/mindmemos/dev.yaml`      | 服务端模型、数据库、Pipeline 和运行配置。 |
-| `mindmemos`      | `config/mindmemos/api_keys.yaml` | API key、`project_id`、记忆算法和访问权限。 |
-| `mindmemos`      | `config/presets/*.json`          | 记忆算法预设。 |
-| `mindmemos_sdk`  | `~/.mindmemos/settings.json`     | SDK 与 CLI 的连接信息和默认用户。 |
-| `mindmemos_eval` | `config/mindmemos_eval/*.yaml`   | 评测模型、数据集、并发和算法配置。 |
-
-
-## 2. 最小启动流程
+### 1.2 初始化 & 填写配置文件
 
 ```bash
 cp .env.example .env
-cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
+```
+并填写必要的ENV信息，包括：
 
-# 编辑 .env 和 config/mindmemos/dev.yaml 后启动
-make dev-setup
+| ENV 名字 | 用途 |
+| --- | --- |
+| `MINDMEMOS_CHAT_API_KEY` | Chat 模型提供商的 API key。 |
+| `MINDMEMOS_CHAT_BASE_URL` | Chat 模型 API 的 Base URL。 |
+| `MINDMEMOS_CHAT_MODEL` | Chat 模型名称，用于聊天、训练和测评中的聊天模型配置。 |
+| `MINDMEMOS_EMBEDDING_API_KEY` | Embedding 模型提供商的 API key。 |
+| `MINDMEMOS_EMBEDDING_BASE_URL` | Embedding 模型 API 的 Base URL。 |
+| `MINDMEMOS_EMBEDDING_MODEL` | Embedding 模型名称，用于生成文本向量。 |
+| `MINDMEMOS_EMBEDDING_DIMENSIONS` | Embedding 输出维度，必须为正整数；配置任意 Embedding 参数时必填，同时用于设置 Qdrant 的 `vector_size`。 |
+| `MINDMEMOS_RERANK_API_KEY` | Rerank 模型提供商的 API key（可选）。 |
+| `MINDMEMOS_RERANK_BASE_URL` | Rerank API 的完整端点地址，按提供商要求填写（可选）。 |
+| `MINDMEMOS_RERANK_MODEL` | Rerank 模型名称，用于对召回结果重新排序（可选）。 |
+
+执行以下命令从模板生成具体的配置脚本：
+
+```bash
+make init
+```
+
+该命令会从 `.example` 模板创建缺失的本地文件。已有文件不重新复制；随后会将 `.env` 中非空的模型参数写入 `config/` 下所有实际 YAML 配置，包括已有文件、Memory/Skill 服务、训练和测评配置。`.example.yaml` 模板保留公开示例值。
+
+如果没有配置 CHAT、EMBEDDING、RERANK模型，或需要配置多种API供应商，需要在生成的config文件里自行添加。
+
+额外依赖：
+
+- `HF_TOKEN`：数据集下载脚本访问 Hugging Face 上的受限（gated）或私有数据集时使用的访问令牌。登录 Hugging Face，在 [Access Tokens](https://huggingface.co/settings/tokens) 中创建具有目标数据集读取权限的令牌，将完整值填入 `.env`，例如 `HF_TOKEN=hf_...`。受限数据集还需要先在数据集页面接受使用条款或申请访问权限；令牌本身不会授予数据集访问资格。下载允许匿名访问的公开数据集时可留空。详见 [Hugging Face 令牌说明](https://huggingface.co/docs/hub/security-tokens)。
+- `SPREADSHEETBENCH_SOFFICE_PATH`：指定 LibreOffice 的 `soffice` 可执行文件，用于 SpreadsheetBench 启用公式重算时重新计算工作簿并保存公式结果缓存。取值为可执行文件的绝对路径，不是安装目录；只在需要重算的任务中使用。
+
+安装 LibreOffice：macOS 可从 [LibreOffice 官网](https://www.libreoffice.org/installation-instructions/) 下载对应芯片架构的安装包，将应用安装到 `/Applications`；Ubuntu/Debian 可执行 `sudo apt update && sudo apt install libreoffice-calc`。
+
+安装后，在 `.env` 中填写当前系统的实际路径，例如：
+
+```dotenv
+# macOS
+SPREADSHEETBENCH_SOFFICE_PATH=/Applications/LibreOffice.app/Contents/MacOS/soffice
+# Linux 常见路径（与上面的 macOS 配置二选一）
+# SPREADSHEETBENCH_SOFFICE_PATH=/usr/bin/soffice
+```
+
+Linux 可通过 `command -v soffice` 查找路径。执行 `"<soffice 的绝对路径>" --version`，确认能输出 LibreOffice 版本。该变量留空时，程序会尝试查找打包的 LibreOffice、PATH 中的 `soffice` 和常见安装路径；填写绝对路径后，无需再将 `soffice` 加入 PATH。
+
+### 1.3 准备 NLP 和 UI 资源
+
+配置文件准备完成后，安装并检查 NLP 模型：
+
+```bash
+uv run --no-sync python scripts/install_nlp_assets.py
+uv run --no-sync python scripts/check_nlp_assets.py
+```
+
+安装器读取 Memory 配置中的 spaCy 模型名称。
+构建 UI：
+
+```bash
+make ui-build
+```
+
+注意：`make dev` 启动命令不执行 UI 构建。缺少前端资源时，UI 页面可能无法打开。
+
+### 1.4 启动部署
+
+执行：
+
+```bash
 make dev
 ```
 
-默认地址：
-
-- FastAPI: `http://127.0.0.1:8000`
-- API Docs: `http://127.0.0.1:8000/docs`
-- Qdrant: `http://localhost:6333`
-- Neo4j Browser: `http://localhost:7474`
-
-`make dev` 会先启动全量 Docker 依赖，再启动 FastAPI。只启动核心依赖时使用：
+该命令等价于：
 
 ```bash
-make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+make dev SERVICE=all FEATURE=all UI=1
 ```
 
-停止本地依赖：
+启动内容如下：
+
+| 类别 | 内容 |
+| --- | --- |
+| Python 服务 | Memory API、Skill API、UI |
+| Memory 存储 | Qdrant、Neo4j |
+| Skill 存储 | PostgreSQL，由 Skill 的数据库配置决定 |
+| 异步任务 | Kafka、Kafka UI，Skill 同时启用任务 worker |
+| 监控 | OpenTelemetry Collector、ClickHouse、Grafana、Kafka Exporter |
+
+### 1.5 检查服务并停止
+
+默认地址如下。修改端口后，使用启动计划中的实际地址。
+
+| 服务 | 地址 |
+| --- | --- |
+| Memory 健康检查 | `http://127.0.0.1:8000/healthz` |
+| Memory API 文档 | `http://127.0.0.1:8000/docs` |
+| Skill 健康检查 | `http://127.0.0.1:8001/health` |
+| Skill API 文档 | `http://127.0.0.1:8001/docs` |
+| UI | `http://127.0.0.1:8765` |
+| Kafka UI | `http://127.0.0.1:8080` |
+| Grafana | `http://127.0.0.1:3000` |
+
+在另一个终端检查健康状态：
 
 ```bash
-make dev-down
+curl -f http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1:8001/health
+make status
 ```
 
-## 3. 必配环境变量
+健康检查通过只说明服务已响应。用配置的模型执行一次业务请求，才能检查模型连接。
+停止方式如下：
 
-配置文件选择：
+| 操作 | 结果 |
+| --- | --- |
+| 前台终端按 `Ctrl+C` | 停止此次启动的 API 和 UI，保留运行中的容器 |
+| `make stop` | 停止工作区管理的应用和当前 Compose 项目的容器，保留数据 |
+| `make clean` | 确认后删除当前 Compose 项目的 Docker 数据卷及其中的数据 |
 
-| 变量 | 作用 | 默认值 |
-| --- | --- | --- |
-| `MINDMEMOS_CONFIG_NAME` | 选择配置名；`dev` 会读取 `config/mindmemos/dev.yaml` | `dev` |
-| `MINDMEMOS_CONFIG_PATH` | 直接指定配置文件路径；设置后优先于 `MINDMEMOS_CONFIG_NAME` | 空 |
 
-Qdrant：
+#### 1.6 精简部署范围
 
-| 变量 | 作用 | 默认值 |
-| --- | --- | --- |
-| `MINDMEMOS_QDRANT_URL` | FastAPI 访问 Qdrant 的 HTTP 地址 | `http://localhost:6333` |
-| `MINDMEMOS_QDRANT_HTTP_PORT` | Docker 暴露 Qdrant HTTP 端口 | `6333` |
-| `MINDMEMOS_QDRANT_GRPC_PORT` | Docker 暴露 Qdrant gRPC 端口，也会覆盖 config 里的 `database.qdrant.grpc_port` | `6334` |
-| `MINDMEMOS_QDRANT_PREFER_GRPC` | Qdrant client 是否优先使用 gRPC | `false` |
-| `MINDMEMOS_QDRANT_API_KEY` | Qdrant API key；本地无鉴权可留空 | 空 |
-| `MINDMEMOS_GRAFANA_QDRANT_URL` | Grafana 容器访问 Qdrant 的 HTTP 地址 | `http://qdrant:6333` |
+全量部署依赖Kafka、OpenTelemtry、Clickhouse等异步任务管理、监控等功能，本地部署可简化。我们同样提供部署范围控制：
 
-Neo4j：
 
-| 变量 | 作用 | 默认值 |
-| --- | --- | --- |
-| `MINDMEMOS_NEO4J_URI` | FastAPI 访问 Neo4j 的 Bolt 地址 | `bolt://localhost:7687` |
-| `MINDMEMOS_NEO4J_HTTP_PORT` | Docker 暴露 Neo4j Browser 端口 | `7474` |
-| `MINDMEMOS_NEO4J_BOLT_PORT` | Docker 暴露 Neo4j Bolt 端口 | `7687` |
-| `MINDMEMOS_NEO4J_USERNAME` | Neo4j 用户名，也是 Docker `NEO4J_AUTH` 的用户名 | `neo4j` |
-| `MINDMEMOS_NEO4J_PASSWORD` | Neo4j 密码，也是 Docker `NEO4J_AUTH` 的密码 | `mindmemos_dev_password` |
+| 参数 | 值 | Memory | Skill |
+| --- | --- | --- | --- |
+| `SERVICE` | `all` | 启动 Memory API | 启动 Skill API |
+| `SERVICE` | `memory` | 启动 Memory API | 不启动 Skill API |
+| `SERVICE` | `skill` | 不启动 Memory API | 启动 Skill API |
+| `FEATURE` | `core` | 启用同步功能；关闭 Kafka 异步任务和 OTLP 导出 | 启用同步功能和本地异步任务管理；关闭 Kafka 和 OTLP 导出 |
+| `FEATURE` | `async` | 启用同步功能和 Kafka 异步任务；关闭 OTLP 导出 | 启用同步功能和 Kafka 异步任务管理；关闭 OTLP 导出 |
+| `FEATURE` | `all` | 启用同步功能、Kafka 异步任务和 OTLP 导出 | 启用同步功能、Kafka 异步任务管理和 OTLP 导出 |
+| `UI` | `0`、`1` | 关闭或启动共用 UI；`make dev` 默认启动 | 关闭或启动共用 UI；`make dev` 默认启动 |
 
-可选依赖：
+切换 `FEATURE` 不会修改 `config/` 中的原始 YAML 文件，只会生成临时 YAML，供服务启动时读取。临时配置位于操作系统临时目录下的 `mindmemos-dev-<随机字符>/memory.yaml` 和 `mindmemos-dev-<随机字符>/skill.yaml`，具体路径每次启动都会变化，启动器退出后会清理该目录。
 
-| 变量 | 作用 | 默认值 |
-| --- | --- | --- |
-| `MINDMEMOS_KAFKA_BOOTSTRAP_SERVERS` | Kafka 地址；只有 config 里 `kafka.enabled=true` 时服务才会启动消费者/生产者 | `localhost:9092` |
-| `MINDMEMOS_TELEMETRY_ENDPOINT` | OTel HTTP endpoint；只有 config 里 `telemetry.enabled=true` 时会上报 | `http://localhost:4318` |
-| `MINDMEMOS_CLICKHOUSE_USER` / `MINDMEMOS_CLICKHOUSE_PASSWORD` / `MINDMEMOS_CLICKHOUSE_DB` | ClickHouse/Grafana 观测数据配置 | 见 `.env.example` |
+`FEATURE` 在运行配置中进行以下调整：
 
-API 监听地址：
+- `core`：关闭 Kafka，关闭 OTLP 监控数据导出。此时 Memory 服务只支持同步接口，Skill 服务采用 Python 原生异步任务管理。
+- `async`：启用 Kafka 异步任务，关闭 OTLP 监控数据导出。
+- `all`：启用 Kafka 异步任务，开启 OTLP 监控数据导出。此时可以通过 Grafana 面板监控 Memory 和 Skill 服务日志。
 
-| 变量 | 作用 | 默认值 |
-| --- | --- | --- |
-| `MINDMEMOS_API_HOST` | `make dev` / `make api` 启动 FastAPI 的 host | `127.0.0.1` |
-| `MINDMEMOS_API_PORT` | `make dev` / `make api` 启动 FastAPI 的 port | `8000` |
-
-## 4. Docker 相关
-
-本地依赖通过：
+常用命令如下：
 
 ```bash
-docker compose --env-file .env -f dockers/docker-compose.memory.yml up -d --wait qdrant neo4j kafka kafka-ui kafka-exporter
+# 两个 API、UI；Memory 同步功能，Skill 本地异步任务。
+make dev SERVICE=all FEATURE=core
+
+# 仅 Memory API，不启动 UI。
+make dev SERVICE=memory FEATURE=core UI=0
+
+# 仅 Skill API，不启动 UI。
+make dev SERVICE=skill FEATURE=core UI=0
+
+# 两个 API 和异步任务，不启动 OTLP 监控。
+make dev SERVICE=all FEATURE=async
 ```
 
-`make dev-core` 会启动 Qdrant、Neo4j、Kafka、Kafka UI 和 kafka-exporter。`make dev` 会先启动全量 Docker 依赖，再启动 FastAPI。`make db` 仍保留为全量依赖的兼容入口，等同于 `make db-observability`。
+一次只执行一个启动命令。切换范围前，先执行 `make stop`。
+较小的启动范围不会自动停止以前启动的额外容器。
 
-Docker Compose 内的核心服务：
+### 2.2 分开启动容器、API 和 UI
 
-- `qdrant`: 存 memory/entity/source 向量和 payload。
-- `neo4j`: 存图关系。
-- `kafka`: 异步任务队列；默认 config 里未开启也可以先跑着。
-- `clickhouse` + `otel-collector` + `grafana`: 观测链路；不需要观测时可以在 config 里关掉 `telemetry.enabled`。
+先启动同步功能所需的容器：
 
-本地部署时，`.env` 里的端口变量要和 `config/mindmemos/dev.yaml` 里的连接地址对齐。代码启动时还会用环境变量覆盖这些连接字段：
-
-- `database.qdrant.url`
-- `database.qdrant.api_key`
-- `database.qdrant.grpc_port`
-- `database.qdrant.prefer_grpc`
-- `database.neo4j.uri`
-- `database.neo4j.username`
-- `database.neo4j.password`
-- `kafka.bootstrap_servers`
-- `telemetry.telemetry_endpoint`
-
-## 5. LLM 配置
-
-LLM 用于记忆抽取、schema 处理、dreaming 等生成任务。需要配置 `chat_model_router`：
-
-```yaml
-chat_model_router:
-  routing_strategy: simple-shuffle
-  endpoints:
-    - model: openai/gpt-4.1-mini
-      api_key: your-api-key
-      api_base: https://your-base-url/v1
-      timeout: 1200
-      temperature: 0.0
-      num_retries: 3
-      extra_body: {}
+```bash
+make docker SERVICE=all FEATURE=core
 ```
 
-注意：
+再启动 API：
 
-- `model` 是 LiteLLM 风格的模型名，OpenAI 兼容接口通常写成 `openai/<model-name>`。
-- `api_base` 要包含 `/v1`，除非你的供应商文档明确不是这个形式。
-- `api_key` 不要提交到仓库；本地写在未提交的 `config/mindmemos/dev.yaml` 即可。
-- 可以配置多个 endpoint，router 会按 `routing_strategy` 路由。
-
-## 6. Embedding 配置
-
-Embedding 是必须配置的；服务启动时会校验 embedding 输出维度和 Qdrant 向量维度是否一致。
-
-```yaml
-embed_model_router:
-  routing_strategy: simple-shuffle
-  endpoints:
-    - model: openai/qwen3-embedding-4b
-      api_key: your-api-key
-      api_base: https://your-base-url/v1
-      timeout: 600
-      num_retries: 3
-      dimensions: 2560
-      extra_body: {}
-
-database:
-  qdrant:
-    vector_size: 2560
-    semantic_vector_name: semantic
-    bm25_vector_name: bm25
+```bash
+make api SERVICE=all FEATURE=core
 ```
 
-重点：
+最后，在另一个终端启动 UI：
 
-- `database.qdrant.vector_size` 必须等于 embedding 模型实际输出维度。
-- 如果 embedding 模型支持自定义维度，`dimensions` 和 `vector_size` 也要一致。
-- Qdrant collection 已经用旧维度创建后，单纯改 `vector_size` 不会自动迁移旧 collection；本地开发可以 `make db-clean` 清掉 volume 后重建。
-
-## 7. Rerank 配置（可选）
-
-Rerank 用于检索候选结果重排，提升搜索精度，但不是服务启动的硬依赖。没有外部 rerank endpoint 时，基础 add/search 仍可运行；代码会使用现有召回结果或 fallback 逻辑。
-
-需要外部 reranker 时配置：
-
-```yaml
-rerank_model_router:
-  routing_strategy: simple-shuffle
-  endpoints:
-    - model: openai/qwen3-reranker-4b
-      api_key: your-api-key
-      api_base: https://your-base-url/v1
-      timeout: 600
-      num_retries: 3
-
-algo_config:
-  search:
-    rerank:
-      enabled: true
-      max_query_length: 100
-      max_doc_length: 5000
-      max_batch_size: 20
-      max_concurrent_batches: 1
-      request_timeout: 5.0
-    vanilla:
-      use_reranker: true
-    schema_search:
-      entity:
-        use_reranker: true
+```bash
+make ui
 ```
-
-不使用外部 reranker 时可以写成：
-
-```yaml
-rerank_model_router:
-  routing_strategy: simple-shuffle
-  endpoints: []
-
-algo_config:
-  search:
-    rerank:
-      enabled: false
-    vanilla:
-      use_reranker: false
-    schema_search:
-      entity:
-        use_reranker: false
-```
-
-强调：`rerank` 是可选增强项。生产环境建议先把 Docker、LLM、Embedding 跑稳，再接入 rerank。
-
-## 8. 记忆算法版本（v1 / v2）
-
-Schema 记忆抽取有两套可选流程，通过 `algo_config.add.schema.version` 切换：
-
-- `v2`（默认）：规则化图融合，每个 episode 的 LLM 调用更少。
-- `v1`：与 develop 对齐的重 LLM 流程，用于基线对比和回退。
-
-写在基础配置里是部署级默认（修改后需重启生效）；写在项目 API key 的覆盖配置里
-则只对该项目生效（项目覆盖优先，项目下一个 add 请求即生效，无需重启）。两个
-方向的存储都兼容：collection 与 payload 结构相同，v2 可直接读写 v1 数据，反向
-亦然，混合历史安全。产出数据带 `mem_extract_version` 标签（`schema_add` /
-`schema_add_v1`），可区分来源。v1 保留用于基线对比和回退，直到 v2 在
-LoCoMo/PersonaMem 基准上验证完成。
-
-## 9. 认证配置
-
-本地默认使用 API key：
-
-```yaml
-auth:
-  mode: api_key
-  api_key_file: api_keys.yaml
-```
-
-`api_key_file` 是相对 config 文件目录解析的，所以默认指向 `config/mindmemos/api_keys.yaml`。本地示例里已有：
-
-- `dev-api-key-001`: vanilla memory
-- `dev-api-key-002`: schema memory
-
-调用 API 时使用：
-
-```text
-Authorization: Bearer <api_key>
-```
-
-## 10. 最小检查清单
-
-启动前至少确认：
-
-- `.env` 里的 Qdrant、Neo4j 端口没有和本机已有服务冲突。
-- `config/mindmemos/dev.yaml` 存在。
-- `chat_model_router.endpoints[0].api_key` / `api_base` / `model` 可用。
-- `embed_model_router.endpoints[0].api_key` / `api_base` / `model` 可用。
-- `database.qdrant.vector_size` 等于 embedding 输出维度。
-- 不需要 rerank 时，`rerank_model_router.endpoints` 可以留空，并关闭相关 `use_reranker`。
