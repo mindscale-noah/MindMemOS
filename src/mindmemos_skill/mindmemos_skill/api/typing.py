@@ -523,7 +523,7 @@ class ListRequest(RequestAuth):
     """Read a bounded page of central Skills."""
 
     limit: int | None = Field(default=None, ge=0)
-    """Maximum number of returned records. 为空为不限制个数"""
+    """Maximum number of returned records. None means no limit."""
 
     cursor: SkillListCursor = Field(default_factory=SkillListCursor)
     """Snapshot cutoff and optional continuation position."""
@@ -562,7 +562,7 @@ class ReportTrajectoryRequest(RequestAuth):
     """Actual Agent finish time when known."""
 
     usage: dict[str, JsonValue] | None = None
-    """轨迹的token消耗"""
+    """Number of tokens consumed by the trajectory."""
 
     @model_validator(mode="after")
     def validate_report(self) -> Self:
@@ -692,7 +692,7 @@ class CommitRequest(RequestAuth):
     """Create a child snapshot and atomically select it."""
 
     skill_id: Nonempty
-    """要提交到哪个skill下面"""
+    """Identifier of the Skill to which the version is committed."""
 
     skill: StructuredSkillInfo
     """Complete structured source content and commit metadata."""

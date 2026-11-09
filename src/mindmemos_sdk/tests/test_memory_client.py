@@ -19,7 +19,7 @@ from mindmemos_sdk.transport import HttpTransport
 
 
 def _transport(handler, *, api_key="mk_test", **kwargs) -> HttpTransport:
-    """构造一个走 MockTransport 的 HttpTransport。"""
+    """Build an HTTP transport backed by MockTransport."""
     client = httpx.Client(transport=httpx.MockTransport(handler))
     return HttpTransport(base_url="https://api.test", api_key=api_key, client=client, **kwargs)
 

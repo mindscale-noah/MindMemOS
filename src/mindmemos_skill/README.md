@@ -113,9 +113,9 @@ dependency state outside config are not automatically fingerprinted.
 Task and private reward-data fields (including subclass fields), source Skill snapshots,
 and assembled Skill snapshots are serialized for resume checking. `_run` receives the original
 task/reward objects and complete task-local Skill copies. Config is persisted in
-plain text and preserve explicitly configured model credentials. See [中文说明](README_ZH.md) for usage.
+plain text and preserves explicitly configured model credentials.
 
-[中文说明](README_ZH.md)
+[中文说明](../../docs/skill/quickstart_ZH.md)
 
 `mindmemos-skill` is the Python package for Skill-related functionality in MindMemOS.
 It provides the abstract `MindMemOSSkill` interface, shared registration, and
@@ -170,7 +170,6 @@ The package is a member of the repository's uv workspace.
 src/mindmemos_skill/
 ├── pyproject.toml
 ├── README.md
-├── README_ZH.md
 └── mindmemos_skill/
     ├── __init__.py
     ├── api/          # Abstract service interface and factory
@@ -335,7 +334,7 @@ then accessed by table name through shared CRUD, upsert, and vector-search opera
 Backend-specific adapters live in `infra/database/builtin_backends/`. Registration does not
 connect or create tables; initialization is explicit, and service shutdown closes pools.
 
-See the [database guide](mindmemos_skill/infra/database/README.md) for registration examples,
+See the [database guide](../../docs/mindmemos_skill/database_infrastructure_ZH.md) for registration examples,
 operation semantics, configuration, and integration tests.
 
 ## Skill content

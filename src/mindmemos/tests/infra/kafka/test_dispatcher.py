@@ -1,4 +1,4 @@
-"""OrderedKeyedDispatcher 单元测试：分组串行、跨组并发、全局并发上限、背压。"""
+"""Tests for ordering, concurrency limits, and backpressure in OrderedKeyedDispatcher."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from mindmemos.infra.kafka.dispatcher import OrderedKeyedDispatcher
 
 @pytest.mark.asyncio
 async def test_same_key_strictly_serial():
-    """同一 key 严格按提交顺序串行处理。"""
+    """Process messages for one key serially in submission order."""
     order: list[int] = []
     active = 0
     max_active = 0
@@ -37,13 +37,13 @@ async def test_same_key_strictly_serial():
         await d.submit("user-a", i)
     await d.drain()
 
-    assert order == [0, 1, 2, 3, 4]  # 顺序保持
-    assert max_active == 1  # 同 key 任意时刻只有一个在跑
+    assert order == [0, 1, 2, 3, 4]
+    assert max_active == 1
 
 
 @pytest.mark.asyncio
 async def test_different_keys_run_concurrently():
-    """不同 key 之间可并发处理。"""
+    """Process messages for different keys concurrently."""
     started = asyncio.Event()
     both_running = asyncio.Event()
     running = 0
@@ -72,7 +72,7 @@ async def test_different_keys_run_concurrently():
 
 @pytest.mark.asyncio
 async def test_global_concurrency_cap():
-    """全局并发不超过 global_max_concurrency，即便有更多 key。"""
+    """Enforce the global concurrency limit even when more keys are active."""
     active = 0
     max_active = 0
 
@@ -99,7 +99,7 @@ async def test_global_concurrency_cap():
 
 @pytest.mark.asyncio
 async def test_shared_global_concurrency_cap_across_dispatchers():
-    """共享 semaphore 可限制多个 consumer/dispatcher 的合计并发。"""
+    """Share one semaphore to limit concurrency across dispatchers."""
     active = 0
     max_active = 0
     shared = asyncio.Semaphore(2)
@@ -133,7 +133,7 @@ async def test_shared_global_concurrency_cap_across_dispatchers():
 
 @pytest.mark.asyncio
 async def test_non_positive_concurrency_config_is_rejected():
-    """并发和缓冲上限必须显式配置为正整数，避免静默掩盖部署错误。"""
+    """Reject missing or nonpositive concurrency and buffer limits."""
     with pytest.raises(ValueError, match="global_max_concurrency"):
         OrderedKeyedDispatcher(
             global_max_concurrency=0,
@@ -164,7 +164,7 @@ async def test_non_positive_concurrency_config_is_rejected():
 
 @pytest.mark.asyncio
 async def test_backpressure_blocks_submit_without_dropping():
-    """缓冲满时 submit 阻塞，所有消息最终都被处理，无丢失。"""
+    """Block submission when the buffer is full and eventually process every message."""
     completed: list[int] = []
     release = asyncio.Event()
 
@@ -181,15 +181,15 @@ async def test_backpressure_blocks_submit_without_dropping():
         process=process,
         on_complete=on_complete,
     )
-    # 填满缓冲（2 条），第三条 submit 应阻塞。
+    # Fill the buffer before testing whether the third submission blocks.
     await d.submit("k", 0)
     await d.submit("k", 1)
     blocked = asyncio.create_task(d.submit("k", 2))
     await asyncio.sleep(0.02)
-    assert not blocked.done()  # 背压生效
+    assert not blocked.done()
 
     release.set()
     await blocked
     await d.drain()
 
-    assert sorted(completed) == [0, 1, 2]  # 一条都不丢
+    assert sorted(completed) == [0, 1, 2]

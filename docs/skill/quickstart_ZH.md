@@ -2,7 +2,7 @@
 
 **把 Skill 当作可管理、可运行、可改进的版本化资产。**
 
-[English](README.md)
+[English](../../src/mindmemos_skill/README.md)
 
 MindMemOS Skill 是 MindMemOS 的 Python Skill 服务。它把 Skill 文件及其历史版本保存在仓库中，让 Agent 可以按任务使用指定版本，并将执行轨迹、评估结果和后续改进关联起来。你可以先在本地用 SQLite 管理 Skill，再按需配置训练、演化、图组织和 HTTP 接口。
 
@@ -59,7 +59,7 @@ printf '\nKeep the final answer short.\n' >> output/demo-skill/SKILL.md
 .venv/bin/mindmemos-skill --config config/mindmemos_skill/dev.yaml diff demo --from v_FIRST --to v_SECOND
 ```
 
-这里的“发布”是写入**本地版本仓库**，不会自动推送到云端，也不会改写源目录。CLI 必须指定完整 YAML；直接本地 CLI 只接受无鉴权模式。YAML 必填 `service.home` 和 `fastapi.auth.default_project_id`。服务创建缺失的 SQLite 存储，不自动生成项目 ID。更多 Python 调用和导出示例见[本地使用指南](../../docs/skill/user-guide.md)。
+这里的“发布”是写入**本地版本仓库**，不会自动推送到云端，也不会改写源目录。CLI 必须指定完整 YAML；直接本地 CLI 只接受无鉴权模式。YAML 必填 `service.home` 和 `fastapi.auth.default_project_id`。服务创建缺失的 SQLite 存储，不自动生成项目 ID。更多 Python 调用和导出示例见[本地使用指南](user-guide.md)。
 
 安装包名是 `mindmemos-skill`，Python 导入名是 `mindmemos_skill`。仓库已将该包列入 uv workspace；如果只需单独安装此包，也可以在仓库根目录执行 `uv pip install -e ./src/mindmemos_skill`。
 
@@ -81,19 +81,19 @@ Skill 的主要可优化内容是 `SKILL.md`。`Skill` 还保留 `references/`�
 
 环境以 `Task` 提供公开任务，以 `RewardData` 保存答案、测试用例等私有评分输入。一次 `rollout()` 返回输出、执行轨迹、`Reward` 和 `Usage`，并在工作目录中分别保存 `workspace/` 与 `audit/`。相同输入的已完成运行可按环境能力恢复；更换任务、Skill 或影响运行的配置时应使用新目录。Agent 后端仍须自行限制文件访问范围，不能仅靠工作目录划分保护私有数据。
 
-内置环境包括 [SearchQA](mindmemos_skill/envs/builtin_envs/searchqa/README.md)、[LiveMath](mindmemos_skill/envs/builtin_envs/livemath/README.md)、[OfficeQA](mindmemos_skill/envs/builtin_envs/officeqa/README.md) 和 [SpreadsheetBench](mindmemos_skill/envs/builtin_envs/spreadsheetbench/README.md)。如何接入自己的任务、Agent 和评分器，可直接看[自定义环境示例](../../docs/skill/custom_env_demo.py)。
+内置环境包括 [SearchQA](../../src/mindmemos_skill/mindmemos_skill/envs/builtin_envs/searchqa/README.md)、[LiveMath](../../src/mindmemos_skill/mindmemos_skill/envs/builtin_envs/livemath/README.md)、[OfficeQA](../../src/mindmemos_skill/mindmemos_skill/envs/builtin_envs/officeqa/README.md) 和 [SpreadsheetBench](../../src/mindmemos_skill/mindmemos_skill/envs/builtin_envs/spreadsheetbench/README.md)。如何接入自己的任务、Agent 和评分器，可直接看[自定义环境示例](custom_env_demo.py)。
 
 ## 配置训练与演化
 
-服务配置示例位于 `config/mindmemos_skill/dev.example.yaml`。算法参数由算法目录内的配置类定义，服务加载配置时会校验所选实现的字段和取值。仓库不维护生成的服务配置 Schema；可选的编辑器提示及配置和运行示例见[训练流程](../../docs/mindmemos_skill/training.md)。
+服务配置示例位于 `config/mindmemos_skill/dev.example.yaml`。算法参数由算法目录内的配置类定义，服务加载配置时会校验所选实现的字段和取值。仓库不维护生成的服务配置 Schema；可选的编辑器提示及配置和运行示例见[训练流程](../mindmemos_skill/training.md)。
 
-算法根据已校验的 Agent 配置，通过统一的 `Agent.from_config()` 创建实例。命名引用和内联配置都遵守字段白名单；TreeSkill、Skill-Forest 和 SimpleEvolver 不再接收 `agent_factory` 构造参数。
+算法根据已校验的 Agent 配置，通过统一的 `Agent.from_config()` 创建实例。命名引用和内联配置都遵守字段白名单；TreeSkill 和 Skill-Forest 不再接收 `agent_factory` 构造参数。
 
 训练请求通过 `algo` 选择服务中的训练算法，通过 `env: {class_name, config}` 提供本次任务的执行及评分环境；环境不属于 Service 启动配置。请求还需提供基础版本、任务样本、`train/val/test` 划分和独立运行目录。`run_training()` 等待训练及评估完成；配置任务管理器后可以通过后台任务入口提交。训练结果是新版本，评估数据与运行产物保存在请求指定的目录中。
 
 演化流程从已保存的执行轨迹中选取证据，对一个确定的 Skill 版本生成改进。它依赖已配置的演化 pipeline 和满足条件的轨迹，不会仅因注册了 Skill 就自动发生。示例配置 [`dev.example.yaml`](../../config/mindmemos_skill/dev.example.yaml) 展示了训练、演化、图管理、任务管理与可观测性组件；其中的模型名称、凭据和并发参数需要按实际服务调整。
 
-从最小配置到一次完整调用，见[本地使用指南](../../docs/skill/user-guide.md)。算法和数据划分细节分别见[训练流程](../../docs/mindmemos_skill/training.md)、[TreeSkill](../../docs/mindmemos_skill/treeskill.md)、[Skill-Forest](../../docs/mindmemos_skill/skill_forest.md) 与 [Skill Manage](../../docs/mindmemos_skill/skill_manage.md)。
+从最小配置到一次完整调用，见[本地使用指南](user-guide.md)。算法和数据划分细节分别见[训练流程](../mindmemos_skill/training.md)、[TreeSkill](../mindmemos_skill/treeskill.md)、[Skill-Forest](../mindmemos_skill/skill_forest.md) 与 [Skill Manage](../mindmemos_skill/skill_manage.md)。
 
 ## 可选：启动 HTTP 服务
 
@@ -112,17 +112,17 @@ curl -X POST http://127.0.0.1:8001/v1/skills/list \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-`/health` 仅表示应用可访问，不代表模型服务或所有业务流程已经就绪。业务路由使用 `/v1/skills/*`；本地示例配置的 `none` 鉴权只允许监听回环地址。部署时还可选择本地 API key 或网关 JWT，由已验证的身份确定项目范围；请求体中的 `project_id` 不能替代鉴权。完整请求、路由和鉴权约定见[接口文档](../../docs/mindmemos_skill/target_architecture_and_api.md)。
+`/health` 仅表示应用可访问，不代表模型服务或所有业务流程已经就绪。业务路由使用 `/v1/skills/*`；本地示例配置的 `none` 鉴权只允许监听回环地址。部署时还可选择本地 API key 或网关 JWT，由已验证的身份确定项目范围；请求体中的 `project_id` 不能替代鉴权。完整请求、路由和鉴权约定见[接口文档](../mindmemos_skill/target_architecture_and_api.md)。
 
 ## 文档入口
 
 | 需要了解 | 阅读 |
 | --- | --- |
-| 本地创建服务、注册版本、运行训练、自定义环境 | [Skill 本地使用指南](../../docs/skill/user-guide.md) |
-| Python 仓库方法与版本操作 | [中心仓 API](../../docs/mindmemos_skill/central_repository_api.md) |
-| HTTP 接口与部署边界 | [目标架构与接口](../../docs/mindmemos_skill/target_architecture_and_api.md) |
-| 轨迹、运行记录和可观测性 | [可观测性说明](../../docs/mindmemos_skill/observability.md) |
-| 数据库与存储后端 | [基础设施说明](mindmemos_skill/infra/database/README.md) |
+| 本地创建服务、注册版本、运行训练、自定义环境 | [Skill 本地使用指南](user-guide.md) |
+| Python 仓库方法与版本操作 | [中心仓 API](../mindmemos_skill/central_repository_api.md) |
+| HTTP 接口与部署边界 | [目标架构与接口](../mindmemos_skill/target_architecture_and_api.md) |
+| 轨迹、运行记录和可观测性 | [可观测性说明](../mindmemos_skill/observability.md) |
+| 数据库与存储后端 | [基础设施说明](../mindmemos_skill/database_infrastructure_ZH.md) |
 
 ## 开发与验证
 
@@ -132,4 +132,4 @@ curl -X POST http://127.0.0.1:8001/v1/skills/list \
 .venv/bin/python -m pytest src/mindmemos_skill/tests -q
 ```
 
-示例配置包含真实模型调用所需的训练和演化组件；只做本地仓库操作时无需模型凭据。HTTP 入口、数据库与任务管理器的行为由所选配置决定。源码与包依赖位于 [`src/mindmemos_skill`](.)，配置示例位于 [`config/mindmemos_skill`](../../config/mindmemos_skill/dev.example.yaml)。
+示例配置包含真实模型调用所需的训练和演化组件；只做本地仓库操作时无需模型凭据。HTTP 入口、数据库与任务管理器的行为由所选配置决定。源码与包依赖位于 [`src/mindmemos_skill`](../../src/mindmemos_skill)，配置示例位于 [`config/mindmemos_skill`](../../config/mindmemos_skill/dev.example.yaml)。
