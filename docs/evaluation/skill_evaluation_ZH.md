@@ -25,12 +25,12 @@ done
 | 数据集 | 测评逻辑 |
 | --- | --- |
 | LiveMath | 提取最终选项，与标准选项匹配。 |
-| ALFWorld | 在只保留有限交互历史的环境中运行任务，以模拟器的 `won` 为准。需要安装 `alfworld` 扩展。 |
-| SpreadsheetBench Verified 400 | 使用原生工具调用。各工作簿用例的指定评分区域均与标准单元格值匹配，整题才通过。默认关闭自动重算。需要安装 `spreadsheetbench` 扩展。 |
+| ALFWorld | 在只保留有限交互历史的环境中运行任务，以模拟器的 `won` 为准。 |
+| SpreadsheetBench Verified 400 | 使用原生工具调用。各工作簿用例的指定评分区域均与标准单元格值匹配，整题才通过。默认关闭自动重算。 |
 | SearchQA | 使用原生题目 ID 的固定划分，训练 400 题、验证 200 题、测试 1,400 题。归一化后与任一标准答案完全匹配即通过，另记 Token F1 和子串匹配。 |
 | OfficeQA | 使用美国财政部文档。固定版本的 OfficeQA 评分器按数值、单位、有序列表和文本规则对最终答案给出二值分数。工具轮数上限由 `max_tool_turns` 设置。 |
 
-固定划分和初始 Skill 在 [resources/mindmemos_skill_eval](../../resources/mindmemos_skill_eval/)。训练前会校验下载记录、划分和运行依赖。运行全部五个基准时，用 `uv sync --all-packages --extra alfworld --extra spreadsheetbench` 安装所需扩展。
+固定划分和初始 Skill 在 [resources/mindmemos_skill_eval](../../resources/mindmemos_skill_eval/)。训练前会校验下载记录、划分和运行依赖。
 
 ### Skill-Forest Select
 

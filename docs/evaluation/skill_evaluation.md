@@ -25,12 +25,12 @@ done
 | Dataset | Evaluation logic |
 | --- | --- |
 | LiveMath | Extract the final choice and match it to the gold option. |
-| ALFWorld | Run the simulator with bounded interaction history. An episode passes when the simulator reports `won`. Install the `alfworld` extra. |
-| SpreadsheetBench Verified 400 | Use native tool calling. A task passes when all workbook cases match the reference values in the scored cell ranges. Automatic recalculation is off by default. Install the `spreadsheetbench` extra. |
+| ALFWorld | Run the simulator with bounded interaction history. An episode passes when the simulator reports `won`. |
+| SpreadsheetBench Verified 400 | Use native tool calling. A task passes when all workbook cases match the reference values in the scored cell ranges. Automatic recalculation is off by default. |
 | SearchQA | Use the fixed 400/200/1,400 train/val/test split by native task key. Success requires normalized exact match against any gold answer. Token F1 and substring match are also recorded. |
 | OfficeQA | Use the Treasury document corpus. The pinned OfficeQA scorer checks the final answer with its numeric, unit, ordered-list, and text rules and returns a binary score. The turn limit is `max_tool_turns`. |
 
-The committed splits and initial Skills are under [resources/mindmemos_skill_eval](../../resources/mindmemos_skill_eval/). The runner checks receipts, splits, and runtime dependencies before training. For all five benchmarks, install both extras with `uv sync --all-packages --extra alfworld --extra spreadsheetbench`.
+The committed splits and initial Skills are under [resources/mindmemos_skill_eval](../../resources/mindmemos_skill_eval/). The runner checks receipts, splits, and runtime dependencies before training.
 
 ### Skill-Forest Select
 
