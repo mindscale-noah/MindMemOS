@@ -1,3 +1,4 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from mindmemos.api.app import register_exception_handlers
@@ -5,7 +6,14 @@ from mindmemos.api.schemas import AddRequest
 from mindmemos.errors import BadRequestError
 
 
-def test_request_validation_errors_return_one_message() -> None:
+@pytest.mark.parametrize(
+    ("payload", "location"),
+    [
+        ({"messages": [], "skill_context": []}, "body.messages"),
+        ({"messages": [{"text": "hello"}], "score": 1, "promt_language": "EN"}, "body.promt_language"),
+    ],
+)
+def test_request_validation_errors_return_one_message(payload: dict, location: str) -> None:
     app = FastAPI()
     register_exception_handlers(app)
 
@@ -13,13 +21,13 @@ def test_request_validation_errors_return_one_message() -> None:
     async def add(payload: AddRequest):
         return {"code": "ok", "data": None}
 
-    response = TestClient(app).post("/add", json={"user_id": "u1", "messages": []})
+    response = TestClient(app).post("/add", json={"user_id": "u1", **payload})
 
     assert response.status_code == 422
     body = response.json()
     assert body["code"] == "invalid_request"
     assert body["data"] is None
-    assert "body.messages" in body["message"]
+    assert location in body["message"]
 
 
 def test_api_error_returns_one_message() -> None:

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from ..typing import (
     AddMode,
@@ -32,7 +32,6 @@ from ..typing import (
     FileMessage,
     MemoryAddEventItem,
     MemorySearchItem,
-    SkillContext,
     TextMessage,
     UrlMessage,
 )
@@ -116,28 +115,13 @@ class AddRequest(ActorIdentityRequest):
     prompt_language: Literal["EN", "ZH"] | None = None
     """Optional request-level prompt language for extraction."""
 
-    skill_context: list[SkillContext] | None = None
-    """Skill references hit in this turn, excluding full text, used for trace binding.
-
-    This is optional for legacy callers. It is consumed only by the service layer
-    for skill binding and is not passed into add pipeline input.
-    """
-
-    score: float | None = None
-    """Optional score for this add trajectory.
-
-    This evaluates uploaded skill trajectories. It is not passed into add pipeline
-    input and is written only as a trace annotation in ``add_record_v1`` for skill
-    evolution and rollout algorithms.
-    """
-
-    task_id: NonEmptyStr | None = None
-    """Optional task identifier for the trajectory.
-
-        During multi-run rollouts, multiple trajectories for one task share the same
-        ``task_id``. It is not passed into add pipeline input and is written only as
-        a trace annotation in ``add_record_v1``.
-    """
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_retired_skill_fields(cls, data: Any) -> Any:
+        """Discard retired Skill annotations sent by older Memory clients."""
+        if not isinstance(data, dict):
+            return data
+        return {key: value for key, value in data.items() if key not in ("skill_context", "score", "task_id")}
 
     @field_validator("messages")
     @classmethod

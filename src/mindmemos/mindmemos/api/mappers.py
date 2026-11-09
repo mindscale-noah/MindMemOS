@@ -59,7 +59,6 @@ from .schemas import (
 
 # Actor identity fields carried by request models but owned by MemoryRequestContext.
 _ACTOR_FIELDS = ("user_id", "app_id", "session_id", "agent_id")
-_SKILL_FIELDS = ("skill_context", "score", "task_id")
 MAX_MEMORY_PAGE_SIZE = 100
 MAX_MEMORY_LIST_OFFSET = 10000
 MAX_MEMORY_SCROLL_LIMIT = 500
@@ -72,13 +71,13 @@ def to_add_pipeline_input(req: AddRequest) -> AddPipelineInput:
         req: Public add request model.
 
     Returns:
-        Add pipeline input with actor fields and trace annotations removed.
+        Add pipeline input with actor fields removed.
     """
 
     return AddPipelineInput.model_validate(
         req.model_dump(
             by_alias=True,
-            exclude={*_ACTOR_FIELDS, *_SKILL_FIELDS},
+            exclude=set(_ACTOR_FIELDS),
             exclude_none=True,
         )
     )

@@ -6,7 +6,11 @@ from datetime import datetime
 
 import mindmemos.api.mappers as api_mappers
 import pytest
+from fastapi.testclient import TestClient
+from mindmemos.api.app import create_app
+from mindmemos.api.deps import get_request_context
 from mindmemos.api.schemas import AddRequest, AuthContext, DreamingRequest, FeedbackRequest, SearchRequest
+from mindmemos.api.services import get_memory_service
 from mindmemos.api.services.memory_service import MemoryService
 from mindmemos.config.algo.search import SearchConfig
 from mindmemos.errors import BadRequestError
@@ -647,17 +651,40 @@ async def test_add_request_missing_optional_actor_fields_stay_empty() -> None:
     assert ctx.agent_id is None
 
 
-@pytest.mark.parametrize("field", ["skill_context", "score", "task_id"])
-def test_add_rejects_removed_skill_trace_fields(field: str) -> None:
-    """The public Memory add contract excludes former Skill trace annotations."""
-    with pytest.raises(ValueError):
-        AddRequest.model_validate(
-            {
-                "user_id": "u1",
-                "messages": [{"role": "user", "content": "hi"}],
-                field: [] if field == "skill_context" else 1,
-            }
-        )
+@pytest.mark.parametrize(
+    ("path", "mode", "status"),
+    [("/add", "sync", "ok"), ("/add", "async", "queued"), ("/add/stream", "sync", "ok")],
+)
+def test_add_ignores_retired_skill_trace_fields(path: str, mode: str, status: str) -> None:
+    recorder = FakeRecorder()
+    pipeline = FakeAsyncAddPipeline() if mode == "async" else FakeAddPipeline()
+    service = make_service(add_pipeline=pipeline, operation_recorder=recorder)
+    app = create_app()
+    app.dependency_overrides[get_request_context] = lambda: make_context().model_copy(
+        update={"scopes": ["memory:write"]}
+    )
+    app.dependency_overrides[get_memory_service] = lambda: service
+    response = TestClient(app).post(
+        f"/v1/memory{path}",
+        json={
+            "user_id": "u1",
+            "messages": [{"role": "user", "content": "hi"}],
+            "mode": mode,
+            "metadata": {"score": 0.5, "task_id": "memory-metadata"},
+            "skill_context": [{"name": "legacy-skill", "content_hash": "legacy"}],
+            "score": 1,
+            "task_id": 123,
+        },
+    )
+
+    assert response.status_code == 200
+    if path == "/add/stream":
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert "event: completed" in response.text
+    else:
+        assert response.json()["code"] == status
+    assert len(recorder.add_calls) == 1
+    assert recorder.add_calls[0]["inp"].metadata == {"score": 0.5, "task_id": "memory-metadata"}
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from ...config import get_config
 from ...errors import MemoryNotFoundError, ResourceNotFoundError
-from ...logging import get_logger, traced
+from ...logging import traced
 from ...pipelines import create_pipeline
 from ...pipelines.add import AddPipeline
 from ...pipelines.delete import DefaultDeletePipeline, DeletePipeline
@@ -16,7 +16,6 @@ from ...pipelines.feedback import FeedbackPipeline
 from ...pipelines.get import DefaultGetPipeline, GetPipeline
 from ...pipelines.memory_db import MemoryCatalog, MemoryOperationRecorder, suppress_recording_errors, utcnow
 from ...pipelines.search import SearchPipeline
-from ...pipelines.skill import SkillVersionStore, get_skill_version_store
 from ...pipelines.update import DefaultUpdatePipeline, UpdatePipeline
 from ...provider_bindings import ProviderBindingResolver, provider_config_context
 from ...typing import (
@@ -30,8 +29,6 @@ from ...typing import (
     MemoryListPipelineResult,
     MemoryScrollPipelineResult,
     SearchPipelineResult,
-    SkillBinding,
-    SkillContext,
     UpdatePipelineResult,
 )
 from ..algorithm import binding_for_memory_algorithm
@@ -61,8 +58,6 @@ from ..schemas import (
     UpdateRequest,
 )
 
-logger = get_logger(__name__)
-
 PipelineKind = Literal["add", "search", "get", "delete", "update", "feedback", "dreaming"]
 SEARCH_PIPELINE_NAME = "search_pipeline"
 
@@ -89,7 +84,6 @@ class MemoryService:
         feedback_pipeline_name: str | None = None,
         dreaming_pipeline_name: str | None = None,
         operation_recorder: MemoryOperationRecorder | None = None,
-        skill_store: SkillVersionStore | None = None,
         provider_binding_resolver: ProviderBindingResolver | None = None,
     ) -> None:
         self._add = add_pipeline
@@ -120,7 +114,6 @@ class MemoryService:
             "_dreaming": ("dreaming", dreaming_pipeline_name),
         }
         self._recorder = operation_recorder or MemoryOperationRecorder()
-        self._skill_store = skill_store if skill_store is not None else get_skill_version_store()
         self._algorithm_add_pipelines: dict[str, AddPipeline] = {}
         self._provider_binding_resolver = provider_binding_resolver
 
@@ -175,15 +168,12 @@ class MemoryService:
         request_submitted_at = utcnow()
         config_ctx = await self._provider_config_context(ctx)
         with config_ctx:
-            skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
             return await self._add_with_context(
                 pipeline,
                 payload,
                 ctx,
-                request,
                 add_record_id,
                 request_submitted_at,
-                skill_bindings,
             )
 
     @traced("memory_service.add_stream")
@@ -214,7 +204,6 @@ class MemoryService:
         request_submitted_at = utcnow()
         config_ctx = await self._provider_config_context(ctx)
         with config_ctx:
-            skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
             yield {
                 "event": "progress",
                 "stage": "accepted",
@@ -228,9 +217,6 @@ class MemoryService:
                     request_submitted_at=request_submitted_at,
                     add_record_id=add_record_id,
                     status="processing",
-                    skill_bindings=skill_bindings,
-                    score=request.score,
-                    task_id=request.task_id,
                 ),
                 operation="add",
             )
@@ -371,18 +357,17 @@ class MemoryService:
         pipeline: AddPipeline,
         payload,
         ctx,
-        request: AddRequest,
         add_record_id: str,
         request_submitted_at,
-        skill_bindings,
     ):
         try:
             if payload.mode == "async":
+                # Keep the existing async payload shape during rolling deployment.
                 record_metadata = {
                     "request_submitted_at": request_submitted_at.isoformat(),
-                    "skill_bindings": [binding.model_dump(mode="json") for binding in skill_bindings or []],
-                    "score": request.score,
-                    "task_id": request.task_id,
+                    "skill_bindings": [],
+                    "score": None,
+                    "task_id": None,
                 }
                 await suppress_recording_errors(
                     self._recorder.record_add_input(
@@ -391,9 +376,6 @@ class MemoryService:
                         request_submitted_at=request_submitted_at,
                         add_record_id=add_record_id,
                         status="queued",
-                        skill_bindings=skill_bindings,
-                        score=request.score,
-                        task_id=request.task_id,
                     ),
                     operation="add",
                 )
@@ -410,9 +392,6 @@ class MemoryService:
                     request_submitted_at=request_submitted_at,
                     add_record_id=add_record_id,
                     status="processing",
-                    skill_bindings=skill_bindings,
-                    score=request.score,
-                    task_id=request.task_id,
                 ),
                 operation="add",
             )
@@ -423,26 +402,6 @@ class MemoryService:
                 operation="add",
             )
             raise
-
-    async def _bind_skill_context(
-        self,
-        project_id: str,
-        add_record_id: str,
-        skill_context: list[SkillContext] | None,
-    ) -> list[SkillBinding] | None:
-        """Resolve ``skill_context`` to trace bindings, swallowing all failures."""
-
-        if self._skill_store is None or not skill_context:
-            return None
-        try:
-            return await self._skill_store.bind_skill_context(
-                project_id=project_id,
-                add_record_id=add_record_id,
-                skill_context=skill_context,
-            )
-        except Exception as exc:  # noqa: BLE001 - binding must never block add
-            logger.warning("skill_context binding failed", error=str(exc), add_record_id=add_record_id)
-            return None
 
     @traced("memory_service.search")
     async def search(
