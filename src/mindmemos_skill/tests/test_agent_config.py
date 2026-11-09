@@ -21,11 +21,23 @@ def test_presets_expand_through_all_algorithm_and_pipeline_boundaries():
     service = deployment.service
     tree = service.training_pipelines["treeskill"].config.trainer.config
     forest = service.training_pipelines["skill_forest"].config.trainer.config
-    evolution = service.evolution_pipelines["simple"].config.evolver.config
-    assert tree.optimizer == service.agents["treeskill_qwen3_5_thinking"].config
-    assert tree.failure_optimizer == tree.router == service.agents["treeskill_qwen3_5_fast"].config
-    assert forest.optimizer.model == service.agents["skill_forest_gpt_5_4_mini"].config.model
-    assert evolution.optimizer == service.agents["simple_evolve_gpt_5_4_mini"].config
+    evolution = service.evolution_pipelines["offline"].config.evolver.config
+    assert tree.optimizer == service.agents["treeskill_analysis_deepseek_v4_flash_thinking"].config
+    assert (
+        tree.failure_optimizer
+        == tree.router
+        == service.agents["treeskill_failure_routing_deepseek_v4_flash_no_thinking"].config
+    )
+    assert (
+        forest.optimizer.model
+        == service.agents["skill_forest_optimizer_deepseek_v4_flash_reasoning_medium"].config.model
+    )
+    assert (
+        evolution.agent
+        == service.agents[
+            raw["service"]["evolution_pipelines"]["offline"]["config"]["evolver"]["config"]["agent"]
+        ].config
+    )
     assert (
         service.manage_pipeline.config.algorithm.chat
         == service.agents[raw["service"]["manage_pipeline"]["config"]["algorithm"]["chat"]].config
@@ -33,8 +45,16 @@ def test_presets_expand_through_all_algorithm_and_pipeline_boundaries():
     assert tree.failure_optimizer is not tree.router
     tree.failure_optimizer.extra_body["demo_mutation"] = True
     assert "demo_mutation" not in tree.router.extra_body
-    assert "demo_mutation" not in service.agents["treeskill_qwen3_5_fast"].config.extra_body
-    assert "demo_mutation" not in raw["service"]["agents"]["treeskill_qwen3_5_fast"]["config"]["extra_body"]
+    assert (
+        "demo_mutation"
+        not in service.agents["treeskill_failure_routing_deepseek_v4_flash_no_thinking"].config.extra_body
+    )
+    assert (
+        "demo_mutation"
+        not in raw["service"]["agents"]["treeskill_failure_routing_deepseek_v4_flash_no_thinking"]["config"][
+            "extra_body"
+        ]
+    )
 
 
 def test_expanded_runtime_options_survive_reconstruction_without_names():
@@ -43,14 +63,14 @@ def test_expanded_runtime_options_survive_reconstruction_without_names():
     assert isinstance(expanded["training_pipelines"]["treeskill"]["config"]["trainer"]["config"]["router"], dict)
     deployment.service.agents.clear()
     reconstructed = resolve_service_config(deployment.service)
-    assert reconstructed.training_pipelines["treeskill"].config.trainer.config.router.model == "qwen3.5-9b"
+    assert reconstructed.training_pipelines["treeskill"].config.trainer.config.router.model == "deepseek-v4-flash"
 
 
 @pytest.mark.parametrize(
     ("name", "message"),
     [
         ("treeskill_missing", "Unknown Agent preset"),
-        ("skill_forest_gpt_5_4_mini", "must belong to algorithm 'treeskill'"),
+        ("skill_forest_optimizer_deepseek_v4_flash_reasoning_medium", "must belong to algorithm 'treeskill'"),
         ("treeskill_codex", "allowed backends"),
     ],
 )
@@ -128,7 +148,6 @@ def test_current_algorithm_schema_declares_chat_only_agent_fields():
     for model, fields in {
         "TreeSkillTrainerConfig": ("optimizer", "failure_optimizer", "router"),
         "SkillForestTrainerConfig": ("optimizer",),
-        "SimpleEvolverConfig": ("optimizer",),
         "SkillManageConfig": ("chat",),
     }.items():
         for field in fields:
@@ -152,8 +171,8 @@ def test_service_example_uses_only_algorithm_owned_named_references():
                     consumed.add(name)
                 else:
                     assert name.get("class_name", "openai_chat") == "openai_chat"
-    name = raw["evolution_pipelines"]["simple"]["config"]["evolver"]["config"]["optimizer"]
-    assert name.startswith("simple_evolve_")
+    name = raw["evolution_pipelines"]["offline"]["config"]["evolver"]["config"]["agent"]
+    assert name.startswith("offline_evolution_")
     consumed.add(name)
     name = raw["manage_pipeline"]["config"]["algorithm"]["chat"]
     assert name.startswith("skill_manage_")
@@ -215,14 +234,12 @@ def test_shared_connection_settings_cannot_construct_an_agent():
 
 
 def test_algorithms_reject_constructor_factory_overrides():
-    from mindmemos_skill.algos.evolve.simple_evolve import SimpleEvolverConfig, SimpleSkillEvolver
     from mindmemos_skill.algos.train.skill_forest import SkillForestTrainer, SkillForestTrainerConfig
     from mindmemos_skill.algos.train.treeskill import TreeSkillTrainer
 
     for implementation, config in (
         (SkillForestTrainer, SkillForestTrainerConfig(optimizer={"model": "offline"})),
         (TreeSkillTrainer, TreeSkillTrainerConfig(optimizer={"model": "offline"}, router={"model": "offline"})),
-        (SimpleSkillEvolver, SimpleEvolverConfig(optimizer={"model": "offline"})),
     ):
         with pytest.raises(TypeError):
             implementation(config, agent_factory=lambda settings: None)

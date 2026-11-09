@@ -258,7 +258,7 @@ Both inputs produce the same `SkillService` implementing `MindMemOSSkill`. The c
 
 Configuration contains one `persistence` with an inline `database`, an optional `repository_pipeline`, and named `training_pipelines` / `evolution_pipelines` mappings containing complete definitions. See the [default configuration](../../config/mindmemos_skill/dev.example.yaml) and [assembly contract](../../docs/mindmemos_skill/central_repository_api.md).
 
-Algorithms construct Agents through `Agent.from_config()` using validated settings that retain the registered `class_name`. Inline settings and named presets both follow the field's backend whitelist. TreeSkill, Skill-Forest, and SimpleEvolver accept only their algorithm config; their constructors no longer accept `agent_factory`. Inline fields allowing several backends require an explicit `class_name`.
+Algorithms construct Agents through `Agent.from_config()` using validated settings that retain the registered `class_name`. Inline settings and named presets both follow the field's backend whitelist. TreeSkill and Skill-Forest accept only their algorithm config; their constructors no longer accept `agent_factory`. Inline fields allowing several backends require an explicit `class_name`.
 
 Each pipeline owns its nested algorithm, environment and agent settings. Repeated configuration creates independent components; there are no global resource references. The factory constructs one `SkillPersistence` and passes it to every pipeline through the fixed `persistence` keyword. Pipeline constructors accept `config` and `persistence`; their `config_type` models validate nested settings, and the implementation constructs local components through their existing registries.
 

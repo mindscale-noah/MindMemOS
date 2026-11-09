@@ -541,10 +541,10 @@ async def test_single_and_collection_evolution_share_sdk_route_and_task_kind(sce
             )
 
     single = SinglePipeline(SingleConfig(), persistence=service._persistence)
-    monkeypatch.setitem(service._evolution_pipelines, "simple", single)
-    monkeypatch.setitem(service._backends, "evolution_pipelines.simple", single)
-    config.fastapi.evolution_pipelines = {"simple", "offline"}
-    config.fastapi.default_evolution_pipeline = "simple"
+    monkeypatch.setitem(service._evolution_pipelines, "custom", single)
+    monkeypatch.setitem(service._backends, "evolution_pipelines.custom", single)
+    config.fastapi.evolution_pipelines = {"custom", "offline"}
+    config.fastapi.default_evolution_pipeline = "custom"
     app = create_app(service, api_config=config.fastapi)
     assert "/v1/skills/algos/evolve/offline" not in app.openapi()["paths"]
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as http:
@@ -582,7 +582,7 @@ async def test_single_and_collection_evolution_share_sdk_route_and_task_kind(sce
         invalid = await http.post(
             "/v1/skills/algos/evolve",
             json={
-                "pipeline": "simple",
+                "pipeline": "custom",
                 "skill_version_ids": [members[0].base.version_id],
                 "auto_accept": False,
             },

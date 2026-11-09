@@ -1031,8 +1031,8 @@ def test_http_policy_yaml_remains_strict():
     """Validate the deployment policy without accepting request-level pipeline names."""
     path = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/dev.example.yaml"
     policy = FastAPIConfig.model_validate(yaml.safe_load(path.read_text(encoding="utf-8"))["fastapi"])
-    assert policy.evolution_pipelines == {"simple", "offline"}
-    assert policy.default_evolution_pipeline == "simple"
+    assert policy.evolution_pipelines == {"offline"}
+    assert policy.default_evolution_pipeline == "offline"
 
 
 def test_http_default_must_be_an_allowed_evolution_pipeline():
@@ -1040,7 +1040,7 @@ def test_http_default_must_be_an_allowed_evolution_pipeline():
     with pytest.raises(ValueError, match="default_evolution_pipeline"):
         FastAPIConfig(
             auth=HttpAuthConfig(mode="none", default_project_id="project"),
-            evolution_pipelines={"simple"},
+            evolution_pipelines={"custom"},
             default_evolution_pipeline="offline",
         )
 
@@ -1051,8 +1051,8 @@ async def test_custom_service_reports_unavailable_evolution_through_common_contr
     service.submit_evolution.side_effect = NotImplementedError("Evolution is unavailable")
     policy = FastAPIConfig(
         auth=HttpAuthConfig(mode="none", default_project_id="project"),
-        evolution_pipelines={"simple", "offline"},
-        default_evolution_pipeline="simple",
+        evolution_pipelines={"offline"},
+        default_evolution_pipeline="offline",
     )
     app = create_app(
         service,
@@ -1065,6 +1065,7 @@ async def test_custom_service_reports_unavailable_evolution_through_common_contr
         for body in ({"skill_version_id": "skv-a"}, {"pipeline": "offline", "skill_version_ids": ["skv-a", "skv-b"]}):
             response = await client.post("/v1/skills/algos/evolve", json=body)
             assert response.status_code == 422
+            assert service.submit_evolution.call_args.kwargs["pipeline"] == "offline"
 
 
 def test_local_import_does_not_load_http_dependencies():

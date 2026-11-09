@@ -410,7 +410,7 @@ def test_service_example_config_is_valid():
     assert config.repository_pipeline.class_name == "repository"
     assert set(config.training_pipelines) == {"treeskill", "skill_forest"}
     assert "training_environments" not in config.model_fields
-    assert set(config.evolution_pipelines) == {"simple", "offline"}
+    assert set(config.evolution_pipelines) == {"offline"}
 
 
 @pytest.mark.asyncio

@@ -7,14 +7,15 @@ from pydantic import BaseModel, Field, JsonValue, TypeAdapter, create_model
 
 from ..agents import Agent
 from ..agents.config import AgentName
-from ..algos import Algorithm, SkillEvolver, SkillTrainer
+from ..algos import Algorithm, SkillTrainer
+from ..algos.evolve.offline_evolution.evolver import OfflineSkillEvolver
 from ..api.typing import TrainingRequest
 from ..envs import Environment
 from ..envs.data import DataSample
 from ..infra import Infrastructure
 from ..infra.database import Database
 from ..pipelines import AnalyzePipeline, EvolutionPipeline, ManagePipeline, Pipeline, TrainingPipeline
-from ..pipelines.builtin_pipelines.evolve.config import SimpleEvolutionPipelineConfig
+from ..pipelines.builtin_pipelines.offline_evolution.config import OfflineEvolutionPipelineConfig
 from ..pipelines.builtin_pipelines.repository.repository import RepositoryPipeline
 from ..pipelines.builtin_pipelines.training.config import TrainingPipelineConfig
 from ..registry import Registrable
@@ -76,18 +77,17 @@ def skill_config_schema() -> dict[str, Any]:
         ValueError: A required backend family has no registered implementations.
     """
     trainer = _choice(Algorithm, SkillTrainer)
-    evolver = _choice(Algorithm, SkillEvolver)
     training = create_model(
         "TrainingPipelineEditorConfig",
         __base__=TrainingPipelineConfig,
         trainer=_field(TrainingPipelineConfig, "trainer", trainer),
     )
     evolution = create_model(
-        "SimpleEvolutionPipelineEditorConfig",
-        __base__=SimpleEvolutionPipelineConfig,
-        evolver=_field(SimpleEvolutionPipelineConfig, "evolver", evolver),
+        "OfflineEvolutionPipelineEditorConfig",
+        __base__=OfflineEvolutionPipelineConfig,
+        evolver=_field(OfflineEvolutionPipelineConfig, "evolver", _choice(Algorithm, OfflineSkillEvolver)),
     )
-    overrides = {TrainingPipelineConfig: training, SimpleEvolutionPipelineConfig: evolution}
+    overrides = {TrainingPipelineConfig: training, OfflineEvolutionPipelineConfig: evolution}
     database = _choice(Infrastructure, Database)
     persistence = create_model(
         "PersistenceEditorConfig",

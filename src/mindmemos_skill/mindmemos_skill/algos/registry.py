@@ -8,7 +8,6 @@ _BUILTIN_MODULES = (
     ".manage.skill_manage.algorithm",
     ".train.treeskill.trainer",
     ".train.skill_forest.trainer",
-    ".evolve.simple_evolve.evolver",
     ".evolve.offline_evolution.evolver",
 )
 """Modules whose decorators register supported algorithm implementations."""

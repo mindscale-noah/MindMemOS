@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from mindmemos_skill.agents import OpenAIChatConfig
 from mindmemos_skill.algos import Algorithm, SkillTrainer
 from mindmemos_skill.algos.evolve.base import SkillEvolver
 from mindmemos_skill.algos.train.skill_forest.config import SkillForestTrainerConfig
@@ -21,8 +20,8 @@ EXAMPLE = Path(__file__).resolve().parents[3] / "config/mindmemos_skill/dev.exam
 """Public deployment example used to verify real nested component definitions."""
 
 
-def test_deployment_example_covers_pipeline_fields_and_nondefault_agent_options():
-    """Detect missing pipelines and ensure omitted Agent options match their defaults."""
+def test_deployment_example_covers_builtins_and_preserves_options():
+    """Cover every builtin and preserve options when defaults are omitted."""
     value = yaml.safe_load(EXAMPLE.read_text())
     deployment = load_skill_config(EXAMPLE.read_text())
     service = value["service"]
@@ -47,32 +46,9 @@ def test_deployment_example_covers_pipeline_fields_and_nondefault_agent_options(
         and ".demos." not in implementation.__module__
     }
 
-    def assert_fields_explicit(actual, complete, path):
-        """Compare nested mappings with the validated model including its defaults."""
-        if isinstance(actual, str) and isinstance(complete, dict) and actual in service["agents"]:
-            actual = service["agents"][actual]["config"]
-        if isinstance(complete, dict):
-            if isinstance(actual, dict):
-                actual = {
-                    key: (
-                        service["agents"][value]["config"]
-                        if isinstance(value, str) and value in service["agents"] and isinstance(complete.get(key), dict)
-                        else value
-                    )
-                    for key, value in actual.items()
-                }
-            assert isinstance(actual, dict), path
-            if "model" in complete and "max_completion_tokens" in complete:
-                for key in complete.keys() - actual.keys():
-                    field = OpenAIChatConfig.model_fields[key]
-                    assert not field.is_required(), f"{path}.{key}"
-                    assert complete[key] == field.get_default(call_default_factory=True), f"{path}.{key}"
-                complete = {key: value for key, value in complete.items() if key in actual}
-            assert actual.keys() == complete.keys(), path
-            for key, nested in complete.items():
-                assert_fields_explicit(actual[key], nested, f"{path}.{key}")
-
-    assert_fields_explicit(value, deployment.model_dump(mode="json"), "deployment")
+    compact = deployment.model_dump(mode="json", exclude_unset=True)
+    restored = load_skill_config(yaml.safe_dump(compact))
+    assert restored == deployment
 
 
 def test_editor_schema_reuses_original_algorithm_fields():
@@ -124,7 +100,7 @@ def test_schema_validates_real_example_and_rejects_wrong_algorithm_fields():
     trainer["config"]["num_tree"] = 3
     assert not validator.is_valid(value)
     del trainer["config"]["num_tree"]
-    trainer["class_name"] = "simple_evolve"
+    trainer["class_name"] = "offline_evolution"
     assert not validator.is_valid(value)
 
 

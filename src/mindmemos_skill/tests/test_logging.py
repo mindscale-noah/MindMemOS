@@ -57,7 +57,7 @@ def test_reconfiguration_appends_without_duplicates(tmp_path, capsys):
     assert capsys.readouterr().err.count("second record") == 1
 
 
-@pytest.mark.parametrize("algorithm", ["treeskill", "skill_forest", "simple_evolution"])
+@pytest.mark.parametrize("algorithm", ["treeskill", "skill_forest", "offline_evolution"])
 def test_algorithm_ids_only_appear_at_start(algorithm, tmp_path, capsys):
     path = tmp_path / "algorithm.log"
     configure_logging(log_file=path)

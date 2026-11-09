@@ -561,11 +561,11 @@ async def test_latest_evolution_is_scoped_and_excludes_training(audit):
     start = datetime(2026, 10, 9, tzinfo=UTC)
     for index, (project, version, algorithm) in enumerate(
         [
-            ("project", "v1", "simple"),
-            ("project", "v1", "simple_evolve"),
+            ("project", "v1", "custom"),
+            ("project", "v1", "custom_evolver"),
             ("project", "v1", "training"),
-            ("other", "v1", "simple"),
-            ("project", "v2", "simple"),
+            ("other", "v1", "custom"),
+            ("project", "v2", "custom"),
         ]
     ):
         (
@@ -587,10 +587,12 @@ async def test_latest_evolution_is_scoped_and_excludes_training(audit):
             )
         )
     assert (
-        await audit.queries(Scope(fields={"project_id": "project"})).latest_evolution("v1", ["simple", "simple_evolve"])
+        await audit.queries(Scope(fields={"project_id": "project"})).latest_evolution(
+            "v1", ["custom", "custom_evolver"]
+        )
     ) == start + timedelta(hours=1)
     assert (
-        await audit.queries(Scope(fields={"project_id": "project"})).latest_evolution("missing", ["simple"])
+        await audit.queries(Scope(fields={"project_id": "project"})).latest_evolution("missing", ["custom"])
     ) is None
     assert (await audit.queries(Scope(fields={"project_id": "project"})).latest_evolution("v1", [])) is None
 
