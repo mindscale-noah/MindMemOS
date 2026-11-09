@@ -1672,7 +1672,7 @@ requires-dist = [
 
 [[package]]
 name = "mindmemos-sdk"
-version = "0.1.4"
+version = "1.0.0"
 source = { editable = "src/mindmemos_sdk" }
 dependencies = [
     { name = "httpx" },

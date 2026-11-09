@@ -6,9 +6,12 @@ and `add`s each completed turn at the end. It is a thin shell-out layer over the
 `mindmemos` CLI — the same integration the OpenClaw plugin provides for a
 different host.
 
-**Prerequisite:** the `mindmemos` CLI must be installed and authenticated first
-(see the main SKILL.md → "Install the CLI"). Installing the plugin alone does
-nothing — it spawns the CLI for every operation.
+Install and authenticate a compatible CLI before enabling the hooks.
+DeepSeek Harness plugin 0.1.1 can send `--skill-context-json` when it detects
+Skill use. SDK 0.1.4 accepts that option. SDK 1.0.0 rejects it, so affected Memory
+writes fail. Keep a separate 0.1.4 executable and v1 config for the existing
+hooks if needed. Use the [1.0.0 CLI](../SKILL.md#install-the-cli) directly for
+Skill management and recommendation.
 
 ## Install the plugin
 

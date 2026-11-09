@@ -172,10 +172,63 @@ SDK 的 `content_hash(text)` 与 `skill_hash(text, resource_bytes)` 独立实现
 旧训练字段 `pipeline`、`environment`、`base_version_id` 不再接受。`work_dir` 是受信任训练服务
 的运行目录，不能用作注册或提交 Skill 的源路径。
 
-演化请求使用 `EvolveRequest(skill_version_id="skv-...", auto_accept=False)`，调用
-`client.skills.evolve(...)` 返回任务快照。`auto_accept` 默认 `True`；设为 `False` 时保存候选版本，
-保留已有 active 版本。通过 `TaskShowRequest(task_id=...)` 查询任务，`status == "succeeded"` 后
-从 `result` 读取版本身份、原文 `content`、Base64 `resources`、`content_hash` 和 `skill_hash`。
+### Skill 评分
+
+同步和异步 Skill 客户端提供相同的评分接口：
+
+```python
+from mindmemos_sdk.skills import (
+    EvaluationQueryRequest,
+    RecommendRequest,
+    SkillAnalyzeRequest,
+    TrajectoryAnalyzeRequest,
+)
+
+# client 是已配置的 MindMemOSClient。
+assessment = client.skills.analyze_skill(SkillAnalyzeRequest(skill_version_id="skv-..."))
+trajectory = client.skills.analyze_trajectory(TrajectoryAnalyzeRequest(trajectory_id="trajectory-..."))
+stored = client.skills.query_evaluations(EvaluationQueryRequest(skill_version_ids=["skv-..."]))
+recommended = client.skills.recommend(
+    RecommendRequest(graph_ref="my-collection", query="整理 CSV 数据", include_evaluation=True)
+)
+```
+
+`analyze_skill` 和 `analyze_trajectory` 会复用已完成的评估；`force_refresh=True` 强制重新计算。
+轨迹评估可传 `attribute` 覆盖失败归因开关，或传有限数值 `verifier_score` 覆盖已存评分。
+`query_evaluations` 只读已存结果，不触发模型调用；可按 `judge_types` 筛选，`limit` 为 1–1000。
+返回值沿用 SDK 的 `data` 字典；评分记录可能为 `completed` 或 `failed`，调用方应检查 `status`。
+
+推荐的 `include_evaluation=True` 只附带已有评估，不重新评分、不改变 Graph 排序。
+Graph 相关性分数与质量评估分别返回，不能当成同一种分数。
+服务端必须配置对应分析器；未启用时返回 API 错误，SDK 不伪造评分或隐式降级。
+
+### Offline 演化
+
+```python
+from mindmemos_sdk.skills import EvolveRequest, TaskShowRequest
+
+accepted = client.skills.evolve(
+    EvolveRequest(
+        pipeline="offline",
+        skill_version_ids=["skv-a", "skv-b"],
+        editable_skills=["sk-a"],
+        allow_create_skills=False,
+        auto_accept=False,
+    )
+)
+task = client.skills.show_task(TaskShowRequest(task_id=accepted["task_id"]))
+```
+
+`pipeline` 是服务端配置并允许调用的流水线名称。单版本也可使用 `skill_version_id`，
+它与 `skill_version_ids` 互斥；集合中每个家族最多选择一个版本。
+`editable_skills` 使用输入家族 ID：省略允许修改全部输入，空列表保持全部输入不变。
+`allow_create_skills=False` 禁止创建独立的新 Skill。
+SDK 的 `auto_accept` 默认 `True`，上述示例显式禁用；CLI 默认禁用。
+禁用时仍会保存候选版本，但不会切换已有家族的 active 版本；允许新建时仍会注册新家族。
+
+提交返回后台任务快照。查询到 `status == "succeeded"` 后，从 `result.members` 读取
+`updated`、`created`、`unchanged` 成员和对应 `version_id`。失败或取消时检查任务错误。
+演化不会自动更新 Graph；采纳候选后仍需发布相应图快照。
 
 异步客户端使用同一组请求类型；可用 `AsyncHttpTransport` 单独连接：
 
@@ -207,3 +260,35 @@ Skill 客户端直接返回服务响应中的 `data` 字典。服务端未启用
 mindmemos memory add --content "I prefer iced Americano" --user-id alice
 mindmemos memory search "coffee preference" --top-k 5 --user-id alice --token-budget 2000
 ```
+
+
+Skill 评分与查询：
+
+```bash
+mindmemos skill analyze skill my-skill
+mindmemos skill analyze skill my-skill --force-refresh
+mindmemos skill analyze trajectory TRAJECTORY_ID --no-attribute --verifier-score 0
+mindmemos skill evaluations query my-skill another-skill --judge-type static_skill --limit 20
+mindmemos skill graph recommend "整理 CSV 数据" --by my-collection --include-evaluation
+```
+
+Skill 引用可使用别名、家族 ID 或精确版本 ID；CLI 先解析，再对选定版本评分或查询。
+`--request-id` 可为两个 analyze 命令提供追踪身份。
+不传 `--attribute` / `--no-attribute` 时沿用服务端归因设置。
+
+Offline 演化支持单个或多个 Skill：
+
+```bash
+mindmemos skill evolve my-skill --pipeline offline
+mindmemos skill evolve my-skill another-skill --pipeline offline --editable-skill my-skill --no-allow-create-skills
+mindmemos skill evolve my-skill another-skill --pipeline offline --read-only --allow-create-skills
+mindmemos skill task show TASK_ID
+mindmemos skill task progress TASK_ID --follow
+```
+
+`--editable-skill` 可重复传入，CLI 将引用解析为输入家族 ID；它与 `--read-only` 互斥。
+`--read-only` 保持输入不变，仍可配合 `--allow-create-skills` 从证据创建独立 Skill。
+`--auto-accept` 才会激活已有家族的新版本；省略时仅保存候选。
+不传 `--pipeline` 时保留原有行为，使用服务端默认流水线；要指定 offline，应显式传入。
+命令立即返回任务快照，不等待模型演化完成。所有 Skill 命令成功时输出 JSON；
+参数或服务错误输出到 stderr，并返回非零退出码。

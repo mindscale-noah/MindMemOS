@@ -48,6 +48,86 @@ def test_task_log_displays_algorithm_ids_only_at_start(capsys):
     assert event["payload"]["request_id"] == "request-a"
 
 
+def test_analysis_commands_pin_versions_and_preserve_overrides(remote, capsys):
+    """Scoring resolves aliases, while trajectory analysis preserves explicit false and zero."""
+    assert cli.main(["skill", "analyze", "skill", "a", "--force-refresh", "--request-id", "trace"]) == 0
+    assert remote[-1][:2] == (
+        "algos/analyze/skill",
+        {"skill_version_id": "skv-a", "force_refresh": True, "request_id": "trace"},
+    )
+    assert json.loads(capsys.readouterr().out) == {"route": "algos/analyze/skill"}
+    assert cli.main(["skill", "analyze", "trajectory", "trajectory-a", "--no-attribute", "--verifier-score", "0"]) == 0
+    assert remote[-1][0] == "algos/analyze/trajectory"
+    assert remote[-1][1]["attribute"] is False
+    assert remote[-1][1]["verifier_score"] == 0.0
+
+
+def test_query_evaluations_does_not_trigger_analysis(remote):
+    assert cli.main(["skill", "evaluations", "query", "a", "b", "--judge-type", "static_skill", "--limit", "12"]) == 0
+    assert remote[-1][:2] == (
+        "algos/evaluations/query",
+        {"skill_version_ids": ["skv-a", "skv-b"], "judge_types": ["static_skill"], "limit": 12},
+    )
+    assert [route for route, _, _ in remote] == ["skill-resolve", "skill-resolve", "algos/evaluations/query"]
+
+
+def test_recommend_can_attach_evaluations(remote):
+    assert cli.main(["skill", "graph", "recommend", "Task", "--by", "graph", "--include-evaluation"]) == 0
+    assert remote[-1][1]["include_evaluation"] is True
+    assert remote[-1][1]["graph_version_id"] == "skgv-a"
+
+
+def test_offline_collection_evolution_resolves_permissions(remote):
+    assert (
+        cli.main(
+            ["skill", "evolve", "a", "b", "--pipeline", "offline", "--editable-skill", "a", "--no-allow-create-skills"]
+        )
+        == 0
+    )
+    assert remote[-1][:2] == (
+        "algos/evolve",
+        {
+            "skill_version_ids": ["skv-a", "skv-b"],
+            "pipeline": "offline",
+            "editable_skills": ["sk-a"],
+            "allow_create_skills": False,
+            "auto_accept": False,
+        },
+    )
+
+
+def test_offline_read_only_single_version_and_activation(remote):
+    assert (
+        cli.main(
+            ["skill", "evolve", "a", "--pipeline", "offline", "--read-only", "--allow-create-skills", "--auto-accept"]
+        )
+        == 0
+    )
+    assert remote[-1][1] == {
+        "skill_version_id": "skv-a",
+        "pipeline": "offline",
+        "editable_skills": [],
+        "allow_create_skills": True,
+        "auto_accept": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["evolve", "a", "skv-a", "--pipeline", "offline"],
+        ["evolve", "a", "--editable-skill", "b"],
+        ["evolve", "a", "--editable-skill", "a", "--editable-skill", "skv-a"],
+        ["analyze", "trajectory", "t1", "--verifier-score", "nan"],
+        ["evaluations", "query", "a", "--limit", "1001"],
+    ],
+)
+def test_invalid_analysis_and_evolution_do_not_submit(remote, capsys, arguments):
+    assert cli.main(["skill", *arguments]) == 2
+    assert json.loads(capsys.readouterr().err)["code"] == "invalid_argument"
+    assert all(not route.startswith("algos/") for route, _, _ in remote)
+
+
 @pytest.fixture
 def remote(monkeypatch):
     """Use real SDK serialization over recorded in-memory HTTP responses."""

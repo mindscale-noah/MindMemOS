@@ -28,6 +28,7 @@ from .typing import (
     CommitRequest,
     DeleteRequest,
     DiffRequest,
+    EvaluationQueryRequest,
     EvolveRequest,
     GraphResolveRequest,
     GraphSnapshotRequest,
@@ -39,10 +40,12 @@ from .typing import (
     RegisterRequest,
     RemoveGraphMembersRequest,
     ShowRequest,
+    SkillAnalyzeRequest,
     SkillResolveRequest,
     TaskProgressRequest,
     TaskShowRequest,
     TrainingSplitRequest,
+    TrajectoryAnalyzeRequest,
     TrajectoryListRequest,
     TrajectoryReportRequest,
     TrajectoryShowRequest,
@@ -155,8 +158,18 @@ def add_skill_commands(subparsers: argparse._SubParsersAction) -> None:
     delete = command("delete", _delete, "Soft-delete the entire owning Skill family.")
     delete.add_argument("skill_ref")
     delete.add_argument("--yes", "-y", action="store_true")
-    evolve = command("evolve", _evolve, "Submit evolution of the selected version.")
-    evolve.add_argument("skill_ref")
+    evolve = command("evolve", _evolve, "Submit evolution of selected Skill versions.")
+    evolve.add_argument("skill_refs", nargs="+", help="Skill aliases, family IDs or exact version IDs.")
+    evolve.add_argument("--pipeline", help="Configured server pipeline, for example offline.")
+    editable = evolve.add_mutually_exclusive_group()
+    editable.add_argument("--editable-skill", action="append", help="Editable input Skill reference; repeatable.")
+    editable.add_argument("--read-only", action="store_true", help="Keep all input Skills unchanged.")
+    evolve.add_argument(
+        "--allow-create-skills",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Allow or forbid new Skills; omission uses the service default.",
+    )
     evolve.add_argument("--auto-accept", action="store_true")
     train = command("train", _train, "Submit training of the selected version.")
     train.add_argument("skill_ref")
@@ -173,6 +186,7 @@ def add_skill_commands(subparsers: argparse._SubParsersAction) -> None:
     _add_task_commands(commands)
     _add_trajectory_commands(commands)
     _add_graph_commands(commands)
+    _add_analysis_commands(commands)
 
 
 def _nested(commands, group, name, handler):
@@ -192,6 +206,27 @@ def _add_task_commands(commands):
     progress.add_argument("task_id")
     progress.add_argument("--after", type=_nonnegative, default=0)
     progress.add_argument("--follow", "-f", action="store_true")
+
+
+def _add_analysis_commands(commands):
+    """Expose scoring commands separately from stored evaluation queries."""
+    root = commands.add_parser("analyze", help="Score Skills or analyze stored trajectories.")
+    nested = root.add_subparsers(dest="analyze_command", required=True)
+    skill = _nested(nested, "analyze", "skill", _analyze_skill)
+    skill.add_argument("skill_ref")
+    trajectory = _nested(nested, "analyze", "trajectory", _analyze_trajectory)
+    trajectory.add_argument("trajectory_id")
+    trajectory.add_argument("--attribute", action=argparse.BooleanOptionalAction, default=None)
+    trajectory.add_argument("--verifier-score", type=float)
+    for parser in (skill, trajectory):
+        parser.add_argument("--request-id")
+        parser.add_argument("--force-refresh", action="store_true")
+    root = commands.add_parser("evaluations", help="Read stored evaluations without running models.")
+    nested = root.add_subparsers(dest="evaluations_command", required=True)
+    query = _nested(nested, "evaluations", "query", _query_evaluations)
+    query.add_argument("skill_refs", nargs="+")
+    query.add_argument("--judge-type", choices=("static_skill", "trajectory"), action="append")
+    query.add_argument("--limit", type=_positive, default=200)
 
 
 def _add_trajectory_commands(commands):
@@ -248,6 +283,7 @@ def _add_graph_commands(commands):
     recommend.add_argument("--top-k", type=_positive, default=5)
     recommend.add_argument("--strategy", choices=("graph", "vector"), default="graph")
     recommend.add_argument("--include-scenes", action="store_true")
+    recommend.add_argument("--include-evaluation", action="store_true", help="Attach stored evaluation results.")
 
 
 def _print_json(data, *, stream=None):
@@ -468,9 +504,58 @@ def _delete(client, args):
 
 
 def _evolve(client, args):
-    """Submit evolution with explicit activation behavior."""
+    """Pin input versions and validate editable families before submitting evolution."""
+    selected = [_selection(client, reference) for reference in args.skill_refs]
+    families = {item["skill_id"] for item in selected}
+    if len(families) != len(selected):
+        raise ValueError("Evolution accepts at most one version per Skill family")
+    versions = [item["skill_version_id"] for item in selected]
+    fields = {"skill_version_id": versions[0]} if len(versions) == 1 else {"skill_version_ids": versions}
+    if args.pipeline is not None:
+        fields["pipeline"] = args.pipeline
+    if args.read_only:
+        fields["editable_skills"] = []
+    elif args.editable_skill is not None:
+        editable = [_selection(client, reference)["skill_id"] for reference in args.editable_skill]
+        if not set(editable) <= families:
+            raise ValueError("Editable Skills must belong to the input collection")
+        fields["editable_skills"] = editable
+    if args.allow_create_skills is not None:
+        fields["allow_create_skills"] = args.allow_create_skills
+    return client.evolve(EvolveRequest(**fields, auto_accept=args.auto_accept))
+
+
+def _analyze_skill(client, args):
+    """Resolve and score exactly one selected version."""
     selected = _selection(client, args.skill_ref)
-    return client.evolve(EvolveRequest(skill_version_id=selected["skill_version_id"], auto_accept=args.auto_accept))
+    return client.analyze_skill(
+        SkillAnalyzeRequest(
+            skill_version_id=selected["skill_version_id"],
+            request_id=args.request_id,
+            force_refresh=args.force_refresh,
+        )
+    )
+
+
+def _analyze_trajectory(client, args):
+    """Analyze a stored execution with explicit optional overrides."""
+    return client.analyze_trajectory(
+        TrajectoryAnalyzeRequest(
+            trajectory_id=args.trajectory_id,
+            request_id=args.request_id,
+            attribute=args.attribute,
+            verifier_score=args.verifier_score,
+            force_refresh=args.force_refresh,
+        )
+    )
+
+
+def _query_evaluations(client, args):
+    """Read existing evaluations for the selected exact versions."""
+    versions = [_selection(client, reference)["skill_version_id"] for reference in args.skill_refs]
+    return client.query_evaluations(
+        EvaluationQueryRequest(skill_version_ids=versions, judge_types=args.judge_type, limit=args.limit)
+    )
 
 
 def _train(client, args):
@@ -679,5 +764,6 @@ def _graph_recommend(client, args):
             top_k=args.top_k,
             strategy=args.strategy,
             include_scenes=args.include_scenes,
+            include_evaluation=args.include_evaluation,
         )
     )

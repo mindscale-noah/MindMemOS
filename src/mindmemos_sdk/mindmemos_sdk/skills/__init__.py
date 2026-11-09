@@ -10,6 +10,7 @@ from .typing import (
     CommitRequest,
     DeleteRequest,
     DiffRequest,
+    EvaluationQueryRequest,
     EvolveRequest,
     GraphResolveRequest,
     GraphSnapshotRequest,
@@ -21,12 +22,14 @@ from .typing import (
     RegisterRequest,
     RemoveGraphMembersRequest,
     ShowRequest,
+    SkillAnalyzeRequest,
     SkillResolveRequest,
     StructuredSkillInfo,
     TaskProgressRequest,
     TaskShowRequest,
     TrainingRequest,
     TrainingSplitRequest,
+    TrajectoryAnalyzeRequest,
     TrajectoryListRequest,
     TrajectoryReportRequest,
     TrajectoryShowRequest,
@@ -36,6 +39,9 @@ from .typing import (
 )
 
 __all__ = [
+    "TrajectoryAnalyzeRequest",
+    "SkillAnalyzeRequest",
+    "EvaluationQueryRequest",
     "EnvironmentConfig",
     "ActivateRequest",
     "AddGraphMembersRequest",

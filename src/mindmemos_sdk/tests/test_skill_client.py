@@ -15,6 +15,7 @@ from mindmemos_sdk.skills import (
     CommitRequest,
     DeleteRequest,
     DiffRequest,
+    EvaluationQueryRequest,
     EvolveRequest,
     GraphResolveRequest,
     GraphSnapshotRequest,
@@ -26,6 +27,7 @@ from mindmemos_sdk.skills import (
     RegisterRequest,
     RemoveGraphMembersRequest,
     ShowRequest,
+    SkillAnalyzeRequest,
     SkillClient,
     SkillResolveRequest,
     StructuredSkillInfo,
@@ -33,6 +35,7 @@ from mindmemos_sdk.skills import (
     TaskShowRequest,
     TrainingRequest,
     TrainingSplitRequest,
+    TrajectoryAnalyzeRequest,
     TrajectoryListRequest,
     TrajectoryReportRequest,
     TrajectoryShowRequest,
@@ -44,6 +47,24 @@ from mindmemos_sdk.skills.core import SkillRoute
 from mindmemos_sdk.transport import AsyncHttpTransport, HttpTransport
 
 REQUESTS = [
+    (
+        SkillClient.analyze_skill,
+        AsyncSkillClient.analyze_skill,
+        SkillAnalyzeRequest(skill_version_id="v1", request_id="trace", force_refresh=True),
+        "algos/analyze/skill",
+    ),
+    (
+        SkillClient.analyze_trajectory,
+        AsyncSkillClient.analyze_trajectory,
+        TrajectoryAnalyzeRequest(trajectory_id="t1", attribute=False, verifier_score=0.0),
+        "algos/analyze/trajectory",
+    ),
+    (
+        SkillClient.query_evaluations,
+        AsyncSkillClient.query_evaluations,
+        EvaluationQueryRequest(skill_version_ids=["v1", "v2"], judge_types=["static_skill"], limit=10),
+        "algos/evaluations/query",
+    ),
     (
         SkillClient.add_graph_members,
         AsyncSkillClient.add_graph_members,
@@ -374,3 +395,36 @@ def test_skill_client_roundtrip_with_local_service(tmp_path):
             client.show_trajectory(TrajectoryShowRequest(trajectory_id=reported["trajectory_id"]))["skill_version_id"]
             == version_id
         )
+        with pytest.raises(ApiError, match="configured"):
+            client.analyze_skill(SkillAnalyzeRequest(skill_version_id=version_id))
+        with pytest.raises(ApiError, match="configured"):
+            client.analyze_trajectory(TrajectoryAnalyzeRequest(trajectory_id=reported["trajectory_id"]))
+        with pytest.raises(ApiError, match="configured"):
+            client.query_evaluations(EvaluationQueryRequest(skill_version_ids=[version_id]))
+
+
+@pytest.mark.parametrize(
+    "model, fields",
+    [
+        (SkillAnalyzeRequest, {"skill_version_id": " "}),
+        (SkillAnalyzeRequest, {"skill_version_id": "v1", "force_refresh": "true"}),
+        (TrajectoryAnalyzeRequest, {"trajectory_id": ""}),
+        (TrajectoryAnalyzeRequest, {"trajectory_id": "t1", "verifier_score": float("inf")}),
+        (EvaluationQueryRequest, {"skill_version_ids": []}),
+        (EvaluationQueryRequest, {"skill_version_ids": [" "]}),
+        (EvaluationQueryRequest, {"skill_version_ids": ["v1"], "limit": 1001}),
+        (EvaluationQueryRequest, {"skill_version_ids": ["v1"], "judge_types": ["unknown"]}),
+    ],
+)
+def test_analysis_requests_reject_invalid_inputs(model, fields):
+    """Reject invalid scoring inputs before transport."""
+    with pytest.raises(ValueError):
+        model(**fields)
+
+
+def test_recommend_evaluation_is_opt_in():
+    """Adding evaluation support leaves legacy request serialization unchanged."""
+    request = RecommendRequest(graph_ref="g", query="Task")
+    assert "include_evaluation" not in request.model_dump(exclude_unset=True)
+    selected = RecommendRequest(graph_ref="g", query="Task", include_evaluation=True)
+    assert selected.model_dump(exclude_unset=True)["include_evaluation"] is True

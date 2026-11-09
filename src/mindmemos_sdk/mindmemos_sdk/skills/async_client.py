@@ -10,6 +10,7 @@ from .typing import (
     CommitRequest,
     DeleteRequest,
     DiffRequest,
+    EvaluationQueryRequest,
     EvolveRequest,
     GraphResolveRequest,
     GraphSnapshotRequest,
@@ -21,12 +22,14 @@ from .typing import (
     RegisterRequest,
     RemoveGraphMembersRequest,
     ShowRequest,
+    SkillAnalyzeRequest,
     SkillData,
     SkillRequestBody,
     SkillResolveRequest,
     TaskProgressRequest,
     TaskShowRequest,
     TrainingRequest,
+    TrajectoryAnalyzeRequest,
     TrajectoryListRequest,
     TrajectoryReportRequest,
     TrajectoryShowRequest,
@@ -323,6 +326,39 @@ class AsyncSkillClient:
             Recommended versions when the pipeline is available.
         """
         return await self._post(SkillRoute.RECOMMEND, request)
+
+    async def analyze_skill(self, request: SkillAnalyzeRequest) -> SkillData:
+        """Run or reuse static Skill scoring.
+
+        Args:
+            request: Exact version, optional trace identity and cache refresh choice.
+
+        Returns:
+            Evaluation record with status, scores, findings and provenance.
+        """
+        return await self._post(SkillRoute.SKILL_ANALYZE, request)
+
+    async def analyze_trajectory(self, request: TrajectoryAnalyzeRequest) -> SkillData:
+        """Run or reuse execution analysis.
+
+        Args:
+            request: Stored trajectory, optional attribution and verifier score overrides.
+
+        Returns:
+            Evaluation record with status, verdict and supporting evidence.
+        """
+        return await self._post(SkillRoute.TRAJECTORY_ANALYZE, request)
+
+    async def query_evaluations(self, request: EvaluationQueryRequest) -> SkillData:
+        """Read completed evaluations without triggering model calls.
+
+        Args:
+            request: Exact versions, optional analyzer filters and result limit.
+
+        Returns:
+            Items containing stored completed evaluation records.
+        """
+        return await self._post(SkillRoute.EVALUATIONS_QUERY, request)
 
     async def evolve(self, request: EvolveRequest) -> SkillData:
         """Submit one version or a collection through the evolution endpoint.

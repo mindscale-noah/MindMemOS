@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue, StringConstraints, model_validator
 
 from .config import EnvironmentConfig
+
+NonemptyIdentity = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+"""Nonblank service identity, normalized like the HTTP request boundary."""
 
 
 class SkillRequestBody(BaseModel):
@@ -344,6 +347,9 @@ class RecommendRequest(GraphResolveRequest):
     include_scenes: bool = Field(default=False, strict=True)
     """Vector-only option matching Scene nodes as well as Skill nodes."""
 
+    include_evaluation: bool = Field(default=False, strict=True)
+    """Attach stored evaluations without changing recommendation ordering."""
+
     @model_validator(mode="after")
     def validate_strategy(self):
         """Reject vector-only options in graph mode and blank instructions."""
@@ -352,6 +358,51 @@ class RecommendRequest(GraphResolveRequest):
         if not self.query.strip():
             raise ValueError("Query must not be blank")
         return self
+
+
+class SkillAnalyzeRequest(SkillRequestBody):
+    """Run or reuse static scoring for an exact Skill version."""
+
+    skill_version_id: NonemptyIdentity
+    """Exact registered version to assess."""
+
+    request_id: NonemptyIdentity | None = None
+    """Optional trace identity, excluded from the evaluation cache key."""
+
+    force_refresh: bool = Field(default=False, strict=True)
+    """Recompute even when a completed evaluation is cached."""
+
+
+class TrajectoryAnalyzeRequest(SkillRequestBody):
+    """Run or reuse analysis of one stored execution."""
+
+    trajectory_id: NonemptyIdentity
+    """Exact stored trajectory to assess."""
+
+    request_id: NonemptyIdentity | None = None
+    """Optional trace identity, excluded from the evaluation cache key."""
+
+    attribute: bool | None = None
+    """Override failure attribution; None uses the service configuration."""
+
+    verifier_score: FiniteFloat | None = None
+    """Optional finite verifier score overriding the stored reward."""
+
+    force_refresh: bool = Field(default=False, strict=True)
+    """Recompute even when a completed evaluation is cached."""
+
+
+class EvaluationQueryRequest(SkillRequestBody):
+    """Read completed evaluations without running an analyzer."""
+
+    skill_version_ids: list[NonemptyIdentity] = Field(min_length=1)
+    """Exact versions whose stored evaluations should be returned."""
+
+    judge_types: list[Literal["static_skill", "trajectory"]] | None = None
+    """Optional analyzer families to include; None includes both."""
+
+    limit: int = Field(default=200, ge=1, le=1000, strict=True)
+    """Maximum number of evaluation records returned."""
 
 
 class GraphMembersRequest(GraphResolveRequest):

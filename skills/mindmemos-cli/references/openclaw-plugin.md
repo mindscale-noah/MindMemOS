@@ -5,9 +5,12 @@ The OpenClaw memory plugin wires MindMemOS into OpenClaw automatically: it
 `add`s finished conversations at the end of a turn. It is a thin hook layer over
 the `mindmemos` CLI.
 
-**Prerequisite:** the `mindmemos` CLI must be installed and authenticated first
-(see the main SKILL.md → "Install the CLI"). Installing the plugin alone does
-nothing — it shells out to the CLI for every operation.
+Install and authenticate a compatible CLI before enabling the hooks.
+OpenClaw plugin 0.1.3 can send `--skill-context-json` when it detects Skill use.
+SDK 0.1.4 accepts that option. SDK 1.0.0 rejects it, so affected Memory writes
+fail. Keep a separate 0.1.4 executable and v1 config for the existing hooks if
+needed. Use the [1.0.0 CLI](../SKILL.md#install-the-cli) directly for Skill
+management and recommendation.
 
 ## Install the plugin
 
@@ -61,7 +64,7 @@ Optional plugin config:
 }
 ```
 
-- `cli` — command used to invoke the CLI. Defaults to `mindmemos`. If OpenClaw does not run with the CLI on its PATH, set this to an absolute path or a wrapper command (e.g. `uv run mindmemos` inside the repo).
+- `cli` — executable used to invoke the CLI. Defaults to `mindmemos`. Use an absolute executable path if the gateway cannot find it on PATH.
 - `topK` — number of memories injected per turn.
 - `tokenBudget` — optional strict token budget for recall; when set, `memory search --token-budget` caps the injected memories by estimated tokens (token-budget retention) instead of only by `topK` count. Omit to keep legacy behavior.
 - `addMode` — `sync` blocks until extraction finishes; `async` (default) enqueues and returns immediately. Note: in `async` mode the plugin only sees CLI-level failures — a server-side add failure that happens after the CLI exits 0 is not logged by the plugin.
@@ -154,12 +157,10 @@ Fix (pick one):
 - **Point `cli` at an absolute path** (most reliable, no PATH dependency):
   set the plugin config `"cli": "/Users/you/.local/bin/mindmemos"` (use the path
   from `which mindmemos`).
-- **Use a wrapper that resolves the CLI itself**, e.g. `"cli": "uv run mindmemos"`
-  when OpenClaw's working directory is this repo.
-- **Install the CLI somewhere already on the GUI PATH** — `uv tool install
-  mindmemos` / `pipx install mindmemos` put it in `~/.local/bin`; ensure that dir
-  is on the PATH the OpenClaw process inherits (for GUI apps on macOS this means
-  the login environment, not just `~/.zshrc`).
+- **Use an executable wrapper script** if the hook needs a separate config.
+  Set `MINDMEMOS_CONFIG_DIR` in the wrapper for SDK 0.1.4 and forward every
+  argument. Point `cli` to the wrapper's absolute path. The field takes a single
+  executable, so a command string such as `uv run mindmemos` fails.
 
 After changing `cli`, re-run a turn and confirm the gateway log no longer shows
 the spawn error.

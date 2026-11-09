@@ -51,4 +51,4 @@ __all__ = [
     "ApiError",
 ]
 
-__version__ = "0.1.4"
+__version__ = "1.0.0"
