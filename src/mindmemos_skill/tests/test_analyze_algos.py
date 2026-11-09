@@ -91,6 +91,12 @@ async def test_skill_judge_registers_and_runs_offline(monkeypatch):
         "executability": 4,
         "maintainability": 3,
     }
+    assert result.metrics["score_reasons"] == {
+        "safety": "safe",
+        "completeness": "complete",
+        "executability": "executable",
+        "maintainability": "maintainable",
+    }
     assert result.metrics["score_mean"] == 4.0
     assert result.metadata["judge_type"] == "static_skill"
     assert result.metadata["algorithm"] == "skill_judge"

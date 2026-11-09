@@ -259,6 +259,7 @@ class SkillJudge(SkillAnalyzer[SkillJudgeConfig, SkillJudgeRequest]):
         ]
         metrics: dict[str, Any] = {
             "scores": {name: verdict.scores[name].score for name in _DIMENSIONS},
+            "score_reasons": {name: verdict.scores[name].reason for name in _DIMENSIONS},
             "score_mean": sum(verdict.scores[name].score for name in _DIMENSIONS) / len(_DIMENSIONS),
         }
         judge_tokens = self._token_metrics(response.usage)
