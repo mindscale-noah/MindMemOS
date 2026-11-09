@@ -6,19 +6,19 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Final
 
 from dotenv import load_dotenv
 
-if __package__:
-    from .constants import HF_TOKEN
-else:
-    from constants import HF_TOKEN
+HF_TOKEN: Final[str] = "HF_TOKEN"
+"""Name of the environment variable for the Hugging Face access token."""
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT / "config/presets/dataset_download_sources.json"
@@ -73,6 +73,20 @@ def _extract(source, destination):
 
 def _materialize(meta, destination, offline):
     """Acquire official data without selecting or modifying experiment cases."""
+    if meta["kind"] == "git":
+        if offline:
+            raise ValueError("Git downloads require network access; use --verify-only for local data.")
+        for command in (
+            ["init", "--quiet"],
+            ["remote", "add", "origin", meta["url"]],
+            ["sparse-checkout", "set", "--", *meta["paths"]],
+            ["fetch", "--depth=1", "--filter=blob:none", "origin", meta["revision"]],
+            ["checkout", "--detach", "FETCH_HEAD"],
+        ):
+            subprocess.run(["git", *command], cwd=destination, check=True)
+        shutil.rmtree(destination / ".git")
+        return {}
+
     archive_hashes = {}
     with tempfile.TemporaryDirectory() as temporary:
         temporary = Path(temporary)

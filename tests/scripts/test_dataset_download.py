@@ -1,6 +1,8 @@
 """Check official dataset acquisition without network access."""
 
 import json
+import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -180,6 +182,55 @@ def test_searchqa_download_uses_pinned_hf_parquet(tmp_path, monkeypatch):
     assert calls[0]["allow_patterns"] == ["data/*.parquet"]
     assert DOWNLOAD.main([*args, "--verify-only"]) == 0
     assert len(calls) == 1
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="Git is required to acquire AgentSkillOS")
+def test_agentskillos_download_uses_pinned_git_tree(tmp_path, monkeypatch):
+    """Publish the benchmark and seeds at the pinned commit and verify them offline."""
+    repository = tmp_path / "upstream"
+    repository.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(
+            [
+                "git",
+                "-c",
+                "user.name=Dataset Test",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                *args,
+            ],
+            cwd=repository,
+            text=True,
+        ).strip()
+
+    git("init")
+    task = Path("benchmark/AgentSkillOS_bench/tasks/task.json")
+    seed = Path("data/skill_seeds/example/SKILL.md")
+    excluded = Path("data/unrelated/input.txt")
+    for path in (task, seed, excluded):
+        (repository / path).parent.mkdir(parents=True, exist_ok=True)
+        (repository / path).write_text("pinned")
+    git("add", ".")
+    git("commit", "-m", "Pin the release")
+    revision = git("rev-parse", "HEAD")
+    (repository / task).write_text("new")
+    git("commit", "-am", "Advance upstream")
+
+    sources = DOWNLOAD._read(DOWNLOAD.SOURCES)
+    sources["skill"]["agentskillos"].update(url=repository.as_uri(), revision=revision)
+    manifest = tmp_path / "sources.json"
+    DOWNLOAD._write(manifest, sources)
+    monkeypatch.setattr(DOWNLOAD, "SOURCES", manifest)
+    args = ["download", "skill", "--name", "agentskillos", "--data-root", str(tmp_path / "downloads")]
+    assert DOWNLOAD.main(args) == 0
+    payload = tmp_path / "downloads/agentskillos"
+    assert (payload / task).read_text() == (payload / seed).read_text() == "pinned"
+    assert not (payload / excluded).exists()
+    assert not (payload / ".git").exists()
+    assert DOWNLOAD.main([*args, "--offline", "--verify-only"]) == 0
 
 
 @pytest.mark.parametrize("status", [401, 403, 429])

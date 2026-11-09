@@ -85,6 +85,15 @@
         "data/*.parquet"
       ]
     },
+    "agentskillos": {
+      "kind": "git",
+      "url": "https://github.com/ynulihao/AgentSkillOS.git",
+      "revision": "c3cfae10ea34a13973c461273ad9c5cc4aa907fe",
+      "paths": [
+        "benchmark",
+        "data/skill_seeds"
+      ]
+    },
     "skillsbench": {
       "kind": "archive",
       "url": "https://github.com/benchflow-ai/skillsbench/releases/tag/v1.0",
