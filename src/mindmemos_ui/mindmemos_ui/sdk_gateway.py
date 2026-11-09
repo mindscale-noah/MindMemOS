@@ -25,8 +25,8 @@ async def skill_client(manager: ConfigManager, *, long_running: bool = False) ->
     """
     config = manager.load_or_default()
     base_url, api_key = config.resolve_skill_connection()
-    if not api_key:
-        raise HTTPException(503, "Configure the Skill service API key before using Skills")
+    if not base_url or not api_key:
+        raise HTTPException(503, "Configure the Skill service URL and API key before using Skills")
     async with AsyncHttpTransport(
         base_url=base_url,
         api_key=api_key,

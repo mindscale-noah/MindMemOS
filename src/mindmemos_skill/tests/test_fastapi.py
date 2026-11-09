@@ -26,6 +26,7 @@ from mindmemos_skill.persistence.constants import (
     SKILL_VERSIONS_TABLE,
     SKILLS_TABLE,
     TRAJECTORIES_TABLE,
+    TRAJECTORY_VERSIONS_TABLE,
 )
 from mindmemos_skill.pipelines import BuiltinAnalyzePipeline
 from mindmemos_skill.pipelines.builtin_pipelines.analyze.config import AnalyzePipelineConfig
@@ -85,11 +86,11 @@ def gateway_token(
     algorithm: str = "HS256",
     **overrides,
 ) -> str:
-    """Sign a Gateway JWT with the Memory service's claim format."""
+    """Sign a Gateway JWT for the independent Skill data plane."""
     now = int(time.time())
     claims = {
         "iss": "mindmemos-gateway",
-        "aud": "memory-data-plane",
+        "aud": "skill-data-plane",
         "sub": "account-a",
         "account_id": "account-a",
         "project_id": project_id,
@@ -420,7 +421,7 @@ async def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(
                 "user_id": "user-1",
                 "agent_id": "agent-1",
                 "session_id": "session-1",
-                "skill_version_id": version_id,
+                "skill_version_ids": [version_id],
                 "messages": [
                     {"role": "system", "content": "Be concise"},
                     {"role": "user", "content": "Summarize the file"},
@@ -430,7 +431,7 @@ async def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(
         )
         assert report.status_code == 201, report.text
         response = report.json()["data"]
-        assert response["skill_version_id"] == version_id
+        assert response["skill_version_ids"] == [version_id]
         with service.repository.persistence.session(Scope(fields={"project_id": "project"})) as store:
             record = await store.trajectories.get(response["trajectory_id"])
         assert record is not None
@@ -442,8 +443,7 @@ async def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(
         assert record.env_ref == "unknown"
         assert record.started_at is None
         assert record.received_at == record.created_at
-        assert record.skill_id == detail["skill_id"]
-        assert record.skill_version_id == version_id
+        assert record.bound_versions == {version_id: detail["skill_id"]}
         assert record.user_id == "user-1" and record.agent_id == "agent-1"
         assert record.session_id == "session-1"
         assert record.n_turn == 1
@@ -460,12 +460,27 @@ async def test_report_trajectory_uses_shared_record_and_preserves_unknown_start(
             json={
                 "user_id": "user-1",
                 "agent_id": "agent-1",
-                "skill_version_id": "missing",
+                "skill_version_ids": ["missing"],
                 "messages": [{"role": "user", "content": "Question"}],
             },
         )
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "skill_version_not_found"
+
+
+def test_trajectory_report_accepts_only_the_version_list(service):
+    """An empty list creates a report without attributing it to a Skill version."""
+    with TestClient(create_app(service)) as client:
+        path = "/v1/skills/trajectories/report"
+        actor = {"user_id": "user-1", "agent_id": "agent-1", "messages": [{"role": "user", "content": "Task"}]}
+        assert client.post(path, json={**actor, "skill_version_id": "old"}).status_code == 422
+        assert client.post(path, json={**actor, "skill_version_ids": None}).status_code == 422
+        response = client.post(path, json={**actor, "skill_version_ids": []})
+        assert response.status_code == 201, response.text
+        report = response.json()["data"]
+        assert report["skill_version_ids"] == []
+        shown = client.post("/v1/skills/trajectories/show", json={"trajectory_id": report["trajectory_id"]})
+        assert shown.json()["data"]["skill_bindings"] == []
 
 
 async def test_report_without_user_message_keeps_task_instruction_empty(service):
@@ -489,7 +504,7 @@ async def test_report_without_user_message_keeps_task_instruction_empty(service)
             json={
                 "user_id": "user-1",
                 "agent_id": "agent-1",
-                "skill_version_id": version_id,
+                "skill_version_ids": [version_id],
                 "messages": [{"role": "assistant", "content": "Done"}],
             },
         )
@@ -524,7 +539,7 @@ async def test_report_show_list_cursor_and_same_execution_actor_filter(service):
                 json={
                     "user_id": user_id,
                     "agent_id": agent_id,
-                    "skill_version_id": version_id,
+                    "skill_version_ids": [version_id],
                     "messages": [{"role": "user", "content": user_id}],
                 },
             )
@@ -567,7 +582,7 @@ async def test_report_show_list_cursor_and_same_execution_actor_filter(service):
         shown = client.post("/v1/skills/trajectories/show", json={"trajectory_id": older})
         assert shown.status_code == 200
         assert shown.json()["data"]["trajectory"][0]["content"] == "user-a"
-        assert shown.json()["data"]["skill_version_id"] == version_id
+        assert shown.json()["data"]["skill_version_ids"] == [version_id]
         assert client.post("/v1/skills/trajectories/show", json={"trajectory_id": "missing"}).status_code == 404
 
         first = client.post("/v1/skills/trajectories/list", json={"skill_id": skill_id, "limit": 1})
@@ -623,7 +638,7 @@ async def test_history_and_trajectory_pages_select_only_summary_fields(service, 
                 json={
                     "user_id": user_id,
                     "agent_id": "agent",
-                    "skill_version_id": version_id,
+                    "skill_version_ids": [version_id],
                     "messages": [{"role": "user", "content": user_id}],
                 },
             )
@@ -656,7 +671,7 @@ async def test_history_and_trajectory_pages_select_only_summary_fields(service, 
         assert len(second.json()["data"]["items"]) == 1
 
         version_fields = [fields for table, fields in selected_fields if table == SKILL_VERSIONS_TABLE]
-        trajectory_fields = [fields for table, fields in selected_fields if table == TRAJECTORIES_TABLE]
+        trajectory_fields = [fields for table, fields in selected_fields if table == TRAJECTORY_VERSIONS_TABLE]
         assert {frozenset(fields) for fields in version_fields} == {
             frozenset(
                 {
@@ -711,8 +726,9 @@ async def test_history_and_trajectory_pages_select_only_summary_fields(service, 
         assert "Body" in custom_history[0]["content"]
         assert set(custom_attempts[0]) == {"trajectory_id", "trajectory"}
         assert custom_attempts[0]["trajectory"][0]["role"] == "user"
-        assert selected_fields[-2:] == [
+        assert selected_fields[-3:] == [
             (SKILL_VERSIONS_TABLE, ["version_id", "content"]),
+            (TRAJECTORY_VERSIONS_TABLE, ["trajectory_id"]),
             (TRAJECTORIES_TABLE, ["trajectory_id", "trajectory"]),
         ]
 
@@ -793,21 +809,22 @@ def test_auth_config_requires_gateway_secret():
 
 def test_gateway_jwt_resolver_verifies_gateway_claims():
     """Accept only signed, unexpired JWTs for the configured issuer and audience."""
-    resolver = GatewayJwtResolver(secret=GATEWAY_SECRET, issuer="mindmemos-gateway", audience="memory-data-plane")
-    identity = resolver(gateway_token(project_id="cloud-project", scopes=["skill:read"]))
+    resolver = GatewayJwtResolver(secret=GATEWAY_SECRET, issuer="mindmemos-gateway", audience="skill-data-plane")
+    identity = resolver(gateway_token(project_id="cloud-project", scopes=["skill:read"], request_id="gateway-request"))
     assert identity.project_id == "cloud-project"
+    assert identity.request_id == "gateway-request"
     assert identity.scopes == {"skill:read"}
 
     invalid = [
         gateway_token(secret="another-gateway-secret-with-32-bytes"),
         gateway_token(exp=int(time.time()) - 1),
         gateway_token(iss="other-gateway"),
-        gateway_token(aud="other-plane"),
+        gateway_token(aud="memory-data-plane"),
         gateway_token(project_id=""),
         gateway_token(scopes="skill:read"),
         gateway_token(exp="tomorrow"),
         gateway_token(algorithm="HS384"),
-        jwt.encode({"iss": "mindmemos-gateway", "aud": "memory-data-plane"}, GATEWAY_SECRET, algorithm="HS256"),
+        jwt.encode({"iss": "mindmemos-gateway", "aud": "skill-data-plane"}, GATEWAY_SECRET, algorithm="HS256"),
     ]
     for token in invalid:
         with pytest.raises(Exception) as exc_info:
@@ -1171,7 +1188,7 @@ async def test_analyze_http_runs_offline_and_queries_both_judge_types(service):
             json={
                 "user_id": "user-1",
                 "agent_id": "agent-1",
-                "skill_version_id": version_id,
+                "skill_version_ids": [version_id],
                 "messages": [{"role": "user", "content": "Summarize the file"}],
             },
         )

@@ -138,8 +138,8 @@ class BuiltinAnalyzePipeline(AnalyzePipeline[AnalyzePipelineConfig]):
             analyzer=analyzer,
             judge_type="trajectory",
             evaluation_key=key,
-            skill_id=record.skill_id,
-            skill_version_id=record.skill_version_id,
+            skill_id=trajectory.skill_id,
+            skill_version_id=trajectory.skill_version_id,
             trajectory_id=record.trajectory_id,
             callback=analyzer.analyze,
             request=judge_request,
@@ -274,6 +274,8 @@ class BuiltinAnalyzePipeline(AnalyzePipeline[AnalyzePipelineConfig]):
     def _trajectory_input(self, record: TrajectoryRecord) -> TrajectoryAnalysisInput:
         """Project a stored trajectory into the algorithm-owned input boundary."""
 
+        versions = record.bound_versions
+        version_id = next(iter(versions)) if len(versions) == 1 else None
         return TrajectoryAnalysisInput(
             trajectory_id=record.trajectory_id,
             status=record.status,
@@ -289,8 +291,8 @@ class BuiltinAnalyzePipeline(AnalyzePipeline[AnalyzePipelineConfig]):
                 for item in record.skill_bindings
                 if isinstance(item, dict)
             ],
-            skill_id=record.skill_id,
-            skill_version_id=record.skill_version_id,
+            skill_id=versions[version_id] if version_id is not None else None,
+            skill_version_id=version_id,
             reward_score=record.reward_score,
         )
 

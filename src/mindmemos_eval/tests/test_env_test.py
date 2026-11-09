@@ -249,7 +249,7 @@ def test_legacy_skill_body_excludes_frontmatter(inputs, tmp_path):
 )
 def test_usage_coverage_overrides_nonzero_heuristic(tmp_path, reported, expected):
     """Partial usage is unknown while explicitly reported zero usage is complete."""
-    from mindmemos_eval.skills.evaluation import _case
+    from mindmemos_eval.skills.rollout import case_from_result as _case
 
     usage = Usage(input_tokens=10, total_tokens=10, reported=False) if not reported else Usage(reported=True)
     result = RolloutResult(

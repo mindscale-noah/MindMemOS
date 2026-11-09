@@ -37,13 +37,14 @@ def _parse(content: str) -> SDKConfig:
         raise HTTPException(422, "Invalid v2 settings JSON") from exc
 
 
-def _document(config: SDKConfig, path: Path) -> dict:
+def _document(config: SDKConfig, manager: ConfigManager) -> dict:
     """Return the current settings and a revision of the stored bytes."""
-    raw = path.read_bytes() if path.exists() else None
+    source = manager.source_path
+    raw = source.read_bytes() if source.is_file() else None
     values = config.model_dump(mode="json", exclude_none=True)
     return {
-        "path": str(path),
-        "exists": raw is not None,
+        "path": str(manager.config_path),
+        "exists": manager.exists(),
         "revision": hashlib.sha256(raw).hexdigest() if raw is not None else None,
         "values": values,
         "content": json.dumps(values, ensure_ascii=False, indent=2) + "\n",
@@ -51,7 +52,7 @@ def _document(config: SDKConfig, path: Path) -> dict:
 
 
 def sdk_settings_router(runtime_home: Path) -> APIRouter:
-    """Expose one v2 settings.json for the selected SDK home.
+    """Expose the v2 settings for the selected SDK home.
 
     Args:
         runtime_home: Default SDK configuration directory for this UI process.
@@ -65,14 +66,14 @@ def sdk_settings_router(runtime_home: Path) -> APIRouter:
         """Resolve one local SDK home and reject linked settings files."""
         directory = Path(home).expanduser() if home else runtime_home
         manager = ConfigManager(directory.resolve())
-        if manager.config_path.is_symlink():
+        if manager.config_path.is_symlink() or manager.source_path.is_symlink():
             raise HTTPException(400, "Symbolic link configuration files are not supported")
         return manager
 
     def read(manager: ConfigManager) -> dict:
         """Read settings after any automatic v1-to-v2 upgrade."""
         try:
-            return _document(manager.load_or_default(), manager.config_path)
+            return _document(manager.load_or_default(), manager)
         except ConfigValidationError as exc:
             raise HTTPException(422, "Invalid SDK settings file") from exc
 

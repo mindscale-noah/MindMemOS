@@ -1,4 +1,4 @@
-"""Skill evaluation commands and pipeline runners."""
+"""Isolated candidate for the Skill evaluation package."""
 
 from .cli import add_skill_args, run_skill_command
 

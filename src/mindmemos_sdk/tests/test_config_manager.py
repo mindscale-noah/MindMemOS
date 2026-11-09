@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from mindmemos_sdk.config import ConfigManager, mask_secret, paths
 from mindmemos_sdk.config.constants import CONFIG_DIR_ENV, MINDMEMOS_HOME_ENV
-from mindmemos_sdk.config.models import CONFIG_SCHEMA_VERSION, DEFAULT_BASE_URL, SDKConfig
+from mindmemos_sdk.config.models import CONFIG_SCHEMA_VERSION, DEFAULT_BASE_URL, DEFAULT_SKILL_BASE_URL, SDKConfig
 from mindmemos_sdk.errors import ConfigNotFoundError, ConfigValidationError
 from pydantic import ValidationError
 
@@ -27,7 +27,7 @@ def test_home_fallback_and_expansion(monkeypatch, tmp_path, home):
         monkeypatch.setenv(MINDMEMOS_HOME_ENV, home)
     expected = Path(home).expanduser() if home else Path.home() / ".mindmemos"
     manager = ConfigManager()
-    assert manager.config_path == expected / "settings.json"
+    assert manager.config_path == expected / "settings.v2.json"
 
 
 def test_home_precedence(monkeypatch, tmp_path):
@@ -87,11 +87,11 @@ def test_project_homes_remain_isolated(monkeypatch, tmp_path):
     assert second.load().memory_service.auth.api_key == "key-b"
 
 
-def test_legacy_v2_storage_is_removed_when_loaded(manager):
+def test_legacy_v2_storage_is_ignored_when_loaded(manager):
     manager.config_path.write_text(json.dumps({"version": 2, "storage": {"skill_cache_dir": "/custom/cache"}}))
     config = manager.load()
     assert config.version == 2
-    assert "storage" not in json.loads(manager.config_path.read_text())
+    assert "storage" in json.loads(manager.config_path.read_text())
     assert manager.load().version == 2
 
 
@@ -113,14 +113,14 @@ def test_update_auth_persists_and_roundtrips(manager):
     assert loaded.service_type == "custom"
     assert loaded.memory_service.base_url == "https://my.example.com"
     assert loaded.memory_service.auth.api_key == "mk_secret"
-    assert loaded.resolve_skill_connection() == ("https://my.example.com", "mk_secret")
+    assert loaded.resolve_skill_connection() == (None, None)
     assert loaded.defaults.user_id == "u_1"
     assert loaded.version == CONFIG_SCHEMA_VERSION
     assert loaded.metadata.created_at is not None
     assert loaded.metadata.updated_at is not None
 
 
-def test_official_skill_connection_reuses_memory_and_runtime_overrides(manager):
+def test_official_skill_connection_never_reuses_a_custom_memory_credential(manager):
     """Existing settings use the official gateway without copied Skill secrets."""
     manager.update_auth(base_url=DEFAULT_BASE_URL, api_key="memory-key", user_id="user")
     loaded = manager.load()
@@ -129,13 +129,13 @@ def test_official_skill_connection_reuses_memory_and_runtime_overrides(manager):
     assert loaded.skill_service.base_url is None
     assert loaded.skill_service.auth is None
     assert loaded.resolve_memory_connection() == (DEFAULT_BASE_URL, "memory-key")
-    assert loaded.resolve_skill_connection() == (DEFAULT_BASE_URL, "memory-key")
+    assert loaded.resolve_skill_connection() == (DEFAULT_SKILL_BASE_URL, "memory-key")
     assert loaded.resolve_skill_connection(
         memory_base_url="https://override.example", memory_api_key="override-key"
-    ) == ("https://override.example", "override-key")
+    ) == (None, None)
     assert SDKConfig.model_validate({"skill_service": {"base_url": ""}}).resolve_skill_connection(
         memory_base_url="https://override.example", memory_api_key="override-key"
-    ) == ("https://override.example", "override-key")
+    ) == (None, None)
     raw = json.loads(manager.config_path.read_text(encoding="utf-8"))
     assert raw["service_type"] == "official"
     assert "base_url" not in raw["memory_service"]
@@ -173,8 +173,6 @@ def test_self_hosted_skill_connection_has_independent_address_and_key(manager):
     "skill_service",
     [
         {"base_url": "https://skill.example"},
-        {"auth": {"api_key": "skill-key"}},
-        {"base_url": "", "auth": {"api_key": "skill-key"}},
         {"base_url": "https://skill.example", "auth": {"api_key": ""}},
         {"base_url": "https://user:pass@skill.example", "auth": {"api_key": "key"}},
         {"mode": "official"},

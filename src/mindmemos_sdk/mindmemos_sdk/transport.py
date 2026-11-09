@@ -81,9 +81,12 @@ class HttpTransport:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         request_id: str | None = None,
+        retry: bool = True,
     ) -> Envelope:
-        """Send a POST request and return the parsed response envelope."""
-        return self._request_envelope("POST", path, json=json, params=params, headers=headers, request_id=request_id)
+        """Send a POST request, optionally bypassing transport retries."""
+        return self._request_envelope(
+            "POST", path, json=json, params=params, headers=headers, request_id=request_id, retry=retry
+        )
 
     def get_envelope(
         self,
@@ -114,6 +117,7 @@ class HttpTransport:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         request_id: str | None = None,
+        retry: bool = True,
     ) -> Envelope:
         if self._require_api_key and not self._api_key:
             raise AuthRequiredError("No api_key configured. Run `mindmemos auth` first.")
@@ -125,7 +129,10 @@ class HttpTransport:
         if headers:
             request_headers.update(headers)
 
-        response = self._send_with_retries(method, url, json=json, params=params, headers=request_headers)
+        max_attempts = self._max_retries + 1 if retry else 1
+        response = self._send_with_retries(
+            method, url, json=json, params=params, headers=request_headers, max_attempts=max_attempts
+        )
         return self._parse_envelope(response)
 
     def _send_with_retries(
@@ -136,18 +143,19 @@ class HttpTransport:
         json: Any | None,
         params: dict[str, Any] | None,
         headers: dict[str, str],
+        max_attempts: int,
     ) -> httpx.Response:
         last_exc: Exception | None = None
-        for attempt in range(self._max_retries + 1):
+        for attempt in range(max_attempts):
             try:
                 return self._client.request(method, url, json=json, params=params, headers=headers)
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_exc = exc
-                if attempt >= self._max_retries:
+                if attempt + 1 == max_attempts:
                     break
                 wait = min(1.0 * (2**attempt), 60.0)
                 time.sleep(wait)
-        raise TransportError(f"Request to {url} failed after {self._max_retries + 1} attempt(s): {last_exc}")
+        raise TransportError(f"Request to {url} failed after {max_attempts} attempt(s): {last_exc}")
 
     def _parse_envelope(self, response: httpx.Response) -> Envelope:
         return parse_envelope(response)

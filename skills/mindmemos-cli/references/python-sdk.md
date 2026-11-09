@@ -167,6 +167,35 @@ with MindMemOSClient() as client:
         print(candidate["version_id"], candidate["name"])
 ```
 
-Use `client.skills.report_trajectory(TrajectoryReportRequest(...))` to report
-an execution with its exact Skill version. See
-[Skill management and recommendation](skill-management.md) for the CLI workflow.
+## Report a turn to Memory and Skill
+
+```python
+from mindmemos_sdk import MindMemOSClient, TrajectoryEvent, TrajectoryMessage
+
+event = TrajectoryEvent(
+    event_id="example:session-42:turn-7",
+    source="my-agent",
+    user_id="alice",
+    agent_id="assistant",
+    session_id="session-42",
+    skill_version_ids=["skv-a", "skv-b"],
+    messages=[
+        TrajectoryMessage(role="user", content="Validate the CSV schema"),
+        TrajectoryMessage(role="assistant", content="The schema passed validation."),
+    ],
+)
+with MindMemOSClient() as client:
+    result = client.report_trajectory(event)
+    print(result.memory, result.skill)
+```
+
+Replace the example IDs with the exact versions loaded in that turn. Use an empty
+list when no exact versions were identified. One call yields separate Memory and
+Skill receipts. Memory `queued` means extraction was accepted. Skill `stored`
+returns the ID of the single trajectory that links all versions.
+
+For a manual retry after confirming which destination rejected the write, retain
+the original event ID and use `include_memory=False` or `include_skill=False`.
+Reconcile `unknown` outcomes before resending, since the service may already
+have accepted the request. The CLI equivalent is
+`mindmemos trajectory report --file event.json --json`.

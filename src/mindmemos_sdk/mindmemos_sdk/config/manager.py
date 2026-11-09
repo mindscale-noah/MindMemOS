@@ -3,7 +3,7 @@
 ``ConfigManager`` is the single entry point for SDK identity and credentials. CLI
 commands and SDK clients both go through it instead of touching the JSON file
 directly. Writes are atomic (temp file + ``os.replace``) so an interrupted process
-never leaves a corrupted ``settings.json``.
+never leaves a corrupted ``settings.v2.json``.
 """
 
 from __future__ import annotations
@@ -21,7 +21,9 @@ from ..errors import ConfigNotFoundError, ConfigValidationError
 from .models import CONFIG_SCHEMA_VERSION, DEFAULT_BASE_URL, MemoryServiceConfig, SDKConfig
 from .paths import get_mindmemos_home
 
-CONFIG_FILE_NAME = "settings.json"
+CONFIG_FILE_NAME = "settings.v2.json"
+LEGACY_CONFIG_FILE_NAME = "settings.json"
+RESET_CONFIG = "null"
 V1_DEFAULT_BASE_URL = "https://api.mindmemos.example.com"
 
 
@@ -61,13 +63,23 @@ class ConfigManager:
             config_dir = get_mindmemos_home()
         self.config_dir = Path(config_dir).expanduser()
         self.config_path = self.config_dir / CONFIG_FILE_NAME
+        self.legacy_config_path = self.config_dir / LEGACY_CONFIG_FILE_NAME
+
+    @property
+    def source_path(self) -> Path:
+        """Return the effective settings file, including any read-only legacy fallback."""
+        return self.config_path if self.config_path.is_file() else self.legacy_config_path
 
     def exists(self) -> bool:
         """Return whether the configuration file exists."""
-        return self.config_path.is_file()
+        path = self.source_path
+        try:
+            return path.read_bytes().strip() != RESET_CONFIG.encode() or path != self.config_path
+        except FileNotFoundError:
+            return False
 
     def load(self) -> SDKConfig:
-        """Load settings, upgrading a v1 file before returning it.
+        """Load settings, interpreting legacy files without replacing them.
 
         Returns:
             Validated v2 settings bound to this manager's home.
@@ -76,29 +88,32 @@ class ConfigManager:
             ConfigNotFoundError: The settings file does not exist.
             ConfigValidationError: The stored configuration cannot be upgraded or validated.
         """
-        if not self.exists():
-            raise ConfigNotFoundError(f"No SDK config at {self.config_path}. Run `mindmemos auth` to create it.")
+        path = self.source_path
         try:
-            raw = json.loads(self.config_path.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise ConfigNotFoundError(f"No SDK config at {path}. Run `mindmemos auth` to create it.") from exc
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ConfigValidationError(f"Invalid SDK config at {path}") from exc
+        if raw is None and path == self.config_path:
+            raise ConfigNotFoundError(f"SDK config at {path} was reset. Run `mindmemos auth` to configure it.")
+        try:
             if not isinstance(raw, dict):
                 raise ValueError("settings must be a JSON object")
             version = raw.get("version", 1)
             if version == 1:
                 config = self._migrate_v1(raw)
             elif version == CONFIG_SCHEMA_VERSION:
-                has_legacy_storage = "storage" in raw
                 raw.pop("storage", None)
                 config = SDKConfig.model_validate(raw)
-                if has_legacy_storage:
-                    self.save(config)
             else:
                 raise ValueError(f"unsupported SDK config version: {version}")
             return config
-        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-            raise ConfigValidationError(f"Invalid SDK config at {self.config_path}: {exc}") from exc
+        except ValueError as exc:
+            raise ConfigValidationError(f"Invalid SDK config at {path}: {exc}") from exc
 
     def _migrate_v1(self, raw: dict) -> SDKConfig:
-        """Upgrade v1 connection settings before replacing the file."""
+        """Interpret v1 connection settings as a v2 document in memory."""
         memory_url = raw.get("base_url", V1_DEFAULT_BASE_URL)
         skill_settings = raw.get("skill_service", {})
         if not isinstance(skill_settings, dict):
@@ -115,7 +130,7 @@ class ConfigManager:
         migrated_memory_url = (
             None if service_type == "official" else (DEFAULT_BASE_URL if official_memory else memory_url)
         )
-        migrated = SDKConfig.model_validate(
+        return SDKConfig.model_validate(
             {
                 "version": CONFIG_SCHEMA_VERSION,
                 "service_type": service_type,
@@ -126,14 +141,13 @@ class ConfigManager:
                 "metadata": raw.get("metadata", {}),
             }
         )
-        self.save(migrated)
-        return migrated
 
     def load_or_default(self) -> SDKConfig:
         """Load existing configuration or return defaults without writing."""
-        if self.exists():
+        try:
             return self.load()
-        return SDKConfig()
+        except ConfigNotFoundError:
+            return SDKConfig()
 
     def save(self, config: SDKConfig) -> None:
         """Atomically write validated v2 settings and refresh timestamps.
@@ -156,11 +170,14 @@ class ConfigManager:
         _write_atomic(self.config_path, payload, prefix=".settings-")
 
     def reset(self) -> bool:
-        """Remove connection settings without touching other home files."""
-        if self.exists():
+        """Clear v2 settings without reviving or deleting a legacy credential."""
+        if not self.exists():
+            return False
+        if self.legacy_config_path.is_file():
+            _write_atomic(self.config_path, RESET_CONFIG, prefix=".settings-")
+        else:
             self.config_path.unlink()
-            return True
-        return False
+        return True
 
     def update_auth(
         self,

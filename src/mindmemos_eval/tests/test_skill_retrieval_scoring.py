@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 from mindmemos_eval.cli import main
-from mindmemos_eval.skills import service, skill_graph
+from mindmemos_eval.skills import service
+from mindmemos_eval.skills.algos import skill_graph
 from mindmemos_skill.api.typing import OrganizeResult
 from mindmemos_skill.config.config import ImplementationConfig
 

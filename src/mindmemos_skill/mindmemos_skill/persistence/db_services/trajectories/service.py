@@ -9,11 +9,11 @@ from zoneinfo import ZoneInfo
 from mindmemos_skill.common.ids import generate_id
 
 from ....common.time_utils import utcnow
-from ....errors import SkillNotFoundError, SkillVersionNotFoundError
+from ....errors import SkillConflictError, SkillNotFoundError, SkillVersionNotFoundError
 from ....infra.database import Database, Filter
 from ....infra.database.scoped import ScopedDatabase
 from ...access import _project_id_from_database
-from ...constants import TRAJECTORIES_TABLE, TRAJECTORY_CONSUMPTIONS_TABLE
+from ...constants import TRAJECTORIES_TABLE, TRAJECTORY_CONSUMPTIONS_TABLE, TRAJECTORY_VERSIONS_TABLE
 from ...typing import TrajectoryCounts
 from ..skills.service import SkillDataService
 from .typing import (
@@ -22,6 +22,7 @@ from .typing import (
     TrajectoryRecord,
     TrajectoryStatistics,
     TrajectorySummary,
+    TrajectoryVersionIndex,
     TrajectoryWrite,
 )
 
@@ -62,7 +63,40 @@ class TrajectoryDataService:
         Args:
             record: Trajectory input; the active scope supplies its project.
         """
-        (await self.database.insert(TRAJECTORIES_TABLE, [record.model_dump(mode="python")]))
+        if not isinstance(record, TrajectoryRecord):
+            record = TrajectoryRecord(
+                project_id=_project_id_from_database(self.database), **record.model_dump(mode="python")
+            )
+        async with self.database.transaction() as transaction:
+            await transaction.insert(TRAJECTORIES_TABLE, [record.model_dump(mode="python")])
+            await self._index_versions(transaction, record)
+
+    @staticmethod
+    async def _index_versions(transaction, record: TrajectoryRecord) -> None:
+        """Index every exact version in the same transaction as the shared attempt."""
+        seen_families = set()
+        rows = []
+        for version_id, skill_id in record.bound_versions.items():
+            entry = TrajectoryVersionIndex(
+                project_id=record.project_id,
+                trajectory_id=record.trajectory_id,
+                skill_version_id=version_id,
+                skill_id=skill_id,
+                first_for_family=skill_id not in seen_families,
+                task_id=record.task_id,
+                source=record.source,
+                user_id=record.user_id,
+                agent_id=record.agent_id,
+                status=record.status,
+                started_at=record.started_at,
+                finished_at=record.finished_at,
+                created_at=record.created_at,
+                received_at=record.received_at,
+            )
+            seen_families.add(skill_id)
+            rows.append(entry.model_dump(mode="python"))
+        if rows:
+            await transaction.insert(TRAJECTORY_VERSIONS_TABLE, rows)
 
     async def get(self, trajectory_id: str) -> TrajectoryRecord | None:
         """Read a stored attempt.
@@ -87,7 +121,7 @@ class TrajectoryDataService:
         """
         filters = {"skill_version_id": skill_version_id}
         async with self.database.transaction() as transaction:
-            total = await transaction.count(TRAJECTORIES_TABLE, filters=filters)
+            total = await transaction.count(TRAJECTORY_VERSIONS_TABLE, filters=filters)
             consumed = await transaction.count(TRAJECTORY_CONSUMPTIONS_TABLE, filters=filters)
         return TrajectoryCounts(total=total, consumed=consumed, unconsumed=total - consumed)
 
@@ -107,7 +141,7 @@ class TrajectoryDataService:
         identities = set(trajectory_ids)
         async with self.database.transaction() as transaction:
             rows = await transaction.select(
-                TRAJECTORIES_TABLE,
+                TRAJECTORY_VERSIONS_TABLE,
                 filters=[
                     Filter(field="skill_version_id", value=skill_version_id),
                     Filter(field="trajectory_id", op="in", value=list(identities)),
@@ -150,7 +184,7 @@ class TrajectoryDataService:
         filters = {"skill_version_id": skill_version_id}
         totals = await self.counts(skill_version_id)
         groups = await self.database.count_by_day(
-            TRAJECTORIES_TABLE,
+            TRAJECTORY_VERSIONS_TABLE,
             time_field="created_at",
             filters=[
                 Filter(field="skill_version_id", value=skill_version_id),
@@ -158,7 +192,7 @@ class TrajectoryDataService:
                 Filter(field="created_at", op="lt", value=end),
             ],
             matching_table=TRAJECTORY_CONSUMPTIONS_TABLE,
-            join_fields=["project_id", "trajectory_id"],
+            join_fields=["project_id", "trajectory_id", "skill_version_id"],
             matching_filters=filters,
             utc_offset_minutes=480,
         )
@@ -196,7 +230,7 @@ class TrajectoryDataService:
         if agent_id is not None:
             filters.append(Filter(field="agent_id", value=agent_id))
         return bool(
-            (await self.database.select(TRAJECTORIES_TABLE, filters=filters, fields=["trajectory_id"], limit=1))
+            (await self.database.select(TRAJECTORY_VERSIONS_TABLE, filters=filters, fields=["trajectory_id"], limit=1))
         )
 
     async def reported_skill_ids(
@@ -224,7 +258,7 @@ class TrajectoryDataService:
             filters.append(Filter(field="user_id", value=user_id))
         if agent_id is not None:
             filters.append(Filter(field="agent_id", value=agent_id))
-        return set((await self.database.select_distinct(TRAJECTORIES_TABLE, "skill_id", filters=filters)))
+        return set((await self.database.select_distinct(TRAJECTORY_VERSIONS_TABLE, "skill_id", filters=filters)))
 
     @overload
     def list_reported(
@@ -293,6 +327,8 @@ class TrajectoryDataService:
         filters.append(Filter(field="received_at", op="le", value=snapshot_at))
         if skill_version_id is not None:
             filters.append(Filter(field="skill_version_id", value=skill_version_id))
+        else:
+            filters.append(Filter(field="first_for_family", value=True))
         if status is not None:
             filters.append(Filter(field="status", value=status))
         if received_at_from is not None:
@@ -300,6 +336,10 @@ class TrajectoryDataService:
         if received_at_to is not None:
             filters.append(Filter(field="received_at", op="le", value=received_at_to))
         selected_fields = list(DEFAULT_REPORTED_FIELDS) if fields is None else fields
+        payload_fields = [name for name in selected_fields if name not in TrajectoryVersionIndex.model_fields]
+        index_fields = [name for name in selected_fields if name in TrajectoryVersionIndex.model_fields]
+        if payload_fields and "trajectory_id" not in index_fields:
+            index_fields.append("trajectory_id")
         order = ["-received_at", "-trajectory_id"]
         rows = []
         if after_received_at is not None:
@@ -312,7 +352,7 @@ class TrajectoryDataService:
             rows.extend(
                 (
                     await self.database.select(
-                        TRAJECTORIES_TABLE, filters=ties, fields=selected_fields, order_by=order, limit=limit
+                        TRAJECTORY_VERSIONS_TABLE, filters=ties, fields=index_fields, order_by=order, limit=limit
                     )
                 )
             )
@@ -321,22 +361,64 @@ class TrajectoryDataService:
             rows.extend(
                 (
                     await self.database.select(
-                        TRAJECTORIES_TABLE,
+                        TRAJECTORY_VERSIONS_TABLE,
                         filters=filters,
-                        fields=selected_fields,
+                        fields=index_fields,
                         order_by=order,
                         limit=None if limit is None else limit - len(rows),
                     )
                 )
             )
         if fields is not None:
-            return rows
+            if not payload_fields or not rows:
+                return rows
+            payload = await self._load_payload([row["trajectory_id"] for row in rows], fields=payload_fields)
+            combined = [row | payload[row["trajectory_id"]] for row in rows if row["trajectory_id"] in payload]
+            return [{name: row[name] for name in fields} for row in combined]
         return [TrajectorySummary.model_validate(row) for row in rows]
+
+    async def list_for_version(
+        self, skill_version_id: str, *, filters: list[Filter], limit: int, offset: int
+    ) -> list[TrajectoryRecord]:
+        """Read a page of execution payloads associated with an exact version.
+
+        Args:
+            skill_version_id: Version identity in the active project.
+            filters: Additional conditions on the indexed attempt fields.
+            limit: Maximum matching attempts in the page.
+            offset: Number of matching attempts to skip.
+
+        Returns:
+            Records ordered by creation time and ID, newest first.
+        """
+        indexed = await self.database.select(
+            TRAJECTORY_VERSIONS_TABLE,
+            filters=[Filter(field="skill_version_id", value=skill_version_id), *filters],
+            fields=["trajectory_id"],
+            order_by=["-created_at", "-trajectory_id"],
+            limit=limit,
+            offset=offset,
+        )
+        ids = [row["trajectory_id"] for row in indexed]
+        payload = await self._load_payload(ids)
+        return [TrajectoryRecord.model_validate(payload[identity]) for identity in ids if identity in payload]
+
+    async def _load_payload(self, trajectory_ids: list[str], *, fields: list[str] | None = None) -> dict[str, dict]:
+        """Fetch the payload for one bounded page of shared attempt IDs."""
+        if not trajectory_ids:
+            return {}
+        rows = await self.database.select(
+            TRAJECTORIES_TABLE,
+            filters=[Filter(field="trajectory_id", op="in", value=trajectory_ids)],
+            fields=None if fields is None else ["trajectory_id", *fields],
+            limit=None,
+        )
+        return {row["trajectory_id"]: row for row in rows}
 
     async def report(
         self,
         *,
-        skill_version_id: str,
+        skill_version_ids: list[str],
         user_id: str | None,
         agent_id: str | None,
         messages: list[dict],
@@ -344,11 +426,12 @@ class TrajectoryDataService:
         status: str,
         started_at: datetime | None,
         finished_at: datetime | None,
+        event_id: str | None = None,
     ) -> TrajectoryRecord:
         """Convert a sparse Harness report into the shared trajectory record.
 
         Args:
-            skill_version_id: Exact version loaded during execution.
+            skill_version_ids: Exact loaded versions, or empty when no version is identified.
             user_id: Business user supplied by the Harness, or None when omitted.
             agent_id: Agent supplied by the Harness, or None when omitted.
             messages: Ordered interaction messages.
@@ -356,62 +439,79 @@ class TrajectoryDataService:
             status: Caller-declared execution outcome.
             started_at: Actual start time when supplied.
             finished_at: Actual finish time when supplied.
+            event_id: Stable project-unique identity for an idempotent report.
 
         Returns:
-            Persisted physical attempt with generated task and trajectory IDs.
+            Shared physical attempt, including the original ID on replay.
+
+        Raises:
+            SkillVersionNotFoundError: A supplied exact version is outside the project or unavailable.
+            SkillConflictError: The event ID was already used with different execution inputs.
         """
         project_id = _project_id_from_database(self.database)
+        reader = self.skills or SkillDataService(self.database)
+        try:
+            versions = [await reader.get(version_id) for version_id in dict.fromkeys(skill_version_ids)]
+        except SkillNotFoundError as exc:
+            raise SkillVersionNotFoundError("Skill version not found in this project") from exc
+
+        received_at = utcnow()
+        trajectory_id = generate_id(hyphenated=True)
+        system_prompt = next(
+            (_message_text(message["content"]) for message in messages if message["role"] == "system"), None
+        )
+        user_prompt = next((_message_text(message["content"]) for message in messages if message["role"] == "user"), "")
+        encoded = json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        record = TrajectoryRecord(
+            project_id=project_id,
+            trajectory_id=trajectory_id,
+            trajectory_hash=hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+            source="reported",
+            task_id=generate_id(hyphenated=True),
+            rollout_id=f"reported:{event_id}" if event_id else trajectory_id,
+            task_instruction=user_prompt,
+            task_system_prompt=system_prompt,
+            env_ref="unknown",
+            skill_bindings=[
+                {
+                    "name": version.name,
+                    "skill_id": version.skill_id,
+                    "version_id": version.version_id,
+                    "content_hash": version.content_hash,
+                }
+                for version in versions
+            ],
+            agent_type="harness",
+            status=status,
+            trajectory=messages,
+            started_at=started_at,
+            finished_at=finished_at,
+            n_turn=sum(message["role"] == "assistant" for message in messages),
+            created_at=received_at,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            received_at=received_at,
+        )
         async with self.database.transaction() as transaction:
-            try:
-                if self.skills is None:
-                    version = await SkillDataService(transaction).get(skill_version_id)
-                else:
-                    with transaction.dependency(self.skills.database) as database:
-                        version = await SkillDataService(database).get(skill_version_id)
-            except SkillNotFoundError as exc:
-                raise SkillVersionNotFoundError("Skill version not found in this project") from exc
-            received_at = utcnow()
-            trajectory_id = generate_id(hyphenated=True)
-            system_prompt = next(
-                (_message_text(message["content"]) for message in messages if message["role"] == "system"), None
-            )
-            user_prompt = next(
-                (_message_text(message["content"]) for message in messages if message["role"] == "user"), ""
-            )
-            encoded = json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-            record = TrajectoryRecord(
-                project_id=project_id,
-                trajectory_id=trajectory_id,
-                trajectory_hash=hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
-                source="reported",
-                task_id=generate_id(hyphenated=True),
-                rollout_id=trajectory_id,
-                task_instruction=user_prompt,
-                task_system_prompt=system_prompt,
-                env_ref="unknown",
-                skill_bindings=[
-                    {
-                        "name": version.name,
-                        "skill_id": version.skill_id,
-                        "version_id": version.version_id,
-                        "content_hash": version.content_hash,
-                    }
-                ],
-                agent_type="harness",
-                status=status,
-                trajectory=messages,
-                started_at=started_at,
-                finished_at=finished_at,
-                n_turn=sum(message["role"] == "assistant" for message in messages),
-                created_at=received_at,
-                skill_id=version.skill_id,
-                skill_version_id=version.version_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                session_id=session_id,
-                received_at=received_at,
-            )
-            (await transaction.insert(TRAJECTORIES_TABLE, [record.model_dump(mode="python")]))
+            row = record.model_dump(mode="python")
+            if event_id:
+                inserted = await transaction.upsert(
+                    TRAJECTORIES_TABLE, [row], conflict_fields=["project_id", "rollout_id", "attempt_no"]
+                )
+                if not inserted:
+                    existing = await transaction.select(
+                        TRAJECTORIES_TABLE, filters={"rollout_id": record.rollout_id, "attempt_no": 0}, limit=1
+                    )
+                    generated = {"trajectory_id", "task_id", "created_at", "received_at"}
+                    if not existing or any(
+                        existing[0][key] != value for key, value in row.items() if key not in generated
+                    ):
+                        raise SkillConflictError("Trajectory event_id is already bound to a different report")
+                    return TrajectoryRecord.model_validate(existing[0])
+            else:
+                await transaction.insert(TRAJECTORIES_TABLE, [row])
+            await self._index_versions(transaction, record)
         return record
 
 

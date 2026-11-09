@@ -1,166 +1,30 @@
 # OpenClaw integration
 
-The OpenClaw memory plugin wires MindMemOS into OpenClaw automatically: it
-`search`es memories before every prompt and injects the hits as context, and
-`add`s finished conversations at the end of a turn. It is a thin hook layer over
-the `mindmemos` CLI.
+The plugin recalls Memory before prompt construction. It reports each successful turn to Memory and Skill through the local CLI. OpenClaw discovers the packaged `mindmemos-cli` guide through the plugin manifest and loads it on demand.
 
-Install and authenticate a compatible CLI before enabling the hooks.
-OpenClaw plugin 0.1.3 can send `--skill-context-json` when it detects Skill use.
-SDK 0.1.4 accepts that option. SDK 1.0.0 rejects it, so affected Memory writes
-fail. Keep a separate 0.1.4 executable and v1 config for the existing hooks if
-needed. Use the [1.0.0 CLI](../SKILL.md#install-the-cli) directly for Skill
-management and recommendation.
+## Install and configure
 
-## Install the plugin
+First authenticate an SDK 1.0.0 build that exposes `mindmemos trajectory report --help`. Configure both service endpoints and a default user through `mindmemos auth`. If the gateway's PATH differs from your terminal's PATH, set `plugins.entries.mindmemos-memory.config.cli` to the executable's absolute path.
 
-The plugin is published to npm as **`@mindmemos/openclaw-plugin`**. Install it
-through OpenClaw:
+For a checkout build, run `npm ci` and `npm run build` in `plugins/openclaw-plugin`, then link the **plugin root**.
 
 ```bash
-openclaw plugins install @mindmemos/openclaw-plugin
+openclaw plugins install --link /path/to/MindMemOS/plugins/openclaw-plugin
 openclaw plugins enable mindmemos-memory
-```
-
-`mindmemos-memory` is the plugin **id** (from its manifest); the npm **package**
-name is `@mindmemos/openclaw-plugin`.
-
-### Grant conversation access (required, or nothing gets stored)
-
-The plugin reads conversation messages in order to persist them, so it needs
-conversation access on its `agent_end` hook. The manifest declares
-`hooks.allowConversationAccess=true`, but for a **non-bundled** plugin (anything
-installed from npm or linked, i.e. not shipped inside OpenClaw) that manifest
-field is only a *request* — OpenClaw does not honor it. You must also grant it
-explicitly at the entry level in config:
-
-```bash
 openclaw config set plugins.entries.mindmemos-memory.hooks.allowConversationAccess true
 openclaw gateway restart
+openclaw skills list
 ```
 
-This writes `plugins.entries["mindmemos-memory"].hooks.allowConversationAccess
-= true` into `~/.openclaw/openclaw.json`. Without it, recall still works (the
-pre-prompt `search` hook does not need conversation access), so the plugin looks
-healthy — but every `agent_end` store is silently blocked. See Troubleshooting
-below for how to confirm.
+After npm publication, install `@mindmemos/openclaw-plugin@0.2.0` in place of the linked package. The conversation access setting is required for installed and linked plugins. It allows the `agent_end` hook to read messages for reporting.
 
-## Configure
+Set `plugins.entries.mindmemos-memory.config.userId` for user-scoped recall and reporting. Without it, recall searches the project and reporting uses the CLI profile's default user. The plugin also supports `topK`, `tokenBudget`, `addMode`, `appId`, `sessionId`, `minQueryLength`, and `maxConversationMessages`. Subagent sessions receive memories as background context.
 
-Optional plugin config:
+## Verify
 
-```json
-{
-  "enabled": true,
-  "cli": "mindmemos",
-  "topK": 5,
-  "tokenBudget": 2000,
-  "addMode": "async",
-  "userId": "alice",
-  "appId": "openclaw",
-  "sessionId": "optional-session-override",
-  "minQueryLength": 2,
-  "maxConversationMessages": 80
-}
-```
+- Check that `openclaw skills list` includes `mindmemos-cli`.
+- Ask about a stored fact and check the gateway log for the recall hit.
+- Complete a turn and look for separate `Memory queued` or `Memory completed` and `Skill stored` lines with the same event ID. Use the returned Skill trajectory ID with `mindmemos skill trajectory show`.
+- To verify multi-Skill binding, use the shell and read tools to [load two exact versions](../SKILL.md#recommend-and-load-a-skill) in one turn, then check the trajectory's `skill_version_ids`.
 
-- `cli` — executable used to invoke the CLI. Defaults to `mindmemos`. Use an absolute executable path if the gateway cannot find it on PATH.
-- `topK` — number of memories injected per turn.
-- `tokenBudget` — optional strict token budget for recall; when set, `memory search --token-budget` caps the injected memories by estimated tokens (token-budget retention) instead of only by `topK` count. Omit to keep legacy behavior.
-- `addMode` — `sync` blocks until extraction finishes; `async` (default) enqueues and returns immediately. Note: in `async` mode the plugin only sees CLI-level failures — a server-side add failure that happens after the CLI exits 0 is not logged by the plugin.
-- `userId` — scopes both search and add to one user. If omitted, search is project-wide, while add inherits the
-  default user from the local `mindmemos` CLI config. If neither location supplies a user, add fails.
-- `appId` / `sessionId` — override the corresponding plugin context values.
-- `minQueryLength` — skip recall for very short prompts.
-- `maxConversationMessages` — cap on how many trailing messages are persisted per turn.
-
-Configure a stable user scope and restart the gateway:
-
-```bash
-openclaw config set plugins.entries.mindmemos-memory.config.userId alice
-openclaw gateway restart
-```
-
-## Subagent behavior
-
-In subagent sessions (session key contains `:subagent:`), recalled memories are
-injected as **background context only**, with a preamble telling the subagent
-not to assume it is the user. This avoids a subagent adopting the main user's
-identity.
-
-## Troubleshooting
-
-- CLI errors surface in the OpenClaw gateway log as `[mindmemos] memory search failed: ...` / `[mindmemos] memory add failed: ...` warnings, including the CLI's stderr / exit code.
-- If recall never fires, check `minQueryLength` and that `cli` resolves to a working `mindmemos` command (`mindmemos config show` from the same environment OpenClaw runs in).
-
-### Recall works but nothing is ever stored (`agent_end blocked`)
-
-Symptom: the gateway log shows recall running every turn
-(`[mindmemos] ... hit N memories, injected ... chars`) but you never see a
-`[mindmemos] stored N message(s) from last turn` line, and on plugin load the
-gateway prints:
-
-```
-[gateway] [plugins] typed hook "agent_end" blocked because non-bundled plugins
-must set plugins.entries.mindmemos-memory.hooks.allowConversationAccess=true
-```
-
-Cause: OpenClaw's security policy ignores the manifest's
-`hooks.allowConversationAccess` for non-bundled plugins; only the entry-level
-config field is honored. The pre-prompt `search` hook does not need conversation
-access, which is why recall keeps working and the failure is easy to miss.
-
-Fix: grant access in config and restart (see "Grant conversation access" above):
-
-```bash
-openclaw config set plugins.entries.mindmemos-memory.hooks.allowConversationAccess true
-openclaw gateway restart
-```
-
-Confirm the fix:
-
-- On restart, `[mindmemos] plugin loaded` appears **without** the `agent_end
-  blocked` warning.
-- Recall still fires as before.
-- After the **next** turn completes, the log shows `[mindmemos] stored N
-  message(s) from last turn`. The store only runs at `agent_end`, so it will not
-  appear until a turn finishes — checking mid-turn always looks empty.
-
-### `mindmemos` not found (PATH mismatch)
-
-The plugin spawns the CLI using the PATH of the **OpenClaw process**, which is
-not always the PATH of your interactive shell. A GUI-launched OpenClaw (Desktop
-app, or one started by a launch agent rather than from a terminal) typically
-inherits a minimal PATH that does **not** include `~/.local/bin`,
-`~/.cargo/bin`, Homebrew dirs, or a project virtualenv — so a `mindmemos` that
-works in your terminal can still be invisible to the plugin. Symptom: every turn
-logs `[mindmemos] ... failed: ... ENOENT` or `command not found`, even though
-`mindmemos` runs fine for you.
-
-Diagnose:
-
-```bash
-# 1. Does it work in your shell at all, and where does it live?
-which mindmemos          # e.g. /Users/you/.local/bin/mindmemos
-
-# 2. Reproduce the plugin's view: run the SAME way OpenClaw was launched.
-#    If OpenClaw is a GUI app, check the PATH it actually sees — the env that
-#    spawned it, not your shell. From a terminal that DID start it:
-echo "$PATH"
-# 3. Confirm the gateway log shows ENOENT / not-found rather than an auth or
-#    network error (those mean the CLI was found and the problem is elsewhere).
-openclaw plugins doctor
-```
-
-Fix (pick one):
-
-- **Point `cli` at an absolute path** (most reliable, no PATH dependency):
-  set the plugin config `"cli": "/Users/you/.local/bin/mindmemos"` (use the path
-  from `which mindmemos`).
-- **Use an executable wrapper script** if the hook needs a separate config.
-  Set `MINDMEMOS_CONFIG_DIR` in the wrapper for SDK 0.1.4 and forward every
-  argument. Point `cli` to the wrapper's absolute path. The field takes a single
-  executable, so a command string such as `uv run mindmemos` fails.
-
-After changing `cli`, re-run a turn and confirm the gateway log no longer shows
-the spawn error.
+An `agent_end` access warning means the conversation access grant is missing. `ENOENT` points to the CLI executable path. If one destination reports `failed` or `unknown`, its line includes the available error and request identifiers. Memory's `queued` receipt confirms acceptance for extraction.

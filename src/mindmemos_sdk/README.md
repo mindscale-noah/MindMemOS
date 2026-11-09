@@ -41,9 +41,9 @@ mindmemos config show
 ```
 
 `auth` 会先询问使用官方服务还是 custom 部署。官方模式只需填写 Memory API Key
-与默认用户，Skill 复用同一地址和 Key。custom 模式先询问 Memory 地址，再询问 Skill 地址；
-Skill 地址直接回车即复用 Memory 地址和 Key，即使先前配置过独立地址也是如此。填写独立 Skill 地址时必须填写自己的 Key；
-本机无鉴权服务也可以填写任意非空 Key。重新配置时，只有服务地址未变才可留空保留已有 Key。
+与默认用户。官方 Skill 使用独立入口，可用已获授权的项目 Key，也可通过
+`--skill-api-key` 单独配置。自部署时，Skill 地址留空可只配置 Memory。已有独立 Skill
+地址时，回车保留该地址，`--no-skill` 清除该连接。独立自部署地址需要自己的 Key。
 `config show` 显示部署类型及两个服务的生效地址，默认遮住 Key。
 
 也可以先指定部署类型和地址，再交互输入 Key，避免把 Key 放进终端历史：
@@ -55,11 +55,9 @@ mindmemos auth --service-type custom \
 mindmemos config show
 ```
 
-`settings.json` 使用 v2 结构。顶层 `service_type` 为 `official` 时，Memory 和 Skill
-都使用 `https://mindmemos.cn`，两个服务配置都不需要填写 `base_url`，Skill 复用 Memory 的凭据。
-自部署时设置为 `custom`，在 `memory_service.base_url` 中填写 Memory 地址；
-`skill_service.base_url` 留空时复用 Memory，填写独立地址时还需填写独立的
-`skill_service.auth.api_key`。`auth` 会按上述选择写入这些字段。例如：
+新版将连接设置保存到 `settings.v2.json`。官方 Memory 使用 `https://mindmemos.cn`，
+官方 Skill 使用 `https://mindmemos.cn/api/developer/skill`。官方模式省略两个
+`base_url`。自部署时填写 Memory 地址和可选的独立 Skill 地址。例如：
 
 ```json
 {
@@ -76,7 +74,7 @@ mindmemos config show
 }
 ```
 
-首次读取 v1 `settings.json` 时，SDK 会升级连接配置到 v2。`MindMemOSClient.memory`
+如果新版配置尚未保存，SDK 会读取旧 `settings.json` 并在内存中解析为 v2。旧 CLI 继续读取原文件。`MindMemOSClient.memory`
 使用 `memory_service`，`MindMemOSClient.skills` 使用 `skill_service` 解析出的连接。
 独立 Skill 地址在配置中必须填写自己的 API Key；本机服务未启用鉴权时，该值仍可填写任意非空字符串。
 
@@ -98,7 +96,7 @@ mindmemos auth
 目录选择优先级：显式 `ConfigManager(config_dir=...)` > 非空 `MINDMEMOS_HOME` >
 非空 `MINDMEMOS_CONFIG_DIR`（兼容旧配置）> 本机保存的默认目录 > `~/.mindmemos`。支持 `~` 展开。
 切换环境变量后请重新创建客户端；已有配置管理器保持创建时选定的目录。
-切换默认目录后也需要重新启动已有进程。命令不会移动原目录的 `settings.json`。
+切换默认目录后也需要重新启动已有进程。原目录中的连接配置会留在原处。
 该变量只选择本地配置，远端数据的项目归属由服务端和 API 凭据决定。
 
 You can also pass `base_url`, `api_key`, and `user_id` directly when creating a client. The default `user_id`
@@ -253,6 +251,32 @@ asyncio.run(main())
 
 Skill 客户端直接返回服务响应中的 `data` 字典。服务端未启用的算法接口会返回相应 API 错误；
 `MindMemOSClient.skills` 默认不自动重试 Skill 请求，避免网络中断时重复提交写操作。
+
+### 统一上报执行轨迹
+
+```python
+from mindmemos_sdk import MindMemOSClient, TrajectoryEvent, TrajectoryMessage
+
+event = TrajectoryEvent(
+    event_id="harness:session-1:turn-7",
+    source="my-harness",
+    user_id="alice",
+    agent_id="assistant",
+    session_id="session-1",
+    skill_version_ids=["skv-a", "skv-b"],
+    messages=[
+        TrajectoryMessage(role="user", content="Summarize the report"),
+        TrajectoryMessage(role="assistant", content="Summary complete"),
+    ],
+)
+with MindMemOSClient() as client:
+    receipts = client.report_trajectory(event)
+    print(receipts.model_dump_json(exclude_none=True))
+```
+
+CLI 可用 `mindmemos trajectory report --file event.json --json` 提交同一结构，`--file -` 从标准输入读取。Memory 和 Skill 各有一份回执。Memory 的 `queued` 表示已接收，Skill 的 `stored` 返回一条关联所有精确版本的轨迹。没有已知版本时，Skill 仍接收该轮轨迹。
+
+同一项目内，Skill 用相同 `event_id` 重放同一份输入时返回原轨迹 ID。用 `--skill-only` 或 `--memory-only` 仅投递指定服务。Memory 写入结果为 `unknown` 时，先核实服务端是否接收，再决定是否补报。任一路失败或结果未知时，CLI 仍输出已有回执并以状态码 1 退出。
 
 ## CLI
 

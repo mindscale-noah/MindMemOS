@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Literal
 
 from ..infra.database import Filter
-from ..persistence.constants import TRAJECTORIES_TABLE
 from ..persistence.db_services.trajectories.typing import TrajectoryRecord
 from ..persistence.store import SkillPersistence
 
@@ -42,7 +41,7 @@ async def collect_skill_trajectories(
         raise ValueError("Trajectory collection bounds must be positive")
     if created_from is not None and created_to is not None and created_to < created_from:
         raise ValueError("Trajectory creation bounds are reversed")
-    filters = [Filter(field="skill_version_id", value=skill_version_id)]
+    filters = []
     if created_from is not None:
         filters.append(Filter(field="created_at", op="ge", value=created_from))
     if created_to is not None:
@@ -54,20 +53,14 @@ async def collect_skill_trajectories(
     selected: list[TrajectoryRecord] = []
     offset = 0
     while len(selected) < limit:
-        rows = await persistence.database.select(
-            TRAJECTORIES_TABLE,
+        rows = await persistence.trajectories.list_for_version(
+            skill_version_id,
             filters=filters,
-            fields=None,
-            order_by=["-created_at", "-trajectory_id"],
             limit=min(max_page_size, limit - len(selected)),
             offset=offset,
         )
         if not rows:
             break
         offset += len(rows)
-        for row in rows:
-            record = TrajectoryRecord.model_validate(row)
-            selected.append(record)
-            if len(selected) == limit:
-                break
+        selected.extend(rows)
     return selected

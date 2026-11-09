@@ -3,8 +3,8 @@
 import pyarrow as pa
 import pyarrow.parquet as parquet
 import pytest
+from mindmemos_eval.skills.algos.skill_forest import _searchqa
 from mindmemos_eval.skills.config import ROOT
-from mindmemos_eval.skills.data import _searchqa
 from mindmemos_skill.common.json import read_json, write_json
 
 

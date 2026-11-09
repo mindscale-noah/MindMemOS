@@ -540,8 +540,8 @@ class ListRequest(RequestAuth):
         return self
 
 
-class ReportTrajectoryRequest(RequestAuth):
-    """Report one Agent execution using an exact registered Skill version."""
+class TrajectoryReportPayload(BaseModel):
+    """Describe one execution and all its exact Skill versions."""
 
     messages: list[dict[str, JsonValue]] = Field(min_length=1)
     """Ordered interaction messages for this physical execution."""
@@ -549,8 +549,11 @@ class ReportTrajectoryRequest(RequestAuth):
     session_id: Nonempty | None = None
     """Optional logical Agent session identity."""
 
-    skill_version_id: Nonempty
-    """Exact Skill version loaded by the Agent."""
+    skill_version_ids: list[Nonempty]
+    """Ordered exact versions. Empty means there are no identified versions."""
+
+    event_id: Nonempty | None = None
+    """Stable project-unique delivery identity, when the caller can replay the event."""
 
     status: Nonempty = "completed"
     """Caller-declared execution outcome."""
@@ -561,17 +564,21 @@ class ReportTrajectoryRequest(RequestAuth):
     finished_at: AwareDatetime | None = None
     """Actual Agent finish time when known."""
 
-    usage: dict[str, JsonValue] | None = None
-    """Number of tokens consumed by the trajectory."""
-
     @model_validator(mode="after")
     def validate_report(self) -> Self:
-        """Require message roles and forward-moving execution times."""
+        """Require message roles and ordered timestamps."""
         if any(not message.get("role") or "content" not in message for message in self.messages):
             raise ValueError("Each message requires role and content")
         if self.started_at and self.finished_at and self.finished_at < self.started_at:
             raise ValueError("finished_at must not precede started_at")
         return self
+
+
+class ReportTrajectoryRequest(RequestAuth, TrajectoryReportPayload):
+    """Report one Agent execution in an authenticated project."""
+
+    usage: dict[str, JsonValue] | None = None
+    """Number of tokens consumed by the trajectory."""
 
 
 class ShowTrajectoryRequest(RequestAuth):

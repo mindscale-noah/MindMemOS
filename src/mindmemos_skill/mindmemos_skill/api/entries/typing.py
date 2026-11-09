@@ -18,7 +18,7 @@ from ...config.config import FastAPIConfig
 from ...envs.config import EnvironmentConfig
 from ..auth import Nonempty, SkillHttpIdentity
 from ..base import MindMemOSSkill
-from ..typing import SkillHistoryCursor, StructuredSkillInfo, TrainingSplit
+from ..typing import SkillHistoryCursor, StructuredSkillInfo, TrainingSplit, TrajectoryReportPayload
 
 
 class HttpRequest(BaseModel):
@@ -247,41 +247,14 @@ class SkillResolveHttpRequest(HttpRequest):
     """Skill alias, family ID or unique prefix, or version ID or unique prefix."""
 
 
-class TrajectoryReportHttpRequest(HttpRequest):
-    """Report one actual Skill version used in an Agent execution."""
+class TrajectoryReportHttpRequest(HttpRequest, TrajectoryReportPayload):
+    """Report a Harness execution with its business actor identities."""
 
     user_id: Nonempty
     """Business user identity supplied by the Harness context."""
 
     agent_id: Nonempty
     """Agent identity that performed the execution."""
-
-    messages: list[dict[str, JsonValue]] = Field(min_length=1)
-    """Ordered interaction messages with role and content per item."""
-
-    skill_version_id: Nonempty
-    """Exact loaded version resolved by the client before reporting."""
-
-    session_id: Nonempty | None = None
-    """Optional Harness session identity."""
-
-    started_at: AwareDatetime | None = None
-    """Actual execution start time when known."""
-
-    finished_at: AwareDatetime | None = None
-    """Actual execution finish time when known."""
-
-    status: Nonempty = "completed"
-    """Caller-declared execution status."""
-
-    @model_validator(mode="after")
-    def validate_messages(self) -> Self:
-        """Require the minimum message shape and ordered timestamps."""
-        if any(not message.get("role") or "content" not in message for message in self.messages):
-            raise ValueError("Each message requires role and content")
-        if self.started_at and self.finished_at and self.finished_at < self.started_at:
-            raise ValueError("finished_at must not precede started_at")
-        return self
 
 
 class TrajectoryShowHttpRequest(HttpRequest):

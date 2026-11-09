@@ -58,8 +58,23 @@ class MemoryClient:
         agent_id: str | None = None,
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        retry: bool = True,
     ) -> AddResult:
-        """Add content to the memory store."""
+        """Add content to the memory store.
+
+        Args:
+            messages: Dialogue or other Memory inputs in execution order.
+            user_id: Business user, falling back to the client default.
+            mode: Run extraction synchronously or enqueue it.
+            app_id: Optional application identity.
+            agent_id: Optional agent identity.
+            session_id: Optional session identity.
+            metadata: Business metadata attached to the add request.
+            retry: Whether to apply configured HTTP transport retries.
+
+        Returns:
+            The result or enqueue receipt from Memory.
+        """
         request = self._core.add(
             messages,
             user_id=user_id,
@@ -69,7 +84,8 @@ class MemoryClient:
             session_id=session_id,
             metadata=metadata,
         )
-        envelope = self._transport.post_envelope(request.path, json=request.body)
+        options = {} if retry else {"retry": False}
+        envelope = self._transport.post_envelope(request.path, json=request.body, **options)
         return request.parse(envelope)
 
     def search(

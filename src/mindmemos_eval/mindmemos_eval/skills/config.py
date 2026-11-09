@@ -17,6 +17,9 @@ from .typing import ArmName, BenchmarkName
 ROOT = Path(__file__).resolve().parents[4]
 """Repository containing committed resources and the default shared configuration."""
 
+EVAL_CONFIGS = ROOT / "config/mindmemos_eval"
+"""Default YAML directory for Skill evaluation commands."""
+
 ENVIRONMENT_NAMES = {
     "livemath": "livemath",
     "alfworld": "alfworld_bounded_history",
@@ -217,6 +220,28 @@ def read_evaluation_yaml(path: Path) -> dict[str, object]:
     payload = yaml.safe_load(path.expanduser().read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"Expected a YAML mapping in {path}")
+    return payload
+
+
+def read_environment_yaml(path: Path, *, env: str | None, output_dir: Path | None) -> dict[str, object]:
+    """Read YAML with explicit environment and output directory overrides.
+
+    Args:
+        path: Evaluation YAML file.
+        env: Registered environment name supplied on the CLI.
+        output_dir: Output directory supplied on the CLI.
+
+    Returns:
+        YAML fields for the selected evaluator's config model.
+    """
+    payload = read_evaluation_yaml(path)
+    if env is not None:
+        environment = payload.setdefault("environment", {})
+        if not isinstance(environment, dict):
+            raise ValueError("environment must be a YAML mapping")
+        environment["class_name"] = env
+    if output_dir is not None:
+        payload["output_dir"] = output_dir
     return payload
 
 

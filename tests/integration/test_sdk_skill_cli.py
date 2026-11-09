@@ -130,15 +130,18 @@ def test_cli_version_lifecycle_resources_and_trajectories(cli_server, tmp_path):
     exported = Path(run("export", second_id, "--to", str(exported))["directory"])
     assert (exported / "resource.bin").read_bytes() == b"\x00\xff"
     report = {
-        "skill_version_id": second_id,
+        "skill_version_ids": [first, second_id],
+        "event_id": "cli-session/turn-1",
         "user_id": "u",
         "agent_id": "a",
         "messages": [{"role": "user", "content": "Task"}],
     }
     trajectory = run("trajectory", "report", "--json-data", json.dumps(report))
-    assert run("trajectory", "list", family)["items"] == []
-    assert len(run("trajectory", "list", second_id)["items"]) == 1
-    assert run("trajectory", "show", trajectory["trajectory_id"])["skill_version_id"] == second_id
+    assert run("trajectory", "report", "--json-data", json.dumps(report)) == trajectory
+    for reference in (family, second_id):
+        rows = run("trajectory", "list", reference)["items"]
+        assert [row["trajectory_id"] for row in rows] == [trajectory["trajectory_id"]]
+    assert run("trajectory", "show", trajectory["trajectory_id"])["skill_version_ids"] == [first, second_id]
     run("update-info", second_id, "--alias", "renamed")
     assert run("resolve", "renamed")["skill_id"] == family
     run("delete", second_id, "--yes")

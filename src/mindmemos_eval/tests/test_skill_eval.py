@@ -2,10 +2,11 @@
 
 import pytest
 from mindmemos_eval.cli import main
-from mindmemos_eval.skills import runner, service
+from mindmemos_eval.skills import service
+from mindmemos_eval.skills.algos import skill_forest as runner
+from mindmemos_eval.skills.algos.skill_forest import read_report, write_report
 from mindmemos_eval.skills.config import EvalConfig, RunOptions, load_config
-from mindmemos_eval.skills.evaluation import evaluate
-from mindmemos_eval.skills.report import read_report, write_report
+from mindmemos_eval.skills.rollout import run_tasks as evaluate
 from mindmemos_eval.skills.typing import BENCHMARKS, ArmResult, BenchmarkReport, CaseResult, DatasetInputs, SuiteReport
 from mindmemos_skill.algos.train.skill_forest.trainer import SkillForestTrainer
 from mindmemos_skill.common.json import read_json, write_json
@@ -237,7 +238,7 @@ def test_rebuild_report_accepts_saved_suite(tmp_path):
 async def test_pipeline_adoption_rejects_corrupt_index_and_wrong_version(
     tmp_path, monkeypatch, config, inputs, offline
 ):
-    from mindmemos_eval.skills.evaluation import read_pipeline_test
+    from mindmemos_eval.skills.algos.skill_forest import read_pipeline_test
     from mindmemos_skill.skill import Skill, SkillSnapshot
 
     monkeypatch.setattr(runner, "load_dataset", lambda *args: inputs)

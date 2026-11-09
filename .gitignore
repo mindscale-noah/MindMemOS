@@ -84,3 +84,6 @@ AGENTS.md
 
 # MindMemOS UI frontend dependencies
 src/mindmemos_ui/frontend/node_modules/
+
+# Sources staged by the plugin builds.
+/plugins/*/src/generated/

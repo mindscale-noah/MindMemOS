@@ -1,6 +1,6 @@
 <h1>
   <img src="https://raw.githubusercontent.com/mindscale-noah/MindMemOS/main/assets/mindmemos-logo-small.png" alt="MindMemOS logo" width="40" height="40" align="absmiddle" style="vertical-align: middle;" />
-  OpenClaw MindMemOS Memory Plugin
+  OpenClaw MindMemOS Plugin
 </h1>
 
 ![MindMemOS Memory For AI Agents](https://raw.githubusercontent.com/mindscale-noah/MindMemOS/main/assets/mindmemos-hero.png)
@@ -32,8 +32,9 @@ This plugin connects OpenClaw conversations to MindMemOS through the local
 `mindmemos` CLI.
 
 - On every user turn, it searches memories and injects the hits as prompt context.
-- At the end of an agent turn, it writes that turn's messages to MindMemOS with
-  `memory add` (the last user message and everything that follows it).
+- At the end of a successful turn, it calls `mindmemos trajectory report` once
+  for Memory and Skill and logs each destination's receipt.
+- The plugin manifest makes the bundled `mindmemos-cli` Skill discoverable by OpenClaw.
 
 ## Captured messages
 
@@ -41,8 +42,7 @@ OpenClaw's transcript carries several message types. The plugin normalizes and
 persists the conversational ones:
 
 - `user` and `assistant` messages — including assistant tool calls, which are
-  serialized inline as `[tool_call] <name>(<json args>)` and kept on the
-  assistant message.
+  rendered inline for Memory and preserved as structured tool calls for Skill.
 - `toolResult` messages — mapped to the generic `tool` role.
 
 Other OpenClaw harness message types are intentionally dropped, because they are
@@ -52,23 +52,24 @@ message in OpenClaw, so it is never persisted either.
 
 ## Requirements
 
-Install and authenticate the `mindmemos` CLI once:
+Install an SDK 1.0.0 build that exposes `trajectory report`, then authenticate the CLI:
 
 ```bash
 mindmemos auth
+mindmemos trajectory report --help
 ```
 
-Install the published plugin:
+After publication, install the 0.2.0 plugin:
 
 ```bash
-openclaw plugins install @mindmemos/openclaw-plugin
+openclaw plugins install @mindmemos/openclaw-plugin@0.2.0
 openclaw plugins enable mindmemos-memory
 ```
 
 For local development, build the plugin and link this package root:
 
 ```bash
-npm install
+npm ci
 npm run build
 openclaw plugins install --link /path/to/repo/plugins/openclaw-plugin
 openclaw plugins enable mindmemos-memory
@@ -90,7 +91,7 @@ right validation command for this hook-based memory plugin.
 ### Grant conversation access
 
 The plugin persists conversation messages, so it needs conversation access. The
-manifest declares `hooks.allowConversationAccess=true`, but for a non-bundled
+package metadata requests `hooks.allowConversationAccess=true`, but for a non-bundled
 (linked/installed) plugin that is only a request — you must also grant it in
 config, otherwise the gateway blocks the `agent_end` write hook:
 
@@ -131,9 +132,8 @@ openclaw config set plugins.entries.mindmemos-memory.config.userId alice
 openclaw gateway restart
 ```
 
-If `userId` is omitted, the plugin runs project-wide searches. Its `memory add`
-calls still inherit the default user from the local `mindmemos` CLI config; if
-neither location provides a user, storage fails because add requires `user_id`.
+If `userId` is omitted, recall searches the project and both report destinations
+inherit the default user from the local CLI profile.
 
 The `cli` value is spawned by the gateway, which (under launchd/systemd) does
 not inherit your shell `PATH`. The default `"mindmemos"` therefore fails with
@@ -148,8 +148,7 @@ openclaw config set plugins.entries.mindmemos-memory.config.cli \
 The `.venv/bin/mindmemos` shim has an absolute-path shebang, so it runs without
 activating the venv. Alternatively set `cli` to a wrapper such as
 `uv run mindmemos`, but only if the gateway can resolve `uv` and the repo
-working directory. If memory add/search silently does nothing, check the gateway
-log for `ENOENT` — that means the `cli` path is wrong.
+working directory. If the gateway logs `ENOENT`, check the `cli` path.
 
 ## Subagent Behavior
 
@@ -157,14 +156,18 @@ In subagent sessions (session key contains `:subagent:`), recalled memories are
 injected as background context only, with a preamble telling the subagent not to
 assume it is the user. This avoids a subagent adopting the main user's identity.
 
-## Skill Recognition
+## Skill discovery and reporting
 
-When the last turn contains OpenClaw tool-call text for `read`, `write`, or
-`edit` on a `SKILL.md` path, the plugin extracts the skill content from the same
-messages it sends to `memory add`, computes the SDK-compatible content hash, and
-passes it via `--skill-context-json`. This lets MindMemOS bind memories to the
-skill version that was loaded or modified without reading OpenClaw's private
-trace format.
+Run `openclaw skills list` to find the bundled `mindmemos-cli` guide. To bind
+remote business Skill versions to a turn, run `mindmemos skill show VERSION_ID`
+in the shell tool, or export a version and read the returned directory's
+`SKILL.md` using the read tool in the same turn. A recommendation or export
+alone leaves the version list empty. Multiple loads produce one list in a
+single Skill trajectory.
+
+The log shows both delivery statuses and the stored Skill trajectory ID.
+`Memory queued` confirms acceptance for background extraction. Check the stored
+versions with `mindmemos skill trajectory show TRAJECTORY_ID`.
 
 ## License
 

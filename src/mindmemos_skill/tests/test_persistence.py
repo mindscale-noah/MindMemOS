@@ -26,6 +26,7 @@ from mindmemos_skill.persistence.constants import (
     SKILLS_TABLE,
     TRAJECTORIES_TABLE,
     TRAJECTORY_CONSUMPTIONS_TABLE,
+    TRAJECTORY_VERSIONS_TABLE,
 )
 from mindmemos_skill.persistence.db_services.skills.service import SkillDataService
 from mindmemos_skill.skill import SkillContent, SkillSnapshot
@@ -141,7 +142,7 @@ async def test_registration_is_lazy_and_all_columns_are_documented(tmp_path):
     try:
         persistence = create_persistence(database)
         assert not path.exists()
-        assert len(database.tables.values()) == 11
+        assert len(database.tables.values()) == 12
         for spec in database.tables.values():
             assert all(column.comment for column in spec.table.columns)
             assert set(spec.insert_model.model_fields) == set(spec.table.c.keys())
@@ -182,9 +183,8 @@ async def test_trajectory_consumption_counts_exact_versions_and_projects(store):
                 trajectory(identity, identity).model_copy(
                     update={
                         "project_id": project,
-                        "skill_version_id": version_id,
+                        "skill_bindings": [{"skill_id": "family", "version_id": version_id}],
                         "source": source,
-                        "skill_id": "family",
                         "user_id": "user",
                         "agent_id": "agent",
                         "received_at": trajectory().created_at,
@@ -224,6 +224,7 @@ async def test_core_only_and_no_global_registry_state(tmp_path):
         persistence = create_persistence(database)
         assert {s.name for s in database.tables.values()} == {
             TRAJECTORY_CONSUMPTIONS_TABLE,
+            TRAJECTORY_VERSIONS_TABLE,
             SKILLS_TABLE,
             SKILL_VERSIONS_TABLE,
             TRAJECTORIES_TABLE,
@@ -235,7 +236,7 @@ async def test_core_only_and_no_global_registry_state(tmp_path):
             SKILL_TASKS_TABLE,
             SKILL_TASK_LOGS_TABLE,
         }
-        assert len(build_persistence_tables().values()) == 11
+        assert len(build_persistence_tables().values()) == 12
         (await ensure_collection(persistence))
         with persistence.maintenance():
             await persistence.skills.add(version())
@@ -475,7 +476,7 @@ async def test_trajectory_statistics_calendar_scope_and_bounded_projection(store
                 trajectory(identity, identity).model_copy(
                     update={
                         "project_id": project,
-                        "skill_version_id": version_id,
+                        "skill_bindings": [{"version_id": version_id}],
                         "created_at": datetime.fromisoformat(created),
                     }
                 )

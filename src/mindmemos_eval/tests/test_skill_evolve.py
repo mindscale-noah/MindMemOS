@@ -2,7 +2,8 @@
 
 import pytest
 from mindmemos_eval.cli import main
-from mindmemos_eval.skills import evolve, service
+from mindmemos_eval.skills import service
+from mindmemos_eval.skills.algos import offline_evolution as evolve
 from mindmemos_eval.skills.config import SkillEvolveConfig
 from mindmemos_skill.api.typing import EvolutionPublishedSkill, EvolutionRunResult, RegisterResult
 from mindmemos_skill.common.json import read_json, write_json
@@ -78,7 +79,7 @@ class FakeService:
         )
 
     async def report_trajectory(self, request):
-        self.reports.append((request.skill_version_id, request.messages))
+        self.reports.append((request.skill_version_ids, request.messages))
 
     async def run_evolution(self, request):
         assert request.pipeline == "offline"
@@ -279,17 +280,17 @@ async def test_evolution_retry_resumes_failed_step(setup_run, tmp_path, monkeypa
 
     async def flaky(*args):
         calls.append(args)
-        # The second call fails once, after the first call's progress is saved.
-        if len(calls) == 2:
+        failure_call = 2 if step == "register_skill" else 1
+        if len(calls) == failure_call:
             raise RuntimeError(f"{step} failure")
         return await original(*args)
 
     monkeypatch.setattr(service, step, flaky)
     result = await evolve.run(config)
     assert result["cases"][0]["status"] == "evolved"
-    assert len(calls) == 3
+    assert len(calls) == (3 if step == "register_skill" else 2)
     assert len(service.skills) == 2
-    assert len(service.reports) == 2
+    assert len(service.reports) == 1
 
 
 def test_missing_skillsbench_skills_directory(tmp_path, monkeypatch):
@@ -307,14 +308,12 @@ def test_missing_skillsbench_skills_directory(tmp_path, monkeypatch):
         skills=[],
         limit=None,
     )
-    monkeypatch.setattr(evolve.EnvTestConfig, "model_validate", lambda payload: type("Base", (), {})())
-    monkeypatch.setattr(SkillEvolveConfig, "model_dump", lambda self, **kwargs: {})
     with pytest.raises(ValueError, match="No initial Skills configured for case"):
         evolve.prepare(config)
 
 
 @pytest.mark.asyncio
-async def test_multiple_skills_report_each_version(setup_run, tmp_path):
+async def test_multiple_skills_share_one_report(setup_run, tmp_path):
     config, service = setup_run
     config.cases = ["zero"]
     other = tmp_path / "second"
@@ -322,7 +321,8 @@ async def test_multiple_skills_report_each_version(setup_run, tmp_path):
     (other / "SKILL.md").write_text("---\nname: second\ndescription: Second fixture\n---\nInitial\n")
     config.skills.append(other)
     result = await evolve.run(config)
-    assert len(service.reports) == 2
+    assert len(service.reports) == 1
+    assert len(service.reports[0][0]) == 2
     assert len(result["cases"][0]["members"]) == 2
     assert all("score" not in message for _, messages in service.reports for message in messages)
 
@@ -340,7 +340,7 @@ async def test_exhausted_network_errors_are_not_scored(setup_run):
 
 
 def test_optional_usage_preserves_cost_and_missing(tmp_path):
-    from mindmemos_eval.skills.evaluation import _case
+    from mindmemos_eval.skills.rollout import case_from_result as _case
 
     result = RolloutResult(
         output="answer",

@@ -45,7 +45,7 @@ class HttpAuthConfig(BaseModel):
     gateway_jwt_issuer: Name = "mindmemos-gateway"
     """Expected issuer of Gateway-issued JWTs."""
 
-    gateway_jwt_audience: Name = "memory-data-plane"
+    gateway_jwt_audience: Name = "skill-data-plane"
     """Expected audience of Gateway-issued JWTs."""
 
     @model_validator(mode="after")

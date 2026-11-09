@@ -1,6 +1,9 @@
-"""Test a registered environment with no Skills or one fixed static collection."""
+"""Evaluate one environment with a fixed Skill collection or no Skills."""
 
+import asyncio
+from argparse import Namespace
 from datetime import datetime, timezone
+from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
@@ -11,10 +14,41 @@ from mindmemos_skill.envs.data import Data, DataSample
 from mindmemos_skill.envs.data.typing import SplitManifest
 from mindmemos_skill.skill import Skill, SkillContent, SkillSet
 
-from .config import ROOT, EnvTestConfig
-from .evaluation import evaluate
-from .report import write_test_report
+from .config import EVAL_CONFIGS, ROOT, EnvTestConfig, read_environment_yaml
+from .rollout import run_tasks
 from .typing import EnvTestSummary
+
+
+def evaluate_environment(args: Namespace) -> int:
+    """Run a direct evaluation with a fixed set of Skills or no Skills.
+
+    Args:
+        args: Environment, task selection, Skill inputs, and execution options.
+
+    Returns:
+        Zero on success, or one when a task reports an error.
+    """
+    payload = read_environment_yaml(
+        args.config or EVAL_CONFIGS / "skill_test_direct/dev.yaml", env=args.env, output_dir=args.output_dir
+    )
+    if args.no_skill:
+        payload["skills"] = []
+    elif args.skills is not None:
+        payload["skills"] = args.skills
+    if args.samples is not None:
+        payload.update(samples_file=args.samples, data=None)
+    overrides = {
+        "split_file": args.split_file,
+        "split": args.split,
+        "limit": args.limit,
+        "concurrency": args.concurrency,
+    }
+    payload.update({name: value for name, value in overrides.items() if value is not None})
+
+    summary = asyncio.run(run_test(EnvTestConfig.model_validate(payload)))
+    print(summary.model_dump_json(indent=2), flush=True)
+    print(f"Report: {summary.trajectory_file.parent.parent / 'report.md'}", flush=True)
+    return int(summary.errors > 0)
 
 
 def _load_samples(config: EnvTestConfig, env: Environment) -> list[DataSample]:
@@ -99,7 +133,7 @@ async def run_test(config: EnvTestConfig) -> EnvTestSummary:
     write_json(directory / "config.json", redact_credentials(config.model_dump(mode="json")))
     write_json(directory / "task_ids.json", [sample.task.id for sample in samples])
     write_json(directory / "skills.json", {name: skill.snapshot() for name, skill in skills.items()})
-    cases = await evaluate(env, samples, skill_set, directory / "tasks", config.concurrency)
+    cases = await run_tasks(env, samples, skill_set, directory / "tasks", config.concurrency)
     completed = [case for case in cases if case.error is None]
     known = [case.usage for case in cases if case.usage is not None]
     usage = {key: sum(item[key] for item in known) for key in ("input_tokens", "output_tokens", "total_tokens")}
@@ -123,5 +157,34 @@ async def run_test(config: EnvTestConfig) -> EnvTestSummary:
         trajectory_file=directory / "tasks/trajectories.jsonl",
     )
     write_json(directory / "summary.json", summary)
-    write_test_report(summary, directory)
+    _write_report(summary, directory)
     return summary
+
+
+def _write_report(summary: EnvTestSummary, directory: Path) -> None:
+    """Write the direct evaluation report with task and token coverage.
+
+    Args:
+        summary: Counts, time, token coverage, and trajectory location.
+        directory: Result directory containing summary.json.
+    """
+    missing = summary.usage_missing
+    usage = summary.reported_usage
+    elapsed = f"{summary.wall_seconds:.3f}" if summary.wall_seconds is not None else "unknown"
+    successful = summary.successful
+    rate = f"{summary.success_rate:.2%}" if summary.success_rate is not None else "N/A"
+    tokens = str(summary.total_tokens) if not missing else f"unknown; reported {usage['total_tokens']}"
+    (directory / "report.md").write_text(
+        f"Environment: {summary.environment}\n\nMode: {summary.mode}\n\n"
+        "| Metric | Value |\n| --- | --- |\n"
+        f"| Tasks attempted / planned | {summary.attempted} / {summary.planned} |\n"
+        f"| Tasks not started | {summary.not_started} |\n"
+        f"| Elapsed seconds | {elapsed} |\n"
+        f"| Tokens | {tokens} |\n"
+        f"| Tasks with unknown token usage | {missing} |\n"
+        f"| Execution errors | {summary.errors} |\n"
+        f"| Successful / completed | {successful} / {summary.completed} |\n"
+        f"| Success rate (completed tasks) | {rate} |\n\n"
+        f"Trajectories: [{summary.trajectory_file.name}]({summary.trajectory_file.relative_to(directory)})\n",
+        encoding="utf-8",
+    )

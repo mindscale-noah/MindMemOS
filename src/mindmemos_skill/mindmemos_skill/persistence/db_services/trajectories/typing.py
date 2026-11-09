@@ -54,6 +54,52 @@ class TrajectoryConsumption(RecordModel):
     """Time the successful use was recorded."""
 
 
+class TrajectoryVersionIndex(RecordModel):
+    """Index one version bound to a physical attempt without copying its payload."""
+
+    project_id: str
+    """Project owning the attempt."""
+
+    trajectory_id: str
+    """Identity of the shared physical attempt."""
+
+    skill_version_id: str
+    """Exact version associated with the attempt."""
+
+    skill_id: str | None
+    """Owning family, when identified by the writer."""
+
+    first_for_family: bool
+    """Whether this binding represents the attempt in an unfiltered family page."""
+
+    task_id: str
+    """Task identity associated with the attempt."""
+
+    source: Literal["local", "reported"]
+    """Local execution or Harness report."""
+
+    user_id: str | None
+    """Business user who requested the execution, when known."""
+
+    agent_id: str | None
+    """Agent that performed the execution, when known."""
+
+    status: str
+    """Execution outcome used by filters."""
+
+    started_at: AwareDatetime | None
+    """Actual execution start time, when known."""
+
+    finished_at: AwareDatetime | None
+    """Actual execution finish time, when known."""
+
+    created_at: AwareDatetime
+    """Persistence time used for version statistics and collection."""
+
+    received_at: AwareDatetime | None
+    """Receipt time for reported attempts, used by cursor pagination."""
+
+
 class TrajectoryWrite(RecordModel):
     """Trajectory input whose project is supplied by the repository scope."""
 
@@ -141,12 +187,6 @@ class TrajectoryWrite(RecordModel):
     created_at: AwareDatetime = Field(default_factory=utcnow)
     """Time this trajectory record was stored."""
 
-    skill_id: str | None = None
-    """Exact Skill family associated with a reported attempt, if any."""
-
-    skill_version_id: str | None = None
-    """Exact loaded Skill version associated with a reported attempt, if any."""
-
     user_id: str | None = None
     """Business user identity supplied with a reported attempt, if any."""
 
@@ -166,9 +206,22 @@ class TrajectoryWrite(RecordModel):
             raise ValueError("finished_at must not precede started_at")
         if self.source == "local" and (not self.task_instruction or self.started_at is None):
             raise ValueError("Local trajectories require a task instruction and start time")
-        if self.source == "reported" and not all((self.skill_id, self.skill_version_id, self.received_at)):
-            raise ValueError("Reported trajectories require a Skill version and receipt time")
+        if self.source == "reported" and self.received_at is None:
+            raise ValueError("Reported trajectories require a receipt time")
         return self
+
+    @property
+    def bound_versions(self) -> dict[str, str | None]:
+        """Return exact version IDs and their families in recorded order."""
+        versions: dict[str, str | None] = {}
+        for binding in self.skill_bindings:
+            if not isinstance(binding, dict):
+                continue
+            version_id = binding.get("version_id")
+            skill_id = binding.get("skill_id")
+            if isinstance(version_id, str) and version_id:
+                versions[version_id] = skill_id if isinstance(skill_id, str) else None
+        return versions
 
 
 class TrajectoryRecord(TrajectoryWrite):

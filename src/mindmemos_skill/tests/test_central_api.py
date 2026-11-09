@@ -1,5 +1,7 @@
 """Repository integration across local files, snapshots, and project boundaries."""
 
+import asyncio
+
 import pytest
 import pytest_asyncio
 from mindmemos_skill.api.typing import (
@@ -15,8 +17,9 @@ from mindmemos_skill.api.typing import (
     ShowTrajectoryRequest,
     StructuredSkillInfo,
 )
-from mindmemos_skill.errors import SkillNotFoundError, SkillVersionNotFoundError
+from mindmemos_skill.errors import SkillConflictError, SkillNotFoundError, SkillVersionNotFoundError
 from mindmemos_skill.infra.database import Scope
+from mindmemos_skill.persistence.constants import TRAJECTORIES_TABLE, TRAJECTORY_VERSIONS_TABLE
 from mindmemos_skill.skill import Skill, SkillContent, decode_resources
 
 from mindmemos_skill import ServiceConfig, create_service
@@ -203,7 +206,7 @@ async def test_reported_trajectory_roundtrip_allows_optional_actors(service, use
     report = await service.report_trajectory(
         ReportTrajectoryRequest(
             project_id="p",
-            skill_version_id=first.version.version_id,
+            skill_version_ids=[first.version.version_id],
             user_id=user_id,
             agent_id=agent_id,
             messages=[{"role": "user", "content": "Question"}],
@@ -224,13 +227,13 @@ async def test_report_trajectory_rejects_cross_project_version_and_read(service)
     first = await register(service)
     request = ReportTrajectoryRequest(
         project_id="p",
-        skill_version_id=first.version.version_id,
+        skill_version_ids=[first.version.version_id],
         user_id="user",
         agent_id="agent",
         messages=[{"role": "user", "content": "Question"}],
     )
     report = await service.report_trajectory(request)
-    assert report.skill_version_id == first.version.version_id
+    assert list(report.bound_versions) == [first.version.version_id]
     assert (
         await service.show_trajectory(ShowTrajectoryRequest(project_id="p", trajectory_id=report.trajectory_id))
         == report
@@ -239,3 +242,50 @@ async def test_report_trajectory_rejects_cross_project_version_and_read(service)
         await service.report_trajectory(request.model_copy(update={"project_id": "other"}))
     with pytest.raises(SkillNotFoundError):
         await service.show_trajectory(ShowTrajectoryRequest(project_id="other", trajectory_id=report.trajectory_id))
+
+
+async def test_multiskill_report_is_atomic_and_replayable(service):
+    """One execution is listed and consumed independently under every bound version."""
+    alpha = await register(service)
+    beta = await register(service, alias="beta", skill=info("another Skill"))
+    newer_alpha = await service.commit_skill(CommitRequest(**ref(alpha), skill=info("updated")))
+    foreign = await register(service, project="other")
+    versions = [alpha.version.version_id, beta.version.version_id, newer_alpha.version.version_id]
+    request = ReportTrajectoryRequest(
+        project_id="p",
+        event_id="test-session/turn-1",
+        user_id="alice",
+        agent_id="harness",
+        skill_version_ids=[*versions, versions[0]],
+        messages=[{"role": "user", "content": "Question"}],
+    )
+    with pytest.raises(SkillVersionNotFoundError):
+        await service.report_trajectory(
+            request.model_copy(update={"skill_version_ids": [*versions, foreign.version.version_id]})
+        )
+    report, replay = await asyncio.gather(service.report_trajectory(request), service.report_trajectory(request))
+    assert replay == report
+    assert list(report.bound_versions) == versions
+    with pytest.raises(SkillConflictError):
+        await service.report_trajectory(request.model_copy(update={"skill_version_ids": versions[:1]}))
+
+    for family, version in [
+        (alpha.skill.skill_id, None),
+        (alpha.skill.skill_id, newer_alpha.version.version_id),
+        (beta.skill.skill_id, beta.version.version_id),
+    ]:
+        rows = await service.list_trajectories(
+            ListTrajectoriesRequest(project_id="p", skill_id=family, skill_version_id=version)
+        )
+        assert [row.trajectory_id for row in rows] == [report.trajectory_id]
+
+    with service.repository.persistence.session(Scope(fields={"project_id": "p"})) as store:
+        assert await store.database.count(TRAJECTORIES_TABLE) == 1
+        assert await store.database.count(TRAJECTORY_VERSIONS_TABLE) == 3
+        await store.trajectories.mark_consumed(versions[0], [report.trajectory_id], "first")
+        assert (await store.trajectories.counts(versions[1])).unconsumed == 1
+        await store.trajectories.mark_consumed(versions[1], [report.trajectory_id], "second")
+        for version in versions[:2]:
+            stats = await store.trajectories.statistics(version)
+            assert stats.totals.consumed == 1
+            assert sum(day.consumed for day in stats.days) == 1

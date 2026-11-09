@@ -292,6 +292,7 @@ fastapi:
   auth:
     mode: none
     default_project_id: personal
+    gateway_jwt_audience: skill-data-plane
 
   # Allow these pipelines over HTTP. Field: FastAPIConfig.evolution_pipelines.
   evolution_pipelines:

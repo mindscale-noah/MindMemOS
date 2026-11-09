@@ -19,6 +19,19 @@ uv run --no-sync mindmemos-eval skill evaluate train --help
 
 Choose `train` for `skill-forest` or `tree-skill`, `manage` for `skill-graph`, and `evolve` for `offline-evolv`. Use `--config FILE` to select a YAML file. Use `--env ENV` to select a supported environment. `--output-dir DIR` overrides `output_dir` in the YAML.
 
+### Evaluation outputs
+
+Each pipeline evaluator resolves its arguments and lets the selected algorithm write its own results and report. Find these files in the run's output directory.
+
+| Evaluation | Where to read the results | Report contents |
+| --- | --- | --- |
+| Skill-Forest | `report.md`, `summary.json`, `summary.csv` | Control-arm results, repeated-run statistics, matched gains, training and failures |
+| TreeSkill | `report.md`, `summary.json`, `trajectories.jsonl` | Held-out pass rate, execution coverage, errors, and usage |
+| Offline Evolution | `report.md`, `summary.json` | Collection and retest scores and usage, with per-task evolution outcomes |
+| Skill Graph · `retrieval` | `summary.json`, `rankings.json` | Macro-average and per-task retrieval metrics, plus the rankings |
+| Skill Graph · `accuracy` | `summary.json`, `selected_skills.json`, `tasks/` | Accuracy, scoring coverage, per-task errors, and execution artifacts |
+| Single-environment `direct` | `report.md`, `summary.json`, `tasks/trajectories.jsonl` | Pass rate, execution coverage, and usage for one fixed-Skill or no-Skill condition |
+
 ## Skill-Forest
 
 ### 1. Prepare the datasets and runtime
@@ -220,6 +233,8 @@ uv run --no-sync mindmemos-eval skill evaluate evolve --algo offline-evolv \
 ### 4. Read the results
 
 By default, the run writes `report.md` and `summary.json` under `output/mindmemos_eval/skill_evolve/<timestamp>/`. The evaluator collects trajectories with the initial Skill and retests the same tasks with the evolved Skill. It averages rewards across repeats per task, then across scored tasks. Tasks without a usable evolved Skill retain their initial scores. Full comparison results are pending.
+
+Check the per-task `Status` to verify evolution. `evolved` means the pipeline produced a new Skill and scheduled a retest, `unchanged` means it kept the initial Skill, and `evolution_failed` means evolution failed and the task kept its initial score. The command can exit with status zero after writing the report, so check each task's status and retest results when validating evolution.
 
 | Dataset | Metric | Initial Skill | Offline Evolution |
 | --- | --- | ---: | ---: |

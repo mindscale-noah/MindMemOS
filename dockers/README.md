@@ -1,6 +1,6 @@
 # Docker and Configuration
 
-This directory defines the database, task queue, and monitoring dependencies for Memory and Skill. For startup commands and development tools, see the [project README](../README.md#12-startup-and-management-commands).
+This directory defines the database, task queue, and monitoring dependencies for Memory and Skill. For startup and management commands, see the [deployment guide](../docs/deploy/instruction.md#3-select-and-manage-services).
 
 ## File Structure
 

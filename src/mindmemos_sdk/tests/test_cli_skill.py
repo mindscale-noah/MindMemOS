@@ -21,7 +21,7 @@ TRAJECTORY = {
     "user_id": "u",
     "agent_id": "a",
     "messages": [{"role": "user", "content": "Task"}],
-    "skill_version_id": "skv-a",
+    "skill_version_ids": ["skv-a"],
 }
 
 

@@ -1,4 +1,4 @@
-"""Collect matched execution evidence, evolve complete Skills, and retest."""
+"""Collect matched execution evidence, evolve Skills, and retest."""
 
 import re
 from collections.abc import Mapping
@@ -20,13 +20,14 @@ from mindmemos_skill.common.secrets import redact_credentials
 from mindmemos_skill.config.config import ImplementationConfig, ServiceConfig
 from mindmemos_skill.config.loader import read_skill_config
 from mindmemos_skill.envs import Environment
+from mindmemos_skill.envs.data import Data, DataSample
+from mindmemos_skill.envs.data.typing import SplitManifest
 from mindmemos_skill.skill import Skill, SkillSet, SkillSnapshot, encode_resources
 
-from .config import ROOT, EnvTestConfig, SkillEvolveConfig
-from .evaluation import evaluate
-from .service import open_skill_service
-from .testing import _load_samples
-from .typing import CaseResult
+from ..config import ROOT, SkillEvolveConfig
+from ..rollout import run_tasks
+from ..service import open_skill_service
+from ..typing import CaseResult
 
 # Explicit HTTP statuses take precedence over generic transport error text.
 _HTTP_STATUS = re.compile(
@@ -39,226 +40,6 @@ _RETRYABLE = re.compile(
     r"|api error|api timed out|environmentstarttimeouterror|无可用渠道",
     re.IGNORECASE,
 )
-
-
-def sanitize_trajectory(value):
-    """Copy public messages while replacing long binary payloads."""
-    if isinstance(value, str):
-        return re.sub(r"[A-Za-z0-9+/=]{400,}", "[omitted binary]", value)
-    if isinstance(value, list):
-        return [sanitize_trajectory(item) for item in value]
-    if isinstance(value, dict):
-        return {key: sanitize_trajectory(item) for key, item in value.items()}
-    return value
-
-
-def classify_error(error: str | None) -> str:
-    """Separate scored timeouts from excluded setup failures and retryable faults."""
-    if not error:
-        return "completed"
-    if "AgentSetupTimeoutError" in error:
-        return "excluded"
-    if any(name in error for name in ("AgentTimeoutError", "VerifierTimeoutError")):
-        return "timeout"
-    statuses = [int(match) for match in _HTTP_STATUS.findall(error)]
-    if statuses:
-        return "retryable" if all(code in {401, 403, 408, 429} or code >= 500 for code in statuses) else "error"
-    return "retryable" if _RETRYABLE.search(error) else "error"
-
-
-def prepare(config: SkillEvolveConfig):
-    """Validate ordered tasks and complete initial Skill sources before execution.
-
-    Args:
-        config: Dataset, environment, task selection, and initial sources.
-
-    Returns:
-        Environment, ordered samples, and task-keyed runtime Skill collections.
-    """
-    env = Environment.build(config.environment.class_name, config.environment.config)
-    base = EnvTestConfig.model_validate(
-        {key: value for key, value in config.model_dump().items() if key in EnvTestConfig.model_fields}
-    )
-    base.limit = None
-    samples = _load_samples(base, env)
-    selected = config.cases
-    if config.cases_file is not None:
-        rows = read_json(config.cases_file)
-        selected = [row if isinstance(row, str) else row["name"] for row in rows]
-    index = {sample.task.id: sample for sample in samples}
-    if selected is not None:
-        if len(set(selected)) != len(selected) or set(selected) - index.keys():
-            raise ValueError("Case selection contains duplicate or unknown task IDs")
-        samples = [index[key] for key in selected]
-    samples = [sample for sample in samples if sample.task.id not in config.exclude_cases][: config.limit]
-    if not samples:
-        raise ValueError("No cases selected")
-    skills = {}
-    for sample in samples:
-        if sample.task.id in {".", ".."} or "/" in sample.task.id or "\\" in sample.task.id:
-            raise ValueError(f"Task ID is not a safe output directory name: {sample.task.id}")
-        paths = config.case_skills.get(sample.task.id, config.skills)
-        if not paths and config.environment.class_name == "skillsbench":
-            root = sample.reward_data.task_dir / "environment/skills"
-            paths = sorted(path for path in root.iterdir() if (path / "SKILL.md").is_file()) if root.is_dir() else []
-        if not paths:
-            raise ValueError(f"No initial Skills configured for {sample.task.id}")
-        skills[sample.task.id] = {f"skill-{i:03d}": Skill.from_path(path) for i, path in enumerate(paths)}
-    return env, samples, skills
-
-
-def _progress(phase, slots, total, *, reused=0, retrying=0):
-    """Print observed final slot counts separately from active retries."""
-    counts = {
-        status: sum(slot["status"] == status for slot in slots)
-        for status in ("completed", "timeout", "error", "retryable", "excluded")
-    }
-    print(
-        f"[{phase}] {len(slots)}/{total} done | ok {counts['completed']} | "
-        f"timeout->0 {counts['timeout']} | errors {counts['error'] + counts['retryable']} | "
-        f"excluded {counts['excluded']} | reused {reused} | retrying {retrying}",
-        flush=True,
-    )
-
-
-async def _slot(config, env, sample, skills, directory):
-    """Run or restore one scored slot, retaining unsuccessful attempts separately."""
-    saved = directory / "slot.json"
-    if saved.exists():
-        return read_json(saved)
-    for attempt in range(config.network_retries + 1):
-        target = directory / "attempts" / f"attempt-{attempt:03d}"
-        result_file = target / "results.json"
-        if result_file.exists():
-            outcome = CaseResult.model_validate(read_json(result_file)[0])
-        elif target.exists():
-            # Incomplete workspaces cannot be safely adopted as completed executions.
-            target.rename(target.with_name(target.name + "_aborted_" + uuid4().hex[:8]))
-            outcome = (await evaluate(env, [sample], SkillSet(skills), target, 1))[0]
-        else:
-            outcome = (await evaluate(env, [sample], SkillSet(skills), target, 1))[0]
-        status = classify_error(outcome.error)
-        if status == "retryable" and attempt < config.network_retries:
-            print(f"[retry] {sample.task.id} retrying=1 attempt={attempt + 1} | {outcome.error}", flush=True)
-            continue
-        messages = None
-        if status == "completed":
-            record = next(read_jsonl(target / "trajectories.jsonl"))
-            messages = record["result"]["trajectory"]
-        data = dict(
-            outcome=outcome.model_dump(mode="json"),
-            status=status,
-            score=0.0 if status == "timeout" else outcome.score,
-            success=False if status == "timeout" else outcome.success,
-            messages=messages,
-        )
-        write_json(saved, data)
-        return data
-
-
-def _merge_profile_options(base: dict[str, object], overrides: Mapping[str, object]) -> dict[str, object]:
-    """Merge nested pipeline options by field name without modifying the loaded profile."""
-    merged = base.copy()
-    for name, value in overrides.items():
-        original = merged.get(name)
-        if isinstance(original, dict) and isinstance(value, dict):
-            value = _merge_profile_options(original, value)
-        merged[name] = value
-    return merged
-
-
-def _evolution_resources(config: SkillEvolveConfig, directory: Path) -> ServiceConfig:
-    """Select the evaluation pipeline and confine its work and storage to the run."""
-    source = read_skill_config(config.service_config).service
-    profile = source.evolution_pipelines[config.pipeline]
-    options = profile.config if isinstance(profile.config, dict) else profile.config.model_dump(mode="python")
-    options = _merge_profile_options(options, config.pipeline_overrides)
-    options["work_dir"] = str(directory / "evolution_work")
-    return ServiceConfig(
-        home=directory / "state",
-        agents=source.agents,
-        evolution_pipelines={config.pipeline: ImplementationConfig(class_name=profile.class_name, config=options)},
-    )
-
-
-async def _evolve_case(
-    service: SkillService,
-    row,
-    skills: Mapping[str, Skill],
-    state,
-    state_path: Path,
-    *,
-    project_id: str,
-    pipeline: str,
-) -> None:
-    """Register, report, and evolve one case, persisting each completed step."""
-    case = row["case"]
-    for index, (key, skill) in enumerate(skills.items()):
-        if index < len(state["registrations"]):
-            continue
-        source = skill.source
-        registered = await service.register_skill(
-            RegisterRequest(
-                project_id=project_id,
-                alias=f"{project_id}/{case}/{key}",
-                skill=StructuredSkillInfo(
-                    content=source.content,
-                    resources=encode_resources(source.resources),
-                    name=source.name,
-                    description=source.description,
-                    standard_format=source.standard_format,
-                ),
-            )
-        )
-        state["registrations"].append(registered.model_dump(mode="json"))
-        write_json(state_path, state)
-
-    version_ids = [item["skill_version_id"] for item in state["registrations"]]
-    for repeat, slot in enumerate(row["collect"]):
-        if not slot["messages"]:
-            continue
-        for version_id in version_ids:
-            identity = f"{repeat}/{version_id}"
-            if identity in state["reported"]:
-                continue
-            await service.report_trajectory(
-                ReportTrajectoryRequest(
-                    project_id=project_id,
-                    user_id="mindmemos-eval",
-                    agent_id="skill-evolve",
-                    skill_version_id=version_id,
-                    messages=sanitize_trajectory(slot["messages"]),
-                    session_id=f"{case}/{repeat}",
-                )
-            )
-            state["reported"].append(identity)
-            write_json(state_path, state)
-
-    if state["members"]:
-        return
-    result = await service.run_evolution(
-        CollectionEvolutionRequest(
-            project_id=project_id,
-            pipeline=pipeline,
-            skill_version_ids=version_ids,
-            auto_accept=False,
-        )
-    )
-    if not isinstance(result, EvolutionRunResult):
-        raise ValueError("Expected a collection evolution result")
-    state["members"] = [member.model_dump(mode="json") for member in result.members]
-    write_json(state_path, state)
-
-
-def _stats(slots):
-    """Aggregate scored slots without treating missing scores as zero."""
-    valid = [slot for slot in slots if slot["status"] in {"completed", "timeout"}]
-    return dict(
-        mean_score=sum(slot["score"] for slot in valid) / len(valid) if valid else None,
-        accuracy=sum(bool(slot["success"]) for slot in valid) / len(valid) if valid else None,
-        scored=len(valid),
-        errors=len(slots) - len(valid),
-    )
 
 
 async def run(config: SkillEvolveConfig) -> dict:
@@ -412,6 +193,224 @@ async def run(config: SkillEvolveConfig) -> dict:
     return summary
 
 
+def prepare(config: SkillEvolveConfig):
+    """Validate ordered tasks and complete initial Skill sources before execution.
+
+    Args:
+        config: Dataset, environment, task selection, and initial sources.
+
+    Returns:
+        Environment, ordered samples, and task-keyed runtime Skill collections.
+    """
+    env = Environment.build(config.environment.class_name, config.environment.config)
+    samples = _load_samples(config, env)
+    selected = config.cases
+    if config.cases_file is not None:
+        rows = read_json(config.cases_file)
+        selected = [row if isinstance(row, str) else row["name"] for row in rows]
+    index = {sample.task.id: sample for sample in samples}
+    if selected is not None:
+        if len(set(selected)) != len(selected) or set(selected) - index.keys():
+            raise ValueError("Case selection contains duplicate or unknown task IDs")
+        samples = [index[key] for key in selected]
+    samples = [sample for sample in samples if sample.task.id not in config.exclude_cases][: config.limit]
+    if not samples:
+        raise ValueError("No cases selected")
+    skills = {}
+    for sample in samples:
+        if sample.task.id in {".", ".."} or "/" in sample.task.id or "\\" in sample.task.id:
+            raise ValueError(f"Task ID is not a safe output directory name: {sample.task.id}")
+        paths = config.case_skills.get(sample.task.id, config.skills)
+        if not paths and config.environment.class_name == "skillsbench":
+            root = sample.reward_data.task_dir / "environment/skills"
+            paths = sorted(path for path in root.iterdir() if (path / "SKILL.md").is_file()) if root.is_dir() else []
+        if not paths:
+            raise ValueError(f"No initial Skills configured for {sample.task.id}")
+        skills[sample.task.id] = {f"skill-{i:03d}": Skill.from_path(path) for i, path in enumerate(paths)}
+    return env, samples, skills
+
+
+def sanitize_trajectory(value):
+    """Copy public messages while replacing long binary payloads."""
+    if isinstance(value, str):
+        return re.sub(r"[A-Za-z0-9+/=]{400,}", "[omitted binary]", value)
+    if isinstance(value, list):
+        return [sanitize_trajectory(item) for item in value]
+    if isinstance(value, dict):
+        return {key: sanitize_trajectory(item) for key, item in value.items()}
+    return value
+
+
+def classify_error(error: str | None) -> str:
+    """Separate scored timeouts from excluded setup failures and retryable faults."""
+    if not error:
+        return "completed"
+    if "AgentSetupTimeoutError" in error:
+        return "excluded"
+    if any(name in error for name in ("AgentTimeoutError", "VerifierTimeoutError")):
+        return "timeout"
+    statuses = [int(match) for match in _HTTP_STATUS.findall(error)]
+    if statuses:
+        return "retryable" if all(code in {401, 403, 408, 429} or code >= 500 for code in statuses) else "error"
+    return "retryable" if _RETRYABLE.search(error) else "error"
+
+
+def _progress(phase, slots, total, *, reused=0, retrying=0):
+    """Print observed final slot counts separately from active retries."""
+    counts = {
+        status: sum(slot["status"] == status for slot in slots)
+        for status in ("completed", "timeout", "error", "retryable", "excluded")
+    }
+    print(
+        f"[{phase}] {len(slots)}/{total} done | ok {counts['completed']} | "
+        f"timeout->0 {counts['timeout']} | errors {counts['error'] + counts['retryable']} | "
+        f"excluded {counts['excluded']} | reused {reused} | retrying {retrying}",
+        flush=True,
+    )
+
+
+async def _slot(config, env, sample, skills, directory):
+    """Run or restore one scored slot, retaining unsuccessful attempts separately."""
+    saved = directory / "slot.json"
+    if saved.exists():
+        return read_json(saved)
+    for attempt in range(config.network_retries + 1):
+        target = directory / "attempts" / f"attempt-{attempt:03d}"
+        result_file = target / "results.json"
+        if result_file.exists():
+            outcome = CaseResult.model_validate(read_json(result_file)[0])
+        elif target.exists():
+            # Incomplete workspaces cannot be safely adopted as completed executions.
+            target.rename(target.with_name(target.name + "_aborted_" + uuid4().hex[:8]))
+            outcome = (await run_tasks(env, [sample], SkillSet(skills), target, 1))[0]
+        else:
+            outcome = (await run_tasks(env, [sample], SkillSet(skills), target, 1))[0]
+        status = classify_error(outcome.error)
+        if status == "retryable" and attempt < config.network_retries:
+            print(f"[retry] {sample.task.id} retrying=1 attempt={attempt + 1} | {outcome.error}", flush=True)
+            continue
+        messages = None
+        if status == "completed":
+            record = next(read_jsonl(target / "trajectories.jsonl"))
+            messages = record["result"]["trajectory"]
+        data = dict(
+            outcome=outcome.model_dump(mode="json"),
+            status=status,
+            score=0.0 if status == "timeout" else outcome.score,
+            success=False if status == "timeout" else outcome.success,
+            messages=messages,
+        )
+        write_json(saved, data)
+        return data
+
+
+def _merge_profile_options(base: dict[str, object], overrides: Mapping[str, object]) -> dict[str, object]:
+    """Merge nested pipeline options by field name without modifying the loaded profile."""
+    merged = base.copy()
+    for name, value in overrides.items():
+        original = merged.get(name)
+        if isinstance(original, dict) and isinstance(value, dict):
+            value = _merge_profile_options(original, value)
+        merged[name] = value
+    return merged
+
+
+def _evolution_resources(config: SkillEvolveConfig, directory: Path) -> ServiceConfig:
+    """Select the evaluation pipeline and confine its work and storage to the run."""
+    source = read_skill_config(config.service_config).service
+    profile = source.evolution_pipelines[config.pipeline]
+    options = profile.config if isinstance(profile.config, dict) else profile.config.model_dump(mode="python")
+    options = _merge_profile_options(options, config.pipeline_overrides)
+    options["work_dir"] = str(directory / "evolution_work")
+    return ServiceConfig(
+        home=directory / "state",
+        agents=source.agents,
+        evolution_pipelines={config.pipeline: ImplementationConfig(class_name=profile.class_name, config=options)},
+    )
+
+
+async def _evolve_case(
+    service: SkillService,
+    row,
+    skills: Mapping[str, Skill],
+    state,
+    state_path: Path,
+    *,
+    project_id: str,
+    pipeline: str,
+) -> None:
+    """Register, report, and evolve one case, persisting each completed step."""
+    case = row["case"]
+    if any(not identity.startswith("skill-evolve/") for identity in state["reported"]):
+        raise ValueError("Stored evolution evidence uses per-version reports. Use a new output directory.")
+    for index, (key, skill) in enumerate(skills.items()):
+        if index < len(state["registrations"]):
+            continue
+        source = skill.source
+        registered = await service.register_skill(
+            RegisterRequest(
+                project_id=project_id,
+                alias=f"{project_id}/{case}/{key}",
+                skill=StructuredSkillInfo(
+                    content=source.content,
+                    resources=encode_resources(source.resources),
+                    name=source.name,
+                    description=source.description,
+                    standard_format=source.standard_format,
+                ),
+            )
+        )
+        state["registrations"].append(registered.model_dump(mode="json"))
+        write_json(state_path, state)
+
+    version_ids = [item["skill_version_id"] for item in state["registrations"]]
+    for repeat, slot in enumerate(row["collect"]):
+        if not slot["messages"]:
+            continue
+        identity = f"skill-evolve/{case}/{repeat}"
+        if identity in state["reported"]:
+            continue
+        await service.report_trajectory(
+            ReportTrajectoryRequest(
+                project_id=project_id,
+                user_id="mindmemos-eval",
+                agent_id="skill-evolve",
+                skill_version_ids=version_ids,
+                event_id=identity,
+                messages=sanitize_trajectory(slot["messages"]),
+                session_id=f"{case}/{repeat}",
+            )
+        )
+        state["reported"].append(identity)
+        write_json(state_path, state)
+
+    if state["members"]:
+        return
+    result = await service.run_evolution(
+        CollectionEvolutionRequest(
+            project_id=project_id,
+            pipeline=pipeline,
+            skill_version_ids=version_ids,
+            auto_accept=False,
+        )
+    )
+    if not isinstance(result, EvolutionRunResult):
+        raise ValueError("Expected a collection evolution result")
+    state["members"] = [member.model_dump(mode="json") for member in result.members]
+    write_json(state_path, state)
+
+
+def _stats(slots):
+    """Aggregate scored slots without treating missing scores as zero."""
+    valid = [slot for slot in slots if slot["status"] in {"completed", "timeout"}]
+    return dict(
+        mean_score=sum(slot["score"] for slot in valid) / len(valid) if valid else None,
+        accuracy=sum(bool(slot["success"]) for slot in valid) / len(valid) if valid else None,
+        scored=len(valid),
+        errors=len(slots) - len(valid),
+    )
+
+
 def _summary(rows, config):
     """Compute paired case means and execution token totals, including resumed slots."""
     included = [
@@ -477,3 +476,41 @@ def _write_report(summary, directory):
     for phase, metrics in summary["metrics"].items():
         lines.extend(["", f"## {phase}", "", str(metrics)])
     (directory / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _load_samples(config: SkillEvolveConfig, env: Environment) -> list[DataSample]:
+    """Read the evolution task pool before applying case selection."""
+    if config.data is not None:
+        loader = Data.build(config.data.class_name, config.data.config)
+        samples = loader.load()
+    else:
+        rows = read_json(config.samples_file.expanduser())
+        if not isinstance(rows, list) or any(
+            not isinstance(row, dict) or set(row) != {"task", "reward_data"} for row in rows
+        ):
+            raise ValueError("samples_file must be an array of objects with task and reward_data fields")
+        samples = [
+            DataSample(
+                task=env.task_type.model_validate(row["task"]),
+                reward_data=env.reward_data_type.model_validate(row["reward_data"]),
+            )
+            for row in rows
+        ]
+    index = {}
+    for sample in samples:
+        if not isinstance(sample.task, env.task_type) or not isinstance(sample.reward_data, env.reward_data_type):
+            raise ValueError("Dataset task or reward_data types do not match the selected environment")
+        if sample.task.id in index:
+            raise ValueError(f"Duplicate task ID: {sample.task.id}")
+        index[sample.task.id] = sample
+    if config.split_file is not None:
+        manifest = SplitManifest.model_validate(read_json(config.split_file.expanduser()))
+        if config.split not in manifest.root:
+            raise ValueError(f"Unknown split: {config.split}")
+        unknown = {identifier for ids in manifest.root.values() for identifier in ids} - index.keys()
+        if unknown:
+            raise ValueError(f"Unknown task IDs in split file: {sorted(unknown)[:5]}")
+        samples = [index[identifier] for identifier in manifest.root[config.split]]
+    if not samples:
+        raise ValueError("No evaluation tasks selected")
+    return samples

@@ -13,11 +13,11 @@ mindmemos --help
 
 To use the current checkout, run `uv sync --all-packages` from the repository root and invoke the commands below with `uv run mindmemos`. See the [deployment guide](../deploy/instruction.md) to start self-hosted services.
 
-The CLI checks `MINDMEMOS_HOME`, then the legacy `MINDMEMOS_CONFIG_DIR`, the saved default directory, and finally `~/.mindmemos`. The selected directory holds the local `settings.json`. The server determines remote project access from the credentials.
+The CLI checks `MINDMEMOS_HOME`, then the legacy `MINDMEMOS_CONFIG_DIR`, the saved default directory, and finally `~/.mindmemos`. The SDK saves new settings to `settings.v2.json` and can read the legacy `settings.json` as a fallback. The server determines remote project access from the credentials.
 
 ### `mindmemos auth`
 
-Choose an official or custom deployment and save the API keys and default user ID. The official deployment uses `https://mindmemos.cn` and one key for both Memory and Skill. A custom deployment can use separate addresses, with a separate key for an independent Skill service.
+Choose an official or custom deployment and save the API keys and default user ID. Official Memory uses `https://mindmemos.cn`. Official Skill uses `https://mindmemos.cn/api/developer/skill` and requires an authorized Skill key. A custom deployment can use separate addresses, with a separate key for an independent Skill service.
 
 ```bash
 mindmemos auth
@@ -27,7 +27,7 @@ mindmemos auth --service-type custom \
   --user-id alice
 ```
 
-For a shared custom connection, leave the Skill address blank at the prompt or pass `--skill-shares-memory`. By default, enter keys at the prompts. Automation can supply `--memory-api-key` and, for an independent Skill service, `--skill-api-key`.
+For a custom Memory-only connection, leave the optional Skill address blank. Pass `--no-skill` to clear an existing custom Skill connection. By default, enter keys at the prompts. Automation can supply `--memory-api-key` and, for an independent Skill service, `--skill-api-key`.
 
 ### `mindmemos config show`
 
@@ -47,7 +47,7 @@ mindmemos config home set /absolute/path/to/.mindmemos
 
 ### `mindmemos config reset`
 
-Delete `settings.json` from the selected directory. The command prompts for confirmation unless you pass `--yes` or `-y`.
+Clear the current SDK settings while preserving the legacy `settings.json` for older clients. The command prompts for confirmation unless you pass `--yes` or `-y`.
 
 ```bash
 mindmemos config reset
@@ -234,7 +234,7 @@ mindmemos skill delete my-skill
 
 #### `mindmemos skill trajectory report`
 
-Report an execution trajectory. Include `user_id`, `agent_id`, `messages`, and the `skill_version_id` actually loaded for the execution. Supply `--file` or `--json-data`. Use `--file -` to read from standard input.
+Report one execution with `user_id`, `agent_id`, `messages`, and `skill_version_ids`. Pass the exact versions loaded during execution as a list, including for a single version. Use `[]` when no exact version is known. The service returns one trajectory ID. Supply `--file` or `--json-data`. Use `--file -` to read from standard input.
 
 ```bash
 mindmemos skill trajectory report --file ./trajectory.json

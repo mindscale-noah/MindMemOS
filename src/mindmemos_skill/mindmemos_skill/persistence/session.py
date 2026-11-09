@@ -16,6 +16,7 @@ from .constants import (
     SKILLS_TABLE,
     TRAJECTORIES_TABLE,
     TRAJECTORY_CONSUMPTIONS_TABLE,
+    TRAJECTORY_VERSIONS_TABLE,
 )
 from .db_services.audit.service import AuditDataService
 from .db_services.evaluations.service import EvaluationDataService
@@ -54,7 +55,8 @@ class SkillPersistenceSession:
             prefixed_ids=prefixed_ids,
         )
         self.trajectories = TrajectoryDataService(
-            self.repository(frozenset({TRAJECTORIES_TABLE, TRAJECTORY_CONSUMPTIONS_TABLE})), skills=skill_reader
+            self.repository(frozenset({TRAJECTORIES_TABLE, TRAJECTORY_CONSUMPTIONS_TABLE, TRAJECTORY_VERSIONS_TABLE})),
+            skills=skill_reader,
         )
         self.graphs = GraphDataService(
             self.repository(

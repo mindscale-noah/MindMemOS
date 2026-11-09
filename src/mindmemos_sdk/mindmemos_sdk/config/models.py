@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 CONFIG_SCHEMA_VERSION = 2
 DEFAULT_BASE_URL = "https://mindmemos.cn"
+DEFAULT_SKILL_BASE_URL = f"{DEFAULT_BASE_URL}/api/developer/skill"
 
 
 def _normalize_base_url(value: str | None) -> str | None:
@@ -49,7 +50,7 @@ class MemoryServiceConfig(BaseModel):
     """Custom Memory API root; omitted for the official cloud."""
 
     auth: AuthConfig = Field(default_factory=AuthConfig)
-    """Credentials used by Memory and by Skill when no separate Skill URL is set."""
+    """Credentials for Memory, also usable at the official Skill gateway."""
 
     @field_validator("base_url")
     @classmethod
@@ -66,16 +67,16 @@ class MemoryServiceConfig(BaseModel):
 
 
 class SkillServiceConfig(BaseModel):
-    """Reuse Memory unless a separate Skill service is configured."""
+    """Independent Skill connection settings."""
 
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     """Reject undeclared connection settings without exposing credentials."""
 
     base_url: str | None = None
-    """Separate Skill API root; empty means use the resolved Memory API root."""
+    """Custom Skill API root; omitted for the official cloud."""
 
     auth: AuthConfig | None = None
-    """Separate Skill credentials; omitted when Skill shares Memory's connection."""
+    """Optional official Skill key or required custom Skill key."""
 
     @field_validator("base_url")
     @classmethod
@@ -83,7 +84,7 @@ class SkillServiceConfig(BaseModel):
         """Normalize the optional separate Skill API root.
 
         Args:
-            value: Configured Skill URL, or None to share Memory's endpoint.
+            value: Configured Skill URL, or None when it is omitted.
 
         Returns:
             Normalized separate URL or None.
@@ -92,13 +93,11 @@ class SkillServiceConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_connection(self) -> SkillServiceConfig:
-        """Require separate credentials exactly when using a separate URL.
+        """Require explicit credentials for a custom URL.
 
         Returns:
             The validated Skill service settings.
         """
-        if self.base_url is None and self.auth is not None:
-            raise ValueError("Skill auth requires a separate Skill base_url")
         if self.base_url is not None and (self.auth is None or not self.auth.api_key):
             raise ValueError("A separate Skill base_url requires its own auth.api_key")
         return self
@@ -132,7 +131,7 @@ class ConfigMetadata(BaseModel):
 
 
 class SDKConfig(BaseModel):
-    """Top-level SDK settings persisted to ``settings.json`` in the selected home."""
+    """Top-level SDK settings persisted to ``settings.v2.json`` in the selected home."""
 
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     """Reject obsolete top-level fields and hide credentials in validation errors."""
@@ -187,22 +186,22 @@ class SDKConfig(BaseModel):
 
     def resolve_skill_connection(
         self, *, memory_base_url: str | None = None, memory_api_key: str | None = None
-    ) -> tuple[str, str | None]:
-        """Resolve the Skill transport from an optional independent URL.
+    ) -> tuple[str | None, str | None]:
+        """Resolve the independent Skill transport without forwarding custom Memory credentials.
 
         Args:
             memory_base_url: Optional runtime override of the Memory API root.
             memory_api_key: Optional runtime override of the Memory API key.
 
         Returns:
-            Skill API root and Bearer key for the configured destination.
+            Skill API root and Bearer key, or a pair of None values when unconfigured.
         """
         resolved_memory_url, resolved_memory_key = self.resolve_memory_connection()
-        if self.skill_service.base_url is None:
-            return (
-                memory_base_url if memory_base_url is not None else resolved_memory_url,
-                memory_api_key if memory_api_key is not None else resolved_memory_key,
-            )
-        if self.skill_service.auth is None:
-            raise ValueError("Self-hosted Skill service settings are incomplete")
-        return self.skill_service.base_url, self.skill_service.auth.api_key
+        skill_auth = self.skill_service.auth
+        if self.skill_service.base_url is not None and skill_auth is not None:
+            return self.skill_service.base_url, skill_auth.api_key
+        if skill_auth is not None and skill_auth.api_key:
+            return DEFAULT_SKILL_BASE_URL, skill_auth.api_key
+        if self.service_type == "official" and (memory_base_url or resolved_memory_url).rstrip("/") == DEFAULT_BASE_URL:
+            return DEFAULT_SKILL_BASE_URL, memory_api_key if memory_api_key is not None else resolved_memory_key
+        return None, None

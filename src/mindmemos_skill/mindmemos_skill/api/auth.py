@@ -145,7 +145,13 @@ class GatewayJwtResolver:
         actor_id = payload.get("sub") or payload.get("account_id")
         if not isinstance(actor_id, str) or not actor_id.strip():
             actor_id = project_id
-        return SkillHttpIdentity(project_id=project_id, scopes=set(scopes), actor_id=actor_id)
+        request_id = payload.get("request_id")
+        return SkillHttpIdentity(
+            project_id=project_id,
+            scopes=set(scopes),
+            actor_id=actor_id,
+            request_id=request_id if isinstance(request_id, str) and request_id.strip() else None,
+        )
 
 
 def build_identity_resolver(config: HttpAuthConfig) -> LocalKeyResolver | GatewayJwtResolver | None:

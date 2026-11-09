@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 import yaml
 from mindmemos_eval.cli import build_arg_parser, main
-from mindmemos_eval.skills import runner, skill_graph
+from mindmemos_eval.skills.algos import skill_forest as runner
+from mindmemos_eval.skills.algos import skill_graph
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.pipelines import Pipeline
 

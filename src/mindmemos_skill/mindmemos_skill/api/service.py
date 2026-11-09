@@ -932,7 +932,7 @@ class SkillService(MindMemOSSkill):
 
     @_service_call
     async def report_trajectory(self, request: ReportTrajectoryRequest) -> TrajectoryRecord:
-        """Persist one authenticated Agent report against its loaded version.
+        """Persist one authenticated execution with all its loaded versions.
 
         Args:
             request: Authorized project and validated Harness execution.

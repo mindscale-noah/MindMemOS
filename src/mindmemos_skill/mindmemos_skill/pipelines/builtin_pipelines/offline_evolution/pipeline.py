@@ -251,8 +251,7 @@ class OfflineEvolutionPipeline(EvolutionPipeline[OfflineEvolutionPipelineConfig]
                     max_page_size=self.config.traj_collect.max_page_size,
                 )
                 for record in rows:
-                    if record.skill_version_id == version_id:
-                        pool[record.trajectory_id] = record
+                    pool[record.trajectory_id] = record
             if not pool:
                 raise ValueError("No trajectories available for the supplied Skill versions")
             records = list(pool.values())
@@ -267,9 +266,9 @@ class OfflineEvolutionPipeline(EvolutionPipeline[OfflineEvolutionPipelineConfig]
             )
         trajectories = []
         for record in records:
-            if record.skill_version_id not in by_version:
+            members = [by_version[version_id] for version_id in record.bound_versions if version_id in by_version]
+            if not members:
                 raise ValueError("Collected evidence does not match a supplied exact version")
-            member = by_version[record.skill_version_id]
             success = record.reward_metadata.get("success")
             reward = None
             if record.reward_score is not None and isinstance(success, bool):
@@ -280,7 +279,7 @@ class OfflineEvolutionPipeline(EvolutionPipeline[OfflineEvolutionPipelineConfig]
                     task=HistoricalTask(id=record.task_id, instruction=record.task_instruction),
                     task_system_prompt=record.task_system_prompt,
                     task_metadata=record.task_metadata,
-                    skills={member.owner.skill_id: Skill.from_snapshot(member.base.snapshot())},
+                    skills={member.owner.skill_id: Skill.from_snapshot(member.base.snapshot()) for member in members},
                     trajectory=record.trajectory,
                     reward=reward,
                     status=record.status,
@@ -296,7 +295,7 @@ class OfflineEvolutionPipeline(EvolutionPipeline[OfflineEvolutionPipelineConfig]
         saved = read_json(directory / "evidence.json")
         records = [TrajectoryRecord.model_validate(item) for item in saved["samples"]]
         for member in inputs.values():
-            ids = [item.trajectory_id for item in records if item.skill_version_id == member.base.version_id]
+            ids = [item.trajectory_id for item in records if member.base.version_id in item.bound_versions]
             await self.persistence.trajectories.mark_consumed(member.base.version_id, ids, directory.name)
 
     @staticmethod

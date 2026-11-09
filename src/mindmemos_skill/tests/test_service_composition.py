@@ -65,7 +65,7 @@ async def test_service_filters_skill_pages_with_reported_actor_evidence(tmp_path
                 project_id=service.default_project_id,
                 user_id="user-a",
                 agent_id="agent-a",
-                skill_version_id=alpha.version.version_id,
+                skill_version_ids=[alpha.version.version_id],
                 messages=[{"role": "user", "content": "Used Alpha"}],
             )
         )
@@ -75,7 +75,7 @@ async def test_service_filters_skill_pages_with_reported_actor_evidence(tmp_path
                 project_id=service.default_project_id,
                 user_id="user-a",
                 agent_id="agent-a",
-                skill_version_id=beta.version.version_id,
+                skill_version_ids=[beta.version.version_id],
                 messages=[{"role": "user", "content": "Used Beta"}],
             )
         )
@@ -126,7 +126,7 @@ async def test_service_queries_reported_ids_in_bounded_batches(tmp_path, monkeyp
                 project_id=service.default_project_id,
                 user_id="user-a",
                 agent_id="agent-a",
-                skill_version_id=registered.version.version_id,
+                skill_version_ids=[registered.version.version_id],
                 messages=[{"role": "user", "content": "Used Tracked"}],
             )
         )

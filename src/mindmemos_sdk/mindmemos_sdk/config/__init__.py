@@ -4,6 +4,7 @@ from .manager import ConfigManager, mask_secret
 from .models import (
     CONFIG_SCHEMA_VERSION,
     DEFAULT_BASE_URL,
+    DEFAULT_SKILL_BASE_URL,
     AuthConfig,
     DefaultsConfig,
     MemoryServiceConfig,
@@ -23,4 +24,5 @@ __all__ = [
     "NetworkConfig",
     "CONFIG_SCHEMA_VERSION",
     "DEFAULT_BASE_URL",
+    "DEFAULT_SKILL_BASE_URL",
 ]

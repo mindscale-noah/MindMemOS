@@ -234,7 +234,7 @@ class SkillResolveRequest(SkillRequestBody):
 
 
 class TrajectoryReportRequest(SkillRequestBody):
-    """Report one execution against its loaded Skill version."""
+    """Report one execution with its exact loaded Skill versions."""
 
     user_id: str
     """Business user who requested the execution."""
@@ -245,8 +245,11 @@ class TrajectoryReportRequest(SkillRequestBody):
     messages: list[dict[str, JsonValue]]
     """Ordered execution messages with role and content."""
 
-    skill_version_id: str
-    """Exact loaded Skill version identity."""
+    skill_version_ids: list[NonemptyIdentity]
+    """Exact loaded versions. Empty means no exact version was identified."""
+
+    event_id: NonemptyIdentity | None = None
+    """Stable project-unique identity for replaying an identical Skill report."""
 
     session_id: str | None = None
     """Optional Harness session identity."""

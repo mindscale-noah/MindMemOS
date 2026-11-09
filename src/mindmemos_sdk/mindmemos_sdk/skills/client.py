@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..errors import AuthRequiredError
 from ..transport import HttpTransport
 from .core import SkillCore, SkillRoute
 from .typing import (
@@ -42,17 +43,20 @@ from .typing import (
 class SkillClient:
     """Call the Skill service without local registration or upload state."""
 
-    def __init__(self, transport: HttpTransport) -> None:
+    def __init__(self, transport: HttpTransport | None) -> None:
         """Use an existing synchronous HTTP transport.
 
         Args:
-            transport: Transport configured for the Skill service URL and credentials.
+            transport: Configured Skill transport, or None when Skill is unconfigured.
         """
         self._transport = transport
 
-    def _post(self, route: SkillRoute, body: SkillRequestBody) -> SkillData:
+    def _post(self, route: SkillRoute, body: SkillRequestBody, *, retry: bool = True) -> SkillData:
+        if self._transport is None:
+            raise AuthRequiredError("Configure an independent Skill service before using Skills.")
         request = SkillCore.prepare(route, body)
-        envelope = self._transport.post_envelope(request.path, json=request.body, params=request.params)
+        options = {} if retry else {"retry": False}
+        envelope = self._transport.post_envelope(request.path, json=request.body, params=request.params, **options)
         return envelope.data if envelope.data is not None else {}
 
     def register(self, request: RegisterRequest) -> SkillData:
@@ -176,16 +180,17 @@ class SkillClient:
         """
         return self._post(SkillRoute.SKILL_RESOLVE, request)
 
-    def report_trajectory(self, request: TrajectoryReportRequest) -> SkillData:
-        """Report an execution against its loaded Skill version.
+    def report_trajectory(self, request: TrajectoryReportRequest, *, retry: bool = True) -> SkillData:
+        """Report one execution with all its loaded Skill versions.
 
         Args:
-            request: Actor, messages, version, and execution timing.
+            request: Actor, messages, exact versions, and execution timing.
+            retry: Whether to apply configured HTTP transport retries.
 
         Returns:
             Stored trajectory identity.
         """
-        return self._post(SkillRoute.TRAJECTORY_REPORT, request)
+        return self._post(SkillRoute.TRAJECTORY_REPORT, request, retry=retry)
 
     def trajectory_statistics(self, request: TrajectoryStatisticsRequest) -> SkillData:
         """Read bounded aggregate counts for one Skill version.

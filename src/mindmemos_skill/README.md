@@ -188,9 +188,9 @@ Package metadata and the version are maintained in `pyproject.toml`.
 
 The local Python repository API supports registration, listing, inspection, commit,
 export, history, diff, version selection, metadata changes, and reference-safe deletion.
-The public HTTP contract is defined in the [target API](../../docs/mindmemos_skill/target_architecture_and_api.md).
+The [HTTP API reference](../../docs/deploy/gateway-skill-api_ZH.md) lists the standalone Skill routes and distinguishes them from the legacy public gateway routes.
 The [Python API guide](../../docs/mindmemos_skill/central_repository_api.md) describes
-the local service methods. Automatic training and evolution remain unimplemented.
+the local service methods.
 
 ## Logging
 
@@ -296,17 +296,10 @@ service, and `api/service.py` implements business operations. `entries/fastapi.p
 `api/auth.py` resolves local keys and verifies Gateway JWTs.
 Open `http://127.0.0.1:8001/docs` for API documentation.
 
-The HTTP entry uses `POST /v1/skills/*`. Repository operations available now are
-`register`, `list`, `show`, `commit`, `history`, `diff`, `activate`, `update-info`,
-`delete`, `version-resolve`, and `trajectories/report`, `show`, `list`. Request bodies do not accept `project_id`; the
-deployment binds a local project or resolves a Bearer credential to one project.
+The HTTP entry uses `POST /v1/skills/*`. The deployment selects the project from a local default or a Bearer credential.
 
 `GET /health` returns `{"status":"ok"}` for application availability only.
-All target routes and request types are listed in the
-[target API](../../docs/mindmemos_skill/target_architecture_and_api.md). Graph,
-some algorithm routes currently return explicit unavailable errors.
-`Idempotency-Key` is ignored in this phase; write requests do not have a
-duplicate-free retry guarantee.
+Algorithm availability depends on the deployment configuration. Trajectory reporting supports retries with a stable `event_id` in the JSON body.
 Python callers can use `run_training()` to await a result or `submit_training()` to submit a task.
 The HTTP training route submits a background task when a task manager is configured.
 The HTTP entry point initializes missing tables; create_app(service) itself does not.

@@ -75,7 +75,7 @@ By default, `make dev` enables both APIs, the UI, Kafka tasks, and OTLP monitori
 
 ### Start the UI with local APIs
 
-With the default authentication mode, `make dev` and `make api UI=1` write the started API addresses and project credentials to `.mindmemos/settings.json`. Set `UI_HOME` to use a different directory. Set `PROJECT=<name>` to override `default_project` in the project file. Both APIs still accept credentials for projects authorized to use them.
+With the default authentication mode, `make dev` and `make api UI=1` write the started API addresses and project credentials to `.mindmemos/settings.v2.json`. Set `UI_HOME` to use a different directory. Set `PROJECT=<name>` to override `default_project` in the project file. Both APIs still accept credentials for projects authorized to use them.
 
 ### Connect to MindMemOS Cloud or existing APIs
 
@@ -96,7 +96,7 @@ UV_NO_SYNC=1 make ui UI_HOME="$PWD/.mindmemos/cloud" UI_PORT=8865
 Open the [workbench](http://127.0.0.1:8765) or use the address printed at startup, then go to **Settings → SDK configuration**.
 
 - **MindMemOS** uses the official service URL. Enter your official API key. Memory and Skill share the credential.
-- **Self-hosted** uses an existing Memory API root URL and service API key. For a separate Skill API, enter its root URL and credential. A blank Skill URL reuses Memory's URL and key. If you only connect a separate Skill API, you can leave the Memory key blank.
+- **Self-hosted** uses an existing Memory API root URL and service API key. For a separate Skill API, enter its root URL and credential. Leave the Skill URL blank for a Memory-only configuration. If you only connect a separate Skill API, you can leave the Memory key blank.
 
 Select **Save configuration** and check **Service availability** in the sidebar. **Available** means the health endpoint responded. Load **Memories** or **Skills** to verify credentials and permissions. To verify model access, run a request that calls the model.
 

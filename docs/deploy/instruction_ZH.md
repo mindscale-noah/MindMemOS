@@ -75,7 +75,7 @@ NLP 资源供 Memory 使用。若只运行 Skill，可跳过两条 NLP 命令。
 
 ### 随本地 API 启动
 
-默认鉴权模式下，`make dev` 和 `make api UI=1` 会把本次启动的 API 地址和项目凭据写入 `.mindmemos/settings.json`。用 `UI_HOME` 指定其他配置目录。用 `PROJECT=<项目名>` 覆盖项目文件中的 `default_project`。两个 API 仍接受项目文件中各自有权访问的项目凭据。
+默认鉴权模式下，`make dev` 和 `make api UI=1` 会把本次启动的 API 地址和项目凭据写入 `.mindmemos/settings.v2.json`。用 `UI_HOME` 指定其他配置目录。用 `PROJECT=<项目名>` 覆盖项目文件中的 `default_project`。两个 API 仍接受项目文件中各自有权访问的项目凭据。
 
 ### 连接官方服务或已有 API
 
@@ -95,8 +95,8 @@ UV_NO_SYNC=1 make ui UI_HOME="$PWD/.mindmemos/cloud" UI_PORT=8865
 
 打开 [工作台](http://127.0.0.1:8765)，或使用启动时输出的地址，进入 **Settings → SDK configuration**。
 
-- **MindMemOS** 使用官方服务地址。填入官方 API key，Memory 和 Skill 共用该凭据。
-- **Self-hosted** 填写已有 Memory API 的根地址和服务 API key。连接独立 Skill API 时，另填 Skill 根地址和对应凭据。Skill 地址留空时复用 Memory 的地址和凭据。只连接独立 Skill 时，Memory key 可以留空。
+- **MindMemOS** 使用各自的官方服务地址。Skill 入口需要带 Skill 权限的项目 Key，可单独填写。
+- **Self-hosted** 填写已有 Memory API 的根地址和服务 API key。连接独立 Skill API 时，另填 Skill 根地址和对应凭据。留空可仅配置 Memory。只连接独立 Skill 时，Memory key 可以留空。
 
 点击 **Save configuration**，在侧栏 **Service availability** 查看状态。**Available** 表示健康接口已响应。打开 **Memories** 或 **Skills** 加载列表，验证业务凭据与权限。模型连接需通过实际调用模型的业务请求验证。
 

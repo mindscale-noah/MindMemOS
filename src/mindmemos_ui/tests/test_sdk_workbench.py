@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 import pytest_asyncio
-from mindmemos_sdk.config import ConfigManager
+from mindmemos_sdk.config import AuthConfig, ConfigManager, SkillServiceConfig
 from mindmemos_sdk.skills import AsyncSkillClient
 from mindmemos_sdk.transport import AsyncHttpTransport
 from mindmemos_skill.api.entries.fastapi import create_app as create_skill_app
@@ -88,8 +88,9 @@ async def workbench(tmp_path, monkeypatch):
     manager = ConfigManager(tmp_path / "sdk")
     config = manager.load_or_default()
     config.service_type = "custom"
-    config.memory_service.base_url = "http://127.0.0.1"
+    config.memory_service.base_url = "http://127.0.0.1:8000"
     config.memory_service.auth.api_key = "test-key"
+    config.skill_service = SkillServiceConfig(base_url="http://127.0.0.1", auth=AuthConfig(api_key="skill-key"))
     manager.save(config)
 
     @asynccontextmanager

@@ -4,7 +4,7 @@ import json
 
 import yaml
 from mindmemos_eval.cli import main
-from mindmemos_eval.skills import skill_graph
+from mindmemos_eval.skills.algos import skill_graph
 from mindmemos_skill.agents.buitin_agents.claude.agent import ClaudeAgent
 from mindmemos_skill.common.json import write_json
 from mindmemos_skill.envs.builtin_envs.agentskillos import AgentSkillOSEnvironment

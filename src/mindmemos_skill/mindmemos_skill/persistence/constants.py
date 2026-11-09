@@ -17,8 +17,11 @@ SKILL_VERSIONS_TABLE: Final[str] = "skill_versions_v1"
 TRAJECTORIES_TABLE: Final[str] = "trajectories_v1"
 """Inputs, interactions, and results of individual rollout attempts."""
 
+TRAJECTORY_VERSIONS_TABLE: Final[str] = "trajectory_versions_v1"
+"""Indexed version membership and query fields for one physical trajectory."""
+
 TRAJECTORY_CONSUMPTIONS_TABLE: Final[str] = "trajectory_consumptions_v1"
-"""First successful evolution use of each stored trajectory."""
+"""First successful evolution use of each stored trajectory and version pair."""
 
 TRAJECTORY_REPORT_CURSOR_INDEX: Final[str] = "trajectories_report_cursor_idx"
 """Project and Skill receipt order for scrolling through reported executions."""

@@ -147,7 +147,7 @@ REQUESTS = [
             user_id="user-1",
             agent_id="agent-1",
             messages=[{"role": "user", "content": "Task"}],
-            skill_version_id="version-1",
+            skill_version_ids=["version-1"],
         ),
         "trajectories/report",
     ),
@@ -388,13 +388,12 @@ def test_skill_client_roundtrip_with_local_service(tmp_path):
                 user_id="user-1",
                 agent_id="agent-1",
                 messages=[{"role": "user", "content": "Help me"}],
-                skill_version_id=version_id,
+                skill_version_ids=[version_id],
             )
         )
-        assert (
-            client.show_trajectory(TrajectoryShowRequest(trajectory_id=reported["trajectory_id"]))["skill_version_id"]
-            == version_id
-        )
+        assert client.show_trajectory(TrajectoryShowRequest(trajectory_id=reported["trajectory_id"]))[
+            "skill_version_ids"
+        ] == [version_id]
         with pytest.raises(ApiError, match="configured"):
             client.analyze_skill(SkillAnalyzeRequest(skill_version_id=version_id))
         with pytest.raises(ApiError, match="configured"):

@@ -24,6 +24,7 @@ from .memory import (
     UrlMessage,
 )
 from .skills import AsyncSkillClient, SkillClient
+from .trajectory import TrajectoryDelivery, TrajectoryEvent, TrajectoryMessage, TrajectoryReportResult
 
 __all__ = [
     "__version__",
@@ -32,6 +33,10 @@ __all__ = [
     "AsyncMemoryClient",
     "SkillClient",
     "AsyncSkillClient",
+    "TrajectoryDelivery",
+    "TrajectoryEvent",
+    "TrajectoryMessage",
+    "TrajectoryReportResult",
     "FeedbackMode",
     "ConfigManager",
     "SDKConfig",

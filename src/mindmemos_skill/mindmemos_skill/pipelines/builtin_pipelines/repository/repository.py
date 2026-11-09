@@ -139,14 +139,15 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """Persist a sparse report through the shared trajectory store.
 
         Args:
-            request: Authorized project, loaded version, and Harness execution.
+            request: Authorized project, loaded versions, and Harness execution.
 
         Returns:
             Stored physical attempt with server receipt time.
         """
         request = ReportTrajectoryRequest.model_validate(request)
         return await self.persistence.trajectories.report(
-            skill_version_id=request.skill_version_id,
+            skill_version_ids=request.skill_version_ids,
+            event_id=request.event_id,
             user_id=request.user_id,
             agent_id=request.agent_id,
             messages=request.messages,

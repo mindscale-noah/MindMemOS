@@ -20,8 +20,9 @@ from .client import MindMemOSClient
 from .config import DEFAULT_BASE_URL, ConfigManager, SDKConfig, mask_secret
 from .config.models import AuthConfig, MemoryServiceConfig, SkillServiceConfig
 from .config.paths import set_default_mindmemos_home
-from .errors import ConfigError, MindMemOSSDKError
+from .errors import ConfigError, InvalidRequestError, MindMemOSSDKError
 from .memory import DialogueMessage, StatusResult
+from .trajectory import TrajectoryEvent
 
 _JSON_PARSE_ERROR = object()
 
@@ -41,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_auth_command(subparsers)
     _add_config_commands(subparsers)
     _add_memory_commands(subparsers)
+    _add_trajectory_commands(subparsers)
     from .skills.cli import add_skill_commands
 
     add_skill_commands(subparsers)
@@ -49,13 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 class _CLIParser(argparse.ArgumentParser):
-    """Keep Skill argument errors machine-readable while preserving existing CLI errors."""
+    """Keep errors for script-facing commands machine-readable."""
 
-    skill_requested = False
-    """Whether the root invocation selected the Skill command group."""
+    structured_errors = False
+    """Whether the root invocation selected a command with JSON errors."""
 
     def parse_args(self, args=None, namespace=None):
-        """Parse CLI arguments and remember whether this is a Skill invocation.
+        """Parse CLI arguments and remember whether to emit JSON errors.
 
         Args:
             args: Explicit arguments, or None to use the process arguments.
@@ -65,16 +67,16 @@ class _CLIParser(argparse.ArgumentParser):
             Parsed argument namespace.
         """
         values = list(sys.argv[1:] if args is None else args)
-        self.skill_requested = bool(values and values[0] == "skill")
+        self.structured_errors = bool(values and values[0] in {"skill", "trajectory"})
         return super().parse_args(values, namespace)
 
     def error(self, message):
-        """Emit JSON for Skill parsing failures.
+        """Emit JSON for Skill and trajectory parsing failures.
 
         Args:
             message: Parser-generated validation explanation.
         """
-        if self.prog.startswith("mindmemos skill") or (self.prog == "mindmemos" and self.skill_requested):
+        if self.prog.startswith(("mindmemos skill", "mindmemos trajectory")) or self.structured_errors:
             print(json.dumps({"code": "invalid_argument", "message": message}), file=sys.stderr)
             self.exit(2)
         super().error(message)
@@ -93,9 +95,7 @@ def _add_auth_command(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     skill_destination = parser.add_mutually_exclusive_group()
     skill_destination.add_argument("--skill-base-url", help="Independent custom Skill API root.")
-    skill_destination.add_argument(
-        "--skill-shares-memory", action="store_true", help="Use the Memory URL and API key for Skill."
-    )
+    skill_destination.add_argument("--no-skill", action="store_true", help="Clear the custom Skill connection.")
     parser.add_argument("--skill-api-key", help="API key for an independent Skill service.")
     parser.add_argument("--user-id", help="Default user id. If omitted, prompt interactively.")
     parser.set_defaults(handler=_handle_auth)
@@ -235,6 +235,20 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
     dreaming.set_defaults(handler=_handle_memory_dreaming)
 
 
+def _add_trajectory_commands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parser = subparsers.add_parser("trajectory", help="Report one execution to Memory and Skill.")
+    commands = parser.add_subparsers(dest="trajectory_command", required=True)
+    report = commands.add_parser("report", help="Send a trajectory event and read independent delivery receipts.")
+    report.add_argument("--file", required=True, help="Path to the trajectory event JSON, or - for standard input.")
+    destinations = report.add_mutually_exclusive_group()
+    destinations.add_argument("--skill-only", action="store_true", help="Send only the shared Skill trajectory.")
+    destinations.add_argument("--memory-only", action="store_true", help="Send only the Memory projection.")
+    report.add_argument(
+        "--json", action="store_true", help="Print machine-readable receipts, including partial results."
+    )
+    report.set_defaults(handler=_handle_trajectory_report)
+
+
 def _add_doctor_command(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser("doctor", help="Check SDK configuration and connectivity.")
     parser.set_defaults(handler=_handle_doctor)
@@ -262,17 +276,15 @@ def _handle_auth(args: argparse.Namespace) -> int:
             print("mindmemos auth: deployment must be official or custom.")
 
     if service_type == "official":
-        if args.memory_base_url is not None or args.skill_base_url is not None or args.skill_shares_memory:
+        if args.memory_base_url is not None or args.skill_base_url is not None or args.no_skill:
             print("mindmemos auth: official deployment does not accept custom service URLs.")
-            return 2
-        if args.skill_api_key is not None:
-            print("mindmemos auth: official Skill uses the Memory API key.")
             return 2
         memory_url = DEFAULT_BASE_URL
         skill_url = None
+        previous_skill_url = None
     else:
-        if args.skill_shares_memory and args.skill_api_key is not None:
-            print("mindmemos auth: a shared Skill connection uses the Memory API key.")
+        if args.no_skill and args.skill_api_key is not None:
+            print("mindmemos auth: --no-skill cannot be used with --skill-api-key.")
             return 2
         previous_memory_url = (
             existing.memory_service.base_url if existing is not None and existing.service_type == "custom" else None
@@ -289,49 +301,56 @@ def _handle_auth(args: argparse.Namespace) -> int:
             return 2
 
         previous_skill_url = existing.skill_service.base_url if existing is not None else None
-        if args.skill_shares_memory:
+        if args.no_skill:
             skill_url = None
+        elif args.service_type is not None and args.skill_base_url is None:
+            skill_url = previous_skill_url
         else:
             try:
                 skill_url = _auth_url(
                     args.skill_base_url,
                     "Skill service URL",
-                    "Skill service URL [Enter to reuse Memory service URL]: ",
+                    _label("Skill service URL", previous_skill_url)
+                    if previous_skill_url
+                    else "Skill service URL [skip]: ",
+                    default=previous_skill_url,
                     allow_empty=True,
                 )
             except ValueError as exc:
                 print(f"mindmemos auth: {exc}")
                 return 2
         if skill_url is None and args.skill_api_key is not None:
-            print("mindmemos auth: a shared Skill connection uses the Memory API key.")
+            print("mindmemos auth: a custom Skill API key requires a Skill service URL.")
             return 2
 
     previous_memory_key = existing.memory_service.auth.api_key if existing is not None else None
     previous_memory_destination = existing.resolve_memory_connection()[0] if existing is not None else None
-    memory_key = _auth_key(
-        args.memory_api_key,
-        previous_memory_key if memory_url == previous_memory_destination else None,
-        "Memory API key",
-    )
-    if not memory_key:
+    matching_memory_key = previous_memory_key if memory_url == previous_memory_destination else None
+    has_skill_key = bool((args.skill_api_key or "").strip())
+    if has_skill_key and args.memory_api_key is None:
+        memory_key = matching_memory_key
+    else:
+        memory_key = _auth_key(args.memory_api_key, matching_memory_key, "Memory API key")
+    if not memory_key and not has_skill_key:
         print("mindmemos auth: Memory API key is required.")
         return 2
 
     skill_key = None
+    previous_skill_auth = existing.skill_service.auth if existing is not None else None
+    previous_skill_key = previous_skill_auth.api_key if previous_skill_auth is not None else None
     if skill_url is not None:
-        previous_skill_key = (
-            existing.skill_service.auth.api_key
-            if existing is not None and existing.skill_service.auth is not None
-            else None
-        )
-        skill_key = _auth_key(
-            args.skill_api_key,
-            previous_skill_key if skill_url == previous_skill_url else None,
-            "Skill API key",
-        )
+        matching_key = previous_skill_key if skill_url == previous_skill_url else None
+        if args.service_type is not None and args.skill_base_url is None and args.skill_api_key is None:
+            skill_key = matching_key
+        else:
+            skill_key = _auth_key(args.skill_api_key, matching_key, "Skill API key")
         if not skill_key:
             print("mindmemos auth: independent Skill API key is required.")
             return 2
+    elif service_type == "official":
+        skill_key = (args.skill_api_key or "").strip() or (
+            previous_skill_key if existing is not None and existing.service_type == "official" else None
+        )
 
     default_user_id = existing.defaults.user_id if existing is not None else None
     if args.user_id is not None:
@@ -351,10 +370,10 @@ def _handle_auth(args: argparse.Namespace) -> int:
         config.service_type = service_type
         config.memory_service.base_url = None if service_type == "official" else memory_url
         config.memory_service.auth.api_key = memory_key
-        config.skill_service = SkillServiceConfig()
-        if skill_url is not None:
-            config.skill_service.base_url = skill_url
-            config.skill_service.auth = AuthConfig(api_key=skill_key)
+        config.skill_service = SkillServiceConfig(
+            base_url=skill_url,
+            auth=AuthConfig(api_key=skill_key) if skill_key else None,
+        )
         config.defaults.user_id = user_id
         manager.save(config)
         saved = manager.load()
@@ -367,7 +386,7 @@ def _handle_auth(args: argparse.Namespace) -> int:
     print(f"Configuration saved at {manager.config_path}.")
     print(f"Deployment: {saved.service_type}")
     print(f"Memory service: {saved_memory_url}")
-    print(f"Skill service: {saved_skill_url}{' (shares Memory)' if saved.skill_service.base_url is None else ''}")
+    print(f"Skill service: {saved_skill_url or '(not configured)'}")
     return 0
 
 
@@ -383,16 +402,12 @@ def _auth_url(
     while True:
         raw = provided if provided is not None else _prompt(prompt)
         candidate = raw.strip()
-        if not candidate and provided is None and not allow_empty:
+        if not candidate and provided is None:
             candidate = default
         if not candidate and allow_empty and provided is None:
             return None
         if not candidate:
-            message = (
-                f"{label} cannot be empty; use --skill-shares-memory to reuse Memory."
-                if allow_empty
-                else f"{label} is required."
-            )
+            message = f"{label} is required."
         else:
             try:
                 normalized = MemoryServiceConfig(base_url=candidate).base_url
@@ -458,8 +473,8 @@ def _handle_config_show(args: argparse.Namespace) -> int:
     print(f"deployment:  {config.service_type}")
     print(f"memory URL:  {memory_url}")
     print(f"memory key:  {memory_key_display}")
-    print(f"skill URL:   {skill_url}{' (shares Memory)' if config.skill_service.base_url is None else ''}")
-    print(f"skill key:   {skill_key_display}{' (shares Memory)' if config.skill_service.base_url is None else ''}")
+    print(f"skill URL:   {skill_url or '(not configured)'}")
+    print(f"skill key:   {skill_key_display}")
     print(f"user_id:     {config.defaults.user_id or '(not set)'}")
     return 0
 
@@ -470,7 +485,7 @@ def _handle_config_reset(args: argparse.Namespace) -> int:
         print(f"No SDK config at {manager.config_path}. Nothing to reset.")
         return 0
     if not args.yes:
-        answer = _prompt(f"Reset and delete {manager.config_path}? [y/N]: ")
+        answer = _prompt(f"Reset the current SDK connection settings at {manager.config_path}? [y/N]: ")
         if answer.strip().lower() not in {"y", "yes"}:
             print("Aborted.")
             return 1
@@ -817,6 +832,47 @@ def _handle_memory_dreaming(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_trajectory_report(args: argparse.Namespace) -> int:
+    """Read a trajectory event and report the result of each destination write."""
+    try:
+        raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
+        event = TrajectoryEvent.model_validate_json(raw)
+    except ValidationError as exc:
+        details = exc.errors(include_input=False, include_context=False, include_url=False)
+        _print_json({"code": "invalid_event", "errors": details}, stream=sys.stderr)
+        return 2
+    except (OSError, UnicodeError) as exc:
+        _print_json({"code": "invalid_input", "message": str(exc)}, stream=sys.stderr)
+        return 2
+
+    try:
+        config = ConfigManager().load()
+        with MindMemOSClient(config=config) as client:
+            result = client.report_trajectory(
+                event,
+                include_memory=not args.skill_only,
+                include_skill=not args.memory_only,
+            )
+    except InvalidRequestError as exc:
+        _print_json({"code": "invalid_argument", "message": str(exc)}, stream=sys.stderr)
+        return 2
+    except (ConfigError, OSError):
+        _print_json(
+            {"code": "config_error", "message": "Cannot load SDK settings. Run mindmemos auth."}, stream=sys.stderr
+        )
+        return 1
+
+    if args.json:
+        _print_json(result.model_dump(mode="json", exclude_none=True))
+    else:
+        print(f"Event {result.event_id}")
+        if result.memory is not None:
+            print(f"Memory: {result.memory.status} ({result.memory.code})")
+        if result.skill is not None:
+            print(f"Skill: {result.skill.status} ({result.skill.trajectory_id or result.skill.code})")
+    return int(result.has_failures)
+
+
 def _handle_doctor(args: argparse.Namespace) -> int:
     # CLI handlers share the argparse namespace signature; doctor uses persisted configuration.
     manager = ConfigManager()
@@ -887,9 +943,9 @@ def _status_line(action: str, target: str | None, result: StatusResult) -> str:
     return line
 
 
-def _print_json(payload: Any) -> None:
-    """Print deterministic JSON for plugins and scripts."""
-    print(json.dumps(payload, ensure_ascii=False, default=str))
+def _print_json(payload: Any, *, stream=None) -> None:
+    """Print JSON to stdout or the supplied diagnostic stream."""
+    print(json.dumps(payload, ensure_ascii=False, default=str), file=stream)
 
 
 def _prompt(message: str) -> str:

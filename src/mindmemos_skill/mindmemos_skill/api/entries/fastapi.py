@@ -697,25 +697,18 @@ def create_app(
         body: TrajectoryReportHttpRequest,
         identity: SkillHttpIdentity = Depends(require("skill:write")),
     ):
-        """Store one execution against its exact loaded Skill version."""
+        """Store one execution with all its exact loaded Skill versions."""
         report = await service.report_trajectory(
             ReportTrajectoryRequest(
                 project_id=identity.project_id,
-                user_id=body.user_id,
-                agent_id=body.agent_id,
-                messages=body.messages,
-                skill_version_id=body.skill_version_id,
-                session_id=body.session_id,
-                status=body.status,
-                started_at=body.started_at,
-                finished_at=body.finished_at,
+                **body.model_dump(exclude_unset=True),
             )
         )
         return envelope(
             request,
             {
                 "trajectory_id": report.trajectory_id,
-                "skill_version_id": report.skill_version_id,
+                "skill_version_ids": list(report.bound_versions),
                 "stored_at": report.received_at,
             },
             status_code=201,
@@ -725,7 +718,7 @@ def create_app(
     async def show_trajectory(
         request: Request, body: TrajectoryShowHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:read"))
     ):
-        """Return one project-owned physical attempt and its version binding."""
+        """Return one project-owned physical attempt and all its version bindings."""
         record = await service.show_trajectory(
             ShowTrajectoryRequest(project_id=identity.project_id, trajectory_id=body.trajectory_id)
         )
@@ -735,8 +728,7 @@ def create_app(
                 "trajectory_id": record.trajectory_id,
                 "task_id": record.task_id,
                 "source": record.source,
-                "skill_id": record.skill_id,
-                "skill_version_id": record.skill_version_id,
+                "skill_version_ids": list(record.bound_versions),
                 "skill_bindings": record.skill_bindings,
                 "user_id": record.user_id,
                 "agent_id": record.agent_id,

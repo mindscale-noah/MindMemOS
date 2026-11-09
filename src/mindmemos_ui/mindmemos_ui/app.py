@@ -183,7 +183,6 @@ async def create_app(
             return result
 
         # Liveness routes do not resolve credentials or touch business storage.
-        skill_health_path = "/health" if config.skill_service.base_url else "/healthz"
         with httpx.Client(
             timeout=min(config.network.timeout_seconds, 5),
             follow_redirects=False,
@@ -191,9 +190,9 @@ async def create_app(
         ) as client:
             for name, url, key, health_path in (
                 ("memory", memory_url, memory_key, "/healthz"),
-                ("skill", skill_url, skill_key, skill_health_path),
+                ("skill", skill_url, skill_key, "/health"),
             ):
-                if not key:
+                if not url or not key:
                     continue
                 try:
                     response = client.get(url.rstrip("/") + health_path)

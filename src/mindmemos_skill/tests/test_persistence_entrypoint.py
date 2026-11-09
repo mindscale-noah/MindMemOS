@@ -371,7 +371,7 @@ async def test_scope_supplies_registration_and_trajectory_ownership(persistence)
             assert family.project_id == project
             assert (await session.skills.resolve_family("shared")).skill_id == family.skill_id
             trajectory = await session.trajectories.report(
-                skill_version_id=family.active_version_id,
+                skill_version_ids=[family.active_version_id],
                 user_id=None,
                 agent_id="agent",
                 messages=[],

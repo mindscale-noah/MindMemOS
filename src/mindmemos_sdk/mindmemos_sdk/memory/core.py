@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from ..errors import InvalidRequestError, MindMemOSSDKError
+from ..errors import ApiError, InvalidRequestError, MindMemOSSDKError
 from ..transport import Envelope
 from .models import (
     AddMode,
@@ -254,6 +254,8 @@ class MemoryCore:
 
 
 def parse_add_result(envelope: Envelope) -> AddResult:
+    if envelope.data is not None and not isinstance(envelope.data, dict):
+        raise ApiError("Expected an object in the Memory add response.", request_id=envelope.request_id)
     data = envelope.data or {}
     return AddResult(
         code=envelope.code,

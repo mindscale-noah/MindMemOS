@@ -25,6 +25,19 @@ uv run --no-sync mindmemos-eval skill evaluate train --help
 
 `train` 支持 `skill-forest` 和 `tree-skill`，`manage` 支持 `skill-graph`，`evolve` 支持 `offline-evolv`。用 `--config FILE` 指定评测 YAML，用 `--env ENV` 选择算法支持的环境。`--output-dir DIR` 优先于 YAML 中的 `output_dir`。
 
+### 评测产物
+
+各 Pipeline 的 evaluator 解析评测参数，再由选中的算法生成自己的结果和报告。以下文件都在本次运行的输出目录中。
+
+| 评测 | 从哪里读结果 | 报告内容 |
+| --- | --- | --- |
+| Skill-Forest | `report.md`、`summary.json`、`summary.csv` | 对照组结果、重复运行统计、配对增益、训练和失败记录 |
+| TreeSkill | `report.md`、`summary.json`、`trajectories.jsonl` | 留出集通过率、执行覆盖、错误和用量 |
+| Offline Evolution | `report.md`、`summary.json` | 采集与复测的分数和用量、逐题演进状态 |
+| Skill Graph · `retrieval` | `summary.json`、`rankings.json` | 检索指标的宏平均、逐题指标和检索排名 |
+| Skill Graph · `accuracy` | `summary.json`、`selected_skills.json`、`tasks/` | 准确率、评分覆盖率、逐题错误与执行产物 |
+| 单环境 `direct` | `report.md`、`summary.json`、`tasks/trajectories.jsonl` | 固定 Skill 或无 Skill 下的单组通过率、执行覆盖和用量 |
+
 ## Skill-Forest
 
 ### 1. 准备数据和运行环境
@@ -312,6 +325,8 @@ uv run --no-sync mindmemos-eval skill evaluate evolve --algo offline-evolv \
 ### 4. 读取结果
 
 默认在 `output/mindmemos_eval/skill_evolve/<时间戳>/` 查看 `report.md` 和 `summary.json`。评测先用初始 Skill 采集轨迹，再用演进后的 Skill 复测同一批题。先对每题的重复执行取平均 reward，再对可计分任务取平均。无可用演进结果的题沿用初始分。正式对比结果待补。
+
+用逐题 `Status` 检查演进结果。`evolved` 表示生成了新 Skill 并安排复测，`unchanged` 表示演进后保留原 Skill，`evolution_failed` 表示演进失败并沿用初始分。写出报告后，命令仍可返回 0，因此验证演进时请同时检查逐题状态和复测结果。
 
 | 数据集 | 指标 | 初始 Skill | Offline Evolution |
 | --- | --- | ---: | ---: |

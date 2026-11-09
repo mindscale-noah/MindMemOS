@@ -13,11 +13,11 @@ mindmemos --help
 
 要使用当前仓库源码，从根目录运行 `uv sync --all-packages`，再用 `uv run mindmemos` 执行下文命令。自部署服务的启动方式见[部署指南](../deploy/instruction_ZH.md)。
 
-CLI 依次从 `MINDMEMOS_HOME`、兼容变量 `MINDMEMOS_CONFIG_DIR`、已保存的默认目录和 `~/.mindmemos` 中选择配置目录。目录中的 `settings.json` 保存本地连接设置，远端项目归属由服务端凭据决定。
+CLI 依次从 `MINDMEMOS_HOME`、兼容变量 `MINDMEMOS_CONFIG_DIR`、已保存的默认目录和 `~/.mindmemos` 中选择配置目录。新版连接写入 `settings.v2.json`。旧 `settings.json` 可供旧 CLI 继续读取。服务端凭据决定远端项目归属。
 
 ### `mindmemos auth`
 
-选择官方或自部署服务，保存 API Key 与默认用户 ID。官方模式下，Memory 和 Skill 共用 `https://mindmemos.cn` 和同一个 Key。自部署时可以分别填写服务地址，独立的 Skill 地址需要单独的 Key。
+选择官方或自部署服务，保存 API Key 与默认用户 ID。官方 Memory 使用 `https://mindmemos.cn`，Skill 使用 `https://mindmemos.cn/api/developer/skill`。只有已获 Skill 授权的项目 Key 可用于新版 Skill。自部署时可以分别填写服务地址，独立的 Skill 地址需要单独的 Key。
 
 ```bash
 mindmemos auth
@@ -27,7 +27,7 @@ mindmemos auth --service-type custom \
   --user-id alice
 ```
 
-自部署时，Skill 地址留空或传 `--skill-shares-memory` 会复用 Memory 连接。命令默认在提示时读取 Key。自动化可用 `--memory-api-key` 和 `--skill-api-key`，按连接模式提供。
+自部署时可留空跳过 Skill，已有独立连接时回车会保留。用 `--no-skill` 清除自部署的 Skill 连接。命令默认在提示时读取 Key。自动化可用 `--memory-api-key` 和 `--skill-api-key`，按连接模式提供。
 
 ### `mindmemos config show`
 
@@ -47,7 +47,7 @@ mindmemos config home set /absolute/path/to/.mindmemos
 
 ### `mindmemos config reset`
 
-删除当前目录的 `settings.json`。默认要求确认，`--yes` 或 `-y` 可跳过确认。
+清除新版连接设置，保留旧 CLI 使用的 `settings.json`。默认要求确认，`--yes` 或 `-y` 可跳过确认。
 
 ```bash
 mindmemos config reset
@@ -234,7 +234,7 @@ mindmemos skill delete my-skill
 
 #### `mindmemos skill trajectory report`
 
-上报一条执行轨迹。请求需要 `user_id`、`agent_id`、`messages` 和执行时实际加载的 `skill_version_id`。用 `--file` 或 `--json-data` 提交，`--file -` 从标准输入读取。
+上报一条执行轨迹。请求需要 `user_id`、`agent_id`、`messages` 和 `skill_version_ids`。列表包含执行时实际加载的精确版本。一个版本也用列表，无法确定版本时传 `[]`。服务返回一个轨迹 ID。用 `--file` 或 `--json-data` 提交，`--file -` 从标准输入读取。
 
 ```bash
 mindmemos skill trajectory report --file ./trajectory.json

@@ -2,7 +2,7 @@
 
 import pytest
 from mindmemos_eval.cli import main
-from mindmemos_eval.skills import treeskill
+from mindmemos_eval.skills.algos import treeskill
 from mindmemos_eval.skills.config import TreeSkillEvalConfig
 from mindmemos_skill.api.service import SkillService
 from mindmemos_skill.api.typing import AlgoSkillEvolveResult
@@ -86,7 +86,7 @@ async def test_local_run_uses_named_registration_and_service_test(monkeypatch, t
     monkeypatch.setattr(
         treeskill,
         "_load_samples",
-        lambda config, env: [
+        lambda data, samples_file, env: [
             DataSample(task=Task(id="train", instruction="Task"), reward_data=RewardData()),
             *samples(),
         ],

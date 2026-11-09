@@ -177,10 +177,10 @@ class AsyncSkillClient:
         return await self._post(SkillRoute.SKILL_RESOLVE, request)
 
     async def report_trajectory(self, request: TrajectoryReportRequest) -> SkillData:
-        """Report an execution against its loaded Skill version.
+        """Report one execution with all its loaded Skill versions.
 
         Args:
-            request: Actor, messages, version, and execution timing.
+            request: Actor, messages, exact versions, and execution timing.
 
         Returns:
             Stored trajectory identity.

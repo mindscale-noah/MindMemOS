@@ -90,8 +90,7 @@ async def scenario(tmp_path, monkeypatch):
                     task_instruction="Process a document.",
                     env_ref="offline",
                     status="completed",
-                    skill_id=item.owner.skill_id,
-                    skill_version_id=item.base.version_id,
+                    skill_bindings=[{"skill_id": item.owner.skill_id, "version_id": item.base.version_id}],
                     trajectory=[{"role": "user", "content": "Process a document."}],
                 )
             )
@@ -147,6 +146,26 @@ async def test_evolution_saves_versions_without_activating_existing_skills(scena
     assert await counts(service) == after and len(calls) == 1
 
 
+async def test_collection_evolution_reads_shared_report_once(scenario):
+    """The same physical execution supplies context for all matching input members."""
+    service, members, calls, _ = scenario
+    versions = [member.base.version_id for member in members[:2]]
+    shared = await service.report_trajectory(
+        ReportTrajectoryRequest(
+            project_id="project",
+            skill_version_ids=versions,
+            messages=[{"role": "user", "content": "Use both Skills."}],
+        )
+    )
+    await service.run_evolution(request(members))
+    recorded = [item for item in calls[0].trajectories if item.trajectory_id == shared.trajectory_id]
+    assert len(recorded) == 1
+    assert list(recorded[0].skills) == [member.owner.skill_id for member in members[:2]]
+    with service._persistence.session(Scope(fields={"project_id": "project"})) as store:
+        assert (await store.trajectories.counts(versions[0])).consumed == 2
+        assert (await store.trajectories.counts(versions[1])).consumed == 2
+
+
 @pytest.mark.parametrize("first", [0, 2])
 async def test_collection_audit_keeps_input_and_published_version_on_the_same_member(scenario, monkeypatch, first):
     """Never attribute another member's update to a changed or read-only input."""
@@ -197,7 +216,7 @@ async def test_offline_uses_all_available_evidence_unless_explicitly_capped(
         report = await service.report_trajectory(
             ReportTrajectoryRequest(
                 project_id="project",
-                skill_version_id=member.base.version_id,
+                skill_version_ids=[member.base.version_id],
                 messages=messages,
                 status="failed" if index == 0 else "completed",
             )
@@ -258,7 +277,7 @@ async def test_offline_recovery_reuses_frozen_evidence_after_new_uploads(scenari
         await service.run_evolution(body)
     await service.report_trajectory(
         ReportTrajectoryRequest(
-            project_id="project", skill_version_id=version_id, messages=[{"role": "user", "content": "Later"}]
+            project_id="project", skill_version_ids=[version_id], messages=[{"role": "user", "content": "Later"}]
         )
     )
     result = await service.run_evolution(body)
@@ -279,7 +298,7 @@ async def test_reported_trajectories_without_instruction_remain_eligible(scenari
     report = await service.report_trajectory(
         ReportTrajectoryRequest(
             project_id="project",
-            skill_version_id=member.base.version_id,
+            skill_version_ids=[member.base.version_id],
             messages=messages,
         )
     )
@@ -325,8 +344,7 @@ async def test_persisted_terminal_event_and_failure_status_reach_s1_and_g1(scena
                 task_instruction="Process a historical document.",
                 env_ref="offline",
                 status="failed",
-                skill_id=member.owner.skill_id,
-                skill_version_id=member.base.version_id,
+                skill_bindings=[{"skill_id": member.owner.skill_id, "version_id": member.base.version_id}],
                 trajectory=events,
             )
         )
