@@ -159,13 +159,13 @@ def test_self_hosted_skill_connection_has_independent_address_and_key(manager):
     loaded = manager.load()
     assert loaded.memory_service.base_url == "https://memory.example"
     assert loaded.memory_service.auth.api_key == "memory-key"
-    assert loaded.resolve_skill_connection() == ("https://skill.example/api", "skill-key")
+    assert loaded.resolve_skill_connection() == ("https://skill.example/api/v1/skills", "skill-key")
     assert loaded.resolve_skill_connection(
         memory_base_url="https://override.example", memory_api_key="override-key"
-    ) == ("https://skill.example/api", "skill-key")
+    ) == ("https://skill.example/api/v1/skills", "skill-key")
     assert "skill-key" not in repr(loaded.skill_service)
     updated = manager.update_auth(base_url="https://new-memory.example", api_key="new-memory-key")
-    assert updated.resolve_skill_connection() == ("https://skill.example/api", "skill-key")
+    assert updated.resolve_skill_connection() == ("https://skill.example/api/v1/skills", "skill-key")
     assert updated.memory_service.auth.api_key == "new-memory-key"
 
 

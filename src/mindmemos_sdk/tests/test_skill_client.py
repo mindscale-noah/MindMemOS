@@ -294,6 +294,7 @@ def test_root_client_uses_independent_skill_connection(tmp_path):
 
     def handler(request):
         assert request.url.host == "skill.example"
+        assert request.url.path == "/v1/skills/list"
         assert request.headers["authorization"] == "Bearer skill-key"
         return httpx.Response(200, json={"code": "ok", "data": {"items": []}})
 
@@ -304,6 +305,47 @@ def test_root_client_uses_independent_skill_connection(tmp_path):
             assert client.skills.list(ListRequest()) == {"items": []}
     finally:
         http.close()
+
+
+@pytest.mark.parametrize(
+    ("skill_base_url", "expected"),
+    [
+        (None, "https://mindmemos.cn/v2/skills/list"),
+        ("http://localhost:8001", "http://localhost:8001/v1/skills/list"),
+        ("https://skills.example/deploy/v1/skills/", "https://skills.example/deploy/v1/skills/list"),
+        ("https://gateway.example/v2/skills", "https://gateway.example/v2/skills/list"),
+    ],
+)
+def test_root_client_uses_resolved_skill_api_root(monkeypatch, skill_base_url, expected):
+    """Both gateway and direct requests append just the operation to their resolved API root."""
+    if skill_base_url is None:
+        config = SDKConfig(memory_service=MemoryServiceConfig(auth=AuthConfig(api_key="memory-key")))
+    else:
+        config = SDKConfig(
+            service_type="custom",
+            memory_service=MemoryServiceConfig(
+                base_url="https://memory.example", auth=AuthConfig(api_key="memory-key")
+            ),
+            skill_service=SkillServiceConfig(base_url=skill_base_url, auth=AuthConfig(api_key="skill-key")),
+        )
+    memory_url, _ = config.resolve_memory_connection()
+    requests = []
+
+    def handler(request):
+        requests.append((str(request.url), request.headers["authorization"]))
+        return httpx.Response(200, json={"code": "ok", "data": {"items": [], "results": [], "total": 0}})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        monkeypatch.setattr("mindmemos_sdk.client.HttpTransport", lambda **kwargs: HttpTransport(client=http, **kwargs))
+        with MindMemOSClient(config=config) as client:
+            client.skills.list(ListRequest())
+            client.memory.list(user_id="alice")
+
+    skill_key = "memory-key" if skill_base_url is None else "skill-key"
+    assert requests == [
+        (expected, f"Bearer {skill_key}"),
+        (f"{memory_url}/v1/memory/list", "Bearer memory-key"),
+    ]
 
 
 def test_skill_service_error_code_is_preserved():

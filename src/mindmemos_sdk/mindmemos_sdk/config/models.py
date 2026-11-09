@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -9,7 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 CONFIG_SCHEMA_VERSION = 2
 DEFAULT_BASE_URL = "https://mindmemos.cn"
-DEFAULT_SKILL_BASE_URL = f"{DEFAULT_BASE_URL}/api/developer/skill"
+DEFAULT_SKILL_BASE_URL = f"{DEFAULT_BASE_URL}/v2/skills"
+DIRECT_SKILL_API_PATH = "/v1/skills"
 
 
 def _normalize_base_url(value: str | None) -> str | None:
@@ -47,7 +49,7 @@ class MemoryServiceConfig(BaseModel):
     """Reject undeclared connection settings without exposing credentials."""
 
     base_url: str | None = None
-    """Custom Memory API root; omitted for the official cloud."""
+    """Custom Memory service URL before /v1/memory; omitted for the official cloud."""
 
     auth: AuthConfig = Field(default_factory=AuthConfig)
     """Credentials for Memory, also usable at the official Skill gateway."""
@@ -73,7 +75,7 @@ class SkillServiceConfig(BaseModel):
     """Reject undeclared connection settings without exposing credentials."""
 
     base_url: str | None = None
-    """Custom Skill API root; omitted for the official cloud."""
+    """Full Skill API root, or a legacy direct service URL; omitted for the official cloud."""
 
     auth: AuthConfig | None = None
     """Optional official Skill key or required custom Skill key."""
@@ -199,7 +201,10 @@ class SDKConfig(BaseModel):
         resolved_memory_url, resolved_memory_key = self.resolve_memory_connection()
         skill_auth = self.skill_service.auth
         if self.skill_service.base_url is not None and skill_auth is not None:
-            return self.skill_service.base_url, skill_auth.api_key
+            base_url = self.skill_service.base_url
+            if not re.search(r"/v[0-9]+/skills$", urlsplit(base_url).path):
+                base_url += DIRECT_SKILL_API_PATH
+            return base_url, skill_auth.api_key
         if skill_auth is not None and skill_auth.api_key:
             return DEFAULT_SKILL_BASE_URL, skill_auth.api_key
         if self.service_type == "official" and (memory_base_url or resolved_memory_url).rstrip("/") == DEFAULT_BASE_URL:

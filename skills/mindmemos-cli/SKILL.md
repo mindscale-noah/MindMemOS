@@ -11,12 +11,12 @@ Use Memory for facts, preferences, and project decisions. Use Skills for reusabl
 
 The plugin workflow requires an SDK 1.0.0 build that exposes `mindmemos trajectory report --help`. From a repository checkout, run `uv sync --all-packages` and use `uv run mindmemos` or the installed `.venv/bin/mindmemos`.
 
-Run `mindmemos auth` when setup is needed. Official mode shares an endpoint and key. For a deployment with separate services, provide both URLs and enter each key at its prompt.
+Run `mindmemos auth` when setup is needed. In official mode, omit the URL flags. Memory uses `https://mindmemos.cn/v1/memory/*` and Skill uses `https://mindmemos.cn/v2/skills/*`. An authorized project key can serve both. For a custom deployment, give Memory the service address and Skill the full API root, then enter each key at its prompt.
 
 ```bash
 mindmemos auth --service-type custom \
   --memory-base-url http://127.0.0.1:8000 \
-  --skill-base-url http://127.0.0.1:8001 \
+  --skill-base-url http://127.0.0.1:8001/v1/skills \
   --user-id alice
 mindmemos config show
 mindmemos doctor

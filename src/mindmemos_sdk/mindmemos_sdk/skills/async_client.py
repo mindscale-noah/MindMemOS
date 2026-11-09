@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..config import DIRECT_SKILL_API_PATH
 from ..transport import AsyncHttpTransport
 from .core import SkillCore, SkillRoute
 from .typing import (
@@ -42,16 +43,19 @@ from .typing import (
 class AsyncSkillClient:
     """Call the Skill service without local registration or upload state."""
 
-    def __init__(self, transport: AsyncHttpTransport) -> None:
+    def __init__(self, transport: AsyncHttpTransport, *, path_prefix: str = DIRECT_SKILL_API_PATH) -> None:
         """Use an existing asynchronous HTTP transport.
 
         Args:
             transport: Transport configured for the Skill service URL and credentials.
+            path_prefix: API path relative to the transport base URL. Use an empty string when
+                the base URL already includes the full Skill API root.
         """
         self._transport = transport
+        self._path_prefix = path_prefix
 
     async def _post(self, route: SkillRoute, body: SkillRequestBody) -> SkillData:
-        request = SkillCore.prepare(route, body)
+        request = SkillCore.prepare(route, body, path_prefix=self._path_prefix)
         envelope = await self._transport.post_envelope(request.path, json=request.body, params=request.params)
         return envelope.data if envelope.data is not None else {}
 

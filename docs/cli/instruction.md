@@ -17,13 +17,15 @@ The CLI checks `MINDMEMOS_HOME`, then the legacy `MINDMEMOS_CONFIG_DIR`, the sav
 
 ### `mindmemos auth`
 
-Choose an official or custom deployment and save the API keys and default user ID. Official Memory uses `https://mindmemos.cn`. Official Skill uses `https://mindmemos.cn/api/developer/skill` and requires an authorized Skill key. A custom deployment can use separate addresses, with a separate key for an independent Skill service.
+Choose an official or custom deployment and save the API keys and default user ID. In official mode, omit both base URL flags. Memory uses `https://mindmemos.cn/v1/memory/*` with the existing key. The new Skill API root is `https://mindmemos.cn/v2/skills` and requires a key with Skill permissions.
+
+For a custom deployment, `--memory-base-url` takes the service address before `/v1/memory`. `--skill-base-url` takes the full Skill API root, including `/v1/skills` for a direct connection, and requires the Skill service's key. Existing Skill settings with only the service address still work.
 
 ```bash
 mindmemos auth
 mindmemos auth --service-type custom \
   --memory-base-url http://127.0.0.1:8000 \
-  --skill-base-url http://127.0.0.1:8001 \
+  --skill-base-url http://127.0.0.1:8001/v1/skills \
   --user-id alice
 ```
 

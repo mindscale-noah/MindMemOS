@@ -33,4 +33,4 @@ async def skill_client(manager: ConfigManager, *, long_running: bool = False) ->
         timeout_seconds=max(config.network.timeout_seconds, 300) if long_running else config.network.timeout_seconds,
         max_retries=0 if long_running else config.network.max_retries,
     ) as transport:
-        yield AsyncSkillClient(transport)
+        yield AsyncSkillClient(transport, path_prefix="")

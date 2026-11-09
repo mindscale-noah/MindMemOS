@@ -296,7 +296,7 @@ service, and `api/service.py` implements business operations. `entries/fastapi.p
 `api/auth.py` resolves local keys and verifies Gateway JWTs.
 Open `http://127.0.0.1:8001/docs` for API documentation.
 
-The HTTP entry uses `POST /v1/skills/*`. The deployment selects the project from a local default or a Bearer credential.
+The standalone HTTP service uses `POST /v1/skills/*`. For a direct SDK connection, set `skill_service.base_url` to the full root, for example `http://127.0.0.1:8001/v1/skills`. The official gateway exposes the same Skill operations under `https://mindmemos.cn/v2/skills` and forwards them to the standalone service. The deployment selects the project from a local default or a Bearer credential.
 
 `GET /health` returns `{"status":"ok"}` for application availability only.
 Algorithm availability depends on the deployment configuration. Trajectory reporting supports retries with a stable `event_id` in the JSON body.

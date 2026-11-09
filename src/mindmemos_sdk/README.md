@@ -51,13 +51,19 @@ mindmemos config show
 ```bash
 mindmemos auth --service-type custom \
   --memory-base-url http://127.0.0.1:8000 \
-  --skill-base-url http://127.0.0.1:8001
+  --skill-base-url http://127.0.0.1:8001/v1/skills
 mindmemos config show
 ```
 
-新版将连接设置保存到 `settings.v2.json`。官方 Memory 使用 `https://mindmemos.cn`，
-官方 Skill 使用 `https://mindmemos.cn/api/developer/skill`。官方模式省略两个
-`base_url`。自部署时填写 Memory 地址和可选的独立 Skill 地址。例如：
+新版将连接设置保存到 `settings.v2.json`。官方模式省略两个 `base_url`。
+Memory 仍通过 `https://mindmemos.cn/v1/memory/*` 使用原项目 Key。
+新版 Skill 的默认 API 根地址是 `https://mindmemos.cn/v2/skills`，由网关转发到独立服务。
+公开入口保持稳定时，网关内部路由的变化无需修改本地配置。
+
+- `memory_service.base_url`（`--memory-base-url`）填 Memory 服务地址。SDK 拼接 `/v1/memory/...`。
+- `skill_service.base_url`（`--skill-base-url`）填完整的 Skill API 根地址。直连独立服务时以 `/v1/skills` 结尾。自建网关可以填写其公开的版本化 Skill 根路径，例如 `https://gateway.example.com/v2/skills`。SDK 只追加操作名。
+
+已有直连配置若只填了服务地址，SDK 会在解析连接时补上 `/v1/skills`。自部署配置示例如下。
 
 ```json
 {
@@ -68,7 +74,7 @@ mindmemos config show
     "auth": {"api_key": "memory-key"}
   },
   "skill_service": {
-    "base_url": "https://skill.example.com",
+    "base_url": "https://skill.example.com/v1/skills",
     "auth": {"api_key": "skill-key"}
   }
 }
@@ -99,7 +105,10 @@ mindmemos auth
 切换默认目录后也需要重新启动已有进程。原目录中的连接配置会留在原处。
 该变量只选择本地配置，远端数据的项目归属由服务端和 API 凭据决定。
 
-You can also pass `base_url`, `api_key`, and `user_id` directly when creating a client. The default `user_id`
+You can also pass `base_url`, `api_key`, and `user_id` directly when creating a client.
+The constructor's `base_url` is the Memory service address before `/v1/memory`.
+Set a custom Skill root separately via `skill_service.base_url` in the SDK configuration.
+The default `user_id`
 is used by operations that require a user, such as `memory.add`. Search is different: `memory.search` only uses
 the `user_id` passed to that call. Omit it for a project-wide search, or pass it explicitly for a user-scoped search.
 
@@ -122,7 +131,7 @@ with MindMemOSClient(user_id="alice", app_id="my-agent") as client:
         print(memory.memory)
 ```
 
-Skill 接口直接调用独立服务的 `/v1/skills/*`，请求类型位于
+Skill 接口按配置的 API 根地址发送请求，官方走 `/v2/skills/*`，直连独立服务走 `/v1/skills/*`。请求类型位于
 `mindmemos_sdk.skills`。客户端不维护本地 Skill 注册表，也不会在 `memory.add`
 时检测或上传本地 Skill：
 
@@ -228,7 +237,7 @@ SDK 的 `auto_accept` 默认 `True`，上述示例显式禁用；CLI 默认禁�
 `updated`、`created`、`unchanged` 成员和对应 `version_id`。失败或取消时检查任务错误。
 演化不会自动更新 Graph；采纳候选后仍需发布相应图快照。
 
-异步客户端使用同一组请求类型；可用 `AsyncHttpTransport` 单独连接：
+异步客户端使用同一组请求类型。直接构造 `AsyncHttpTransport` 时，可以传入完整的 Skill API 根地址，并在 `AsyncSkillClient` 中设置 `path_prefix=""`。已有代码如果传入服务地址并省略 `path_prefix`，客户端仍会追加 `/v1/skills`。
 
 ```python
 import asyncio
@@ -238,9 +247,9 @@ from mindmemos_sdk.transport import AsyncHttpTransport
 
 
 async def main():
-    transport = AsyncHttpTransport(base_url="http://127.0.0.1:8001", api_key="local-key", max_retries=0)
+    transport = AsyncHttpTransport(base_url="http://127.0.0.1:8001/v1/skills", api_key="local-key", max_retries=0)
     try:
-        page = await AsyncSkillClient(transport).list(ListRequest(limit=20))
+        page = await AsyncSkillClient(transport, path_prefix="").list(ListRequest(limit=20))
         print(page["items"])
     finally:
         await transport.aclose()

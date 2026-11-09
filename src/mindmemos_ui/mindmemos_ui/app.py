@@ -11,7 +11,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from mindmemos_sdk.config import ConfigManager
+from mindmemos_sdk.config import DIRECT_SKILL_API_PATH, ConfigManager
 from mindmemos_sdk.errors import ApiError, MindMemOSSDKError
 from mindmemos_skill.common.skill_runtime import load_runtime_skill
 from mindmemos_skill.errors import SkillConflictError
@@ -183,6 +183,7 @@ async def create_app(
             return result
 
         # Liveness routes do not resolve credentials or touch business storage.
+        skill_health_base = skill_url.removesuffix(DIRECT_SKILL_API_PATH) if skill_url else None
         with httpx.Client(
             timeout=min(config.network.timeout_seconds, 5),
             follow_redirects=False,
@@ -190,7 +191,7 @@ async def create_app(
         ) as client:
             for name, url, key, health_path in (
                 ("memory", memory_url, memory_key, "/healthz"),
-                ("skill", skill_url, skill_key, "/health"),
+                ("skill", skill_health_base, skill_key, "/health"),
             ):
                 if not url or not key:
                     continue

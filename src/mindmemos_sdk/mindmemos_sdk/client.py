@@ -12,7 +12,7 @@ from collections.abc import Mapping
 
 from pydantic import ValidationError
 
-from .config import ConfigManager, SDKConfig
+from .config import DIRECT_SKILL_API_PATH, ConfigManager, SDKConfig
 from .errors import ApiError, AuthRequiredError, InvalidRequestError, MindMemOSSDKError, TransportError
 from .memory import MemoryClient
 from .skills import SkillClient, TrajectoryReportRequest
@@ -69,7 +69,9 @@ class MindMemOSClient:
                 timeout_seconds=config.network.timeout_seconds,
                 max_retries=0,
             )
-        self.skills = SkillClient(self._skill_transport)
+        self.skills = SkillClient(
+            self._skill_transport, path_prefix="" if skill_transport is None else DIRECT_SKILL_API_PATH
+        )
         self.memory = MemoryClient(
             self._transport,
             default_user_id=self._user_id,

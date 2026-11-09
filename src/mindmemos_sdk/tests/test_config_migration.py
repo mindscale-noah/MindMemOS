@@ -46,7 +46,7 @@ def test_v1_custom_migration_preserves_connections(tmp_path):
     assert config.version == 2
     assert config.service_type == "custom"
     assert config.resolve_memory_connection() == ("https://memory.example", "memory-key")
-    assert config.resolve_skill_connection() == ("https://skill.example", "skill-key")
+    assert config.resolve_skill_connection() == ("https://skill.example/v1/skills", "skill-key")
     assert config.defaults.user_id == "user-1"
     assert config.network.timeout_seconds == 41
     assert config.network.max_retries == 3
@@ -92,7 +92,7 @@ def test_v1_mixed_deployment_preserves_official_memory_and_separate_skill(tmp_pa
     config = manager.load()
     assert config.service_type == "custom"
     assert config.memory_service.base_url == DEFAULT_BASE_URL
-    assert config.resolve_skill_connection() == ("https://skill.example", "skill-key")
+    assert config.resolve_skill_connection() == ("https://skill.example/v1/skills", "skill-key")
 
 
 def test_v1_migration_retries_after_interrupted_settings_write(tmp_path, monkeypatch):

@@ -17,13 +17,15 @@ CLI 依次从 `MINDMEMOS_HOME`、兼容变量 `MINDMEMOS_CONFIG_DIR`、已保存
 
 ### `mindmemos auth`
 
-选择官方或自部署服务，保存 API Key 与默认用户 ID。官方 Memory 使用 `https://mindmemos.cn`，Skill 使用 `https://mindmemos.cn/api/developer/skill`。只有已获 Skill 授权的项目 Key 可用于新版 Skill。自部署时可以分别填写服务地址，独立的 Skill 地址需要单独的 Key。
+选择官方或自部署服务，保存 API Key 与默认用户 ID。官方模式省略两个 base URL 参数。Memory 继续使用 `https://mindmemos.cn/v1/memory/*` 和原 Key。新版 Skill 的 API 根地址为 `https://mindmemos.cn/v2/skills`，需要具有 Skill 权限的项目 Key。
+
+自部署时，`--memory-base-url` 填服务地址，由 SDK 拼接 `/v1/memory/...`。`--skill-base-url` 填完整的 Skill API 根地址，直连时包含 `/v1/skills`，并为该连接提供 Skill 服务的 Key。已有只填服务地址的 Skill 配置仍可使用。
 
 ```bash
 mindmemos auth
 mindmemos auth --service-type custom \
   --memory-base-url http://127.0.0.1:8000 \
-  --skill-base-url http://127.0.0.1:8001 \
+  --skill-base-url http://127.0.0.1:8001/v1/skills \
   --user-id alice
 ```
 

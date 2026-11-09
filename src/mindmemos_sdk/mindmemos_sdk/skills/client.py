@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..config import DIRECT_SKILL_API_PATH
 from ..errors import AuthRequiredError
 from ..transport import HttpTransport
 from .core import SkillCore, SkillRoute
@@ -43,18 +44,21 @@ from .typing import (
 class SkillClient:
     """Call the Skill service without local registration or upload state."""
 
-    def __init__(self, transport: HttpTransport | None) -> None:
+    def __init__(self, transport: HttpTransport | None, *, path_prefix: str = DIRECT_SKILL_API_PATH) -> None:
         """Use an existing synchronous HTTP transport.
 
         Args:
             transport: Configured Skill transport, or None when Skill is unconfigured.
+            path_prefix: API path relative to the transport base URL. Use an empty string when
+                the base URL already includes the full Skill API root.
         """
         self._transport = transport
+        self._path_prefix = path_prefix
 
     def _post(self, route: SkillRoute, body: SkillRequestBody, *, retry: bool = True) -> SkillData:
         if self._transport is None:
             raise AuthRequiredError("Configure an independent Skill service before using Skills.")
-        request = SkillCore.prepare(route, body)
+        request = SkillCore.prepare(route, body, path_prefix=self._path_prefix)
         options = {} if retry else {"retry": False}
         envelope = self._transport.post_envelope(request.path, json=request.body, params=request.params, **options)
         return envelope.data if envelope.data is not None else {}

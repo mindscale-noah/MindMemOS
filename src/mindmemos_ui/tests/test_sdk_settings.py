@@ -29,7 +29,7 @@ def test_official_and_custom_connections_share_one_settings_file(tmp_path):
         )
         assert first.status_code == 200, first.text
         assert ConfigManager(home).load().resolve_skill_connection() == (
-            "https://mindmemos.cn/api/developer/skill",
+            "https://mindmemos.cn/v2/skills",
             "memory-key",
         )
 
@@ -44,7 +44,7 @@ def test_official_and_custom_connections_share_one_settings_file(tmp_path):
         assert updated.status_code == 200, updated.text
         saved = ConfigManager(home).load()
         assert saved.resolve_memory_connection() == ("https://memory.example", "memory-key")
-        assert saved.resolve_skill_connection() == ("https://skill.example", "skill-key")
+        assert saved.resolve_skill_connection() == ("https://skill.example/v1/skills", "skill-key")
         assert set(json.loads((home / "settings.v2.json").read_text())) == set(updated.json()["values"])
         assert "storage" not in updated.json()["values"]
         assert not (home / "skill-client.yaml").exists()

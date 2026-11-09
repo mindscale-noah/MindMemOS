@@ -93,18 +93,16 @@ async def workbench(tmp_path, monkeypatch):
     config.skill_service = SkillServiceConfig(base_url="http://127.0.0.1", auth=AuthConfig(api_key="skill-key"))
     manager.save(config)
 
-    @asynccontextmanager
-    async def sdk_client(_manager, *, long_running=False):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=skill_app), base_url="http://127.0.0.1"
-        ) as remote:
-            async with AsyncHttpTransport(base_url="http://127.0.0.1", api_key="test-key", client=remote) as transport:
-                yield AsyncSkillClient(transport)
-
-    monkeypatch.setattr("mindmemos_ui.sdk_workbench.skill_client", sdk_client)
     ui = await create_ui_app(manager)
     try:
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=ui), base_url="http://127.0.0.1") as browser:
+        async with (
+            httpx.AsyncClient(transport=httpx.ASGITransport(app=skill_app)) as remote,
+            httpx.AsyncClient(transport=httpx.ASGITransport(app=ui), base_url="http://127.0.0.1") as browser,
+        ):
+            monkeypatch.setattr(
+                "mindmemos_ui.sdk_gateway.AsyncHttpTransport",
+                lambda **kwargs: AsyncHttpTransport(client=remote, **kwargs),
+            )
             token = (await browser.get("/api/session")).json()["token"]
             browser.headers["x-workbench-token"] = token
             yield browser, manager
@@ -179,7 +177,7 @@ async def test_skill_lifecycle_uses_sdk_and_preserves_auxiliary_files(workbench,
     assert preview.status_code == 200, preview.text
     assert preview.json()["name"] == "demo"
     assert preview.json()["files"] == ["SKILL.md", "assets/data.bin"]
-    assert preview.json()["service_url"] == "http://127.0.0.1"
+    assert preview.json()["service_url"] == "http://127.0.0.1/v1/skills"
     result = await browser.post("/api/register/confirm", json={"plan_id": preview.json()["plan_id"]})
     assert result.status_code == 200, result.text
     skill_id = result.json()["skill"]["skill_id"]

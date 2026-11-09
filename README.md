@@ -52,7 +52,7 @@
 - **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.
 - **2026-06-30**: MindMemOS was officially released!
 
-> **Skill API upgrade.** The legacy Skill API is deprecated. To access the new Skill service at `https://mindmemos.cn/api/developer/skill`, upgrade to `mindmemos-sdk` **1.0.0 or later**. If you use an agent plugin, upgrade `@mindmemos/openclaw-plugin` or `@mindmemos/deepseek-harness-plugin` to **0.2.0 or later** as well. In the MindMemOS console, edit the project API key and add `skill:read` and `skill:write`. Save the permissions, then run `mindmemos auth` again with the same key. The quick start below installs these versions from this repository. [New Skill service permissions](#grant-a-project-api-key-access-to-the-new-skill-service)
+> **Skill API upgrade.** The legacy Skill API is deprecated. To access the new Skill service at `https://mindmemos.cn/v2/skills`, upgrade to `mindmemos-sdk` **1.0.0 or later**. If you use an agent plugin, upgrade `@mindmemos/openclaw-plugin` or `@mindmemos/deepseek-harness-plugin` to **0.2.0 or later** as well. In the MindMemOS console, edit the project API key and add `skill:read` and `skill:write`. Save the permissions, then run `mindmemos auth` again with the same key. The quick start below installs these versions from this repository. [New Skill service permissions](#grant-a-project-api-key-access-to-the-new-skill-service)
 
 ## 🌟 Core Features
 
@@ -92,6 +92,8 @@ Memory and Skill manage their own business data and can be deployed independentl
 ### 2. Connect the Python SDK
 
 With Python 3.11–3.13 and uv installed, run these commands from the repository root. Enter your project API key with the configured scopes when prompted. The SDK and agent plugins share this configuration.
+
+In official mode, leave both `base_url` fields unset. Memory uses `https://mindmemos.cn` and the existing project API key for `/v1/memory/*`. The new Skill API root is `https://mindmemos.cn/v2/skills` and requires a project key with Skill permissions. The gateway forwards Skill requests to the independent service. Its internal routes can change while the public addresses stay the same.
 
 ```bash
 uv sync --package mindmemos-sdk --no-dev --inexact
@@ -213,10 +215,13 @@ make dev SERVICE=all FEATURE=async UI=0
 
 This starts [Memory](http://127.0.0.1:8000/docs) on port 8000 and [Skill](http://127.0.0.1:8001/docs) on port 8001. The async profile enables the queue used by the plugins' default Memory writes. In a second terminal, configure the SDK for both local endpoints. Enter your local project API key at both prompts.
 
+- `--memory-base-url` takes the service address before `/v1/memory`. The SDK adds the Memory path.
+- `--skill-base-url` takes the full Skill API root. For a direct connection, include `/v1/skills`. The SDK appends the operation name. Existing configurations that contain only the Skill service address still work.
+
 ```bash
 uv run --no-sync mindmemos auth --service-type custom \
   --memory-base-url http://127.0.0.1:8000 \
-  --skill-base-url http://127.0.0.1:8001 \
+  --skill-base-url http://127.0.0.1:8001/v1/skills \
   --user-id alice
 ```
 

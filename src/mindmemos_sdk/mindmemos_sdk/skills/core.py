@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from ..config import DIRECT_SKILL_API_PATH
 from .typing import SkillRequestBody, TaskProgressRequest
 
 
@@ -59,22 +60,24 @@ class SkillCore:
     """Build Skill service requests independently of HTTP I/O."""
 
     @staticmethod
-    def prepare(route: SkillRoute, body: SkillRequestBody) -> SkillRequest:
+    def prepare(route: SkillRoute, body: SkillRequestBody, *, path_prefix: str = DIRECT_SKILL_API_PATH) -> SkillRequest:
         """Serialize a typed request for one public Skill route.
 
         Args:
             route: Public operation selected by the caller.
             body: Request body matching that operation.
+            path_prefix: API path relative to the transport base URL, or empty for a full API root.
 
         Returns:
             Relative route and JSON-compatible body for the transport.
         """
+        path = f"{path_prefix}/{route.value}"
         if route is SkillRoute.TASK_PROGRESS:
             if not isinstance(body, TaskProgressRequest):
                 raise TypeError("Task progress requires TaskProgressRequest")
             return SkillRequest(
-                path=f"/v1/skills/{route.value}",
+                path=path,
                 body={"task_id": body.task_id},
                 params={"after": body.after},
             )
-        return SkillRequest(path=f"/v1/skills/{route.value}", body=body.model_dump(mode="json", exclude_unset=True))
+        return SkillRequest(path=path, body=body.model_dump(mode="json", exclude_unset=True))

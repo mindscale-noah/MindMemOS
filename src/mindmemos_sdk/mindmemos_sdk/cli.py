@@ -89,12 +89,16 @@ def _add_auth_command(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         description="Choose a deployment and configure Memory and Skill service credentials.",
     )
     parser.add_argument("--service-type", choices=["official", "custom"], help="Official cloud or custom deployment.")
-    parser.add_argument("--memory-base-url", "--base-url", dest="memory_base_url", help="Custom Memory API root.")
+    parser.add_argument(
+        "--memory-base-url", "--base-url", dest="memory_base_url", help="Custom Memory service URL before /v1/memory."
+    )
     parser.add_argument(
         "--memory-api-key", "--api-key", dest="memory_api_key", help="Memory API key; prompted if omitted."
     )
     skill_destination = parser.add_mutually_exclusive_group()
-    skill_destination.add_argument("--skill-base-url", help="Independent custom Skill API root.")
+    skill_destination.add_argument(
+        "--skill-base-url", help="Custom Skill API root, e.g. http://localhost:8001/v1/skills."
+    )
     skill_destination.add_argument("--no-skill", action="store_true", help="Clear the custom Skill connection.")
     parser.add_argument("--skill-api-key", help="API key for an independent Skill service.")
     parser.add_argument("--user-id", help="Default user id. If omitted, prompt interactively.")

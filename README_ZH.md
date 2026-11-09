@@ -52,7 +52,7 @@
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
 - **2026-06-30**：MindMemOS 正式发布！
 
-> **Skill API 更新提示。** 旧版 Skill API 已弃用。新版 Skill 服务地址为 `https://mindmemos.cn/api/developer/skill`。请将 `mindmemos-sdk` 升级至 **1.0.0 或更高版本**。如果使用 OpenClaw 或 DeepSeek Harness，请同时将对应的 `@mindmemos/openclaw-plugin` 或 `@mindmemos/deepseek-harness-plugin` 升级至 **0.2.0 或更高版本**。升级后，先在 MindMemOS 控制台编辑项目 API Key，添加 `skill:read` 和 `skill:write`，保存后再用同一个 Key 运行 `mindmemos auth`。下方快速开始提供了从本仓库安装这些版本的步骤。[新版 Skill 服务权限设置](#为项目-api-key-开通新版-skill-服务权限)
+> **Skill API 更新提示。** 旧版 Skill API 已弃用。新版 Skill 服务地址为 `https://mindmemos.cn/v2/skills`。请将 `mindmemos-sdk` 升级至 **1.0.0 或更高版本**。如果使用 OpenClaw 或 DeepSeek Harness，请同时将对应的 `@mindmemos/openclaw-plugin` 或 `@mindmemos/deepseek-harness-plugin` 升级至 **0.2.0 或更高版本**。升级后，先在 MindMemOS 控制台编辑项目 API Key，添加 `skill:read` 和 `skill:write`，保存后再用同一个 Key 运行 `mindmemos auth`。下方快速开始提供了从本仓库安装这些版本的步骤。[新版 Skill 服务权限设置](#为项目-api-key-开通新版-skill-服务权限)
 
 ## 🌟 Core Features
 
@@ -92,6 +92,8 @@ Memory 与 Skill 各自管理业务数据，可分别部署。默认本地部署
 ### 2. 接入 Python SDK
 
 准备 Python 3.11–3.13 和 uv，在仓库根目录运行以下命令，按提示输入已配置权限的项目 API Key。SDK 和 Agent 插件共用这份配置。
+
+官方模式下省略两个 `base_url`。Memory 继续使用 `https://mindmemos.cn` 和原项目 Key，请求路径仍是 `/v1/memory/*`。新版 Skill 的 API 根地址是 `https://mindmemos.cn/v2/skills`，使用具有 Skill 权限的项目 Key。网关负责转发到独立 Skill 服务，对外地址保持稳定时，云端调整内部路由无需修改本地配置。
 
 ```bash
 uv sync --package mindmemos-sdk --no-dev --inexact
@@ -213,10 +215,13 @@ make dev SERVICE=all FEATURE=async UI=0
 
 [Memory](http://127.0.0.1:8000/docs) 默认监听 8000 端口，[Skill](http://127.0.0.1:8001/docs) 默认监听 8001 端口。`FEATURE=async` 启用插件默认写入 Memory 时使用的队列。另开终端，配置两个本地服务地址。两次提示均输入本地项目 API Key。
 
+- `--memory-base-url` 填服务地址，由 SDK 拼接 `/v1/memory/...`。
+- `--skill-base-url` 填完整的 Skill API 根地址。直连独立服务时包含 `/v1/skills`，SDK 只追加操作名。旧配置如果只填了 Skill 服务地址，仍可继续使用。
+
 ```bash
 uv run --no-sync mindmemos auth --service-type custom \
   --memory-base-url http://127.0.0.1:8000 \
-  --skill-base-url http://127.0.0.1:8001 \
+  --skill-base-url http://127.0.0.1:8001/v1/skills \
   --user-id alice
 ```
 
