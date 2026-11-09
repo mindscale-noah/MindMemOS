@@ -15,6 +15,7 @@ from mindmemos_sdk.skills import (
     ActivateRequest,
     AddGraphMembersRequest,
     DeleteRequest,
+    EvaluationQueryRequest,
     GraphResolveRequest,
     GraphSnapshotRequest,
     GraphSnapshotsRequest,
@@ -22,6 +23,7 @@ from mindmemos_sdk.skills import (
     ListRequest,
     RemoveGraphMembersRequest,
     ShowRequest,
+    SkillAnalyzeRequest,
     StructuredSkillInfo,
     TrajectoryStatisticsRequest,
 )
@@ -201,6 +203,7 @@ def sdk_workbench_router(
     """
     router = APIRouter(prefix="/api")
     plans: OrderedDict[str, tuple[float, str, object]] = OrderedDict()
+    running_evaluations: set[str] = set()
 
     def remember(kind: str, value: object) -> str:
         """Save one bounded, short-lived reviewed operation."""
@@ -292,6 +295,53 @@ def sdk_workbench_router(
             return await client.trajectory_statistics(
                 TrajectoryStatisticsRequest(skill_id=skill_id, skill_version_id=version_id)
             )
+
+    @router.get("/skills/{skill_id}/versions/{version_id}/evaluations")
+    async def skill_evaluations(skill_id: str, version_id: str) -> dict:
+        """Read completed static evaluations for one version.
+
+        Args:
+            skill_id: Owning Skill family identity.
+            version_id: Exact evaluated version identity.
+
+        Returns:
+            Stored evaluations and whether the service query reached its limit.
+        """
+        limit = 1000
+        async with skill_client(manager) as client:
+            result = await client.query_evaluations(
+                EvaluationQueryRequest(skill_version_ids=[version_id], judge_types=["static_skill"], limit=limit)
+            )
+        items = result["items"]
+        return {
+            "items": [item for item in items if item["skill_id"] == skill_id],
+            "limit_reached": len(items) == limit,
+        }
+
+    @router.post("/skills/evaluations/run")
+    async def run_skill_evaluation(version: VersionRef) -> dict:
+        """Evaluate one exact Skill version through the configured Skill service.
+
+        Args:
+            version: Owning Skill family and selected version identity.
+
+        Returns:
+            The completed evaluation record, including any matching cached result.
+
+        Raises:
+            HTTPException: An evaluation for this version is already in progress.
+        """
+        request = SkillAnalyzeRequest(skill_version_id=version.version_id)
+        version_id = request.skill_version_id
+        if version_id in running_evaluations:
+            raise HTTPException(409, "Skill Judge is already running for this version. Try again when it finishes.")
+        running_evaluations.add(version_id)
+        try:
+            async with skill_client(manager, long_running=True) as client:
+                await show_version(client, version)
+                return await client.analyze_skill(request)
+        finally:
+            running_evaluations.remove(version_id)
 
     @router.get("/content")
     async def content(source: str, skill_id: str, version_id: str):

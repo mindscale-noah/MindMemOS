@@ -666,6 +666,36 @@ details .fields {
 .version-toolbar .version-picker {
   margin-bottom: 0;
 }
+.evaluation-row {
+  cursor: pointer;
+}
+.evaluation-row:hover,
+.evaluation-row:focus-within {
+  background: #f7f8fa;
+}
+.evaluation-time,
+.evaluation-score {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.evaluation-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.evaluation-details {
+  overflow-wrap: anywhere;
+}
+.evaluation-details p,
+.evaluation-findings li {
+  white-space: pre-wrap;
+}
+.evaluation-findings > li + li,
+.evaluation-details details {
+  margin-top: 12px;
+}
 .code-panel {
   border: 1px solid var(--line);
   border-radius: 9px;

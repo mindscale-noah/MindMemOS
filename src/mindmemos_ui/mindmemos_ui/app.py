@@ -83,6 +83,7 @@ async def create_app(
             if request.method in {"GET", "HEAD"} or request.url.path in {
                 "/api/configurations/choose-directory",
                 "/api/skills/choose-directory",
+                "/api/skills/evaluations/run",
                 "/api/algorithm-visualization/choose-directory",
                 "/api/algorithm-visualization/report",
             }:

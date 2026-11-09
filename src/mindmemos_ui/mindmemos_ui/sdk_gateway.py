@@ -10,11 +10,12 @@ from mindmemos_sdk.transport import AsyncHttpTransport
 
 
 @asynccontextmanager
-async def skill_client(manager: ConfigManager) -> AsyncIterator[AsyncSkillClient]:
+async def skill_client(manager: ConfigManager, *, long_running: bool = False) -> AsyncIterator[AsyncSkillClient]:
     """Open a Skill SDK client for the latest saved connection settings.
 
     Args:
         manager: Owner of the UI process's SDK settings file.
+        long_running: Allow at least five minutes for an operation that should not retry automatically.
 
     Yields:
         A client scoped by the configured Skill credential.
@@ -29,7 +30,7 @@ async def skill_client(manager: ConfigManager) -> AsyncIterator[AsyncSkillClient
     async with AsyncHttpTransport(
         base_url=base_url,
         api_key=api_key,
-        timeout_seconds=config.network.timeout_seconds,
-        max_retries=config.network.max_retries,
+        timeout_seconds=max(config.network.timeout_seconds, 300) if long_running else config.network.timeout_seconds,
+        max_retries=0 if long_running else config.network.max_retries,
     ) as transport:
         yield AsyncSkillClient(transport)

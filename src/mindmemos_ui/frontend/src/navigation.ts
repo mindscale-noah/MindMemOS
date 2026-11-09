@@ -37,6 +37,7 @@ export function readRoute(): Route {
       tab === "diff" ||
       tab === "versions" ||
       tab === "content" ||
+      tab === "evaluations" ||
       tab === "trajectories"
         ? tab
         : route.selection.version

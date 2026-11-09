@@ -1,6 +1,8 @@
 """Exercise browser routes through the SDK and a real Skill HTTP service."""
 
+import asyncio
 from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -91,7 +93,7 @@ async def workbench(tmp_path, monkeypatch):
     manager.save(config)
 
     @asynccontextmanager
-    async def sdk_client(_manager):
+    async def sdk_client(_manager, *, long_running=False):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=skill_app), base_url="http://127.0.0.1"
         ) as remote:
@@ -107,6 +109,60 @@ async def workbench(tmp_path, monkeypatch):
             yield browser, manager
     finally:
         await service.close()
+
+
+async def test_run_skill_evaluation_uses_only_the_selected_version(workbench, tmp_path, monkeypatch):
+    """Validate ownership and dispatch at most one active run per version."""
+    browser, _ = workbench
+    registrations = []
+    for name in ("first", "second"):
+        source = tmp_path / name
+        source.mkdir()
+        (source / "SKILL.md").write_text(f"---\nname: {name}\ndescription: Example\n---\nBody", encoding="utf-8")
+        preview = await browser.post("/api/register/preview", json={"path": str(source)})
+        response = await browser.post("/api/register/confirm", json={"plan_id": preview.json()["plan_id"]})
+        assert response.status_code == 200, response.text
+        registrations.append(response.json())
+
+    result = {"status": "completed", "evaluation_id": "evaluation-1"}
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def analyze_version(request):
+        started.set()
+        await finish.wait()
+        return result
+
+    analyze = AsyncMock(side_effect=analyze_version)
+    monkeypatch.setattr(AsyncSkillClient, "analyze_skill", analyze)
+    path = "/api/skills/evaluations/run"
+    target = {
+        "source": "local",
+        "skill_id": registrations[0]["skill"]["skill_id"],
+        "version_id": registrations[0]["version"]["version_id"],
+    }
+    unauthorized = await browser.post(path, json=target, headers={"x-workbench-token": "invalid"})
+    assert unauthorized.status_code == 403
+    mismatch = await browser.post(path, json={**target, "skill_id": registrations[1]["skill"]["skill_id"]})
+    assert mismatch.status_code == 404
+    analyze.assert_not_awaited()
+
+    async with asyncio.TaskGroup() as tasks:
+        pending = tasks.create_task(browser.post(path, json=target))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            duplicate = await asyncio.wait_for(browser.post(path, json=target), timeout=2)
+            assert duplicate.status_code == 409
+        finally:
+            finish.set()
+
+    completed = pending.result()
+    assert completed.status_code == 200, completed.text
+    assert completed.json() == result
+    analyze.assert_awaited_once()
+    request = analyze.await_args.args[0]
+    assert request.skill_version_id == target["version_id"]
+    assert not request.force_refresh
 
 
 @pytest.mark.asyncio

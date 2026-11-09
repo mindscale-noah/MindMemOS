@@ -1,4 +1,5 @@
 import { Trajectories } from "./trajectories";
+import { SkillEvaluations } from "./skill-evaluations";
 import { SkillEditor } from "./skill-editor";
 import { DynamicSkill } from "./dynamic-skill";
 import { useState, useEffect } from "react";
@@ -296,6 +297,7 @@ export function Detail({
         {[
           ["content", "Content"],
           ["versions", "Version history"],
+          ["evaluations", "Evaluations"],
           ["diff", "Compare"],
           ...(selection.source === "local"
             ? [["trajectories", "Trajectories"]]
@@ -368,6 +370,15 @@ export function Detail({
                 </tbody>
               </table>
             </div>
+          ) : tab === "evaluations" ? (
+            version && (
+              <SkillEvaluations
+                key={JSON.stringify([selection.id, version])}
+                target={ref(selection, version)}
+                versions={data.value}
+                setVersion={setVersion}
+              />
+            )
           ) : tab === "content" ? (
             <>
               {editing ? (
