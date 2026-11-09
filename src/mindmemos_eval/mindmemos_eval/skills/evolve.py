@@ -1,18 +1,30 @@
 """Collect matched execution evidence, evolve complete Skills, and retest."""
 
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
+from mindmemos_skill.api.service import SkillService
+from mindmemos_skill.api.typing import (
+    CollectionEvolutionRequest,
+    EvolutionRunResult,
+    RegisterRequest,
+    ReportTrajectoryRequest,
+    StructuredSkillInfo,
+)
 from mindmemos_skill.common.asyncio import map_bounded
 from mindmemos_skill.common.json import read_json, read_jsonl, write_json
 from mindmemos_skill.common.secrets import redact_credentials
+from mindmemos_skill.config.config import ImplementationConfig, ServiceConfig
+from mindmemos_skill.config.loader import read_skill_config
 from mindmemos_skill.envs import Environment
-from mindmemos_skill.skill import Skill, SkillSet, SkillSnapshot
+from mindmemos_skill.skill import Skill, SkillSet, SkillSnapshot, encode_resources
 
 from .config import ROOT, EnvTestConfig, SkillEvolveConfig
 from .evaluation import evaluate
-from .evolve_service import evolution_connection
+from .service import open_skill_service
 from .testing import _load_samples
 from .typing import CaseResult
 
@@ -144,27 +156,98 @@ async def _slot(config, env, sample, skills, directory):
         return data
 
 
-async def _evolve_case(service, row, skills, state, state_path, project_id):
+def _merge_profile_options(base: dict[str, object], overrides: Mapping[str, object]) -> dict[str, object]:
+    """Merge nested pipeline options by field name without modifying the loaded profile."""
+    merged = base.copy()
+    for name, value in overrides.items():
+        original = merged.get(name)
+        if isinstance(original, dict) and isinstance(value, dict):
+            value = _merge_profile_options(original, value)
+        merged[name] = value
+    return merged
+
+
+def _evolution_resources(config: SkillEvolveConfig, directory: Path) -> ServiceConfig:
+    """Select the evaluation pipeline and confine its work and storage to the run."""
+    source = read_skill_config(config.service_config).service
+    profile = source.evolution_pipelines[config.pipeline]
+    options = profile.config if isinstance(profile.config, dict) else profile.config.model_dump(mode="python")
+    options = _merge_profile_options(options, config.pipeline_overrides)
+    options["work_dir"] = str(directory / "evolution_work")
+    return ServiceConfig(
+        home=directory / "state",
+        agents=source.agents,
+        evolution_pipelines={config.pipeline: ImplementationConfig(class_name=profile.class_name, config=options)},
+    )
+
+
+async def _evolve_case(
+    service: SkillService,
+    row,
+    skills: Mapping[str, Skill],
+    state,
+    state_path: Path,
+    *,
+    project_id: str,
+    pipeline: str,
+) -> None:
     """Register, report, and evolve one case, persisting each completed step."""
     case = row["case"]
     for index, (key, skill) in enumerate(skills.items()):
-        if len(state["registrations"]) <= index:
-            state["registrations"].append(await service.register(skill, f"{project_id}/{case}/{key}"))
-            write_json(state_path, state)
+        if index < len(state["registrations"]):
+            continue
+        source = skill.source
+        registered = await service.register_skill(
+            RegisterRequest(
+                project_id=project_id,
+                alias=f"{project_id}/{case}/{key}",
+                skill=StructuredSkillInfo(
+                    content=source.content,
+                    resources=encode_resources(source.resources),
+                    name=source.name,
+                    description=source.description,
+                    standard_format=source.standard_format,
+                ),
+            )
+        )
+        state["registrations"].append(registered.model_dump(mode="json"))
+        write_json(state_path, state)
+
+    version_ids = [item["skill_version_id"] for item in state["registrations"]]
     for repeat, slot in enumerate(row["collect"]):
         if not slot["messages"]:
             continue
-        for registration in state["registrations"]:
-            identity = f"{repeat}/{registration['skill_version_id']}"
-            if identity not in state["reported"]:
-                await service.report(
-                    registration["skill_version_id"], sanitize_trajectory(slot["messages"]), f"{case}/{repeat}"
+        for version_id in version_ids:
+            identity = f"{repeat}/{version_id}"
+            if identity in state["reported"]:
+                continue
+            await service.report_trajectory(
+                ReportTrajectoryRequest(
+                    project_id=project_id,
+                    user_id="mindmemos-eval",
+                    agent_id="skill-evolve",
+                    skill_version_id=version_id,
+                    messages=sanitize_trajectory(slot["messages"]),
+                    session_id=f"{case}/{repeat}",
                 )
-                state["reported"].append(identity)
-                write_json(state_path, state)
-    if not state["members"]:
-        state["members"] = await service.evolve(state["registrations"])
-        write_json(state_path, state)
+            )
+            state["reported"].append(identity)
+            write_json(state_path, state)
+
+    if state["members"]:
+        return
+    result = await service.run_evolution(
+        CollectionEvolutionRequest(
+            project_id=project_id,
+            pipeline=pipeline,
+            skill_version_ids=version_ids,
+            auto_accept=False,
+        )
+    )
+    if not isinstance(result, EvolutionRunResult):
+        raise ValueError("Expected a collection evolution result")
+    state["members"] = [member.model_dump(mode="json") for member in result.members]
+    write_json(state_path, state)
 
 
 def _stats(slots):
@@ -199,12 +282,18 @@ async def run(config: SkillEvolveConfig) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     public = redact_credentials(config.model_dump(mode="json"))
     config_path = directory / "config.json"
-    if config_path.exists() and read_json(config_path) != public:
-        raise ValueError("Output directory belongs to a different configuration")
+    if config_path.exists():
+        previous = read_json(config_path)
+        if isinstance(previous, dict) and previous.get("connection") == "inprocess":
+            for name in ("connection", "sdk_home", "poll_interval"):
+                previous.pop(name, None)
+        if previous != public:
+            raise ValueError("Output directory belongs to a different configuration")
     write_json(config_path, public)
     project_file = directory / "project.json"
     project = read_json(project_file) if project_file.exists() else {"project_id": "eval-" + uuid4().hex}
     write_json(project_file, project)
+    project_id = project["project_id"]
     total = len(samples) * config.repeats
     collect_slots = []
     collect_reused = 0
@@ -233,18 +322,7 @@ async def run(config: SkillEvolveConfig) -> dict:
     ]
     published = {}
     for count, row in enumerate(eligible, 1):
-        case_config = config
-        if config.pipeline == "simple" and config.connection == "inprocess":
-            available = sum(bool(slot["messages"]) for slot in row["collect"])
-            overrides = dict(config.pipeline_overrides)
-            collection = dict(overrides.get("traj_collect", {}))
-            collection.setdefault("sample_size", available)
-            collection["trajectory_limit"] = max(
-                collection.get("trajectory_limit", 100), available, collection["sample_size"]
-            )
-            overrides["traj_collect"] = collection
-            case_config = config.model_copy(update={"pipeline_overrides": overrides})
-        async with evolution_connection(case_config, directory, project["project_id"]) as service:
+        async with open_skill_service(_evolution_resources(config, directory), project_id) as service:
             case = row["case"]
             state_path = directory / case / "evolution.json"
             state = (
@@ -258,7 +336,15 @@ async def run(config: SkillEvolveConfig) -> dict:
                 # Saved progress makes each retry resume after the last completed step.
                 for attempt in range(config.evolution_retries + 1):
                     try:
-                        await _evolve_case(service, row, initial[case], state, state_path, project["project_id"])
+                        await _evolve_case(
+                            service,
+                            row,
+                            initial[case],
+                            state,
+                            state_path,
+                            project_id=project_id,
+                            pipeline=config.pipeline,
+                        )
                         break
                     except Exception as exc:
                         if attempt == config.evolution_retries:

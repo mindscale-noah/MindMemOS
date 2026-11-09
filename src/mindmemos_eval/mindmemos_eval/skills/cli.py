@@ -1,162 +1,132 @@
-"""Expose only fresh Skill runs and saved-result reports."""
+"""Define the Skill evaluation CLI and dispatch parsed commands."""
 
 import argparse
-import asyncio
 from pathlib import Path
 
 import yaml
-from mindmemos_skill.envs import Environment
 
-from .config import ROOT, EnvTestConfig, RunOptions, TreeSkillEvalConfig, load_config
-from .report import read_report, write_report
-from .runner import run
-from .testing import run_test
+from . import commands
+from .typing import BENCHMARKS
 
 
 def add_skill_args(parser: argparse.ArgumentParser) -> None:
-    """Add the supported Skill commands to the top-level parser.
+    """Add Skill subcommands to the evaluation CLI.
 
     Args:
-        parser: Skill subparser owned by the evaluation CLI.
+        parser: Parser for the top-level skill command.
     """
-    commands = parser.add_subparsers(dest="skill_command", required=True)
-    evolve = commands.add_parser("evolve", help="Collect initial-Skill evidence, evolve, and retest matched cases.")
-    evolve.add_argument("--config", type=Path, default=ROOT / "config/mindmemos_eval/skill_evolve/dev.yaml")
-    evolve.add_argument("--check", action="store_true", help="Validate selected tasks and Skill sources without model calls.")
-    evolve.add_argument("--output-dir", type=Path)
-    treeskill = commands.add_parser(
-        "treeskill", help="Run the reference TreeSkill SpreadsheetBench protocol through the UI service."
+    subcommands = parser.add_subparsers(dest="skill_command", required=True)
+
+    show = subcommands.add_parser("show", help="List registered environments or pipelines.")
+    registries = show.add_subparsers(dest="registry", required=True)
+    registries.add_parser("envs", help="List registered environments.").set_defaults(handler=commands.show_envs)
+    registries.add_parser("pipelines", help="List registered pipelines and their evaluation names.").set_defaults(
+        handler=commands.show_pipelines
     )
-    treeskill.add_argument("--config", type=Path, default=ROOT / "config/mindmemos_eval/treeskill/dev.yaml")
-    treeskill.add_argument(
-        "--check", action="store_true", help="Verify reference inputs and service configuration without model calls."
-    )
-    treeskill.add_argument(
-        "--env", help="Registered environment; other environments have no reference score guarantee."
-    )
-    treeskill.add_argument("--output-dir", type=Path)
-    commands.add_parser("envs", help="List registered environments without running tasks.")
-    test = commands.add_parser("test", help="Test one environment with no Skills or a fixed static Skill collection.")
-    test.add_argument("--config", type=Path, default=ROOT / "config/mindmemos_eval/env_test/dev.yaml")
-    test.add_argument("--env", help="Override the registered environment name in the configuration.")
-    mode = test.add_mutually_exclusive_group()
-    mode.add_argument("--no-skill", action="store_true", help="Run without any Skills.")
-    mode.add_argument("--skills", type=Path, nargs="+", help="Inject these static Skill paths together.")
-    test.add_argument("--samples", type=Path, help="Override the data loader with a task/reward_data JSON array.")
-    test.add_argument("--split-file", type=Path)
-    test.add_argument("--split")
-    test.add_argument("--limit", type=int)
-    test.add_argument("--concurrency", type=int)
-    test.add_argument("--output-dir", type=Path)
-    execute = commands.add_parser("run", help="Run fresh Skill-Forest control and trained tests.")
-    execute.add_argument("--config", type=Path, default=ROOT / "config/mindmemos_eval/dev.yaml")
-    execute.add_argument("--algorithm", choices=["skill_forest"], default="skill_forest")
-    execute.add_argument(
-        "--benchmark",
-        choices=["livemath", "alfworld", "spreadsheetbench", "searchqa", "officeqa", "all"],
-        default="livemath",
-    )
-    execute.add_argument("--smoke", action="store_true")
-    execute.add_argument("--test-repeats", type=int, default=1)
-    execute.add_argument("--arms", default="no_skill,initial_skill,trained_skill")
-    execute.add_argument("--data-root", type=Path, default=ROOT / "data/mindmemos_skill")
-    execute.add_argument("--output-dir", type=Path)
-    report = commands.add_parser("report", help="Regenerate reports from saved outcomes without model calls.")
+
+    evaluate = subcommands.add_parser("evaluate", help="Run a Skill evaluation or rebuild a saved report.")
+    _add_evaluation_commands(evaluate)
+
+
+def _add_evaluation_commands(parser: argparse.ArgumentParser) -> None:
+    """Register pipeline evaluations and standalone evaluation operations."""
+    evaluations = parser.add_subparsers(dest="evaluation", required=True)
+
+    evolve = evaluations.add_parser("evolve", help="Evaluate offline Skill evolution.")
+    evolve.add_argument("--algo", choices=("offline-evolv",), default="offline-evolv")
+    _add_config_args(evolve)
+    _add_env_arg(evolve)
+    _add_check_arg(evolve)
+    evolve.set_defaults(handler=commands.evaluate_evolution)
+
+    manage = evaluations.add_parser("manage", help="Evaluate Skill Graph retrieval or end-to-end accuracy.")
+    manage.add_argument("--algo", choices=("skill-graph",), default="skill-graph")
+    manage.add_argument("--env", choices=("agentskillos",), help="AgentSkillOS environment.")
+    _add_graph_args(manage)
+    manage.set_defaults(handler=commands.evaluate_graph)
+
+    train = evaluations.add_parser("train", help="Evaluate Skill-Forest or TreeSkill training.")
+    train.add_argument("--algo", choices=("skill-forest", "tree-skill"), required=True)
+    _add_config_args(train)
+    _add_env_arg(train)
+    _add_forest_args(train)
+    _add_check_arg(train, help_text="Validate TreeSkill inputs without model calls.")
+    train.set_defaults(handler=commands.evaluate_training)
+
+    direct = evaluations.add_parser("direct", help="Test a single environment with no Skills or fixed Skills.")
+    _add_direct_test_args(direct)
+    direct.set_defaults(handler=commands.test_environment)
+
+    report = evaluations.add_parser("rebuild-report", help="Rebuild a saved Skill-Forest report.")
     report.add_argument("run_dir", type=Path)
+    report.set_defaults(handler=commands.rebuild_report)
 
 
-def run_skill_benchmark(args: argparse.Namespace) -> int:
-    """Dispatch a fresh run or a report and return an honest exit code.
+def _add_config_args(parser: argparse.ArgumentParser) -> None:
+    """Add the YAML and output directory options shared by evaluation commands."""
+    parser.add_argument("--config", type=Path, help="Evaluation YAML file.")
+    parser.add_argument("--output-dir", type=Path, help="Output directory. Overrides output_dir in the YAML.")
+
+
+def _add_env_arg(parser: argparse.ArgumentParser) -> None:
+    """Add a registered environment override."""
+    parser.add_argument("--env", help="Registered environment name. See skill show envs.")
+
+
+def _add_check_arg(parser: argparse.ArgumentParser, help_text: str = "Validate inputs without model calls.") -> None:
+    """Add the input validation mode."""
+    parser.add_argument("--check", action="store_true", help=help_text)
+
+
+def _add_forest_args(parser: argparse.ArgumentParser) -> None:
+    """Add options for the Skill-Forest controls and trained runs."""
+    parser.add_argument("--benchmark", choices=BENCHMARKS, help="Skill-Forest dataset.")
+    parser.add_argument(
+        "--smoke", action="store_true", default=None, help="Use small Skill-Forest dataset splits and search budget."
+    )
+    parser.add_argument("--test-repeats", type=int, help="Number of Skill-Forest test repetitions per arm.")
+    parser.add_argument("--arms", help="Skill-Forest arms: no_skill,initial_skill,trained_skill.")
+    parser.add_argument("--data-root", type=Path, help="Parent directory of the Skill-Forest datasets.")
+
+
+def _add_graph_args(parser: argparse.ArgumentParser) -> None:
+    """Add Skill Graph inputs and scoring mode."""
+    _add_config_args(parser)
+    parser.add_argument(
+        "--eval-mode",
+        choices=("retrieval", "accuracy"),
+        help="Score retrieval rankings or execute and score AgentSkillOS tasks.",
+    )
+    parser.add_argument("--tasks-dir", type=Path, help="Directory of original task JSON files for retrieval scoring.")
+    parser.add_argument("--skills-dir", type=Path, help="Directory of Skill packages to index and rank.")
+    parser.add_argument("--service-config", type=Path, help="Local Skill service YAML file.")
+
+
+def _add_direct_test_args(parser: argparse.ArgumentParser) -> None:
+    """Add inputs for a direct environment test."""
+    _add_config_args(parser)
+    _add_env_arg(parser)
+    skill_source = parser.add_mutually_exclusive_group()
+    skill_source.add_argument("--no-skill", action="store_true", help="Run without any Skills.")
+    skill_source.add_argument("--skills", type=Path, nargs="+", help="Inject these static Skill paths together.")
+    parser.add_argument("--samples", type=Path, help="Override the data loader with a task/reward_data JSON array.")
+    parser.add_argument("--split-file", type=Path)
+    parser.add_argument("--split")
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--concurrency", type=int)
+
+
+def run_skill_command(args: argparse.Namespace) -> int:
+    """Execute the selected Skill command and report expected input or runtime failures.
 
     Args:
-        args: Parsed arguments from add_skill_args.
+        args: Parsed Skill command and its options.
 
     Returns:
-        Zero for complete results; one for preflight, runtime, or incomplete outcomes.
+        The command's exit status, or one when execution raises an input or runtime error.
     """
     try:
-        if args.skill_command == "evolve":
-            from .config import SkillEvolveConfig
-            from .evolve import prepare
-            from .evolve import run as run_evolve
-
-            payload = yaml.safe_load(args.config.expanduser().read_text(encoding="utf-8"))
-            if args.output_dir is not None:
-                payload["output_dir"] = args.output_dir
-            config = SkillEvolveConfig.model_validate(payload)
-            if args.check:
-                _, samples, skills = prepare(config)
-                print(f"Prepared {len(samples)} cases; {sum(len(items) for items in skills.values())} initial Skills.", flush=True)
-                return 0
-            summary = asyncio.run(run_evolve(config))
-            print(f"Report: {summary['output_dir']}/report.md", flush=True)
-            return int(summary["errors"] > 0)
-        if args.skill_command == "treeskill":
-            from .treeskill import prepare
-            from .treeskill import run as run_treeskill
-
-            payload = yaml.safe_load(args.config.read_text())
-            if args.env is not None:
-                payload["environment"] = {**payload.get("environment", {}), "class_name": args.env}
-            if args.output_dir is not None:
-                payload["output_dir"] = args.output_dir
-            config = TreeSkillEvalConfig.model_validate(payload)
-            if args.check:
-                _, pools, _ = prepare(config)
-                print(
-                    f"Prepared {config.environment.class_name}: {len(pools['train'])} train / {len(pools['test'])} test."
-                )
-                if config.environment.class_name == "spreadsheetbench_text_action":
-                    print(f"Reference inputs aligned: max_turns=100; recalculation=true; concurrency={config.concurrency}.")
-                return 0
-            summary = asyncio.run(run_treeskill(config))
-            print(summary.model_dump_json(indent=2), flush=True)
-            return int(summary.errors > 0)
-        if args.skill_command == "envs":
-            print("\n".join(Environment.registered_types()), flush=True)
-            return 0
-        if args.skill_command == "test":
-            payload = yaml.safe_load(args.config.expanduser().read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("Test configuration must be a YAML object")
-            if args.env is not None:
-                payload["environment"] = {**payload.get("environment", {}), "class_name": args.env}
-            if args.no_skill:
-                payload["skills"] = []
-            elif args.skills is not None:
-                payload["skills"] = args.skills
-            if args.samples is not None:
-                payload.update(samples_file=args.samples, data=None)
-            overrides = {
-                "split_file": args.split_file,
-                "split": args.split,
-                "limit": args.limit,
-                "concurrency": args.concurrency,
-                "output_dir": args.output_dir,
-            }
-            payload.update({key: value for key, value in overrides.items() if value is not None})
-            summary = asyncio.run(run_test(EnvTestConfig.model_validate(payload)))
-            print(summary.model_dump_json(indent=2), flush=True)
-            print(f"Report: {summary.trajectory_file.parent.parent / 'report.md'}", flush=True)
-            return int(summary.errors > 0)
-        if args.skill_command == "report":
-            report = read_report(args.run_dir)
-            write_report(report, report.output_dir)
-        else:
-            options = RunOptions(
-                benchmark=args.benchmark,
-                algorithm=args.algorithm,
-                smoke=args.smoke,
-                test_repeats=args.test_repeats,
-                arms=args.arms.split(","),
-                data_root=args.data_root,
-                output_dir=args.output_dir,
-            )
-            report = asyncio.run(run(load_config(args.config), options))
-        from mindmemos_skill.common.json import read_json
-
-        print(f"Report: {report.output_dir / 'report.md'}", flush=True)
-        return int(read_json(report.output_dir / "summary.json")["incomplete"])
-    except (ValueError, OSError, RuntimeError, TypeError, yaml.YAMLError) as exc:
+        return args.handler(args)
+    except (ValueError, OSError, RuntimeError, yaml.YAMLError) as exc:
         print(f"Evaluation failed: {exc}", flush=True)
         return 1

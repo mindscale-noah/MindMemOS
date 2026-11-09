@@ -7,20 +7,12 @@ from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
-from mindmemos_skill.api import create_service
 from mindmemos_skill.api.typing import FileSkillInfo, RegisterFromLocalRequest, TrainingRequest, TrainingSplit
 from mindmemos_skill.common.json import write_json
 from mindmemos_skill.common.secrets import redact_credentials
 from mindmemos_skill.common.skill_runtime import load_runtime_skill
 from mindmemos_skill.common.skill_versions import snapshot_from_version
-from mindmemos_skill.config.config import (
-    FastAPIConfig,
-    HttpAuthConfig,
-    ImplementationConfig,
-    PersistenceConfig,
-    ServiceConfig,
-    SkillConfig,
-)
+from mindmemos_skill.config.config import ImplementationConfig, ServiceConfig
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.builtin_envs.alfworld_bounded_history.config import ALFWorldConfig
 from mindmemos_skill.envs.builtin_envs.alfworld_bounded_history.simulator import Simulator
@@ -35,7 +27,8 @@ from .config import ROOT, EvalConfig, RunOptions
 from .data import load_dataset
 from .evaluation import evaluate, read_pipeline_test
 from .report import write_report
-from .typing import ArmResult, BenchmarkName, BenchmarkReport, DatasetInputs, SuiteReport
+from .service import open_skill_service
+from .typing import ArmResult, BenchmarkReport, DatasetInputs, SuiteReport
 
 
 async def _check_runtime(inputs: DatasetInputs) -> None:
@@ -101,16 +94,8 @@ async def _run_skill_forest(
         return
 
     project_id = f"eval-{uuid4().hex}"
-    state = directory / "state"
     service_config = ServiceConfig(
-        home=state,
-        persistence=PersistenceConfig(
-            database=ImplementationConfig(
-                class_name="sqlite",
-                config={"url": f"sqlite+aiosqlite:///{state / 'skills.db'}"},
-            )
-        ),
-        repository_pipeline=ImplementationConfig(class_name="repository"),
+        home=directory / "state",
         training_pipelines={
             "skill_forest": ImplementationConfig(
                 class_name="training",
@@ -121,12 +106,7 @@ async def _run_skill_forest(
             )
         },
     )
-    async with await create_service(
-        SkillConfig(
-            service=service_config,
-            fastapi=FastAPIConfig(auth=HttpAuthConfig(mode="none", default_project_id=project_id)),
-        )
-    ) as service:
+    async with open_skill_service(service_config, project_id) as service:
         registered = await service.register_from_local(
             RegisterFromLocalRequest(
                 project_id=project_id,
@@ -181,14 +161,14 @@ async def _run_skill_forest(
 
 
 async def run(config: EvalConfig, options: RunOptions) -> SuiteReport:
-    """Validate the whole selected suite before executing fresh benchmark runs.
+    """Validate the selected benchmark and run its requested conditions.
 
     Args:
         config: Validated shared models, native forest, and environment settings.
-        options: Supported command options including scope and requested conditions.
+        options: Selected benchmark and execution options.
 
     Returns:
-        Suite results with explicit failures; reports are written automatically.
+        Results with explicit failures; reports are written automatically.
 
     Raises:
         ValueError: Output directory is nonempty or any selected preflight check fails.
@@ -207,20 +187,17 @@ async def run(config: EvalConfig, options: RunOptions) -> SuiteReport:
         try:
             model.require_connection()
         except ValueError as exc:
-            errors.append(f"models.{label} in config/mindmemos_eval/dev.yaml: {exc}")
-    datasets: dict[BenchmarkName, DatasetInputs] = {}
-    for benchmark in options.selected_benchmarks():
-        print(f"Checking {benchmark} inputs and runtime", flush=True)
-        try:
-            inputs = await asyncio.to_thread(load_dataset, benchmark, options.data_root, root / benchmark, config)
-            if options.smoke:
-                inputs.splits = {
-                    name: samples[: 4 if name == "train" else 2] for name, samples in inputs.splits.items()
-                }
-            await _check_runtime(inputs)
-            datasets[benchmark] = inputs
-        except Exception as exc:
-            errors.append(f"{benchmark}: {type(exc).__name__}: {exc}")
+            errors.append(f"models.{label} in config/mindmemos_eval/skill_train_skill_forest/dev.yaml: {exc}")
+    benchmark = options.benchmark
+    directory = root / benchmark
+    print(f"Checking {benchmark} inputs and runtime", flush=True)
+    try:
+        inputs = await asyncio.to_thread(load_dataset, benchmark, options.data_root, directory, config)
+        if options.smoke:
+            inputs.splits = {name: samples[: 4 if name == "train" else 2] for name, samples in inputs.splits.items()}
+        await _check_runtime(inputs)
+    except Exception as exc:
+        errors.append(f"{benchmark}: {type(exc).__name__}: {exc}")
     if errors:
         write_json(root / "diagnostics.json", {"errors": errors})
         raise ValueError("Evaluation preflight failed:\n" + "\n".join(errors))
@@ -241,27 +218,19 @@ async def run(config: EvalConfig, options: RunOptions) -> SuiteReport:
                     "environment": redact_credentials(inputs.environment.model_dump(mode="json")),
                     "splits": {name: [sample.task.id for sample in samples] for name, samples in inputs.splits.items()},
                 }
-                for benchmark, inputs in datasets.items()
             },
         },
     )
-    suite = SuiteReport(
-        output_dir=root,
-        smoke=options.smoke,
-        benchmarks=[BenchmarkReport(benchmark=name) for name in options.selected_benchmarks()],
-    )
-    for report in suite.benchmarks:
-        directory = root / report.benchmark
-        directory.mkdir(parents=True, exist_ok=True)
-        write_json(
-            directory / "initial_skill.json", Skill.from_path(datasets[report.benchmark].initial_skill).snapshot()
-        )
-        print(f"Running {report.benchmark}: {', '.join(options.arms)}", flush=True)
-        try:
-            await _run_skill_forest(config, options, datasets[report.benchmark], directory, report)
-        except Exception as exc:
-            report.error = f"{type(exc).__name__}: {exc}"
-        finally:
-            write_json(directory / "results.json", report)
-            write_report(suite, root)
-    return suite
+    report = BenchmarkReport(benchmark=benchmark)
+    results = SuiteReport(output_dir=root, smoke=options.smoke, benchmarks=[report])
+    directory.mkdir(parents=True, exist_ok=True)
+    write_json(directory / "initial_skill.json", Skill.from_path(inputs.initial_skill).snapshot())
+    print(f"Running {benchmark}: {', '.join(options.arms)}", flush=True)
+    try:
+        await _run_skill_forest(config, options, inputs, directory, report)
+    except Exception as exc:
+        report.error = f"{type(exc).__name__}: {exc}"
+    finally:
+        write_json(directory / "results.json", report)
+        write_report(results, root)
+    return results

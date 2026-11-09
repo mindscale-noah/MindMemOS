@@ -1,13 +1,14 @@
 """Exercise matched evolution evaluation without model calls."""
 
-from contextlib import asynccontextmanager
-
 import pytest
-from mindmemos_eval.skills import evolve
+from mindmemos_eval.cli import main
+from mindmemos_eval.skills import evolve, service
 from mindmemos_eval.skills.config import SkillEvolveConfig
-from mindmemos_skill.common.json import write_json
+from mindmemos_skill.api.typing import EvolutionPublishedSkill, EvolutionRunResult, RegisterResult
+from mindmemos_skill.common.json import read_json, write_json
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.typing import Reward, RolloutResult, Usage
+from mindmemos_skill.skill import Skill, SkillContent, decode_resources
 from pydantic import BaseModel
 
 
@@ -50,34 +51,61 @@ class FakeService:
         self.skills = {}
         self.reports = []
 
-    async def register(self, skill, alias):
-        self.skills[alias] = skill
-        return dict(skill_id=alias, skill_version_id=alias)
+    async def __aenter__(self):
+        return self
 
-    async def report(self, version_id, messages, session_id):
-        self.reports.append((version_id, messages))
+    async def __aexit__(self, *exc):
+        return False
 
-    async def evolve(self, registrations):
+    async def register_skill(self, request):
+        source = request.skill
+        skill = Skill(
+            SkillContent(
+                content=source.content,
+                resources=decode_resources(source.resources),
+                name=source.name,
+                description=source.description,
+                standard_format=source.standard_format,
+            )
+        )
+        self.skills[request.alias] = skill
+        snapshot = skill.snapshot()
+        return RegisterResult(
+            skill_id=request.alias,
+            skill_version_id=request.alias,
+            content_hash=snapshot.content_hash,
+            skill_hash=snapshot.skill_hash,
+        )
+
+    async def report_trajectory(self, request):
+        self.reports.append((request.skill_version_id, request.messages))
+
+    async def run_evolution(self, request):
+        assert request.pipeline == "offline"
+        assert request.auto_accept is False
         if self.mode == "fail":
             raise RuntimeError("fixture evolution failure")
-        return [
-            dict(
-                skill_id=item["skill_id"],
-                version_id="new",
-                base_version_id=item["skill_version_id"],
-                action="unchanged" if self.mode == "unchanged" else "updated",
-                snapshot=(
-                    self.skills[item["skill_id"]]
-                    if self.mode == "unchanged"
-                    else self.skills[item["skill_id"]].with_content(
-                        self.skills[item["skill_id"]].content + "\nImproved\n"
-                    )
+        members = []
+        for version_id in request.skill_version_ids:
+            skill = self.skills[version_id]
+            unchanged = self.mode == "unchanged"
+            candidate = skill if unchanged else skill.with_content(skill.content + "\nImproved\n")
+            members.append(
+                EvolutionPublishedSkill(
+                    key=version_id,
+                    skill_id=version_id,
+                    version_id="new",
+                    base_version_id=version_id,
+                    action="unchanged" if unchanged else "updated",
+                    snapshot=candidate.snapshot(),
                 )
-                .snapshot()
-                .model_dump(mode="json"),
             )
-            for item in registrations
-        ]
+        return EvolutionRunResult(
+            run_id="evolve_" + "0" * 32,
+            input_version_ids={version_id: version_id for version_id in request.skill_version_ids},
+            skills={member.skill_id: member.snapshot for member in members},
+            members=members,
+        )
 
 
 @pytest.fixture
@@ -86,6 +114,7 @@ def setup_run(tmp_path, monkeypatch):
     skill = tmp_path / "skill"
     skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: fixture\ndescription: Fixture skill\n---\nInitial\n")
+    (skill / "resource.bin").write_bytes(b"\x00\xff")
     samples = tmp_path / "samples.json"
     write_json(
         samples,
@@ -94,21 +123,58 @@ def setup_run(tmp_path, monkeypatch):
             for key in ("perfect", "zero", "timeout", "setup", "network")
         ],
     )
-    service = FakeService("updated")
-
-    @asynccontextmanager
-    async def connection(config, directory, project_id):
-        yield service
-
-    monkeypatch.setattr(evolve, "evolution_connection", connection)
+    fake_service = FakeService("updated")
+    service_config = tmp_path / "service.yaml"
+    write_json(
+        service_config,
+        {
+            "service": {
+                "home": str(tmp_path / "unused-service-home"),
+                "evolution_pipelines": {
+                    "offline": {
+                        "class_name": "offline_evolution",
+                        "config": {
+                            "work_dir": "unused-work-dir",
+                            "evolver": {"class_name": "offline_evolution"},
+                            "traj_collect": {"max_page_size": 23},
+                        },
+                    },
+                },
+            },
+            "fastapi": {"auth": {"mode": "none", "default_project_id": "unused"}},
+        },
+    )
     config = SkillEvolveConfig(
         environment={"class_name": "evolve_fixture"},
         samples_file=samples,
         skills=[skill],
         repeats=1,
+        service_config=service_config,
+        pipeline_overrides={"traj_collect": {"trajectory_limit": 5}},
         output_dir=tmp_path / "run",
     )
-    return config, service
+
+    async def create_service(deployment):
+        resources = deployment.service
+        assert resources.home == config.output_dir / "state"
+        options = resources.evolution_pipelines["offline"].config
+        assert options["work_dir"] == str(config.output_dir / "evolution_work")
+        assert options["traj_collect"] == {"max_page_size": 23, "trajectory_limit": 5}
+        return fake_service
+
+    monkeypatch.setattr(service, "create_service", create_service)
+    return config, fake_service
+
+
+def test_evaluate_evolve_check_prepares_selected_tasks(setup_run, tmp_path, capsys):
+    config, _ = setup_run
+    config_file = tmp_path / "evolve.yaml"
+    write_json(config_file, config)
+    assert (
+        main(["skill", "evaluate", "evolve", "--algo", "offline-evolv", "--config", str(config_file), "--check"]) == 0
+    )
+    assert "Prepared 5 cases" in capsys.readouterr().out
+    assert not config.output_dir.exists()
 
 
 @pytest.mark.asyncio
@@ -124,9 +190,15 @@ async def test_end_to_end_and_resume(setup_run):
     assert result["metrics"]["collect"]["mean_score"] == 0.25
     assert result["metrics"]["test"]["mean_score"] == 0.75
     assert len(service.reports) == 2
+    initial = Skill.from_path(config.skills[0])
+    assert all(skill.source == initial.source for skill in service.skills.values())
     previous = dict(FixtureEnvironment.calls)
+    config_path = config.output_dir / "config.json"
+    recorded = read_json(config_path)
+    write_json(config_path, {**recorded, "connection": "inprocess", "sdk_home": None, "poll_interval": 5})
     await evolve.run(config)
     assert FixtureEnvironment.calls == previous
+    assert read_json(config_path) == recorded
 
 
 @pytest.mark.asyncio
@@ -194,8 +266,8 @@ def test_request_errors_are_not_retried(error):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("step", ["register", "report"])
-async def test_evolution_retry_resumes_failed_step(setup_run, tmp_path, step):
+@pytest.mark.parametrize("step", ["register_skill", "report_trajectory"])
+async def test_evolution_retry_resumes_failed_step(setup_run, tmp_path, monkeypatch, step):
     config, service = setup_run
     config.cases = ["zero"]
     other = tmp_path / "second"
@@ -203,7 +275,7 @@ async def test_evolution_retry_resumes_failed_step(setup_run, tmp_path, step):
     (other / "SKILL.md").write_text("---\nname: second\ndescription: Second fixture\n---\nInitial\n")
     config.skills.append(other)
     calls = []
-    original = getattr(service, step)
+    original = service.register_skill if step == "register_skill" else service.report_trajectory
 
     async def flaky(*args):
         calls.append(args)
@@ -212,7 +284,7 @@ async def test_evolution_retry_resumes_failed_step(setup_run, tmp_path, step):
             raise RuntimeError(f"{step} failure")
         return await original(*args)
 
-    setattr(service, step, flaky)
+    monkeypatch.setattr(service, step, flaky)
     result = await evolve.run(config)
     assert result["cases"][0]["status"] == "evolved"
     assert len(calls) == 3
@@ -265,40 +337,6 @@ async def test_exhausted_network_errors_are_not_scored(setup_run):
     assert result["included_cases"] == 0
     assert result["metrics"]["collect"]["mean_score"] is None
     assert not service.reports
-
-
-@pytest.mark.asyncio
-async def test_simple_automatic_sample_size(setup_run, monkeypatch):
-    config, service = setup_run
-    config.cases = ["zero"]
-    config.pipeline = "simple"
-    observed = []
-
-    @asynccontextmanager
-    async def connection(settings, directory, project_id):
-        observed.append(settings.pipeline_overrides["traj_collect"]["sample_size"])
-        yield service
-
-    monkeypatch.setattr(evolve, "evolution_connection", connection)
-    await evolve.run(config)
-    assert observed == [1]
-    assert config.pipeline_overrides == {}
-
-
-@pytest.mark.asyncio
-async def test_simple_explicit_sample_size(setup_run, monkeypatch):
-    config, service = setup_run
-    config.cases = ["zero"]
-    config.pipeline = "simple"
-    config.pipeline_overrides = {"traj_collect": {"sample_size": 1}}
-
-    @asynccontextmanager
-    async def connection(settings, directory, project_id):
-        assert settings.pipeline_overrides["traj_collect"]["sample_size"] == 1
-        yield service
-
-    monkeypatch.setattr(evolve, "evolution_connection", connection)
-    await evolve.run(config)
 
 
 def test_optional_usage_preserves_cost_and_missing(tmp_path):
@@ -372,17 +410,17 @@ async def test_case_concurrency_and_stage_barriers(setup_run, monkeypatch, concu
             active.remove(sample.task.id)
             events.append(phase)
 
-    original_evolve = service.evolve
+    original_evolve = service.run_evolution
 
-    async def observed_evolve(registrations):
+    async def observed_evolve(request):
         assert not active
         assert events.count("collect") == 6
         assert events.count("test") == 0
         events.append("evolve")
-        return await original_evolve(registrations)
+        return await original_evolve(request)
 
     monkeypatch.setattr(evolve, "_slot", observed_slot)
-    monkeypatch.setattr(service, "evolve", observed_evolve)
+    monkeypatch.setattr(service, "run_evolution", observed_evolve)
     result = await evolve.run(config)
     assert maximum == {"collect": concurrency, "test": concurrency}
     assert [row["case"] for row in result["cases"]] == config.cases

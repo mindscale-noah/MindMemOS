@@ -20,14 +20,15 @@ TEMPLATES = (
     ".env.example",
     "config/mindmemos/dev.example.yaml",
     "config/mindmemos_skill/dev.example.yaml",
-    "config/mindmemos_eval/dev.example.yaml",
-    "config/mindmemos_eval/env_test/dev.example.yaml",
-    "config/mindmemos_eval/treeskill/dev.example.yaml",
+    "config/mindmemos_eval/skill_train_skill_forest/dev.example.yaml",
+    "config/mindmemos_eval/skill_test_direct/dev.example.yaml",
+    "config/mindmemos_eval/skill_train_treeskill/dev.example.yaml",
+    "config/mindmemos_eval/skill_graph_setting_1/dev.example.yaml",
     "config/presets/local.project.example.yaml",
 )
 """Required templates copied to corresponding local filenames."""
 
-EVAL_DIRECTORIES = ("config/mindmemos_eval/memory_evaluation", "config/mindmemos_eval/dreaming_evaluation")
+EVAL_DIRECTORIES = ("config/mindmemos_eval/memory_qa_matrix", "config/mindmemos_eval/memory_dreaming_vanilla")
 """Specific evaluation directories whose example configurations are initialized."""
 
 CHAT_API_KEY_ENV = "MINDMEMOS_CHAT_API_KEY"
@@ -205,7 +206,8 @@ def main() -> int:
         "\nNext, configure the key information in these files:\n"
         "Optional .env model defaults override corresponding fields in all local config YAML files.\n"
         "Fill unset model fields manually in config/.\n"
-        "- config/mindmemos_eval/dev.yaml: target and optimizer model names, API keys, and base URLs.\n"
+        "- config/mindmemos_eval/skill_train_skill_forest/dev.yaml: target and optimizer model names, "
+        "API keys, and base URLs.\n"
         "- config/mindmemos/dev.yaml and config/mindmemos_skill/dev.yaml: service model and storage connections.\n"
         "- config/presets/local.project.yaml: local project identity and credentials.\n"
         "- .env: required service settings and HF_TOKEN for gated Hugging Face datasets."

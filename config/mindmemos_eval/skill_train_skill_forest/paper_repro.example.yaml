@@ -1,4 +1,4 @@
-# Shared Skill evaluation settings for fresh in-process runs.
+# Seven-tree Skill-Forest evaluation. Set skill_forest.ensemble_strategy to select or hierarchical_merge.
 models:
   target:
     model: gpt-5.4-mini
@@ -19,7 +19,7 @@ models:
 skill_forest:
   validation_batch_size: 8
   selection_tiebreak: novelty
-  patch_application: exact
+  patch_application: reference
   num_trees: 7
   candidates_per_node: 3
   max_depth: 3
@@ -28,6 +28,22 @@ skill_forest:
   expansion_concurrency: 20
   rollout_concurrency: 20
   model_concurrency: 20
+  ensemble_strategy: select
+  train_ratio: 0.5
+  root_share_validation: true
+  root_share_train_trajectory: false
+  min_gain: 0.0
+  early_rejection: true
+  reflection_minibatch_size: 8
+  reflection_edit_budget: 4
+  merge_batch_size: 8
+  ranking_enabled: true
+  ranking_edit_budgets:
+  - 4
+  - 3
+  - 2
+  merge_threshold: 0.15
+  cleanup_workspaces: true
 evaluation_concurrency: 20
 environments:
   livemath: {}
@@ -44,3 +60,5 @@ environments:
     max_steps: 50
     history_length: 2
     seed: 42
+
+output_dir: null

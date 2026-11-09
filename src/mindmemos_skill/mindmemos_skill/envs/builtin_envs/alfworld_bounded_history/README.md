@@ -7,8 +7,7 @@ from the repository root with Python 3.12 or 3.13:
 uv run python scripts/download_datasets.py download skill --name alfworld
 ```
 
-The default destination is `data/mindmemos_skill/alfworld/`. The script uses the sources and pinned versions in
-`config/presets/dataset_download_sources.json`.
+The command downloads the pinned release to `data/mindmemos_skill/alfworld/` by default.
 The download includes the pinned ALFWorld 0.4.2 simulator configuration at
 `configs/base_config.yaml`; environment initialization reads this local file.
 If the dataset was downloaded before this file was included, use a new

@@ -10,7 +10,7 @@ from mindmemos_skill.common.json import read_json, write_json
 from mindmemos_skill.envs.typing import RolloutResult
 from pydantic import JsonValue
 
-from .typing import ArmResult, BenchmarkReport, EnvTestSummary, SuiteReport
+from .typing import BENCHMARKS, ArmResult, BenchmarkReport, EnvTestSummary, SuiteReport
 
 
 def _row(benchmark: BenchmarkReport, arm: ArmResult) -> dict[str, JsonValue]:
@@ -223,9 +223,15 @@ def read_report(run_dir: Path) -> SuiteReport:
     from .config import RunOptions
 
     directory = run_dir.expanduser().resolve()
-    options = RunOptions.model_validate(read_json(directory / "config.json")["options"])
+    saved_options = read_json(directory / "config.json")["options"]
+    legacy_suite = isinstance(saved_options, dict) and saved_options.get("benchmark") == "all"
+    if legacy_suite:
+        # Old suite outputs can still be aggregated without running any benchmarks.
+        saved_options.pop("benchmark")
+    options = RunOptions.model_validate(saved_options)
+    benchmarks = BENCHMARKS if legacy_suite else (options.benchmark,)
     reports = []
-    for benchmark in options.selected_benchmarks():
+    for benchmark in benchmarks:
         path = directory / benchmark / "results.json"
         if path.is_file():
             report = BenchmarkReport.model_validate(read_json(path))

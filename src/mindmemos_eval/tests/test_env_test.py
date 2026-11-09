@@ -81,7 +81,9 @@ def inputs(tmp_path):
 
 def test_no_skill_reports_six_requirements_and_keeps_errors_separate(inputs):
     config, _, output = inputs
-    assert main(["skill", "test", "--config", str(config), "--no-skill", "--output-dir", str(output)]) == 1
+    assert (
+        main(["skill", "evaluate", "direct", "--config", str(config), "--no-skill", "--output-dir", str(output)]) == 1
+    )
     summary = read_json(output / "summary.json")
     assert summary["mode"] == "no_skill"
     assert (summary["planned"], summary["attempted"], summary["completed"], summary["errors"]) == (3, 3, 2, 1)
@@ -111,7 +113,19 @@ def test_static_collection_runs_once_with_all_skills_and_exact_usage(inputs, tmp
         paths.append(str(directory))
     assert (
         main(
-            ["skill", "test", "--config", str(config), "--skills", *paths, "--limit", "2", "--output-dir", str(output)]
+            [
+                "skill",
+                "evaluate",
+                "direct",
+                "--config",
+                str(config),
+                "--skills",
+                *paths,
+                "--limit",
+                "2",
+                "--output-dir",
+                str(output),
+            ]
         )
         == 0
     )
@@ -138,7 +152,8 @@ def test_registered_data_loader_and_split_order(inputs, tmp_path):
         main(
             [
                 "skill",
-                "test",
+                "evaluate",
+                "direct",
                 "--config",
                 str(config),
                 "--split-file",
@@ -160,7 +175,9 @@ def test_registered_data_loader_and_split_order(inputs, tmp_path):
 def test_all_errors_and_unreported_usage_are_not_zero_usage(inputs, identifier):
     config, samples, output = inputs
     write_json(samples, [{"task": {"id": identifier, "instruction": "Answer"}, "reward_data": {}}])
-    assert main(["skill", "test", "--config", str(config), "--output-dir", str(output)]) == int(identifier == "error")
+    assert main(["skill", "evaluate", "direct", "--config", str(config), "--output-dir", str(output)]) == int(
+        identifier == "error"
+    )
     summary = read_json(output / "summary.json")
     assert summary["usage_missing"] == 1 and summary["total_tokens"] is None
     if identifier == "error":
@@ -170,13 +187,13 @@ def test_all_errors_and_unreported_usage_are_not_zero_usage(inputs, identifier):
 def test_modes_are_mutually_exclusive(inputs):
     config, _, _ = inputs
     with pytest.raises(SystemExit):
-        main(["skill", "test", "--config", str(config), "--no-skill", "--skills", "a"])
+        main(["skill", "evaluate", "direct", "--config", str(config), "--no-skill", "--skills", "a"])
 
 
 @pytest.mark.parametrize("override", [["--limit", "0"], ["--concurrency", "0"], ["--env", "unregistered"]])
 def test_bad_options_fail_before_output(inputs, override):
     config, _, output = inputs
-    assert main(["skill", "test", "--config", str(config), "--output-dir", str(output), *override]) == 1
+    assert main(["skill", "evaluate", "direct", "--config", str(config), "--output-dir", str(output), *override]) == 1
     assert not output.exists()
 
 
@@ -184,12 +201,12 @@ def test_existing_output_is_not_overwritten(inputs):
     config, _, output = inputs
     output.mkdir()
     (output / "keep").write_text("original")
-    assert main(["skill", "test", "--config", str(config), "--output-dir", str(output)]) == 1
+    assert main(["skill", "evaluate", "direct", "--config", str(config), "--output-dir", str(output)]) == 1
     assert (output / "keep").read_text() == "original"
 
 
 def test_env_listing_uses_registry(capsys):
-    assert main(["skill", "envs"]) == 0
+    assert main(["skill", "show", "envs"]) == 0
     assert "eval_cli_offline" in capsys.readouterr().out
 
 
@@ -208,7 +225,8 @@ def test_legacy_skill_body_excludes_frontmatter(inputs, tmp_path):
         main(
             [
                 "skill",
-                "test",
+                "evaluate",
+                "direct",
                 "--config",
                 str(config),
                 "--skills",

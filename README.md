@@ -442,18 +442,18 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 
 ### Dataset downloads
 
-Use the shared downloader for both benchmark groups (Python 3.12+; install `huggingface_hub` for Hugging Face sources):
+Run `scripts/download_datasets.py` from the repository root to list datasets and download pinned releases for either benchmark group.
 
 ```bash
-python scripts/download_datasets.py list memory
-python scripts/download_datasets.py list skill
-python scripts/download_datasets.py download memory --name locomo
-python scripts/download_datasets.py download skill --name spreadsheetbench
+uv sync --all-packages
+uv run --no-sync python scripts/download_datasets.py list memory
+uv run --no-sync python scripts/download_datasets.py list skill
+uv run --no-sync python scripts/download_datasets.py download memory --name locomo
+uv run --no-sync python scripts/download_datasets.py download skill --name spreadsheetbench
 ```
 
-Memory datasets: `locomo`, `personamem` (v1), `memoryagentbench` (all four official partitions),
-and `longmemeval` (official cleaned release). Sources and pinned revisions are in
-[`config/presets/dataset_download_sources.json`](config/presets/dataset_download_sources.json).
+Memory datasets include `locomo`, `personamem` (v1), `memoryagentbench` (all four official partitions),
+and `longmemeval` (official cleaned release).
 Downloads go to `data/mindmemos_memory/<dataset>/` or `data/mindmemos_skill/<dataset>/`;
 use `--data-root` to change the parent directory and `--verify-only` on `download` to verify existing files.
 Set evaluation config paths to these downloaded files. Official formats are preserved; MemoryAgentBench
@@ -513,10 +513,10 @@ After preparing dependencies, model settings, and data, start with a smoke test:
 
 ```bash
 uv run --no-sync python scripts/download_datasets.py download skill --name livemath
-uv run --no-sync mindmemos-eval skill run --smoke
+uv run --no-sync mindmemos-eval skill evaluate train --algo skill-forest --smoke
 ```
 
-Model and concurrency settings live in `config/mindmemos_eval/dev.yaml`, created by `make init`. Skill evaluation creates an isolated local Service in the evaluation process; it does not require a Memory API or Skill HTTP API. A smoke test checks a small workflow and does not establish benchmark performance. See the [evaluation guide](docs/eval/README.md) for full commands, environment requirements, and reports.
+Model and concurrency settings live in `config/mindmemos_eval/skill_train_skill_forest/dev.yaml`, created by `make init`. Skill-Forest evaluation creates an isolated local service in the evaluation process; it does not require a Memory API or Skill HTTP API. A smoke test checks a small workflow and does not establish benchmark performance. See the [Skill evaluation guide](docs/evaluation/skill_evaluation.md#skill-forest) for full commands, environment requirements, and reports.
 
 ## Documentation
 
@@ -528,7 +528,7 @@ Model and concurrency settings live in `config/mindmemos_eval/dev.yaml`, created
 | Integrate the Python SDK and independent Skill API | [SDK guide](src/mindmemos_sdk/README.md) |
 | Manage, train, and evolve local Skills or add an environment | [Local Skill guide](docs/skill/user-guide.md) |
 | Use the local Web workbench | [UI guide](docs/mindmemos_ui/usage.md) |
-| Download datasets and reproduce Memory or Skill evaluations | [Evaluation guide](docs/eval/README.md) |
+| Download datasets and reproduce Memory or Skill evaluations | [Memory evaluation](docs/evaluation/memory_evaluation.md) · [Skill evaluation](docs/evaluation/skill_evaluation.md) |
 
 ## 🗺️ Coming Features
 

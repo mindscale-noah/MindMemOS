@@ -1,16 +1,16 @@
-"""Verify HTTP submission naming and honest export of native TreeSkill test results."""
-
-from types import SimpleNamespace
+"""Verify local submission naming and honest export of native TreeSkill test results."""
 
 import pytest
+from mindmemos_eval.cli import main
 from mindmemos_eval.skills import treeskill
 from mindmemos_eval.skills.config import TreeSkillEvalConfig
+from mindmemos_skill.api.service import SkillService
+from mindmemos_skill.api.typing import AlgoSkillEvolveResult
 from mindmemos_skill.common.checkpoint import boundary
 from mindmemos_skill.common.json import read_json, read_jsonl, write_json
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.data import DataSample, RewardData
 from mindmemos_skill.envs.typing import Reward, RolloutResult, Task, Usage
-from mindmemos_skill.skill import Skill
 from pydantic import BaseModel
 
 
@@ -69,88 +69,87 @@ async def test_export_separates_execution_errors_from_unstarted_and_zero_reward(
 
 
 @pytest.mark.asyncio
-async def test_http_run_uses_named_registration_and_service_test(monkeypatch, tmp_path):
+async def test_local_run_uses_named_registration_and_service_test(monkeypatch, tmp_path, capsys):
     source = tmp_path / "initial"
     source.mkdir()
     (source / "SKILL.md").write_text("---\nname: xlsx\ndescription: Sheets.\n---\nOriginal body.\n")
     config = TreeSkillEvalConfig(
-        reference_run=tmp_path / "reference",
         service_config=tmp_path / "service.yaml",
-        sdk_home=tmp_path / "sdk",
         data_root=tmp_path,
         split_file=tmp_path / "split.json",
         initial_skill=source,
         output_dir=tmp_path / "run",
         concurrency=16,
+        poll_interval=1,
     )
-    reference_algorithm = {
-        "seed": 41,
-        "rollout_concurrency": 32,
-        "analysis_concurrency": 32,
-        "localization_concurrency": 32,
-    }
-    write_json(config.reference_run / "training/train/config.json", {"algorithm": reference_algorithm})
+    write_json(config.split_file, {"train": ["train"], "test": ["0", "1", "2"]})
     monkeypatch.setattr(
         treeskill,
-        "prepare",
-        lambda config: (
-            StubEnvironment(StubConfig()),
-            {"train": samples()[:1], "val": [], "test": samples()},
-            Skill.from_path(source),
-        ),
+        "_load_samples",
+        lambda config, env: [
+            DataSample(task=Task(id="train", instruction="Task"), reward_data=RewardData()),
+            *samples(),
+        ],
     )
-    monkeypatch.setattr(
-        treeskill.ConfigManager,
-        "load",
-        lambda self: SimpleNamespace(
-            resolve_skill_connection=lambda: ("http://service", "test-key"), network=SimpleNamespace(timeout_seconds=10)
-        ),
-    )
-    calls = {}
-
-    class Transport:
-        def __init__(self, **kwargs):
-            calls["connection"] = kwargs
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
-    class Client:
-        def __init__(self, transport):
-            pass
-
-        async def register(self, request):
-            calls["registration"] = request
-            return {"skill_id": "family", "skill_version_id": "initial"}
-
-        async def train(self, request):
-            calls["training"] = request
-            for i in range(3):
-                complete(config.output_dir, i, i != 1)
-            write_json(
-                config.output_dir / "training/train/config.json",
-                {
-                    "algorithm": {
-                        **reference_algorithm,
-                        "rollout_concurrency": 16,
-                        "analysis_concurrency": 16,
-                        "localization_concurrency": 16,
+    monkeypatch.setattr(Environment, "resolve", lambda name: StubEnvironment)
+    write_json(
+        config.service_config,
+        {
+            "service": {
+                "home": str(tmp_path / "unused-service-home"),
+                "training_pipelines": {
+                    config.profile: {
+                        "class_name": "training",
+                        "config": {
+                            "trainer": {
+                                "class_name": "treeskill",
+                                "config": {
+                                    "optimizer": {"model": "fixture"},
+                                    "router": {"model": "fixture"},
+                                    "rollout_concurrency": 16,
+                                    "analysis_concurrency": 16,
+                                    "localization_concurrency": 16,
+                                },
+                            },
+                            "evaluation_concurrency": 16,
+                        },
                     }
                 },
-            )
-            return {"task_id": "task", "project_id": "ui-project", "status": "queued"}
+            },
+            "fastapi": {"auth": {"mode": "none", "default_project_id": "unused"}},
+        },
+    )
+    config_file = tmp_path / "treeskill.yaml"
+    write_json(config_file, config)
+    assert main(["skill", "evaluate", "train", "--algo", "tree-skill", "--config", str(config_file), "--check"]) == 0
+    assert "1 train / 3 test" in capsys.readouterr().out
+    assert not config.output_dir.exists()
 
-        async def task_progress(self, request):
-            return []
+    calls = {}
+    register_skill = SkillService.register_skill
 
-        async def show_task(self, request):
-            return {"task_id": "task", "status": "succeeded", "result": {"version_id": "trained"}}
+    async def register(self, request):
+        calls["registration"] = request
+        return await register_skill(self, request)
 
-    monkeypatch.setattr(treeskill, "AsyncHttpTransport", Transport)
-    monkeypatch.setattr(treeskill, "AsyncSkillClient", Client)
+    async def train(self, request):
+        calls["training"] = request
+        for i in range(3):
+            complete(config.output_dir, i, i != 1)
+        registered = await self.get_skill_version(request.init_skill_version_id, request.project_id)
+        return AlgoSkillEvolveResult(
+            skill_id=registered.skill_id,
+            base_version_id=registered.version_id,
+            version_id="trained",
+            run_id="fixture",
+            content=registered.content,
+            resources={},
+            content_hash="content",
+            skill_hash="skill",
+        )
+
+    monkeypatch.setattr(SkillService, "register_skill", register)
+    monkeypatch.setattr(SkillService, "_run_training", train)
     summary = await treeskill.run(config)
     registered = calls["registration"]
     assert registered.alias.startswith("xlsx-mindmemos-eval-")
@@ -161,6 +160,8 @@ async def test_http_run_uses_named_registration_and_service_test(monkeypatch, tm
     assert calls["training"].env.class_name == "spreadsheetbench_text_action"
     assert summary.completed == 3 and summary.success_rate == 2 / 3
     assert read_json(config.output_dir / "task.json")["result"]["version_id"] == "trained"
+    assert (config.output_dir / "state/skills.db").is_file()
+    assert not (tmp_path / "unused-service-home").exists()
 
 
 @pytest.mark.asyncio
@@ -172,14 +173,7 @@ async def test_export_rejects_task_order_drift(tmp_path):
         )
 
 
-def test_protocol_keeps_model_and_sampling_settings():
-    assert treeskill._protocol({"api_key": "secret", "base_url": "private", "model": "qwen", "temperature": 0.7}) == {
-        "model": "qwen",
-        "temperature": 0.7,
-    }
-
-
-def test_other_registered_environment_prepares_without_reference(tmp_path, capsys):
+def test_other_registered_environment_prepares(tmp_path):
     source = tmp_path / "initial"
     source.mkdir()
     (source / "SKILL.md").write_text("---\nname: math\ndescription: Math.\n---\nSolve the task.\n")
@@ -200,8 +194,20 @@ def test_other_registered_environment_prepares_without_reference(tmp_path, capsy
         tmp_path / "service.yaml",
         {
             "service": {
-                "training_pipelines": {"treeskill_mindmemos_eval": {"config": {"trainer": {"class_name": "treeskill"}}}}
-            }
+                "home": str(tmp_path),
+                "training_pipelines": {
+                    "treeskill_mindmemos_eval": {
+                        "class_name": "training",
+                        "config": {
+                            "trainer": {
+                                "class_name": "treeskill",
+                                "config": {"optimizer": {"model": "fixture"}, "router": {"model": "fixture"}},
+                            }
+                        },
+                    }
+                },
+            },
+            "fastapi": {"auth": {"mode": "none", "default_project_id": "unused"}},
         },
     )
     config = TreeSkillEvalConfig(
@@ -210,9 +216,8 @@ def test_other_registered_environment_prepares_without_reference(tmp_path, capsy
         split_file=tmp_path / "split.json",
         initial_skill=source,
         service_config=tmp_path / "service.yaml",
-        sdk_home=tmp_path / "sdk",
     )
-    env, pools, skill = treeskill.prepare(config)
+    env, pools, skill, _ = treeskill.prepare(config)
     assert Environment.name_for(type(env)) == "livemath"
     assert {name: [sample.task.id for sample in values] for name, values in pools.items()} == {
         "train": ["0"],
@@ -220,12 +225,3 @@ def test_other_registered_environment_prepares_without_reference(tmp_path, capsy
         "test": ["2"],
     }
     assert skill.source.name == "math"
-    assert "no reference score guarantee" in capsys.readouterr().out
-
-
-def test_reference_protocol_restores_agent_defaults_without_ignoring_model_drift():
-    recorded = {"model": "qwen", "timeout_s": 600.0, "response_validation": "content"}
-    current = {"model": "qwen", "timeout_s": 600.0, "class_name": "openai_chat", "sdk_max_retries": 0}
-    assert treeskill._protocol(recorded) == treeskill._protocol(current)
-    assert treeskill._protocol(recorded) != treeskill._protocol({**current, "model": "different"})
-    assert treeskill._protocol({**recorded, "response_validation": "strict"}) != treeskill._protocol(current)

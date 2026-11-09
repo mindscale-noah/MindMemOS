@@ -2,248 +2,152 @@
 
 [English](instruction.md) | 简体中文
 
-本文说明如何本地拉起MindMemOS的记忆和Skill服务。
+从源码启动 Memory API、Skill API 和 Web 工作台。API 和 UI 在宿主机上以前台进程运行，Docker Compose 管理按需启动的存储、队列和监控组件。
 
-## 0. Overview：包与服务架构
+- [启动本地服务和 UI](#1-启动本地服务和-ui)
+- [部署 UI](#2-部署-ui)，随本地 API 启动，或单独连接官方服务和已有 API
+- [按需启动和管理](#3-按需启动和管理)，选择单个服务、减少依赖或分开启动
 
-MindMemOS 当前包含五个 Python 包。其中`mindmemos` 和 `mindmemos_skill` 分别提供 Memory 和 Skill 两个算法核心服务。SDK、评测工具和 UI 负责接入及使用这些服务。
+## 1. 启动本地服务和 UI
 
-### 0.1 包与功能
+以下命令均在仓库根目录运行。完整启动需要 Git、Make、uv、Python 3.11–3.13 和运行中的 Docker Compose；构建 UI 还需 Node.js 和 npm。仓库默认使用 Python 3.13。
 
-
-| 包 | 主要功能 |
-| --- | --- |
-| `src/mindmemos` | 提供 Memory 服务。支持记忆写入、检索、查询、修改、删除、反馈和记忆巩固（dreaming）。支持Fastapi方式部署和使用。 |
-| `src/mindmemos_skill` | 提供独立 Skill 服务。支持 Skill 注册、版本管理、轨迹保存、训练、自动演化、图组织和推荐。 支持fastapi和python直接调用。|
-| `src/mindmemos_sdk` | 提供接入Memory、Skill的fastapi服务的SDK接口和CLI命令，并支持管理服务连接地址、凭据和鉴权。 |
-| `src/mindmemos_eval` | 执行 Memory 和 Skill 评测，汇总评分、耗时和模型用量。服务调用通过 SDK 完成。 |
-| `src/mindmemos_ui` | 提供本机 Web 工作台，通过 SDK 调用对接 Memory 和 Skill 服务。支持 Memory管理和搜索，Skill 和图谱管理，动态 Skill 预览，以及 SDK 配置编辑。|
-
-### 0.2 服务启动后的架构
-
-| 层次 | 服务连接与职责 |
-| --- | --- |
-| 接入 | 业务应用通过 HTTP 或 SDK 调用两个 API。浏览器连接 UI，UI 后端通过 SDK 调用两个 API。默认地址为 Memory `:8000`、Skill `:8001`、UI `:8765`。 |
-| Memory 服务 | Memory API 执行记忆 pipeline，调用模型服务，并访问 Qdrant 和 Neo4j。Qdrant 提供向量存储与检索，Neo4j 保存图数据。 |
-| Skill 服务 | Skill API 执行版本管理、训练、演化和图管理流程。默认部署使用独立 PostgreSQL，保存 Skill 正文、辅助文件、版本和轨迹等数据。本地目录保存运行产物。单独使用 Python Service 时也可配置 SQLite。 |
-| 异步任务 | 两个服务使用同一套 Kafka 基础设施，各自处理任务消息。默认启动会启用相应消费者，Skill worker 随 Skill 服务启动。Worker 是任务执行组件，不是另一个 HTTP API。Kafka UI 用于查看消息。 |
-| 监控 | 两个服务将监控数据发送到 OpenTelemetry Collector，再写入 ClickHouse，由 Grafana 展示。Kafka Exporter 提供 Kafka 指标。 |
-| 外部能力 | 按配置连接 Chat、Embedding、可选的 Rerank 服务。Skill 训练还可能需要数据集、Agent 程序及任务环境依赖。 |
-
-两个服务各自管理业务数据，UI 不直接访问业务数据库。共享 Kafka 和监控组件不意味着共享业务存储。
-
-独立 Skill 服务可单独部署，不要求先启动 Memory API。
-
-
-### 0.3 与 MindMemOS 1.0 的服务架构差异
-
-1. 新增 skill 全链路算法能力。从原有的只支持 根据轨迹自动演化skill，变为支持skill训练、演化、组织的全流程算法。
-2. 独立部署、独立存储。对于只需要skill服务的用户，支持本地独立部署skill服务，支持自定义环境和数据在自己的场景下使用算法训练skill。
-3. 新增 UI 操作界面，支持切换对接 我们的官方服务和本地部署服务，方便记忆和Skill的查看、管理和编辑。
-4. 降低部署难度，配置env后可自动分发模型api到config，不再需要配置繁复的config文件；支持关闭kafka、otel监控等额外功能。
-
-
-## 1. 通过FastAPI启动服务
-
-我们建议使用FastAPI启动服务。同时考虑到Skill训练能力需要本地部署，`mindmemos_skill` 还提供代码访问服务（见xxx节）。
-
-### 1.1 软件与Python依赖
-
-部署前需要安装以下软件：
-- Git、Make 和 uv
-- Docker 和 Docker Compose
-- Node.js 和 npm，用于构建 UI
-
-安装全量Python依赖：
+### 1.1 安装依赖
 
 ```bash
 uv sync --all-packages --extra postgres --extra kafka
+export UV_NO_SYNC=1
 ```
 
-其中：
-- kafka负责记忆、Skill服务的异步任务管理
-- postgres为Skill服务的默认后端数据库
+`postgres` 对应 Skill 示例使用的 PostgreSQL，`kafka` 对应 Skill 的 Kafka 任务队列。`UV_NO_SYNC=1` 让当前终端的 Make 命令沿用已安装的依赖。换终端时重新设置，依赖变更后重新同步。部分 ALFWorld 依赖需要系统编译工具。macOS ARM64 上，安装 TextWorld 时需要允许挂载和卸载 Inform7 安装镜像。
 
 ### 1.2 初始化 & 填写配置文件
 
 ```bash
-cp .env.example .env
-```
-并填写必要的ENV信息，包括：
-
-| ENV 名字 | 用途 |
-| --- | --- |
-| `MINDMEMOS_CHAT_API_KEY` | Chat 模型提供商的 API key。 |
-| `MINDMEMOS_CHAT_BASE_URL` | Chat 模型 API 的 Base URL。 |
-| `MINDMEMOS_CHAT_MODEL` | Chat 模型名称，用于聊天、训练和测评中的聊天模型配置。 |
-| `MINDMEMOS_EMBEDDING_API_KEY` | Embedding 模型提供商的 API key。 |
-| `MINDMEMOS_EMBEDDING_BASE_URL` | Embedding 模型 API 的 Base URL。 |
-| `MINDMEMOS_EMBEDDING_MODEL` | Embedding 模型名称，用于生成文本向量。 |
-| `MINDMEMOS_EMBEDDING_DIMENSIONS` | Embedding 输出维度，必须为正整数；配置任意 Embedding 参数时必填，同时用于设置 Qdrant 的 `vector_size`。 |
-| `MINDMEMOS_RERANK_API_KEY` | Rerank 模型提供商的 API key（可选）。 |
-| `MINDMEMOS_RERANK_BASE_URL` | Rerank API 的完整端点地址，按提供商要求填写（可选）。 |
-| `MINDMEMOS_RERANK_MODEL` | Rerank 模型名称，用于对召回结果重新排序（可选）。 |
-
-执行以下命令从模板生成具体的配置脚本：
-
-```bash
+test -f .env || cp .env.example .env
+# 如需共用模型连接，先编辑 .env，再初始化。
 make init
 ```
 
-该命令会从 `.example` 模板创建缺失的本地文件。已有文件不重新复制；随后会将 `.env` 中非空的模型参数写入 `config/` 下所有实际 YAML 配置，包括已有文件、Memory/Skill 服务、训练和测评配置。`.example.yaml` 模板保留公开示例值。
+`make init` 从示例生成缺失的本地文件。它把 `.env` 中非空的模型参数写入 `config/` 下匹配的现有字段，包括服务、训练和评测配置。留空的变量保留 YAML 原值。对缺少的字段或需要不同供应商的模型，直接补充各自的 YAML。再次执行 `make init` 会重新应用这些非空参数。
 
-如果没有配置 CHAT、EMBEDDING、RERANK模型，或需要配置多种API供应商，需要在生成的config文件里自行添加。
+| 模型 | API key | 地址 | 模型名 | 输出维度 |
+| --- | --- | --- | --- | --- |
+| Chat | `MINDMEMOS_CHAT_API_KEY` | `MINDMEMOS_CHAT_BASE_URL` | `MINDMEMOS_CHAT_MODEL` | — |
+| Embedding | `MINDMEMOS_EMBEDDING_API_KEY` | `MINDMEMOS_EMBEDDING_BASE_URL` | `MINDMEMOS_EMBEDDING_MODEL` | `MINDMEMOS_EMBEDDING_DIMENSIONS` |
+| Rerank | `MINDMEMOS_RERANK_API_KEY` | `MINDMEMOS_RERANK_BASE_URL` | `MINDMEMOS_RERANK_MODEL` | — |
 
-额外依赖：
+填写任一 Embedding 环境变量时，输出维度必须是正整数。初始化会更新匹配的 Embedding 维度及 Qdrant 的 `vector_size`。Rerank 地址填写供应商要求的完整端点。
 
-- `HF_TOKEN`：数据集下载脚本访问 Hugging Face 上的受限（gated）或私有数据集时使用的访问令牌。登录 Hugging Face，在 [Access Tokens](https://huggingface.co/settings/tokens) 中创建具有目标数据集读取权限的令牌，将完整值填入 `.env`，例如 `HF_TOKEN=hf_...`。受限数据集还需要先在数据集页面接受使用条款或申请访问权限；令牌本身不会授予数据集访问资格。下载允许匿名访问的公开数据集时可留空。详见 [Hugging Face 令牌说明](https://huggingface.co/docs/hub/security-tokens)。
-- `SPREADSHEETBENCH_SOFFICE_PATH`：指定 LibreOffice 的 `soffice` 可执行文件，用于 SpreadsheetBench 启用公式重算时重新计算工作簿并保存公式结果缓存。取值为可执行文件的绝对路径，不是安装目录；只在需要重算的任务中使用。
+启动前检查对应文件：
 
-安装 LibreOffice：macOS 可从 [LibreOffice 官网](https://www.libreoffice.org/installation-instructions/) 下载对应芯片架构的安装包，将应用安装到 `/Applications`；Ubuntu/Debian 可执行 `sudo apt update && sudo apt install libreoffice-calc`。
+- `config/mindmemos/dev.yaml`。补齐使用的模型连接，确认 Embedding 的实际输出维度与配置及 `database.qdrant.vector_size` 一致。
+- `config/mindmemos_skill/dev.yaml`。检查存储配置，并为要使用的图管理、训练或演化流程补齐模型连接及凭据。
+- `config/presets/local.project.yaml`。把 `projects.<项目名>.api_key` 中的占位值改成自己的服务 API key。已有数据时保留项目 ID。需要通过 UI 读写两项服务时，所选项目需包含 `memory:read`、`memory:write`、`skill:read`、`skill:write`。
 
-安装后，在 `.env` 中填写当前系统的实际路径，例如：
+模型供应商的 key 用于服务调用模型，项目 API key 用于客户端调用 MindMemOS。数据库、端口和容器配置见 [Docker 配置说明](../../dockers/README.md)。训练或评测额外依赖见[任务环境与数据](#任务环境与数据)。
 
-```dotenv
-# macOS
-SPREADSHEETBENCH_SOFFICE_PATH=/Applications/LibreOffice.app/Contents/MacOS/soffice
-# Linux 常见路径（与上面的 macOS 配置二选一）
-# SPREADSHEETBENCH_SOFFICE_PATH=/usr/bin/soffice
-```
-
-Linux 可通过 `command -v soffice` 查找路径。执行 `"<soffice 的绝对路径>" --version`，确认能输出 LibreOffice 版本。该变量留空时，程序会尝试查找打包的 LibreOffice、PATH 中的 `soffice` 和常见安装路径；填写绝对路径后，无需再将 `soffice` 加入 PATH。
-
-### 1.3 准备 NLP 和 UI 资源
-
-配置文件准备完成后，安装并检查 NLP 模型：
+### 1.3 构建并启动
 
 ```bash
 uv run --no-sync python scripts/install_nlp_assets.py
 uv run --no-sync python scripts/check_nlp_assets.py
-```
-
-安装器读取 Memory 配置中的 spaCy 模型名称。
-构建 UI：
-
-```bash
 make ui-build
-```
-
-注意：`make dev` 启动命令不执行 UI 构建。缺少前端资源时，UI 页面可能无法打开。
-
-### 1.4 启动部署
-
-执行：
-
-```bash
+make dev PLAN=1
 make dev
 ```
 
-该命令等价于：
+NLP 资源供 Memory 使用。若只运行 Skill，可跳过两条 NLP 命令。`make ui-build` 将前端产物写入 UI Python 包的 `static/` 目录。启动器直接使用该目录，前端源码有变更或本地缺少产物时需要重新构建。
+
+`PLAN=1` 校验配置并显示服务地址和容器列表。等待实际启动输出 `Development services ready`，再打开 [Web 工作台](http://127.0.0.1:8765)。
+
+| 服务 | 默认入口 | 健康检查 |
+| --- | --- | --- |
+| Memory | [API 文档](http://127.0.0.1:8000/docs) | [`/healthz`](http://127.0.0.1:8000/healthz) |
+| Skill | [API 文档](http://127.0.0.1:8001/docs) | [`/health`](http://127.0.0.1:8001/health) |
+| UI | [工作台](http://127.0.0.1:8765) | 打开页面，确认可加载 **Settings** |
+| Kafka UI | [消息和消费者](http://127.0.0.1:8080) | — |
+| Grafana | [监控面板](http://127.0.0.1:3000) | — |
+
+`make dev` 默认启用两个 API、UI、Kafka 任务和 OTLP 监控。Memory 使用 Qdrant 和 Neo4j，Skill 示例使用独立的 PostgreSQL。启动器按最终配置的连接地址选择本地容器。
+
+## 2. 部署 UI
+
+### 随本地 API 启动
+
+默认鉴权模式下，`make dev` 和 `make api UI=1` 会把本次启动的 API 地址和项目凭据写入 `.mindmemos/settings.json`。用 `UI_HOME` 指定其他配置目录。用 `PROJECT=<项目名>` 覆盖项目文件中的 `default_project`。两个 API 仍接受项目文件中各自有权访问的项目凭据。
+
+### 连接官方服务或已有 API
+
+已有 Python 依赖时，直接从构建步骤开始。仅运行 UI 的新环境可以按下方命令安装：
 
 ```bash
-make dev SERVICE=all FEATURE=all UI=1
+uv sync --package mindmemos-ui --inexact
+make ui-build
+UV_NO_SYNC=1 make ui
 ```
 
-启动内容如下：
-
-| 类别 | 内容 |
-| --- | --- |
-| Python 服务 | Memory API、Skill API、UI |
-| Memory 存储 | Qdrant、Neo4j |
-| Skill 存储 | PostgreSQL，由 Skill 的数据库配置决定 |
-| 异步任务 | Kafka、Kafka UI，Skill 同时启用任务 worker |
-| 监控 | OpenTelemetry Collector、ClickHouse、Grafana、Kafka Exporter |
-
-### 1.5 检查服务并停止
-
-默认地址如下。修改端口后，使用启动计划中的实际地址。
-
-| 服务 | 地址 |
-| --- | --- |
-| Memory 健康检查 | `http://127.0.0.1:8000/healthz` |
-| Memory API 文档 | `http://127.0.0.1:8000/docs` |
-| Skill 健康检查 | `http://127.0.0.1:8001/health` |
-| Skill API 文档 | `http://127.0.0.1:8001/docs` |
-| UI | `http://127.0.0.1:8765` |
-| Kafka UI | `http://127.0.0.1:8080` |
-| Grafana | `http://127.0.0.1:3000` |
-
-在另一个终端检查健康状态：
+`make ui` 只启动工作台，读取现有的 SDK 配置。它默认使用仓库中的 `.mindmemos/`，也可以通过 `UI_HOME` 或 `MINDMEMOS_HOME` 指定配置目录。要隔离不同环境的连接，可为每个环境使用独立目录。例如：
 
 ```bash
-curl -f http://127.0.0.1:8000/healthz
-curl -f http://127.0.0.1:8001/health
-make status
+UV_NO_SYNC=1 make ui UI_HOME="$PWD/.mindmemos/cloud" UI_PORT=8865
 ```
 
-健康检查通过只说明服务已响应。用配置的模型执行一次业务请求，才能检查模型连接。
-停止方式如下：
+打开 [工作台](http://127.0.0.1:8765)，或使用启动时输出的地址，进入 **Settings → SDK configuration**。
 
-| 操作 | 结果 |
-| --- | --- |
-| 前台终端按 `Ctrl+C` | 停止此次启动的 API 和 UI，保留运行中的容器 |
-| `make stop` | 停止工作区管理的应用和当前 Compose 项目的容器，保留数据 |
-| `make clean` | 确认后删除当前 Compose 项目的 Docker 数据卷及其中的数据 |
+- **MindMemOS** 使用官方服务地址。填入官方 API key，Memory 和 Skill 共用该凭据。
+- **Self-hosted** 填写已有 Memory API 的根地址和服务 API key。连接独立 Skill API 时，另填 Skill 根地址和对应凭据。Skill 地址留空时复用 Memory 的地址和凭据。只连接独立 Skill 时，Memory key 可以留空。
 
+点击 **Save configuration**，在侧栏 **Service availability** 查看状态。**Available** 表示健康接口已响应。打开 **Memories** 或 **Skills** 加载列表，验证业务凭据与权限。模型连接需通过实际调用模型的业务请求验证。
 
-#### 1.6 精简部署范围
+UI 固定监听 `127.0.0.1`，供运行 UI 的机器本地访问。UI 后端通过 SDK 连接配置的 API。
 
-全量部署依赖Kafka、OpenTelemtry、Clickhouse等异步任务管理、监控等功能，本地部署可简化。我们同样提供部署范围控制：
+## 3. 按需启动和管理
 
+### 选择服务和功能
 
-| 参数 | 值 | Memory | Skill |
+`SERVICE=all|memory|skill` 默认选中两个服务。Skill API 可以单独启动。下表适用于 `make dev`、`make docker` 和 `make api`。
+
+| `FEATURE` | Memory 任务 | Skill 任务 | OTLP 监控 |
 | --- | --- | --- | --- |
-| `SERVICE` | `all` | 启动 Memory API | 启动 Skill API |
-| `SERVICE` | `memory` | 启动 Memory API | 不启动 Skill API |
-| `SERVICE` | `skill` | 不启动 Memory API | 启动 Skill API |
-| `FEATURE` | `core` | 启用同步功能；关闭 Kafka 异步任务和 OTLP 导出 | 启用同步功能和本地异步任务管理；关闭 Kafka 和 OTLP 导出 |
-| `FEATURE` | `async` | 启用同步功能和 Kafka 异步任务；关闭 OTLP 导出 | 启用同步功能和 Kafka 异步任务管理；关闭 OTLP 导出 |
-| `FEATURE` | `all` | 启用同步功能、Kafka 异步任务和 OTLP 导出 | 启用同步功能、Kafka 异步任务管理和 OTLP 导出 |
-| `UI` | `0`、`1` | 关闭或启动共用 UI；`make dev` 默认启动 | 关闭或启动共用 UI；`make dev` 默认启动 |
-
-切换 `FEATURE` 不会修改 `config/` 中的原始 YAML 文件，只会生成临时 YAML，供服务启动时读取。临时配置位于操作系统临时目录下的 `mindmemos-dev-<随机字符>/memory.yaml` 和 `mindmemos-dev-<随机字符>/skill.yaml`，具体路径每次启动都会变化，启动器退出后会清理该目录。
-
-`FEATURE` 在运行配置中进行以下调整：
-
-- `core`：关闭 Kafka，关闭 OTLP 监控数据导出。此时 Memory 服务只支持同步接口，Skill 服务采用 Python 原生异步任务管理。
-- `async`：启用 Kafka 异步任务，关闭 OTLP 监控数据导出。
-- `all`：启用 Kafka 异步任务，开启 OTLP 监控数据导出。此时可以通过 Grafana 面板监控 Memory 和 Skill 服务日志。
-
-常用命令如下：
+| `core` | 同步 | 本地异步 | 关闭 |
+| `async` | 同步 + Kafka 异步 | Kafka | 关闭 |
+| `all`（默认） | 同步 + Kafka 异步 | Kafka | 开启 |
 
 ```bash
-# 两个 API、UI；Memory 同步功能，Skill 本地异步任务。
-make dev SERVICE=all FEATURE=core
-
-# 仅 Memory API，不启动 UI。
-make dev SERVICE=memory FEATURE=core UI=0
-
-# 仅 Skill API，不启动 UI。
-make dev SERVICE=skill FEATURE=core UI=0
-
-# 两个 API 和异步任务，不启动 OTLP 监控。
-make dev SERVICE=all FEATURE=async
+make dev SERVICE=skill FEATURE=core         # Skill API 和 UI
+make dev SERVICE=memory FEATURE=core UI=0   # Memory API，关闭 UI
 ```
 
-一次只执行一个启动命令。切换范围前，先执行 `make stop`。
-较小的启动范围不会自动停止以前启动的额外容器。
+`UI=0` 或 `UI=1` 可覆盖 `make dev` 和 `make api` 的 UI 默认值。选项覆盖写入启动时使用的临时配置，源 YAML 保留原值。
 
-### 2.2 分开启动容器、API 和 UI
-
-先启动同步功能所需的容器：
+### 分开启动或使用已有基础设施
 
 ```bash
-make docker SERVICE=all FEATURE=core
+make docker FEATURE=core             # 仅启动所需的本地容器
+make api FEATURE=core UI=1           # 使用相同范围启动 API，并自动配置 UI
 ```
 
-再启动 API：
+`make api` 要求依赖已就绪，默认只启动 API。使用外部数据库、Kafka 或 OTLP 时，在 YAML 或 `.env` 填写连接地址；启动器只为本机回环地址选择容器。使用 `SERVICE_AUTH=1` 保留各服务 YAML 中的鉴权设置，并在 UI 的 **Settings** 中单独配置连接。
 
-```bash
-make api SERVICE=all FEATURE=core
-```
+| 参数 | 用途 |
+| --- | --- |
+| `API_PORT`、`SKILL_PORT`、`UI_PORT` | 覆盖应用端口 |
+| `MEMORY_CONFIG`、`SKILL_CONFIG` | 指定服务 YAML |
+| `PROJECT_CONFIG` | 指定本地项目 YAML |
+| `API_RELOAD=1`、`SKILL_RELOAD=1` | 开发时开启 API 热重载 |
 
-最后，在另一个终端启动 UI：
+### 查看状态和停止
 
-```bash
-make ui
-```
+- `make status` 查看受管理的应用、地址和容器。
+- `Ctrl+C` 停止当前终端启动的 API 和 UI，保留容器。
+- `make stop` 停止受管理的应用和当前 Compose 项目的容器，保留数据。需要缩小启动范围时先执行它，再用新参数启动。
+- `make clean` 在确认后删除当前 Compose 项目的 Docker 数据卷。日常重启使用 `make stop`。
+
+## 任务环境与数据
+
+训练和评测按任务准备数据集、Agent 程序及系统依赖。下载 Hugging Face 受限数据前，先取得数据集访问权限，再把读取令牌填入 `.env` 的 `HF_TOKEN`。下载和运行命令见 [Skill 评测指南](../evaluation/skill_evaluation_ZH.md)。
+
+SpreadsheetBench 启用公式重算时需要 LibreOffice。macOS 可安装到 `/Applications`，Ubuntu/Debian 可运行 `sudo apt install libreoffice-calc`。可在 `.env` 中将 `SPREADSHEETBENCH_SOFFICE_PATH` 设为 `soffice` 的绝对路径，例如 `/Applications/LibreOffice.app/Contents/MacOS/soffice` 或 `/usr/bin/soffice`。运行该可执行文件的 `--version` 确认安装。
+
+直接从 Python 使用 Skill 时，参见 [Skill 服务文档](../../src/mindmemos_skill/README.md)。

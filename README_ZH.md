@@ -441,18 +441,18 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 
 ### 数据集下载
 
-skill 和 memory 共用下载入口（Python 3.12+；Hugging Face 来源需安装 `huggingface_hub`）：
+从仓库根目录运行 `scripts/download_datasets.py`，列出数据集并按需下载固定版本。
 
 ```bash
-python scripts/download_datasets.py list memory
-python scripts/download_datasets.py list skill
-python scripts/download_datasets.py download memory --name locomo
-python scripts/download_datasets.py download skill --name spreadsheetbench
+uv sync --all-packages
+uv run --no-sync python scripts/download_datasets.py list memory
+uv run --no-sync python scripts/download_datasets.py list skill
+uv run --no-sync python scripts/download_datasets.py download memory --name locomo
+uv run --no-sync python scripts/download_datasets.py download skill --name spreadsheetbench
 ```
 
-memory 包括 `locomo`、`personamem`（v1）、`memoryagentbench`（官方四个数据分区）和
-`longmemeval`（官方 cleaned 版本）。官方来源与固定 revision 集中在
-[`config/presets/dataset_download_sources.json`](config/presets/dataset_download_sources.json)。
+Memory 数据集包括 `locomo`、`personamem`（v1）、`memoryagentbench`（官方四个数据分区）和
+`longmemeval`（官方 cleaned 版本）。
 默认下载到 `data/mindmemos_memory/<dataset>/` 或 `data/mindmemos_skill/<dataset>/`；
 可用 `--data-root` 指定父目录，在 `download` 后加 `--verify-only` 校验已有文件。
 评测配置需指向下载后的文件。下载保留官方格式，MemoryAgentBench 为 Parquet，使用当前评测器的
@@ -511,10 +511,10 @@ memory 包括 `locomo`、`personamem`（v1）、`memoryagentbench`（官方四�
 
 ```bash
 uv run --no-sync python scripts/download_datasets.py download skill --name livemath
-uv run --no-sync mindmemos-eval skill run --smoke
+uv run --no-sync mindmemos-eval skill evaluate train --algo skill-forest --smoke
 ```
 
-模型与并发配置位于 `config/mindmemos_eval/dev.yaml`，由 `make init` 创建。Skill 测评使用进程内隔离的本地 Service，无需启动 Memory API 或 Skill HTTP API。冒烟测试只检查小规模流程，不能作为正式效果结论；完整测评命令、环境依赖和报告说明见[评测指南](docs/eval/README_ZH.md#skill-forest-五基准测评)。
+模型与并发配置位于 `config/mindmemos_eval/skill_train_skill_forest/dev.yaml`，由 `make init` 创建。Skill-Forest 测评使用进程内隔离的本地服务，无需启动 Memory API 或 Skill HTTP API。冒烟测试只检查小规模流程，不能作为正式效果结论；完整测评命令、环境依赖和报告说明见[Skill 评测指南](docs/evaluation/skill_evaluation_ZH.md#skill-forest)。
 
 ## 文档导航
 
@@ -526,7 +526,7 @@ uv run --no-sync mindmemos-eval skill run --smoke
 | 接入 Python SDK 与独立 Skill API | [SDK 文档](src/mindmemos_sdk/README.md) |
 | 本地管理、训练和演化 Skill，接入自定义环境 | [Skill 本地使用指南](docs/skill/user-guide.md) |
 | 使用本机 Web 工作台 | [UI 使用说明](docs/mindmemos_ui/usage.md) |
-| 下载数据、复现 Memory 或 Skill 测评 | [评测指南](docs/eval/README_ZH.md) |
+| 下载数据、复现 Memory 或 Skill 测评 | [Memory 评测](docs/evaluation/memory_evaluation_ZH.md) · [Skill 评测](docs/evaluation/skill_evaluation_ZH.md) |
 
 ## 🗺️ Coming Features
 

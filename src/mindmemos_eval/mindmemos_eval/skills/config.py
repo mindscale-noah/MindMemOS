@@ -5,13 +5,14 @@ from typing import Literal, Self
 
 import yaml
 from mindmemos_skill.agents import OpenAIChatConfig
+from mindmemos_skill.agents.buitin_agents.claude.config import ClaudeConfig
 from mindmemos_skill.algos.train.skill_forest.config import ForestOptimizerConfig, SkillForestTrainerConfig
 from mindmemos_skill.config.config import ImplementationConfig
 from mindmemos_skill.envs import Environment
 from mindmemos_skill.envs.config import EnvironmentConfig
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from .typing import BENCHMARKS, ArmName, BenchmarkName
+from .typing import ArmName, BenchmarkName
 
 ROOT = Path(__file__).resolve().parents[4]
 """Repository containing committed resources and the default shared configuration."""
@@ -24,6 +25,47 @@ ENVIRONMENT_NAMES = {
     "officeqa": "officeqa",
 }
 """Explicit benchmark-to-environment selections; no eval registration mechanism."""
+
+
+class SkillGraphAccuracyConfig(BaseModel):
+    """Configure the AgentSkillOS execution arm of the Skill Graph benchmark."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Reject unsupported experiment settings."""
+
+    benchmark_root: Path
+    """Original AgentSkillOS checkout containing task assets and evaluator code."""
+
+    agent: ClaudeConfig
+    """Tool-using executor and model connection for the Setting 1 arm."""
+
+    execution_top_k: int = Field(default=5, ge=1)
+    """Maximum number of ranked Skills injected per task."""
+
+    concurrency: int = Field(default=1, ge=1)
+    """Maximum simultaneous task executions."""
+
+
+class SkillGraphRunOptions(BaseModel):
+    """Resolve inputs shared by the Skill Graph evaluation modes."""
+
+    env: Literal["agentskillos"] = "agentskillos"
+    """Registered environment supported by both Skill Graph modes."""
+
+    eval_mode: Literal["retrieval", "accuracy"]
+    """Score rankings against labels or score executed tasks."""
+
+    tasks_dir: Path | None = None
+    """Original task JSON directory used for retrieval scoring."""
+
+    skills_dir: Path
+    """Skill packages to index and rank."""
+
+    service_config: Path = ROOT / "config/mindmemos_skill/dev.yaml"
+    """Local Skill service configuration for indexing and retrieval."""
+
+    output_dir: Path
+    """Fresh directory for the graph, rankings, and results."""
 
 
 class ModelConfig(BaseModel):
@@ -56,6 +98,9 @@ class EvalConfig(BaseModel):
 
     environments: dict[BenchmarkName, dict[str, JsonValue]] = Field(default_factory=dict)
     """Native environment overrides keyed by benchmark; unknown fields are rejected."""
+
+    output_dir: Path | None = Field(default=None, exclude=True)
+    """YAML output directory. The run records the resolved path in RunOptions."""
 
     @model_validator(mode="after")
     def validate_implementations(self) -> Self:
@@ -108,8 +153,8 @@ class RunOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     """Reject unsupported execution modes."""
 
-    benchmark: BenchmarkName | Literal["all"] = "livemath"
-    """Selected benchmark or the fixed five-benchmark suite."""
+    benchmark: BenchmarkName = "livemath"
+    """Dataset used for training and held-out evaluation."""
 
     algorithm: Literal["skill_forest"] = "skill_forest"
     """Only currently implemented algorithm."""
@@ -136,20 +181,13 @@ class RunOptions(BaseModel):
             raise ValueError("arms must be unique")
         return self
 
-    def selected_benchmarks(self) -> tuple[BenchmarkName, ...]:
-        """Return the ordered selected suite.
 
-        Returns:
-            All five benchmarks or the single requested benchmark.
-        """
-        return BENCHMARKS if self.benchmark == "all" else (self.benchmark,)
-
-
-def load_config(path: Path) -> EvalConfig:
+def load_config(path: Path, *, output_dir: Path | None = None) -> EvalConfig:
     """Read one shared YAML configuration.
 
     Args:
         path: Configuration path relative to the caller or absolute.
+        output_dir: CLI output directory override, if supplied.
 
     Returns:
         Validated model, forest, and environment options.
@@ -158,7 +196,28 @@ def load_config(path: Path) -> EvalConfig:
         OSError: The file cannot be read.
         ValueError: YAML or native configuration validation fails.
     """
-    return EvalConfig.model_validate(yaml.safe_load(path.expanduser().read_text(encoding="utf-8")))
+    payload = read_evaluation_yaml(path)
+    if output_dir is not None:
+        payload["output_dir"] = output_dir
+    return EvalConfig.model_validate(payload)
+
+
+def read_evaluation_yaml(path: Path) -> dict[str, object]:
+    """Read an evaluation YAML file as a field mapping.
+
+    Args:
+        path: Evaluation configuration file.
+
+    Returns:
+        YAML keys and values for the selected evaluator's config model.
+
+    Raises:
+        ValueError: The YAML root is not a mapping.
+    """
+    payload = yaml.safe_load(path.expanduser().read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected a YAML mapping in {path}")
+    return payload
 
 
 class EnvTestConfig(BaseModel):
@@ -231,16 +290,10 @@ class SkillEvolveConfig(EnvTestConfig):
     repeats: int = Field(default=3, ge=1)
     """Independent executions per task and comparison arm."""
 
-    connection: Literal["inprocess", "sdk"] = "inprocess"
-    """Use isolated SQLite storage or an existing SDK service connection."""
-
     service_config: Path = ROOT / "config/mindmemos_skill/dev.yaml"
     """Existing service configuration supplying agents and evolution profiles."""
 
-    sdk_home: Path | None = None
-    """SDK configuration directory; None uses the SDK default."""
-
-    pipeline: Literal["offline", "simple"] = "offline"
+    pipeline: Literal["offline"] = "offline"
     """Evolution profile selected from the service configuration."""
 
     pipeline_overrides: dict[str, JsonValue] = Field(default_factory=dict)
@@ -258,9 +311,6 @@ class SkillEvolveConfig(EnvTestConfig):
     reference_file: Path | None = None
     """Optional per-task baseline and offline-evolution reference scores."""
 
-    poll_interval: float = Field(default=5, ge=1)
-    """Seconds between SDK task status reads."""
-
     @model_validator(mode="after")
     def validate_evolution(self) -> Self:
         """Reject ambiguous task selection and unsupported source transformations."""
@@ -274,15 +324,15 @@ class SkillEvolveConfig(EnvTestConfig):
 
 
 class TreeSkillEvalConfig(BaseModel):
-    """Submit registered environments to TreeSkill through the UI's Skill service."""
+    """Evaluate TreeSkill through an isolated local Skill service."""
 
     model_config = ConfigDict(extra="forbid")
-    """Reject unsupported protocol overrides."""
+    """Reject unknown evaluation options."""
 
     environment: ImplementationConfig = Field(
         default_factory=lambda: ImplementationConfig(class_name="spreadsheetbench_text_action", config={})
     )
-    """Registered environment; text_action defaults are restored from the reference run."""
+    """Registered environment and its local execution settings."""
 
     data: ImplementationConfig | None = None
     """Registered loader for other environments; exclusive with samples_file."""
@@ -290,35 +340,26 @@ class TreeSkillEvalConfig(BaseModel):
     samples_file: Path | None = None
     """Native task/reward_data JSON array for other environments, instead of a loader."""
 
-    reference_run: Path | None = None
-    """Completed 61-percent experiment whose recorded inputs define alignment."""
-
-    reference_optimizer_model: str = Field(default="qwen3.5-35b-a3b", min_length=1)
-    """Owner-confirmed historical optimizer model, redacted in the saved trainer config."""
-
     service_config: Path
     """Local Skill service configuration containing the dedicated training profile."""
-
-    sdk_home: Path
-    """SDK configuration directory shared with the UI, including project authentication."""
 
     data_root: Path | None = None
     """Verified 400 release directory containing dataset.json and spreadsheet files."""
 
     split_file: Path
-    """Ordered train/val/test IDs; text_action requires the exact reference split."""
+    """Ordered train/val/test task IDs from the chosen benchmark split."""
 
     initial_skill: Path
-    """Initial static Skill checked against the reference training input."""
+    """Initial static Skill used to start fresh training."""
 
     profile: str = "treeskill_mindmemos_eval"
-    """Configured server training profile; its trainer must be treeskill."""
+    """Configured local training profile; its trainer must be treeskill."""
 
     concurrency: int = Field(default=32, ge=1)
     """Explicit worker limit for rollout, analysis, localization and held-out evaluation."""
 
     poll_interval: float = Field(default=5, ge=1, le=60)
-    """Seconds between persisted HTTP task progress reads."""
+    """Seconds between local task progress reads."""
 
     output_dir: Path | None = None
-    """Empty local directory also accessible at the same absolute path by the server."""
+    """Empty local directory for the evaluation and its service state."""

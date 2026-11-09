@@ -1,278 +1,153 @@
-# MindMemOS deployment guide
+# MindMemOS Deployment Guide
 
 English | [简体中文](instruction_ZH.md)
 
-This guide starts local services from the repository root. Python services run on the host. Docker Compose manages databases and monitoring components.
-`make dev` manages service processes in the foreground. This guide does not configure public access, a reverse proxy, or a background system service.
+Run the Memory API, Skill API, and web workbench from source. The APIs and UI run in the foreground on the host. Docker Compose runs the storage, queue, and monitoring components selected by the launcher.
 
-## 1. Start all features with `make dev`
+- [Start local services with the UI](#1-start-local-services-with-the-ui)
+- [Deploy the UI](#2-deploy-the-ui) with local APIs or on its own against MindMemOS Cloud or existing APIs
+- [Select and manage services](#3-select-and-manage-services) to run a single API, reduce dependencies, or start components separately
 
-The default command starts Memory API, Skill API, and UI. It also enables Kafka tasks and OTLP monitoring.
-The launcher selects local containers from the configured connection addresses. Remote connections do not cause the launcher to create those containers.
+## 1. Start local services with the UI
 
-### 1.1 Prepare software and Python dependencies
+Run these commands from the repository root. A full startup requires Git, Make, uv, Python 3.11–3.13, and a running Docker engine with Docker Compose. Building the UI requires Node.js and npm. The repository defaults to Python 3.13.
 
-Prepare these tools:
-
-- Git, Make, and uv.
-- Python 3.11–3.13. The repository selects 3.13 through `.python-version` by default.
-- Docker and Docker Compose. Start the Docker engine.
-- Node.js and npm for the UI build.
-- System build tools. Some ALFWorld dependencies require native compilation.
-
-On macOS ARM64, the TextWorld build mounts and unmounts an Inform7 installer image. Allow the installation process to do these operations.
-The project includes a runtime patch for TextWorld 1.7.0 on Python 3.13.
-
-Install dependencies from the repository root:
+### 1.1 Install dependencies
 
 ```bash
 uv sync --all-packages --extra postgres --extra kafka
+export UV_NO_SYNC=1
 ```
 
-The root `uv.lock` manages workspace dependencies. All Python services use the root `.venv`.
-Skill includes FastAPI and Python packages for its built-in environments in the default dependencies. Only `postgres` and `kafka` are optional extras.
-The Skill example selects PostgreSQL. All features require Kafka, so this command includes both extras.
+The `postgres` extra supports the Skill example's PostgreSQL database. The `kafka` extra supports Skill's Kafka task queue. Set `UV_NO_SYNC=1` in each terminal that runs Make commands so they use the installed extras. Sync again after dependencies change. Some ALFWorld dependencies require native build tools. On macOS ARM64, allow the TextWorld installer to mount and unmount the Inform7 disk image.
 
 ### 1.2 Initialize local configuration
 
-Run this command:
-
 ```bash
+test -f .env || cp .env.example .env
+# Edit .env before initialization to share model settings.
 make init
 ```
 
-Initialization copies `.example` templates to missing local files. Existing files are not recopied. It then applies nonempty model settings from `.env` to all actual YAML configurations under `config/`, including existing files, Memory/Skill services, training, and evaluation. `.example.yaml` templates retain public example values.
+`make init` creates missing local files from the examples. It copies nonempty model settings from `.env` into matching fields already present in YAML under `config/`, including service, training, and evaluation configs. Empty variables keep the YAML values. Fill missing fields and provider-specific settings in the relevant YAML. Running `make init` again reapplies the nonempty settings.
 
-To share model connections, create `.env`, fill the optional settings below, and initialize:
-
-```bash
-cp .env.example .env  # Only when .env does not exist
-# Edit .env and fill the optional model settings below
-make init
-```
-
-| Model type | API key | Base URL | Model name | Output dimensions |
+| Model | API key | URL | Model name | Output dimensions |
 | --- | --- | --- | --- | --- |
 | Chat | `MINDMEMOS_CHAT_API_KEY` | `MINDMEMOS_CHAT_BASE_URL` | `MINDMEMOS_CHAT_MODEL` | — |
 | Embedding | `MINDMEMOS_EMBEDDING_API_KEY` | `MINDMEMOS_EMBEDDING_BASE_URL` | `MINDMEMOS_EMBEDDING_MODEL` | `MINDMEMOS_EMBEDDING_DIMENSIONS` |
 | Rerank | `MINDMEMOS_RERANK_API_KEY` | `MINDMEMOS_RERANK_BASE_URL` | `MINDMEMOS_RERANK_MODEL` | — |
 
-Each nonempty setting replaces its corresponding fields. Empty or undefined settings preserve the YAML values; fill them manually in `config/`. Any Embedding setting requires a positive integer dimension. Initialization updates every embedding `dimensions` field and Qdrant `vector_size`. Base URLs are copied verbatim into `base_url` or `api_base`; provide the complete rerank endpoint required by your provider.
+If you set any Embedding variable, supply a positive integer output dimension. Initialization updates matching Embedding dimensions and Qdrant's `vector_size`. Use the full endpoint required by your Rerank provider.
 
-Run `make init` again after editing `.env` to replace all corresponding fields with the new values. Chat settings apply to every chat model block, including training optimizers, routers, and evaluation targets. To use different models, edit the YAML files after initialization and avoid overwriting them again with shared `.env` settings. Initialization retains YAML comments, other settings, and local connections, and does not print model credentials.
+Check the files for the services you will run.
 
-Check these deployment files:
+- In `config/mindmemos/dev.yaml`, complete the model connections you use. Match the actual Embedding output dimensions to the model configuration and `database.qdrant.vector_size`.
+- In `config/mindmemos_skill/dev.yaml`, check storage and fill in model connections and credentials for the graph management, training, or evolution pipelines you use.
+- In `config/presets/local.project.yaml`, replace the placeholders in `projects.<name>.api_key` with your own service API keys. Keep existing project IDs to retain access to their data. To read and write through both APIs in the UI, select a project with `memory:read`, `memory:write`, `skill:read`, and `skill:write`.
 
-| File | Required settings |
-| --- | --- |
-| `.env` | Database addresses, ports, passwords, and monitoring connections |
-| `config/mindmemos/dev.yaml` | Chat, Embedding, and Rerank model names, API keys, and addresses |
-| `config/mindmemos_skill/dev.yaml` | Storage connections and model connections for enabled management, training, and evolution pipelines |
-| `config/presets/local.project.yaml` | Project IDs, service API keys, permissions, and the default project |
+The APIs use model provider keys to call models. Clients use project API keys to call MindMemOS. See the [Docker configuration guide](../../dockers/README.md) for database connections and ports, and [task environments and data](#task-environments-and-data) for training and evaluation prerequisites.
 
-`make init` also creates evaluation configuration files. Service startup does not require an evaluation run.
-
-Check these conditions when you configure models:
-
-1. Match the Memory embedding dimensions to `database.qdrant.vector_size`.
-2. Set the connection parameters in each enabled Skill model block.
-3. Configure local service API keys separately from model provider API keys.
-4. Give the default project these permissions: `memory:read`, `memory:write`, `skill:read`, and `skill:write`.
-5. Preserve existing project IDs to retain access to existing data.
-
-The default launcher reads all local projects. It creates temporary authentication files for both APIs.
-`default_project` selects the project for UI. `PROJECT=<name>` changes this selection without restricting the projects accepted by the APIs.
-The default UI configuration directory is `.mindmemos` in the repository root.
-
-Additional dependencies:
-
-- `HF_TOKEN`: The access token used by the dataset downloader for gated or private Hugging Face datasets. Sign in to Hugging Face, create a token with read access to the target dataset in [Access Tokens](https://huggingface.co/settings/tokens), and put its full value in `.env`, for example `HF_TOKEN=hf_...`. For gated datasets, first accept the terms or request access on the dataset page; a token alone does not grant dataset access. Leave it empty for public datasets that allow anonymous downloads. See the [Hugging Face token documentation](https://huggingface.co/docs/hub/security-tokens).
-- `SPREADSHEETBENCH_SOFFICE_PATH`: The absolute path to the LibreOffice `soffice` executable, used to recalculate workbooks and save cached formula results when SpreadsheetBench formula recalculation is enabled. Set an executable file path, not an installation directory. Tasks only need it when they use recalculation.
-
-Install LibreOffice: on macOS, download the installer for your processor architecture from the [LibreOffice website](https://www.libreoffice.org/installation-instructions/) and install the application in `/Applications`. On Ubuntu/Debian, run `sudo apt update && sudo apt install libreoffice-calc`.
-
-Then set the actual executable path in `.env`, for example:
-
-```dotenv
-# macOS
-SPREADSHEETBENCH_SOFFICE_PATH=/Applications/LibreOffice.app/Contents/MacOS/soffice
-# Common Linux path (use this instead of the macOS setting)
-# SPREADSHEETBENCH_SOFFICE_PATH=/usr/bin/soffice
-```
-
-On Linux, use `command -v soffice` to find the path. Run `"<absolute path to soffice>" --version` and confirm that it prints the LibreOffice version. If the variable is empty, the program searches for a packaged LibreOffice runtime, `soffice` on PATH, and common installation paths. An explicit absolute path does not require adding `soffice` to PATH.
-
-### 1.3 Prepare NLP and UI resources
-
-After you prepare configuration files, install and check NLP models:
+### 1.3 Build and start
 
 ```bash
 uv run --no-sync python scripts/install_nlp_assets.py
 uv run --no-sync python scripts/check_nlp_assets.py
-```
-
-The installer reads spaCy model names from Memory configuration.
-Build the UI:
-
-```bash
 make ui-build
-```
-
-`make dev` does not build the UI. The UI page may fail to open if frontend resources are missing.
-Before SpreadsheetBench tasks that require formula recalculation, install and configure LibreOffice as described in section 1.2.
-Prepare datasets and external evaluators separately. Service startup does not download all benchmark data.
-
-### 1.4 Check the plan and start services
-
-Preserve the selected dependencies in the current terminal:
-
-```bash
-export UV_NO_SYNC=1
 make dev PLAN=1
-```
-
-`UV_NO_SYNC=1` tells the Makefile's `uv run` to use the synchronized environment.
-Repeat the synchronization command in section 1.1 after dependency declarations change.
-`make setup` synchronizes dependencies, installs Git hooks, and prepares NLP models. After that command, synchronize the required extras again.
-
-`PLAN=1` checks configuration and shows the startup plan. It does not start containers or APIs, or test external connections and model calls.
-After you check the plan, start services:
-
-```bash
 make dev
 ```
 
-This command is equivalent to:
+The NLP assets are for Memory. Skip the two NLP commands when running only Skill. `make ui-build` writes the frontend bundle to the UI Python package's `static/` directory. The launcher uses that directory as-is. Rebuild before launching when assets are missing or the frontend has changed.
+
+`PLAN=1` validates configuration and lists application addresses and selected containers. On actual startup, wait for `Development services ready`, then open the [web workbench](http://127.0.0.1:8765).
+
+| Service | Default entry point | Health check |
+| --- | --- | --- |
+| Memory | [API docs](http://127.0.0.1:8000/docs) | [`/healthz`](http://127.0.0.1:8000/healthz) |
+| Skill | [API docs](http://127.0.0.1:8001/docs) | [`/health`](http://127.0.0.1:8001/health) |
+| UI | [Workbench](http://127.0.0.1:8765) | Open the page and load **Settings** |
+| Kafka UI | [Messages and consumers](http://127.0.0.1:8080) | — |
+| Grafana | [Dashboards](http://127.0.0.1:3000) | — |
+
+By default, `make dev` enables both APIs, the UI, Kafka tasks, and OTLP monitoring. Memory uses Qdrant and Neo4j. The Skill example uses a separate PostgreSQL database. The launcher selects local containers from the resolved connection settings.
+
+## 2. Deploy the UI
+
+### Start the UI with local APIs
+
+With the default authentication mode, `make dev` and `make api UI=1` write the started API addresses and project credentials to `.mindmemos/settings.json`. Set `UI_HOME` to use a different directory. Set `PROJECT=<name>` to override `default_project` in the project file. Both APIs still accept credentials for projects authorized to use them.
+
+### Connect to MindMemOS Cloud or existing APIs
+
+If you already have the Python dependencies, start with the build. For a fresh UI-only environment, run all three commands.
 
 ```bash
-make dev SERVICE=all FEATURE=all UI=1
+uv sync --package mindmemos-ui --inexact
+make ui-build
+UV_NO_SYNC=1 make ui
 ```
 
-With local example connections, the command starts these components:
-
-| Category | Components |
-| --- | --- |
-| Python services | Memory API, Skill API, UI |
-| Memory storage | Qdrant, Neo4j |
-| Skill storage | PostgreSQL, selected by Skill database configuration |
-| Asynchronous tasks | Kafka, Kafka UI, and the Skill task worker |
-| Monitoring | OpenTelemetry Collector, ClickHouse, Grafana, Kafka Exporter |
-
-The launcher waits for dependency ports and application health checks. Wait for `Development services ready` before you access services.
-
-### 1.5 Check services and stop them
-
-These addresses use default ports. If you change ports, use the addresses in the startup plan.
-
-| Service | Address |
-| --- | --- |
-| Memory health check | `http://127.0.0.1:8000/healthz` |
-| Memory API documentation | `http://127.0.0.1:8000/docs` |
-| Skill health check | `http://127.0.0.1:8001/health` |
-| Skill API documentation | `http://127.0.0.1:8001/docs` |
-| UI | `http://127.0.0.1:8765` |
-| Kafka UI | `http://127.0.0.1:8080` |
-| Grafana | `http://127.0.0.1:3000` |
-
-Check health from another terminal:
+`make ui` starts the workbench and reads the existing SDK configuration. It defaults to the repository's `.mindmemos/` directory. Set `UI_HOME` or `MINDMEMOS_HOME` to use another directory. Use separate directories to keep connections for different environments apart.
 
 ```bash
-curl -f http://127.0.0.1:8000/healthz
-curl -f http://127.0.0.1:8001/health
-UV_NO_SYNC=1 make status
+UV_NO_SYNC=1 make ui UI_HOME="$PWD/.mindmemos/cloud" UI_PORT=8865
 ```
 
-A successful health check means the service responds. Send a business request with the configured model to check its connection.
-Use these stop commands:
+Open the [workbench](http://127.0.0.1:8765) or use the address printed at startup, then go to **Settings → SDK configuration**.
 
-| Action | Result |
-| --- | --- |
-| Press `Ctrl+C` in the foreground terminal | Stop this session's APIs and UI, but keep containers running |
-| `UV_NO_SYNC=1 make stop` | Stop managed workspace applications and containers in the current Compose project, but preserve data |
-| `UV_NO_SYNC=1 make clean` | After confirmation, delete Docker volumes in the current Compose project and their data |
+- **MindMemOS** uses the official service URL. Enter your official API key. Memory and Skill share the credential.
+- **Self-hosted** uses an existing Memory API root URL and service API key. For a separate Skill API, enter its root URL and credential. A blank Skill URL reuses Memory's URL and key. If you only connect a separate Skill API, you can leave the Memory key blank.
 
-Use `make stop` for normal shutdown. `make clean` deletes database data. Do not use it for a normal restart.
+Select **Save configuration** and check **Service availability** in the sidebar. **Available** means the health endpoint responded. Load **Memories** or **Skills** to verify credentials and permissions. To verify model access, run a request that calls the model.
 
-## 2. Deploy core features
+The workbench listens on `127.0.0.1` for use on the machine running it. The UI backend connects to the configured APIs through the SDK.
 
-Complete sections 1.1–1.3 first. Then select the services and features you need.
-This section retains `UV_NO_SYNC=1` and uses the service configuration you prepared.
+## 3. Select and manage services
 
-### 2.1 Select services and features
+### Select services and features
 
-| Parameter | Value | Memory | Skill |
+`SERVICE=all|memory|skill` defaults to both APIs. Skill can run independently. These feature choices apply to `make dev`, `make docker`, and `make api`.
+
+| `FEATURE` | Memory tasks | Skill tasks | OTLP monitoring |
 | --- | --- | --- | --- |
-| `SERVICE` | `all` | Start Memory API | Start Skill API |
-| `SERVICE` | `memory` | Start Memory API | Do not start Skill API |
-| `SERVICE` | `skill` | Do not start Memory API | Start Skill API |
-| `FEATURE` | `core` | Enable synchronous features; disable Kafka tasks and OTLP export | Enable synchronous features and local asynchronous task management; disable Kafka and OTLP export |
-| `FEATURE` | `async` | Enable synchronous features and Kafka tasks; disable OTLP export | Enable synchronous features and Kafka task management; disable OTLP export |
-| `FEATURE` | `all` | Enable synchronous features, Kafka tasks, and OTLP export | Enable synchronous features, Kafka task management, and OTLP export |
-| `UI` | `0`, `1` | Disable or enable the shared UI; `make dev` enables it by default | Disable or enable the shared UI; `make dev` enables it by default |
-
-Changing `FEATURE` does not modify the original YAML files in `config/`. The launcher generates temporary YAML files for the services to read at startup. These files are located at `mindmemos-dev-<random characters>/memory.yaml` and `mindmemos-dev-<random characters>/skill.yaml` under the operating system's temporary directory. The paths change on each launch, and the directory is cleaned up when the launcher exits.
-
-`FEATURE` makes these changes to the runtime configuration:
-
-- `core`: Disable Kafka and OTLP monitoring data export. Memory supports synchronous interfaces only, while Skill uses Python's native asynchronous task management.
-- `async`: Enable Kafka asynchronous tasks and disable OTLP monitoring data export.
-- `all`: Enable Kafka asynchronous tasks and OTLP monitoring data export. Use Grafana dashboards to monitor Memory and Skill service logs.
-
-Use one of these commands:
+| `core` | Synchronous | Local asynchronous | Off |
+| `async` | Synchronous and Kafka | Kafka | Off |
+| `all` (default) | Synchronous and Kafka | Kafka | On |
 
 ```bash
-# Both APIs and UI; synchronous Memory features and local asynchronous Skill tasks.
-make dev SERVICE=all FEATURE=core
-
-# Only Memory API, without UI.
-make dev SERVICE=memory FEATURE=core UI=0
-
-# Only Skill API, without UI.
-make dev SERVICE=skill FEATURE=core UI=0
-
-# Both APIs and asynchronous tasks, without OTLP monitoring.
-make dev SERVICE=all FEATURE=async
+make dev SERVICE=skill FEATURE=core         # Skill API and UI
+make dev SERVICE=memory FEATURE=core UI=0   # Memory API with UI disabled
 ```
 
-Run one startup command at a time. Run `make stop` before you change the scope.
-A smaller scope does not stop extra containers from an earlier startup.
+Use `UI=0` or `UI=1` to override the UI defaults for `make dev` and `make api`. The launcher applies overrides to temporary runtime configs and preserves the source YAML.
 
-### 2.2 Start containers, APIs, and UI separately
-
-Start containers required for synchronous features:
+### Start dependencies separately or use existing infrastructure
 
 ```bash
-make docker SERVICE=all FEATURE=core
+make docker FEATURE=core             # Start the required local containers
+make api FEATURE=core UI=1           # Start APIs with the same scope and configure the UI
 ```
 
-Then start the APIs:
+`make api` requires ready dependencies and defaults to starting the APIs only. For external databases, Kafka, or OTLP, set the endpoints in the YAML or `.env`. The launcher selects containers for loopback addresses. Set `SERVICE_AUTH=1` to retain authentication from the service YAML and configure the UI connections in **Settings**.
 
-```bash
-make api SERVICE=all FEATURE=core
-```
+| Option | Purpose |
+| --- | --- |
+| `API_PORT`, `SKILL_PORT`, `UI_PORT` | Override application ports |
+| `MEMORY_CONFIG`, `SKILL_CONFIG` | Select service YAML files |
+| `PROJECT_CONFIG` | Select the local project YAML |
+| `API_RELOAD=1`, `SKILL_RELOAD=1` | Enable API reload for development |
 
-Finally, start the UI in another terminal:
+### Check status and stop
 
-```bash
-make ui
-```
+- `make status` shows managed applications, addresses, and containers.
+- `Ctrl+C` stops the APIs and UI started in the current terminal and leaves containers running.
+- `make stop` stops managed applications and containers in the current Compose project and preserves data. Run it before restarting with a smaller scope.
+- `make clean` deletes Docker volumes in the current Compose project after confirmation. Use `make stop` for normal restarts.
 
-### 2.3 Use existing infrastructure or change ports
+## Task environments and data
 
-Set existing database, Kafka, and OTLP addresses in service YAML or `.env`.
-The launcher creates containers only for localhost or loopback addresses. It does not create remote services.
-After external dependencies become available, use `make api` for the selected APIs.
+Prepare datasets, agent programs, and system dependencies for the training or evaluation tasks you run. For gated Hugging Face datasets, obtain access and set a read token as `HF_TOKEN` in `.env`. See the [Skill evaluation guide](../evaluation/skill_evaluation.md) for download and run commands.
 
-Example startup parameters:
+SpreadsheetBench requires LibreOffice when formula recalculation is enabled. Install it in `/Applications` on macOS or run `sudo apt install libreoffice-calc` on Ubuntu or Debian. In `.env`, you can set `SPREADSHEETBENCH_SOFFICE_PATH` to the absolute path to `soffice`, such as `/Applications/LibreOffice.app/Contents/MacOS/soffice` or `/usr/bin/soffice`. Run the executable with `--version` to verify the installation.
 
-```bash
-make dev FEATURE=core API_PORT=8100 SKILL_PORT=8101 UI_PORT=8865
-make dev FEATURE=core MEMORY_CONFIG=/absolute/path/memory.yaml SKILL_CONFIG=/absolute/path/skill.yaml
-```
-
-These are separate examples. Select one command for each startup.
-`UI_HOME` selects the UI's SDK configuration directory. `PROJECT_CONFIG` selects the local project configuration file.
-`API_RELOAD=1` enables development reload for Memory API. `SKILL_RELOAD=1` enables it for Skill API.
-
-The default launcher uses local project authentication. Set `SERVICE_AUTH=1` to retain authentication policies from service YAML.
-In that mode, configure UI service addresses and credentials separately. The launcher does not configure them automatically.
+To use Skill directly from Python, see the [Skill service documentation](../../src/mindmemos_skill/README.md).

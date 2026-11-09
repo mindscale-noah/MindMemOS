@@ -1,4 +1,4 @@
-"""Align TreeSkill to recorded SpreadsheetBench inputs and submit through the HTTP SDK."""
+"""Run fresh TreeSkill training and held-out evaluation locally."""
 
 import asyncio
 import re
@@ -7,181 +7,95 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
-import yaml
-from mindmemos_sdk.config import ConfigManager
-from mindmemos_sdk.skills import AsyncSkillClient
-from mindmemos_sdk.skills.config import EnvironmentConfig as SDKEnvironmentConfig
-from mindmemos_sdk.skills.typing import (
-    RegisterRequest,
-    StructuredSkillInfo,
-    TaskProgressRequest,
-    TaskShowRequest,
-    TrainingRequest,
-    TrainingSplitRequest,
-)
-from mindmemos_sdk.transport import AsyncHttpTransport
-from mindmemos_skill.agents import AgentCatalog
 from mindmemos_skill.algos.train.treeskill import TreeSkillTrainerConfig
+from mindmemos_skill.api.typing import RegisterRequest, StructuredSkillInfo, TrainingRequest, TrainingSplit
 from mindmemos_skill.common.checkpoint import fingerprint, read_boundary
 from mindmemos_skill.common.json import append_jsonl, read_json, write_json
 from mindmemos_skill.common.secrets import redact_credentials
+from mindmemos_skill.config.config import ServiceConfig, TaskManagerConfig
+from mindmemos_skill.config.loader import read_skill_config
 from mindmemos_skill.envs import Environment
-from mindmemos_skill.envs.data import Data, DataSample
+from mindmemos_skill.envs.config import EnvironmentConfig
+from mindmemos_skill.envs.data import DataSample
 from mindmemos_skill.envs.data.typing import SplitManifest
+from mindmemos_skill.pipelines.builtin_pipelines.training.config import TrainingPipelineConfig
 from mindmemos_skill.skill import Skill
 
 from .config import ROOT, EnvTestConfig, TreeSkillEvalConfig
 from .evaluation import _case
 from .report import write_test_report
+from .service import open_skill_service
 from .testing import _load_samples
 from .typing import CaseResult, EnvTestSummary, TaskTrajectory
 
 
-def _protocol(value):
-    """Compare execution settings with historical OpenAI agent defaults restored."""
-    if isinstance(value, dict):
-        if "model" in value and "timeout_s" in value:
-            value = {"class_name": "openai_chat", "sdk_max_retries": 0, **value}
-        return {
-            key: _protocol(child)
-            for key, child in value.items()
-            if key not in {"api_key", "base_url"} and not (key == "response_validation" and child == "content")
-        }
-    if isinstance(value, list):
-        return [_protocol(child) for child in value]
-    return value
-
-
-def _reference_algorithm(reference: Path, optimizer_model: str) -> dict:
-    """Restore recorded models and the owner-confirmed historical optimizer model."""
-    algorithm = read_json(reference / "training/train/config.json")["algorithm"]
-    manifest = read_json(reference / "manifest.json")["protocol"]
-    router = read_json(reference / "training/train/final_skill.json")["config"]["router"]
-    for role in ("optimizer", "failure_optimizer"):
-        if algorithm[role]["model"] == "[REDACTED]":
-            algorithm[role]["model"] = optimizer_model if role == "optimizer" else manifest["model"]
-    if algorithm["router"]["model"] == "[REDACTED]":
-        algorithm["router"]["model"] = router["model"]
-    for role in ("optimizer", "failure_optimizer", "router"):
-        if algorithm[role].get("response_validation") == "content":
-            algorithm[role].pop("response_validation")
-    return algorithm
-
-
-def _portable(value):
-    """Compare dataset-relative workbook locations across local checkouts."""
-    if isinstance(value, dict):
-        return {key: _portable(child) for key, child in value.items()}
-    if isinstance(value, list):
-        return [_portable(child) for child in value]
-    if isinstance(value, str) and "/spreadsheetbench_verified_400/" in value:
-        return value.split("/spreadsheetbench_verified_400/", 1)[1]
-    return value
-
-
-def prepare(config: TreeSkillEvalConfig) -> tuple[Environment, dict[str, list[DataSample]], Skill]:
-    """Validate the reference protocol, dataset content, and service profile without model calls.
+def prepare(config: TreeSkillEvalConfig) -> tuple[Environment, dict[str, list[DataSample]], Skill, ServiceConfig]:
+    """Validate local inputs and assemble the training and test splits.
 
     Args:
-        config: Recorded reference, local input paths, and HTTP profile selection.
+        config: Evaluation inputs, environment settings, and training profile selection.
 
     Returns:
-        Native environment, ordered training/test samples, and frozen initial Skill.
+        Native environment, ordered samples by split, initial Skill, and validated service config.
 
     Raises:
-        ValueError: Reference results or any execution input differ from the strict protocol.
+        ValueError: The profile, dataset, split, or initial Skill is invalid.
     """
-    document = yaml.safe_load(config.service_config.read_text())
-    pipeline = document["service"]["training_pipelines"].get(config.profile)
-    if pipeline is None or pipeline["config"]["trainer"]["class_name"] != "treeskill":
-        raise ValueError(f"Missing TreeSkill service profile: {config.profile}")
-    pipeline = pipeline["config"]
-    if config.environment.class_name != "spreadsheetbench_text_action":
-        env = Environment.build(config.environment.class_name, config.environment.config)
-        samples = _load_samples(
-            EnvTestConfig(
-                environment=config.environment.model_dump(), data=config.data, samples_file=config.samples_file
-            ),
-            env,
-        )
-        split = SplitManifest.model_validate(read_json(config.split_file)).root
-        index = {sample.task.id: sample for sample in samples}
-        if any(identifier not in index for ids in split.values() for identifier in ids):
-            raise ValueError("Split contains task IDs absent from the dataset")
-        pools = {phase: [index[key] for key in split.get(phase, [])] for phase in ("train", "val", "test")}
-        if not pools["train"] or not pools["test"]:
-            raise ValueError("TreeSkill evaluation requires nonempty train and test splits")
-        print(f"Environment {config.environment.class_name}: no reference score guarantee.", flush=True)
-        return env, pools, Skill.from_path(config.initial_skill)
-    if config.reference_run is None or config.data_root is None:
-        raise ValueError("text_action alignment requires reference_run and data_root")
-    reference = config.reference_run.expanduser().resolve()
-    summary = read_json(reference / "training/test/summary.json")
-    if summary != {"count": 200, "success_rate": 0.61, "mean_score": 0.61}:
-        raise ValueError("Reference must be the completed 122/200 SpreadsheetBench test")
-    split = read_json(config.split_file)
+    source = read_skill_config(config.service_config).service
+    profile = source.training_pipelines.get(config.profile)
     if (
-        split != read_json(reference / "split.json")
-        or len(split["train"]) != 200
-        or len(split["test"]) != 200
-        or split["val"]
+        profile is None
+        or not isinstance(profile.config, TrainingPipelineConfig)
+        or not isinstance(profile.config.trainer.config, TreeSkillTrainerConfig)
     ):
-        raise ValueError("TreeSkill requires the exact reference 200/200 split and order")
-    algorithm = TreeSkillTrainerConfig.model_validate(
-        pipeline["trainer"]["config"], context=AgentCatalog(agents=document["service"].get("agents", {}))
+        raise ValueError(f"Missing TreeSkill service profile: {config.profile}")
+
+    environment = config.environment
+    options = environment.config
+    data = config.data
+    if environment.class_name == "spreadsheetbench_text_action":
+        if config.data_root is None:
+            raise ValueError("SpreadsheetBench requires data_root")
+        algorithm = profile.config.trainer.config
+        workers = {
+            algorithm.rollout_concurrency,
+            algorithm.analysis_concurrency,
+            algorithm.localization_concurrency,
+            profile.config.evaluation_concurrency,
+        }
+        if workers != {config.concurrency}:
+            raise ValueError(
+                "Service rollout, analysis, localization and evaluation concurrency must match concurrency"
+            )
+        policy = (algorithm.failure_optimizer or algorithm.optimizer).model_copy(
+            update={"temperature": 0.7, "stop": ["Observation:"]}
+        )
+        options = {"agent": policy.model_dump(mode="json")}
+        options.update(environment.config)
+        data = {
+            "class_name": "spreadsheetbench",
+            "config": {"data_path": config.data_root / "dataset.json", "data_root": config.data_root},
+        }
+
+    env = Environment.build(environment.class_name, options)
+    samples = _load_samples(
+        EnvTestConfig(
+            environment={"class_name": environment.class_name, "config": options},
+            data=data,
+            samples_file=config.samples_file,
+        ),
+        env,
     )
-    expected = TreeSkillTrainerConfig.model_validate(
-        _with_requested_concurrency(_reference_algorithm(reference, config.reference_optimizer_model), config.concurrency)
-    )
-    if _protocol(algorithm.model_dump(mode="json")) != _protocol(expected.model_dump(mode="json")):
-        raise ValueError("Service TreeSkill profile differs from the reference trainer/model parameters")
-    if pipeline["evaluation_concurrency"] != config.concurrency:
-        raise ValueError("Service evaluation concurrency must match the requested concurrency")
-    requests = {}
-    initial = Skill.from_path(config.initial_skill)
-    for phase, pattern in (
-        ("train", "training/train/rollouts/train/**/audit/request.json"),
-        ("test", "training/test/**/audit/request.json"),
-    ):
-        for path in sorted(reference.glob(pattern)):
-            request = read_json(path)
-            identifier = request["task"]["data"]["id"]
-            if (phase, identifier) in requests:
-                raise ValueError(f"Ambiguous reference attempts for {phase}/{identifier}")
-            requests[phase, identifier] = request
-    first = requests["train", split["train"][0]]
-    snapshot = initial.snapshot().model_dump(mode="json")
-    if any(snapshot[key] != first["skills"][0][key] for key in ("content", "resources", "name", "description")):
-        raise ValueError("Initial Skill differs from the reference full initial Skill")
-    env_options = dict(first["config"])
-    policy = (algorithm.failure_optimizer or algorithm.optimizer).model_copy(
-        update={"temperature": 0.7, "stop": ["Observation:"]}
-    )
-    env_options["agent"] = policy.model_dump(mode="json")
-    env_options.update(config.environment.config)
-    env = Environment.build(config.environment.class_name, env_options)
-    loader = Data.build(
-        "spreadsheetbench", {"data_path": config.data_root / "dataset.json", "data_root": config.data_root}
-    )
-    pools = loader.split(loader.load(), split_file=config.split_file)
-    for phase in ("train", "test"):
-        for sample in pools[phase]:
-            request = requests.get((phase, sample.task.id))
-            if request is None:
-                raise ValueError(f"Missing reference audit input for {phase}/{sample.task.id}")
-            if _protocol(request["config"]) != _protocol(env.config.model_dump(mode="json")):
-                raise ValueError(f"Environment protocol differs for {phase}/{sample.task.id}")
-            if _portable(request["task"]["data"]) != _portable(sample.task.model_dump(mode="json")) or _portable(
-                request["reward_data"]["data"]
-            ) != _portable(sample.reward_data.model_dump(mode="json")):
-                raise ValueError(f"Dataset metadata differs for {phase}/{sample.task.id}")
-            recorded = {_portable(path): value for path, value in request["input_identity"].items()}
-            current = {
-                _portable(path): value for path, value in env.input_identity(sample.task, sample.reward_data).items()
-            }
-            if recorded != current:
-                raise ValueError(f"Workbook content differs for {phase}/{sample.task.id}")
-    return env, pools, initial
+    split = SplitManifest.model_validate(read_json(config.split_file.expanduser())).root
+    index = {sample.task.id: sample for sample in samples}
+    if set(split) - {"train", "val", "test"}:
+        raise ValueError("TreeSkill supports only train, val and test splits")
+    if any(identifier not in index for ids in split.values() for identifier in ids):
+        raise ValueError("Split contains task IDs absent from the dataset")
+    pools = {phase: [index[key] for key in split.get(phase, [])] for phase in ("train", "val", "test")}
+    if not pools["train"] or not pools["test"]:
+        raise ValueError("TreeSkill evaluation requires nonempty train and test splits")
+    return env, pools, Skill.from_path(config.initial_skill.expanduser()), source
 
 
 async def export_test(
@@ -273,15 +187,15 @@ async def export_test(
 
 
 async def run(config: TreeSkillEvalConfig) -> EnvTestSummary:
-    """Register a named Skill and execute training/test as a persisted UI-visible service task.
+    """Register the initial Skill and evaluate the trained Skill through a local service.
 
     Args:
-        config: Strict reference protocol and SDK/service paths on a shared local filesystem.
+        config: Local training profile and evaluation inputs.
 
     Returns:
-        Held-out summary after the HTTP task terminates.
+        Held-out summary after the local task terminates.
     """
-    env, pools, initial = prepare(config)
+    env, pools, initial, source = prepare(config)
     stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
     name = f"{initial.source.name}-mindmemos-eval-{stamp}"
     directory = (config.output_dir or ROOT / "output/mindmemos_eval/treeskill" / stamp).expanduser().resolve()
@@ -291,17 +205,20 @@ async def run(config: TreeSkillEvalConfig) -> EnvTestSummary:
     content = re.sub(r"(?m)^name:.*$", f"name: {name}", initial.source.content, count=1)
     renamed = initial.with_content(content, name=name)
     snapshot = renamed.snapshot()
-    sdk = ConfigManager(config.sdk_home).load()
-    url, api_key = sdk.resolve_skill_connection()
+    project_id = "mindmemos-eval"
+    resources = ServiceConfig(
+        home=directory / "state",
+        agents=source.agents,
+        task_manager=TaskManagerConfig(mode="local"),
+        training_pipelines={config.profile: source.training_pipelines[config.profile]},
+    )
     write_json(directory / "config.json", redact_credentials(config.model_dump(mode="json")))
     write_json(directory / "split.json", {key: [s.task.id for s in values] for key, values in pools.items()})
     start = perf_counter()
-    async with AsyncHttpTransport(
-        base_url=url, api_key=api_key, timeout_seconds=sdk.network.timeout_seconds, max_retries=0, require_api_key=False
-    ) as transport:
-        client = AsyncSkillClient(transport)
-        registered = await client.register(
+    async with open_skill_service(resources, project_id) as service:
+        registered = await service.register_skill(
             RegisterRequest(
+                project_id=project_id,
                 alias=name,
                 skill=StructuredSkillInfo(
                     content=snapshot.content,
@@ -310,66 +227,46 @@ async def run(config: TreeSkillEvalConfig) -> EnvTestSummary:
                     description=snapshot.description,
                     metadata={
                         "evaluation": "mindmemos-eval",
-                        "reference_run": str(config.reference_run),
                         "environment": config.environment.class_name,
                     },
                 ),
             )
         )
         write_json(directory / "registration.json", registered)
-        accepted = await client.train(
+        accepted = await service.submit_training(
             TrainingRequest(
-                init_skill_version_id=registered["skill_version_id"],
+                project_id=project_id,
+                init_skill_version_id=registered.skill_version_id,
                 work_dir=str(directory / "training"),
-                tasks=[sample.model_dump(mode="json") for sample in pools["train"] + pools["val"] + pools["test"]],
-                split=TrainingSplitRequest(
+                tasks=[sample for phase in ("train", "val", "test") for sample in pools[phase]],
+                split=TrainingSplit(
                     train=[s.task.id for s in pools["train"]],
                     val=[s.task.id for s in pools["val"]],
                     test=[s.task.id for s in pools["test"]],
                 ),
                 algo=config.profile,
-                env=SDKEnvironmentConfig(
-                    class_name=config.environment.class_name, config=env.config.model_dump(mode="json")
-                ),
+                env=EnvironmentConfig(class_name=config.environment.class_name, config=env.config),
             )
         )
         write_json(directory / "task.json", accepted)
-        print(f"Registered {name}; service task {accepted['task_id']}", flush=True)
+        print(f"Registered {name}; local task {accepted.task_id}", flush=True)
         after = 0
         while True:
-            logs = await client.task_progress(TaskProgressRequest(task_id=accepted["task_id"], after=after))
+            state = await service.task_status(project_id, accepted.task_id)
+            if state is None:
+                raise RuntimeError(f"Local training task disappeared: {accepted.task_id}")
+            logs = await service.task_progress(project_id, accepted.task_id, after=after)
             for event in logs:
                 await append_jsonl(directory / "service_progress.jsonl", event)
-                after = max(after, event["sequence"])
-            state = await client.show_task(TaskShowRequest(task_id=accepted["task_id"]))
+                after = max(after, event.sequence)
             write_json(directory / "task.json", state)
-            if state["status"] in {"succeeded", "failed", "cancelled"}:
+            if state.status in {"succeeded", "failed", "cancelled"}:
                 break
             await asyncio.sleep(config.poll_interval)
     write_json(directory / "runtime.json", {"pipeline_wall_seconds": perf_counter() - start})
     timing = directory / "training/test/report.json"
     seconds = read_json(timing)["wall_seconds"] if timing.exists() else None
     summary = await export_test(directory, pools["test"], env, seconds, config.environment.class_name)
-    if state["status"] != "succeeded":
-        raise RuntimeError(
-            f"Service task {accepted['task_id']} ended as {state['status']}; see {directory / 'task.json'}"
-        )
-    if config.environment.class_name != "spreadsheetbench_text_action":
-        return summary
-    actual = read_json(directory / "training/train/config.json")["algorithm"]
-    expected = _with_requested_concurrency(
-        read_json(config.reference_run / "training/train/config.json")["algorithm"], config.concurrency
-    )
-    if _protocol(actual) != _protocol(expected):
-        raise ValueError("Running service trainer differed from the reference; results are not aligned")
+    if state.status != "succeeded":
+        raise RuntimeError(f"Local task {accepted.task_id} ended as {state.status}; see {directory / 'task.json'}")
     return summary
-
-
-def _with_requested_concurrency(algorithm: dict, concurrency: int) -> dict:
-    """Replace only reference worker limits with the explicitly requested limit."""
-    return {
-        **algorithm,
-        "rollout_concurrency": concurrency,
-        "analysis_concurrency": concurrency,
-        "localization_concurrency": concurrency,
-    }

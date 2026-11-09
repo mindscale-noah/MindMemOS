@@ -6,7 +6,7 @@
 - 修改前检查当前源码、配置和工作区差异，保留用户已有改动。
 - 优先编写最少必要、易读的代码，复用标准库、已有公共模块和成熟依赖；不提前实现未确定的业务逻辑。
 - 本文件适用于 `src/mindmemos_skill/`。下文涉及的 `config/`、`scripts/` 和 `docs/` 路径均相对于仓库根目录；本包测试位于 `src/mindmemos_skill/tests/`。
-- 当前已实现服务组装、Agent 后端、环境 rollout、数据加载与划分、Skill 内容与任务组装、数据库及部分业务持久化能力；中心仓注册、查询、提交、导出与版本管理 API 已实现，通用训练 pipeline 已支持 TreeSkill / Skill-Forest，simple_evolution 已接入历史轨迹取证与版本发布。以当前源码和测试区分已实现能力与设计方案，不把局部实现描述为完整业务流程。
+- 当前已实现服务组装、Agent 后端、环境 rollout、数据加载与划分、Skill 内容与任务组装、数据库及部分业务持久化能力；中心仓注册、查询、提交、导出与版本管理 API 已实现，通用训练 pipeline 已支持 TreeSkill / Skill-Forest，offline_evolution 已接入历史轨迹取证与版本发布。以当前源码和测试区分已实现能力与设计方案，不把局部实现描述为完整业务流程。
 
 ## Skill 包模块职责
 
@@ -72,7 +72,7 @@
 - `Skill` 是数据对象，不继承 `Registrable`，不要求空配置，也不作为 YAML 后端。可优化 `content` 和辅助 `resources` 分开保存。`assemble(task)` 返回完整的任务专属 Skill 副本，保留具体类、依赖、辅助资源和导出能力，不原地修改源 Skill。
 - rollout 公开入口统一接收 `skill_set: SkillSet | None`，不接受旧的 `skills=`。SkillSet 默认全选，动态集合通过 `select(task)` 选择成员，并用 `config_snapshot()` 记录非敏感选择配置；异步 `SkillSet.assemble()` 按 `max_concurrency` 并行等待成员的异步 `assemble(task)` 并保持选择顺序。具体环境 `_run` 直接使用已组装的 Skill 列表，不按静态或动态类型分支，也不重复组装。恢复复用已保存的选择和组装内容，输入或选择配置变化要求新目录；不兼容的历史记录要求新的运行目录。
 - `snapshot()` / `from_snapshot()` 负责内容快照与数据恢复，保留已有实现元数据而不加载运行时代码。`content_hash` 覆盖原文 UTF-8 字节，`skill_hash` 同时覆盖 content 和 resources；源内容与某次任务组装结果不得混用。
-- 算法专属实现由调用方显式构造；需要动态行为时使用该算法自己的恢复入口。`algos/train/treeskill/` 提供任务时路由的 `TreeSkill` 与单轮主动采样的 `TreeSkillTrainer`；独立实验入口位于 `scripts/treeskill/`，也可通过通用 `training` pipeline 配置使用。
+- 算法专属实现由调用方显式构造；需要动态行为时使用该算法自己的恢复入口。`algos/train/treeskill/` 提供任务时路由的 `TreeSkill` 与单轮主动采样的 `TreeSkillTrainer`。评测入口为 `mindmemos-eval skill treeskill`，也可通过通用 `training` pipeline 配置训练。
 - TreeSkill 的训练组织放在 `trainer.py`，动态 `TreeSkill(Skill)` 放在 `treeskill.py`，其 `assemble()` 负责唯一的任务路由。构建函数按 Markdown、分析、定位和融合归入 `construction/`，不依赖动态 Skill；阶段产物、patch 和统计归入 `artifacts.py`。不保留第二套树结构、独立路由类或兼容转发文件。
 - SpreadsheetBench 两个环境 `spreadsheetbench_tool_calling` 与 `spreadsheetbench_text_action` 互不继承，共同继承 `SpreadsheetExecutionEnvironment`；通过覆盖 `_system_prompt`、`_user_prompt`、`_get_observation` 实现；不复制 `_run()`、交互循环、工作区与任务评分。环境重算运行时和评分实现归入 `envs/builtin_envs/spreadsheetbench/`。
 - 所有算法的主流程保持通用；环境特殊提示词、分析或执行流程放在算法自身的 `env_specific/` 中，主入口文件名与环境注册名对应（例如 `spreadsheetbench_text_action.py`）。较长的同环境辅助实现可以按 `spreadsheetbench_*.py` 拆分，配置和数据类型仍分别归入该目录的 `config.py`、`typing.py`。

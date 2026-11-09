@@ -23,8 +23,11 @@ def test_init_copies_all_templates_and_keeps_user_configuration(tmp_path, monkey
     assert init.main() == 0
     output = capsys.readouterr().out
     assert "file skipped: .env.example -> .env (destination already exists)" in output
-    assert "file copied: config/mindmemos_eval/dev.example.yaml -> config/mindmemos_eval/dev.yaml" in output
-    assert (tmp_path / "config/mindmemos_eval/env_test/dev.yaml").exists()
+    assert (
+        "file copied: config/mindmemos_eval/skill_train_skill_forest/dev.example.yaml -> "
+        "config/mindmemos_eval/skill_train_skill_forest/dev.yaml"
+    ) in output
+    assert (tmp_path / "config/mindmemos_eval/skill_test_direct/dev.yaml").exists()
     assert output.index("Next, configure") > output.rindex("file copied:")
     assert (tmp_path / ".env").read_text() == "existing private settings"
     for name in init.EVAL_DIRECTORIES:
@@ -112,10 +115,10 @@ def test_init_applies_env_to_all_real_configuration_locations(tmp_path, monkeypa
     for preset in skill["service"]["agents"].values():
         if any(field in preset["config"] for field in ("api_key", "base_url")):
             assert preset["config"]["model"] == settings["chat"]["model"]
-    benchmark = yaml.safe_load((tmp_path / "config/mindmemos_eval/dev.yaml").read_text())
+    benchmark = yaml.safe_load((tmp_path / "config/mindmemos_eval/skill_train_skill_forest/dev.yaml").read_text())
     assert benchmark["models"]["target"]["model"] == settings["chat"]["model"]
     assert benchmark["models"]["optimizer"]["api_key"] == settings["chat"]["api_key"]
-    direct = yaml.safe_load((tmp_path / "config/mindmemos_eval/env_test/dev.yaml").read_text())
+    direct = yaml.safe_load((tmp_path / "config/mindmemos_eval/skill_test_direct/dev.yaml").read_text())
     assert direct["environment"]["config"]["agent"]["model"] == settings["chat"]["model"]
     assert direct["environment"]["config"]["agent"]["api_key"] == settings["chat"]["api_key"]
     original = memory.read_bytes()

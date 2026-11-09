@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
+from mindmemos_skill.envs.builtin_envs.agentskillos.typing import SkillID
 from mindmemos_skill.envs.config import EnvironmentConfig
 from mindmemos_skill.envs.data import DataSample
 from mindmemos_skill.envs.typing import RolloutResult, Task
@@ -11,6 +12,51 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, FiniteFloat, J
 BenchmarkName = Literal["livemath", "alfworld", "spreadsheetbench", "searchqa", "officeqa"]
 ArmName = Literal["no_skill", "initial_skill", "trained_skill"]
 BENCHMARKS: tuple[BenchmarkName, ...] = ("livemath", "alfworld", "spreadsheetbench", "searchqa", "officeqa")
+
+
+class AgentSkillOSRetrievalTask(BaseModel):
+    """Read the public query and private labels from an original AgentSkillOS task."""
+
+    task_id: SkillID
+    """Task identity used to associate the ranking with the original task."""
+
+    prompt: str = Field(min_length=1)
+    """Public instruction sent to the Skill Graph."""
+
+    skills: list[SkillID] = Field(min_length=1)
+    """Official reference Skill IDs used as binary retrieval labels."""
+
+
+class RetrievalScoreReport(BaseModel):
+    """Record metrics computed from the submitted AgentSkillOS rankings."""
+
+    label_source: Literal["official_task_skills"] = "official_task_skills"
+    """Source of the relevance labels used to score the submission."""
+
+    metrics: dict[str, float]
+    """Macro-average scores keyed by metric name."""
+
+    per_task: dict[str, dict[str, float]]
+    """Per-task scores keyed by task ID, then metric name."""
+
+
+class SkillGraphAccuracyReport(BaseModel):
+    """Report native AgentSkillOS success separately from execution failures."""
+
+    model: str
+    """Execution model used to generate task artifacts."""
+
+    execution_top_k: int
+    """Maximum number of Skills injected for each task."""
+
+    accuracy: float | None
+    """Official pass rate over successfully scored tasks, or None if there are none."""
+
+    scoring_coverage: float
+    """Fraction of the planned tasks with an official score."""
+
+    errors: dict[str, str]
+    """Execution and scorer failures keyed by task ID."""
 
 
 class DatasetInputs(BaseModel):

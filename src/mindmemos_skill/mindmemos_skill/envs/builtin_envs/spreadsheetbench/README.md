@@ -8,8 +8,7 @@ uv run python scripts/download_datasets.py download skill --name spreadsheetbenc
 ```
 
 The Hugging Face downloads require `huggingface_hub` in the Python environment.
-The default destination is `data/mindmemos_skill/spreadsheetbench/`. The script uses the sources and pinned versions in
-`config/presets/dataset_download_sources.json`.
+The command downloads the pinned release to `data/mindmemos_skill/spreadsheetbench/` by default.
 
 ## 2. Split File Format and Provided Paths
 

@@ -1,11 +1,12 @@
 """Verify fresh eval protocols against native environments and in-process storage."""
 
 import pytest
-from mindmemos_eval.skills import runner
+from mindmemos_eval.cli import main
+from mindmemos_eval.skills import runner, service
 from mindmemos_eval.skills.config import EvalConfig, RunOptions, load_config
 from mindmemos_eval.skills.evaluation import evaluate
 from mindmemos_eval.skills.report import read_report, write_report
-from mindmemos_eval.skills.typing import ArmResult, BenchmarkReport, CaseResult, DatasetInputs, SuiteReport
+from mindmemos_eval.skills.typing import BENCHMARKS, ArmResult, BenchmarkReport, CaseResult, DatasetInputs, SuiteReport
 from mindmemos_skill.algos.train.skill_forest.trainer import SkillForestTrainer
 from mindmemos_skill.common.json import read_json, write_json
 from mindmemos_skill.envs import Environment
@@ -120,13 +121,13 @@ async def test_control_only_skips_service_and_optimizer_connection(tmp_path, mon
     async def forbidden(*args):
         pytest.fail("Control-only runs must not create a training service")
 
-    monkeypatch.setattr(runner, "create_service", forbidden)
+    monkeypatch.setattr(service, "create_service", forbidden)
     suite = await runner.run(config, RunOptions(output_dir=tmp_path / "run", arms=["no_skill", "initial_skill"]))
     assert suite.benchmarks[0].error is None
     assert len(offline) == 4
 
 
-async def test_preflight_collects_errors_before_creating_service(tmp_path, monkeypatch, config):
+async def test_preflight_checks_only_selected_benchmark(tmp_path, monkeypatch, config):
     checked = []
 
     def invalid(benchmark, *args):
@@ -135,10 +136,10 @@ async def test_preflight_collects_errors_before_creating_service(tmp_path, monke
 
     monkeypatch.setattr(runner, "load_dataset", invalid)
     with pytest.raises(ValueError, match="Evaluation preflight failed"):
-        await runner.run(config, RunOptions(benchmark="all", output_dir=tmp_path / "run"))
-    assert len(checked) == 5
-    assert len(read_json(tmp_path / "run/diagnostics.json")["errors"]) == 5
-    assert not (tmp_path / "run/livemath/state").exists()
+        await runner.run(config, RunOptions(benchmark="officeqa", output_dir=tmp_path / "run"))
+    assert checked == ["officeqa"]
+    assert read_json(tmp_path / "run/diagnostics.json")["errors"] == ["officeqa: ValueError: missing input"]
+    assert not (tmp_path / "run/officeqa/state").exists()
 
 
 async def test_nonempty_output_is_rejected_before_preflight(tmp_path, config):
@@ -195,31 +196,42 @@ def test_native_environment_fields_and_smoke_config(config):
         RunOptions(arms=["no_skill", "no_skill"])
     with pytest.raises(ValueError):
         RunOptions(test_repeats=0)
+    with pytest.raises(ValueError, match="benchmark"):
+        RunOptions(benchmark="all")
 
 
 def test_synchronized_config_templates_use_native_officeqa_field():
     from mindmemos_eval.skills.config import ROOT
 
-    example = load_config(ROOT / "config/mindmemos_eval/dev.example.yaml")
-    local = load_config(ROOT / "config/mindmemos_eval/dev.yaml")
+    example = load_config(ROOT / "config/mindmemos_eval/skill_train_skill_forest/dev.example.yaml")
+    local = load_config(ROOT / "config/mindmemos_eval/skill_train_skill_forest/dev.yaml")
     assert example.environments["officeqa"]["max_tool_turns"] == local.environments["officeqa"]["max_tool_turns"] == 24
 
 
-async def test_suite_continues_after_benchmark_failure(tmp_path, monkeypatch, config, inputs):
+async def test_benchmark_failure_is_recorded_in_report(tmp_path, monkeypatch, config, inputs):
     monkeypatch.setattr(runner, "load_dataset", lambda *args: inputs)
-    called = []
 
     async def execute(config, options, inputs, directory, report):
-        called.append(report.benchmark)
-        if report.benchmark == "alfworld":
-            raise RuntimeError("simulator stopped")
+        raise RuntimeError("execution stopped")
 
     monkeypatch.setattr(runner, "_run_skill_forest", execute)
-    suite = await runner.run(config, RunOptions(benchmark="all", output_dir=tmp_path / "run"))
-    assert len(called) == 5
-    assert "simulator stopped" in suite.benchmarks[1].error
-    assert (tmp_path / "run/officeqa/results.json").is_file()
-    assert read_json(tmp_path / "run/summary.json")["incomplete"]
+    output_dir = tmp_path / "run"
+    results = await runner.run(config, RunOptions(benchmark="livemath", output_dir=output_dir))
+    assert len(results.benchmarks) == 1
+    assert results.benchmarks[0].error == "RuntimeError: execution stopped"
+    assert read_json(output_dir / "livemath/results.json")["error"] == results.benchmarks[0].error
+    assert read_json(output_dir / "summary.json")["incomplete"]
+
+
+def test_rebuild_report_accepts_saved_suite(tmp_path):
+    write_json(tmp_path / "config.json", {"options": {"benchmark": "all"}})
+    write_json(tmp_path / "livemath/results.json", BenchmarkReport(benchmark="livemath", error="Execution failed"))
+
+    assert main(["skill", "evaluate", "rebuild-report", str(tmp_path)]) == 1
+    summary = read_json(tmp_path / "summary.json")
+    assert [report["benchmark"] for report in summary["benchmarks"]] == list(BENCHMARKS)
+    assert summary["benchmarks"][0]["error"] == "Execution failed"
+    assert summary["benchmarks"][1]["error"] == "Benchmark did not finish"
 
 
 async def test_pipeline_adoption_rejects_corrupt_index_and_wrong_version(
@@ -251,8 +263,7 @@ async def test_report_marks_missing_original_rollouts_incomplete(tmp_path, monke
     monkeypatch.setattr(runner, "load_dataset", lambda *args: inputs)
     suite = await runner.run(config, RunOptions(output_dir=tmp_path / "run", arms=["no_skill"]))
     suite.benchmarks[0].arms[0].cases[0].result_path.unlink()
-    report = read_report(tmp_path / "run")
-    write_report(report, tmp_path / "run")
+    assert main(["skill", "evaluate", "rebuild-report", str(tmp_path / "run")]) == 1
     summary = read_json(tmp_path / "run/summary.json")
     assert summary["incomplete"] and summary["rows"][0]["mean_score"] is None
     assert len(offline) == 2
