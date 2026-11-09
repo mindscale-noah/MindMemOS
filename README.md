@@ -52,17 +52,19 @@
 - **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.
 - **2026-06-30**: MindMemOS was officially released!
 
-> **Skill API upgrade.** The legacy Skill API is deprecated. To access the new Skill service at `https://mindmemos.cn/api/developer/skill`, upgrade to `mindmemos-sdk` **1.0.0 or later**. If you use an agent plugin, upgrade `@mindmemos/openclaw-plugin` or `@mindmemos/deepseek-harness-plugin` to **0.2.0 or later** as well. Then run `mindmemos auth` again with a project API key authorized for Skill. The quick start below installs these versions from this repository.
+> **Skill API upgrade.** The legacy Skill API is deprecated. To access the new Skill service at `https://mindmemos.cn/api/developer/skill`, upgrade to `mindmemos-sdk` **1.0.0 or later**. If you use an agent plugin, upgrade `@mindmemos/openclaw-plugin` or `@mindmemos/deepseek-harness-plugin` to **0.2.0 or later** as well. In the MindMemOS console, edit the project API key and add `skill:read` and `skill:write`. Save the permissions, then run `mindmemos auth` again with the same key. The quick start below installs these versions from this repository. [New Skill service permissions](#grant-a-project-api-key-access-to-the-new-skill-service)
 
 ## 🌟 Core Features
 
 - **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable assets, allowing OpenClaw, Hermes, Claude Code, OpenHands, and other agents to share or transfer the same long-term memory.
 - **Self-evolving memory system**: Continuously improve memory quality through schema learning, dreaming, and feedback by automatically learning frequent memory patterns, consolidating memories offline, and using interaction corrections to optimize add/search workflows.
-- **MindMemOS-Skill**: Register Skills, track their versions, and record agent runs. Train Skills on benchmark tasks with TreeSkill or Skill-Forest, or use saved trajectories to evolve a specific version offline. Deploy the Skill API independently or embed the Python service.
+- **Improve Skills with tasks and past trajectories**. Use MindMemOS-Skill to register and version Skills, save agent execution trajectories, and score both Skills and trajectories. Build and manage Skill graphs to recommend Skill combinations for a given task. Train Skills on tasks with TreeSkill or Skill-Forest, or use saved trajectories to evolve a specific version offline. Deploy the Skill API independently or call the Python service directly.
 - **Local Web workbench**: Connect to Memory and Skill through the SDK to search and edit memories, manage Skill versions, inspect graph snapshots, preview dynamic Skills, and edit connections.
 - **Plugin integrations**: Connect MindMemOS to different agents and workflows through plugins that retrieve and inject relevant memories before interactions and automatically write conversations back afterward. The [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) and [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) are currently available, with more integrations in progress.
 
 ### Packages and services
+
+![The Web Workbench uses the SDK, which connects to independent Memory and Skill services. Memory evaluation also uses the SDK.](./assets/mindmemos-service-architecture.png)
 
 | Package | Capabilities | Access |
 | --- | --- | --- |
@@ -78,11 +80,18 @@ Memory and Skill manage their own business data and can be deployed independentl
 
 ### 1. Create an account and an API key
 
-[Create a MindMemOS account](https://mindmemos.cn/#/register) and sign in to the console. Open or create a project, then create and save a key under **API Keys**. To use the Skill service, use a project key authorized for Skill.
+[Create a MindMemOS account](https://mindmemos.cn/#/register) and sign in to the console. Open or create a project. For a first-time setup, open **API Keys**, choose **Create API key**, and select the project and required scopes. Save the full key after creating it.
+
+#### Grant a project API key access to the new Skill service
+
+1. Sign in to the [MindMemOS console](https://mindmemos.cn/) and open **API Keys**. Find the key your SDK or plugin uses by its name and prefix, then edit its permissions.
+2. Under **Scopes**, add `skill:read` to view Skills and versions, and `skill:write` to register Skills, write new versions, and report execution trajectories. Keep the existing `memory:read` and `memory:write` scopes if you also use Memory.
+3. Save the permissions and confirm that both Skill scopes appear in the key's **Scopes** column.
+4. Rerun `mindmemos auth` in official mode with the authorized key, following [Connect the Python SDK](#2-connect-the-python-sdk). Run `mindmemos skill list --limit 1` to verify read access. Use the Skill registration example below to verify write access.
 
 ### 2. Connect the Python SDK
 
-With Python 3.11–3.13 and uv installed, run these commands from the repository root. Enter your project API key when prompted. The SDK and agent plugins share this configuration.
+With Python 3.11–3.13 and uv installed, run these commands from the repository root. Enter your project API key with the configured scopes when prompted. The SDK and agent plugins share this configuration.
 
 ```bash
 uv sync --package mindmemos-sdk --no-dev --inexact
@@ -96,17 +105,48 @@ Replace `alice` with your application's user ID. If your key has Skill access, v
 uv run --no-sync mindmemos skill list --limit 1
 ```
 
-Run the example with `uv run --no-sync python` to store and search a memory.
+Run either example with `uv run --no-sync python`.
+
+**Memory — Store and search a memory**
 
 ```python
 from mindmemos_sdk import DialogueMessage, MindMemOSClient
 
-with MindMemOSClient() as client:
+user_id = "alice"
+
+with MindMemOSClient(user_id=user_id) as client:
     client.memory.add(
         messages=[DialogueMessage(role="user", content="I like iced Americanos.")],
         mode="sync",
     )
-    print(client.memory.search("coffee preferences", user_id="alice", top_k=3))
+    result = client.memory.search("coffee preferences", user_id=user_id, top_k=3)
+    for memory in result.memories:
+        print(memory.memory)
+```
+
+**Skill — Register a Skill and retrieve its first version**
+
+Use a project API key with Skill read and write access.
+
+```python
+from mindmemos_sdk import MindMemOSClient
+from mindmemos_sdk.skills import RegisterRequest, ShowRequest, StructuredSkillInfo
+
+skill_content = """---
+name: meeting-summary
+description: Summarize meeting notes into decisions and action items.
+---
+List decisions first. Then list each action item with its owner and deadline.
+"""
+
+with MindMemOSClient() as client:
+    created = client.skills.register(
+        RegisterRequest(skill=StructuredSkillInfo(content=skill_content, commit_version="v1.0.0"))
+    )
+    version_id = created["skill_version_id"]
+    detail = client.skills.show(ShowRequest(skill_version_id=version_id))
+    print(version_id)
+    print(detail["version"]["content"])
 ```
 
 See the SDK guide to [register and version Skills](src/mindmemos_sdk/README.md#python-sdk) or [report one execution record to both APIs](src/mindmemos_sdk/README.md#统一上报执行轨迹).
@@ -184,7 +224,156 @@ For the web workbench and other startup options, see the [deployment guide](docs
 
 ## 📊 Benchmark
 
-### Dataset downloads
+Bold marks the highest score for each metric within its comparison group, including ties.
+
+### Memory Benchmarks
+
+#### LoCoMo
+
+Long-conversation question answering across single-hop, multi-hop, temporal, and open-domain tasks. [LoCoMo paper](https://arxiv.org/abs/2402.17753)
+
+| Method | Single-hop | Multi-hop | Temporal | Open-domain | Overall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Mem0 | 68.97 | 61.70 | 58.26 | 50.00 | 64.20 |
+| MemU | 74.91 | 72.34 | 43.61 | 54.17 | 66.67 |
+| MemOS | 85.37 | 79.43 | 75.08 | 64.58 | 80.76 |
+| Zep | 90.84 | 81.91 | 77.26 | 75.00 | 85.22 |
+| EverOS | 96.67 | 91.84 | 89.72 | 76.04 | 93.05 |
+| MindMemOS-MindVanilla | 92.03 | 85.82 | 83.80 | 66.67 | 87.60 |
+| MindMemOS-MindSchema | **96.79** | **93.97** | **90.34** | **82.29** | **94.03** |
+
+#### PersonaMem
+
+Accuracy by question type for user profiles and preferences. [PersonaMem paper](https://arxiv.org/abs/2504.14225)
+
+| Method | Recall | Ack. Lat. | Trk. Evo. | Revisit | Suggest | Recom. | General. | Overall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mem0 | 46.51 | 41.18 | 65.47 | **90.91** | 12.90 | 34.55 | 43.86 | 51.61 |
+| MemU | 64.34 | 64.71 | 66.20 | 87.88 | 31.18 | 67.27 | **84.21** | 65.70 |
+| MemOS | 53.49 | 82.35 | **66.91** | 79.80 | 41.94 | 69.09 | 75.44 | 63.67 |
+| EverOS | 74.42 | 64.71 | 64.03 | 85.86 | 35.48 | 65.45 | **84.21** | 67.57 |
+| MindMemOS-MindVanilla | 76.74 | **88.24** | 65.47 | 87.88 | 17.20 | **80.00** | 82.46 | 67.74 |
+| MindMemOS-MindSchema | **81.40** | 64.71 | 64.75 | 82.83 | **47.31** | 76.36 | 73.68 | **70.63** |
+
+#### MemoryAgentBench
+
+FactConsolidation scores are the mean Substring Exact Match across four context sizes. [MemoryAgentBench paper](https://arxiv.org/abs/2507.05257)
+
+| Model | Method | SH score | SH archived | MH score | MH archived |
+| --- | --- | ---: | ---: | ---: | ---: |
+| GPT-4o-mini | Mem0 | 0.180 | — | 0.020 | — |
+|  | MemoRAG | 0.270 | — | 0.070 | — |
+|  | HippoRAG-v2 | 0.540 | — | 0.050 | — |
+|  | MindMemOS-MindVanilla | 0.635 | — | 0.118 | — |
+|  | MindMemOS-MindVanilla + Dreaming | **0.738** | 21.4% | **0.180** | 19.4% |
+| GPT-5-mini | Infini Memory | 0.800 | — | 0.220 | — |
+|  | MindMemOS-MindVanilla | 0.900 | — | 0.190 | — |
+|  | MindMemOS-MindVanilla + Dreaming | **0.920** | 23.5% | **0.250** | 21.5% |
+
+### Skill Benchmarks
+
+#### Skill-Forest
+
+Each benchmark reports the mean Hard score (%) over three runs on the held-out test split. The overall score weights the five benchmarks equally. Select and Merge each use seven trees. [Evaluation setup and results](docs/evaluation/skill_evaluation.md#validation-results)
+
+| Method | LiveMath | ALFWorld | SpreadsheetBench Verified 400 | SearchQA | OfficeQA | Overall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| No Skill | 27.42 | 56.97 | 80.24 | 76.90 | 28.49 | 54.00 |
+| Initial Skill | 28.23 | 70.65 | 79.40 | 76.67 | 43.99 | 59.79 |
+| Trace2Skill | 27.69 | 76.62 | 81.79 | 77.50 | 54.84 | 63.69 |
+| GEPA | 31.45 | 79.85 | **82.26** | 79.62 | 53.68 | 65.37 |
+| SkillOpt | 31.72 | 75.37 | 80.71 | **80.67** | 52.71 | 64.24 |
+| Select | **36.02** | 82.34 | 81.67 | 80.21 | 53.88 | 66.82 |
+| Merge | 34.68 | **82.84** | 81.07 | 80.52 | **55.23** | **66.87** |
+
+#### TreeSkill
+
+The table reports in-domain SpreadsheetBench scores. Parentheses show the gain in percentage points over the human-written Skill for the same model. The 35B baselines are previously reported scores. The TreeSkill results and the 9B baselines come from our runs. [Evaluation setup and results](docs/evaluation/skill_evaluation.md#in-domain-spreadsheetbench-results)
+
+| Policy model | Method | Vrf (%) | Soft (%) | Hard (%) |
+| --- | --- | ---: | ---: | ---: |
+| Qwen3.5-35B-A3B | No Skill | 19.00 | 18.00 | 4.60 |
+|  | Human-Written Skill | 9.67 | 13.03 | 3.37 |
+|  | Trace2Skill +Combined | 29.67 (+20.00) | 18.80 (+5.77) | 5.73 (+2.36) |
+|  | SkillCAT | 55.50 (+45.83) | 39.02 (+25.99) | 20.61 (+17.24) |
+|  | TreeSkill (routed) | **66.00 (+56.33)** | **41.72 (+28.69)** | **25.22 (+21.85)** |
+| Qwen3.5-9B | No Skill | 25.50 | 21.00 | 9.21 |
+|  | Human-Written Skill | 14.00 | 16.76 | 7.24 |
+|  | Trace2Skill +Combined | 16.50 (+2.50) | 18.97 (+2.21) | 8.66 (+1.42) |
+|  | TreeSkill (routed) | **45.50 (+31.50)** | **30.28 (+13.52)** | **14.58 (+7.34)** |
+
+#### Skill Graph
+
+##### Skill retrieval
+
+In the Skill Graph tables, underlining marks second place, including ties. Asterisks mark scores from the corresponding papers. [Retrieval results](docs/evaluation/skill_evaluation.md#table-1-skill-retrieval)
+
+**ALFWorld**
+
+| Method | Ret@1 | Ret@K | MRR |
+| --- | ---: | ---: | ---: |
+| Vector Skills | 0.7 | 4.5 | 0.4 |
+| SkillRouter (Emb.) | 13.6 | 48.6 | 26.2 |
+| SkillRouter (Emb.+RR) | 12.1 | **74.3** | <ins>36.2</ins> |
+| AgentSkillOS | 0.7 | 50.7 | 18.5 |
+| SkillRAE | 9.3 | 35.6 | 17.5 |
+| GoS | 8.6 | 9.3 | 8.9 |
+| SkillDAG | <ins>20.0</ins> | 44.8 | 29.2 |
+| MindMemOS Skill Graph | **49.3** | <ins>71.4</ins> | **57.9** |
+
+**AgentSkillOS**
+
+| Method | Ret@1 | Ret@K | MRR |
+| --- | ---: | ---: | ---: |
+| Vector Skills | 56.7 | 83.3 | 66.2 |
+| SkillRouter (Emb.) | 50.0 | <ins>86.7</ins> | 64.3 |
+| SkillRouter (Emb.+RR) | 56.7 | 70.0 | 61.9 |
+| AgentSkillOS | 70.0 | 83.3 | 76.7 |
+| SkillRAE | 40.0 | 80.0 | 55.2 |
+| GoS | <ins>76.7</ins> | <ins>86.7</ins> | <ins>80.3</ins> |
+| SkillDAG | 43.3 | 56.1 | 60.8 |
+| MindMemOS Skill Graph | **80.0** | **93.3** | **83.3** |
+
+**SkillsBench**
+
+| Method | Ret@1 | Ret@K | MRR |
+| --- | ---: | ---: | ---: |
+| Vector Skills | 3.6\* | 10.8\* | 5.8\* |
+| SkillRouter (Emb.) | <ins>77.6</ins> | **93.4** | <ins>83.1</ins> |
+| SkillRouter (Emb.+RR) | **81.6** | <ins>88.2</ins> | **84.5** |
+| AgentSkillOS | 38.2 | 44.7 | 41.0 |
+| SkillRAE | 69.7 | 86.8 | 76.8 |
+| GoS | 50.6\* | 65.5\* | 57.3\* |
+| SkillDAG | 66.7\* | 78.2\* | 71.3\* |
+| MindMemOS Skill Graph | 69.2 | 86.8 | 76.8 |
+
+##### End-to-end R scores
+
+Rankings are within each setting. Setting 1 uses MiniMax-M2.7, and the current reproduction guide covers AgentSkillOS for that setting. [End-to-end results](docs/evaluation/skill_evaluation.md#table-2-end-to-end-r-scores)
+
+| Setting | Method | ALFWorld | AgentSkillOS | SkillsBench |
+| --- | --- | ---: | ---: | ---: |
+| Setting 1 | Vanilla Skills | 47.1\* | 70.8 | 17.2\* |
+|  | Vector Skills | 50.7\* | <ins>72.4</ins> | 10.4\* |
+|  | GoS | 54.3\* | 68.0 | 18.7\* |
+|  | SkillDAG | <ins>67.9</ins> | 54.9 | <ins>27.3</ins>\* |
+|  | MindMemOS Skill Graph | **76.4** | **80.9** | **28.0** |
+| Setting 2 | Vector Skills | 60.0 | 74.9\* | 27.3 |
+|  | GoS | 63.6 | <ins>96.2</ins> | <ins>35.4</ins> |
+|  | SkillDAG | <ins>82.0</ins> | 94.2 | 31.4 |
+|  | AgentSkillOS | 13.6 | 83.5\* | 17.2\* |
+|  | SkillRouter | 29.3 | 82.3\* | 22.0\* |
+|  | SkillRAE | 27.1 | 84.6\* | 29.3\* |
+|  | MindMemOS Skill Graph | **86.0** | **97.4** | **43.2** |
+| Setting 3 | GoS | 79.3 | <ins>96.2</ins> | 40.1 |
+|  | SkillDAG | <ins>85.0</ins> | 92.3 | <ins>49.0</ins> |
+|  | MindMemOS Skill Graph | **85.7** | **96.5** | **51.0** |
+
+#### Offline Evolution
+
+The SkillsBench comparison is pending. The evaluation guide describes how to collect trajectories with the initial Skill and retest the same tasks with the evolved Skill. [Offline Evolution evaluation](docs/evaluation/skill_evaluation.md#offline-evolution)
+
+### Datasets and reproduction
 
 Run `scripts/download_datasets.py` from the repository root to list datasets and download pinned releases for either benchmark group.
 
@@ -203,124 +392,6 @@ use `--data-root` to change the parent directory and `--verify-only` on `downloa
 Set evaluation config paths to these downloaded files. Official formats are preserved; MemoryAgentBench
 remains Parquet and requires conversion for the current evaluator's local JSON/JSONL input.
 Experiment split manifests are maintained in the repository and are not downloaded or generated.
-
-
-### 💬 Conversational Memory: LoCoMo
-
-- **Benchmark**: [LoCoMo](https://arxiv.org/abs/2402.17753), a mainstream benchmark for long-conversation memory covering single-hop, multi-hop, temporal, and open-domain question answering.
-
-| Method                       | Single-hop | Multi-hop | Temporal | Open-domain | Overall |
-| :--------------------------- | :--------: | :-------: | :------: | :---------: | :-----: |
-| Mem0                         | 68.97 | 61.70 | 58.26 | 50.00  | 64.20 |
-| MemU                         | 74.91 | 72.34 | 43.61 | 54.17  | 66.67 |
-| MemOS                        | 85.37 | 79.43 | 75.08 | 64.58  | 80.76 |
-| Zep                          | 90.84 | 81.91 | 77.26 | 75.00  | 85.22 |
-| EverOS                       | 96.67 | 91.84 | 89.72 | 76.04  | 93.05 |
-| **MindMemOS-MindVanilla**    | 92.03 | 85.82 | 83.80 | 66.67  | 87.60 |
-| **MindMemOS-MindSchema**     | **96.79** | **93.97** | **90.34** | **82.29** | **94.03** |
-
-### 👤 User Profile Memory: PersonaMem
-
-- **Benchmark**: [PersonaMem](https://arxiv.org/abs/2504.14225), a memory benchmark centered on user profiles and preference understanding that evaluates recall, tracking, revisiting, suggestion, recommendation, and generalization of user traits.
-
-| Method | Recall | Ack. Lat. | Trk. Evo. | Revisit | Suggest | Recom. | General. | Overall |
-| :----- | :----: | :-------: | :-------: | :-----: | :-----: | :-----: | :------: | :-----: |
-| Mem0 | 46.51 | 41.18 | 65.47 | 90.91 | 12.90 | 34.55 | 43.86 | 51.61 |
-| MemU | 64.34 | 64.71 | 66.20 | 87.88 | 31.18 | 67.27 | 84.21 | 65.70 |
-| MemOS | 53.49 | 82.35 | 66.91 | 79.80 | 41.94 | 69.09 | 75.44 | 63.67 |
-| EverOS | 74.42 | 64.71 | 64.03 | 85.86 | 35.48 | 65.45 | 84.21 | 67.57 |
-| **MindMemOS-MindVanilla** | 76.74 | 88.24 | 65.47 | 87.88 | 17.20 | 80.00 | 82.46 | 67.74 |
-| **MindMemOS-MindSchema** | 81.40 | 64.71 | 64.75 | 82.83 | 47.31 | 76.36 | 73.68 | 70.63 |
-
-### 🌙 Memory Consolidation: MemoryAgentBench (FactConsolidation)
-
-- **Benchmark**: [MemoryAgentBench](https://arxiv.org/abs/2507.05257) FactConsolidation. Scores in the table are the average Substring Exact Match across four context sizes.
-
-| Method                             | SH score | SH archived | MH score | MH archived |
-|:-----------------------------------| :------: | :---------: | :------: | :---------: |
-| **GPT-4o-mini**                    |  |  |  |  |
-| Mem0                               | 0.180 | — | 0.020 | — |
-| MemoRAG                            | 0.270 | — | 0.070 | — |
-| HippoRAG-v2                        | 0.540 | — | 0.050 | — |
-| MindMemOS-MindVanilla              | 0.635 | — | 0.118 | — |
-| **MindMemOS-MindVanilla + Dreaming** | 0.738 | 21.4% | 0.180 | 19.4% |
-| **GPT-5-mini**                     |  |  |  |  |
-| Infini Memory                      | 0.800 | — | 0.220 | — |
-| MindMemOS-MindVanilla              | 0.900 | — | 0.190 | — |
-| **MindMemOS-MindVanilla + Dreaming** | 0.920 | 23.5% | 0.250 | 21.5% |
-
-### Skill Benchmarks
-
-#### Skill-Forest
-
-Each benchmark reports the mean Hard score (%) over three runs on the held-out test split. The overall score weights the five benchmarks equally. Select and Merge each use seven trees. [Evaluation setup and results](docs/evaluation/skill_evaluation.md#validation-results)
-
-| Dataset | No Skill | Initial Skill | Trace2Skill | GEPA | SkillOpt | Select | Merge |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| LiveMath | 27.42 | 28.23 | 27.69 | 31.45 | 31.72 | 36.02 | 34.68 |
-| ALFWorld | 56.97 | 70.65 | 76.62 | 79.85 | 75.37 | 82.34 | 82.84 |
-| SpreadsheetBench Verified 400 | 80.24 | 79.40 | 81.79 | 82.26 | 80.71 | 81.67 | 81.07 |
-| SearchQA | 76.90 | 76.67 | 77.50 | 79.62 | 80.67 | 80.21 | 80.52 |
-| OfficeQA | 28.49 | 43.99 | 54.84 | 53.68 | 52.71 | 53.88 | 55.23 |
-| **Overall** | 54.00 | 59.79 | 63.69 | 65.37 | 64.24 | 66.82 | 66.87 |
-
-#### TreeSkill
-
-The table reports in-domain SpreadsheetBench scores. Parentheses show the gain in percentage points over the human-written Skill for the same model. The 35B baselines are previously reported scores. The TreeSkill results and the 9B baselines come from our runs. [Evaluation setup and results](docs/evaluation/skill_evaluation.md#in-domain-spreadsheetbench-results)
-
-| Policy model | Method | Vrf (%) | Soft (%) | Hard (%) |
-| --- | --- | ---: | ---: | ---: |
-| Qwen3.5-35B-A3B | No Skill | 19.00 | 18.00 | 4.60 |
-| Qwen3.5-35B-A3B | Human-Written Skill | 9.67 | 13.03 | 3.37 |
-| Qwen3.5-35B-A3B | Trace2Skill +Combined | 29.67 (+20.00) | 18.80 (+5.77) | 5.73 (+2.36) |
-| Qwen3.5-35B-A3B | SkillCAT | 55.50 (+45.83) | 39.02 (+25.99) | 20.61 (+17.24) |
-| Qwen3.5-35B-A3B | **TreeSkill (routed)** | **66.00 (+56.33)** | **41.72 (+28.69)** | **25.22 (+21.85)** |
-| Qwen3.5-9B | No Skill | 25.50 | 21.00 | 9.21 |
-| Qwen3.5-9B | Human-Written Skill | 14.00 | 16.76 | 7.24 |
-| Qwen3.5-9B | Trace2Skill +Combined | 16.50 (+2.50) | 18.97 (+2.21) | 8.66 (+1.42) |
-| Qwen3.5-9B | **TreeSkill (routed)** | **45.50 (+31.50)** | **30.28 (+13.52)** | **14.58 (+7.34)** |
-
-#### Skill Graph
-
-The retrieval table reports Ret@1, Ret@K, and MRR for three benchmarks. Bold and underlined scores mark first and second place, including ties. Asterisks mark scores from the corresponding papers. [Retrieval results](docs/evaluation/skill_evaluation.md#table-1-skill-retrieval)
-
-| Method | ALFWorld Ret@1 | ALFWorld Ret@K | ALFWorld MRR | AgentSkillOS Ret@1 | AgentSkillOS Ret@K | AgentSkillOS MRR | SkillsBench Ret@1 | SkillsBench Ret@K | SkillsBench MRR |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Vector-based methods** |  |  |  |  |  |  |  |  |  |
-| Vector Skills | 0.7 | 4.5 | 0.4 | 56.7 | 83.3 | 66.2 | 3.6\* | 10.8\* | 5.8\* |
-| SkillRouter (Emb.) | 13.6 | 48.6 | 26.2 | 50.0 | <ins>86.7</ins> | 64.3 | <ins>77.6</ins> | **93.4** | <ins>83.1</ins> |
-| SkillRouter (Emb.+RR) | 12.1 | **74.3** | <ins>36.2</ins> | 56.7 | 70.0 | 61.9 | **81.6** | <ins>88.2</ins> | **84.5** |
-| **Tree-structured methods** |  |  |  |  |  |  |  |  |  |
-| AgentSkillOS | 0.7 | 50.7 | 18.5 | 70.0 | 83.3 | 76.7 | 38.2 | 44.7 | 41.0 |
-| SkillRAE | 9.3 | 35.6 | 17.5 | 40.0 | 80.0 | 55.2 | 69.7 | 86.8 | 76.8 |
-| **Graph-structured methods** |  |  |  |  |  |  |  |  |  |
-| GoS | 8.6 | 9.3 | 8.9 | <ins>76.7</ins> | <ins>86.7</ins> | <ins>80.3</ins> | 50.6\* | 65.5\* | 57.3\* |
-| SkillDAG | <ins>20.0</ins> | 44.8 | 29.2 | 43.3 | 56.1 | 60.8 | 66.7\* | 78.2\* | 71.3\* |
-| **MindMemOS Skill Graph** | **49.3** | <ins>71.4</ins> | **57.9** | **80.0** | **93.3** | **83.3** | 69.2 | 86.8 | 76.8 |
-
-The second table reports end-to-end R scores. Rankings are within each setting. Setting 1 uses MiniMax-M2.7, and the current reproduction guide covers AgentSkillOS for that setting. [End-to-end results](docs/evaluation/skill_evaluation.md#table-2-end-to-end-r-scores)
-
-| Setting | Method | ALFWorld | AgentSkillOS | SkillsBench |
-| --- | --- | ---: | ---: | ---: |
-| Setting 1 | Vanilla Skills | 47.1\* | 70.8 | 17.2\* |
-|  | Vector Skills | 50.7\* | <ins>72.4</ins> | 10.4\* |
-|  | GoS | 54.3\* | 68.0 | 18.7\* |
-|  | SkillDAG | <ins>67.9</ins> | 54.9 | <ins>27.3</ins>\* |
-|  | **MindMemOS Skill Graph** | **76.4** | **80.9** | **28.0** |
-| Setting 2 | Vector Skills | 60.0 | 74.9\* | 27.3 |
-|  | GoS | 63.6 | <ins>96.2</ins> | <ins>35.4</ins> |
-|  | SkillDAG | <ins>82.0</ins> | 94.2 | 31.4 |
-|  | AgentSkillOS | 13.6 | 83.5\* | 17.2\* |
-|  | SkillRouter | 29.3 | 82.3\* | 22.0\* |
-|  | SkillRAE | 27.1 | 84.6\* | 29.3\* |
-|  | **MindMemOS Skill Graph** | **86.0** | **97.4** | **43.2** |
-| Setting 3 | GoS | 79.3 | <ins>96.2</ins> | 40.1 |
-|  | SkillDAG | <ins>85.0</ins> | 92.3 | <ins>49.0</ins> |
-|  | **MindMemOS Skill Graph** | **85.7** | **96.5** | **51.0** |
-
-#### Offline Evolution
-
-The SkillsBench comparison is pending. The evaluation guide describes how to collect trajectories with the initial Skill and retest the same tasks with the evolved Skill. [Offline Evolution evaluation](docs/evaluation/skill_evaluation.md#offline-evolution)
 
 #### Skill-Forest smoke test
 

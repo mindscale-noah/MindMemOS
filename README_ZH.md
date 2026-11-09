@@ -52,17 +52,19 @@
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
 - **2026-06-30**：MindMemOS 正式发布！
 
-> **Skill API 更新提示。** 旧版 Skill API 已弃用。新版 Skill 服务地址为 `https://mindmemos.cn/api/developer/skill`。请将 `mindmemos-sdk` 升级至 **1.0.0 或更高版本**。如果使用 OpenClaw 或 DeepSeek Harness，请同时将对应的 `@mindmemos/openclaw-plugin` 或 `@mindmemos/deepseek-harness-plugin` 升级至 **0.2.0 或更高版本**。升级后，用已获 Skill 权限的项目 API Key 重新运行 `mindmemos auth`。下方快速开始提供了从本仓库安装这些版本的步骤。
+> **Skill API 更新提示。** 旧版 Skill API 已弃用。新版 Skill 服务地址为 `https://mindmemos.cn/api/developer/skill`。请将 `mindmemos-sdk` 升级至 **1.0.0 或更高版本**。如果使用 OpenClaw 或 DeepSeek Harness，请同时将对应的 `@mindmemos/openclaw-plugin` 或 `@mindmemos/deepseek-harness-plugin` 升级至 **0.2.0 或更高版本**。升级后，先在 MindMemOS 控制台编辑项目 API Key，添加 `skill:read` 和 `skill:write`，保存后再用同一个 Key 运行 `mindmemos auth`。下方快速开始提供了从本仓库安装这些版本的步骤。[新版 Skill 服务权限设置](#为项目-api-key-开通新版-skill-服务权限)
 
 ## 🌟 Core Features
 
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。
 - **记忆系统可自主演化**：通过 schema learning、dreaming、feedback 持续优化记忆质量，自动学习高频记忆点、离线巩固合并记忆，并从交互纠错中反向优化 add/search 流程。
-- **MindMemOS-Skill** 可注册 Skill、管理版本并保存 Agent 执行轨迹。你可以用 TreeSkill 或 Skill-Forest 基于任务训练 Skill，也可以用已保存的轨迹离线演化指定版本。支持独立部署 Skill API 或直接调用 Python 服务。
+- **从任务和历史轨迹中改进 Skill**。MindMemOS-Skill 支持注册 Skill、管理版本、保存 Agent 执行轨迹，并对 Skill 和执行轨迹评分。你可以构建和管理 Skill 图谱，按任务推荐合适的 Skill 组合，也可以用 TreeSkill 或 Skill-Forest 基于任务训练 Skill，或用已保存的轨迹离线演化指定版本。你可以独立部署 Skill API，也可以直接调用 Python 服务。
 - **本机 Web 工作台**可通过 SDK 连接 Memory 和 Skill 服务，搜索和编辑记忆、管理 Skill 版本、查看图谱快照、预览动态 Skill，并编辑服务连接配置。
 - **插件集成能力**：支持通过插件将 MindMemOS 接入不同 Agent 与工作流，在交互前检索并注入相关记忆、回合结束后自动写回对话，当前已提供 [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) 和 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，并持续扩展更多集成。
 
 ### 项目组成与服务关系
+
+![Web 工作台通过 SDK 分别连接独立的 Memory 和 Skill 服务，Memory 评测也使用 SDK。](./assets/mindmemos-service-architecture.png)
 
 | 包 | 提供的能力 | 使用方式 |
 | --- | --- | --- |
@@ -78,11 +80,18 @@ Memory 与 Skill 各自管理业务数据，可分别部署。默认本地部署
 
 ### 1. 注册账号并创建 API Key
 
-[注册 MindMemOS 账号](https://mindmemos.cn/#/register)并登录控制台。打开已有项目或新建项目，在 **API 密钥** 中创建并保存 Key。使用 Skill 服务时，请选用已获 Skill 权限的项目 Key。
+[注册 MindMemOS 账号](https://mindmemos.cn/#/register)并登录控制台。打开已有项目或新建项目。首次使用时，在 **API Keys** 页面点击 **创建 API Key**，选择对应项目和所需权限，创建后保存完整 Key。
+
+#### 为项目 API Key 开通新版 Skill 服务权限
+
+1. 登录 [MindMemOS 控制台](https://mindmemos.cn/)，打开 **API Keys**（API 密钥）。按名称和前缀找到 SDK 或插件当前使用的项目 Key，进入权限编辑。
+2. 在 **权限** 中新增 `skill:read` 和 `skill:write`。`skill:read` 用于查看 Skill 和版本，`skill:write` 用于注册 Skill、写入新版本和上报执行轨迹。同时使用 Memory 时，保留已有的 `memory:read` 和 `memory:write`。
+3. 保存权限，在 Key 列表的 **权限** 列确认 `skill:read` 和 `skill:write` 已显示。
+4. 按[接入 Python SDK](#2-接入-python-sdk)中的命令重新运行 `mindmemos auth`，选择官方服务，按提示输入刚完成授权的项目 Key。用 `mindmemos skill list --limit 1` 验证读取权限，再用下方的 Skill 注册示例验证写入权限。
 
 ### 2. 接入 Python SDK
 
-准备 Python 3.11–3.13 和 uv，在仓库根目录运行以下命令，按提示输入上一步创建的项目 API Key。SDK 和 Agent 插件共用这份配置。
+准备 Python 3.11–3.13 和 uv，在仓库根目录运行以下命令，按提示输入已配置权限的项目 API Key。SDK 和 Agent 插件共用这份配置。
 
 ```bash
 uv sync --package mindmemos-sdk --no-dev --inexact
@@ -96,17 +105,48 @@ uv run --no-sync mindmemos memory get --top-k 1
 uv run --no-sync mindmemos skill list --limit 1
 ```
 
-用 `uv run --no-sync python` 运行下面的示例，写入并检索一条记忆。
+用 `uv run --no-sync python` 分别运行下面两个示例。
+
+**Memory：写入并检索记忆**
 
 ```python
 from mindmemos_sdk import DialogueMessage, MindMemOSClient
 
-with MindMemOSClient() as client:
+user_id = "alice"
+
+with MindMemOSClient(user_id=user_id) as client:
     client.memory.add(
         messages=[DialogueMessage(role="user", content="我喜欢喝冰美式。")],
         mode="sync",
     )
-    print(client.memory.search("咖啡偏好", user_id="alice", top_k=3))
+    result = client.memory.search("咖啡偏好", user_id=user_id, top_k=3)
+    for memory in result.memories:
+        print(memory.memory)
+```
+
+**Skill：注册 Skill 并读取首个版本**
+
+此示例需要具备 Skill 读写权限的项目 API Key。
+
+```python
+from mindmemos_sdk import MindMemOSClient
+from mindmemos_sdk.skills import RegisterRequest, ShowRequest, StructuredSkillInfo
+
+skill_content = """---
+name: meeting-summary
+description: Summarize meeting notes into decisions and action items.
+---
+List decisions first. Then list each action item with its owner and deadline.
+"""
+
+with MindMemOSClient() as client:
+    created = client.skills.register(
+        RegisterRequest(skill=StructuredSkillInfo(content=skill_content, commit_version="v1.0.0"))
+    )
+    version_id = created["skill_version_id"]
+    detail = client.skills.show(ShowRequest(skill_version_id=version_id))
+    print(version_id)
+    print(detail["version"]["content"])
 ```
 
 SDK 文档提供了[注册 Skill 和管理版本](src/mindmemos_sdk/README.md#python-sdk)与[向两个服务统一上报执行轨迹](src/mindmemos_sdk/README.md#统一上报执行轨迹)的示例。
@@ -184,7 +224,156 @@ Web 工作台和其他启动方式见[部署指南](docs/deploy/instruction_ZH.m
 
 ## 📊 Benchmark
 
-### 数据集下载
+粗体标出同组、同指标的最高分，包含并列。
+
+### Memory 基准评测
+
+#### LoCoMo
+
+长对话记忆问答，覆盖单跳、多跳、时序和开放域任务。[LoCoMo 论文](https://arxiv.org/abs/2402.17753)
+
+| 方法 | Single-hop | Multi-hop | Temporal | Open-domain | Overall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Mem0 | 68.97 | 61.70 | 58.26 | 50.00 | 64.20 |
+| MemU | 74.91 | 72.34 | 43.61 | 54.17 | 66.67 |
+| MemOS | 85.37 | 79.43 | 75.08 | 64.58 | 80.76 |
+| Zep | 90.84 | 81.91 | 77.26 | 75.00 | 85.22 |
+| EverOS | 96.67 | 91.84 | 89.72 | 76.04 | 93.05 |
+| MindMemOS-MindVanilla | 92.03 | 85.82 | 83.80 | 66.67 | 87.60 |
+| MindMemOS-MindSchema | **96.79** | **93.97** | **90.34** | **82.29** | **94.03** |
+
+#### PersonaMem
+
+用户画像与偏好理解，按题型统计准确率。[PersonaMem 论文](https://arxiv.org/abs/2504.14225)
+
+| Method | Recall | Ack. Lat. | Trk. Evo. | Revisit | Suggest | Recom. | General. | Overall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mem0 | 46.51 | 41.18 | 65.47 | **90.91** | 12.90 | 34.55 | 43.86 | 51.61 |
+| MemU | 64.34 | 64.71 | 66.20 | 87.88 | 31.18 | 67.27 | **84.21** | 65.70 |
+| MemOS | 53.49 | 82.35 | **66.91** | 79.80 | 41.94 | 69.09 | 75.44 | 63.67 |
+| EverOS | 74.42 | 64.71 | 64.03 | 85.86 | 35.48 | 65.45 | **84.21** | 67.57 |
+| MindMemOS-MindVanilla | 76.74 | **88.24** | 65.47 | 87.88 | 17.20 | **80.00** | 82.46 | 67.74 |
+| MindMemOS-MindSchema | **81.40** | 64.71 | 64.75 | 82.83 | **47.31** | 76.36 | 73.68 | **70.63** |
+
+#### MemoryAgentBench
+
+FactConsolidation 分数为四种上下文规模下的平均 Substring Exact Match。[MemoryAgentBench 论文](https://arxiv.org/abs/2507.05257)
+
+| 模型 | Method | SH score | SH archived | MH score | MH archived |
+| --- | --- | ---: | ---: | ---: | ---: |
+| GPT-4o-mini | Mem0 | 0.180 | — | 0.020 | — |
+|  | MemoRAG | 0.270 | — | 0.070 | — |
+|  | HippoRAG-v2 | 0.540 | — | 0.050 | — |
+|  | MindMemOS-MindVanilla | 0.635 | — | 0.118 | — |
+|  | MindMemOS-MindVanilla + Dreaming | **0.738** | 21.4% | **0.180** | 19.4% |
+| GPT-5-mini | Infini Memory | 0.800 | — | 0.220 | — |
+|  | MindMemOS-MindVanilla | 0.900 | — | 0.190 | — |
+|  | MindMemOS-MindVanilla + Dreaming | **0.920** | 23.5% | **0.250** | 21.5% |
+
+### Skill 基准评测
+
+#### Skill-Forest
+
+各基准的 Hard 分数（%）取留出测试集三轮运行的平均值，总体分数对五个基准等权平均。Select 和 Merge 各使用 7 棵树。[评测配置与结果](docs/evaluation/skill_evaluation_ZH.md#验证结果)
+
+| 方法 | LiveMath | ALFWorld | SpreadsheetBench Verified 400 | SearchQA | OfficeQA | 总体 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 无 Skill | 27.42 | 56.97 | 80.24 | 76.90 | 28.49 | 54.00 |
+| 初始 Skill | 28.23 | 70.65 | 79.40 | 76.67 | 43.99 | 59.79 |
+| Trace2Skill | 27.69 | 76.62 | 81.79 | 77.50 | 54.84 | 63.69 |
+| GEPA | 31.45 | 79.85 | **82.26** | 79.62 | 53.68 | 65.37 |
+| SkillOpt | 31.72 | 75.37 | 80.71 | **80.67** | 52.71 | 64.24 |
+| Select | **36.02** | 82.34 | 81.67 | 80.21 | 53.88 | 66.82 |
+| Merge | 34.68 | **82.84** | 81.07 | 80.52 | **55.23** | **66.87** |
+
+#### TreeSkill
+
+下表为 SpreadsheetBench 域内评测结果。括号内是相对于同一执行模型的人工编写 Skill 的提升，单位为百分点。35B 的对照分数引自已有报告，TreeSkill 两组结果和 9B 对照由本项目实测。[评测配置与结果](docs/evaluation/skill_evaluation_ZH.md#spreadsheetbench-域内评测结果)
+
+| 执行模型 | 方法 | Vrf (%) | Soft (%) | Hard (%) |
+| --- | --- | ---: | ---: | ---: |
+| Qwen3.5-35B-A3B | No Skill | 19.00 | 18.00 | 4.60 |
+|  | Human-Written Skill | 9.67 | 13.03 | 3.37 |
+|  | Trace2Skill +Combined | 29.67 (+20.00) | 18.80 (+5.77) | 5.73 (+2.36) |
+|  | SkillCAT | 55.50 (+45.83) | 39.02 (+25.99) | 20.61 (+17.24) |
+|  | TreeSkill (routed) | **66.00 (+56.33)** | **41.72 (+28.69)** | **25.22 (+21.85)** |
+| Qwen3.5-9B | No Skill | 25.50 | 21.00 | 9.21 |
+|  | Human-Written Skill | 14.00 | 16.76 | 7.24 |
+|  | Trace2Skill +Combined | 16.50 (+2.50) | 18.97 (+2.21) | 8.66 (+1.42) |
+|  | TreeSkill (routed) | **45.50 (+31.50)** | **30.28 (+13.52)** | **14.58 (+7.34)** |
+
+#### Skill Graph
+
+##### Skill 检索
+
+Skill Graph 表格中的下划线标出第二名，含并列。星号表示分数引自对应方法的原论文。[检索评测结果](docs/evaluation/skill_evaluation_ZH.md#对标结果)
+
+**ALFWorld**
+
+| 方法 | Ret@1 | Ret@K | MRR |
+| --- | ---: | ---: | ---: |
+| Vector Skills | 0.7 | 4.5 | 0.4 |
+| SkillRouter (Emb.) | 13.6 | 48.6 | 26.2 |
+| SkillRouter (Emb.+RR) | 12.1 | **74.3** | <ins>36.2</ins> |
+| AgentSkillOS | 0.7 | 50.7 | 18.5 |
+| SkillRAE | 9.3 | 35.6 | 17.5 |
+| GoS | 8.6 | 9.3 | 8.9 |
+| SkillDAG | <ins>20.0</ins> | 44.8 | 29.2 |
+| MindMemOS Skill Graph | **49.3** | <ins>71.4</ins> | **57.9** |
+
+**AgentSkillOS**
+
+| 方法 | Ret@1 | Ret@K | MRR |
+| --- | ---: | ---: | ---: |
+| Vector Skills | 56.7 | 83.3 | 66.2 |
+| SkillRouter (Emb.) | 50.0 | <ins>86.7</ins> | 64.3 |
+| SkillRouter (Emb.+RR) | 56.7 | 70.0 | 61.9 |
+| AgentSkillOS | 70.0 | 83.3 | 76.7 |
+| SkillRAE | 40.0 | 80.0 | 55.2 |
+| GoS | <ins>76.7</ins> | <ins>86.7</ins> | <ins>80.3</ins> |
+| SkillDAG | 43.3 | 56.1 | 60.8 |
+| MindMemOS Skill Graph | **80.0** | **93.3** | **83.3** |
+
+**SkillsBench**
+
+| 方法 | Ret@1 | Ret@K | MRR |
+| --- | ---: | ---: | ---: |
+| Vector Skills | 3.6\* | 10.8\* | 5.8\* |
+| SkillRouter (Emb.) | <ins>77.6</ins> | **93.4** | <ins>83.1</ins> |
+| SkillRouter (Emb.+RR) | **81.6** | <ins>88.2</ins> | **84.5** |
+| AgentSkillOS | 38.2 | 44.7 | 41.0 |
+| SkillRAE | 69.7 | 86.8 | 76.8 |
+| GoS | 50.6\* | 65.5\* | 57.3\* |
+| SkillDAG | 66.7\* | 78.2\* | 71.3\* |
+| MindMemOS Skill Graph | 69.2 | 86.8 | 76.8 |
+
+##### 端到端 R 分数
+
+端到端结果按各设置分别排名。Setting 1 使用 MiniMax-M2.7，当前复现指南覆盖该设置下的 AgentSkillOS。[端到端评测结果](docs/evaluation/skill_evaluation_ZH.md#对标结果)
+
+| 设置 | 方法 | ALFWorld | AgentSkillOS | SkillsBench |
+| --- | --- | ---: | ---: | ---: |
+| Setting 1 | Vanilla Skills | 47.1\* | 70.8 | 17.2\* |
+|  | Vector Skills | 50.7\* | <ins>72.4</ins> | 10.4\* |
+|  | GoS | 54.3\* | 68.0 | 18.7\* |
+|  | SkillDAG | <ins>67.9</ins> | 54.9 | <ins>27.3</ins>\* |
+|  | MindMemOS Skill Graph | **76.4** | **80.9** | **28.0** |
+| Setting 2 | Vector Skills | 60.0 | 74.9\* | 27.3 |
+|  | GoS | 63.6 | <ins>96.2</ins> | <ins>35.4</ins> |
+|  | SkillDAG | <ins>82.0</ins> | 94.2 | 31.4 |
+|  | AgentSkillOS | 13.6 | 83.5\* | 17.2\* |
+|  | SkillRouter | 29.3 | 82.3\* | 22.0\* |
+|  | SkillRAE | 27.1 | 84.6\* | 29.3\* |
+|  | MindMemOS Skill Graph | **86.0** | **97.4** | **43.2** |
+| Setting 3 | GoS | 79.3 | <ins>96.2</ins> | 40.1 |
+|  | SkillDAG | <ins>85.0</ins> | 92.3 | <ins>49.0</ins> |
+|  | MindMemOS Skill Graph | **85.7** | **96.5** | **51.0** |
+
+#### Offline Evolution
+
+SkillsBench 的正式对比结果待补。评测指南说明了如何用初始 Skill 收集轨迹，并用演化后的 Skill 复测同一批任务。[离线演化评测](docs/evaluation/skill_evaluation_ZH.md#offline-evolution)
+
+### 数据集与复现
 
 从仓库根目录运行 `scripts/download_datasets.py`，列出数据集并按需下载固定版本。
 
@@ -202,124 +391,6 @@ Memory 数据集包括 `locomo`、`personamem`（v1）、`memoryagentbench`（�
 可用 `--data-root` 指定父目录，在 `download` 后加 `--verify-only` 校验已有文件。
 评测配置需指向下载后的文件。下载保留官方格式，MemoryAgentBench 为 Parquet，使用当前评测器的
 本地 JSON/JSONL 入口前仍需转换格式。实验 split 随仓库管理，下载脚本不下载或生成 split。
-
-
-### 💬 对话记忆：LoCoMo
-
-- **评测基准**：[LoCoMo](https://arxiv.org/abs/2402.17753)，面向长对话记忆的主流基准，覆盖单跳（single-hop）、多跳（multi-hop）、时序（temporal）和开放域（open-domain）问答。
-
-| 方法                       | Single-hop | Multi-hop | Temporal | Open-domain | Overall |
-| :------------------------- | :--------: | :-------: | :------: | :---------: | :-----: |
-| Mem0                       | 68.97 | 61.70 | 58.26 | 50.00  | 64.20 |
-| MemU                       | 74.91 | 72.34 | 43.61 | 54.17  | 66.67 |
-| MemOS                      | 85.37 | 79.43 | 75.08 | 64.58  | 80.76 |
-| Zep                        | 90.84 | 81.91 | 77.26 | 75.00  | 85.22 |
-| EverOS                     | 96.67 | 91.84 | 89.72 | 76.04  | 93.05 |
-| **MindMemOS-MindVanilla** | 92.03 | 85.82 | 83.80 | 66.67  | 87.60 |
-| **MindMemOS-MindSchema**  | **96.79** | **93.97** | **90.34** | **82.29** | **94.03** |
-
-### 👤 用户画像记忆：PersonaMem
-
-- **评测基准**：[PersonaMem](https://arxiv.org/abs/2504.14225)，以用户画像与喜好理解为中心的记忆基准，评测对用户特征的召回、追踪、重访、建议、推荐与泛化能力。
-
-| Method | Recall | Ack. Lat. | Trk. Evo. | Revisit | Suggest | Recom. | General. | Overall |
-| :----- | :----: | :-------: | :-------: | :-----: | :-----: | :-----: | :------: | :-----: |
-| Mem0 | 46.51 | 41.18 | 65.47 | 90.91 | 12.90 | 34.55 | 43.86 | 51.61 |
-| MemU | 64.34 | 64.71 | 66.20 | 87.88 | 31.18 | 67.27 | 84.21 | 65.70 |
-| MemOS | 53.49 | 82.35 | 66.91 | 79.80 | 41.94 | 69.09 | 75.44 | 63.67 |
-| EverOS | 74.42 | 64.71 | 64.03 | 85.86 | 35.48 | 65.45 | 84.21 | 67.57 |
-| **MindMemOS-MindVanilla** | 76.74 | 88.24 | 65.47 | 87.88 | 17.20 | 80.00 | 82.46 | 67.74 |
-| **MindMemOS-MindSchema** | 81.40 | 64.71 | 64.75 | 82.83 | 47.31 | 76.36 | 73.68 | 70.63 |
-
-### 🌙 记忆巩固：MemoryAgentBench（FactConsolidation）
-
-- **评测基准**：[MemoryAgentBench](https://arxiv.org/abs/2507.05257) FactConsolidation，表中分数为四种上下文规模下的平均 Substring Exact Match。
-
-| Method                             | SH score | SH archived | MH score | MH archived |
-|:-----------------------------------| :------: | :---------: | :------: | :---------: |
-| **GPT-4o-mini**                    |  |  |  |  |
-| Mem0                               | 0.180 | — | 0.020 | — |
-| MemoRAG                            | 0.270 | — | 0.070 | — |
-| HippoRAG-v2                        | 0.540 | — | 0.050 | — |
-| MindMemOS-MindVanilla              | 0.635 | — | 0.118 | — |
-| **MindMemOS-MindVanilla + Dreaming** | 0.738 | 21.4% | 0.180 | 19.4% |
-| **GPT-5-mini**                     |  |  |  |  |
-| Infini Memory                      | 0.800 | — | 0.220 | — |
-| MindMemOS-MindVanilla              | 0.900 | — | 0.190 | — |
-| **MindMemOS-MindVanilla + Dreaming** | 0.920 | 23.5% | 0.250 | 21.5% |
-
-### Skill 基准评测
-
-#### Skill-Forest
-
-各基准的 Hard 分数（%）取留出测试集三轮运行的平均值，总体分数对五个基准等权平均。Select 和 Merge 各使用 7 棵树。[评测配置与结果](docs/evaluation/skill_evaluation_ZH.md#验证结果)
-
-| 数据集 | 无 Skill | 初始 Skill | Trace2Skill | GEPA | SkillOpt | Select | Merge |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| LiveMath | 27.42 | 28.23 | 27.69 | 31.45 | 31.72 | 36.02 | 34.68 |
-| ALFWorld | 56.97 | 70.65 | 76.62 | 79.85 | 75.37 | 82.34 | 82.84 |
-| SpreadsheetBench Verified 400 | 80.24 | 79.40 | 81.79 | 82.26 | 80.71 | 81.67 | 81.07 |
-| SearchQA | 76.90 | 76.67 | 77.50 | 79.62 | 80.67 | 80.21 | 80.52 |
-| OfficeQA | 28.49 | 43.99 | 54.84 | 53.68 | 52.71 | 53.88 | 55.23 |
-| **总体** | 54.00 | 59.79 | 63.69 | 65.37 | 64.24 | 66.82 | 66.87 |
-
-#### TreeSkill
-
-下表为 SpreadsheetBench 域内评测结果。括号内是相对于同一执行模型的人工编写 Skill 的提升，单位为百分点。35B 的对照分数引自已有报告，TreeSkill 两组结果和 9B 对照由本项目实测。[评测配置与结果](docs/evaluation/skill_evaluation_ZH.md#spreadsheetbench-域内评测结果)
-
-| 执行模型 | 方法 | Vrf (%) | Soft (%) | Hard (%) |
-| --- | --- | ---: | ---: | ---: |
-| Qwen3.5-35B-A3B | No Skill | 19.00 | 18.00 | 4.60 |
-| Qwen3.5-35B-A3B | Human-Written Skill | 9.67 | 13.03 | 3.37 |
-| Qwen3.5-35B-A3B | Trace2Skill +Combined | 29.67 (+20.00) | 18.80 (+5.77) | 5.73 (+2.36) |
-| Qwen3.5-35B-A3B | SkillCAT | 55.50 (+45.83) | 39.02 (+25.99) | 20.61 (+17.24) |
-| Qwen3.5-35B-A3B | **TreeSkill (routed)** | **66.00 (+56.33)** | **41.72 (+28.69)** | **25.22 (+21.85)** |
-| Qwen3.5-9B | No Skill | 25.50 | 21.00 | 9.21 |
-| Qwen3.5-9B | Human-Written Skill | 14.00 | 16.76 | 7.24 |
-| Qwen3.5-9B | Trace2Skill +Combined | 16.50 (+2.50) | 18.97 (+2.21) | 8.66 (+1.42) |
-| Qwen3.5-9B | **TreeSkill (routed)** | **45.50 (+31.50)** | **30.28 (+13.52)** | **14.58 (+7.34)** |
-
-#### Skill Graph
-
-检索评测报告三个基准的 Ret@1、Ret@K 和 MRR。粗体和下划线分别标出第一名和第二名，含并列。星号表示分数引自对应方法的原论文。[检索评测结果](docs/evaluation/skill_evaluation_ZH.md#对标结果)
-
-| 方法 | ALFWorld Ret@1 | ALFWorld Ret@K | ALFWorld MRR | AgentSkillOS Ret@1 | AgentSkillOS Ret@K | AgentSkillOS MRR | SkillsBench Ret@1 | SkillsBench Ret@K | SkillsBench MRR |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **向量检索** |  |  |  |  |  |  |  |  |  |
-| Vector Skills | 0.7 | 4.5 | 0.4 | 56.7 | 83.3 | 66.2 | 3.6\* | 10.8\* | 5.8\* |
-| SkillRouter (Emb.) | 13.6 | 48.6 | 26.2 | 50.0 | <ins>86.7</ins> | 64.3 | <ins>77.6</ins> | **93.4** | <ins>83.1</ins> |
-| SkillRouter (Emb.+RR) | 12.1 | **74.3** | <ins>36.2</ins> | 56.7 | 70.0 | 61.9 | **81.6** | <ins>88.2</ins> | **84.5** |
-| **树结构** |  |  |  |  |  |  |  |  |  |
-| AgentSkillOS | 0.7 | 50.7 | 18.5 | 70.0 | 83.3 | 76.7 | 38.2 | 44.7 | 41.0 |
-| SkillRAE | 9.3 | 35.6 | 17.5 | 40.0 | 80.0 | 55.2 | 69.7 | 86.8 | 76.8 |
-| **图结构** |  |  |  |  |  |  |  |  |  |
-| GoS | 8.6 | 9.3 | 8.9 | <ins>76.7</ins> | <ins>86.7</ins> | <ins>80.3</ins> | 50.6\* | 65.5\* | 57.3\* |
-| SkillDAG | <ins>20.0</ins> | 44.8 | 29.2 | 43.3 | 56.1 | 60.8 | 66.7\* | 78.2\* | 71.3\* |
-| **MindMemOS Skill Graph** | **49.3** | <ins>71.4</ins> | **57.9** | **80.0** | **93.3** | **83.3** | 69.2 | 86.8 | 76.8 |
-
-下表是端到端 R 分数，排名按各设置分别计算。Setting 1 使用 MiniMax-M2.7，当前复现指南覆盖该设置下的 AgentSkillOS。[端到端评测结果](docs/evaluation/skill_evaluation_ZH.md#对标结果)
-
-| 设置 | 方法 | ALFWorld | AgentSkillOS | SkillsBench |
-| --- | --- | ---: | ---: | ---: |
-| Setting 1 | Vanilla Skills | 47.1\* | 70.8 | 17.2\* |
-|  | Vector Skills | 50.7\* | <ins>72.4</ins> | 10.4\* |
-|  | GoS | 54.3\* | 68.0 | 18.7\* |
-|  | SkillDAG | <ins>67.9</ins> | 54.9 | <ins>27.3</ins>\* |
-|  | **MindMemOS Skill Graph** | **76.4** | **80.9** | **28.0** |
-| Setting 2 | Vector Skills | 60.0 | 74.9\* | 27.3 |
-|  | GoS | 63.6 | <ins>96.2</ins> | <ins>35.4</ins> |
-|  | SkillDAG | <ins>82.0</ins> | 94.2 | 31.4 |
-|  | AgentSkillOS | 13.6 | 83.5\* | 17.2\* |
-|  | SkillRouter | 29.3 | 82.3\* | 22.0\* |
-|  | SkillRAE | 27.1 | 84.6\* | 29.3\* |
-|  | **MindMemOS Skill Graph** | **86.0** | **97.4** | **43.2** |
-| Setting 3 | GoS | 79.3 | <ins>96.2</ins> | 40.1 |
-|  | SkillDAG | <ins>85.0</ins> | 92.3 | <ins>49.0</ins> |
-|  | **MindMemOS Skill Graph** | **85.7** | **96.5** | **51.0** |
-
-#### Offline Evolution
-
-SkillsBench 的正式对比结果待补。评测指南说明了如何用初始 Skill 收集轨迹，并用演化后的 Skill 复测同一批任务。[离线演化评测](docs/evaluation/skill_evaluation_ZH.md#offline-evolution)
 
 #### Skill-Forest 冒烟测试
 
