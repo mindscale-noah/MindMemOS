@@ -20,7 +20,7 @@ from .agentic.wrapper import AgenticSearchWrapper
 from .base import SearchEngine
 from .default import DefaultSearchEngine
 from .schema import SchemaSearchEngine
-from .vanilla import VanillaSearchEngine
+from .vanilla_multimodal import VanillaMultimodalSearchEngine
 
 logger = get_logger(__name__)
 
@@ -63,7 +63,9 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
             available = ", ".join(sorted(self._available_engine_names()))
             raise ValueError(f"Unknown search strategy {strategy!r}. Available strategies: {available}")
 
-        if inp.agentic:
+        owns_agentic = getattr(engine, "owns_agentic", None)
+        engine_agentic = inp.agentic and owns_agentic is not None and owns_agentic(inp)
+        if inp.agentic and not engine_agentic:
             candidates = await self._agentic_wrapper().run(inp, context, engine)
         elif inp.token_budget is not None:
             # Retention packs from a wider pool than top_k; raise engine recall accordingly.
@@ -80,8 +82,15 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
                 rerank=inp.rerank and _strategy_allows_rerank(strategy),
                 score_threshold=inp.score_threshold,
             )
-            return SearchPipelineResult(status="ok", memories=memories)
-        memories = await self._search_with_retention(inp, strategy=strategy, candidates=candidates)
+        else:
+            memories = await self._search_with_retention(inp, strategy=strategy, candidates=candidates)
+        augment = getattr(engine, "augment_results", None)
+        if augment is not None:
+            # Engines may add results from other channels (e.g. images) after text final filtering.
+            memories = await augment(inp, context, memories)
+        if engine_agentic:
+            # The engine runs its own agentic retrieval, starting from the single-pass result.
+            memories = await engine.agentic_refine(inp, context, memories)
         return SearchPipelineResult(status="ok", memories=memories)
 
     async def _search_with_retention(
@@ -152,7 +161,8 @@ class SearchPipelineImpl(MemoryDbPipelineMixin):
         if name == "default":
             engine = DefaultSearchEngine(**common)
         elif name == "vanilla":
-            engine = VanillaSearchEngine(**common)
+            # Plain vanilla unless a search is multimodal (algo_config.multimodal).
+            engine = VanillaMultimodalSearchEngine(**common)
         else:
             engine = SchemaSearchEngine(**common)
         self._engines[name] = engine

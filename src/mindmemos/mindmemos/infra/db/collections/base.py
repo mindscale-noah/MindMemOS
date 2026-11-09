@@ -11,6 +11,9 @@ shared :class:`QdrantEngine`.
 
 from __future__ import annotations
 
+import base64
+import json
+import time
 from typing import Any
 
 from qdrant_client import models as qmodels
@@ -18,6 +21,7 @@ from qdrant_client import models as qmodels
 from ....config import QdrantConfig
 from ..engine import QdrantEngine
 from ..models import PayloadIndexSpec, QdrantCollectionSpec, QdrantRecord
+from ..read_cache import ProjectReadCache
 
 
 class CollectionRepository:
@@ -26,6 +30,10 @@ class CollectionRepository:
     def __init__(self, engine: QdrantEngine, cfg: QdrantConfig) -> None:
         self._engine = engine
         self._cfg = cfg
+        self._project_collections_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
+        self._project_collections_cache_ttl_seconds = 30.0
+        self._project_collections_cache_max_entries = 4096
+        self.read_cache: ProjectReadCache[Any] = ProjectReadCache()
 
     @property
     def collection(self) -> str:
@@ -83,13 +91,39 @@ class CollectionRepository:
     ) -> str | None:
         """Locate the shared vector collection containing one project's data."""
 
+        collections = await self._collections_holding_project(project_id, vector_size=vector_size)
+        return collections[0] if collections else None
+
+    async def _collections_holding_project(
+        self,
+        project_id: str,
+        *,
+        vector_size: int | None = None,
+    ) -> list[str]:
+        """Locate every dimension collection containing one project's data.
+
+        A project can temporarily span dimensions during a model migration or
+        after an embedding failure. Reads must not let the first collection
+        hide the others.
+        """
+
         if not self._cfg.project_collection_namespace_enabled or not self._is_vector_repository:
-            return self.collection
+            return [self.collection]
         preferred = self.collection_for_vector_size(vector_size) if vector_size else None
+        now = time.monotonic()
+        cached = self._project_collections_cache.get(project_id)
+        if cached is not None and cached[0] > now:
+            collections = list(cached[1])
+            if preferred in collections:
+                collections.remove(preferred)
+                collections.insert(0, preferred)
+            return collections
+        self._project_collections_cache.pop(project_id, None)
         candidates = await self._dimension_collection_names()
         if preferred in candidates:
             candidates.remove(preferred)
             candidates.insert(0, preferred)
+        collections: list[str] = []
         for collection in candidates:
             count = await self._engine.count(
                 collection,
@@ -97,8 +131,35 @@ class CollectionRepository:
                 exact=True,
             )
             if count:
-                return collection
-        return None
+                collections.append(collection)
+        if len(self._project_collections_cache) >= self._project_collections_cache_max_entries:
+            oldest = min(
+                self._project_collections_cache,
+                key=lambda cache_key: self._project_collections_cache[cache_key][0],
+            )
+            self._project_collections_cache.pop(oldest, None)
+        self._project_collections_cache[project_id] = (
+            now + self._project_collections_cache_ttl_seconds,
+            tuple(collections),
+        )
+        return collections
+
+    def _invalidate_project_collection_cache(self, project_id: str) -> None:
+        self.read_cache.invalidate(project_id)
+        if project_id:
+            self._project_collections_cache.pop(project_id, None)
+
+    async def _collections_holding_record(self, project_id: str, point_id: str) -> list[str]:
+        """Return all project-owned physical collections containing ``point_id``."""
+
+        if not self._cfg.project_collection_namespace_enabled or not self._is_vector_repository:
+            return [self.collection]
+        collections: list[str] = []
+        for collection in await self._collections_holding_project(project_id):
+            records = await self._engine.retrieve(collection, [point_id], with_vectors=False)
+            if self._engine.first_project_match(records, project_id) is not None:
+                collections.append(collection)
+        return collections
 
     async def _project_collection_exists(self, project_id: str) -> bool:
         if not self._cfg.project_collection_namespace_enabled:
@@ -124,38 +185,34 @@ class CollectionRepository:
     ) -> QdrantRecord | None:
         """Retrieve one point and return it only if it belongs to ``project_id``."""
 
-        collection = (
-            await self._collection_holding_project(project_id)
-            if self._is_vector_repository
-            else self.collection
-        )
-        if collection is None:
-            return None
-        records = await self._engine.retrieve(
-            collection,
-            [point_id],
-            with_vectors=with_vectors,
-        )
-        return self._engine.first_project_match(records, project_id)
+        records = await self._retrieve_scoped(project_id, [point_id], with_vectors=with_vectors)
+        return records[0] if records else None
 
     async def _retrieve_scoped(
-        self, project_id: str, point_ids: list[str], *, with_vectors: bool = False
+        self,
+        project_id: str,
+        point_ids: list[str],
+        *,
+        with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> list[QdrantRecord]:
         """Retrieve points by id, keeping only those owned by ``project_id``."""
 
-        collection = (
-            await self._collection_holding_project(project_id)
-            if self._is_vector_repository
-            else self.collection
+        collections = (
+            await self._collections_holding_project(project_id) if self._is_vector_repository else [self.collection]
         )
-        if collection is None:
-            return []
-        records = await self._engine.retrieve(
-            collection,
-            point_ids,
-            with_vectors=with_vectors,
-        )
-        return [record for record in records if record.payload.get("project_id") == project_id]
+        records_by_id: dict[str, QdrantRecord] = {}
+        for collection in collections:
+            options = (
+                {"payload_fields": list(dict.fromkeys([*payload_fields, "project_id"]))}
+                if payload_fields is not None
+                else {}
+            )
+            records = await self._engine.retrieve(collection, point_ids, with_vectors=with_vectors, **options)
+            for record in records:
+                if record.payload.get("project_id") == project_id:
+                    records_by_id.setdefault(record.point_id, record)
+        return [records_by_id[point_id] for point_id in point_ids if point_id in records_by_id]
 
     async def _scroll_scoped(
         self,
@@ -166,40 +223,88 @@ class CollectionRepository:
         cursor: Any | None = None,
         order_by: Any | None = None,
         with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll the collection inside one project."""
 
-        collection = (
-            await self._collection_holding_project(project_id)
-            if self._is_vector_repository
-            else self.collection
+        collections = (
+            await self._collections_holding_project(project_id) if self._is_vector_repository else [self.collection]
         )
-        if collection is None:
+        if not collections:
             return [], None
-        return await self._engine.scroll(
-            collection,
-            scroll_filter=self._engine.project_filter(project_id, filter_=filter_),
-            limit=limit,
-            offset=cursor,
-            order_by=order_by,
-            with_vectors=with_vectors,
-        )
+        if len(collections) == 1:
+            return await self._engine.scroll(
+                collections[0],
+                scroll_filter=self._engine.project_filter(project_id, filter_=filter_),
+                limit=limit,
+                offset=cursor,
+                order_by=order_by,
+                with_vectors=with_vectors,
+                payload_fields=payload_fields,
+            )
+
+        collection_index, offset = self._decode_dimension_cursor(cursor)
+        records: list[QdrantRecord] = []
+        seen: set[str] = set()
+        for index in range(collection_index, len(collections)):
+            remaining = limit - len(records)
+            if remaining <= 0:
+                return records, self._encode_dimension_cursor(index, None)
+            page, next_offset = await self._engine.scroll(
+                collections[index],
+                scroll_filter=self._engine.project_filter(project_id, filter_=filter_),
+                limit=remaining,
+                offset=offset if index == collection_index else None,
+                order_by=order_by,
+                with_vectors=with_vectors,
+                payload_fields=payload_fields,
+            )
+            for record in page:
+                if record.point_id not in seen:
+                    seen.add(record.point_id)
+                    records.append(record)
+            if next_offset is not None:
+                return records, self._encode_dimension_cursor(index, next_offset)
+            if len(records) >= limit and index + 1 < len(collections):
+                return records, self._encode_dimension_cursor(index + 1, None)
+        return records, None
 
     async def _count_scoped(self, project_id: str, *, filter_: qmodels.Filter | None = None) -> int:
         """Count points inside one project."""
 
-        collection = (
-            await self._collection_holding_project(project_id)
-            if self._is_vector_repository
-            else self.collection
+        collections = (
+            await self._collections_holding_project(project_id) if self._is_vector_repository else [self.collection]
         )
-        if collection is None:
-            return 0
-        return await self._engine.count(
-            collection,
-            count_filter=self._engine.project_filter(project_id, filter_=filter_),
-            exact=True,
+        return sum(
+            [
+                await self._engine.count(
+                    collection,
+                    count_filter=self._engine.project_filter(project_id, filter_=filter_),
+                    exact=True,
+                )
+                for collection in collections
+            ]
         )
+
+    @staticmethod
+    def _encode_dimension_cursor(collection_index: int, offset: Any | None) -> str:
+        payload = json.dumps(
+            {"collection_index": collection_index, "offset": str(offset) if offset is not None else None},
+            separators=(",", ":"),
+        ).encode()
+        return "dim:" + base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_dimension_cursor(cursor: Any | None) -> tuple[int, Any | None]:
+        if not isinstance(cursor, str) or not cursor.startswith("dim:"):
+            return 0, cursor
+        encoded = cursor.removeprefix("dim:")
+        encoded += "=" * (-len(encoded) % 4)
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(encoded).decode())
+            return int(payload.get("collection_index") or 0), payload.get("offset")
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return 0, None
 
     async def _ensure_project_vector_collection(
         self,

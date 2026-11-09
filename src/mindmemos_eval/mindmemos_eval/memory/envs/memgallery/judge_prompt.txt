@@ -1,0 +1,47 @@
+You are an impartial judge evaluating the memory capabilities of an AI assistant with the question-answering task.
+Your task is to compare the Assistant's Answer against the Ground Truth and assign a score of 0, 0.25, 0.5, 0.75, or 1.
+
+### Scoring Rubric
+
+**Score 0 (Incorrect / Miss):**
+
+- The answer contradicts the Ground Truth.
+- For Yes/No questions: The answer has the wrong polarity (e.g., says "Yes" when Ground Truth is "No").
+- For Open-ended questions: The answer provides factually wrong information or hallucinations.
+- The assistant fails to provide the required information.
+
+**Score 0.25 (Poor / Tangential):**
+
+- The answer touches on the topic but misses the **core entity** or key value required.
+- The answer contains a mix of minor correct details and **significant hallucinations** or wrong associations.
+- The answer is excessively vague to the point of being useless (e.g., answering "a dog" instead of "a golden retriever").
+
+**Score 0.5 (Partial / Vague):**
+
+- The answer is technically correct, but lacks confidence or is incomplete.
+- The answer captures the **main entity or concept** correctly but misses a part of the required supporting details.
+- For Yes/No questions: The polarity is correct, but the reasoning is flawed (if have), or the assistant is uncertain (e.g., "I think it might be Yes").
+- For Open-ended questions: The answer is too general or misses key adjectives/details present in the Ground Truth.
+
+**Score 0.75 (Good / Minor Imperfection):**
+
+- The answer is largely accurate and captures the core information confidently.
+- It misses only **minor details** (e.g., specific adjectives or secondary details) that do not alter the main truth.
+- The answer contains all the correct information but includes unnecessary "fluff" or slight conversational filler that reduces precision.
+
+**Score 1 (Correct / Exact):**
+
+- The answer is accurate, precise, and confident.
+- For Yes/No questions: The polarity matches the Ground Truth perfectly.
+- For Open-ended questions: The answer contains **all** the core information and necessary details required by the Ground Truth without hallucinations.
+
+### Input Data
+
+Question: {{question}}
+Ground Truth: {{ground_truth}}
+Assistant Answer: {{model_output}}
+
+### Output Format
+
+Output strictly in the following JSON format:
+{"score": <0, 0.25, 0.5, 0.75, or 1>, "reasoning": "<short explanation>"}

@@ -1,4 +1,6 @@
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -15,6 +17,86 @@ from mindmemos.infra.db.filters import build_filter, match_any, match_value
 from qdrant_client import AsyncQdrantClient
 from qdrant_client import models as qmodels
 from qdrant_client.http.exceptions import ResponseHandlingException
+
+
+@pytest.mark.asyncio
+async def test_provenance_lookup_is_project_scoped_projected_cached_and_invalidated(qdrant_store, monkeypatch):
+    memory_id = "memory-provenance"
+    own_id = "00000000-0000-0000-0000-000000000002"
+    other_id = "00000000-0000-0000-0000-000000000001"
+    await qdrant_store.upsert_add_records(
+        [
+            AddRecordPoint(
+                add_record_id=other_id,
+                payload={
+                    "project_id": "other",
+                    "memories": [{"memory_id": memory_id}],
+                    "messages": ["private other input"],
+                },
+            ),
+            AddRecordPoint(
+                add_record_id=own_id,
+                payload={
+                    "project_id": "proj",
+                    "memories": [{"memory_id": memory_id}],
+                    "messages": ["private original input"],
+                    "request_id": "before",
+                },
+            ),
+        ]
+    )
+    scroll = AsyncMock(wraps=qdrant_store.engine.scroll)
+    monkeypatch.setattr(qdrant_store.engine, "scroll", scroll)
+    result = await qdrant_store.get_memory_provenance("proj", memory_id)
+    assert result["add_record_id"] == own_id
+    assert result["request_id"] == "before"
+    assert "messages" not in result and "memories" not in result
+    assert await qdrant_store.get_memory_provenance("proj", memory_id) == result
+    assert scroll.await_count == 1
+    assert scroll.call_args.kwargs["limit"] == 1
+    assert "messages" not in scroll.call_args.kwargs["payload_fields"]
+    assert await qdrant_store.get_memory_provenance("proj", memory_id, add_record_id=other_id) == result
+    await qdrant_store.patch_add_record("proj", own_id, {"request_id": "after"})
+    assert (await qdrant_store.get_memory_provenance("proj", memory_id))["request_id"] == "after"
+
+
+@pytest.mark.asyncio
+async def test_missing_provenance_cache_is_invalidated_when_add_output_arrives(qdrant_store):
+    assert await qdrant_store.get_memory_provenance("proj", "new-memory") is None
+    await qdrant_store.upsert_add_record(
+        AddRecordPoint(
+            add_record_id="00000000-0000-0000-0000-000000000003",
+            payload={"project_id": "proj", "memories": [{"memory_id": "new-memory"}], "messages": ["private"]},
+        )
+    )
+    result = await qdrant_store.get_memory_provenance("proj", "new-memory")
+    assert result["add_record_id"].endswith("0003")
+    assert "messages" not in result
+
+
+@pytest.mark.asyncio
+async def test_insight_cache_is_invalidated_by_memory_state_changes(qdrant_store, monkeypatch):
+    from mindmemos.pipelines.memory_db import MemoryDbReader
+    from mindmemos.typing import MemoryRequestContext
+
+    memory_id = "00000000-0000-0000-0000-000000000004"
+    await qdrant_store.upsert_memory(_point(memory_id, "memory", [1.0, 0.0], 1))
+    reader = MemoryDbReader(clients=SimpleNamespace(qdrant=qdrant_store))
+    ctx = MemoryRequestContext(project_id="proj", request_id="req", account_id="account", api_key_uuid="key")
+    counts = AsyncMock(wraps=qdrant_store.count_memories)
+    monkeypatch.setattr(qdrant_store, "count_memories", counts)
+    assert (await reader.get_memory_insights(ctx)).counts["active"] == 1
+    assert (await reader.get_memory_insights(ctx)).counts["active"] == 1
+    assert counts.await_count == 4
+    await qdrant_store.update_memory_payload("proj", memory_id, {"status": "archived"})
+    assert (await reader.get_memory_insights(ctx)).counts["archived"] == 1
+    assert counts.await_count == 8
+    await qdrant_store.patch_memory("proj", memory_id, {"status": "active"})
+    assert (await reader.get_memory_insights(ctx)).counts["active"] == 1
+    await qdrant_store.delete_memory("proj", memory_id)
+    assert (await reader.get_memory_insights(ctx)).counts["total"] == 0
+    await qdrant_store.upsert_memory(_point(memory_id, "new memory", [1.0, 0.0], 1))
+    assert (await reader.get_memory_insights(ctx)).counts["active"] == 1
 
 
 class ConcurrencyTrackingQdrantClient:
@@ -247,6 +329,22 @@ async def test_qdrant_filtering_is_caller_owned(qdrant_store):
     hits = await qdrant_store.search_memory_dense("proj", [1.0, 0.0], filter_=qfilter, limit=2)
 
     assert hits == []
+
+
+@pytest.mark.asyncio
+async def test_qdrant_scroll_can_select_only_lifecycle_payload_fields(qdrant_store):
+    await qdrant_store.upsert_memories(
+        [_point("00000000-0000-0000-0000-000000000004", "large memory body", [1.0, 0.0], 4)]
+    )
+
+    records, _ = await qdrant_store.scroll_memories(
+        "proj",
+        limit=10,
+        payload_fields=["status", "created_at", "reinforcement_count"],
+    )
+
+    assert records[0].payload["status"] == "active"
+    assert "content" not in records[0].payload
 
 
 @pytest.mark.asyncio

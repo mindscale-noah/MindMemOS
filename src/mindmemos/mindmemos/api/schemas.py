@@ -30,6 +30,7 @@ from ..typing import (
     AddMode,
     DialogueMessage,
     FileMessage,
+    ImageRef,
     MemoryAddEventItem,
     MemorySearchItem,
     SkillContext,
@@ -159,6 +160,23 @@ class SearchRequest(ActorIdentityRequest):
 
     query: NonEmptyStr
     """Search query."""
+
+    query_images: list[ImageRef] = Field(
+        default_factory=list,
+        description=(
+            "Images attached to the query; they make the search multimodal. Rejected (400, "
+            "search.images_unsupported) while the project's algo_config.multimodal.mode is off or "
+            "the algorithm has no image support."
+        ),
+    )
+    multimodal: bool = Field(
+        default=False,
+        description=(
+            "Search stored images too (image results, image-recalled facts). Implied by "
+            "query_images; silently ignored (text search) while algo_config.multimodal.mode is "
+            "off. False: text search only, exactly vanilla."
+        ),
+    )
 
     filters: dict[str, Any] | None = None
     """Custom structured filter DSL parsed by ``mappers.api.parse_search_dsl``."""
@@ -369,5 +387,8 @@ def validate_messages_have_content(messages) -> None:
             or getattr(message, "url", None)
             or getattr(message, "file_path", None)
         )
+        if getattr(message, "images", None):
+            # An image-only turn is valid; whether the algorithm accepts images is checked per API key.
+            continue
         if not isinstance(text, str) or not text.strip():
             raise ValueError(f"messages[{index}] must contain non-empty content")

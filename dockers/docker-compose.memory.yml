@@ -155,6 +155,42 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
 
+  # ---- MinIO: S3 blob storage for multimodal images (make dev-blobs) ----
+  # Host 9100 because ClickHouse native already claims 9000.
+  # The minio/* Docker Hub repos and dl.min.io binaries were withdrawn in 2025 (the
+  # upstream OSS server is archived); bitnamilegacy keeps genuine minio/mc builds
+  # (no web console in them — manage buckets with mc / the minio-init service).
+  # Credentials reuse the app-side MINDMEMOS_S3_* vars so .env is the single source.
+  minio:
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+    container_name: mindmemos-minio
+    ports:
+      - "${MINDMEMOS_MINIO_PORT:-9100}:9000"
+    environment:
+      MINIO_ROOT_USER: "${MINDMEMOS_S3_ACCESS_KEY:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINDMEMOS_S3_SECRET_KEY:-minioadmin}"
+    volumes:
+      - minio_data:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # One-shot bucket bootstrap; the app also lazily creates the bucket, so this
+  # is a convenience, not a requirement.
+  minio-init:
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3
+    container_name: mindmemos-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MC_HOST_local: "http://${MINDMEMOS_S3_ACCESS_KEY:-minioadmin}:${MINDMEMOS_S3_SECRET_KEY:-minioadmin}@minio:9000"
+    entrypoint: ["/opt/bitnami/minio-client/bin/mc"]
+    command: ["mb", "--ignore-existing", "local/${MINDMEMOS_S3_BUCKET:-mindmemos-blobs}"]
+    restart: "no"
+
 volumes:
   qdrant_storage:
   neo4j_data:
@@ -162,3 +198,4 @@ volumes:
   kafka_data:
   clickhouse_data:
   grafana_data:
+  minio_data:

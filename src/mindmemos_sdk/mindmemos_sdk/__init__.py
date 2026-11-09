@@ -17,6 +17,7 @@ from .memory import (
     FeedbackMode,
     FileMessage,
     GetResult,
+    ImageRef,
     MemoryClient,
     SearchResult,
     StatusResult,
@@ -38,6 +39,7 @@ __all__ = [
     "StatusResult",
     "TextMessage",
     "DialogueMessage",
+    "ImageRef",
     "UrlMessage",
     "FileMessage",
     "MindMemOSSDKError",
@@ -48,4 +50,4 @@ __all__ = [
     "ApiError",
 ]
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"

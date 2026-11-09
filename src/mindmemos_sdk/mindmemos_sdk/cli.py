@@ -9,9 +9,13 @@ mutations yet.
 from __future__ import annotations
 
 import argparse
+import base64
+import contextlib
 import json
+import os
 import shutil
 import sys
+import tempfile
 import time
 from collections.abc import Sequence
 from getpass import getpass
@@ -21,11 +25,88 @@ from typing import Any
 from .client import MindMemOSClient
 from .config import DEFAULT_BASE_URL, ConfigManager, mask_secret
 from .errors import ConfigError, MindMemOSSDKError
-from .memory import DialogueMessage, StatusResult
+from .memory import DialogueMessage, ImageRef, StatusResult
 from .skills import SkillCloudClient, SkillManager, SkillRecord
 from .transport import HttpTransport
 
 _JSON_PARSE_ERROR = object()
+
+_IMAGE_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+_EXT_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+}
+_MIME_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+}
+
+
+class _ImageInputError(Exception):
+    """A --image/--query-image value is unreadable or not a supported image."""
+
+
+def _sniff_image_mime(data: bytes) -> str | None:
+    """Detect the image type by magic bytes (the server checks content, not extension)."""
+
+    for magic, mime_type in _IMAGE_MAGIC:
+        if data.startswith(magic):
+            return mime_type
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    return None
+
+
+def _load_image_ref(value: str) -> ImageRef:
+    """Build an ImageRef from an http(s) URL or a local file (inlined as base64)."""
+
+    if value.startswith(("http://", "https://")):
+        return ImageRef(url=value)
+    try:
+        data = Path(value).read_bytes()
+    except OSError as exc:
+        raise _ImageInputError(f"failed to read image {value}: {exc}") from exc
+    mime_type = _sniff_image_mime(data) or _EXT_MIME.get(Path(value).suffix.lower())
+    if mime_type is None:
+        raise _ImageInputError(f"unrecognized image format: {value} (expected png/jpeg/gif/webp/bmp)")
+    return ImageRef(data=base64.b64encode(data).decode("ascii"), mime_type=mime_type)
+
+
+def _load_image_refs(values: Sequence[str] | None) -> list[ImageRef] | None:
+    if not values:
+        return None
+    return [_load_image_ref(value) for value in values]
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write bytes to path atomically (temp file + fsync + replace)."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
 
 
 def _without_none(**kwargs: Any) -> dict[str, Any]:
@@ -170,11 +251,30 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="Strict token budget; enables token-budget retention post-processing.",
     )
     search.add_argument("--filter", dest="filter_json", help="Filter DSL as a JSON object string.")
+    search.add_argument(
+        "--query-image",
+        dest="query_images",
+        action="append",
+        metavar="PATH_OR_URL",
+        help="Attach an image to the query (local file or http(s) URL). Repeatable.",
+    )
+    search.add_argument(
+        "--multimodal",
+        action="store_true",
+        help="Also search stored images (implied by --query-image; needs multimodal mode).",
+    )
     search.add_argument("--json", action="store_true", help="Print a machine-readable JSON result.")
     search.set_defaults(handler=_handle_memory_search)
 
     add = memory_subparsers.add_parser("add", help="Add a dialogue message as memory using configured credentials.")
     add.add_argument("--content", help="Dialogue message content to add.")
+    add.add_argument(
+        "--image",
+        dest="images",
+        action="append",
+        metavar="PATH_OR_URL",
+        help="Attach an image to the --content message (local file or http(s) URL). Repeatable.",
+    )
     add.add_argument(
         "--messages-json",
         help="JSON array of memory messages. When provided, --content/--role are ignored.",
@@ -203,6 +303,23 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
     get.add_argument("--filter", dest="filter_json", help="Filter DSL as a JSON object string.")
     get.add_argument("--top-k", type=int, default=None, help="Max number of memories to return.")
     get.set_defaults(handler=_handle_memory_get)
+
+    get_image = memory_subparsers.add_parser(
+        "get-image",
+        help="Download a stored image by blob id (metadata.blob_id of a search image result).",
+    )
+    get_image.add_argument("blob_id", help="Image blob id from a search result.")
+    get_image.add_argument(
+        "--user-id",
+        required=True,
+        help="Owner of the image (metadata.user_id of the search image result); verified by the server.",
+    )
+    get_image.add_argument(
+        "-o",
+        "--output",
+        help="Output file path. Default: ./{blob_id}{extension by content type}.",
+    )
+    get_image.set_defaults(handler=_handle_memory_get_image)
 
     update = memory_subparsers.add_parser("update", help="Update a memory's content by id.")
     update.add_argument("memory_id", help="Target memory id.")
@@ -572,6 +689,11 @@ def _handle_memory_search(args: argparse.Namespace) -> int:
     filters = _parse_json_object(args.filter_json, command="memory search", option="--filter")
     if filters is _JSON_PARSE_ERROR:
         return 2
+    try:
+        query_images = _load_image_refs(args.query_images)
+    except _ImageInputError as exc:
+        print(f"mindmemos memory search: {exc}")
+        return 2
 
     client = _build_client()
     if client is None:
@@ -591,6 +713,8 @@ def _handle_memory_search(args: argparse.Namespace) -> int:
                     app_id=args.app_id,
                     agent_id=args.agent_id,
                     session_id=args.session_id,
+                    query_images=query_images,
+                    multimodal=args.multimodal or None,
                 ),
             )
     except MindMemOSSDKError as exc:
@@ -605,6 +729,9 @@ def _handle_memory_search(args: argparse.Namespace) -> int:
     for i, hit in enumerate(result.memories, start=1):
         when = hit.last_update_at or ""
         print(f"{i}. [{hit.id}] {hit.memory}" + (f"  ({when})" if when else ""))
+        image_url = (hit.metadata or {}).get("image_url")
+        if image_url:
+            print(f"   image: {image_url}")
     return 0
 
 
@@ -612,6 +739,16 @@ def _handle_memory_add(args: argparse.Namespace) -> int:
     messages = _parse_add_messages(args)
     if messages is None:
         return 2
+    if args.images:
+        if args.messages_json is not None or args.messages_json_file is not None:
+            print("mindmemos memory add: --image attaches to --content; embed images in --messages-json instead.")
+            return 2
+        try:
+            images = _load_image_refs(args.images)
+        except _ImageInputError as exc:
+            print(f"mindmemos memory add: {exc}")
+            return 2
+        messages[0] = messages[0].model_copy(update={"images": images})
     metadata = _parse_json_object(args.metadata_json, command="memory add", option="--metadata-json")
     if metadata is _JSON_PARSE_ERROR:
         return 2
@@ -763,6 +900,26 @@ def _parse_json_array(raw: str | None, *, command: str, option: str) -> list[Any
         print(f"mindmemos {command}: {option} must be a JSON array.")
         return _JSON_PARSE_ERROR
     return value
+
+
+def _handle_memory_get_image(args: argparse.Namespace) -> int:
+    client = _build_client()
+    if client is None:
+        return 1
+    try:
+        with client:
+            data, mime_type = client.memory.get_image(args.blob_id, args.user_id)
+    except MindMemOSSDKError as exc:
+        return _report_api_error("memory get-image", exc)
+
+    output = Path(args.output) if args.output else Path(f"{args.blob_id}{_MIME_EXT.get(mime_type, '.bin')}")
+    try:
+        _atomic_write_bytes(output, data)
+    except OSError as exc:
+        print(f"mindmemos memory get-image: failed to write {output}: {exc}")
+        return 1
+    print(f"Saved {len(data)} bytes to {output} ({mime_type}).")
+    return 0
 
 
 def _handle_memory_get(args: argparse.Namespace) -> int:

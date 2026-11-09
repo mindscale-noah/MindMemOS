@@ -73,7 +73,7 @@ async def test_memory_add_worker_uses_algorithm_bound_add_pipeline_sync_entry(mo
     )
 
     assert len(calls) == 1
-    assert pipeline_names == ["vanilla_add"]
+    assert pipeline_names == ["vanilla_multimodal_add"]  # vanilla binds the multimodal wrapper
     assert calls[0].context.request_id == "req-1"
     # AddPipelineInput.timestamp defaults to wall-clock millis, so compare the
     # meaningful fields instead of full-object equality.

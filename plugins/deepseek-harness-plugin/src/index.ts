@@ -23,6 +23,10 @@ type MemoryHit = {
   last_update_at?: string | null;
   event_time?: string | null;
   source_timestamp?: string | null;
+  metadata?: {
+    image_url?: string;
+    [key: string]: unknown;
+  };
 };
 
 type MemorySearchResult = {
@@ -71,6 +75,8 @@ export interface Config {
   cli: string;
   /** Number of memories injected per turn. */
   topK: number;
+  /** Search stored images too; image hits carry a short-lived directly-fetchable image_url. */
+  multimodal: boolean;
   /** Optional strict token budget for recall; enables token-budget retention when set. */
   tokenBudget?: number;
   /** `sync` blocks until extraction finishes; `async` enqueues and returns. */
@@ -91,8 +97,12 @@ export interface Config {
 export const Config: z<Config> = z.object({
   cli: z.string().default("mindmemos"),
   topK: z.natural().min(1).default(5),
+  multimodal: z.boolean().default(true),
   tokenBudget: z.natural().min(1),
-  addMode: z.union([z.const("sync"), z.const("async")]).default("async"),
+  // sync by default: async needs kafka.enabled=true on the server — without Kafka the
+  // add is rejected with a clean 400 (add.async_unavailable) rather than stored;
+  // sync works on every deployment.
+  addMode: z.union([z.const("sync"), z.const("async")]).default("sync"),
   userId: z.string(),
   appId: z.string().default("deepseek-harness"),
   sessionId: z.string(),
@@ -184,6 +194,11 @@ export function apply(ctx: Context, config: Config): void {
 
 async function searchMemories(config: Config, query: string, sessionId: string): Promise<MemorySearchResult> {
   const args = ["memory", "search", query, "--top-k", String(config.topK), "--json"];
+  if (config.multimodal) {
+    // Image hits carry metadata.blob_id + a short-lived image_url the agent can GET directly;
+    // the server silently ignores this flag while the project's multimodal mode is off.
+    args.push("--multimodal");
+  }
   if (config.tokenBudget) {
     args.push("--token-budget", String(config.tokenBudget));
   }
@@ -215,15 +230,22 @@ async function addConversation(config: Config, messages: MemoryMessage[], sessio
 }
 
 function formatMemoryContext(memories: MemoryHit[], userId: string | undefined): string {
+  let hasImage = false;
   const lines = memories
     .map((hit, index) => {
       const text = typeof hit.memory === "string" ? hit.memory.trim() : "";
-      if (!text) {
+      const imageUrl =
+        typeof hit.metadata?.image_url === "string" && hit.metadata.image_url
+          ? hit.metadata.image_url
+          : undefined;
+      if (!text && !imageUrl) {
         return null;
       }
+      hasImage = hasImage || Boolean(imageUrl);
       const label = hit.id ? `${index + 1}. [${hit.id}]` : `${index + 1}.`;
       const when = hit.last_update_at ?? hit.event_time ?? hit.source_timestamp;
-      return when ? `${label} ${text} (${when})` : `${label} ${text}`;
+      const body = [text || "[image memory]", imageUrl ? `<image: ${imageUrl}>` : ""].filter(Boolean).join(" ");
+      return when ? `${label} ${body} (${when})` : `${label} ${body}`;
     })
     .filter((line): line is string => line !== null);
 
@@ -231,7 +253,10 @@ function formatMemoryContext(memories: MemoryHit[], userId: string | undefined):
     return "";
   }
   const preamble = userId ? `Relevant memories for ${userId}:` : "Relevant memories:";
-  return [MEMORY_CONTEXT_OPEN, preamble, ...lines, MEMORY_CONTEXT_CLOSE].join("\n");
+  const imageHint = hasImage
+    ? "(<image: …> URLs point at the stored images, fetch directly with no API key, and expire; relative paths resolve against the MindMemOS API base)"
+    : "";
+  return [MEMORY_CONTEXT_OPEN, preamble, imageHint, ...lines, MEMORY_CONTEXT_CLOSE].filter(Boolean).join("\n");
 }
 
 /** The recall query: the real human prompt(s) entering step 1, not injected context. */

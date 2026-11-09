@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -12,8 +13,26 @@ import yaml
 
 from .base import AlgorithmProfile, BenchmarkSpec, RunnerConfig
 
+logger = logging.getLogger("mindmemos_eval.memory.config")
+
 SUPPORTED_MEMORY_ALGORITHMS = frozenset({"vanilla", "schema"})
 SUPPORTED_BENCHMARK_SEARCH_STRATEGIES = frozenset({"vanilla", "schema"})
+
+# Keys actually read by the adapters. Search params are shared across benchmarks; execution
+# params are per benchmark (benchmarks absent here read none). Unknown keys are rejected so
+# misspellings (e.g. an execution_params top_k that no adapter ever reads) fail at load time.
+SUPPORTED_SEARCH_PARAM_KEYS = frozenset(
+    {"top_k", "rerank", "search_strategy", "multimodal", "public_search_strategy", "agentic"}
+)
+SUPPORTED_EXECUTION_PARAM_KEYS: dict[str, frozenset[str]] = {
+    "memeye": frozenset({"send_images", "max_questions", "max_answer_images", "image_max_side"}),
+    "memgallery": frozenset({"send_images", "max_questions", "max_answer_images", "image_max_side"}),
+    "personamem": frozenset({"add_batch_size"}),
+    "personamem_subset": frozenset({"add_batch_size"}),
+    "memoryagentbench": frozenset({"chunk_size"}),
+}
+# Benchmarks whose adapters send dialogue/question images to the server by default.
+IMAGE_SENDING_BENCHMARKS = frozenset({"memeye", "memgallery"})
 
 
 def load_algorithm_profiles(path: str | Path) -> dict[str, AlgorithmProfile]:
@@ -29,6 +48,7 @@ def load_algorithm_profiles(path: str | Path) -> dict[str, AlgorithmProfile]:
             raise ValueError(f"algorithm profile {name!r} must be a mapping")
         memory_algorithm = validate_memory_algorithm(raw.get("memory_algorithm"))
         search_params = dict(raw.get("search_params") or {})
+        _check_known_keys(search_params, SUPPORTED_SEARCH_PARAM_KEYS, f"algorithm_profiles.{name}.search_params")
         project_override_config = _optional_mapping(
             raw.get("project_override_config"), field_name=f"{name}.project_override_config"
         )
@@ -47,6 +67,7 @@ def load_benchmark_specs(
     *,
     algorithm_override: str | None = None,
     memory_algorithm_override: str | None = None,
+    validate_image_sending: bool = True,
 ) -> dict[str, BenchmarkSpec]:
     """Load benchmark specs from YAML."""
     data = load_benchmark_matrix_config(path)
@@ -83,17 +104,27 @@ def load_benchmark_specs(
             memory_algorithm = validate_memory_algorithm(raw.get("memory_algorithm"))
         search_params = dict(profile.search_params if profile is not None else {})
         search_params.update(dict(raw.get("search_params") or {}))
+        _check_known_keys(search_params, SUPPORTED_SEARCH_PARAM_KEYS, f"benchmarks.{name}.search_params")
         benchmark_execution_params = {}
         if name in execution_params:
             raw_execution_params = execution_params[name]
             if not isinstance(raw_execution_params, Mapping):
                 raise ValueError(f"execution_params.{name} must be a mapping")
             benchmark_execution_params = dict(raw_execution_params)
+        _check_known_keys(
+            benchmark_execution_params,
+            SUPPORTED_EXECUTION_PARAM_KEYS.get(str(name), frozenset()),
+            f"execution_params.{name}",
+        )
         project_override_config = (
             _optional_mapping(raw.get("project_override_config"), field_name=f"{name}.project_override_config")
             if raw.get("project_override_config") is not None
             else (profile.project_override_config if profile is not None else None)
         )
+        if validate_image_sending:
+            check_image_sending_consistency(
+                str(name), benchmark_execution_params, project_override_config
+            )
         specs[str(name)] = BenchmarkSpec(
             name=str(name),
             dataset=dataset,
@@ -226,6 +257,51 @@ def _optional_mapping(value: Any, *, field_name: str) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         raise ValueError(f"{field_name} must be a mapping")
     return dict(value)
+
+
+def _check_known_keys(params: Mapping[str, Any], known: frozenset[str], field_name: str) -> None:
+    # str() the keys: YAML 1.1 parses bare on/off/yes/no as bool and ints stay ints.
+    unknown = sorted(str(key) for key in set(params) - known)
+    if unknown:
+        known_list = ", ".join(sorted(known)) if known else "(none for this benchmark)"
+        raise ValueError(f"{field_name}: unknown key(s) {', '.join(unknown)}; known keys: {known_list}")
+
+
+def check_image_sending_consistency(
+    name: str, execution_params: Mapping[str, Any], project_override_config: Mapping[str, Any] | None
+) -> None:
+    """Reject send_images=true against a multimodal mode of off before any request is made.
+
+    The server rejects image sends in that mode (400 add.images_unsupported, and
+    search.images_unsupported for query images on --no-add reruns), so every add with images
+    would fail mid-run; catching it at load time names the conflicting keys instead.
+    """
+
+    if name not in IMAGE_SENDING_BENCHMARKS:
+        return
+    if not bool(execution_params.get("send_images", True)):
+        return
+    override = project_override_config or {}
+    algo = override.get("algo_config")
+    multimodal = algo.get("multimodal") if isinstance(algo, Mapping) else None
+    mode = multimodal.get("mode") if isinstance(multimodal, Mapping) else None
+    # A bare YAML `off` parses as false, same trap as on the server.
+    if mode is False or str(mode).strip().lower() == "off":
+        raise ValueError(
+            f"execution_params.{name}.send_images is true but the effective project_override_config sets"
+            " algo_config.multimodal.mode=off, and the server rejects image sends in that mode"
+            " (add.images_unsupported, search.images_unsupported): set send_images: false"
+            " or use a basic/enhanced profile"
+        )
+    if mode is None:
+        # Not an error: the server may enable multimodal globally, beyond this override. But with
+        # the stock server default (off) every add with images would 400 mid-run, so say it now.
+        logger.warning(
+            "execution_params.%s.send_images is true but project_override_config does not set"
+            " algo_config.multimodal.mode; if the server default is still off, adds will fail with"
+            " add.images_unsupported — set algo_config.multimodal.mode: basic/enhanced or send_images: false",
+            name,
+        )
 
 
 def _option(args: argparse.Namespace, name: str, default: Any = None) -> Any:
