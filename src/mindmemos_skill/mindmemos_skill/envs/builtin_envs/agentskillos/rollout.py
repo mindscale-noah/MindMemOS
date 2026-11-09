@@ -6,6 +6,8 @@ from tempfile import mkdtemp
 
 from mindmemos_skill.common.ids import generate_id
 
+from ....agents.buitin_agents.claude.agent import ClaudeAgent
+from ....agents.buitin_agents.claude.config import ClaudeConfig
 from ....agents.buitin_agents.codex.agent import CodexAgent
 from ....infra.execution import execute
 from ....skill import Skill
@@ -32,7 +34,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
     config_type = AgentSkillOSConfig
     """Native agent and private official scoring settings."""
 
-    def __init__(self, config: AgentSkillOSConfig, *, agent: CodexAgent | None = None) -> None:
+    def __init__(self, config: AgentSkillOSConfig, *, agent: CodexAgent | ClaudeAgent | None = None) -> None:
         """Construct the executor without starting a model or subprocess.
 
         Args:
@@ -43,7 +45,12 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
         self._evaluator_digest = evaluator_digest(config.benchmark_root)
         if agent is not None and agent.config != config.agent:
             raise ValueError("Injected agent config must match environment agent config")
-        self.agent = agent if agent is not None else CodexAgent(config.agent)
+        if agent is not None:
+            self.agent = agent
+        elif isinstance(config.agent, ClaudeConfig):
+            self.agent = ClaudeAgent(config.agent)
+        else:
+            self.agent = CodexAgent(config.agent)
 
     def input_identity(self, task: Task, reward_data: RewardData) -> dict[str, str]:
         """Bind public files and official evaluator sources to recovery records.
@@ -69,6 +76,7 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
         command = [
             *self.config.evaluator.python_command,
             "-I",
+            "-B",
             str(Path(__file__).with_name("evaluator_worker.py")),
             "--source",
             str(self.config.benchmark_root),
@@ -116,8 +124,10 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
             destination = attempt / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(content)
+        uses_claude = isinstance(self.config.agent, ClaudeConfig)
+        skill_dir = ".claude/skills" if uses_claude else ".agents/skills"
         for skill in skills:
-            skill.export(attempt / ".agents" / "skills")
+            skill.export(attempt / skill_dir)
         audit = workspace.parent / "audit"
         identifier = generate_id()
         task_path = audit / f"official-task-{identifier}.json"
@@ -126,12 +136,17 @@ class AgentSkillOSEnvironment(Environment[AgentSkillOSConfig]):
         (await self._score(task_path, outputs, report_path, preflight=True))
         system = (
             "Complete the user's task by producing actual deliverable files. "
-            "Available Skills and their resources are in .agents/skills/. Read relevant SKILL.md files "
+            f"Available Skills and their resources are in {skill_dir}/. Read relevant SKILL.md files "
             "and use their instructions and tools. Input paths in the task are relative to your working directory. "
             "Write all final deliverables, including supporting output files, under workspace/. "
             "Inspect and validate the deliverables before reporting completion. "
             "Do not read files outside this execution directory."
         )
+        if uses_claude and ranking:
+            # Explicit entrypoints also work with automatic project discovery disabled.
+            system += "\nSelected Skill entrypoints in rank order:\n" + "\n".join(
+                f"{skill_dir}/{name}/SKILL.md" for name in ranking
+            )
         user = task.instruction + "\n\nOutput directory: workspace/\nExpected deliverables:\n" + "\n".join(task.outputs)
         response = await self.agent.run(system=system, user=user, workspace=attempt)
         if not isinstance(response.output, str):

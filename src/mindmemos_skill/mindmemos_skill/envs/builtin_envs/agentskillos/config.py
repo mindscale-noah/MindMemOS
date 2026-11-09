@@ -5,6 +5,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ....agents.buitin_agents.claude.config import ClaudeConfig
 from ....agents.buitin_agents.codex.config import CodexConfig
 from ....infra.execution import ExecutionConfig
 from .source import evaluator_digest
@@ -42,8 +43,8 @@ class AgentSkillOSConfig(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Reject unknown execution settings and stale retrieval-only configuration."""
 
-    agent: CodexConfig
-    """Native Codex execution settings; model must be explicitly selected."""
+    agent: CodexConfig | ClaudeConfig
+    """Native tool-using executor and its explicitly selected model."""
 
     benchmark_root: Path
     """Official evaluator checkout, used only by the private scoring subprocess."""

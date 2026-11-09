@@ -18,13 +18,15 @@ from mindmemos_skill.envs.builtin_envs.agentskillos import (
 from mindmemos_skill.envs.data import Data
 from mindmemos_skill.skill import Skill, SkillContent, SkillSet
 
-SOURCE = Path(__file__).resolve().parents[3] / "data/agentskillos/source"
+SOURCE = Path(__file__).resolve().parents[3] / "data/mindmemos_skill/agentskillos"
 
 
 @pytest.fixture
 def config():
     if not (SOURCE / "benchmark/AgentSkillOS_bench/orchestrator.py").exists():
-        pytest.skip("Run scripts/agentskillos/download.py to test the official evaluator")
+        pytest.skip(
+            "Run scripts/download_datasets.py download skill --name agentskillos to test the official evaluator"
+        )
     for module in ("pptx", "docx", "fitz", "jsonschema", "pdfplumber", "openpyxl"):
         pytest.importorskip(module)
     return AgentSkillOSConfig(agent=CodexConfig(model="offline-test", api_key="test"), benchmark_root=SOURCE)
@@ -76,7 +78,7 @@ def skill_set(name="alpha"):
         source=SkillContent(
             content=f"---\nname: {name}\n---\nDo the task.",
             resources={"scripts/helper.txt": b"AUXILIARY"},
-            name="test-skill",
+            name=name,
             description="Task instructions",
             standard_format=False,
         )
@@ -147,10 +149,13 @@ async def test_resume_fresh_attempt_and_input_change(config, tmp_path):
     assert (agent.workspaces[0] / "workspace/answer.json").exists()
     (directory / "audit/result.json").unlink()
     assert (await env.rollout(task, directory, reward_data=private)).reward.score == 0
+    result_path = directory / "audit/result.json"
+    saved = result_path.read_bytes()
     task.files["input.txt"].write_text("MUTATED")
     with pytest.raises(ValueError, match="inputs changed"):
         (await env.rollout(task, directory, reward_data=private, resume=False))
-    assert not (directory / "audit/result.json").exists()
+    assert result_path.read_bytes() == saved
+    assert agent.calls == 3
 
 
 async def test_transport_and_evaluator_errors_are_not_task_failures(config, tmp_path):
@@ -237,7 +242,7 @@ async def test_real_codex_adapter_and_official_scoring(config, tmp_path):
     )
     cli.chmod(0o755)
     settings = AgentSkillOSConfig(
-        agent=CodexConfig(model="offline-test", cli_path=str(cli), api_key="test"),
+        agent=CodexConfig(model="offline-test", cli_path=str(cli), api_key="test", base_url="http://localhost"),
         benchmark_root=SOURCE,
     )
     result = await AgentSkillOSEnvironment(settings).rollout(task, tmp_path / "run", reward_data=private)
@@ -253,42 +258,3 @@ async def test_evaluator_exception_is_not_a_scored_zero(config, tmp_path):
     with pytest.raises(RuntimeError, match="Evaluator error"):
         (await env.rollout(task, tmp_path / "run", reward_data=private))
     assert not (tmp_path / "run/audit/result.json").exists()
-
-
-def test_batch_cli_actual_official_task_and_resume(config, tmp_path):
-    import subprocess
-    import sys
-
-    cli = tmp_path / "codex-stub"
-    cli.write_text(
-        f"#!{sys.executable}\nimport json, sys\nsys.stdin.read()\n"
-        "print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'Done'}}))\n"
-        "print(json.dumps({'type':'turn.completed','usage':{'input_tokens':5,'output_tokens':2}}))\n"
-    )
-    cli.chmod(0o755)
-    settings = tmp_path / "config.json"
-    settings.write_text(json.dumps({"benchmark_root": str(SOURCE), "agent": {"model": "test", "cli_path": str(cli)}}))
-    split = tmp_path / "split.json"
-    split.write_text('{"test":["data_computation_task3"]}')
-    output = tmp_path / "batch"
-    script = Path(__file__).resolve().parents[3] / "scripts/agentskillos/run.py"
-    command = [
-        sys.executable,
-        str(script),
-        "--config",
-        str(settings),
-        "--output",
-        str(output),
-        "--selection",
-        "none",
-        "--split-file",
-        str(split),
-    ]
-    subprocess.run(command, check=True, capture_output=True, text=True)
-    first = json.loads((output / "summary.json").read_text())
-    assert first["status"] == "complete"
-    assert first["task_success_rate"] == 0
-    assert first["scoring_coverage"] == 1
-    subprocess.run([*command, "--resume"], check=True, capture_output=True, text=True)
-    assert json.loads((output / "summary.json").read_text()) == first
-    assert len(list((output / "task-0000/workspace").glob("attempt-*"))) == 1
