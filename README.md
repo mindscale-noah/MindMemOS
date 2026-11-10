@@ -46,7 +46,7 @@
 
 ## 📰 News
 
-- **2026-10-31**: Multimodal memory is here — `memory.add` / `memory.search` accept images (originals stored in S3-compatible object storage / MinIO, indexed by multimodal embeddings), with `enhanced` mode adding VLM visual-fact extraction and multimodal agent retrieval. Benchmark results and the run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
+- **2026-10-31**: We released the multimodal mode of MindMemOS — it significantly outperforms multiple strong baselines on the MemEye and Mem-Gallery benchmarks. Full comparison in the multimodal benchmark section below.
 - **2026-08-18**: We released the [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin), letting DeepSeek Harness (dsh) agents automatically recall and write MindMemOS memories.
 - **2026-08-14**: We released the [MindMemOS 1.0 technical report](https://arxiv.org/abs/2608.12428), *MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents*.
 - **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.
@@ -415,17 +415,6 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 | MindMemOS-MindVanilla              | 0.900 | — | 0.190 | — |
 | **MindMemOS-MindVanilla + Dreaming** | 0.920 | 23.5% | 0.250 | 21.5% |
 
-### 🧠 Skill Self-Evolution: SpreadsheetBench-Verified
-
-- **Benchmark**: [SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz), a 400-task verified subset of SpreadsheetBench covering diverse real-world spreadsheet operations.
-
-| Method | Success Rate | Time / Task (s) | Agent Tokens | Evolve Tokens |
-| :----- | :----------: | :-------------: | :----------: | :-----------: |
-| No-skill | 51.3% ± 0.8% | 11.227 | 10.4M | - |
-| Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
-| **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
-| **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
-
 ### 🖼️ Multimodal Memory: MemEye & Mem-Gallery
 
 - **Benchmarks**: [MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye) (8 tasks, 742 questions — multi-turn dialogs interleaving images; EM on MCQ, BLEU-1 and LLM-Judge on open questions, macro-averaged over tasks) and [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery) (20 tasks, 1,711 open questions; token-level F1, BLEU-1 and LLM-Judge, micro-averaged over questions).
@@ -446,6 +435,17 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 | MindMemOS enhanced_agentic (multimodal agent) | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
 
 Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The baseline rows are reproductions under identical conditions (mean of 3 runs; source: a paper under double-blind review, not linked yet); the four MindMemOS rows are this repository's implementation (mean of 2 runs, 2026-10). `enhanced_agentic` is not a fourth mode — it is `enhanced` with `search_strategy: agentic` (multimodal agent retrieval). Judge models differ between the groups (`gpt-4.1-mini` here vs `GPT-5.4-mini` for the baselines), so compare Judge scores within a group, not across. Step-by-step run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
+
+### 🧠 Skill Self-Evolution: SpreadsheetBench-Verified
+
+- **Benchmark**: [SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz), a 400-task verified subset of SpreadsheetBench covering diverse real-world spreadsheet operations.
+
+| Method | Success Rate | Time / Task (s) | Agent Tokens | Evolve Tokens |
+| :----- | :----------: | :-------------: | :----------: | :-----------: |
+| No-skill | 51.3% ± 0.8% | 11.227 | 10.4M | - |
+| Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
+| **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
+| **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
 
 ## 🗺️ Coming Features
 
