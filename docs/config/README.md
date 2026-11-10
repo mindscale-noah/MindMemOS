@@ -295,10 +295,7 @@ Enhanced details:
 | `max_concurrent_vlm_calls` | `8` | Enhanced: VLM extraction calls in flight across the whole process (main and visual-only, every add); bounds endpoint load under bursts of image-heavy adds. `0` disables the cap. |
 | `agentic_max_steps` | `4` | Enhanced: tool calls in agentic retrieval before it must submit. |
 
-Deleting memory: archived memories are never recalled through images. Deleting a user's or a
-project's images (`ImageMemoryStore.purge_images`) removes their image records and the blobs no
-other image record of the project uses (a project purge drops the whole blob namespace); the eval
-project reset also deletes the project's blobs.
+Archived memories are never recalled through images.
 
 Image requests over HTTP and SDK:
 
@@ -362,8 +359,8 @@ unreachable endpoint only logs a warning. Changing the model requires a new `ima
 
 The image collection has two named vectors: `image` (this router) and `text` (the text embedding
 router, `database.qdrant.vector_size` dimensions; set in enhanced mode). Startup also stops when an
-existing image collection has no `text` vector of that size (created by an older version): use a new
-`image_collection` name or drop the collection.
+existing image collection has no `text` vector of that size: use a new `image_collection` name or
+drop the collection.
 
 ## `blob_store` — raw image storage
 

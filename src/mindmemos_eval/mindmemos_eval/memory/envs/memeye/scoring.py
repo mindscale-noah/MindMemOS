@@ -3,6 +3,9 @@
 Mirrors the benchmark protocol: an MCQ question is asked once per option rotation and scores the
 fraction of rotations answered correctly; OPEN answers get BLEU-1 (normalized tokens, NLTK
 smoothing method 1) and a 0 / 0.25 / 0.5 / 0.75 / 1 judge score.
+
+Source: ``judge_prompt.txt`` is MemEye's ``benchmark/llm_judge.txt``, copied verbatim from
+https://github.com/MinghoKwok/MemEye (Apache License 2.0).
 """
 
 from __future__ import annotations

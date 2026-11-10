@@ -46,7 +46,7 @@
 
 ## 📰 News
 
-- **2026-10-31**：多模态记忆发布——`memory.add` / `memory.search` 支持图片（原图存 S3 兼容对象存储 / MinIO，按多模态 embedding 建索引），`enhanced` 模式提供 VLM 视觉事实抽取与多模态 agent 检索；评测结果与复现指南见 [评测指南的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
+- **2026-10-31**：我们发布了 MindMemOS 的多模态模式——在 MemEye 和 Mem-Gallery 基准上显著优于多个强基线，完整对比见下文的多模态评测一节。
 - **2026-08-18**：我们发布了 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，让 DeepSeek Harness（dsh）Agent 自动召回并写入 MindMemOS 记忆。
 - **2026-08-14**：我们发布了 [MindMemOS 1.0 技术报告](https://arxiv.org/abs/2608.12428)《MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents》。
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
@@ -302,7 +302,7 @@ openclaw plugins enable mindmemos-memory
   openclaw config set plugins.entries.mindmemos-memory.hooks.allowConversationAccess true
   openclaw gateway restart
   ```
-- **`cli` 的 PATH**：GUI 方式启动的 OpenClaw 进程不继承终端 PATH，`mindmemos` 命令需显式配置为绝对路径或用 `uv run mindmemos` 包装，否则日志报 `ENOENT`。
+- **`cli` 的 PATH**：GUI 方式启动的 OpenClaw 进程不继承终端 PATH，需把 `cli` 配置为 `mindmemos` 的绝对路径（如 `which mindmemos` 的输出），否则日志报 `ENOENT`。`cli` 必须是单个可执行文件，`uv run mindmemos` 这类多个词的命令不可用；确需包装时，请指向一个可执行的包装脚本。
 
 安装启用并重启 gateway 后，插件会在每次用户回合前检索并注入相关记忆，回合结束后自动写回对话。
 
@@ -402,17 +402,6 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 | MindMemOS-MindVanilla              | 0.900 | — | 0.190 | — |
 | **MindMemOS-MindVanilla + Dreaming** | 0.920 | 23.5% | 0.250 | 21.5% |
 
-### 🧠 Skill 自演进：SpreadsheetBench-Verified
-
-- **评测基准**：[SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz)，SpreadsheetBench 的 400 题 verified 子集，覆盖多种真实 spreadsheet 操作任务。
-
-| Method | Success Rate | Time / Task (s) | Agent Tokens | Evolve Tokens |
-| :----- | :----------: | :-------------: | :----------: | :-----------: |
-| No-skill | 51.3% ± 0.8% | 11.227 | 10.4M | - |
-| Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
-| **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
-| **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
-
 ### 🖼️ 多模态记忆：MemEye 与 Mem-Gallery
 
 - **评测基准**：[MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye)（8 任务共 742 题，多轮对话穿插图片；MCQ 计 EM、开放题计 BLEU-1 与 LLM Judge，按任务宏平均）与 [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery)（20 任务共 1711 开放题；token 级 F1、BLEU-1 与 LLM Judge，按题微平均）。
@@ -425,14 +414,30 @@ dsh plugin --profile <name> add @mindmemos/deepseek-harness-plugin
 | HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
 | M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
 | MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
-| SRAG | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| SRAG | 58.36 | **31.48** | 50.54 | 41.07 | 35.03 | 67.06 |
 | UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
-| MindMemOS b0（纯文本基线） | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
-| MindMemOS b1（图片相似度检索） | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
-| MindMemOS enhanced（VLM 视觉事实） | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
-| MindMemOS enhanced_agentic（多模态 agent） | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
+| **MindMemOS-MindVanilla**（纯文本） | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| **MindMemOS-MindVanilla + MM basic** | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| **MindMemOS-MindVanilla + MM enhanced** | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| **MindMemOS-MindVanilla + MM enhanced + agentic** | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
 
-配置：vanilla 算法；所有行均以 `gpt-4.1-mini` 作答；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）。基线行为同一实验条件下的复现（3 次均值；出处为双盲评审中的在投论文，暂不附链接）；MindMemOS 四行为本仓库当前实现的评测（2 次均值，2026-10）。`enhanced_agentic` 不是第四种模式，而是 `enhanced` 开启 `search_strategy: agentic`（多模态 agent 检索）。两组 Judge 模型不同（本文 `gpt-4.1-mini`、基线 `GPT-5.4-mini`），Judge 分数请各组内比较、勿跨组对比。完整运行指南见 [docs/eval/README_ZH.md 的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
+- **纯文本**（`mode: off`）：原版 vanilla，不处理图片，作为对照。
+- **MM basic**（`mode: basic`）：保存原图，用多模态 embedding 按与查询的相似度召回图片，附在文本结果之后；写入和检索都不增加 LLM 调用。
+- **MM enhanced**（`mode: enhanced`）：写入时由 VLM 为每张图抽取描述和视觉事实；检索时额外返回相关的视觉事实，以及与召回事实关联的证据图片。
+- **MM enhanced + agentic**：在 enhanced 的基础上设置 `search_strategy: agentic`，由多模态 agent 多轮检索、查看图片后再提交证据。
+
+配置：vanilla 算法；所有行均以 `gpt-4.1-mini` 作答；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）。基线行为同一实验条件下的复现（3 次均值；来源：项目组的 MHG 研究工作，[arXiv:2610.29995](https://arxiv.org/abs/2610.29995)）；MindMemOS 四行为本仓库当前实现的评测（2 次均值，2026-10）。两组 Judge 模型不同（本文 `gpt-4.1-mini`、基线 `GPT-5.4-mini`），Judge 分数请各组内比较、勿跨组对比。完整运行指南见 [docs/eval/README_ZH.md 的多模态一节](docs/eval/README_ZH.md#多模态memeye--mem-galleryvanilla多模态模式-off--basic--enhanced)。
+
+### 🧠 Skill 自演进：SpreadsheetBench-Verified
+
+- **评测基准**：[SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz)，SpreadsheetBench 的 400 题 verified 子集，覆盖多种真实 spreadsheet 操作任务。
+
+| Method | Success Rate | Time / Task (s) | Agent Tokens | Evolve Tokens |
+| :----- | :----------: | :-------------: | :----------: | :-----------: |
+| No-skill | 51.3% ± 0.8% | 11.227 | 10.4M | - |
+| Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
+| **MindMemOS-MindEvolve-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
+| **MindMemOS-MindEvolve-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
 
 ## 🗺️ Coming Features
 

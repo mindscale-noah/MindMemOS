@@ -3,7 +3,7 @@
 ``MultimodalMemoryExtractor`` wraps the vanilla extractor. A chunk without images goes to the
 vanilla extractor untouched. A chunk with images makes the same single extraction call, built
 from the same vanilla prompt, with the images attached and rules for reading them (adapted from
-MHG's per-round memorizer). The call returns two separate outputs:
+the per-round memorizer of our team's MHG research, https://arxiv.org/abs/2610.29995). The call returns two separate outputs:
 
 - ``memories``: dialogue facts, written to text memory by the vanilla pipeline as usual. Each is
   anchored to the images of the turns it came from (``metadata["image_blob_ids"]``).

@@ -340,7 +340,7 @@ mindmemos config reset --yes          # 跳过确认
 | No api_key configured | API key 缺失，重新运行 `mindmemos auth` |
 | transport: not ready … | `doctor` 检测到服务不可达。确认服务已启动，且 `base_url` 正确：本地自部署为 `http://127.0.0.1:8000`，云端为 `https://mindmemos.cn` |
 | 服务返回认证错误 | API key 无效或未启用，核对云端的 key 或 `config/mindmemos/api_keys.yaml` 中的本地 key |
-| 插件环境报 `ENOENT` | GUI 启动的进程不继承终端 PATH，`mindmemos` 需显式配置绝对路径或用 `uv run mindmemos` 包装，详见 [OpenClaw 插件集成](../../skills/mindmemos-cli/references/openclaw-plugin.md) |
+| 插件环境报 `ENOENT` | GUI 启动的进程不继承终端 PATH，需把 `cli` 配置为 `mindmemos` 的绝对路径（`uv run mindmemos` 这类多个词的命令不可用，需要包装时请用可执行的包装脚本），详见 [OpenClaw 插件集成](../../skills/mindmemos-cli/references/openclaw-plugin.md) |
 | 服务返回 `add.images_unsupported` / `search.images_unsupported` | 项目多模态模式未开启；将 `algo_config.multimodal.mode` 设为 `basic`/`enhanced`（或按项目 `project_override_config` 覆盖），见[配置文档](../config/README.md) |
 
 可随时运行 `mindmemos doctor` 一键检查配置与连通性。

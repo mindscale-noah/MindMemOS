@@ -7,6 +7,9 @@ for dataset image ids (``D1:IMG_002``), so every returned memory that points at 
 also returned is shown with that image's ids, as the benchmark labels its memory images
 ``image_id: ...``. The ids are the ones the client sent with the image (``caller_image_ids``);
 nothing else from the dataset (captions, clues) is shown.
+
+Source: ``prompts/*.txt`` (``sys_prompt``, ``ar_prompt``, ``cd_prompt``, ``vs_prompt``) are copied
+verbatim from ``benchmark/prompt/`` of https://github.com/YuanchenBei/Mem-Gallery (MIT License).
 """
 
 from __future__ import annotations
