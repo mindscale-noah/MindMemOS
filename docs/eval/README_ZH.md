@@ -292,7 +292,7 @@ cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
 在 `config/mindmemos/dev.yaml` 中做以下修改：
 
 1. 按[主 README 的"准备配置文件"一节](../../README_ZH.md)填好 `chat_model_router`、`embed_model_router`、`rerank_model_router`。chat 模型必须支持图片输入。
-2. 配置多模态 embedding：
+2. 把 `mm_embed_model_router` 指向第 3 步的 embedding 服务（各端点字段与必填的 `dimensions` 见[配置参考](../config/README.md#mm_embed_model_router--multimodal-embedding)）：
 
    ```yaml
    mm_embed_model_router:
@@ -302,21 +302,8 @@ cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
          dimensions: 768
    ```
 
-3. 允许服务端按路径读取数据集里的图片。评测以文件路径方式发送图片，这里必须写**绝对路径**，并且是软链接解析之后的真实路径：
-
-   ```yaml
-   blob_store:
-     allowed_path_roots:
-       - /绝对路径/MindMemOS/datasets      # 或数据集的真实所在目录；原图统一存 S3/MinIO（s3_endpoint 等）
-   ```
-
-4. 让服务端使用评测生成的 key 文件。评测时会自动写入这个文件，服务端会自动重新加载：
-
-   ```yaml
-   auth:
-     api_key_file: eval_api_keys.yaml
-   ```
-
+3. 把数据集目录加入 `blob_store.allowed_path_roots`——评测以文件路径方式发送数据集图片，这里必须写**绝对路径**，并且是软链接解析之后的真实路径。
+4. 设置 `auth.api_key_file: eval_api_keys.yaml`（评测会自动写入这个文件，服务端自动重新加载）。
 5. `algo_config.multimodal.mode` 保持 `"off"`（评测用 `project_override_config` 按项目开启）。
 
 启动服务：
@@ -365,7 +352,7 @@ uv run python scripts/run_multimodal_bench.py --benchmarks memgallery --configs 
 
 ### 7. 手动跑单个配置
 
-MemEye（8 个任务，MCQ + OPEN，对话中含图片）使用同一个作答器：`answer_llm`（需支持看图）只看到检索返回的文本记忆和图片，以及题目自带的图片。算法固定为 `vanilla`；由 profile 的 `project_override_config` 设置 `algo_config.multimodal.mode`，`search_params.multimodal: true` 让每次检索都使用已存的图片。`execution_params.memeye.send_images: true` 时，对话图片和题目图片以路径方式发送，因此服务端 `blob_store.allowed_path_roots` 需要覆盖数据集目录；`off` 模式会拒绝图片，所以其基线设 `send_images: false`。数据集自带的图片描述不会发送给记忆系统。评测配置在装载时会拒绝未知的 `search_params` / `execution_params` 键（各 benchmark 的合法键见 `src/mindmemos_eval/mindmemos_eval/memory/config.py`）；`send_images: true` 配上 off 模式项目同样在装载期即报一致性错误——冲突在发出任何请求前就会暴露，而不是跑到一半才出现 `add.images_unsupported`。
+MemEye（8 个任务，MCQ + OPEN，对话中含图片）使用同一个作答器：`answer_llm`（需支持看图）只看到检索返回的文本记忆和图片，以及题目自带的图片。算法固定为 `vanilla`；由 profile 的 `project_override_config` 设置 `algo_config.multimodal.mode`，`search_params.multimodal: true` 让每次检索都使用已存的图片，`execution_params.memeye.send_images: true` 时对话图片和题目图片以路径方式发送（`off` 模式会拒绝图片，所以其基线设 `send_images: false`）。未知的 `search_params` / `execution_params` 键，以及 `send_images: true` 配上 off 模式的项目，都会在配置装载时报错——冲突在发出任何请求前就会暴露。
 
 1. 从 Hugging Face 下载 `MemEyeBench/MemEye`，链接到 `datasets/memeye/data`（包含 `dialog/` 和 `image/`）。
 2. 跑 `basic` / `enhanced` 模式时，在服务端配置 `mm_embed_model_router`（见 `docs/config/README.md`）。
@@ -382,9 +369,7 @@ uv run python -m mindmemos_eval.cli memory \
 
 `--server-config` 让项目重置找到服务端的集合名与 S3/MinIO blob 配置，重置时把该项目的已存图片对象连同其他记录一起删除。
 
-`eval_result.metrics` 给出百分制指标：`EM`（MCQ 四种选项轮换的平均精确匹配，按任务宏平均）、`B-1`（OPEN 的 BLEU-1）、`Judge`（OPEN，MemEye 的 0–1 评分标准），以及逐任务数值。`eval_result.cost` 记录客户端的写入/检索调用次数与延迟、作答器和 judge 的 token 用量；只要有作答或 judge 调用失败，`eval_result.valid` 即为 false。逐题明细写在 `output_root/<run_id>/memeye/`。冒烟测试可设 `execution_params.memeye.max_questions: 2`、`benchmarks.memeye.tasks: [Brand_Memory_Test]`。
-
-多模态评测遵循与其他 benchmark 相同的 runner 协议：检索默认参数（`top_k`、`rerank`、`search_strategy`）来自 runner 配置 / CLI（`--top-k`、`--rerank`、`--search-strategy`），benchmark/profile 的 `search_params` 仍可覆盖；`--max-search-concurrency` 限制并发检索。`--judge-runs N` 对每道 OPEN 题独立跑 N 次 judge 并取平均。`metrics.overall_accuracy` 沿用 locomo 的 0–1 约定（MemEye 取 `EM`、Mem-Gallery 取 `F1` 作为 headline），作答/judge 的 token 字段也沿用 locomo 命名，因此下面的指标汇总流程同样适用于多模态 manifest。
+`eval_result.metrics` 给出百分制指标：`EM`（MCQ 四种选项轮换的平均精确匹配，按任务宏平均）、`B-1`（OPEN 的 BLEU-1）、`Judge`（OPEN，MemEye 的 0–1 评分标准），以及逐任务数值；`eval_result.cost` 记录调用次数、延迟和 token 用量，只要有作答或 judge 调用失败，`eval_result.valid` 即为 false。逐题明细写在 `output_root/<run_id>/memeye/`。冒烟测试可设 `execution_params.memeye.max_questions: 2`、`benchmarks.memeye.tasks: [Brand_Memory_Test]`。多模态 manifest 沿用与其他 benchmark 相同的指标约定，因此下面的指标汇总流程同样适用。
 
 ### 8. 结果解读
 
@@ -415,20 +400,11 @@ manifest 中的 `eval_result` 包含：
 
 **比较结果时注意：**
 
-- **MemEye 波动大：** OPEN 题少，单次 Judge 波动约 2–3 分，单个任务可达 10–20 分；并且会随 LLM 服务随时间漂移——同一份代码隔两天重跑，enhanced 的 Judge 从 52.8 降到 50.2、agentic 的 EM 从 67.8 降到 65.5。比较两个版本时，每个配置至少跑 2 次，并在同一时期重跑基线。
+- **MemEye 波动大：** OPEN 题少，单次 Judge 波动约 2–3 分，单个任务可达 10–20 分，并且会随 LLM 服务随时间漂移。比较两个版本时，每个配置至少跑 2 次，并在同一时期重跑基线。
 - **Mem-Gallery 较稳：** 单次 Judge 波动小于 0.6。
 - **不要同时跑两条评测：** 共用同一个 LLM 服务时，并发负载会把 MemEye 的 Judge 拉低约 5 分。上面的数字都是串行跑出来的。
-- **VR 计数题：** Mem-Gallery 作答器会给图片结果、事实和视觉事实都标上 image_id（VS 题需要用 image_id 作答）。快速检索模式下，作答器有时会按重复出现的 id 计数，导致 VR 计数题多数。
 
-### 10. 试过但无效、未合入的方案
-
-| 方案 | 结果 | 原因 |
-|---|---|---|
-| 视觉事实前加图片标识，并让 agent 只保留 5 条未选中的事实 | 快速检索 Judge −2.8，agentic EM −1.3 | reranker 会匹配标识，把视觉事实集中到少数几张图上 |
-| 先用 VLM 描述查询图片，再拼进查询 | 两个数据集上带图的题只 +0.2～+0.4 | 作答器直接看题图，以图搜图也已经能找到对应存图，空间很小 |
-| 视觉事实前加图片名（对话中对这张图的叫法） | MemEye agentic EM −2.1；Mem-Gallery 快速检索略降、agentic +0.4 | 名字常是"从另一侧看的同一个房间"这类相对说法，事实也被集中到少数几张图上 |
-
-### 11. 常见问题
+### 10. 常见问题
 
 | 现象 | 原因与处理 |
 |---|---|
