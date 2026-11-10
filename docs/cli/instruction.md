@@ -340,7 +340,7 @@ The config file lives at `~/.mindmemos/settings.json`; set the `MINDMEMOS_CONFIG
 | No api_key configured | API key missing; re-run `mindmemos auth` |
 | transport: not ready … | `doctor` found the service unreachable. Confirm the service is up and `base_url` is correct: `http://127.0.0.1:8000` for local, `https://mindmemos.cn` for cloud |
 | Authentication error from the service | The API key is invalid or disabled; check the cloud key or an enabled key in `config/mindmemos/api_keys.yaml` |
-| `ENOENT` in a plugin environment | A GUI-launched process does not inherit the terminal PATH; configure `mindmemos` as an absolute path or wrap it with `uv run mindmemos`. See [OpenClaw plugin integration](../../skills/mindmemos-cli/references/openclaw-plugin.md) |
+| `ENOENT` in a plugin environment | A GUI-launched process does not inherit the terminal PATH; set `cli` to the absolute path of `mindmemos` (a multi-word value such as `uv run mindmemos` does not work; use an executable wrapper script instead). See [OpenClaw plugin integration](../../skills/mindmemos-cli/references/openclaw-plugin.md) |
 | `add.images_unsupported` / `search.images_unsupported` from the service | The project's multimodal mode is off; set `algo_config.multimodal.mode` to `basic`/`enhanced` (or per-project `project_override_config`) — see the [config docs](../config/README.md) |
 
 Run `mindmemos doctor` anytime as a one-shot config / connectivity check.

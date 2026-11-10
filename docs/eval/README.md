@@ -257,26 +257,18 @@ gpt-4.1-mini; wall time depends heavily on LLM latency, `enhanced_agentic` being
 
 ### 7. Running one configuration by hand
 
-MemEye (8 tasks, MCQ + OPEN, images in the dialogue) runs with one shared answerer: the
-`answer_llm` (a vision model) sees the text memories and images returned by search, plus the
-question's own images. The algorithm is always `vanilla`; the profile's `project_override_config`
-sets `algo_config.multimodal.mode`, and `search_params.multimodal: true` makes every search use the
-stored images. With `execution_params.memeye.send_images: true` the dialogue and question images
-are sent by path, so the server's `blob_store.allowed_path_roots` must cover the dataset; mode
-`off` rejects images, so its baseline sets `send_images: false`. Dataset captions are never sent.
-The config loader rejects unknown `search_params` / `execution_params` keys at load time (the
-known keys per benchmark live in `src/mindmemos_eval/mindmemos_eval/memory/config.py`), and
-`send_images: true` against an off-mode project fails the same load-time consistency check —
-the conflict surfaces before any request is made, not as a mid-run `add.images_unsupported`.
+Taking MemEye as the example: copy `config/mindmemos_eval/memory_evaluation_multimodal.example.yaml`
+to `memory_evaluation_multimodal.yaml`, fill in the LLM keys and set, under
+`algorithm_profiles.vanilla` (the example file is `enhanced`):
 
-1. Download `MemEyeBench/MemEye` from Hugging Face and link it so `datasets/memeye/data` holds
-   `dialog/` and `image/`.
-2. For modes `basic` and `enhanced`, configure `mm_embed_model_router` on the server (see
-   `docs/config/README.md`).
-3. Copy `config/mindmemos_eval/memory_evaluation_multimodal.example.yaml` to
-   `memory_evaluation_multimodal.yaml`, fill in the LLM keys and set the mode (the example uses
-   `enhanced`; for B0 use `"off"` with `send_images: false`, for B1 `basic`; add
-   `search_strategy: agentic` for the multimodal agent), then run:
+| Config | `mode` in `project_override_config` | Other changes |
+|---|---|---|
+| `b0` | `"off"` | `execution_params.memeye.send_images: false` (mode off rejects images) |
+| `b1` | `basic` | — |
+| `enhanced` | `enhanced` | — |
+| `enhanced_agentic` | `enhanced` | `search_params.search_strategy: agentic` |
+
+Then run:
 
 ```bash
 uv run python -m mindmemos_eval.cli memory \
@@ -290,13 +282,10 @@ uv run python -m mindmemos_eval.cli memory \
 `--server-config` lets the project reset find the server's collections and its S3/MinIO blob
 settings, so stored image objects are deleted with the project's other records.
 
-`eval_result.metrics` reports, in percent: `EM` (MCQ exact match averaged over the four option
-rotations, macro mean over tasks), `B-1` (OPEN BLEU-1) and `Judge` (OPEN, MemEye 0–1 judge rubric),
-plus per-task values. `eval_result.cost` holds client-side add/search call counts and latencies and
-answerer/judge token usage; `eval_result.valid` is false when any answer or judge call failed.
-Per-question rows (retrieved items, predictions, scores) are written under
-`output_root/<run_id>/memeye/`. For a smoke test set `execution_params.memeye.max_questions: 2` and
-`benchmarks.memeye.tasks: [Brand_Memory_Test]`.
+For a smoke test set `execution_params.memeye.max_questions: 2` and
+`benchmarks.memeye.tasks: [Brand_Memory_Test]`. Mem-Gallery works the same way with
+`memory_evaluation_memgallery.yaml` (`memgallery` in place of `memeye` in the field names) and
+`--benchmark-list memgallery`.
 
 Multimodal runs follow the same runner protocol as the other benchmarks: search defaults (`top_k`,
 `rerank`, `search_strategy`) come from the runner config / CLI (`--top-k`, `--rerank`,
@@ -315,13 +304,16 @@ The `eval_result` in each manifest holds:
 - `cost`: client-side add/search call counts and latencies, answerer and judge tokens;
 - `valid`: false as soon as any answer or judge call failed — such a result is unusable.
 
+Per-question rows (retrieved items, predictions, scores) are written under
+`output_root/<run_id>/<benchmark>/`.
+
 ### 9. Reference results
 
 Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini` (the answerer must accept
 images); image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The MindMemOS rows are this
 repository's implementation (answerer & judge both `gpt-4.1-mini`, mean of 2 runs, measured
-2026-10); the baseline rows are the paper's reproductions under identical conditions with the same
-answerer (mean of 3 runs; source: a paper under double-blind review, not linked yet). Judge models
+2026-10); the baseline rows are reproductions under identical conditions with the same answerer (mean of
+3 runs; source: our team's MHG research, [arXiv:2610.29995](https://arxiv.org/abs/2610.29995)). Judge models
 differ between the groups (`gpt-4.1-mini` here vs `GPT-5.4-mini` for the baselines), so compare
 Judge scores within a group, not across.
 
@@ -333,35 +325,23 @@ Judge scores within a group, not across.
 | HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
 | M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
 | MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
-| SRAG (multimodal semantic RAG) | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| SRAG (multimodal semantic RAG) | 58.36 | **31.48** | 50.54 | 41.07 | 35.03 | 67.06 |
 | UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
-| MindMemOS b0 (mode off, text-only) | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
-| MindMemOS b1 (basic) | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
-| MindMemOS enhanced | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
-| MindMemOS enhanced_agentic | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
+| **MindMemOS-MindVanilla** (text-only, `b0`) | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| **MindMemOS-MindVanilla + MM basic** (`b1`) | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| **MindMemOS-MindVanilla + MM enhanced** (`enhanced`) | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| **MindMemOS-MindVanilla + MM enhanced + agentic** (`enhanced_agentic`) | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
 
 **When comparing results:**
 
 - **MemEye is noisy:** few OPEN questions, so a single-run Judge moves 2–3 points (10–20 on a
-  single task), and it drifts with the LLM service over time — the same code rerun two days apart
-  dropped enhanced's Judge from 52.8 to 50.2 and agentic's EM from 67.8 to 65.5. Run each
+  single task), and it drifts with the state of the LLM service. Run each
   configuration at least twice and rerun the baseline in the same period.
 - **Mem-Gallery is stable:** single-run Judge moves less than 0.6.
-- **Never run two evaluations concurrently:** sharing one LLM service under concurrent load costs
-  MemEye about 5 Judge points. The numbers above are all serial runs.
-- **VR counting questions:** the Mem-Gallery answerer labels image results, facts and visual
-  facts with image_ids (the VS type answers with image_ids). In fast retrieval the answerer
-  sometimes counts repeated ids, over-counting on VR.
+- **Never run two evaluations concurrently:** sharing one LLM service under concurrent load
+  noticeably lowers MemEye scores.
 
-### 10. Approaches that were tried and did not work
-
-| Approach | Result | Why |
-|---|---|---|
-| Image label in front of each visual fact, agent keeps only 5 unselected facts | Fast Judge −2.8, agentic EM −1.3 | The reranker matches the label, concentrating visual facts on a few images |
-| Describe the query images with a VLM first, then append to the query | +0.2–0.4 on image questions only | The answerer already sees the question images, and image-to-image search already finds the stored counterpart — little headroom |
-| Image name (what the dialogue calls the image) in front of visual facts | MemEye agentic EM −2.1; Mem-Gallery fast slightly down, agentic +0.4 | Names are often relative ("the same room from the other side"), again concentrating facts |
-
-### 11. FAQ
+### 10. FAQ
 
 | Symptom | Cause and fix |
 |---|---|

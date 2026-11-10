@@ -1,6 +1,7 @@
 """Simplified multimodal agentic retrieval (vanilla, multimodal mode enhanced, ``search_strategy=agentic``).
 
-A short ReAct loop over four tools, distilled from MHG's six-tool retriever: search text
+A short ReAct loop over four tools, distilled from the six-tool retriever of our team's MHG
+research (https://arxiv.org/abs/2610.29995): search text
 memories, search images (by text or by the question's image, results shown to the model), view
 images, and submit. The agent starts from the fast-path results and may add facts and images it
 finds; what it submits goes first, the fast-path results follow, so recall never drops below the

@@ -3,6 +3,9 @@
 Token F1 over Porter-stemmed normalized tokens, BLEU-1 (NLTK smoothing method 1), and the
 Mem-Gallery judge rubric whose score is snapped to 0 / 0.5 / 1 (below 0.25 -> 0, below 0.75 ->
 0.5, else 1). Normalization is the benchmark's ``normalize_answer_universal`` (MemEye uses the same).
+
+Source: ``judge_prompt.txt`` is Mem-Gallery's ``benchmark/memengine/evaluate/llm_judge.txt``, copied
+verbatim from https://github.com/YuanchenBei/Mem-Gallery (MIT License).
 """
 
 from __future__ import annotations

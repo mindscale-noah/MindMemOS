@@ -315,7 +315,7 @@ openclaw plugins enable mindmemos-memory
   openclaw config set plugins.entries.mindmemos-memory.hooks.allowConversationAccess true
   openclaw gateway restart
   ```
-- **`cli` PATH**: an OpenClaw process launched from the GUI does not inherit your terminal PATH. Configure `mindmemos` as an absolute path or wrap it with `uv run mindmemos`, or the logs will report `ENOENT`.
+- **`cli` PATH**: an OpenClaw process launched from the GUI does not inherit your terminal PATH. Set `cli` to the absolute path of `mindmemos` (e.g. the output of `which mindmemos`), or the logs will report `ENOENT`. `cli` must be a single executable — a multi-word value such as `uv run mindmemos` does not work; point it at an executable wrapper script if you need one.
 
 Once installed, enabled, and the gateway restarted, the plugin recalls and injects relevant memories before each user turn and writes the conversation back automatically when the turn ends.
 
@@ -427,14 +427,19 @@ Full commands, configuration options, and troubleshooting are in the [DeepSeek H
 | HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
 | M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
 | MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
-| SRAG | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| SRAG | 58.36 | **31.48** | 50.54 | 41.07 | 35.03 | 67.06 |
 | UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
-| MindMemOS b0 (text-only baseline) | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
-| MindMemOS b1 (image-similarity retrieval) | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
-| MindMemOS enhanced (VLM visual facts) | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
-| MindMemOS enhanced_agentic (multimodal agent) | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
+| **MindMemOS-MindVanilla** (text-only) | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| **MindMemOS-MindVanilla + MM basic** | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| **MindMemOS-MindVanilla + MM enhanced** | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| **MindMemOS-MindVanilla + MM enhanced + agentic** | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
 
-Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The baseline rows are reproductions under identical conditions (mean of 3 runs; source: a paper under double-blind review, not linked yet); the four MindMemOS rows are this repository's implementation (mean of 2 runs, 2026-10). `enhanced_agentic` is not a fourth mode — it is `enhanced` with `search_strategy: agentic` (multimodal agent retrieval). Judge models differ between the groups (`gpt-4.1-mini` here vs `GPT-5.4-mini` for the baselines), so compare Judge scores within a group, not across. Step-by-step run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
+- **Text-only** (`mode: off`): plain vanilla without images, as the control.
+- **MM basic** (`mode: basic`): stores the original images and recalls them by similarity to the query with a multimodal embedding, appended after the text results; no extra LLM calls on add or search.
+- **MM enhanced** (`mode: enhanced`): on add, a VLM extracts a description and visual facts for every image; on search, the relevant visual facts and the evidence images linked to the recalled facts are returned as well.
+- **MM enhanced + agentic**: enhanced with `search_strategy: agentic` — a multimodal agent searches over several rounds and views images before submitting the evidence.
+
+Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The baseline rows are reproductions under identical conditions (mean of 3 runs; source: our team's MHG research, [arXiv:2610.29995](https://arxiv.org/abs/2610.29995)); the four MindMemOS rows are this repository's implementation (mean of 2 runs, 2026-10). Judge models differ between the groups (`gpt-4.1-mini` here vs `GPT-5.4-mini` for the baselines), so compare Judge scores within a group, not across. Step-by-step run guide: the [multimodal section](docs/eval/README.md#multimodal-memeye--mem-gallery-vanilla-multimodal-mode-off--basic--enhanced) of the evaluation guide.
 
 ### 🧠 Skill Self-Evolution: SpreadsheetBench-Verified
 
