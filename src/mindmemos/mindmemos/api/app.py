@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -31,8 +31,11 @@ from ..llm import (
 from ..logging import configure_logging, configure_tracing, get_logger
 from ..pipelines.memory_db import ImageMemoryStore
 from ..workers import register_workers
+from ..workers.legacy_skill_trajectory import legacy_trajectory_worker
+from .deps import get_request_context
 from .internal_routes import router as internal_router
 from .routes import router as memory_router
+from .schemas import AuthContext
 from .skill_routes import router as skill_router
 
 logger = get_logger(__name__)
@@ -72,7 +75,8 @@ async def lifespan(app: FastAPI):
     await start_kafka()
 
     try:
-        yield
+        async with legacy_trajectory_worker():
+            yield
     finally:
         await stop_kafka()
         await _close_llm_clients()
@@ -200,6 +204,11 @@ def create_app() -> FastAPI:
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/auth/identity", tags=["auth"])
+    async def resolved_identity(ctx: AuthContext = Depends(get_request_context)) -> dict[str, object]:
+        """Return the current credential's project and scopes for peer services."""
+        return {"project_id": ctx.project_id, "scopes": ctx.scopes}
 
     app.include_router(memory_router)
     app.include_router(skill_router)

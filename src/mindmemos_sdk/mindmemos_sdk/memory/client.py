@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..skills import SkillManager, detect_skill_context
 from ..transport import HttpTransport
 from .core import MemoryCore, MemoryDefaults
 from .models import (
@@ -39,10 +38,8 @@ class MemoryClient:
         default_app_id: str | None = None,
         default_agent_id: str | None = None,
         default_session_id: str | None = None,
-        skill_manager: SkillManager | None = None,
     ) -> None:
         self._transport = transport
-        self._skill_manager = skill_manager
         self._core = MemoryCore(
             MemoryDefaults(
                 user_id=default_user_id,
@@ -62,23 +59,25 @@ class MemoryClient:
         agent_id: str | None = None,
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        skill_context: list[Any] | None = None,
-        score: float | None = None,
-        task_id: str | None = None,
+        retry: bool = True,
     ) -> AddResult:
         """Add content to the memory store.
 
-        Messages accept images (``DialogueMessage.images`` with ``ImageRef`` path/url/data/blob_id
-        sources) when the project's ``algo_config.multimodal.mode`` is basic or enhanced; in off
-        mode image sends are rejected with error code ``add.images_unsupported``, and server-side
-        ``path`` sources outside ``blob_store.allowed_path_roots`` fail with ``image.path_denied``.
-        """
-        if self._skill_manager is not None:
-            if skill_context is None:
-                skill_context = self._detect_and_ensure_skill_context(messages)
-            else:
-                skill_context = self._ensure_provided_skill_context(skill_context)
+        Images require the project's multimodal mode.
 
+        Args:
+            messages: Dialogue or other Memory inputs in execution order.
+            user_id: Business user, falling back to the client default.
+            mode: Run extraction synchronously or enqueue it.
+            app_id: Optional application identity.
+            agent_id: Optional agent identity.
+            session_id: Optional session identity.
+            metadata: Business metadata attached to the add request.
+            retry: Whether to apply configured HTTP transport retries.
+
+        Returns:
+            The result or enqueue receipt from Memory.
+        """
         request = self._core.add(
             messages,
             user_id=user_id,
@@ -87,35 +86,10 @@ class MemoryClient:
             agent_id=agent_id,
             session_id=session_id,
             metadata=metadata,
-            skill_context=skill_context,
-            score=score,
-            task_id=task_id,
         )
-        envelope = self._transport.post_envelope(request.path, json=request.body)
+        options = {} if retry else {"retry": False}
+        envelope = self._transport.post_envelope(request.path, json=request.body, **options)
         return request.parse(envelope)
-
-    def _detect_and_ensure_skill_context(self, messages: list[Message | dict[str, Any]]) -> list[Any]:
-        contexts = detect_skill_context(messages, registry=self._skill_manager.registry)
-        return self._ensure_provided_skill_context(contexts)
-
-    def _ensure_provided_skill_context(self, skill_context: list[Any]) -> list[Any]:
-        ensured: list[Any] = []
-        for raw_context in skill_context:
-            context = raw_context if hasattr(raw_context, "name") else self._skill_context_from_dict(raw_context)
-            skill_id = self._skill_manager.skill_id_for_context(context)
-            if skill_id:
-                ensured.append(self._skill_manager.ensure_skill_context(skill_id, usage=context.usage))
-            else:
-                ensured.append(context)
-        if ensured:
-            self._skill_manager.flush_pending_uploads()
-        return ensured
-
-    @staticmethod
-    def _skill_context_from_dict(value: Any) -> Any:
-        from ..skills import SkillContext
-
-        return SkillContext.model_validate(value) if isinstance(value, dict) else value
 
     def search(
         self,

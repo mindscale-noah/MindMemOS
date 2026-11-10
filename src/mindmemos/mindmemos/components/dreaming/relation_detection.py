@@ -52,7 +52,7 @@ class DetectedMemoryIssueGroup(BaseModel):
     @field_validator("memory_ids")
     @classmethod
     def _dedupe_memory_ids(cls, value: list[str]) -> list[str]:
-        """去重并保留模型输出中的记忆顺序。"""
+        """Deduplicate memories while preserving the order in the model output."""
 
         return list(dict.fromkeys(str(item) for item in value if str(item)))
 
@@ -65,7 +65,7 @@ class DetectedRelationBatch(BaseModel):
 
     @model_validator(mode="after")
     def _backfill_issue_groups_from_candidates(self) -> "DetectedRelationBatch":
-        """兼容旧版 pair-only 输出，将候选 pair 转为 ambiguous issue group。"""
+        """Convert legacy pair-only output into ambiguous issue groups."""
 
         if self.issue_groups:
             return self

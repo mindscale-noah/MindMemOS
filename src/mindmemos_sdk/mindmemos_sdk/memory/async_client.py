@@ -55,9 +55,6 @@ class AsyncMemoryClient:
         agent_id: str | None = None,
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        skill_context: list[Any] | None = None,
-        score: float | None = None,
-        task_id: str | None = None,
     ) -> AddResult:
         """Add content to the memory store."""
         request = self._core.add(
@@ -68,9 +65,6 @@ class AsyncMemoryClient:
             agent_id=agent_id,
             session_id=session_id,
             metadata=metadata,
-            skill_context=skill_context,
-            score=score,
-            task_id=task_id,
         )
         envelope = await self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)

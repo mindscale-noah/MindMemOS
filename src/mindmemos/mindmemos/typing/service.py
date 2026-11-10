@@ -118,6 +118,9 @@ class MemorySearchItem(BaseModel):
     memory: str
     """Memory content."""
 
+    user_id: str | None = None
+    """Business user associated with this memory, when available."""
+
     memory_type: MemoryType | str = "fact"
     """Standard displayed memory type."""
 

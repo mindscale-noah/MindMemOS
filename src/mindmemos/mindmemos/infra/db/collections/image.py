@@ -145,9 +145,7 @@ class ImageRepository(CollectionRepository):
         if image_ids and await self._engine.collection_exists(self.collection):
             await self._engine.delete_by_filter(
                 self.collection,
-                self._engine.project_filter(
-                    project_id, conditions=[qmodels.HasIdCondition(has_id=image_ids)]
-                ),
+                self._engine.project_filter(project_id, conditions=[qmodels.HasIdCondition(has_id=image_ids)]),
             )
 
     async def search(

@@ -1,7 +1,10 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { buildJsonPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { spawnFileJson, spawnFileOk } from "./mindmemos-cli.js";
+import {
+  asRecord, loadedSkillVersions, reportTrajectory, spawnFileJson,
+  type ToolCall, type TrajectoryMessage,
+} from "./generated/mindmemos-cli.js";
 
 type PluginConfig = {
   enabled: boolean;
@@ -33,20 +36,6 @@ type MemoryHit = {
 type MemorySearchResult = {
   request_id?: string | null;
   memories?: MemoryHit[];
-};
-
-type MemoryMessage = {
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  timestamp: number;
-};
-
-type SkillContext = {
-  name: string;
-  content_hash: string;
-  base_version_id: string;
-  version_label?: string;
-  usage?: "injected" | "modified";
 };
 
 const MEMORY_CONTEXT_OPEN = "<relevant-memories>";
@@ -115,7 +104,7 @@ const entry: ReturnType<typeof definePluginEntry> = definePluginEntry({
   id: "mindmemos-memory",
   name: "MindMemOS Memory",
   description:
-    "Searches MindMemOS memories before each prompt and stores completed OpenClaw conversations through the mindmemos CLI.",
+    "Recalls MindMemOS memories and reports completed OpenClaw turns to Memory and Skill.",
   configSchema: buildJsonPluginConfigSchema(CONFIG_SCHEMA),
   register,
 });
@@ -150,26 +139,37 @@ function register(api: OpenClawPluginApi): void {
     }
   });
 
-  // Stateless capture: on each completed turn we store only the latest turn
-  // (the last user message and the assistant replies that follow it). Earlier
-  // turns were already stored by their own agent_end, so nothing is re-sent and
-  // there is no client-side buffer to keep in sync. Deduplication of repeated
-  // facts is handled server-side by the mindmemos add pipeline.
-  api.on("agent_end", async (event: unknown, ctx: unknown) => {
+  api.on("agent_end", async (event, ctx) => {
     if (!isSuccessfulRun(event)) {
       return;
     }
-    const messages = pickLastTurnMessages(event, config.maxConversationMessages);
-    if (messages.length === 0) {
+    const turn = pickLastTurnMessages(event);
+    if (turn.length === 0) {
       return;
     }
-    const sessionId = resolveSessionId(config, event, ctx, messages);
+    const sessionId = resolveSessionId(config, event, ctx, turn);
+    const turnId = nonemptyText(getPath(event, ["runId"])) ?? nonemptyText(getPath(ctx, ["runId"]));
+    const agentId = nonemptyText(ctx.agentId) ?? config.appId;
+    const eventId = `openclaw:${turnId ?? randomUUID()}`;
 
     try {
-      await addConversation(config, messages, sessionId);
-      api.logger.info(`[mindmemos] stored ${messages.length} message(s) from last turn (session_id=${sessionId})`);
+      await reportTrajectory(config.cli, {
+        event_id: eventId,
+        source: "openclaw-plugin",
+        messages: turn.slice(-config.maxConversationMessages),
+        skill_version_ids: loadedSkillVersions(turn, ctx.workspaceDir),
+        user_id: config.userId,
+        agent_id: agentId,
+        app_id: config.appId,
+        session_id: sessionId,
+        turn_id: turnId,
+        memory_mode: config.addMode,
+      }, {
+        info: (message) => api.logger.info(`[mindmemos] ${message}`),
+        warn: (message) => api.logger.warn(`[mindmemos] ${message}`),
+      });
     } catch (error) {
-      api.logger.warn(`[mindmemos] memory add failed: ${errorMessage(error)}`);
+      api.logger.warn(`[mindmemos] trajectory ${eventId}: ${errorMessage(error)}`);
     }
   });
 
@@ -212,144 +212,6 @@ async function searchMemories(config: PluginConfig, query: string, sessionId: st
     args.push("--user-id", config.userId);
   }
   return spawnFileJson<MemorySearchResult>(config.cli, args);
-}
-
-async function addConversation(config: PluginConfig, messages: MemoryMessage[], sessionId: string): Promise<void> {
-  const args = ["memory", "add", "--messages-json-file", "-", "--json"];
-  args.push("--app-id", config.appId, "--session-id", sessionId);
-  if (config.addMode === "async") {
-    args.push("--async");
-  }
-  if (config.userId) {
-    args.push("--user-id", config.userId);
-  }
-  const skillContext = detectSkillContext(messages);
-  if (skillContext.length > 0) {
-    args.push("--skill-context-json", JSON.stringify(skillContext));
-  }
-  args.push("--metadata-json", JSON.stringify({ source: "openclaw-plugin" }));
-  await spawnFileOk(config.cli, args, `${JSON.stringify(messages)}\n`);
-}
-
-function detectSkillContext(messages: MemoryMessage[]): SkillContext[] {
-  const candidates = new Map<string, { path: string; content: string; usage: "injected" | "modified" }>();
-  for (let i = 0; i < messages.length; i += 1) {
-    const message = messages[i];
-    if (message.role !== "assistant") {
-      continue;
-    }
-    const call = parseToolCall(message.content);
-    if (!call) {
-      continue;
-    }
-    const path = toolArgPath(call.args);
-    if (!path || !isSkillMdPath(path)) {
-      continue;
-    }
-    const key = skillDirKey(path);
-    if (call.tool === "read") {
-      const content = messages[i + 1]?.role === "tool" ? messages[i + 1].content : "";
-      if (content) {
-        candidates.set(key, { path, content, usage: strongestUsage(candidates.get(key)?.usage, "injected") });
-      }
-    } else if (call.tool === "write" || call.tool === "edit") {
-      const content = call.tool === "edit" ? editContent(call.args) : toolArgText(call.args, "content");
-      if (content) {
-        candidates.set(key, { path, content, usage: "modified" });
-      }
-    }
-  }
-  return [...candidates.values()].map((candidate) => {
-    const metadata = parseSkillMetadata(candidate.content);
-    return {
-      name: metadata.name || skillNameFromPath(candidate.path),
-      content_hash: computeSkillContentHash(candidate.content),
-      base_version_id: "",
-      ...(metadata.version ? { version_label: metadata.version } : {}),
-      usage: candidate.usage,
-    };
-  });
-}
-
-function parseToolCall(content: string): { tool: string; args: Record<string, unknown> & { path?: string } } | null {
-  const match = content.match(/^\s*\[tool_call\]\s*([A-Za-z0-9_.-]+)\((.*)\)\s*$/s);
-  if (!match) {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = match[2].trim() ? JSON.parse(match[2]) : {};
-  } catch {
-    return null;
-  }
-  if (!isRecord(parsed)) {
-    return null;
-  }
-  const path = typeof parsed.path === "string" ? parsed.path : "";
-  return { tool: match[1].toLowerCase(), args: { ...parsed, path } };
-}
-
-function toolArgPath(args: Record<string, unknown>): string {
-  for (const key of ["path", "file_path", "filepath"]) {
-    const value = args[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return "";
-}
-
-function toolArgText(args: Record<string, unknown>, key: string): string {
-  const value = args[key];
-  return typeof value === "string" ? value : "";
-}
-
-function editContent(args: Record<string, unknown>): string {
-  for (const key of ["content", "new_content", "replacement", "replace"]) {
-    const value = toolArgText(args, key);
-    if (value) {
-      return value;
-    }
-  }
-  return "";
-}
-
-function isSkillMdPath(path: unknown): path is string {
-  return typeof path === "string" && /(^|[/\\])SKILL\.md$/.test(path);
-}
-
-function skillDirKey(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/SKILL\.md$/, "");
-}
-
-function skillNameFromPath(path: string): string {
-  const parts = skillDirKey(path).split("/").filter(Boolean);
-  return parts[parts.length - 1] || "skill";
-}
-
-function strongestUsage(
-  current: "injected" | "modified" | undefined,
-  next: "injected" | "modified",
-): "injected" | "modified" {
-  return current === "modified" || next === "modified" ? "modified" : "injected";
-}
-
-function parseSkillMetadata(content: string): { name?: string; version?: string } {
-  return {
-    name: simpleFrontmatterField(content, "name"),
-    version: simpleFrontmatterField(content, "version"),
-  };
-}
-
-function simpleFrontmatterField(content: string, field: string): string | undefined {
-  const match = content.match(new RegExp(`^\\s*${field}\\s*:\\s*["']?([^"'\\n#]+)`, "m"));
-  return match?.[1]?.trim() || undefined;
-}
-
-function computeSkillContentHash(content: string): string {
-  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const canonical = JSON.stringify([{ content: normalized, path: "SKILL.md" }]);
-  return createHash("sha256").update(canonical).digest("hex");
 }
 
 function formatMemoryContext(memories: MemoryHit[], userId: string | undefined, isSubagent: boolean): string {
@@ -444,39 +306,20 @@ function isSuccessfulRun(event: unknown): boolean {
   return getPath(event, ["success"]) !== false;
 }
 
-/**
- * Select only the latest turn: the last user message and every assistant/tool
- * message that follows it. Returns [] when there is no user message. `maxMessages`
- * is a safety cap (a single turn is normally well under it).
- */
-function pickLastTurnMessages(event: unknown, maxMessages: number): MemoryMessage[] {
+/** Select the last real user message and the assistant/tool messages that follow it. */
+function pickLastTurnMessages(event: unknown): TrajectoryMessage[] {
   const all = getMessagesArray(event)
-    .map((message) => normalizeMessage(message))
-    .filter((message): message is MemoryMessage => message !== null && !isInternalMemoryMessage(message));
-
-  let lastUserIndex = -1;
-  for (let i = all.length - 1; i >= 0; i -= 1) {
-    if (all[i].role === "user") {
-      lastUserIndex = i;
-      break;
-    }
-  }
-  if (lastUserIndex === -1) {
-    return [];
-  }
-
-  const turn = all.slice(lastUserIndex);
-  if (turn.length <= maxMessages) {
-    return turn;
-  }
-  return turn.slice(turn.length - maxMessages);
+    .map(normalizeMessage)
+    .filter((message): message is TrajectoryMessage => message !== null && !isInternalMemoryMessage(message));
+  const lastUserIndex = all.map((message) => message.role).lastIndexOf("user");
+  return lastUserIndex < 0 ? [] : all.slice(lastUserIndex);
 }
 
 function resolveSessionId(
   config: PluginConfig,
   event: unknown,
   ctx: unknown,
-  messages: MemoryMessage[] = [],
+  messages: TrajectoryMessage[] = [],
 ): string {
   if (config.sessionId) {
     return sanitizeSessionId(config.sessionId);
@@ -547,14 +390,19 @@ function getMessagesArray(event: unknown): unknown[] {
   return [];
 }
 
-function normalizeMessage(raw: unknown): MemoryMessage | null {
+function normalizeMessage(raw: unknown): TrajectoryMessage | null {
   if (!isRecord(raw)) {
     return null;
   }
 
   const role = normalizeRole(raw.role ?? raw.type ?? raw.sender);
-  const content = textFromUnknown(raw.content ?? raw.text ?? raw.message);
-  if (!role || !content) {
+  const rawContent = raw.content ?? raw.text ?? raw.message;
+  const content = textFromUnknown(rawContent);
+  const toolCalls = role === "assistant" && Array.isArray(rawContent)
+    ? rawContent.map(parseToolCall).filter((call): call is ToolCall => call !== undefined)
+    : [];
+  const toolCallId = role === "tool" ? nonemptyText(raw.toolCallId) : undefined;
+  if (!role || (!content && toolCalls.length === 0 && !toolCallId)) {
     return null;
   }
 
@@ -562,16 +410,26 @@ function normalizeMessage(raw: unknown): MemoryMessage | null {
     role,
     content,
     timestamp: timestampMillis(raw.timestamp ?? raw.createdAt ?? raw.time),
+    ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+    ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+    ...(role === "tool" && typeof raw.isError === "boolean" ? { is_error: raw.isError } : {}),
   };
 }
 
-function messageSignature(message: MemoryMessage): string {
+function nonemptyText(raw: unknown): string | undefined {
+  return typeof raw === "string" ? raw.trim() || undefined : undefined;
+}
+
+function messageSignature(message: TrajectoryMessage): string {
   return `${message.timestamp}\u0000${message.role}\u0000${message.content}`;
 }
 
-function isInternalMemoryMessage(message: MemoryMessage): boolean {
+function isInternalMemoryMessage(message: TrajectoryMessage): boolean {
   const text = message.content.trim();
   if (!text) {
+    return !message.tool_call_id && !message.tool_calls?.length;
+  }
+  if (text.startsWith(MEMORY_CONTEXT_OPEN) && text.endsWith(MEMORY_CONTEXT_CLOSE)) {
     return true;
   }
   if (text === "HEARTBEAT_OK" || text === "[OpenClaw heartbeat poll]") {
@@ -585,7 +443,7 @@ function isInternalMemoryMessage(message: MemoryMessage): boolean {
   );
 }
 
-function normalizeRole(raw: unknown): MemoryMessage["role"] | null {
+function normalizeRole(raw: unknown): TrajectoryMessage["role"] | null {
   if (typeof raw !== "string") {
     return null;
   }
@@ -632,26 +490,30 @@ function textFromUnknown(value: unknown): string {
  * line `[tool_call] name(<json args>)`.
  */
 function textFromToolCall(value: Record<string, unknown>): string {
-  const isToolCall = value.type === "toolCall" || (typeof value.name === "string" && "arguments" in value);
-  if (!isToolCall || typeof value.name !== "string") {
+  const call = parseToolCall(value);
+  if (!call) {
     return "";
   }
-  const name = value.name.trim();
-  if (!name) {
-    return "";
-  }
-  let args = "";
-  if (value.arguments !== undefined && value.arguments !== null) {
-    try {
-      args = typeof value.arguments === "string" ? value.arguments : JSON.stringify(value.arguments);
-    } catch {
-      args = "";
-    }
-  }
-  return `[tool_call] ${name}(${args})`;
+  const args = typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments);
+  return `[tool_call] ${call.name}(${args})`;
 }
 
-function timestampMillis(value: unknown): number {
+function parseToolCall(raw: unknown): ToolCall | undefined {
+  const value = asRecord(raw);
+  const name = nonemptyText(value?.name);
+  if (!value || !name || value.type !== "toolCall") {
+    return undefined;
+  }
+  const id = nonemptyText(value.id);
+  const args = value.arguments;
+  return {
+    ...(id ? { id } : {}),
+    name,
+    arguments: typeof args === "string" ? args : asRecord(args) ?? {},
+  };
+}
+
+function timestampMillis(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value > 10_000_000_000 ? Math.round(value) : Math.round(value * 1000);
   }
@@ -661,7 +523,7 @@ function timestampMillis(value: unknown): number {
       return parsed;
     }
   }
-  return Date.now();
+  return undefined;
 }
 
 function getPath(value: unknown, path: string[]): unknown {

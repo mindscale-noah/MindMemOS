@@ -1,0 +1,69 @@
+"""SpreadsheetBench data, local execution, and workspace ReAct settings."""
+
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+from ....agents.buitin_agents.openai_chat.config import OpenAIChatConfig
+
+
+class SpreadsheetBenchDataConfig(BaseModel):
+    """Read a released dataset and its workbook case directories."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+    """Reject unknown data settings."""
+
+    data_path: Path
+    """Official dataset.json or normalized JSONL file."""
+
+    data_root: Path | None = None
+    """Workbook release root; defaults to the dataset file's directory."""
+
+
+class SpreadsheetBenchExecutionConfig(BaseModel):
+    """Shared model and turn limits for the two spreadsheet protocols."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+    """Reject unrecognized options, including obsolete protocol switches."""
+
+    agent: OpenAIChatConfig
+    """Recorded model and transport settings."""
+
+    max_turns: int = Field(default=30, ge=1)
+    """Maximum model turns per workbook case."""
+
+    stagnation_limit: int | None = Field(default=None, ge=2)
+    """Consecutive identical observations allowed; None disables the cutoff."""
+
+    transactional_recalculation: bool = True
+    """Recalculate formula outputs into output.recalc.xlsx before shared evaluation."""
+
+
+class SpreadsheetBenchToolCallingConfig(SpreadsheetBenchExecutionConfig):
+    """Configure native structured tool calls over workspace tools."""
+
+    transactional_recalculation: bool = False
+    """Recalculate formula outputs before scoring only when explicitly enabled."""
+
+    tools: list[dict[str, JsonValue]] | None = None
+    """Explicit tool schemas; None exposes the standard workspace tools."""
+
+    skill_loading_mode: Literal["tool", "system_prompt"] = "tool"
+    """Load Skill instructions through a tool or preload them into the prompt."""
+
+
+class SpreadsheetBenchTextActionConfig(SpreadsheetBenchExecutionConfig):
+    """Configure text Action/Observation messages and bash execution."""
+
+    transactional_recalculation: bool = True
+    """Provide the task-local Python recalculation command for the agent to run before completion; scoring never recalculates."""
+
+    max_turns: int = Field(default=100, ge=1)
+    """Maximum text-action turns per task."""
+
+    shell_timeout_seconds: int = Field(default=120, ge=1)
+    """Timeout for each local bash command."""
+
+    stagnation_limit: int = Field(default=5, ge=2)
+    """Consecutive identical actions or format errors allowed before stopping."""

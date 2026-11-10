@@ -67,8 +67,8 @@ mm_embed_model_router:
   endpoints: []
 
 # Raw image storage for multimodal vanilla (content-addressed, per project) — S3-compatible only.
-# `make dev` / `make dev-blobs` starts MinIO on :9100 with the bucket bootstrapped; the
-# connection needs the s3 extra: uv sync (dev env) or pip install mindmemos[s3]
+# `make dev SERVICE=memory` starts local MinIO for basic/enhanced mode.
+# Install the s3 extra with uv sync (dev env) or pip install mindmemos[s3].
 blob_store:
   s3_endpoint: http://localhost:9100
   s3_region: us-east-1
@@ -368,6 +368,7 @@ algo_config:
     image_score_threshold:
     image_context_chars: 500
     max_images_per_request: 32
+    max_query_images: 4
     max_occurrences_per_image: 20
     evidence_images: 6            # enhanced from here on
     session_expansion_images: 4

@@ -1,9 +1,9 @@
 """Collection-agnostic Qdrant primitives shared by all repositories.
 
 ``QdrantEngine`` owns the :class:`AsyncQdrantClient` and every Qdrant operation
-that carries no memory/skill business semantics: it deals only in collection
+that carries no business semantics: it deals only in collection
 names, point structs, records and project-scoped filters. Typed adapters such as
-``QdrantStore`` and ``SkillVersionRepository`` compose one engine and delegate
+``QdrantStore`` composes one engine and delegates
 the low-level work here, so connection handling, payload sanitisation, record
 mapping and project scoping live in exactly one place.
 """

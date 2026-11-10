@@ -1257,11 +1257,10 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
         cancel_check: CancelCheck | None = None,
         rt: _SchemaAddRuntime,
     ) -> list[MemoryAddEventItem]:
-        """v2 (current) rule-based graph fusion flow.
+        """Run rule-based graph fusion for each episode.
 
-        Orchestrates two parallel siblings per episode:
-          - 二.1 episode memory: objectify + episode entity + episode edges.
-          - 二.2 schema entity memory: schema selection -> reference recall -> entity generation.
+        Generate episode memory and schema entity memory in parallel.
+        The schema branch selects a schema and recalls references before generating entities.
         """
         conversation_text = add_record_ops.to_conversation_text(records)
         if not conversation_text.strip():
@@ -1280,13 +1279,10 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
 
         await _report_progress(progress, "llm_extracting", "Extracting structured memory with LLM.", 35)
         await _raise_if_cancelled(cancel_check, "llm_extracting")
-        # 二.1 and 二.2 are parallel siblings, all derived from the raw conversation
-        # text. Guard them with one TaskGroup so a failure in the serial 二.2 chain
-        # (schema selection -> reference recall -> entity generation) cancels the
-        # still-running 二.1 tasks instead of leaving them orphaned across retries.
+        # Share one TaskGroup so a schema branch failure cancels pending episode tasks.
+        # This prevents those tasks from continuing across retries.
         try:
             async with asyncio.TaskGroup() as tg:
-                # 二.1: episode memory generation (parallel).
                 objectify_task = tg.create_task(
                     rt.extractor.objectify_conversation(
                         conversation_text, dialogue_timestamp, prompt_set=request_prompts
@@ -1305,7 +1301,7 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
                         prompt_set=request_prompts,
                     )
                 )
-                # 二.2.a schema selection and 二.2.b reference recall (embed, not chat).
+                # Recall uses embeddings and can run alongside schema selection.
                 schema_selection_task = tg.create_task(
                     rt.extractor.select_schema(
                         conversation_text,
@@ -1319,7 +1315,6 @@ class SchemaAddPipeline(MemoryDbPipelineMixin, AddPipeline):
 
                 selected_schema = await schema_selection_task
                 reference_entities = await recall_task
-                # 二.2.c single entity-generation call.
                 raw_memory = await rt.extractor.generate_memory(
                     entity_schema=selected_schema,
                     reference_entities=reference_entities,
@@ -1385,7 +1380,7 @@ def _events_to_payload(events: list[MemoryAddEventItem]) -> list[dict[str, Any]]
 
 
 def _episode_name_hint(episode_title: str, conversation_text: str) -> str:
-    """Return a chunk-title fallback name for the episode edge prompt (方案1)."""
+    """Return a chunk-title fallback name for the episode edge prompt."""
     title = (episode_title or "").strip()
     if title:
         return title

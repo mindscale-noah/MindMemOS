@@ -28,7 +28,7 @@ class PersonaMemAdapter:
         args: argparse.Namespace,
     ) -> dict[str, Any]:
         """Run PersonaMem with official context boundaries and deterministic scoring."""
-        # ✅ 提前验证配置，避免浪费初始化资源
+        # Validate the configuration before allocating resources.
         context_dataset = str(bench_config.raw.get("context_dataset") or "")
         if not context_dataset:
             raise ValueError("personamem benchmark is missing context_dataset in raw config")
@@ -84,7 +84,6 @@ class PersonaMemAdapter:
             max_build_concurrency=runner.max_conv_concurrency,
             max_qa_concurrency=runner.max_qa_concurrency,
             add=runner.add,
-            score=runner.score,
             show_progress=runner.show_progress,
         )
         print(run.format_report())

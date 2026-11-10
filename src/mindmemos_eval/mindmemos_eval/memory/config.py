@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -122,9 +121,7 @@ def load_benchmark_specs(
             else (profile.project_override_config if profile is not None else None)
         )
         if validate_image_sending:
-            check_image_sending_consistency(
-                str(name), benchmark_execution_params, project_override_config
-            )
+            check_image_sending_consistency(str(name), benchmark_execution_params, project_override_config)
         specs[str(name)] = BenchmarkSpec(
             name=str(name),
             dataset=dataset,
@@ -170,9 +167,9 @@ def load_runner_config(path: str | Path) -> RunnerConfig:
         add=bool(raw.get("add", True)),
         score=bool(raw.get("score", True)),
         show_progress=bool(raw.get("show_progress", True)),
-        llm_model=str(llm.get("model") or os.getenv("MINDMEMOS_EVAL_LLM_MODEL") or "gpt-4o-mini"),
-        llm_api_key=llm.get("api_key") or os.getenv("MINDMEMOS_EVAL_LLM_API_KEY") or os.getenv("OPENAI_API_KEY"),
-        llm_base_url=llm.get("base_url") or os.getenv("MINDMEMOS_EVAL_LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL"),
+        llm_model=str(llm.get("model") or "gpt-4o-mini"),
+        llm_api_key=llm.get("api_key"),
+        llm_base_url=llm.get("base_url"),
         llm_temperature=_optional_float(llm.get("temperature"), default=0.0),
         llm_max_tokens=_optional_int(llm.get("max_tokens")),
         llm_timeout=float(llm.get("timeout", 600.0)),

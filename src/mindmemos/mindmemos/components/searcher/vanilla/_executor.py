@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from concurrent.futures import Executor, ThreadPoolExecutor
+from concurrent.futures import Executor
 from contextvars import copy_context
 from functools import partial
 from threading import Lock
@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 
 
 class BoundedDedupExecutor:
-    """Run CPU-bound de-duplication outside asyncio's shared executor."""
+    """Bound synchronous de-duplication through an async admission gate."""
 
     def __init__(
         self,
@@ -33,20 +33,20 @@ class BoundedDedupExecutor:
         if max_inflight < 1:
             raise ValueError("max_inflight must be at least 1")
 
-        self._executor = executor or ThreadPoolExecutor(
-            max_workers=max_workers,
-            thread_name_prefix="mindmemos-vanilla-dedup",
-        )
+        self._executor = executor
+        self._max_workers = max_workers
         self._max_inflight = max_inflight
         self._gates: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = WeakKeyDictionary()
+        self._worker_gates: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = WeakKeyDictionary()
         self._gates_lock = Lock()
 
-    def _gate_for(self, loop: asyncio.AbstractEventLoop) -> asyncio.Semaphore:
+    def _gate_for(self, loop: asyncio.AbstractEventLoop, *, workers: bool = False) -> asyncio.Semaphore:
         with self._gates_lock:
-            gate = self._gates.get(loop)
+            gates = self._worker_gates if workers else self._gates
+            gate = gates.get(loop)
             if gate is None:
-                gate = asyncio.Semaphore(self._max_inflight)
-                self._gates[loop] = gate
+                gate = asyncio.Semaphore(self._max_workers if workers else self._max_inflight)
+                gates[loop] = gate
             return gate
 
     async def run(self, func: Callable[_P, _R], /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
@@ -54,16 +54,33 @@ class BoundedDedupExecutor:
         loop = asyncio.get_running_loop()
         gate = self._gate_for(loop)
         await gate.acquire()
+        worker_gate = self._gate_for(loop, workers=True) if self._executor is None else None
+        if worker_gate is not None:
+            try:
+                await worker_gate.acquire()
+            except BaseException:
+                gate.release()
+                raise
 
         context = copy_context()
         call = partial(func, *args, **kwargs)
         try:
-            future = loop.run_in_executor(self._executor, context.run, call)
+            if self._executor is None:
+                future = asyncio.create_task(asyncio.to_thread(context.run, call))
+            else:
+                future = loop.run_in_executor(self._executor, context.run, call)
         except BaseException:
+            if worker_gate is not None:
+                worker_gate.release()
             gate.release()
             raise
 
-        future.add_done_callback(lambda _: gate.release())
+        def release(_future: asyncio.Future) -> None:
+            if worker_gate is not None:
+                worker_gate.release()
+            gate.release()
+
+        future.add_done_callback(release)
         try:
             return await asyncio.shield(future)
         except asyncio.CancelledError:

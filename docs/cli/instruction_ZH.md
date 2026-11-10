@@ -1,353 +1,417 @@
-# MindMemOS CLI 使用说明
+# MindMemOS CLI 使用指南
 
+[English](instruction.md) · 简体中文
 
-<p align="center">
-  <strong><a href="instruction.md">English</a></strong>
-  &nbsp;&nbsp;│&nbsp;&nbsp;
-  <strong><a href="instruction_ZH.md">简体中文</a></strong>
-</p>
+`mindmemos` 随 Python SDK 安装，用于配置服务连接、操作 Memory 和管理远端 Skill。每个命令都可以追加 `--help` 查看完整参数。
 
-## 1. 简介
-
-`mindmemos` 是随 MindMemOS Python SDK（`mindmemos_sdk`）一起发布的命令行工具，用于在终端中直接操作记忆服务：写入与检索记忆、管理 SDK 注册的 Skill、检查本地配置与连通性。
-
-它是 SDK 的薄封装：所有命令都读取本地配置文件（`~/.mindmemos/settings.json`），通过 HTTP 调用 `mindmemos` 服务，因此使用时无需手动拼接请求、也不需要在命令中重复填写服务地址。
-
-## 2. 安装
+## SDK 配置与诊断
 
 ```bash
 pip install mindmemos-sdk
-```
-
-安装后确认命令可用：
-
-```bash
 mindmemos --help
 ```
 
-命令通过 `project.scripts` 暴露为全局可用的 `mindmemos` 可执行文件。
+要使用当前仓库源码，从根目录运行 `uv sync --all-packages`，再用 `uv run mindmemos` 执行下文命令。自部署服务的启动方式见[部署指南](../deploy/instruction_ZH.md)。
 
-## 3. 快速上手
+CLI 依次从 `MINDMEMOS_HOME`、兼容变量 `MINDMEMOS_CONFIG_DIR`、已保存的默认目录和 `~/.mindmemos` 中选择配置目录。新版连接写入 `settings.v2.json`。旧 `settings.json` 可供旧 CLI 继续读取。服务端凭据决定远端项目归属。
 
-### 3.1 配置认证
+### `mindmemos auth`
 
-首次使用前，运行 `mindmemos auth` 配置服务地址、API key 与默认用户：
+选择官方或自部署服务，保存 API Key 与默认用户 ID。官方模式省略两个 base URL 参数。Memory 继续使用 `https://mindmemos.cn/v1/memory/*` 和原 Key。新版 Skill 的 API 根地址为 `https://mindmemos.cn/v2/skills`，需要具有 Skill 权限的项目 Key。
+
+自部署时，`--memory-base-url` 填服务地址，由 SDK 拼接 `/v1/memory/...`。`--skill-base-url` 填完整的 Skill API 根地址，直连时包含 `/v1/skills`，并为该连接提供 Skill 服务的 Key。已有只填服务地址的 Skill 配置仍可使用。
 
 ```bash
 mindmemos auth
+mindmemos auth --service-type custom \
+  --memory-base-url http://127.0.0.1:8000 \
+  --skill-base-url http://127.0.0.1:8001/v1/skills \
+  --user-id alice
 ```
 
-交互式依次输入三项配置：
+自部署时可留空跳过 Skill，已有独立连接时回车会保留。用 `--no-skill` 清除自部署的 Skill 连接。命令默认在提示时读取 Key。自动化可用 `--memory-api-key` 和 `--skill-api-key`，按连接模式提供。
 
-| 配置项 | 本地自部署服务 | 官方云服务 |
-| :--- | :--- | :--- |
-| `Base URL` | `http://127.0.0.1:8000` | `https://mindmemos.cn` |
-| `API key` | `config/mindmemos/api_keys.yaml` 中已启用的 key | 从 [官网](https://mindmemos.cn) 申请的 key |
-| `User id` | 当前用户的稳定标识，例如 `u_123` | 当前用户的稳定标识，例如 `u_123` |
+### `mindmemos config show`
 
-也可以一次性传入参数跳过交互：
+查看生效的服务地址、默认用户和配置文件路径。API Key 默认打码，`--show-secret` 会显示原值。
 
 ```bash
-mindmemos auth --base-url http://127.0.0.1:8000 --api-key dev-api-key-001 --user-id u_123
-```
-
-配置保存到 `~/.mindmemos/settings.json`。本地服务会根据 API key 自动确定 `project_id`，无需在命令中指定。
-
-### 3.2 检查配置与连通性
-
-```bash
-# 查看当前配置（API key 默认打码）
 mindmemos config show
+```
 
-# 完整显示 API key
-mindmemos config show --show-secret
+### `mindmemos config home set`
 
-# 检查配置是否有效、服务是否连通
+为后续启动的进程设置默认配置目录。当前进程需要重启，原目录的 `settings.json` 留在原处。
+
+```bash
+mindmemos config home set /absolute/path/to/.mindmemos
+```
+
+### `mindmemos config reset`
+
+清除新版连接设置，保留旧 CLI 使用的 `settings.json`。默认要求确认，`--yes` 或 `-y` 可跳过确认。
+
+```bash
+mindmemos config reset
+```
+
+### `mindmemos doctor`
+
+检查本地配置、凭据是否存在，以及能否初始化 SDK 客户端。`transport: ready` 表示客户端初始化成功。验证远端连通性和权限时，分别运行 `mindmemos memory get --top-k 1` 和 `mindmemos skill list --limit 1`。
+
+```bash
 mindmemos doctor
 ```
 
-### 3.3 写入一条记忆
+如果提示缺少配置或 Key，先用 `config show` 核对目录，再运行 `auth`。GUI 插件找不到 `mindmemos` 时，可为插件指定 [CLI 的绝对路径](../../skills/mindmemos-cli/references/openclaw-plugin.md)。
+
+## Memory 命令
+
+`add`、`search`、`feedback` 和 `dreaming` 都支持 `--user-id`、`--app-id`、`--agent-id` 和 `--session-id`。示例中的 `alice` 和 `MEMORY_ID` 请替换为实际值。
+
+### `mindmemos memory add`
+
+写入单条消息或一段对话。`--role` 默认是 `user`。多轮消息通过 `--messages-json` 或 `--messages-json-file` 传入非空 JSON 数组，业务元数据用 `--metadata-json`。
 
 ```bash
 mindmemos memory add --content "我喜欢喝冰美式。"
+mindmemos memory add --messages-json-file ./messages.json --async --json
 ```
 
-### 3.4 检索记忆
+默认使用配置中的用户并同步处理。`--async` 排队成功后返回 `request_id`，`--json` 输出完整结果。
+
+### `mindmemos memory search`
+
+按查询文本检索记忆，默认最多返回 10 条。使用 `--user-id` 限定用户，省略时检索当前项目。
 
 ```bash
-mindmemos memory search "用户喜欢喝什么咖啡？" --top-k 5
+mindmemos memory search "我喜欢喝什么咖啡？" --user-id alice --top-k 5
 ```
 
-> 写入、检索的更多参数见下文「记忆命令」；CLI 仅做调用与结果展示，记忆的完整提取、打分、存储逻辑由服务端完成。
+用 `--search-strategy agentic` 切换默认的 `fast` 策略。还可用 `--filter` 传入 JSON 过滤对象、用 `--token-budget` 限制结果的 token 数，或用 `--json` 输出完整结果。`--score-threshold` 只在启用 `--rerank` 时生效。
 
-## 4. 命令总览
+### 图文写入、检索和下载
 
-```
-mindmemos
-├── auth                  交互式配置 API key、用户与服务地址
-├── config                查看 / 重置本地配置
-│   ├── show
-│   └── reset
-├── memory                记忆相关操作
-│   ├── add               写入一条对话消息作为记忆
-│   ├── search            检索记忆
-│   ├── get               列出 / 过滤当前项目下的记忆
-│   ├── get-image         按 blob id 下载已存储的图片
-│   ├── update            更新指定记忆内容
-│   ├── delete            删除指定记忆
-│   ├── feedback          提交显式 / 隐式反馈
-│   └── dreaming          触发记忆演进管线
-├── skill                 管理 SDK 注册的 Skill
-│   ├── register          注册并上传本地 Skill
-│   ├── list              列出已注册 Skill
-│   ├── show              查看单个 Skill
-│   ├── evolve            触发云端 Skill 演进
-│   ├── push              上传本地改动为新版本
-│   ├── pull              拉取版本元数据（不改动文件）
-│   ├── update            更新一个或全部 Skill
-│   ├── rollback          回滚到指定版本
-│   ├── history           查看版本历史
-│   ├── diff              查看版本差异
-│   └── unregister        移除注册（可同时删除文件）
-└── doctor                检查 SDK 配置与连通性
-```
+项目启用多模态后，`--image` 和 `--query-image` 接受本地文件或 HTTP(S) URL，可重复传入。`--image` 附加到 `--content` 对应的消息。传入多条消息时，在 `--messages-json` 中把图片放入对应消息的 `images` 数组。`--query-image` 会同时启用多模态检索。
 
-每个命令都支持 `--help` 查看完整参数说明：
+检索结果可包含 `metadata.image_url`，该链接可能过期。用 `metadata.blob_id` 和 `metadata.user_id` 调用 `get-image` 可下载原图。
 
 ```bash
-mindmemos memory add --help
+mindmemos memory add --content "Desk setup" --image ./desk.png
+mindmemos memory search "Desk" --query-image ./desk.png --json
+mindmemos memory search "Desk" --multimodal --json
+mindmemos memory get-image BLOB_ID --user-id alice --output desk.png
 ```
 
-## 5. 记忆命令（`mindmemos memory`）
+### `mindmemos memory get`
 
-记忆命令使用 `mindmemos auth` 配置好的凭据，无需重复输入。
-
-### 5.1 写入记忆 `add`
-
-最常用的方式是传入单条消息内容：
+列出当前项目中的记忆。用 `--top-k` 限制条数，或用 `--filter` 传入 JSON 过滤对象。
 
 ```bash
-mindmemos memory add --content "我喜欢喝冰美式。"
-```
-
-指定消息角色（默认 `user`）：
-
-```bash
-mindmemos memory add --content "记住这个偏好" --role system
-```
-
-多轮消息以 JSON 传入（此时 `--content` / `--role` 被忽略）。可内联或从文件读取：
-
-```bash
-# 内联 JSON
-mindmemos memory add --messages-json \
-  '[{"role":"user","content":"我喜欢喝冰美式。"},{"role":"assistant","content":"好的，记住了。"}]'
-
-# 从文件读取
-mindmemos memory add --messages-json-file ./messages.json
-```
-
-异步模式（立即返回 `request_id`，不等待提取完成）：
-
-```bash
-mindmemos memory add --content "我喜欢喝冰美式。" --async
-```
-
-为 `--content` 消息附加图片（本地文件或 http(s) URL，可重复；需服务端开启多模态模式）：
-
-```bash
-mindmemos memory add --content "看看这张照片。" --image ./photo.png
-```
-
-> `--image` 只附加到 `--content` 消息上；多轮消息输入时，请把图片直接嵌入 `--messages-json`（如 `--messages-json '[{"role":"user","content":"看看这张照片。","images":[{"url":"https://example.com/photo.png"}]}]'`）。
-
-其他可选参数：
-
-| 参数 | 说明 |
-| :--- | :--- |
-| `--image` | 为 `--content` 消息附加图片（本地文件或 http(s) URL），可重复 |
-| `--user-id` | 覆盖配置中的默认用户 |
-| `--app-id` / `--agent-id` / `--session-id` | 上下文标识，供细分与过滤使用 |
-| `--metadata-json` | 业务元数据（JSON 对象） |
-| `--skill-context-json` | Skill 上下文数组，覆盖 SDK 自动检测 |
-| `--json` | 以机器可读 JSON 输出完整结果 |
-
-示例输出：
-
-```text
-Added 1 memory item(s):
-- [did] m_8f3a: 我喜欢喝冰美式。
-```
-
-### 5.2 检索记忆 `search`
-
-```bash
-mindmemos memory search "用户喜欢喝什么咖啡？" --top-k 5
-```
-
-以图搜图（需服务端开启多模态模式）：
-
-```bash
-mindmemos memory search "猫" --query-image ./query.png
-```
-
-常用参数：
-
-| 参数 | 说明 |
-| :--- | :--- |
-| `--top-k` | 返回结果条数，默认 `10` |
-| `--search-strategy` | 检索策略，`fast`（默认）或 `agentic` |
-| `--rerank` | 开启重排 |
-| `--score-threshold` | 重排相关度阈值（0-1），需配合 `--rerank` |
-| `--filter` | 过滤 DSL（JSON 对象字符串） |
-| `--query-image` | 为查询附加图片（本地文件或 http(s) URL），可重复，隐含 `--multimodal` |
-| `--multimodal` | 同时检索已存图片，需服务端开启多模态模式 |
-| `--user-id` 等 | 覆盖请求上下文 |
-| `--json` | 以 JSON 输出完整结果 |
-
-命中已存储图片的结果会多输出一行 `image: <url>` —— 服务端配置了公共镜像（`blob_store.s3_public_base_url`）时为永久 URL，否则是短时效的 S3/MinIO 预签名链接，再否则回退为同样短时效的**签名**代理 URL（`/v1/memory/images/{blob_id}?user_id=…&project_id=…&expires=…&signature=…`，配置了 `blob_store.proxy_public_base_url` 时为绝对地址，否则为相对路径、按配置的 `base_url` 拼接），无需任何 API key 即可下载。`--json` 模式下该 URL 位于 `metadata.image_url`，与 `metadata.blob_id`、`metadata.user_id` 一并返回；`blob_id` + `user_id` 正是下文 `memory get-image` 所需的输入，因此链接过期或不可直接访问时仍可随时通过 API 重新下载。
-
-### 5.3 列出与过滤 `get`
-
-列出当前项目下的记忆，可选过滤：
-
-```bash
-# 列出最近 20 条
 mindmemos memory get --top-k 20
-
-# 按过滤 DSL 过滤
-mindmemos memory get --filter '{"field":"value"}'
 ```
 
-### 5.4 下载已存储图片 `get-image`
+### `mindmemos memory update`
 
-下载 `memory search` 返回的图片。`--user-id` 必填，且必须是图片所有者（检索结果中的 `metadata.user_id`，服务端会校验）：
+用 `--content` 替换指定 ID 的记忆内容。
 
 ```bash
-mindmemos memory get-image <blob_id> --user-id u_123
-
-# 也可显式指定输出路径
-mindmemos memory get-image <blob_id> --user-id u_123 -o out.png
+mindmemos memory update MEMORY_ID --content "用户喜欢无糖冰美式。"
 ```
 
-`blob_id` 来自检索结果的 `metadata.blob_id`。默认输出路径为 `./{blob_id}{按内容类型确定的扩展名}`。当检索给出的 `image:` URL 已过期时（预签名链接天然短时效），可用该命令重新下载。
+### `mindmemos memory delete`
 
-### 5.5 更新与删除
+按 ID 删除一条记忆。默认要求确认，`--yes` 或 `-y` 可跳过确认。
 
 ```bash
-# 更新指定记忆的内容
-mindmemos memory update <memory_id> --content "新内容"
-
-# 删除指定记忆（-y 跳过二次确认）
-mindmemos memory delete <memory_id> --yes
+mindmemos memory delete MEMORY_ID
 ```
 
-### 5.6 反馈 `feedback`
+### `mindmemos memory feedback`
 
-默认运行隐式反馈，由服务端分析近期写入并生成反馈；也可通过 `--text` 提交显式反馈：
+省略 `--text` 时触发隐式反馈。显式反馈用 `--text` 和 `--messages-json` 或 `--messages-json-file` 提交原始对话，可用 `--recalled-memories-json` 或 `--recalled-memories-json-file` 附上该轮召回的记忆。
 
 ```bash
-# 隐式反馈
 mindmemos memory feedback
-
-# 显式反馈，需同时给出产生该反馈的消息
-mindmemos memory feedback --text "这条记忆不正确" \
-  --messages-json '[{"role":"user","content":"..."}]'
+mindmemos memory feedback --text "用户喜欢无糖咖啡" \
+  --messages-json '[{"role":"user","content":"我喜欢无糖咖啡。"}]'
 ```
 
-### 5.7 记忆演进 `dreaming`
+### `mindmemos memory dreaming`
 
-触发记忆演进（dreaming）管线，选择同步或异步：
+触发记忆演进。默认异步排队，也可显式传 `--async`。用 `--sync` 等待完成。
 
 ```bash
-# 异步排队（默认）
-mindmemos memory dreaming --async
-
-# 同步等待完成
 mindmemos memory dreaming --sync
 ```
 
-## 6. Skill 命令（`mindmemos skill`）
+## Skill 命令
 
-`mindmemos skill` 管理已在 SDK 注册、可由云端演进（evolve）的本地 Skill。
+Skill 引用可以是别名、家族 ID 或版本 ID。别名和家族 ID 选中当前活动版本。用完整版本 ID 可固定评分、导出和对比的输入。图引用可以是别名、图家族 ID 或快照 ID。
 
-注册一个本地 Skill（路径可为目录或 SKILL.md 文件）：
+示例中的 `SKILL_VERSION_ID`、`TRAJECTORY_ID` 和 `TASK_ID` 请替换为实际 ID。Skill 命令成功时输出 JSON，`task progress` 输出文本日志。失败时在 stderr 输出错误并返回非零退出码。
+
+### 基础管理
+
+管理 Skill 家族与版本、执行轨迹和图快照。
+
+#### `mindmemos skill register`
+
+从本地 Skill 目录或 `SKILL.md` 注册新家族。标准 `SKILL.md` 的 frontmatter 需包含 `name` 和 `description`。本地注册默认使用 `name` 作为别名，首个版本标签为 `v0.0.1`。
 
 ```bash
-mindmemos skill register ./my-skill
-# 指定别名，便于后续命令使用
 mindmemos skill register ./my-skill --alias my-skill
 ```
 
-常用操作：
+用 `--version`、`--message` 和 `--metadata-json` 设置首个版本信息。`--include` 和 `--exclude` 接受逗号分隔的资源匹配规则。也可用 `--json-skill` 传入完整的 `StructuredSkillInfo` JSON 对象，此时省略本地路径及本地来源选项。
+
+#### `mindmemos skill list`
+
+列出项目中的 Skill 家族，默认最多 20 条。可按 `--name`、`--alias`、`--user-id` 或 `--agent-id` 筛选，也可用 `--filter` 一次传入 JSON 对象。
 
 ```bash
-# 列出 / 查看已注册 Skill
-mindmemos skill list
-mindmemos skill show <skill-id-or-alias>
-
-# 触发云端演进（默认同步，--async 改为排队）
-mindmemos skill evolve <skill-id-or-alias> --sync
-
-# 推送本地改动为新版本；拉取版本元数据
-mindmemos skill push <skill-id-or-alias>
-mindmemos skill pull <skill-id-or-alias>
-
-# 更新一个或全部 Skill（--all 更新全部，-y 跳过确认）
-mindmemos skill update <skill-id-or-alias> --yes
-mindmemos skill update --all --yes
-
-# 撤销注册（--delete-files 同时删除本地文件）
-mindmemos skill unregister <skill-id-or-alias> --delete-files --yes
+mindmemos skill list --limit 20
 ```
 
-版本管理：
+#### `mindmemos skill show`
+
+读取 Skill 家族信息和选定版本的完整内容，包括资源。
 
 ```bash
-# 查看版本历史
-mindmemos skill history <skill-id-or-alias>
-
-# 回滚到指定版本
-mindmemos skill rollback <skill-id-or-alias> --to <version-id> --yes
-
-# 查看两个版本间的差异
-mindmemos skill diff <skill-id-or-alias> --from <version-id> --to <version-id>
+mindmemos skill show my-skill
 ```
 
-在提交 `update` / `rollback` 等可能改动本地文件的操作前，命令会先展示变更计划并请求确认。
+#### `mindmemos skill resolve`
 
-## 7. 配置管理（`mindmemos config`）
+把 Skill 引用解析为家族 ID 和版本 ID。可从返回结果的 `skill_version_id` 取得当前解析到的具体版本。
 
 ```bash
-# 查看当前配置
-mindmemos config show
-mindmemos config show --show-secret   # 显示完整 API key
-
-# 重置并删除本地配置
-mindmemos config reset
-mindmemos config reset --yes          # 跳过确认
+mindmemos skill resolve my-skill
 ```
 
-配置文件位于 `~/.mindmemos/settings.json`，也可通过环境变量 `MINDMEMOS_CONFIG_DIR` 指定其他配置目录。
+#### `mindmemos skill export`
 
-> API key 属于敏感信息，默认在 `config show` 中打码显示（`config show --show-secret` 才会完整展示）。
+将选定版本的内容和资源导出到 `--to` 指定的父目录下的 Skill 子目录。`--overwrite` 会替换同名子目录及其内容。
 
-## 8. 故障排查
+```bash
+mindmemos skill export my-skill --to ./exports
+```
 
-| 现象 | 可能原因与处理 |
-| :--- | :--- |
-| No SDK config at … Run `mindmemos auth` first. | 尚未配置认证，先运行 `mindmemos auth` |
-| No api_key configured | API key 缺失，重新运行 `mindmemos auth` |
-| transport: not ready … | `doctor` 检测到服务不可达。确认服务已启动，且 `base_url` 正确：本地自部署为 `http://127.0.0.1:8000`，云端为 `https://mindmemos.cn` |
-| 服务返回认证错误 | API key 无效或未启用，核对云端的 key 或 `config/mindmemos/api_keys.yaml` 中的本地 key |
-| 插件环境报 `ENOENT` | GUI 启动的进程不继承终端 PATH，`mindmemos` 需显式配置绝对路径或用 `uv run mindmemos` 包装，详见 [OpenClaw 插件集成](../../skills/mindmemos-cli/references/openclaw-plugin.md) |
-| 服务返回 `add.images_unsupported` / `search.images_unsupported` | 项目多模态模式未开启；将 `algo_config.multimodal.mode` 设为 `basic`/`enhanced`（或按项目 `project_override_config` 覆盖），见[配置文档](../config/README.md) |
+#### `mindmemos skill commit`
 
-可随时运行 `mindmemos doctor` 一键检查配置与连通性。
+以引用选中的版本为父版本创建新版本，返回新版本的 `skill_version_id`。本地来源用 `--from` 指定目录或 `SKILL.md`，并提供 `--message`。加 `--activate` 可在提交时激活。
 
-## 9. 相关文档
+```bash
+mindmemos skill commit my-skill --from ./my-skill --message "补全输入校验步骤"
+```
 
-- [Python SDK 集成](../../skills/mindmemos-cli/references/python-sdk.md)
-- [OpenClaw 插件集成](../../skills/mindmemos-cli/references/openclaw-plugin.md)
-- [部署 & 配置说明](../deploy/instruction_ZH.md)
-- [API 文档](https://mindmemos.cn/api-docs)
+默认按 `patch` 递增并继承父版本的资源。可用 `--version` 指定标签，或用 `--bump minor`、`--bump major` 改变增量。资源可用 `--resources-dir` 替换或用 `--clear-resources` 清空。使用 `--json-skill` 时，提供包含 `commit_message` 的完整 JSON 对象，并省略本地来源选项。
+
+#### `mindmemos skill history`
+
+列出引用所属家族的版本历史。`--limit` 默认 20，`--offset` 默认 0，可组合使用。
+
+```bash
+mindmemos skill history my-skill --limit 20 --offset 0
+```
+
+#### `mindmemos skill diff`
+
+按从左到右的顺序对比两个引用选中的版本。下面把 `my-skill` 当前活动版本与另一个指定版本对比。
+
+```bash
+mindmemos skill diff my-skill SKILL_VERSION_ID
+```
+
+#### `mindmemos skill activate`
+
+切换家族的活动版本。用 `--version` 指定标签，或用 `--version-id` 指定同一家族的完整版本 ID。要恢复较早版本为活动版本，也使用这个命令。
+
+```bash
+mindmemos skill activate my-skill --version-id SKILL_VERSION_ID
+```
+
+#### `mindmemos skill update-info`
+
+更新家族信息。用 `--name` 修改名称、用 `--alias` 设置别名、用 `--clear-alias` 清除别名，或用 `--metadata-json` 设置元数据。
+
+```bash
+mindmemos skill update-info my-skill --alias review-skill
+```
+
+#### `mindmemos skill delete`
+
+软删除整个 Skill 家族。传入版本 ID 也会删除其所属家族。默认要求确认，`--yes` 或 `-y` 可跳过确认。
+
+```bash
+mindmemos skill delete my-skill
+```
+
+#### `mindmemos skill trajectory report`
+
+上报一条执行轨迹。请求需要 `user_id`、`agent_id`、`messages` 和 `skill_version_ids`。列表包含执行时实际加载的精确版本。一个版本也用列表，无法确定版本时传 `[]`。服务返回一个轨迹 ID。用 `--file` 或 `--json-data` 提交，`--file -` 从标准输入读取。
+
+```bash
+mindmemos skill trajectory report --file ./trajectory.json
+```
+
+#### `mindmemos skill trajectory list`
+
+列出引用选中版本的轨迹。可用 `--status`、`--received-from` 和 `--received-to` 过滤，默认最多返回 20 条。
+
+```bash
+mindmemos skill trajectory list my-skill --limit 20
+```
+
+#### `mindmemos skill trajectory show`
+
+按轨迹 ID 读取一次完整的执行记录。
+
+```bash
+mindmemos skill trajectory show TRAJECTORY_ID
+```
+
+#### `mindmemos skill graph list`
+
+列出当前项目中的图家族。
+
+```bash
+mindmemos skill graph list
+```
+
+#### `mindmemos skill graph resolve`
+
+把图引用解析为图家族 ID 和所选快照 ID。
+
+```bash
+mindmemos skill graph resolve my-collection
+```
+
+#### `mindmemos skill graph history`
+
+列出引用所属图家族的快照。
+
+```bash
+mindmemos skill graph history my-collection
+```
+
+#### `mindmemos skill graph show`
+
+读取引用选中的已发布图快照。
+
+```bash
+mindmemos skill graph show my-collection
+```
+
+#### `mindmemos skill graph preview`
+
+读取已发布快照的拓扑供预览。此命令只读。
+
+```bash
+mindmemos skill graph preview my-collection
+```
+
+#### `mindmemos skill graph publish`
+
+发布图快照。用 `--alias` 或 `--graph-id` 指定目标图。成员来源三选一，可重复传入 `--skill`，也可用 `--all-skills` 或 `--empty`。快照固定成员的具体版本，每个家族最多一个版本。
+
+```bash
+mindmemos skill graph publish --alias my-collection --skill my-skill
+```
+
+可用 `--message` 记录提交说明，或用 `--force-extract-scene` 强制提取 Scene。
+
+#### `mindmemos skill graph add`
+
+将选定的 Skill 加入图并发布新快照。重复 `--skill` 可一次加入多个成员。可附上 `--message`，或用 `--force-extract-scene` 强制提取 Scene。
+
+```bash
+mindmemos skill graph add my-collection --skill another-skill
+```
+
+#### `mindmemos skill graph remove`
+
+从图中移除指定成员并发布新快照，Skill 家族和版本仍可在仓库中查询。`--skill` 可重复，`--message` 可记录移除原因。
+
+```bash
+mindmemos skill graph remove my-collection --skill another-skill
+```
+
+### 算法相关
+
+评分和评分查询依赖服务端的 Analyze 流水线。评分命令还需要启用对应的 Judge。返回 `pipeline_unavailable` 时，检查服务端是否启用了该命令所需的流水线。基准评测另见 [Skill 评测指南](../evaluation/skill_evaluation_ZH.md)。
+
+#### `mindmemos skill analyze skill`
+
+对选定版本的 Skill 内容和资源进行静态评分。相同输入和评分配置会复用已完成结果，`--force-refresh` 可重新运行并更新该结果。用 `--request-id` 关联外部追踪。
+
+```bash
+mindmemos skill analyze skill my-skill
+```
+
+#### `mindmemos skill analyze trajectory`
+
+分析已保存的轨迹。省略归因开关时沿用服务端设置，可用 `--attribute` 或 `--no-attribute` 覆盖。`--verifier-score` 可指定验证分数。支持 `--request-id` 与 `--force-refresh`。
+
+```bash
+mindmemos skill analyze trajectory TRAJECTORY_ID --no-attribute --verifier-score 0
+```
+
+#### `mindmemos skill evaluations query`
+
+读取一个或多个指定版本的已完成评分。可重复指定 `--judge-type static_skill` 或 `--judge-type trajectory`，省略时返回两类。`--limit` 默认 200，最大 1,000。查询只读取已有结果。
+
+```bash
+mindmemos skill evaluations query SKILL_VERSION_ID --judge-type static_skill --limit 20
+```
+
+返回的 `items` 中，静态评分记录包含 `skill_version_id`、`score_mean`、`scores`、`summary` 和 `findings`。使用完整版本 ID 可以在切换活动版本后继续查询同一版本。
+
+#### `mindmemos skill evolve`
+
+提交异步演进任务，返回 `task_id`。一次可提交多个 Skill 引用，每个家族最多选一个版本。省略 `--pipeline` 时使用服务端默认流水线，仓库示例中的流水线名为 `offline`。
+
+```bash
+mindmemos skill evolve my-skill --pipeline offline
+mindmemos skill evolve my-skill another-skill --pipeline offline
+```
+
+重复 `--editable-skill` 可指定允许修改的输入，也可用 `--read-only` 保持输入家族不变。用 `--allow-create-skills` 或 `--no-allow-create-skills` 控制新增家族。加 `--auto-accept` 可激活已有家族的候选版本。
+
+#### `mindmemos skill train`
+
+提交异步训练任务，返回 `task_id`。提供服务端配置的 `--pipeline` 和 `--work-dir`，环境用 `--environment` 从本地 YAML 或 JSON 文件读取，也可用 `--environment-json` 内联传入。
+
+```bash
+mindmemos skill train my-skill --pipeline TRAINING_PROFILE \
+  --work-dir ./runs/train-001 --environment ./environment.yaml \
+  --sample-json "$(cat ./train-sample.json)" --train-id SAMPLE_ID
+```
+
+将 `TRAINING_PROFILE` 换成服务端的训练配置名，样本文件需包含 `task` 和 `reward_data`，`SAMPLE_ID` 对应样本的 `task.id`。可以重复传入 `--sample-json`、`--train-id`、`--val-id` 和 `--test-id`，各分组的 ID 必须互不重叠。加 `--auto-accept` 可激活训练生成的新版本。
+
+#### `mindmemos skill task show`
+
+按任务 ID 查看状态和结果快照。任务 ID 由 `evolve` 或 `train` 返回。
+
+```bash
+mindmemos skill task show TASK_ID
+```
+
+#### `mindmemos skill task progress`
+
+输出任务文本日志。用 `--after N` 只读取序号大于 N 的事件，用 `--follow` 或 `-f` 持续读取到任务结束。
+
+```bash
+mindmemos skill task progress TASK_ID --follow
+```
+
+#### `mindmemos skill graph recommend`
+
+从 `--by` 选定的图快照中推荐与任务相关的 Skill。用完整快照 ID 可固定推荐范围。`--strategy` 支持 `graph` 和 `vector`，默认 `graph`。
+
+```bash
+mindmemos skill graph recommend "整理 CSV 数据" --by my-collection --include-evaluation
+```
+
+用 `--top-k` 控制结果数量，默认 5。`--include-scenes` 附带 Scene，`--include-evaluation` 附带已有评分。

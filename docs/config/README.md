@@ -403,7 +403,7 @@ is unavailable, hits fall back to the equally short-lived signed proxy URL on th
 
 The S3 store needs the `s3` extra (`pip install mindmemos[s3]`; the dev workspace already
 includes it). Object keys are `<namespace-prefix>/<id[:2]>/<id>`; the MIME type rides on the
-object's content-type. For local development `make dev` / `make db` also start MinIO (`make dev-blobs` starts it alone) on
+object's content-type. For local development, `make dev SERVICE=memory` starts MinIO for a local endpoint when multimodal mode is enabled globally, on
 port 9100 (ClickHouse native claims 9000) with credentials taken from the same `MINDMEMOS_S3_*`
 environment variables. All `s3_*` fields except `s3_region` can be set via environment
 (`MINDMEMOS_S3_ENDPOINT/BUCKET/ACCESS_KEY/SECRET_KEY/PUBLIC_BASE_URL/PRESIGN_ENDPOINT/PRESIGN_EXPIRY_SECONDS`).
