@@ -92,7 +92,9 @@ Use `--search-strategy agentic` to switch from the default `fast` strategy. Pass
 
 ### Image add, search, and download
 
-When multimodal mode is enabled for the project, repeat `--image` or `--query-image` for local files and HTTP(S) URLs. Download an original with the hit's `metadata.blob_id` and `metadata.user_id`.
+When multimodal mode is enabled for the project, repeat `--image` or `--query-image` for local files and HTTP(S) URLs. `--image` attaches to the `--content` message. For multiple messages, put each image in that message's `images` array in `--messages-json`. `--query-image` also enables multimodal search.
+
+A search hit can include `metadata.image_url`, which may expire. Use `metadata.blob_id` and `metadata.user_id` with `get-image` to download the original.
 
 ```bash
 mindmemos memory add --content "Desk setup" --image ./desk.png

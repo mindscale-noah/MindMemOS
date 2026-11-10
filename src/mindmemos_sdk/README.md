@@ -33,6 +33,10 @@ pip install mindmemos-sdk
 
 The package also installs the `mindmemos` command.
 
+升级到 1.0 时，请通过独立 Skill 服务管理版本，用 `skill commit` 创建版本，
+用 `skill show` 或 `skill export` 读取版本。通过 `client.report_trajectory(...)`
+或 `mindmemos trajectory report` 上报执行轨迹和已加载的 Skill 版本。
+
 ## Configure
 
 ```bash

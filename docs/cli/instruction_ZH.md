@@ -92,7 +92,9 @@ mindmemos memory search "我喜欢喝什么咖啡？" --user-id alice --top-k 5
 
 ### 图文写入、检索和下载
 
-项目启用多模态后，`--image` 和 `--query-image` 接受本地文件或 HTTP(S) URL，可重复传入。图片命中的 `metadata.blob_id` 和 `metadata.user_id` 可用于下载原图。
+项目启用多模态后，`--image` 和 `--query-image` 接受本地文件或 HTTP(S) URL，可重复传入。`--image` 附加到 `--content` 对应的消息。传入多条消息时，在 `--messages-json` 中把图片放入对应消息的 `images` 数组。`--query-image` 会同时启用多模态检索。
+
+检索结果可包含 `metadata.image_url`，该链接可能过期。用 `metadata.blob_id` 和 `metadata.user_id` 调用 `get-image` 可下载原图。
 
 ```bash
 mindmemos memory add --content "Desk setup" --image ./desk.png

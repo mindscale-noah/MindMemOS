@@ -97,6 +97,10 @@ or use `skill export` and read the exported `SKILL.md` with the read tool in the
 same turn. Every identified version is added to the same trajectory.
 Recommendations and exports alone leave the list empty.
 
+When image recall is enabled, the plugin includes each hit's image link in the
+injected context. The recall query and reported conversation messages use text.
+To store image attachments, use the SDK or `mindmemos memory add --image`.
+
 If dsh logs `ENOENT`, set `cli` to the absolute path to the executable.
 If recall is absent, check `minQueryLength` and the CLI profile. Reporting
 runs when `turn/end` has reason `completed`. Injected Memory and Skill

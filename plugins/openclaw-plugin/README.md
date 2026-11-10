@@ -151,9 +151,13 @@ openclaw config set plugins.entries.mindmemos-memory.config.cli \
 ```
 
 The `.venv/bin/mindmemos` shim has an absolute-path shebang, so it runs without
-activating the venv. Alternatively set `cli` to a wrapper such as
-`uv run mindmemos`, but only if the gateway can resolve `uv` and the repo
-working directory. If the gateway logs `ENOENT`, check the `cli` path.
+activating the venv. If you need to run `uv run mindmemos`, put the command in
+an executable wrapper script and set `cli` to the script's absolute path.
+If the gateway logs `ENOENT`, check the `cli` path.
+
+When image recall is enabled, the plugin includes each hit's image link in the
+injected context. The recall query and reported conversation messages use text.
+To store image attachments, use the SDK or `mindmemos memory add --image`.
 
 ## Subagent Behavior
 
