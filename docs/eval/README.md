@@ -170,7 +170,9 @@ In `config/mindmemos/dev.yaml`:
 
 1. Fill in `chat_model_router`, `embed_model_router` and `rerank_model_router` as in the
    [main README](../../README.md). The chat model must accept image input.
-2. Configure the multimodal embedding:
+2. Point `mm_embed_model_router` at the embedding service from step 3 (endpoint fields and the
+   required `dimensions` are documented in the
+   [config reference](../config/README.md#mm_embed_model_router--multimodal-embedding)):
 
    ```yaml
    mm_embed_model_router:
@@ -180,23 +182,10 @@ In `config/mindmemos/dev.yaml`:
          dimensions: 768
    ```
 
-3. Allow the server to read dataset images by path. The evaluation sends images as file paths, so
-   this must be the **absolute** path after resolving symlinks:
-
-   ```yaml
-   blob_store:
-     allowed_path_roots:
-       - /absolute/path/to/MindMemOS/datasets   # originals are stored in S3/MinIO (s3_endpoint/...)
-   ```
-
-4. Point the server at the evaluation's key file (written by the runner, auto-reloaded by the
-   server):
-
-   ```yaml
-   auth:
-     api_key_file: eval_api_keys.yaml
-   ```
-
+3. Add the dataset directory to `blob_store.allowed_path_roots` — the evaluation sends dataset
+   images by file path, so this must be the **absolute** path after resolving symlinks.
+4. Set `auth.api_key_file: eval_api_keys.yaml` (written by the runner, auto-reloaded by the
+   server).
 5. Leave `algo_config.multimodal.mode` at `"off"` (evaluations enable it per project via
    `project_override_config`).
 
@@ -260,14 +249,11 @@ gpt-4.1-mini; wall time depends heavily on LLM latency, `enhanced_agentic` being
 MemEye (8 tasks, MCQ + OPEN, images in the dialogue) runs with one shared answerer: the
 `answer_llm` (a vision model) sees the text memories and images returned by search, plus the
 question's own images. The algorithm is always `vanilla`; the profile's `project_override_config`
-sets `algo_config.multimodal.mode`, and `search_params.multimodal: true` makes every search use the
-stored images. With `execution_params.memeye.send_images: true` the dialogue and question images
-are sent by path, so the server's `blob_store.allowed_path_roots` must cover the dataset; mode
-`off` rejects images, so its baseline sets `send_images: false`. Dataset captions are never sent.
-The config loader rejects unknown `search_params` / `execution_params` keys at load time (the
-known keys per benchmark live in `src/mindmemos_eval/mindmemos_eval/memory/config.py`), and
-`send_images: true` against an off-mode project fails the same load-time consistency check —
-the conflict surfaces before any request is made, not as a mid-run `add.images_unsupported`.
+sets `algo_config.multimodal.mode`, `search_params.multimodal: true` makes every search use the
+stored images, and `execution_params.memeye.send_images: true` sends the dialogue and question
+images by path (mode `off` rejects images, so its baseline sets `send_images: false`). Unknown
+`search_params` / `execution_params` keys — and `send_images: true` against an off-mode project —
+are rejected when the config loads, before any request is made.
 
 1. Download `MemEyeBench/MemEye` from Hugging Face and link it so `datasets/memeye/data` holds
    `dialog/` and `image/`.
@@ -292,19 +278,12 @@ settings, so stored image objects are deleted with the project's other records.
 
 `eval_result.metrics` reports, in percent: `EM` (MCQ exact match averaged over the four option
 rotations, macro mean over tasks), `B-1` (OPEN BLEU-1) and `Judge` (OPEN, MemEye 0–1 judge rubric),
-plus per-task values. `eval_result.cost` holds client-side add/search call counts and latencies and
-answerer/judge token usage; `eval_result.valid` is false when any answer or judge call failed.
-Per-question rows (retrieved items, predictions, scores) are written under
-`output_root/<run_id>/memeye/`. For a smoke test set `execution_params.memeye.max_questions: 2` and
-`benchmarks.memeye.tasks: [Brand_Memory_Test]`.
-
-Multimodal runs follow the same runner protocol as the other benchmarks: search defaults (`top_k`,
-`rerank`, `search_strategy`) come from the runner config / CLI (`--top-k`, `--rerank`,
-`--search-strategy`), with benchmark/profile `search_params` still winning over them;
-`--max-search-concurrency` caps the search calls. `--judge-runs N` runs the OPEN judge N times per
-question and averages the scores. `metrics.overall_accuracy` follows the locomo convention (0–1)
-using the headline metric (`EM` for MemEye, `F1` for Mem-Gallery), and the answer/judge token
-fields use locomo's names, so the metrics collection below also works on multimodal manifests.
+plus per-task values; `eval_result.cost` holds call counts, latencies and token usage, and
+`eval_result.valid` is false when any answer or judge call failed. Per-question rows (retrieved
+items, predictions, scores) are written under `output_root/<run_id>/memeye/`. For a smoke test set
+`execution_params.memeye.max_questions: 2` and `benchmarks.memeye.tasks: [Brand_Memory_Test]`.
+Multimodal manifests follow the same metric conventions as the other benchmarks, so the metrics
+collection below also works on them.
 
 ### 8. Reading the results
 
@@ -343,25 +322,13 @@ Judge scores within a group, not across.
 **When comparing results:**
 
 - **MemEye is noisy:** few OPEN questions, so a single-run Judge moves 2–3 points (10–20 on a
-  single task), and it drifts with the LLM service over time — the same code rerun two days apart
-  dropped enhanced's Judge from 52.8 to 50.2 and agentic's EM from 67.8 to 65.5. Run each
-  configuration at least twice and rerun the baseline in the same period.
+  single task) and drifts with the LLM service over time. Run each configuration at least twice
+  and rerun the baseline in the same period.
 - **Mem-Gallery is stable:** single-run Judge moves less than 0.6.
 - **Never run two evaluations concurrently:** sharing one LLM service under concurrent load costs
   MemEye about 5 Judge points. The numbers above are all serial runs.
-- **VR counting questions:** the Mem-Gallery answerer labels image results, facts and visual
-  facts with image_ids (the VS type answers with image_ids). In fast retrieval the answerer
-  sometimes counts repeated ids, over-counting on VR.
 
-### 10. Approaches that were tried and did not work
-
-| Approach | Result | Why |
-|---|---|---|
-| Image label in front of each visual fact, agent keeps only 5 unselected facts | Fast Judge −2.8, agentic EM −1.3 | The reranker matches the label, concentrating visual facts on a few images |
-| Describe the query images with a VLM first, then append to the query | +0.2–0.4 on image questions only | The answerer already sees the question images, and image-to-image search already finds the stored counterpart — little headroom |
-| Image name (what the dialogue calls the image) in front of visual facts | MemEye agentic EM −2.1; Mem-Gallery fast slightly down, agentic +0.4 | Names are often relative ("the same room from the other side"), again concentrating facts |
-
-### 11. FAQ
+### 10. FAQ
 
 | Symptom | Cause and fix |
 |---|---|
