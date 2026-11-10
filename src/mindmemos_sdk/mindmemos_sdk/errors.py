@@ -24,7 +24,7 @@ class ConfigNotFoundError(ConfigError):
     """Raised when the SDK config file does not exist yet.
 
     Typically resolved by running ``mindmemos auth`` to create
-    ``~/.mindmemos/settings.json``.
+    ``settings.json`` in the selected SDK home (default: ``~/.mindmemos``).
     """
 
 
@@ -68,23 +68,3 @@ class AuthRequiredError(ConfigError):
 
 class SkillError(MindMemOSSDKError):
     """Base class for SDK skill-management errors."""
-
-
-class SkillBundleError(SkillError):
-    """Raised when a local skill bundle cannot be read or normalized."""
-
-
-class SkillRegistryError(SkillError):
-    """Raised when SDK skill registry content is invalid."""
-
-
-class SkillHistoryError(SkillError):
-    """Raised when local skill history/cache content cannot be read or written."""
-
-
-class SkillPendingUploadError(SkillError):
-    """Raised when the local skill pending-upload queue cannot be read or written."""
-
-
-class SkillInstallerError(SkillError):
-    """Raised when a managed skill checkout cannot be safely applied."""

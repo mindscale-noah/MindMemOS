@@ -36,13 +36,13 @@ gitleaks version
 Then install project dependencies and Git hooks from the repository root:
 
 ```bash
-make dev-setup
+make setup
 ```
 
 If dependencies are already installed and you only need the hooks:
 
 ```bash
-make hooks-install
+make hook
 ```
 
 ## Use

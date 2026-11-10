@@ -10,6 +10,7 @@ from qdrant_client import models as qmodels
 from ..infra import db
 from ..infra.db import (
     FILTERABLE_ENTITY_FIELDS,
+    FILTERABLE_IMAGE_FIELDS,
     FILTERABLE_MEMORY_FIELDS,
     build_filter,
     datetime_range,
@@ -34,6 +35,7 @@ from ..typing import (
     FieldCondition,
     GraphNodeRef,
     GraphRelationship,
+    ImageRecord,
     MemoryDbWritePlan,
     MemoryRequestContext,
     MemoryWrite,
@@ -78,6 +80,8 @@ def _filterable_fields_for_target(target: str) -> frozenset[str]:
         return FILTERABLE_MEMORY_FIELDS
     if target == "entity":
         return FILTERABLE_ENTITY_FIELDS
+    if target == "image":
+        return FILTERABLE_IMAGE_FIELDS
     raise MappingError(f"unsupported search filter target {target!r}")
 
 
@@ -140,6 +144,27 @@ def to_source_payload(write: SourceWrite, *, ctx: MemoryRequestContext | None = 
     # `exclude` drops persist_payload (a routing flag, not payload); exclude_none then
     # strips optional None fields. Field-name exclusion and None filtering are independent.
     return write.model_dump(mode="python", exclude={"persist_payload"}, exclude_none=True)
+
+
+def to_image_point(record: ImageRecord, vector: list[float]) -> db.ImagePoint:
+    """Convert a stored image to an image-collection point.
+
+    Occurrence fields are flattened into keyword arrays (``session_id`` / ``request_id`` /
+    ``agent_id``) so the public search filters match an image seen in any of its sessions.
+    """
+
+    payload = record.model_dump(mode="python", exclude_none=True)
+    payload["session_id"] = record.session_ids
+    payload["request_id"] = record.request_ids
+    payload["agent_id"] = record.agent_ids
+    payload["status"] = "active"
+    return db.ImagePoint(image_id=record.image_id, payload=payload, vector=vector)
+
+
+def to_image_record(payload: dict[str, Any]) -> ImageRecord:
+    """Rebuild a stored image from its point payload."""
+
+    return ImageRecord.model_validate({key: value for key, value in payload.items() if key in ImageRecord.model_fields})
 
 
 def to_add_record_point(
@@ -293,6 +318,7 @@ def to_memory_point(
         memory_id=write.memory_id,
         payload=to_memory_payload(write, ctx=ctx),
         semantic_vector=vector.semantic_vector if vector else None,
+        semantic_dimension=vector.semantic_dimension if vector else None,
         bm25_vector=to_sparse_vector_data(vector),
     )
 
@@ -314,6 +340,7 @@ def to_entity_point(
         entity_id=write.entity_id,
         payload=to_entity_payload(write, ctx=ctx),
         vector=vector.semantic_vector if vector else None,
+        semantic_dimension=vector.semantic_dimension if vector else None,
         bm25_vector=sparse,
     )
 
@@ -410,6 +437,7 @@ def _to_search_field_entity_points(
                     entity_id=sf_point_id,
                     payload=payload,
                     vector=sf_vec.semantic_vector,
+                    semantic_dimension=sf_vec.semantic_dimension,
                     bm25_vector=sparse,
                 )
             )
@@ -483,7 +511,7 @@ def _model_list_dump(values: list[Any]) -> list[Any]:
     dumped: list[Any] = []
     for value in values:
         if hasattr(value, "model_dump"):
-            dumped.append(value.model_dump(mode="python", exclude_none=True))
+            dumped.append(value.model_dump(mode="python", exclude_none=True, context={"redact_image_data": True}))
         else:
             dumped.append(value)
     return dumped

@@ -1,8 +1,8 @@
 {
   "id": "mindmemos-memory",
   "name": "MindMemOS Memory",
-  "description": "Searches MindMemOS memories before each prompt and stores completed OpenClaw conversations through the mindmemos CLI.",
-  "version": "0.1.3",
+  "description": "Recalls MindMemOS memories, reports trajectories to Memory and Skill, and bundles the MindMemOS CLI Skill.",
+  "version": "0.2.0",
   "kind": "memory",
   "configSchema": {
     "type": "object",
@@ -18,13 +18,19 @@
         "type": "integer",
         "minimum": 1
       },
+      "multimodal": {
+        "type": "boolean"
+      },
       "tokenBudget": {
         "type": "integer",
         "minimum": 1
       },
       "addMode": {
         "type": "string",
-        "enum": ["sync", "async"]
+        "enum": [
+          "sync",
+          "async"
+        ]
       },
       "userId": {
         "type": "string"
@@ -44,5 +50,8 @@
         "minimum": 1
       }
     }
-  }
+  },
+  "skills": [
+    "./dist/skills"
+  ]
 }

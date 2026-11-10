@@ -30,6 +30,7 @@ from ..typing import (
     AddMode,
     DialogueMessage,
     FileMessage,
+    ImageRef,
     MemoryAddEventItem,
     MemorySearchItem,
     SkillContext,
@@ -117,27 +118,13 @@ class AddRequest(ActorIdentityRequest):
     """Optional request-level prompt language for extraction."""
 
     skill_context: list[SkillContext] | None = None
-    """Skill references hit in this turn, excluding full text, used for trace binding.
-
-    This is optional for legacy callers. It is consumed only by the service layer
-    for skill binding and is not passed into add pipeline input.
-    """
+    """Skill references for binding this turn's add record to existing versions."""
 
     score: float | None = None
-    """Optional score for this add trajectory.
-
-    This evaluates uploaded skill trajectories. It is not passed into add pipeline
-    input and is written only as a trace annotation in ``add_record_v1`` for skill
-    evolution and rollout algorithms.
-    """
+    """Evaluation score stored on the add record for Skill evolution."""
 
     task_id: NonEmptyStr | None = None
-    """Optional task identifier for the trajectory.
-
-        During multi-run rollouts, multiple trajectories for one task share the same
-        ``task_id``. It is not passed into add pipeline input and is written only as
-        a trace annotation in ``add_record_v1``.
-    """
+    """Task identifier shared by add records from repeated rollouts of one task."""
 
     @field_validator("messages")
     @classmethod
@@ -159,6 +146,23 @@ class SearchRequest(ActorIdentityRequest):
 
     query: NonEmptyStr
     """Search query."""
+
+    query_images: list[ImageRef] = Field(
+        default_factory=list,
+        description=(
+            "Images attached to the query; they make the search multimodal. Rejected (400, "
+            "search.images_unsupported) while the project's algo_config.multimodal.mode is off or "
+            "the algorithm has no image support."
+        ),
+    )
+    multimodal: bool = Field(
+        default=False,
+        description=(
+            "Search stored images too (image results, image-recalled facts). Implied by "
+            "query_images; silently ignored (text search) while algo_config.multimodal.mode is "
+            "off. False: text search only, exactly vanilla."
+        ),
+    )
 
     filters: dict[str, Any] | None = None
     """Custom structured filter DSL parsed by ``mappers.api.parse_search_dsl``."""
@@ -363,6 +367,9 @@ class ApiResponse(BaseModel, Generic[T]):
 
 def validate_messages_have_content(messages) -> None:
     for index, message in enumerate(messages):
+        if isinstance(message, DialogueMessage) and message.images:
+            # Image-only turns are valid; the selected pipeline checks image support.
+            continue
         text = (
             getattr(message, "content", None)
             or getattr(message, "text", None)

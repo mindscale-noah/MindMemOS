@@ -5,12 +5,21 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from .memory import (
     AddMode,
     DialogueMessage,
     FileMessage,
+    ImageRef,
     MemoryOperation,
     MemoryType,
     TextMessage,
@@ -109,6 +118,9 @@ class MemorySearchItem(BaseModel):
     memory: str
     """Memory content."""
 
+    user_id: str | None = None
+    """Business user associated with this memory, when available."""
+
     memory_type: MemoryType | str = "fact"
     """Standard displayed memory type."""
 
@@ -124,8 +136,17 @@ class MemorySearchItem(BaseModel):
     lineage: MemoryLineage | None = None
     """Version lineage metadata populated by vanilla search."""
 
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    """Business metadata for management views."""
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Business metadata for management views. Image hits additionally carry blob_id (the "
+            "stable re-download id) and, when the blob backend can address the bytes, image_url: a "
+            "permanent public-mirror URL (blob_store.s3_public_base_url), a short-lived presigned "
+            "S3 URL, or a signed /v1/memory/images/{blob_id}?user_id=<owner>&expires=<unix>&"
+            "signature=<hmac> proxy path. All three fetch directly with no API key, the signed "
+            "proxy path until it expires."
+        ),
+    )
 
     status: str | None = None
     """Lifecycle status for management views."""
@@ -210,6 +231,12 @@ class SearchPipelineInput(BaseModel):
     query: str
     """Search query."""
 
+    query_images: list[ImageRef] = Field(default_factory=list)
+    """Images attached to the query; they make the search multimodal (vanilla, mode basic/enhanced)."""
+
+    multimodal: bool = False
+    """Search stored images too; implied by ``query_images``. False keeps the search text-only."""
+
     filters: dict[str, Any] | None = None
     """Public filter DSL parsed into an internal SearchFilter."""
 
@@ -236,6 +263,16 @@ class SearchPipelineInput(BaseModel):
 
     include_patches: bool = True
     """Deprecated compatibility flag; vanilla search owns archived-version lineage recall."""
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        # Text-only searches serialize exactly as before images existed (search records).
+        if not self.query_images:
+            data.pop("query_images", None)
+        if not self.multimodal:
+            data.pop("multimodal", None)
+        return data
 
 
 class SearchPipelineResult(BaseModel):
@@ -341,6 +378,7 @@ class DeletePipelineInput(BaseModel):
 
     id: str = Field(alias="memory_id")
     """Memory ID."""
+
 
 class DeletePipelineResult(BaseModel):
     status: ServiceResultStatus

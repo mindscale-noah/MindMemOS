@@ -1,0 +1,32 @@
+# Copy to local.project.yaml in this directory and replace the API keys.
+# make dev uses default_project; override with PROJECT=vanilla or PROJECT=schema.
+# Preserve existing project IDs to continue accessing existing local data.
+default_project: local
+projects:
+  local:
+    project_id: proj-dev-memory-skill
+    api_key: replace-with-joint-api-key
+    key_id: key_dev_local
+    memory_algorithm: vanilla
+    enabled: true
+    scopes: [memory:read, memory:write, skill:read, skill:write]
+    user_override_config: null
+    project_override_config: null
+  vanilla:
+    project_id: proj-dev-vanilla-memory
+    api_key: replace-with-vanilla-api-key
+    key_id: key_dev_0001
+    memory_algorithm: vanilla
+    enabled: true
+    scopes: [memory:read, memory:write]
+    user_override_config: null
+    project_override_config: null
+  schema:
+    project_id: proj-dev-schema-memory
+    api_key: replace-with-schema-api-key
+    key_id: key_dev_0002
+    memory_algorithm: schema
+    enabled: true
+    scopes: [memory:read, memory:write]
+    user_override_config: null
+    project_override_config: null

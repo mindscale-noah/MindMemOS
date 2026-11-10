@@ -1,40 +1,26 @@
 # @mindmemos/deepseek-harness-plugin
 
-A [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) (dsh)
-plugin that wires [MindMemOS](https://github.com/mindscale-noah/MindMemOS) long-term
-memory into the harness. It:
+A DeepSeek Harness (dsh) plugin for automatic Memory recall and unified
+trajectory reporting. It recalls Memory before the first model step and reports
+completed turns to Memory. The same CLI call reports to Skill when the turn
+loads an exact version. The plugin registers the bundled `mindmemos-cli` guide
+in the host's Skill catalog.
 
-- **recalls** memories before each turn by running `mindmemos memory search` and
-  injecting the hits as model context, and
-- **stores** each completed turn by running `mindmemos memory add`.
-
-It is a thin shell-out layer over the `mindmemos` CLI — the same integration the
-[OpenClaw plugin](../openclaw-plugin) provides for a different host.
-
-**Prerequisite:** the `mindmemos` CLI must be installed and authenticated
-first. Installing this plugin alone does nothing — it spawns the CLI for every
-operation.
-
-## Install the CLI
+Use a dsh profile with `agents` and `skills` services. This plugin is built
+against dsh 0.1.0-rc.6. Install and authenticate an SDK 1.0.0 build before enabling
+the plugin.
 
 ```bash
-# whichever installer you use for the MindMemOS CLI; e.g.
-pip install mindmemos-sdk
 mindmemos auth
-```
-
-Confirm it works from the shell dsh will run under:
-
-```bash
-mindmemos config show
+mindmemos trajectory report --help
 ```
 
 ## Install the plugin
 
-Install the published package in the project where dsh runs:
+After publication, install the 0.2.0 package in the dsh profile:
 
 ```bash
-npm install @mindmemos/deepseek-harness-plugin
+npm install @mindmemos/deepseek-harness-plugin@0.2.0
 ```
 
 For local development before publishing, build from this repo instead (see
@@ -44,8 +30,8 @@ For local development before publishing, build from this repo instead (see
 
 ```bash
 cd plugins/deepseek-harness-plugin
-npm install
-npm run build        # emits dist/index.js + dist/index.d.ts
+npm ci
+npm run build
 ```
 
 `npm run typecheck` runs the same compiler pass without emitting — use it to
@@ -87,79 +73,38 @@ the row.
 | --- | --- | --- |
 | `cli` | `mindmemos` | Executable used to invoke the CLI — a name on dsh's `PATH` or an absolute path. It is not a shell command, so a wrapper like `uv run mindmemos` will not work; point it at the real executable instead. |
 | `topK` | `5` | Number of memories injected per turn. |
+| `multimodal` | `true` | Also search stored images by passing `memory search --multimodal`; set `false` for text-only recall. The server ignores the flag when the project's multimodal mode is off. |
 | `tokenBudget` | *(none)* | Optional strict token budget for recall; when set, `memory search --token-budget` caps the injected memories by estimated tokens (token-budget retention) in addition to `topK` — whichever limit is tighter applies. |
-| `addMode` | `async` | `sync` blocks until extraction finishes; `async` enqueues and returns. In `async` mode only CLI-level failures are visible to the plugin. |
-| `userId` | *(none)* | Scopes both search and add to one user. Omit for project-wide search; add then inherits the CLI's default user. |
-| `appId` | `deepseek-harness` | Application scope attached to every search and add. |
+| `addMode` | `sync` | `sync` blocks until extraction finishes; `async` enqueues and returns. In `async` mode the Memory receipt confirms acceptance for extraction. |
+| `userId` | *(none)* | Scopes recall and reporting. Omit for project-wide recall and use the CLI profile's default user for reporting. |
+| `appId` | `deepseek-harness` | Application scope for Memory recall and reporting. |
 | `sessionId` | *(none)* | Override the harness session id used as the CLI session scope. |
 | `minQueryLength` | `2` | Skip recall for prompts shorter than this many characters. |
 | `maxConversationMessages` | `80` | Cap on how many trailing messages are persisted per turn. |
 
-## How it works
-
-- **Recall** hooks `agent/pre-step` (step 1 only) as a prepended waterfall
-  listener. It extracts the real human prompt, runs `mindmemos memory search`,
-  and appends one `createUserMessage` carrying the hits under a
-  `<relevant-memories>` banner. The injected message is stamped
-  `source.kind === "plugin"` so the store step can tell it apart from real input.
-- **Store** hooks the `session/event` firehose and reacts to `turn/end` with
-  `reason.kind === "completed"`. It walks that turn's log back to its
-  `turn/start`, collecting the surface `user`/`assistant`/`tool` messages, and
-  runs `mindmemos memory add --messages-json-file -`. Plugin-injected context
-  (`source.kind !== "user"`) is excluded so recalled memories are not re-stored.
-
 ## Verify
 
-1. **Types build cleanly**
+1. Load the profile and find `mindmemos-cli` in its Skill catalog. The provider
+   exposes the guide and the directory containing its references.
+2. Ask about a stored fact and look for a recall hit in the plugin log.
+3. Finish a turn. The log shows separate Memory and Skill receipts with the
+   same event ID. Use `mindmemos skill trajectory show TRAJECTORY_ID` to read the
+   Skill receipt's stored trajectory. `Skill skipped` means the turn had no
+   identified Skill versions and the SDK sent no Skill request.
 
-   ```bash
-   npm run typecheck
-   ```
+For multi-Skill binding, run `mindmemos skill show VERSION_ID` in the shell tool
+or use `skill export` and read the exported `SKILL.md` with the read tool in the
+same turn. Every identified version is added to the same trajectory.
+Recommendations and exports alone leave the list empty.
 
-2. **Recall fires**
+If dsh logs `ENOENT`, set `cli` to the absolute path to the executable.
+If recall is absent, check `minQueryLength` and the CLI profile. Reporting
+runs when `turn/end` has reason `completed`. Injected Memory and Skill
+snapshots are excluded from the turn's messages.
 
-   First store a fact out of band, then ask about it in dsh:
+To run the shared hook integration tests, build both plugins, then run from the
+repository root with the SDK installed.
 
-   ```bash
-   mindmemos memory add --messages-json-file - --json --user-id alice --app-id deepseek-harness <<'JSON'
-   [{"role":"user","content":"My favorite color is teal.","timestamp":0}]
-   JSON
-   ```
-
-   In dsh, ask *"what is my favorite color?"*. The plugin log should show:
-
-   ```
-   [mindmemos-memory] recall hit 1 memories, injected N chars
-   ```
-
-   and the model should answer with the stored fact.
-
-3. **Store writes**
-
-   Complete any turn in dsh, then confirm the log shows:
-
-   ```
-   [mindmemos-memory] stored N message(s) from turn 1 (session_id=…)
-   ```
-
-   and that the memory is searchable afterwards:
-
-   ```bash
-   mindmemos memory search "…" --json --user-id alice
-   ```
-
-## Troubleshooting
-
-- **`ENOENT` / `command not found`** — dsh's `PATH` may not include the CLI
-  (common for GUI-launched dsh). Set `cli` to the executable's absolute path
-  (`which mindmemos`, or `uv run which mindmemos` inside a uv project). `cli` is
-  a single executable path, not a shell command, so a wrapper like
-  `uv run mindmemos` will fail with `ENOENT`.
-- **Recall never fires** — check `minQueryLength` and that `cli` resolves
-  (`mindmemos config show` from dsh's environment).
-- **Recall works but nothing is stored** — the store only runs when a turn
-  *completes* (`reason.kind === "completed"`); aborted or errored turns are
-  skipped by design. Check the log after a turn that ends cleanly.
-- **CLI errors** surface as `[mindmemos-memory] memory search failed: …` /
-  `[mindmemos-memory] memory add failed: …` warnings, including the CLI's
-  stderr and exit code.
+```bash
+MINDMEMOS_TEST_CLI="$PWD/.venv/bin/mindmemos" node --test tests/integration/test_plugin_trajectory.mjs
+```

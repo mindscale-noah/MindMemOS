@@ -18,6 +18,7 @@ from ...typing import (
     SearchPipelineResult,
     SkillBinding,
 )
+from ...workers.legacy_skill_trajectory import enqueue_legacy_trajectory
 from .add_record_store import AddRecordStore
 
 logger = get_logger(__name__)
@@ -66,6 +67,8 @@ class MemoryOperationRecorder:
             extra_payload=extra_payload,
         )
         await self._add_records.append(point)
+        if skill_bindings:
+            enqueue_legacy_trajectory(ctx.project_id, point.add_record_id)
         return point.add_record_id
 
     async def record_add_input(
@@ -102,6 +105,8 @@ class MemoryOperationRecorder:
             status=status,
         )
         await self._add_records.append(point)
+        if skill_bindings:
+            enqueue_legacy_trajectory(ctx.project_id, point.add_record_id)
         return point.add_record_id
 
     async def mark_add_processing(self, ctx: MemoryRequestContext, add_record_id: str) -> None:

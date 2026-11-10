@@ -22,6 +22,7 @@ from ...logging import get_logger
 from .collections import (
     AddRecordRepository,
     EntityRepository,
+    ImageRepository,
     MemoryRepository,
     ProviderBindingRepository,
     SchemaAddBufferRepository,
@@ -60,6 +61,7 @@ class QdrantStore:
         self._schema_add_buffer = SchemaAddBufferRepository(self._engine, cfg)
         self._search_record = SearchRecordRepository(self._engine, cfg)
         self._provider_binding = ProviderBindingRepository(self._engine, cfg)
+        self._image = ImageRepository(self._engine, cfg)
 
     @property
     def engine(self) -> QdrantEngine:
@@ -114,6 +116,12 @@ class QdrantStore:
         """Repository for ``provider_binding_v1``."""
 
         return self._provider_binding
+
+    @property
+    def image(self) -> ImageRepository:
+        """Repository for the multimodal image collection."""
+
+        return self._image
 
     @property
     def memory_collection(self) -> str:
@@ -531,11 +539,17 @@ class QdrantStore:
         limit: int = 50,
         cursor: Any | None = None,
         with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll memories in one project."""
 
         return await self._memory.scroll(
-            project_id, filter_=filter_, limit=limit, cursor=cursor, with_vectors=with_vectors
+            project_id,
+            filter_=filter_,
+            limit=limit,
+            cursor=cursor,
+            with_vectors=with_vectors,
+            payload_fields=payload_fields,
         )
 
     async def count_memories(
@@ -565,6 +579,13 @@ class QdrantStore:
         """Retrieve add-record points by id inside one project."""
 
         return await self._add_record.retrieve(project_id, add_record_ids)
+
+    async def get_memory_provenance(
+        self, project_id: str, memory_id: str, *, add_record_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Read only allowlisted provenance, scoped and cached by project."""
+
+        return await self._add_record.memory_provenance(project_id, memory_id, add_record_id=add_record_id)
 
     async def scroll_add_records_global(
         self,

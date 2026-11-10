@@ -6,13 +6,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from ..errors import InvalidRequestError, MindMemOSSDKError
+from ..errors import ApiError, InvalidRequestError, MindMemOSSDKError
 from ..transport import Envelope
 from .models import (
     AddMode,
     AddResult,
     FeedbackMode,
     GetResult,
+    ImageRef,
     MemoryPageResult,
     MemoryScrollResult,
     MemorySearchHit,
@@ -73,9 +74,6 @@ class MemoryCore:
         agent_id: str | None = None,
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        skill_context: list[Any] | None = None,
-        score: float | None = None,
-        task_id: str | None = None,
     ) -> MemoryRequest[AddResult]:
         if not messages:
             raise InvalidRequestError("`messages` must be a non-empty list.")
@@ -89,9 +87,6 @@ class MemoryCore:
                 agent_id=agent_id or self._defaults.agent_id,
                 session_id=session_id or self._defaults.session_id,
                 metadata=metadata,
-                skill_context=skill_context,
-                score=score,
-                task_id=task_id,
             ),
             parse=parse_add_result,
         )
@@ -110,6 +105,8 @@ class MemoryCore:
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        query_images: list[ImageRef | dict[str, Any]] | None = None,
+        multimodal: bool = False,
     ) -> MemoryRequest[SearchResult]:
         return MemoryRequest(
             path="/v1/memory/search",
@@ -125,6 +122,8 @@ class MemoryCore:
                 app_id=app_id or self._defaults.app_id,
                 agent_id=agent_id or self._defaults.agent_id,
                 session_id=session_id or self._defaults.session_id,
+                query_images=query_images,
+                multimodal=multimodal,
             ),
             parse=parse_search_result,
         )
@@ -260,6 +259,8 @@ class MemoryCore:
 
 
 def parse_add_result(envelope: Envelope) -> AddResult:
+    if envelope.data is not None and not isinstance(envelope.data, dict):
+        raise ApiError("Expected an object in the Memory add response.", request_id=envelope.request_id)
     data = envelope.data or {}
     return AddResult(
         code=envelope.code,

@@ -46,6 +46,7 @@ from ...typing import (
     SkillVersion,
     SkillVersionStatus,
 )
+from ...workers.legacy_skill_trajectory import enqueue_legacy_trajectory
 from ..memory_db import utcnow
 
 logger = get_logger(__name__)
@@ -414,6 +415,8 @@ class SkillVersionStore:
 
         if changed_points:
             await self._add_record.upsert(changed_points)
+            for point in changed_points:
+                enqueue_legacy_trajectory(project_id, point.add_record_id)
         await self._skill.delete_pending_traces(rebound_trace_ids)
 
     @staticmethod

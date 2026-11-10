@@ -10,6 +10,7 @@ from __future__ import annotations
 from .add_record import AddRecordRepository
 from .base import CollectionRepository
 from .entity import EntityRepository
+from .image import ImageRepository
 from .memory import MemoryRepository
 from .provider_binding import ProviderBindingRepository
 from .schema_add_buffer import SchemaAddBufferRepository
@@ -21,6 +22,7 @@ __all__ = [
     "AddRecordRepository",
     "CollectionRepository",
     "EntityRepository",
+    "ImageRepository",
     "MemoryRepository",
     "ProviderBindingRepository",
     "SchemaAddBufferRepository",

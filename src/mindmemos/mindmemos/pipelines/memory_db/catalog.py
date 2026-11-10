@@ -109,6 +109,7 @@ def _to_memory_search_item(memory: MemoryView) -> MemorySearchItem:
     return MemorySearchItem(
         id=memory.memory_id,
         memory=memory.content,
+        user_id=memory.user_id,
         memory_type=memory.mem_type,
         last_update_at=format_datetime(updated_at),
         event_time=format_memory_event_time(memory),

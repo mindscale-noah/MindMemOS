@@ -1,21 +1,14 @@
-import { createHash } from "node:crypto";
 import z from "@deepseek-ai/schemastery";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { ContentBlock, UserMessage } from "@deepseek-ai/dsh-llm";
 import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
-import { spawnFileJson, spawnFileOk } from "./mindmemos-cli.js";
-
-/**
- * DeepSeek Harness (dsh) plugin that wires MindMemOS into the harness: it
- * `search`es memories before each turn and injects the hits as model context,
- * and `add`s each completed turn through the `mindmemos` CLI.
- *
- * It is a thin layer over the CLI — see the OpenClaw plugin for the same
- * integration on a different host. The CLI must be installed and authenticated
- * separately; this plugin shells out to it for every operation.
- */
+import {
+  loadedSkillVersions, reportTrajectory, spawnFileJson,
+  type ToolCall, type TrajectoryMessage,
+} from "./generated/mindmemos-cli.js";
+import { registerBundledSkill } from "./skill-provider.js";
 
 type MemoryHit = {
   id?: string;
@@ -23,37 +16,15 @@ type MemoryHit = {
   last_update_at?: string | null;
   event_time?: string | null;
   source_timestamp?: string | null;
+  metadata?: {
+    image_url?: string;
+    [key: string]: unknown;
+  };
 };
 
 type MemorySearchResult = {
   request_id?: string | null;
   memories?: MemoryHit[];
-};
-
-type ToolCall = {
-  tool: string;
-  args: Record<string, unknown>;
-  callId?: string;
-};
-
-type MemoryMessage = {
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  timestamp: number;
-  /** Structured tool calls issued by this assistant message, in order. */
-  toolCalls?: ToolCall[];
-  /** Call id pairing a `tool` message with the `tool-call` it answers. */
-  toolCallId?: string;
-  /** Whether this `tool` message is an error result. */
-  isError?: boolean;
-};
-
-type SkillContext = {
-  name: string;
-  content_hash: string;
-  base_version_id: string;
-  version_label?: string;
-  usage?: "injected" | "modified";
 };
 
 const MEMORY_CONTEXT_OPEN = "<relevant-memories>";
@@ -62,8 +33,8 @@ const MEMORY_CONTEXT_CLOSE = "</relevant-memories>";
 /** Cordis plugin name, also stamped on injected messages for provenance. */
 export const name = "mindmemos-memory";
 
-/** The agent registry owns pre-step processing; depend on it so recall runs after agents exist. */
-export const inject = ["agents"];
+/** Host services for recall and registration of the bundled Skill. */
+export const inject = ["agents", "skills"];
 
 /** Resolved plugin configuration, filled in by the {@link Config} schema before {@link apply} runs. */
 export interface Config {
@@ -71,6 +42,8 @@ export interface Config {
   cli: string;
   /** Number of memories injected per turn. */
   topK: number;
+  /** Search stored images too; image hits carry a short-lived directly-fetchable image_url. */
+  multimodal: boolean;
   /** Optional strict token budget for recall; enables token-budget retention when set. */
   tokenBudget?: number;
   /** `sync` blocks until extraction finishes; `async` enqueues and returns. */
@@ -91,8 +64,12 @@ export interface Config {
 export const Config: z<Config> = z.object({
   cli: z.string().default("mindmemos"),
   topK: z.natural().min(1).default(5),
+  multimodal: z.boolean().default(true),
   tokenBudget: z.natural().min(1),
-  addMode: z.union([z.const("sync"), z.const("async")]).default("async"),
+  // sync by default: async needs kafka.enabled=true on the server — without Kafka the
+  // add is rejected with a clean 400 (add.async_unavailable) rather than stored;
+  // sync works on every deployment.
+  addMode: z.union([z.const("sync"), z.const("async")]).default("sync"),
   userId: z.string(),
   appId: z.string().default("deepseek-harness"),
   sessionId: z.string(),
@@ -101,6 +78,8 @@ export const Config: z<Config> = z.object({
 });
 
 export function apply(ctx: Context, config: Config): void {
+  registerBundledSkill(ctx);
+
   // Recall: search and inject memories before the first step of each turn.
   // `agent/pre-step` is a waterfall; prepending lets our injection land ahead of
   // later listeners while preserving whatever messages `next()` already claimed.
@@ -154,29 +133,38 @@ export function apply(ctx: Context, config: Config): void {
     { prepend: true },
   );
 
-  // Store: on each completed turn, persist that turn's messages. The session log
-  // is the source of truth, so no client-side buffer is kept in sync — earlier
-  // turns were stored by their own `turn/end`. Injected memory context carries
-  // `source.kind === "plugin"` and is excluded to avoid storing our own recall.
   ctx.on("session/event", (session, event) => {
     if (event.type !== "turn/end" || event.data.reason.kind !== "completed") {
       return;
     }
-    const messages = collectTurnMessages(session, event.data.turn, config.maxConversationMessages);
-    if (messages.length === 0) {
+    const turn = collectTurnMessages(session, event);
+    if (!turn || turn.messages.length === 0) {
       return;
     }
 
-    const sessionId = resolveSessionId(config, String(session.id));
-    void addConversation(config, messages, sessionId)
-      .then(() => {
-        ctx.logger(name).info(
-          `stored ${messages.length} message(s) from turn ${event.data.turn} (session_id=${sessionId})`,
-        );
-      })
-      .catch((error: unknown) => {
-        ctx.logger(name).warn(`memory add failed: ${errorMessage(error)}`);
-      });
+    const hostSessionId = String(session.id);
+    const turnId = String(event.data.turn);
+    const eventId = `deepseek-harness:${hostSessionId}:${turnId}`;
+    const logger = ctx.logger(name);
+    void reportTrajectory(config.cli, {
+      event_id: eventId,
+      source: "deepseek-harness-plugin",
+      messages: turn.messages.slice(-config.maxConversationMessages),
+      skill_version_ids: loadedSkillVersions(turn.messages, session.header.cwd),
+      user_id: config.userId?.trim() || undefined,
+      agent_id: session.header.agentPreset ?? config.appId,
+      app_id: config.appId,
+      session_id: resolveSessionId(config, hostSessionId),
+      turn_id: turnId,
+      started_at: new Date(turn.startTime).toISOString(),
+      finished_at: new Date(event.time).toISOString(),
+      memory_mode: config.addMode,
+    }, {
+      info: (message) => logger.info(message),
+      warn: (message) => logger.warn(message),
+    }).catch((error: unknown) => {
+      logger.warn(`trajectory ${eventId}: ${errorMessage(error)}`);
+    });
   });
 
   ctx.logger(name).info("plugin loaded");
@@ -184,6 +172,11 @@ export function apply(ctx: Context, config: Config): void {
 
 async function searchMemories(config: Config, query: string, sessionId: string): Promise<MemorySearchResult> {
   const args = ["memory", "search", query, "--top-k", String(config.topK), "--json"];
+  if (config.multimodal) {
+    // Image hits carry metadata.blob_id + a short-lived image_url the agent can GET directly;
+    // the server silently ignores this flag while the project's multimodal mode is off.
+    args.push("--multimodal");
+  }
   if (config.tokenBudget) {
     args.push("--token-budget", String(config.tokenBudget));
   }
@@ -194,36 +187,23 @@ async function searchMemories(config: Config, query: string, sessionId: string):
   return spawnFileJson<MemorySearchResult>(config.cli, args);
 }
 
-async function addConversation(config: Config, messages: MemoryMessage[], sessionId: string): Promise<void> {
-  const args = ["memory", "add", "--messages-json-file", "-", "--json"];
-  args.push("--app-id", config.appId, "--session-id", sessionId);
-  if (config.addMode === "async") {
-    args.push("--async");
-  }
-  if (config.userId) {
-    args.push("--user-id", config.userId);
-  }
-  const skillContext = detectSkillContext(messages);
-  if (skillContext.length > 0) {
-    args.push("--skill-context-json", JSON.stringify(skillContext));
-  }
-  args.push("--metadata-json", JSON.stringify({ source: "deepseek-harness-plugin" }));
-  // The structured tool-call fields are detection-only; strip them so the CLI
-  // sees the same message shape it always has.
-  const payload = messages.map(({ role, content, timestamp }) => ({ role, content, timestamp }));
-  await spawnFileOk(config.cli, args, `${JSON.stringify(payload)}\n`);
-}
-
 function formatMemoryContext(memories: MemoryHit[], userId: string | undefined): string {
+  let hasImage = false;
   const lines = memories
     .map((hit, index) => {
       const text = typeof hit.memory === "string" ? hit.memory.trim() : "";
-      if (!text) {
+      const imageUrl =
+        typeof hit.metadata?.image_url === "string" && hit.metadata.image_url
+          ? hit.metadata.image_url
+          : undefined;
+      if (!text && !imageUrl) {
         return null;
       }
+      hasImage = hasImage || Boolean(imageUrl);
       const label = hit.id ? `${index + 1}. [${hit.id}]` : `${index + 1}.`;
       const when = hit.last_update_at ?? hit.event_time ?? hit.source_timestamp;
-      return when ? `${label} ${text} (${when})` : `${label} ${text}`;
+      const body = [text || "[image memory]", imageUrl ? `<image: ${imageUrl}>` : ""].filter(Boolean).join(" ");
+      return when ? `${label} ${body} (${when})` : `${label} ${body}`;
     })
     .filter((line): line is string => line !== null);
 
@@ -231,7 +211,10 @@ function formatMemoryContext(memories: MemoryHit[], userId: string | undefined):
     return "";
   }
   const preamble = userId ? `Relevant memories for ${userId}:` : "Relevant memories:";
-  return [MEMORY_CONTEXT_OPEN, preamble, ...lines, MEMORY_CONTEXT_CLOSE].join("\n");
+  const imageHint = hasImage
+    ? "(<image: …> URLs point at the stored images, fetch directly with no API key, and expire; relative paths resolve against the MindMemOS API base)"
+    : "";
+  return [MEMORY_CONTEXT_OPEN, preamble, imageHint, ...lines, MEMORY_CONTEXT_CLOSE].filter(Boolean).join("\n");
 }
 
 /** The recall query: the real human prompt(s) entering step 1, not injected context. */
@@ -244,28 +227,34 @@ function extractQuery(messages: readonly UserMessage[]): string {
     .trim();
 }
 
-/** Collect the surface messages of one completed turn, walking the log back to its `turn/start`. */
-function collectTurnMessages(session: Session, turn: number, maxMessages: number): MemoryMessage[] {
-  const events = session.events;
-  const collected: MemoryMessage[] = [];
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    const event = events[i];
-    if (event.type === "turn/start" && event.data.turn === turn) {
-      break;
+/** Read only the events enclosed by this turn's start and end. */
+function collectTurnMessages(
+  session: Session,
+  end: SessionEvent<"turn/end">,
+): { messages: TrajectoryMessage[]; startTime: number } | undefined {
+  const messages: TrajectoryMessage[] = [];
+  for (let i = session.events.length - 1; i >= 0; i -= 1) {
+    const event = session.events[i];
+    if (event.seq >= end.seq) {
+      continue;
+    }
+    if (event.type === "turn/start") {
+      return event.data.turn === end.data.turn
+        ? { messages: messages.reverse(), startTime: event.time }
+        : undefined;
     }
     const message = messageFromEvent(event);
-    if (message !== null) {
-      collected.unshift(message);
+    if (message) {
+      messages.push(message);
     }
   }
-  return collected.length <= maxMessages ? collected : collected.slice(collected.length - maxMessages);
+  return undefined;
 }
 
-function messageFromEvent(event: SessionEvent): MemoryMessage | null {
+function messageFromEvent(event: SessionEvent): TrajectoryMessage | null {
   switch (event.type) {
     case "user/message": {
-      // Only real human input is stored; plugin-injected context (our own recall,
-      // other plugins' snapshots) is excluded to avoid a feedback loop.
+      // Plugin and Skill snapshots are context, not fresh user dialogue.
       if (event.data.source.kind !== "user") {
         return null;
       }
@@ -273,34 +262,34 @@ function messageFromEvent(event: SessionEvent): MemoryMessage | null {
       return content ? { role: "user", content, timestamp: event.time } : null;
     }
     case "assistant/message": {
-      const content = textFromContent(event.data.message.content);
-      if (!content) {
-        return null;
-      }
-      return {
-        role: "assistant",
-        content,
-        timestamp: event.time,
-        toolCalls: toolCallsFromContent(event.data.message.content),
-      };
+      const blocks = event.data.message.content;
+      const content = textFromContent(blocks);
+      const toolCalls = toolCallsFromContent(blocks);
+      return content || toolCalls.length
+        ? { role: "assistant", content, timestamp: event.time, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }
+        : null;
     }
     case "tool/result": {
-      const content = textFromContent(event.data.message.content);
-      if (!content) {
-        return null;
-      }
-      const resultBlock = event.data.message.content[0];
+      const message = event.data.message;
       return {
         role: "tool",
-        content,
+        content: textFromContent(message.content),
         timestamp: event.time,
-        toolCallId: String(event.data.message.source.callId),
-        isError: resultBlock?.isError === true || event.data.error !== undefined,
+        tool_call_id: String(message.source.callId),
+        is_error: message.content[0]?.isError === true || event.data.error !== undefined,
       };
     }
     default:
       return null;
   }
+}
+
+function toolCallsFromContent(content: readonly ContentBlock[]): ToolCall[] {
+  return content.flatMap((block) => block.type === "tool-call" ? [{
+    id: String(block.id),
+    name: block.name,
+    arguments: block.arguments,
+  }] : []);
 }
 
 /** Render message content blocks as one plain-text string; tool calls stay visible as `[tool_call]`. */
@@ -345,174 +334,4 @@ function sanitizeSessionId(value: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Detect skill references from the collected turn messages, mirroring the
- * OpenClaw plugin so the same `--skill-context-json` reaches the CLI. dsh's
- * file tools are also named `read`/`write`/`edit`, but a single assistant
- * message may carry several parallel tool calls alongside text blocks, so
- * detection walks the structured tool calls captured on each message instead of
- * re-parsing the flattened text. `read` results are paired with the call that
- * produced them by call id, and `edit` content is reconstructed from the base
- * content captured earlier in the turn (see {@link editedContent}).
- */
-function detectSkillContext(messages: MemoryMessage[]): SkillContext[] {
-  const candidates = new Map<string, { path: string; content: string; usage: "injected" | "modified" }>();
-  const results = toolResultsByCallId(messages);
-  for (const message of messages) {
-    if (message.role !== "assistant") {
-      continue;
-    }
-    for (const call of message.toolCalls ?? []) {
-      const path = toolArgPath(call.args);
-      if (!path || !isSkillMdPath(path)) {
-        continue;
-      }
-      const key = skillDirKey(path);
-      if (call.tool === "read") {
-        const result = call.callId ? results.get(call.callId) : undefined;
-        if (result && !result.isError && result.content) {
-          candidates.set(key, { path, content: result.content, usage: strongestUsage(candidates.get(key)?.usage, "injected") });
-        }
-      } else if (call.tool === "write") {
-        const content = toolArgText(call.args, "content");
-        if (content) {
-          candidates.set(key, { path, content, usage: "modified" });
-        }
-      } else if (call.tool === "edit") {
-        const content = editedContent(candidates.get(key)?.content, call.args);
-        if (content) {
-          candidates.set(key, { path, content, usage: "modified" });
-        }
-      }
-    }
-  }
-  return [...candidates.values()].map((candidate) => {
-    const metadata = parseSkillMetadata(candidate.content);
-    return {
-      name: metadata.name || skillNameFromPath(candidate.path),
-      content_hash: computeSkillContentHash(candidate.content),
-      base_version_id: "",
-      ...(metadata.version ? { version_label: metadata.version } : {}),
-      usage: candidate.usage,
-    };
-  });
-}
-
-/** Structured tool calls from an assistant message's content blocks, in order. */
-function toolCallsFromContent(content: readonly ContentBlock[]): ToolCall[] {
-  const calls: ToolCall[] = [];
-  for (const block of content) {
-    if (block.type !== "tool-call") {
-      continue;
-    }
-    const args = parseToolArgs(block.arguments);
-    if (args === null) {
-      continue;
-    }
-    calls.push({ tool: block.name.toLowerCase(), args, callId: String(block.id) });
-  }
-  return calls;
-}
-
-/** Parse a tool call's raw JSON `arguments` string into a record; `null` when malformed. */
-function parseToolArgs(raw: string): Record<string, unknown> | null {
-  if (!raw.trim()) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Index tool results by the call id they answer, so parallel reads pair with the right content. */
-function toolResultsByCallId(messages: MemoryMessage[]): Map<string, { content: string; isError: boolean }> {
-  const results = new Map<string, { content: string; isError: boolean }>();
-  for (const message of messages) {
-    if (message.role === "tool" && message.toolCallId) {
-      results.set(message.toolCallId, { content: message.content, isError: message.isError === true });
-    }
-  }
-  return results;
-}
-
-function toolArgPath(args: Record<string, unknown>): string {
-  for (const key of ["path", "file_path", "filepath"]) {
-    const value = args[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return "";
-}
-
-function toolArgText(args: Record<string, unknown>, key: string): string {
-  const value = args[key];
-  return typeof value === "string" ? value : "";
-}
-
-/**
- * Reconstruct the full content an `edit` call produces. dsh's `edit` only carries
- * the `old_string`/`new_string` find-and-replace fragment, so hashing `new_string`
- * alone would mint a content hash matching no real SKILL.md. Rebuild the file by
- * replacing `old_string` with `new_string` in the `base` content captured from an
- * earlier `read`/`write`/`edit` in the same turn. Returns "" when the base is
- * missing or `old_string` does not occur in it — the caller then drops the
- * candidate instead of emitting a `modified` context it cannot reconstruct.
- */
-function editedContent(base: string | undefined, args: Record<string, unknown>): string {
-  const oldString = toolArgText(args, "old_string");
-  const newString = toolArgText(args, "new_string");
-  if (!base || !oldString || !base.includes(oldString)) {
-    return "";
-  }
-  // A function replacement keeps `newString` literal — a string replacement would
-  // treat `$&`/`$1`/`$$` in the skill text as special patterns and mangle it.
-  return base.replace(oldString, () => newString);
-}
-
-function isSkillMdPath(path: unknown): path is string {
-  return typeof path === "string" && /(^|[/\\])SKILL\.md$/.test(path);
-}
-
-function skillDirKey(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/SKILL\.md$/, "");
-}
-
-function skillNameFromPath(path: string): string {
-  const parts = skillDirKey(path).split("/").filter(Boolean);
-  return parts[parts.length - 1] || "skill";
-}
-
-function strongestUsage(
-  current: "injected" | "modified" | undefined,
-  next: "injected" | "modified",
-): "injected" | "modified" {
-  return current === "modified" || next === "modified" ? "modified" : "injected";
-}
-
-function parseSkillMetadata(content: string): { name?: string; version?: string } {
-  return {
-    name: simpleFrontmatterField(content, "name"),
-    version: simpleFrontmatterField(content, "version"),
-  };
-}
-
-function simpleFrontmatterField(content: string, field: string): string | undefined {
-  const match = content.match(new RegExp(`^\\s*${field}\\s*:\\s*["']?([^"'\\n#]+)`, "m"));
-  return match?.[1]?.trim() || undefined;
-}
-
-function computeSkillContentHash(content: string): string {
-  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const canonical = JSON.stringify([{ content: normalized, path: "SKILL.md" }]);
-  return createHash("sha256").update(canonical).digest("hex");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

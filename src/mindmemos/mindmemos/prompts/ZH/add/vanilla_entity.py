@@ -1,16 +1,8 @@
-"""vanilla add 系统提示词的实体抽取变体。
+"""Chinese memory extraction prompt with entity output.
 
-相对 ``vanilla.py`` 的最小改动，且按现有抽取层 schema 组织，无需改动
-解析层即可对接：
-- 解除 entities 输出禁令；实体在顶层 ``entities`` 数组
-  （``ExtractedEntityCandidate``）中输出，并由各条 memory 通过
-  ``ref_id`` 引用（``ExtractedMemoryCandidate.entities: list[str]``）。
-- 每个实体在 ``metadata.source_refs`` 中用 message ref ``s{evidence_index}``
-  记录来源（因 ``ExtractedEntityCandidate`` 没有顶层 source 字段，放
-  metadata 才不会被丢弃）。
-
-``_normalize_extraction_payload`` 已处理顶层 entities 数组，因此该
-prompt 可直接接入，无需改代码。
+Entities appear in the top-level ``entities`` array, and memories reference them by
+``ref_id``. Entity provenance uses message references in ``metadata.source_refs``
+because the extraction schema has no top-level source field on entities.
 """
 
 EXTRACTION_SYSTEM_PROMPT_ENTITY_ZH = """你是 MindMemOS 的记忆抽取器。仅从输入中抽取高价值、可复用的候选记忆，并返回严格 JSON。

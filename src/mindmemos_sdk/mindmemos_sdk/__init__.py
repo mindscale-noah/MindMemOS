@@ -17,18 +17,27 @@ from .memory import (
     FeedbackMode,
     FileMessage,
     GetResult,
+    ImageRef,
     MemoryClient,
     SearchResult,
     StatusResult,
     TextMessage,
     UrlMessage,
 )
+from .skills import AsyncSkillClient, SkillClient
+from .trajectory import TrajectoryDelivery, TrajectoryEvent, TrajectoryMessage, TrajectoryReportResult
 
 __all__ = [
     "__version__",
     "MindMemOSClient",
     "MemoryClient",
     "AsyncMemoryClient",
+    "SkillClient",
+    "AsyncSkillClient",
+    "TrajectoryDelivery",
+    "TrajectoryEvent",
+    "TrajectoryMessage",
+    "TrajectoryReportResult",
     "FeedbackMode",
     "ConfigManager",
     "SDKConfig",
@@ -38,6 +47,7 @@ __all__ = [
     "StatusResult",
     "TextMessage",
     "DialogueMessage",
+    "ImageRef",
     "UrlMessage",
     "FileMessage",
     "MindMemOSSDKError",
@@ -48,4 +58,4 @@ __all__ = [
     "ApiError",
 ]
 
-__version__ = "0.1.4"
+__version__ = "1.0.0"

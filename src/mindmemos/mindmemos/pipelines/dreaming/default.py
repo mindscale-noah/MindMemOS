@@ -304,12 +304,14 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
                     self._cfg.max_entity_memory_count,
                 )
                 continue
-            entity_clusters.append({
-                "entity_id": eid,
-                "entity_name": str(row.get("entity_name") or ""),
-                "entity_type": str(row.get("entity_type") or ""),
-                "memory_ids": mem_ids,
-            })
+            entity_clusters.append(
+                {
+                    "entity_id": eid,
+                    "entity_name": str(row.get("entity_name") or ""),
+                    "entity_type": str(row.get("entity_type") or ""),
+                    "memory_ids": mem_ids,
+                }
+            )
 
         if not entity_clusters:
             return []
@@ -363,9 +365,7 @@ class DefaultDreamingPipeline(MemoryDbPipelineMixin):
         # Distribute memories to each scope
         result: list[tuple[ConsolidationScope, list[MemoryView]]] = []
         for scope, mem_ids in scopes_and_ids:
-            primary_id = scope.primary_memory_id or (
-                scope.seed_memory_ids[0] if scope.seed_memory_ids else None
-            )
+            primary_id = scope.primary_memory_id or (scope.seed_memory_ids[0] if scope.seed_memory_ids else None)
             recalled = [memory_view_map[mid] for mid in mem_ids if mid in memory_view_map]
             memories = sorted(
                 recalled,

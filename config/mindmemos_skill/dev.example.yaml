@@ -1,0 +1,310 @@
+# Copy to dev.yaml and set api_key/base_url for the models you use.
+# Agent names: <algorithm>_<purpose>_<model>[_<traits>]. Pipelines refer to these names.
+# class_name selects an implementation; config contains its settings. Search the class names below in Python.
+# Tuning values follow their Python config defaults; models, connections, and enabled features are explicit choices.
+# Models, storage, and enabled features. Config: ServiceConfig.
+service:
+  # Shared limit for queued and running graph builds, judges, and evolutions in each project.
+  max_active_tasks_per_project: 1
+  home: ../../data/mindmemos_skill
+  # Set the internal Platform HTTP origin before enabling platform_gateway below.
+  platform_model_origin: null
+
+  # Named model presets used by the pipelines below. Each entry: AgentDefinition.
+  agents:
+    # Generate and merge Skill-Forest edits. Algorithm defaults: ForestOptimizerConfig.
+    skill_forest_optimizer_deepseek_v4_flash:
+      class_name: openai_chat
+      config:
+        model: deepseek-v4-flash
+        reasoning_effort: null
+        max_completion_tokens: 16384
+
+    # Analyze TreeSkill execution records with provider-default thinking settings. config: OpenAIChatConfig.
+    treeskill_analysis_deepseek_v4_flash:
+      class_name: openai_chat
+      config:
+        model: deepseek-v4-flash
+        max_completion_tokens: 4096
+        timeout_s: 180
+        extra_body: {}
+
+    # Analyze failures and select Skill subtrees with provider-default thinking settings. config: OpenAIChatConfig.
+    treeskill_failure_routing_deepseek_v4_flash:
+      class_name: openai_chat
+      config:
+        model: deepseek-v4-flash
+        max_completion_tokens: 4096
+        timeout_s: 180
+        extra_body: {}
+
+    # Improve Skills with a CLI agent. config: CodexConfig.
+    offline_evolution_evolver_deepseek_v4_flash_codex:
+      class_name: codex
+      config:
+        model: deepseek-v4-flash
+        reasoning_effort: null
+        timeout_s: 300
+
+    # For Platform routing, set platform_model_origin, transport: platform_gateway, and model: platform-chat.
+    offline_evolution_evolver_claude:
+      class_name: claude
+      config:
+        transport: direct
+        model: deepseek-v4-flash
+        timeout_s: 300
+
+    # Analyze Skill relationships for graphs and retrieval. config: OpenAIChatConfig.
+    skill_manage_chat_deepseek_v4_flash:
+      class_name: openai_chat
+      config:
+        transport: direct
+        model: deepseek-v4-flash
+        max_completion_tokens: 4096
+        timeout_s: 180
+        base_url: https://api.openai.com/v1
+
+    # Review Skill content. Algorithm defaults: SkillJudgeAgentConfig.
+    skill_judge_evaluator_deepseek_v4_flash_feedback:
+      class_name: openai_chat
+      config:
+        transport: direct
+        model: deepseek-v4-flash
+        parse_retry_mode: feedback
+        max_completion_tokens: 4096
+        timeout_s: 180
+        base_url: https://api.openai.com/v1
+
+    # Review task execution records. Algorithm defaults: TrajectoryJudgeAgentConfig.
+    trajectory_judge_evaluator_deepseek_v4_flash_feedback:
+      class_name: openai_chat
+      config:
+        transport: direct
+        model: deepseek-v4-flash
+        parse_retry_mode: feedback
+        max_completion_tokens: 4096
+        timeout_s: 180
+        base_url: https://api.openai.com/v1
+
+  # Store Skills, versions, and task data. Config: PersistenceConfig.
+  persistence:
+    # Business database connection and pool size. config: PostgresConfig.
+    database:
+      class_name: postgres
+      config:
+        url: postgresql+psycopg://mindmemos_skill:mindmemos_dev_password@localhost:55432/mindmemos_skill
+        pool_size: 5
+
+  # Save, find, and version Skills. config: RepositoryPipelineConfig.
+  repository_pipeline:
+    class_name: repository
+
+  # Build Skill graphs and find relevant Skills. config: GraphManagePipelineConfig.
+  manage_pipeline:
+    class_name: graph_manage
+    config:
+      # Graph building and retrieval settings. Config: SkillManageConfig.
+      algorithm:
+        # Turn text into search vectors. Config: OpenAIEmbeddingConfig.
+        embedding:
+          transport: direct
+          model: qwen3-embedding-4b
+          base_url: https://api.openai.com/v1
+          dimensions: 2560
+        chat: skill_manage_chat_deepseek_v4_flash
+        # Set false for cheaper graph builds; rule-based links remain.
+        llm_linking: true
+        # Enable for vague user queries; adds model work to retrieval.
+        query_rewrite: false
+        # Enable when Skill metadata is sparse; adds model work during graph builds.
+        enrich_skill: false
+        # Use skill_only for a simple baseline; separate also ranks through Scenes.
+        mode: separate
+        # Raise for broader Skill recall, at higher retrieval cost.
+        skill_candidates: 20
+        # Raise when useful details appear in Scenes rather than Skill summaries.
+        scene_candidates: 20
+        # Graph starting points; keep <= skill_candidates.
+        skill_seeds: 5
+        # Scene starting points; keep <= scene_candidates; 0 disables Scene seeds only.
+        scene_seeds: 5
+        # Raise to reject weak vector matches; -1 disables this cutoff.
+        score_threshold: -1.0
+        # Raise to give child Scene scores more weight in separate mode.
+        alpha: 0.5
+        # Lower if relation prompts exceed model limits; smaller batches need more calls.
+        llm_batch_size: 32
+
+  # Check Skill content and execution records. config: AnalyzePipelineConfig.
+  analyze_pipeline:
+    class_name: analyze
+    config:
+      # Find problems in Skill files. config: SkillJudgeConfig.
+      skill_judge:
+        class_name: skill_judge
+        config:
+          judge: skill_judge_evaluator_deepseek_v4_flash_feedback
+          # Characters per SKILL.md window or resource excerpt; raise for longer local context.
+          per_file_cap: 6000
+          # Characters per resource-only window; lower for smaller model contexts.
+          total_cap: 30000
+          # Raise for long SKILL.md files; lines beyond this cap are omitted.
+          max_md_lines: 2000
+          # Raise for large audits; exceeding this limit fails instead of silently skipping windows.
+          max_windows: 60
+          # Raise for detailed audits; limits reported findings, not inspected windows.
+          max_findings: 20
+      # Find problems in task execution records. config: TrajectoryJudgeConfig.
+      trajectory_judge:
+        class_name: trajectory_judge
+        config:
+          judge: trajectory_judge_evaluator_deepseek_v4_flash_feedback
+          # Raise for long executions; limits the rendered evidence sent to the judge.
+          max_trajectory_chars: 30000
+          # Raise when important details occur in long tool outputs.
+          max_event_chars: 4000
+          # Enable to diagnose why a task failed; adds an attribution model pass.
+          attribute_failures: false
+          # Also diagnose partial successes; requires attribution to be enabled.
+          attribute_on_partial_success: false
+
+  # Training pipelines selected by name. Each entry: ImplementationConfig.
+  training_pipelines:
+    # Skill-Forest training and evaluation concurrency. config: TrainingPipelineConfig.
+    skill_forest:
+      class_name: training
+      config:
+        # Generate and compare Skill candidates. config: SkillForestTrainerConfig.
+        trainer:
+          class_name: skill_forest
+          config:
+            optimizer: skill_forest_optimizer_deepseek_v4_flash
+
+            # Lower for a cheap trial; raise for more independent searches.
+            num_trees: 7
+            # Total parent expansions, including roots; must be >= num_trees. Raise for deeper search.
+            expansion_budget: 30
+            # Raise to try more edits per expansion; increases model and evaluation cost.
+            candidates_per_node: 3
+            # Raise for more rounds of refinement; also allow enough expansion_budget.
+            max_depth: 3
+
+            # Share of tasks used for reflection; the rest validate candidates.
+            train_ratio: 0.5
+            # Keep fixed when comparing settings on the same task data.
+            seed: 42
+            # select keeps one winner; hierarchical_merge combines winners with extra model calls.
+            ensemble_strategy: select
+            # Raise to require larger validation gains before accepting a child.
+            min_gain: 0.0
+            # Lower for long trajectories or smaller model contexts.
+            reflection_minibatch_size: 8
+
+            # Lower to limit simultaneous search expansions.
+            expansion_concurrency: 40
+            # Lower when task environments consume too much CPU or memory.
+            rollout_concurrency: 40
+            # Lower when the model endpoint hits rate limits.
+            model_concurrency: 40
+            # Set false to retain task files while debugging; uses more disk space.
+            cleanup_workspaces: true
+        # Lower when held-out evaluation exhausts environment resources.
+        evaluation_concurrency: 1
+
+    # TreeSkill training and evaluation concurrency. config: TrainingPipelineConfig.
+    treeskill:
+      class_name: training
+      config:
+        # Improve Skill trees from execution records. config: TreeSkillTrainerConfig.
+        trainer:
+          class_name: treeskill
+          config:
+            optimizer: treeskill_analysis_deepseek_v4_flash
+            # null reuses optimizer; set a preset name only to use a separate failure model.
+            failure_optimizer: null
+            router: treeskill_failure_routing_deepseek_v4_flash
+
+            # Raise to collect repeated attempts on noisy tasks; increases execution cost.
+            samples_per_task: 1
+            # Raise to avoid updating from too little evidence; smaller batches leave the Skill unchanged.
+            min_trajectories: 1
+            # Hard evidence limit, not a sampling target; exceeding it fails the round.
+            max_trajectories: 1000
+            # Match the environment score scale; scores below this use failure analysis.
+            success_score_threshold: 1.0
+
+            # Lower for cheap trials; raise when failure diagnosis needs more tool steps.
+            analysis_max_turns: 20
+            # Raise for slow diagnostic commands; bounds each command, not the whole analysis.
+            shell_timeout_seconds: 120
+            # Raise to retain longer tool output; this cap applies per event.
+            transcript_max_chars: 20000
+
+            # Lower when task environments consume too much CPU or memory.
+            rollout_concurrency: 32
+            # Lower when analysis calls hit model rate limits.
+            analysis_concurrency: 32
+            # Lower when localization calls hit model rate limits.
+            localization_concurrency: 32
+        # Lower when held-out evaluation exhausts environment resources.
+        evaluation_concurrency: 1
+
+  # Skill improvement pipelines selected by name. Each entry: ImplementationConfig.
+  evolution_pipelines:
+    # Improve Skills with a CLI agent and save results. config: OfflineEvolutionPipelineConfig.
+    offline:
+      class_name: offline_evolution
+      config:
+        # Select the CLI agent; checks use the running Python interpreter by default. config: OfflineEvolutionConfig.
+        evolver:
+          class_name: offline_evolution
+          config:
+            agent: offline_evolution_evolver_claude
+            # Raise to allow more feedback rounds per stage; increases runtime and model calls.
+            retries: 1
+            # Raise for slow evidence checks; separate from the CLI Agent timeout_s.
+            script_timeout_s: 900.0
+            # Lower to tolerate fewer invalid findings; the gate still allows at least one.
+            max_invalid_share: 0.1
+        work_dir: ./output/offline_evolution
+        # Limit historical evidence for large runs. Config: OfflineTrajectoryConfig.
+        traj_collect:
+          # Set a count to use only recent records per Skill version; null uses all.
+          trajectory_limit: null
+          # Lower for smaller database reads; does not limit the total evidence.
+          max_page_size: 200
+
+  # Queue background tasks and enable this process as a worker. Config: TaskManagerConfig.
+  task_manager:
+    # Default: execute tasks in this process. Set kafka to use the broker below.
+    mode: local
+    bootstrap_servers: localhost:9092
+    # Default: do not consume Kafka jobs in this process.
+    worker: false
+
+  # Store run records and export logs and traces. Config: ObservabilityConfig.
+  observability:
+    # Database for run records. config: PostgresConfig.
+    backend:
+      class_name: postgres
+      config:
+        url: postgresql+psycopg://mindmemos_skill:mindmemos_dev_password@localhost:55432/mindmemos_skill
+        pool_size: 5
+
+    # Collector endpoint for logs and traces. Config: OTLPConfig.
+    otlp:
+      endpoint: http://localhost:4318/
+
+# HTTP access rules and available pipelines. Config: FastAPIConfig.
+fastapi:
+  # Control API access; none allows loopback listening only. Config: HttpAuthConfig.
+  auth:
+    mode: none
+    default_project_id: personal
+    gateway_jwt_audience: skill-data-plane
+
+  # Allow these pipelines over HTTP. Field: FastAPIConfig.evolution_pipelines.
+  evolution_pipelines:
+    - offline
+  # Use this pipeline when a request omits it. Field: FastAPIConfig.default_evolution_pipeline.
+  default_evolution_pipeline: offline
