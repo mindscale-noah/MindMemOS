@@ -1,0 +1,156 @@
+"""One reset/model/step loop with request-local simulator ownership."""
+
+import re
+from pathlib import Path
+
+from ....agents import OpenAIChatAgent
+from ....common.input_files import file_fingerprints
+from ....skill import Skill
+from ...base import Environment
+from ...data import RewardData
+from ...typing import RolloutResult, Task
+from ..common import skill_text, total_usage
+from .config import ALFWorldConfig
+from .prompts import NO_HISTORY, WITH_HISTORY
+from .reward import evaluate
+from .simulator import Simulator
+from .typing import ALFWorldRewardData, ALFWorldTask
+
+
+@Environment.register("alfworld_bounded_history")
+class ALFWorldEnvironment(Environment[ALFWorldConfig]):
+    """Run one game with bounded history and no batch scheduling barrier."""
+
+    task_type = ALFWorldTask
+    """Public ALFWorld task schema."""
+
+    reward_data_type = ALFWorldRewardData
+    """Private ALFWorld scoring schema."""
+
+    config_type = ALFWorldConfig
+    """Recorded model, simulator, and history settings."""
+
+    def __init__(self, config: ALFWorldConfig, *, agent: OpenAIChatAgent | None = None) -> None:
+        """Initialize the model; defer simulator creation to each rollout.
+
+        Args:
+            config: Audited runtime settings.
+            agent: Optional model backend with matching settings.
+        """
+        super().__init__(config)
+        if agent is not None and agent.config != config.agent:
+            raise ValueError("Injected agent config must match the environment's agent config")
+        self.agent = agent if agent is not None else OpenAIChatAgent(config.agent)
+
+    def input_identity(self, task: Task, reward_data: RewardData) -> dict[str, str]:
+        """Include supporting simulator files alongside the selected game.
+
+        Args:
+            task: Public game selection.
+            reward_data: Private scoring inputs.
+
+        Returns:
+            Game-directory files mapped to their current content fingerprints.
+        """
+        identity = super().input_identity(task, reward_data)
+        if isinstance(task, ALFWorldTask):
+            identity.update(file_fingerprints(path for path in task.gamefile.parent.iterdir() if path.is_file()))
+        return identity
+
+    async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+        """Keep simulator state local and close it even if model execution fails."""
+        if not isinstance(task, ALFWorldTask) or not isinstance(reward_data, ALFWorldRewardData):
+            raise TypeError("ALFWorld requires ALFWorldTask and ALFWorldRewardData")
+        text = skill_text(skills)
+        history, responses, trajectory = [], [], []
+        system = "You are an expert agent operating in the ALFRED Embodied Environment."
+        simulator = await Simulator.create(self.config, task.gamefile)
+        done, won, output = False, False, ""
+        try:
+            observations, infos = await simulator.reset()
+            observation = observations[0]
+            marker = "Your task is to: "
+            if marker not in observation:
+                raise ValueError("Task description not found in text observation.")
+            description = observation.split(marker, 1)[1].strip()
+            for step in range(self.config.max_steps):
+                admissible = "\n ".join(f"'{action}'" for action in infos["admissible_commands"][0] if action != "help")
+                values = {"current_observation": observation, "admissible_actions": admissible}
+                if history and self.config.history_length:
+                    recent = history[-self.config.history_length :]
+                    values.update(
+                        task_description=description,
+                        step_count=len(history),
+                        history_length=len(recent),
+                        action_history="\n".join(recent),
+                        current_step=len(history) + 1,
+                    )
+                    prompt = WITH_HISTORY.format(**values)
+                else:
+                    prompt = NO_HISTORY.format(**values)
+                if text.strip():
+                    prompt = (
+                        "\n\n## Skill Knowledge\n"
+                        "Below is a skill document with learned strategies. "
+                        "Use these guidelines to inform your decisions:\n\n"
+                        f"{text}\n\n{prompt}"
+                    )
+                (workspace / f"prompt_{step + 1}.md").write_text(prompt, encoding="utf-8")
+                response = await self.agent.run(system=system, user=prompt)
+                if not isinstance(response.output, str):
+                    raise TypeError("ALFWorld requires a text agent output")
+                responses.append(response)
+                output = response.output.strip()
+                action_match = re.search(r"<action>(.*?)</action>", output, re.DOTALL)
+                if not output:
+                    output = "<think>empty model response</think><action>look</action>"
+                elif action_match is None:
+                    output = "<think>missing action tag</think><action>look</action>"
+                action_match = re.search(r"<action>(.*?)</action>", output, re.DOTALL)
+                action = action_match.group(1).strip().lower()
+                reasoning = re.search(r"<think>(.*?)</think>", output, re.DOTALL)
+                history.append(f"[Observation {step + 1}: '{observation}', Action {step + 1}: '{action}']")
+                observations, scores, dones, infos = await simulator.step([action])
+                observation, done = observations[0], bool(dones[0])
+                if done:
+                    won = bool(infos["won"][0])
+                trajectory.append(
+                    {
+                        "step": step,
+                        "action": action_match.group(1).strip(),
+                        "reasoning": reasoning.group(1).strip() if reasoning else None,
+                        "model_response": output,
+                        "env_feedback": observation,
+                        "reward": 10.0 * float(infos["won"][0]),
+                        "done": done,
+                    }
+                )
+                if done:
+                    break
+        finally:
+            await simulator.close()
+        return RolloutResult(
+            output=output,
+            trajectory=trajectory,
+            reward=(await evaluate(won=won, done=done, max_steps=self.config.max_steps)).model_copy(
+                update={
+                    "task_description": description,
+                    "task_type": next(
+                        (
+                            name
+                            for name in (
+                                "pick_and_place",
+                                "pick_two_obj_and_place",
+                                "look_at_obj_in_light",
+                                "pick_heat_then_place_in_recep",
+                                "pick_cool_then_place_in_recep",
+                                "pick_clean_then_place_in_recep",
+                            )
+                            if name in str(task.gamefile)
+                        ),
+                        "other",
+                    ),
+                },
+            ),
+            usage=total_usage(responses),
+        )

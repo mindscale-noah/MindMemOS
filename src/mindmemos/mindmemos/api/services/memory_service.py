@@ -1,48 +1,60 @@
 """Memory HTTP business logic."""
 
-from uuid import NAMESPACE_URL, uuid4, uuid5
-
-from mindmemos_skill.contracts import (
-    SkillTrajectoryReportRequest,
-    SkillTrajectoryUpload,
-    SkillTrajectoryUploadItem,
-    TrajectorySource,
-    compute_trajectory_hash,
-)
+import asyncio
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, Literal
+from urllib.parse import quote
+from uuid import uuid4
 
 from ...config import get_config
-from ...errors import BadRequestError
+from ...errors import BadRequestError, ConfigNotInitializedError, MemoryNotFoundError, ResourceNotFoundError
+from ...infra.blob import get_blob_store, is_valid_blob_id
+from ...infra.blob.signed_url import image_url_signature, resolve_signing_secret
 from ...logging import get_logger, traced
-from ...pipelines import PipelineType, create_pipeline
+from ...pipelines import create_pipeline
 from ...pipelines.add import AddPipeline
 from ...pipelines.delete import DefaultDeletePipeline, DeletePipeline
 from ...pipelines.dreaming import DreamingPipeline
 from ...pipelines.feedback import FeedbackPipeline
 from ...pipelines.get import DefaultGetPipeline, GetPipeline
-from ...pipelines.memory_db import MemoryOperationRecorder, suppress_recording_errors, utcnow
+from ...pipelines.memory_db import (
+    ImageMemoryStore,
+    MemoryCatalog,
+    MemoryOperationRecorder,
+    suppress_recording_errors,
+    utcnow,
+)
 from ...pipelines.search import SearchPipeline
+from ...pipelines.skill import SkillVersionStore, get_skill_version_store
 from ...pipelines.update import DefaultUpdatePipeline, UpdatePipeline
+from ...provider_bindings import ProviderBindingResolver, provider_config_context
 from ...typing import (
     AddPipelineAsyncResult,
     AddPipelineSyncResult,
+    AddStreamCancelled,
     DeletePipelineResult,
     DreamingPipelineResult,
     FeedbackPipelineResult,
     GetPipelineResult,
+    MemoryListPipelineResult,
+    MemoryScrollPipelineResult,
     SearchPipelineResult,
     SkillBinding,
     SkillContext,
     UpdatePipelineResult,
 )
 from ..algorithm import binding_for_memory_algorithm
-from ..deps import annotate_request_trace, ensure_scopes
+from ..deps import annotate_request_trace
 from ..mappers import (
     to_add_pipeline_input,
     to_delete_pipeline_input,
     to_dreaming_pipeline_input,
     to_feedback_pipeline_input,
     to_get_pipeline_input,
+    to_memory_list_pipeline_input,
     to_memory_request_context,
+    to_memory_scroll_pipeline_input,
     to_search_pipeline_input,
     to_update_pipeline_input,
 )
@@ -53,13 +65,15 @@ from ..schemas import (
     DreamingRequest,
     FeedbackRequest,
     GetRequest,
+    MemoryPageRequest,
+    MemoryScrollRequest,
     SearchRequest,
     UpdateRequest,
 )
-from .skill_service import SkillService, get_skill_service
 
 logger = get_logger(__name__)
 
+PipelineKind = Literal["add", "search", "get", "delete", "update", "feedback", "dreaming"]
 SEARCH_PIPELINE_NAME = "search_pipeline"
 
 
@@ -70,6 +84,7 @@ class MemoryService:
         self,
         *,
         get_pipeline: GetPipeline | None = None,
+        catalog: MemoryCatalog | None = None,
         add_pipeline: AddPipeline | None = None,
         search_pipeline: SearchPipeline | None = None,
         delete_pipeline: DeletePipeline | None = None,
@@ -84,14 +99,15 @@ class MemoryService:
         feedback_pipeline_name: str | None = None,
         dreaming_pipeline_name: str | None = None,
         operation_recorder: MemoryOperationRecorder | None = None,
-        skill_store: object | None = None,
-        skill_service: SkillService | None = None,
+        skill_store: SkillVersionStore | None = None,
+        provider_binding_resolver: ProviderBindingResolver | None = None,
     ) -> None:
         self._add = add_pipeline
         if search_pipeline is None and search_pipeline_name is None:
             search_pipeline_name = SEARCH_PIPELINE_NAME
         self._search = search_pipeline
         self._get = get_pipeline if get_pipeline is not None else (None if get_pipeline_name else DefaultGetPipeline())
+        self._catalog = catalog or MemoryCatalog()
         self._delete = (
             delete_pipeline
             if delete_pipeline is not None
@@ -104,19 +120,19 @@ class MemoryService:
         )
         self._feedback = feedback_pipeline
         self._dreaming = dreaming_pipeline
-        self._pipeline_names: dict[str, tuple[PipelineType, str | None]] = {
-            "_add": (PipelineType.ADD, add_pipeline_name),
-            "_search": (PipelineType.SEARCH, search_pipeline_name),
-            "_get": (PipelineType.GET, get_pipeline_name),
-            "_delete": (PipelineType.DELETE, delete_pipeline_name),
-            "_update": (PipelineType.UPDATE, update_pipeline_name),
-            "_feedback": (PipelineType.FEEDBACK, feedback_pipeline_name),
-            "_dreaming": (PipelineType.DREAMING, dreaming_pipeline_name),
+        self._pipeline_names: dict[str, tuple[PipelineKind, str | None]] = {
+            "_add": ("add", add_pipeline_name),
+            "_search": ("search", search_pipeline_name),
+            "_get": ("get", get_pipeline_name),
+            "_delete": ("delete", delete_pipeline_name),
+            "_update": ("update", update_pipeline_name),
+            "_feedback": ("feedback", feedback_pipeline_name),
+            "_dreaming": ("dreaming", dreaming_pipeline_name),
         }
         self._recorder = operation_recorder or MemoryOperationRecorder()
-        del skill_store  # Legacy injection point retained for constructor compatibility; the old store is never written.
-        self._skill_service = skill_service
+        self._skill_store = skill_store if skill_store is not None else get_skill_version_store()
         self._algorithm_add_pipelines: dict[str, AddPipeline] = {}
+        self._provider_binding_resolver = provider_binding_resolver
 
     def _pipeline(self, attr: str):
         pipeline = getattr(self, attr)
@@ -133,7 +149,7 @@ class MemoryService:
         pipeline_name = binding_for_memory_algorithm(memory_algorithm).add_pipeline
         pipeline = self._algorithm_add_pipelines.get(pipeline_name)
         if pipeline is None:
-            pipeline = create_pipeline(type=PipelineType.ADD, name=pipeline_name)
+            pipeline = create_pipeline(type="add", name=pipeline_name)
             self._algorithm_add_pipelines[pipeline_name] = pipeline
         return pipeline, pipeline_name
 
@@ -141,6 +157,13 @@ class MemoryService:
         if self._add is not None:
             return self._add, self._pipeline_names["_add"][1]
         return self._add_pipeline_for_algorithm(auth.memory_algorithm)
+
+    async def _provider_config_context(self, ctx):
+        """Return a temporary config binding that includes dynamic provider overrides."""
+        return await provider_config_context(
+            ctx,
+            resolver=self._provider_binding_resolver,
+        )
 
     @traced("memory_service.add")
     async def add(
@@ -153,6 +176,7 @@ class MemoryService:
         # Stamp request identity onto the handler-root span so downstream LLM spans
         # (which live in this trace, not the auth dependency's trace) are attributable.
         annotate_request_trace(auth)
+        _reject_images_unless_supported(auth, request)
         pipeline, _add_pipeline_name = self._add_pipeline_for_auth(auth)
         if pipeline is None:
             raise NotImplementedError("add pipeline implementation is not wired yet")
@@ -160,23 +184,231 @@ class MemoryService:
         payload = to_add_pipeline_input(request)
         add_record_id = str(uuid4())
         request_submitted_at = utcnow()
-        trajectory_result = await self._ingest_skill_trajectory(auth, add_record_id, request)
-        trajectory_ref = None
-        if trajectory_result is not None:
-            trajectory_ref = {
-                "trajectory_id": trajectory_result["trajectory_id"],
-                "trajectory_hash": trajectory_result["trajectory_hash"],
-                "delivery": request.skill_trajectory_delivery,
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
+            return await self._add_with_context(
+                pipeline,
+                payload,
+                ctx,
+                request,
+                add_record_id,
+                request_submitted_at,
+                skill_bindings,
+            )
+
+    @traced("memory_service.add_stream")
+    async def add_stream(
+        self,
+        auth: AuthContext,
+        request: AddRequest,
+        *,
+        cancel_check: Callable[[], Awaitable[bool]] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Run sync add while streaming progress events."""
+
+        annotate_request_trace(auth)
+        _reject_images_unless_supported(auth, request)
+        pipeline, _add_pipeline_name = self._add_pipeline_for_auth(auth)
+        if pipeline is None:
+            raise NotImplementedError("add pipeline implementation is not wired yet")
+        ctx = to_memory_request_context(auth, request, require_user_id=True)
+        payload = to_add_pipeline_input(request)
+        if payload.mode != "sync":
+            yield {
+                "event": "error",
+                "stage": "accepted",
+                "message": "streaming add only supports sync mode",
             }
-        skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
+            return
+
+        add_record_id = str(uuid4())
+        request_submitted_at = utcnow()
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
+            yield {
+                "event": "progress",
+                "stage": "accepted",
+                "message": "Add request accepted.",
+                "percent": 1,
+            }
+            await suppress_recording_errors(
+                self._recorder.record_add_input(
+                    payload,
+                    ctx=ctx,
+                    request_submitted_at=request_submitted_at,
+                    add_record_id=add_record_id,
+                    status="processing",
+                    skill_bindings=skill_bindings,
+                    score=request.score,
+                    task_id=request.task_id,
+                ),
+                operation="add",
+            )
+
+            if hasattr(pipeline, "add_sync_stream"):
+                async for event in self._stream_pipeline_add(
+                    pipeline,
+                    payload,
+                    ctx,
+                    add_record_id=add_record_id,
+                    cancel_check=cancel_check,
+                ):
+                    yield event
+                return
+
+            try:
+                result = await pipeline.add_sync(payload, ctx, add_record_id=add_record_id)
+            except Exception as exc:
+                await suppress_recording_errors(
+                    self._recorder.mark_add_failed(ctx, add_record_id, str(exc)),
+                    operation="add",
+                )
+                yield {"event": "error", "stage": "error", "message": str(exc)}
+                return
+            yield {
+                "event": "completed",
+                "stage": "completed",
+                "message": "Add completed.",
+                "data": {"memories": [memory.model_dump(mode="json") for memory in result.memories]},
+            }
+
+    async def _stream_pipeline_add(
+        self,
+        pipeline: AddPipeline,
+        payload,
+        ctx,
+        *,
+        add_record_id: str,
+        cancel_check: Callable[[], Awaitable[bool]] | None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+        async def progress(
+            stage: str,
+            message: str,
+            percent: int | None = None,
+            data: dict[str, Any] | None = None,
+        ) -> None:
+            event: dict[str, Any] = {
+                "event": "progress",
+                "stage": stage,
+                "message": message,
+            }
+            if percent is not None:
+                event["percent"] = percent
+            if data:
+                message_i18n = data.get("message_i18n")
+                if isinstance(message_i18n, dict):
+                    event["message_i18n"] = message_i18n
+                remaining_data = {key: value for key, value in data.items() if key != "message_i18n"}
+                if remaining_data:
+                    event["data"] = remaining_data
+            await queue.put(event)
+
+        async def run_pipeline() -> None:
+            try:
+                result_or_stream = pipeline.add_sync_stream(
+                    payload,
+                    ctx,
+                    add_record_id=add_record_id,
+                    progress=progress,
+                    cancel_check=cancel_check,
+                )
+                if hasattr(result_or_stream, "__aiter__"):
+                    async for event in result_or_stream:
+                        await queue.put(event)
+                else:
+                    result = await result_or_stream
+                    await queue.put(
+                        {
+                            "event": "completed",
+                            "stage": "completed",
+                            "message": "Add completed.",
+                            "data": {"memories": [memory.model_dump(mode="json") for memory in result.memories]},
+                        }
+                    )
+            except AddStreamCancelled as exc:
+                await suppress_recording_errors(
+                    self._recorder.mark_add_cancelled(ctx, add_record_id, exc.message),
+                    operation="add",
+                )
+                await queue.put(
+                    {
+                        "event": "cancelled",
+                        "stage": exc.stage,
+                        "message": exc.message,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                await suppress_recording_errors(
+                    self._recorder.mark_add_failed(ctx, add_record_id, str(exc)),
+                    operation="add",
+                )
+                await queue.put({"event": "error", "stage": "error", "message": str(exc)})
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(run_pipeline())
+        heartbeat_seconds = getattr(self, "stream_heartbeat_seconds", 10.0)
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                except asyncio.TimeoutError:
+                    yield {
+                        "event": "heartbeat",
+                        "stage": "waiting",
+                        "message": "Memory extraction is still running.",
+                        "message_i18n": {
+                            "zh": "记忆提取仍在进行，请稍候",
+                            "en": "Memory extraction is still running.",
+                        },
+                    }
+                    continue
+                if item is None:
+                    break
+                yield item
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    async def _add_with_context(
+        self,
+        pipeline: AddPipeline,
+        payload,
+        ctx,
+        request: AddRequest,
+        add_record_id: str,
+        request_submitted_at,
+        skill_bindings: list[SkillBinding] | None,
+    ):
         try:
             if payload.mode == "async":
+                try:
+                    kafka_enabled = get_config().kafka.enabled
+                except ConfigNotInitializedError:
+                    # no bootstrapped config (unit tests): the pipeline enforces its own rule
+                    kafka_enabled = True
+                if not kafka_enabled:
+                    # a client-selectable mode the server cannot serve is a request error,
+                    # not a 500: the pipeline would raise a bare RuntimeError downstream
+                    raise BadRequestError(
+                        "async add requires Kafka to be enabled (kafka.enabled=true); "
+                        "use mode='sync' or enable Kafka in config",
+                        code="add.async_unavailable",
+                    )
+                # Keep the existing async payload shape during rolling deployment.
                 record_metadata = {
                     "request_submitted_at": request_submitted_at.isoformat(),
                     "skill_bindings": [binding.model_dump(mode="json") for binding in skill_bindings or []],
                     "score": request.score,
                     "task_id": request.task_id,
-                    "skill_trajectory_ref": trajectory_ref,
                 }
                 await suppress_recording_errors(
                     self._recorder.record_add_input(
@@ -188,17 +420,15 @@ class MemoryService:
                         skill_bindings=skill_bindings,
                         score=request.score,
                         task_id=request.task_id,
-                        extra_payload={"skill_trajectory_ref": trajectory_ref} if trajectory_ref else None,
                     ),
                     operation="add",
                 )
-                result = await pipeline.add_async(
+                return await pipeline.add_async(
                     payload,
                     ctx,
                     add_record_id=add_record_id,
                     record_metadata=record_metadata,
                 )
-                return result.model_copy(update={"skill_trajectory": trajectory_result})
             await suppress_recording_errors(
                 self._recorder.record_add_input(
                     payload,
@@ -209,12 +439,10 @@ class MemoryService:
                     skill_bindings=skill_bindings,
                     score=request.score,
                     task_id=request.task_id,
-                    extra_payload={"skill_trajectory_ref": trajectory_ref} if trajectory_ref else None,
                 ),
                 operation="add",
             )
-            result = await pipeline.add_sync(payload, ctx, add_record_id=add_record_id)
-            return result.model_copy(update={"skill_trajectory": trajectory_result})
+            return await pipeline.add_sync(payload, ctx, add_record_id=add_record_id)
         except Exception as exc:
             await suppress_recording_errors(
                 self._recorder.mark_add_failed(ctx, add_record_id, str(exc)),
@@ -222,76 +450,25 @@ class MemoryService:
             )
             raise
 
-    async def _ingest_skill_trajectory(
-        self,
-        auth: AuthContext,
-        add_record_id: str,
-        request: AddRequest,
-    ) -> dict[str, str] | None:
-        upload = request.skill_trajectory
-        if upload is None:
-            return None
-        ensure_scopes(auth, ("skills:trajectory:write",))
-        if upload.source is not TrajectorySource.MEMORY_ADD:
-            raise BadRequestError(
-                "Memory Add skill_trajectory requires source=memory_add",
-                code="skill.trajectory_invalid",
-                status_code=422,
-            )
-        if upload.source_add_record_id not in {None, add_record_id}:
-            raise BadRequestError(
-                "Memory Add skill_trajectory source_add_record_id is server-assigned",
-                code="skill.trajectory_invalid",
-                status_code=422,
-            )
-        source = upload.model_dump(mode="json")
-        source["source_add_record_id"] = add_record_id
-        source["trajectory_hash"] = compute_trajectory_hash(source)
-        upload = SkillTrajectoryUpload.model_validate(source)
-        operation_id = str(
-            uuid5(
-                NAMESPACE_URL,
-                f"mindmemos:memory-add-trajectory:{upload.trajectory_id}:{upload.trajectory_hash}",
-            )
-        )
-        skill_service = self._skill_service or get_skill_service()
-        report = await skill_service.report_trajectories(
-            auth,
-            SkillTrajectoryReportRequest(
-                operation_id=operation_id,
-                mode="sync" if request.skill_trajectory_delivery == "required" else "async",
-                items=[SkillTrajectoryUploadItem(trajectory=upload)],
-            ),
-        )
-        item = report.items[0]
-        return {
-            "trajectory_id": item.trajectory_id,
-            "trajectory_hash": upload.trajectory_hash.removeprefix("sha256:"),
-            "status": item.status,
-        }
-
     async def _bind_skill_context(
         self,
         project_id: str,
         add_record_id: str,
         skill_context: list[SkillContext] | None,
     ) -> list[SkillBinding] | None:
-        """Project legacy ``skill_context`` into add-audit metadata without touching old Skill collections."""
+        """Resolve trace bindings without blocking Memory add on binding errors."""
 
-        del project_id, add_record_id
         if not skill_context:
             return None
-        return [
-            SkillBinding(
-                name=context.name,
-                content_hash=context.content_hash,
-                base_version_id=context.base_version_id,
-                version_id=context.base_version_id or None,
-                version_label=context.version_label,
-                usage=context.usage,
+        try:
+            return await self._skill_store.bind_skill_context(
+                project_id=project_id,
+                add_record_id=add_record_id,
+                skill_context=skill_context,
             )
-            for context in skill_context
-        ]
+        except Exception as exc:  # noqa: BLE001 - binding must never block add
+            logger.warning("skill_context binding failed", error=str(exc), add_record_id=add_record_id)
+            return None
 
     @traced("memory_service.search")
     async def search(
@@ -299,17 +476,29 @@ class MemoryService:
         auth: AuthContext,
         request: SearchRequest,
     ) -> SearchPipelineResult:
-        """Run the search pipeline."""
+        """Run the search pipeline.
+
+        Image hits are decorated with ``metadata.image_url``: a public-mirror or presigned
+        link when the blob backend can address the bytes, otherwise a signed keyless proxy
+        path (see ``_attach_image_urls``).
+        """
 
         # Stamp request identity onto the handler-root span so downstream LLM spans
         # (which live in this trace, not the auth dependency's trace) are attributable.
         annotate_request_trace(auth)
-        ctx = to_memory_request_context(auth, request, require_user_id=True)
+        ctx = to_memory_request_context(auth, request)
         binding = binding_for_memory_algorithm(auth.memory_algorithm)
+        if request.query_images and (reason := _images_unsupported_reason(auth)):
+            raise BadRequestError(f"query_images {reason}", code="search.images_unsupported")
         payload = to_search_pipeline_input(request, search_pipeline=binding.search_pipeline)
         pipeline = self._pipeline("_search")
         if pipeline is None:
             raise NotImplementedError("search pipeline implementation is not wired yet")
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            return await self._search_with_context(pipeline, payload, ctx)
+
+    async def _search_with_context(self, pipeline: SearchPipeline, payload, ctx) -> SearchPipelineResult:
         request_submitted_at = utcnow()
         try:
             result = await pipeline.search(payload, ctx)
@@ -337,7 +526,28 @@ class MemoryService:
             ),
             operation="search",
         )
+        # Decorated after recording: telemetry keeps signed URLs (short-lived secrets) out.
+        _attach_image_urls(result, project_id=ctx.project_id)
         return result
+
+    @traced("memory_service.get_image")
+    async def get_image(self, auth: AuthContext, blob_id: str, user_id: str) -> tuple[bytes, str]:
+        """Read one stored image of the caller's project, naming its owner.
+
+        The caller-declared ``user_id`` is verified against the project's image records; another
+        user's blob and a missing blob raise the same ``image.not_found``, so the response does
+        not reveal which blobs exist.
+        """
+
+        annotate_request_trace(auth)
+        ctx = to_memory_request_context(auth)
+        if not await ImageMemoryStore().blob_owned_by(ctx, blob_id, user_id):
+            raise ResourceNotFoundError(f"image {blob_id} not found", code="image.not_found")
+        found = await get_blob_store().get(auth.project_id, blob_id)
+        if found is None:
+            raise ResourceNotFoundError(f"image {blob_id} not found", code="image.not_found")
+        blob, data = found
+        return data, blob.mime_type
 
     @traced("memory_service.get")
     async def get(self, auth: AuthContext, request: GetRequest) -> GetPipelineResult:
@@ -349,8 +559,30 @@ class MemoryService:
         pipeline = self._pipeline("_get")
         if pipeline is None:
             raise NotImplementedError("get pipeline implementation is not wired yet")
-        return await pipeline.get(to_get_pipeline_input(request), to_memory_request_context(auth))
+        ctx = to_memory_request_context(auth)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            return await pipeline.get(to_get_pipeline_input(request), ctx)
 
+    @traced("memory_service.list")
+    async def list(self, auth: AuthContext, request: MemoryPageRequest) -> MemoryListPipelineResult:
+        """Run the paged memory list pipeline."""
+
+        annotate_request_trace(auth)
+        ctx = to_memory_request_context(auth, request)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            return await self._catalog.list(to_memory_list_pipeline_input(request), ctx)
+
+    @traced("memory_service.scroll")
+    async def scroll(self, auth: AuthContext, request: MemoryScrollRequest) -> MemoryScrollPipelineResult:
+        """Run the cursor memory scroll pipeline."""
+
+        annotate_request_trace(auth)
+        ctx = to_memory_request_context(auth, request)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            return await self._catalog.scroll(to_memory_scroll_pipeline_input(request), ctx)
 
     @traced("memory_service.delete")
     async def delete(self, auth: AuthContext, request: DeleteRequest) -> DeletePipelineResult:
@@ -362,7 +594,11 @@ class MemoryService:
         pipeline = self._pipeline("_delete")
         if pipeline is None:
             raise NotImplementedError("delete pipeline implementation is not wired yet")
-        return await pipeline.delete(to_delete_pipeline_input(request), to_memory_request_context(auth))
+        ctx = to_memory_request_context(auth)
+        try:
+            return await pipeline.delete(to_delete_pipeline_input(request), ctx)
+        except MemoryNotFoundError as exc:
+            raise ResourceNotFoundError(str(exc), code="memory.not_found") from exc
 
     @traced("memory_service.update")
     async def update(self, auth: AuthContext, request: UpdateRequest) -> UpdatePipelineResult:
@@ -374,7 +610,13 @@ class MemoryService:
         pipeline = self._pipeline("_update")
         if pipeline is None:
             raise NotImplementedError("update pipeline implementation is not wired yet")
-        return await pipeline.update(to_update_pipeline_input(request), to_memory_request_context(auth))
+        ctx = to_memory_request_context(auth, request)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            try:
+                return await pipeline.update(to_update_pipeline_input(request), ctx)
+            except MemoryNotFoundError as exc:
+                raise ResourceNotFoundError(str(exc), code="memory.not_found") from exc
 
     @traced("memory_service.feedback")
     async def feedback(self, auth: AuthContext, request: FeedbackRequest) -> FeedbackPipelineResult:
@@ -388,9 +630,11 @@ class MemoryService:
             raise NotImplementedError("feedback pipeline implementation is not wired yet")
         ctx = to_memory_request_context(auth, request, require_user_id=True)
         payload = to_feedback_pipeline_input(request)
-        if payload.mode == "async":
-            return await pipeline.feedback_async(payload, ctx)
-        return await pipeline.feedback_sync(payload, ctx)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            if payload.mode == "async":
+                return await pipeline.feedback_async(payload, ctx)
+            return await pipeline.feedback_sync(payload, ctx)
 
     @traced("memory_service.dream")
     async def dream(self, auth: AuthContext, request: DreamingRequest) -> DreamingPipelineResult:
@@ -404,13 +648,99 @@ class MemoryService:
             raise NotImplementedError("dreaming pipeline implementation is not wired yet")
         payload = to_dreaming_pipeline_input(request)
         ctx = to_memory_request_context(auth, request)
-        if payload.mode == "sync":
-            return await pipeline.dream_sync(payload, ctx)
-        return await pipeline.dream(payload, ctx)
+        config_ctx = await self._provider_config_context(ctx)
+        with config_ctx:
+            if payload.mode == "sync":
+                return await pipeline.dream_sync(payload, ctx)
+            return await pipeline.dream(payload, ctx)
 
 
 _service: MemoryService | None = None
 _service_key: tuple[str, ...] | None = None
+
+
+def _reject_images_unless_supported(auth: AuthContext, request: AddRequest) -> None:
+    """Keep images away from text-only configurations instead of silently dropping them."""
+
+    if not any(getattr(message, "images", None) for message in request.messages):
+        return
+    if reason := _images_unsupported_reason(auth):
+        raise BadRequestError(f"images {reason}", code="add.images_unsupported")
+
+
+def _images_unsupported_reason(auth: AuthContext) -> str | None:
+    """Why this request may not carry images, or None when it may (reads the request-bound config)."""
+
+    if not binding_for_memory_algorithm(auth.memory_algorithm).supports_images:
+        return f"are not supported by memory_algorithm {auth.memory_algorithm}"
+    if get_config().algo_config.multimodal.mode == "off":
+        return "require algo_config.multimodal.mode basic or enhanced; it is off for this project"
+
+
+def _attach_image_urls(
+    result: SearchPipelineResult,
+    *,
+    project_id: str,
+    store: Any | None = None,
+    expires_seconds: int | None = None,
+) -> None:
+    """Attach ``metadata.image_url`` to search hits that reference a stored image.
+
+    An S3 backend with a public mirror (``blob_store.s3_public_base_url``) gets that
+    permanent URL; otherwise the store returns a short-lived presigned URL clients can
+    GET directly (lazy loading; bytes never transit this API). When presigning yields
+    nothing, the hit falls back to an equally short-lived *signed* proxy URL — the same
+    ``/v1/memory/images/{blob_id}`` route, plus ``project_id``/``expires``/``signature``
+    query params, so it too is a direct GET without an API key. Signed proxy URLs are
+    absolute when ``blob_store.proxy_public_base_url`` is configured (a trusted
+    deployment value — never the request's Host header, which is client-controlled and
+    must not be reflected into a credential-bearing URL) and relative otherwise.
+    ``metadata.blob_id`` remains the stable canonical reference; failures degrade
+    silently — search results never break over URL decoration.
+    """
+
+    hits = [
+        item
+        for item in result.memories
+        if isinstance(getattr(item, "metadata", None), dict) and is_valid_blob_id(item.metadata.get("blob_id") or "")
+    ]
+    if not hits:
+        return
+    try:
+        blob_store = store if store is not None else get_blob_store()
+        cfg = get_config().blob_store
+        proxy_expiry = (
+            expires_seconds
+            if expires_seconds is not None
+            else (cfg.proxy_url_expiry_seconds or cfg.s3_presign_expiry_seconds)
+        )
+        secret = resolve_signing_secret(cfg.url_signing_secret, get_config().auth.gateway_jwt_secret)
+        base = (cfg.proxy_public_base_url or "").rstrip("/")
+        for item in hits:
+            blob_id = item.metadata["blob_id"]
+            url = blob_store.public_url(project_id, blob_id)
+            if url is None:
+                url = blob_store.presigned_get(
+                    project_id,
+                    blob_id,
+                    expires_seconds=expires_seconds if expires_seconds is not None else cfg.s3_presign_expiry_seconds,
+                )
+            # with no signing secret the tier is skipped, not minted with an empty key
+            # (an empty-key HMAC is forgeable by anyone — see resolve_signing_secret)
+            if url is None and secret and item.metadata.get("user_id"):
+                owner = str(item.metadata["user_id"])
+                expires_at = int(time.time()) + proxy_expiry
+                # self-declared ids may hold '&'/'#'/non-ASCII; quote keeps each id one query value
+                signature = image_url_signature(project_id, blob_id, owner, expires_at, secret)
+                url = (
+                    f"{base}/v1/memory/images/{blob_id}"
+                    f"?user_id={quote(owner, safe='')}&project_id={quote(project_id, safe='')}"
+                    f"&expires={expires_at}&signature={signature}"
+                )
+            if url:
+                item.metadata["image_url"] = url
+    except Exception as exc:  # noqa: BLE001 - decoration must never fail the search (e.g. s3 extra missing)
+        logger.warning("search_image_url_decoration_failed", project_id=project_id, error=str(exc))
 
 
 def get_memory_service() -> MemoryService:

@@ -1,0 +1,19 @@
+environment:
+  class_name: livemath
+  config:
+    agent:
+      model: gpt-5.4-mini
+      api_key: null
+      base_url: https://example.com/v1
+      reasoning_effort: medium
+      max_completion_tokens: 16384
+      max_retries: 10
+      timeout_s: 600
+      retry_policy: all
+      retry_max_wait_s: 30
+    evaluator_version: livemath-mcq-v1
+    prompt_version: livemath-math-v1
+samples_file: /Users/cuiyuqi/hw-project/MindMemOs-fastapi/mindmemos-skill-dev-0920/.tmp/skill_forest_repro_20261012/livemath_samples.json
+skills: []
+concurrency: 40
+skill_body_only: true

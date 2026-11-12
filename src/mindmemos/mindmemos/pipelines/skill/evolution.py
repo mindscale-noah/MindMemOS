@@ -32,7 +32,7 @@ from ...components.skill import apply_patch_ops, deserialize_bundle
 from ...config import SkillEvolutionConfig, get_config
 from ...errors import SkillBundleError
 from ...infra.db import get_database_clients
-from ...llm import get_llm_client
+from ...llm import get_llm_client, require_model_endpoint
 from ...logging import get_logger, traced
 from ...mappers import skill_trace_summary_from_record, to_skill_trace_summary_point
 from ...prompts.EN.skills import (
@@ -54,7 +54,7 @@ from ...typing import (
     SkillVersionStatus,
 )
 from ..memory_db import utcnow
-from ..registry import PipelineType, create_pipeline, register
+from ..registry import create_pipeline, register
 from .version_store import SkillVersionStore, get_skill_version_store
 
 logger = get_logger(__name__)
@@ -83,7 +83,7 @@ class _Candidate:
         self.task_id = task_id
 
 
-@register(type=PipelineType.SKILL_EVOLVE, name="trace_v2_summary")
+@register(type="skill_evolve", name="trace_v2_summary")
 class SkillEvolver:
     """Orchestrates summarize -> aggregate -> patch -> mint version for one skill.
 
@@ -91,7 +91,7 @@ class SkillEvolver:
     ``skill-rl``'s offline ``trace_v2_summary``); the active version is chosen via
     ``get_config().pipelines["skill_evolve"]``, like the ``add`` / ``search``
     pipeline families. Add new algorithm versions by registering another class
-    under ``type=PipelineType.SKILL_EVOLVE``.
+    under ``type="skill_evolve"``.
 
     Repositories and the LLM client are resolved lazily from the process globals
     so the evolver survives ``reset_*`` in tests/config reloads; they can be
@@ -127,7 +127,10 @@ class SkillEvolver:
     @property
     def llm(self):
         """Return the configured LLM client."""
-        return self._llm if self._llm is not None else get_llm_client()
+        if self._llm is not None:
+            return self._llm
+        require_model_endpoint("chat")
+        return get_llm_client()
 
     @traced("skill_evolver.evolve")
     async def evolve(self, *, project_id: str, cloud_skill_id: str) -> SkillEvolveResult:
@@ -433,7 +436,7 @@ class SkillEvolver:
             project_id=project_id, cloud_skill_id=cloud_skill_id, version_id=head.version_id
         )
         files = deserialize_bundle(content.content)
-        # The local and cloud bundle both contain only SKILL.md.
+        # The canonical bundle keys are basenames; SKILL.md is the only whitelisted file.
         return files.get("SKILL.md", "")
 
     @staticmethod
@@ -516,6 +519,6 @@ def get_skill_evolver() -> Any:
     global _evolver, _evolver_name
     name = get_config().pipelines["skill_evolve"]
     if _evolver is None or _evolver_name != name:
-        _evolver = create_pipeline(type=PipelineType.SKILL_EVOLVE, name=name)
+        _evolver = create_pipeline(type="skill_evolve", name=name)
         _evolver_name = name
     return _evolver

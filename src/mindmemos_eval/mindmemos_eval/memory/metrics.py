@@ -211,13 +211,13 @@ async def collect_clickhouse_metrics(run: BenchmarkRunRef, config: ClickHouseCol
         return {"enabled": True, "llm_call_count": 0, "llm_by_task": []}
 
     try:
-        totals = await asyncio.to_thread(_query_clickhouse_json, config, _llm_totals_sql(run, request_ids, config))
-        by_task = await asyncio.to_thread(_query_clickhouse_json, config, _llm_by_task_sql(run, request_ids, config))
+        totals = await asyncio.to_thread(_query_clickhouse_json, config, _llm_totals_sql(run, config))
+        by_task = await asyncio.to_thread(_query_clickhouse_json, config, _llm_by_task_sql(run, config))
         token_percentiles = await asyncio.to_thread(
-            _query_clickhouse_json, config, _llm_token_percentiles_sql(run, request_ids, config)
+            _query_clickhouse_json, config, _llm_token_percentiles_sql(run, config)
         )
         search_token_perc = await asyncio.to_thread(
-            _query_clickhouse_json, config, _search_token_percentiles_sql(run, request_ids, config)
+            _query_clickhouse_json, config, _search_token_percentiles_sql(run, config)
         )
     except Exception as exc:  # noqa: BLE001 - collector should keep producing Qdrant metrics.
         if config.strict:
@@ -383,15 +383,9 @@ def _eval_qa_token_series(row: dict[str, Any]) -> dict[str, list[float]]:
     series: dict[str, list[float]] = {"answer": [], "judge": []}
 
     if benchmark == "locomo":
-        qa_lists = [
-            conv.get("qa_results") or []
-            for conv in (er.get("conversations") or [])
-        ]
+        qa_lists = [conv.get("qa_results") or [] for conv in (er.get("conversations") or [])]
     elif benchmark == "longmemeval":
-        qa_lists = [
-            s.get("qa_results") or []
-            for s in (er.get("samples") or [])
-        ]
+        qa_lists = [s.get("qa_results") or [] for s in (er.get("samples") or [])]
     else:
         return series
 
@@ -450,8 +444,7 @@ def _parse_dt(value: Any) -> datetime | None:
     return None
 
 
-def _llm_totals_sql(run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig) -> str:
-    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
+def _llm_totals_sql(run: BenchmarkRunRef, config: ClickHouseCollectorConfig) -> str:
     table = _qualified_table(config)
     return f"""
 WITH benchmark_traces AS (
@@ -473,8 +466,7 @@ FORMAT JSON
 """.strip()
 
 
-def _llm_by_task_sql(run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig) -> str:
-    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
+def _llm_by_task_sql(run: BenchmarkRunRef, config: ClickHouseCollectorConfig) -> str:
     table = _qualified_table(config)
     return f"""
 WITH benchmark_traces AS (
@@ -500,11 +492,8 @@ FORMAT JSON
 """.strip()
 
 
-def _llm_token_percentiles_sql(
-    run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig
-) -> str:
+def _llm_token_percentiles_sql(run: BenchmarkRunRef, config: ClickHouseCollectorConfig) -> str:
     """Compute token count percentiles per LLM task."""
-    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
     table = _qualified_table(config)
     return f"""
 WITH benchmark_traces AS (
@@ -528,9 +517,7 @@ FORMAT JSON
 """.strip()
 
 
-def _search_token_percentiles_sql(
-    run: BenchmarkRunRef, request_ids: Sequence[str], config: ClickHouseCollectorConfig
-) -> str:
+def _search_token_percentiles_sql(run: BenchmarkRunRef, config: ClickHouseCollectorConfig) -> str:
     """Compute search-stage token totals and per-query percentiles, entirely from ClickHouse.
 
     Groups by TraceId so that all search.* LLM calls within one search request
@@ -539,7 +526,6 @@ def _search_token_percentiles_sql(
     prompt/completion/total token sums so no Qdrant data is needed for search
     token summaries.
     """
-    del request_ids  # project_id + api_key_uuid already scope one benchmark run uniquely.
     table = _qualified_table(config)
     return f"""
 WITH benchmark_traces AS (
@@ -1035,8 +1021,7 @@ def write_metrics_xlsx(path: str | Path, rows: list[dict[str, Any]]) -> None:
     eval_metrics_sheet = wb.create_sheet("eval_metrics")
     all_eval_rows = [[_xlsx_cell(v) for v in _eval_metrics_values(row)] for row in rows]
     non_empty_cols = [
-        i for i, header in enumerate(EVAL_METRICS_HEADERS)
-        if any(row[i] not in (None, "") for row in all_eval_rows)
+        i for i, header in enumerate(EVAL_METRICS_HEADERS) if any(row[i] not in (None, "") for row in all_eval_rows)
     ]
     eval_metrics_sheet.append([EVAL_METRICS_HEADERS[i] for i in non_empty_cols])
     for row in all_eval_rows:

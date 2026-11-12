@@ -1,16 +1,13 @@
 """MindMemOS SDK package."""
 
-from .async_client import AsyncMindMemOSClient
 from .client import MindMemOSClient
-from .config import ConfigManager
+from .config import ConfigManager, SDKConfig
 from .errors import (
     ApiError,
     AuthRequiredError,
     ConfigError,
     InvalidRequestError,
     MindMemOSSDKError,
-    SkillCapabilityUnavailableError,
-    SkillRemoteError,
     TransportError,
 )
 from .memory import (
@@ -20,31 +17,37 @@ from .memory import (
     FeedbackMode,
     FileMessage,
     GetResult,
+    ImageRef,
     MemoryClient,
     SearchResult,
     StatusResult,
     TextMessage,
     UrlMessage,
 )
-from .runtime import SDKPortalRuntime
-from .skills import AsyncSkillClient
+from .skills import AsyncSkillClient, SkillClient
+from .trajectory import TrajectoryDelivery, TrajectoryEvent, TrajectoryMessage, TrajectoryReportResult
 
 __all__ = [
     "__version__",
-    "AsyncMindMemOSClient",
-    "SDKPortalRuntime",
     "MindMemOSClient",
     "MemoryClient",
     "AsyncMemoryClient",
+    "SkillClient",
     "AsyncSkillClient",
+    "TrajectoryDelivery",
+    "TrajectoryEvent",
+    "TrajectoryMessage",
+    "TrajectoryReportResult",
     "FeedbackMode",
     "ConfigManager",
+    "SDKConfig",
     "AddResult",
     "SearchResult",
     "GetResult",
     "StatusResult",
     "TextMessage",
     "DialogueMessage",
+    "ImageRef",
     "UrlMessage",
     "FileMessage",
     "MindMemOSSDKError",
@@ -53,8 +56,6 @@ __all__ = [
     "AuthRequiredError",
     "TransportError",
     "ApiError",
-    "SkillCapabilityUnavailableError",
-    "SkillRemoteError",
 ]
 
-__version__ = "0.1.4"
+__version__ = "1.0.0"

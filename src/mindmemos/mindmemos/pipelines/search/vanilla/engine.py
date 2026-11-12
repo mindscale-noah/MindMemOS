@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC
+from typing import Any
 
+from ....components.multimodal.extraction import IMAGE_BLOB_IDS_KEY
 from ....components.searcher.vanilla import dedup_by_text_similarity
 from ....components.searcher.vanilla._executor import vanilla_dedup_executor
 from ....components.text import SparseVectorEncoder, TextPreprocessor, get_text_preprocessor
@@ -16,7 +18,12 @@ from ....config.algo.search.vanilla.vanilla import (
     VANILLA_HYBRID_PREFETCH_MAX,
     VANILLA_RECALL_SIZE_MAX,
 )
-from ....llm import EmbedClient, get_embed_client
+from ....llm import (
+    EmbedClient,
+    get_embed_client,
+    provider_binding_runtime_enabled,
+    require_model_endpoint,
+)
 from ....logging import get_logger, traced
 from ....mappers import parse_search_dsl
 from ....typing import (
@@ -72,8 +79,9 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
         self._sparse_encoder = sparse_encoder or SparseVectorEncoder(text_cfg)
         self._explicit_search_config: VanillaSearchConfig | None = search_config
 
+        self._explicit_embed_client = embed_client
         self._embed_client: EmbedClient | None = embed_client
-        if self._embed_client is None:
+        if self._embed_client is None and not provider_binding_runtime_enabled():
             try:
                 self._embed_client = get_embed_client()
             except Exception:
@@ -175,12 +183,21 @@ class VanillaSearchEngine(MemoryDbPipelineMixin):
             )
         return candidates
 
+    def _resolve_embed_client(self) -> EmbedClient | None:
+        if self._explicit_embed_client is not None:
+            return self._explicit_embed_client
+        if provider_binding_runtime_enabled():
+            require_model_endpoint("embedding")
+            return get_embed_client()
+        return self._embed_client
+
     async def _encode_dense(self, query: str) -> list[float] | None:
         """Generate a dense embedding; return None when unavailable."""
-        if self._embed_client is None:
+        embed_client = self._resolve_embed_client()
+        if embed_client is None:
             return None
         try:
-            resp = await self._embed_client.embed(task="search.query", text=query)
+            resp = await embed_client.embed(task="search.query", text=query)
             return resp.embeddings[0] if resp.embeddings else None
         except Exception:
             logger.warning("vanilla_search_dense_embed_failed", exc_info=True)
@@ -468,7 +485,19 @@ def _to_memory_search_item(hit: MemoryDbSearchHit, *, lineage: MemoryLineage | N
         event_time=format_memory_event_time(memory, fallback_to_source_timestamp=True) if memory else None,
         source_timestamp=format_source_timestamp(memory) if memory else None,
         lineage=lineage,
+        metadata=_fact_anchor_metadata(memory),
     )
+
+
+def _fact_anchor_metadata(memory: MemoryView | None) -> dict[str, Any]:
+    """The blob ids a fact is anchored to, when it was extracted from image-bearing turns.
+
+    Only this one key is surfaced, and only when present: everything else on the stored view
+    stays internal, so text responses keep their exact shape for memories without anchors.
+    """
+
+    blob_ids = (memory.metadata or {}).get(IMAGE_BLOB_IDS_KEY) if memory else None
+    return {IMAGE_BLOB_IDS_KEY: blob_ids} if blob_ids else {}
 
 
 def _ordered_archived_ids(lineage_by_id: dict[str, list[str]], *, existing_ids: set[str]) -> list[str]:

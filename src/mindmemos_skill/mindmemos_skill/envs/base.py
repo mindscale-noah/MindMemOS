@@ -1,217 +1,193 @@
-"""Base lifecycle for one benchmark rollout attempt."""
+"""Execute and resume one persisted skill evaluation rollout."""
 
-from __future__ import annotations
-
-import re
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from types import TracebackType
-from typing import Any, Generic, TypeVar, cast
+from time import perf_counter
+from typing import ClassVar
 
-from pydantic import BaseModel, JsonValue
-
-from ..agents.base import Agent
-from ..typing import AgentExecutionRequest, EnvConfig, Environment, Reward, Rollout, Skill, Task, Trajectory
-
-EnvConfigT = TypeVar("EnvConfigT", bound=EnvConfig)
-
-
-@dataclass(slots=True)
-class EnvRolloutContext:
-    """Trainer-owned context for one physical rollout attempt."""
-
-    rollout: Rollout
-    """本次物理执行所属的逻辑 rollout 及重试序号；其 ``rollout_id`` 和 ``attempt_no`` 也参与工作目录拼接。"""
-
-    workspace_root: Path | None = None
-    """所有 attempt 工作目录的根路径；为 ``None`` 时不创建目录，最终 ``Environment.running_dir`` 也为 ``None``。"""
-
-    workspace_scope: str = "rollout"
-    """根路径下的业务隔离层级，例如 ``train/epoch 1`` 会转换为 ``train/epoch_1`` 两级目录。
-
-    最终路径为 ``workspace_root / safe(scope各段) / safe(task_id) /
-    safe(rollout_id) / attempt_no``。scope 按 ``/`` 分段，空段、``.`` 和
-    ``..`` 被忽略；每段中的非 ``A-Z a-z 0-9 _ . -`` 字符替换为 ``_``。
-    """
-
-    agent_options: dict[str, JsonValue] = field(default_factory=dict)
-    """仅作用于本次 attempt 的 Agent 执行参数覆盖，原样传入 ``AgentExecutionRequest.options``。"""
-
-    metadata: dict[str, JsonValue] = field(default_factory=dict)
-    """Trainer 附加的可序列化上下文；原样传入请求，并写入环境元数据（环境中另补 ``workspace_scope``）。"""
-
-    env_ref: str = "unknown"
-    """当前物理 attempt 使用的注册 Env 名称；由 scheduler 从 ``RolloutSpec.env_ref`` 传入。"""
+from ..common.input_files import model_file_fingerprints
+from ..common.skill_runtime import restore_assembled_skill
+from ..registry.base import ConfigT, Registrable
+from ..skill import Skill, SkillSet
+from .data.typing import RewardData
+from .typing import RolloutRequest, RolloutResult, Task
 
 
-@dataclass(slots=True)
-class PreparedRollout:
-    """Environment state prepared for one rollout attempt.
+class Environment(Registrable[ConfigT], ABC):
+    """Own rollout persistence while subclasses execute agents and score outputs."""
 
-    ``runtime_state`` may hold non-serializable objects such as a simulator or
-    sidecar client. Only ``environment`` is attached to the persisted
-    trajectory.
-    """
+    task_type: ClassVar[type[Task]] = Task
+    """Public task model used to restore serialized training requests."""
 
-    agent_request: AgentExecutionRequest
-    environment: Environment
-    runtime_state: Any = None
+    reward_data_type: ClassVar[type[RewardData]] = RewardData
+    """Private scoring model used to restore serialized training requests."""
 
+    result_type: ClassVar[type[RolloutResult]] = RolloutResult
+    """Result schema used for validation and resume; override for typed reward subclasses."""
 
-class BaseEnv(ABC, Generic[EnvConfigT]):
-    """Execute and evaluate one rollout attempt.
+    supports_resume: ClassVar[bool] = True
+    """Whether saved rollout results and assembly can be reused; subclasses may disable this capability."""
 
-    Batch planning, sample fan-out and concurrency belong to the trainer. The
-    environment owns per-attempt preparation, execution adaptation, evaluation
-    and teardown.
-    """
+    def input_identity(self, task: Task, reward_data: RewardData) -> dict[str, str]:
+        """Compute external input identities without requiring caller-supplied hashes.
 
-    config_type: type[EnvConfig] = EnvConfig
+        Args:
+            task: Public task containing typed input file paths.
+            reward_data: Private scoring inputs containing typed reference paths.
 
-    def __init__(self, config: EnvConfigT | Mapping[str, Any]) -> None:
-        raw_config = config.model_dump() if isinstance(config, BaseModel) else config
-        self.config = cast(EnvConfigT, self.config_type.model_validate(raw_config))
+        Returns:
+            File paths mapped to content fingerprints. Subclasses include supporting
+            files or external evaluator sources when those also affect execution.
 
-    async def setup(self) -> None:
-        """Initialize instance-level resources before rollouts begin."""
-
-    async def cleanup(self) -> None:
-        """Release instance-level resources after all rollouts finish."""
-
-    async def __aenter__(self) -> BaseEnv[EnvConfigT]:
-        await self.setup()
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        await self.cleanup()
+        Raises:
+            OSError: An input file cannot be read.
+        """
+        return model_file_fingerprints(task, reward_data)
 
     async def rollout(
         self,
-        agent: Agent[Any],
         task: Task,
-        skills: Sequence[Skill],
+        work_dir: str | Path,
         *,
-        context: EnvRolloutContext,
-    ) -> Trajectory:
-        """Execute and evaluate one physical rollout attempt."""
+        reward_data: RewardData,
+        skill_set: SkillSet | None = None,
+        resume: bool = True,
+    ) -> RolloutResult:
+        """Execute a task or load its matching completed result.
 
-        prepared = await self._prepare(task=task, skills=skills, context=context)
-        try:
-            trajectory = await self._execute(agent=agent, prepared=prepared)
+        Args:
+            task: Initial task object passed to the environment implementation.
+            work_dir: Root directory for one independent rollout, containing
+                private audit/ records and an agent-facing workspace/ directory.
+                Concurrent calls must use different roots.
+            skill_set: Candidate collection with task-time selection and bounded
+                parallel assembly, or None for a baseline run.
+            reward_data: Private scoring inputs, persisted only in audit/.
+            resume: Reuse a completed result when True. False reruns matching
+                inputs without clearing agent-created workspace files. Environments
+                with supports_resume=False require resume=False, even on a first run.
 
-            trajectory.reward = await self._evaluate(
-                trajectory=trajectory,
-                prepared=prepared,
-            )
-            return trajectory
-        finally:
-            await self._teardown(prepared)
+        Returns:
+            The validated output, trajectory, and reward.
 
-    async def _prepare(
-        self,
-        *,
-        task: Task,
-        skills: Sequence[Skill],
-        context: EnvRolloutContext,
-    ) -> PreparedRollout:
-        """Create the default workspace and agent execution request."""
-
-        workspace = self._create_workspace(task=task, context=context)
-        running_dir = str(workspace) if workspace is not None else None
-        environment = Environment(
-            env_ref=context.env_ref,
-            running_dir=running_dir,
-            metadata={**context.metadata, "workspace_scope": context.workspace_scope},
-        )
-        return PreparedRollout(
-            agent_request=AgentExecutionRequest(
-                task=task,
-                rollout=context.rollout,
-                environment=environment,
-                skills=list(skills),
-                options=context.agent_options,
-                metadata=context.metadata,
-            ),
-            environment=environment,
-        )
-
-    async def _execute(
-        self,
-        *,
-        agent: Agent[Any],
-        prepared: PreparedRollout,
-    ) -> Trajectory:
-        """Execute through the generic Agent interface.
-
-        Interactive simulator environments may override this hook while
-        retaining the public rollout lifecycle.
+        Raises:
+            NotImplementedError: Resume is requested but the environment does not support it.
+            ValueError: Stored inputs differ, persisted data is invalid, or
+                audit/ or workspace/ is a symbolic link.
+            OSError: The workspace or rollout files cannot be read or written.
+            Exception: Agent execution or scoring failed; no result is cached.
         """
+        if resume and not self.supports_resume:
+            raise NotImplementedError(f"{type(self).__name__} does not support resume; pass resume=False")
+        skill_set = SkillSet({}, max_concurrency=1) if skill_set is None else skill_set
+        if not isinstance(skill_set, SkillSet):
+            raise TypeError("skill_set must be a SkillSet")
+        skills = skill_set.skills
+        request = RolloutRequest(
+            task={
+                "type": f"{type(task).__module__}.{type(task).__qualname__}",
+                "data": task.model_dump(mode="json"),
+            },
+            reward_data={
+                "type": f"{type(reward_data).__module__}.{type(reward_data).__qualname__}",
+                "data": reward_data.model_dump(mode="json"),
+            },
+            skills=[skill.snapshot() for skill in skills.values()],
+            skill_set=skill_set.identity(),
+            environment=f"{type(self).__module__}.{type(self).__qualname__}",
+            config=self.config.model_dump(mode="json"),
+            input_identity=self.input_identity(task, reward_data),
+        )
+        work_dir = Path(work_dir).expanduser().resolve()
+        audit_dir = work_dir / "audit"
+        workspace = work_dir / "workspace"
+        if audit_dir.is_symlink() or workspace.is_symlink():
+            raise ValueError("audit/ and workspace/ must be separate directories, not symbolic links")
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        request_path = audit_dir / "request.json"
+        result_path = audit_dir / "result.json"
 
-        return await agent.execute(prepared.agent_request)
+        previous = None
+        if request_path.exists():
+            previous = RolloutRequest.model_validate_json(request_path.read_text(encoding="utf-8"))
+            source_request = previous.model_copy(
+                update={"assembled_skills": None, "assembled_hashes": None, "selected_skill_ids": None}
+            )
+            # Legacy requests had an ordered static list and no selection policy.
+            if previous.skill_set is None and type(skill_set) is SkillSet:
+                source_request.skill_set = request.skill_set
+            if source_request != request:
+                raise ValueError("Rollout inputs changed; use a new work_dir")
+        elif result_path.exists():
+            raise ValueError("Stored result has no request; use a new work_dir")
+
+        if resume and result_path.exists():
+            if previous is None or previous.assembled_skills is None:
+                raise ValueError("Stored result has no assembled Skill record")
+            result = self.result_type.model_validate_json(result_path.read_text(encoding="utf-8"))
+            if result.started_at is None:
+                raise ValueError("Stored result has no execution timing; rerun with resume=False")
+            return result
+
+        workspace.mkdir(parents=True, exist_ok=True)
+        # Remove a previous completion before a forced rerun can fail.
+        result_path.unlink(missing_ok=True)
+        temporary_request = audit_dir / "request.json.tmp"
+        started_at = datetime.now(timezone.utc)
+        start = perf_counter()
+        if resume and previous is not None and previous.assembled_skills is not None:
+            selected_ids = previous.selected_skill_ids
+            if selected_ids is None:
+                selected_ids = list(skills)
+            prepared_skills = [
+                restore_assembled_skill(skills[key], snapshot)
+                for key, snapshot in zip(selected_ids, previous.assembled_skills, strict=True)
+            ]
+        else:
+            # Clear prior assembly before a forced rerun that may fail to assemble.
+            temporary_request.write_text(request.model_dump_json(indent=2), encoding="utf-8")
+            temporary_request.replace(request_path)
+            selected_ids = list(await skill_set.select(task))
+            prepared_skills = await skill_set.assemble(task, selected_ids=selected_ids)
+        snapshots = [skill.snapshot() for skill in prepared_skills]
+        request.assembled_skills = snapshots
+        request.assembled_hashes = [snapshot.skill_hash for snapshot in snapshots]
+        request.selected_skill_ids = selected_ids
+        request = RolloutRequest.model_validate_json(request.model_dump_json())
+        temporary_request.write_text(request.model_dump_json(indent=2), encoding="utf-8")
+        temporary_request.replace(request_path)
+        if self.input_identity(task, reward_data) != request.input_identity:
+            raise ValueError("Rollout input files changed during assembly; use a new work_dir")
+        result = await self._run(task=task, reward_data=reward_data, skills=prepared_skills, workspace=workspace)
+        if self.input_identity(task, reward_data) != request.input_identity:
+            raise ValueError("Rollout input files changed during execution; use a new work_dir")
+        duration_s = perf_counter() - start
+        finished_at = datetime.now(timezone.utc)
+        result.started_at = started_at
+        result.finished_at = finished_at
+        result.duration_s = duration_s
+        # Revalidate even mutated model instances before publishing completion.
+        result = self.result_type.model_validate_json(result.model_dump_json())
+        temporary_path = audit_dir / "result.json.tmp"
+        temporary_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        temporary_path.replace(result_path)
+        return result
 
     @abstractmethod
-    async def _evaluate(
-        self,
-        *,
-        trajectory: Trajectory,
-        prepared: PreparedRollout,
-    ) -> Reward:
-        """Return the benchmark-specific reward for one trajectory."""
+    async def _run(self, *, task: Task, reward_data: RewardData, skills: list[Skill], workspace: Path) -> RolloutResult:
+        """Run the agent with skills in workspace and score its actual trajectory.
 
-    async def _teardown(self, prepared: PreparedRollout) -> None:
-        """Release resources owned by one attempt without deleting artifacts."""
-
-    def _create_workspace(
-        self,
-        *,
-        task: Task,
-        context: EnvRolloutContext,
-    ) -> Path | None:
-        """Create an isolated workspace for one rollout attempt.
-
-        Existing directories fail fast so retries and concurrent samples cannot
-        silently overwrite artifacts.
+        Skills retain their concrete classes, auxiliary files, and export methods.
+        Their content is already assembled for this task; never reassemble here.
+        Implementations own agent invocation, task preparation, and reward
+        calculation. Pass only workspace and public task materials to the agent.
+        Keep reward_data private and use it only for evaluation.
+        The backend must restrict agent file access to workspace; setting its
+        working directory alone does not prevent access to audit/. Do not change
+        the process working directory. Record all execution-affecting settings in
+        self.config, including agent/model and evaluator versions. Raise on
+        execution or scoring errors; return a Reward for evaluated failures.
+        Aggregate LLM usage, including scoring calls, into result.usage. Timing
+        is populated by rollout and includes assembly and this method.
         """
-
-        if context.workspace_root is None:
-            return None
-
-        scope_parts = [
-            self._safe_path_part(part)
-            for part in context.workspace_scope.split("/")
-            if part and part not in {".", ".."}
-        ]
-        if not scope_parts:
-            raise ValueError("workspace_scope must contain at least one safe path part")
-
-        workspace = (
-            context.workspace_root
-            / Path(*scope_parts)
-            / self._safe_path_part(task.task_id)
-            / self._safe_path_part(context.rollout.rollout_id)
-            / str(context.rollout.attempt_no)
-        )
-        workspace.mkdir(parents=True, exist_ok=False)
-        return workspace
-
-    @staticmethod
-    def _safe_path_part(value: str) -> str:
-        """Return a non-empty filesystem-safe path component."""
-
-        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
-        return safe or "item"
-
-
-__all__ = [
-    "BaseEnv",
-    "EnvConfigT",
-    "EnvRolloutContext",
-    "PreparedRollout",
-]

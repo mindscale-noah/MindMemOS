@@ -5,12 +5,21 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from .memory import (
     AddMode,
     DialogueMessage,
     FileMessage,
+    ImageRef,
     MemoryOperation,
     MemoryType,
     TextMessage,
@@ -19,6 +28,15 @@ from .memory import (
 
 ServiceResultStatus = Literal["ok", "error", "queued"]
 SearchPipelineStrategy = Literal["default", "vanilla", "schema"]
+
+
+class AddStreamCancelled(Exception):
+    """Raised when a streaming add request is cancelled before memory persistence."""
+
+    def __init__(self, stage: str, message: str = "add stream cancelled") -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.message = message
 
 
 def _utc_millis() -> int:
@@ -100,6 +118,9 @@ class MemorySearchItem(BaseModel):
     memory: str
     """Memory content."""
 
+    user_id: str | None = None
+    """Business user associated with this memory, when available."""
+
     memory_type: MemoryType | str = "fact"
     """Standard displayed memory type."""
 
@@ -114,6 +135,30 @@ class MemorySearchItem(BaseModel):
 
     lineage: MemoryLineage | None = None
     """Version lineage metadata populated by vanilla search."""
+
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Business metadata for management views. Image hits additionally carry blob_id (the "
+            "stable re-download id) and, when the blob backend can address the bytes, image_url: a "
+            "permanent public-mirror URL (blob_store.s3_public_base_url), a short-lived presigned "
+            "S3 URL, or a signed /v1/memory/images/{blob_id}?user_id=<owner>&expires=<unix>&"
+            "signature=<hmac> proxy path. All three fetch directly with no API key, the signed "
+            "proxy path until it expires."
+        ),
+    )
+
+    status: str | None = None
+    """Lifecycle status for management views."""
+
+    entity_id: str | None = None
+    """Schema entity id for management views."""
+
+    entity_type: str | None = None
+    """Schema entity type for management views."""
+
+    property_name: str | None = None
+    """Schema property name for management views."""
 
 
 class AddPipelineInput(BaseModel):
@@ -142,6 +187,9 @@ class AddPipelineInput(BaseModel):
     metadata: dict = Field(default_factory=dict)
     """Business extension metadata."""
 
+    prompt_language: Literal["EN", "ZH"] | None = None
+    """Optional request-level prompt language for extraction."""
+
     @property
     def timestamp(self) -> int:
         return self.event_timestamp_ms
@@ -168,8 +216,6 @@ class AddPipelineSyncResult(BaseModel):
     memories: list[MemoryAddEventItem] = Field(default_factory=list)
     """Generated memory events."""
 
-    skill_trajectory: dict[str, str] | None = None
-
 
 class AddPipelineAsyncResult(BaseModel):
     status: ServiceResultStatus = "queued"
@@ -178,14 +224,18 @@ class AddPipelineAsyncResult(BaseModel):
     memories: list[MemoryAddEventItem] = Field(default_factory=list)
     """Always empty in async mode; workers produce the actual write results."""
 
-    skill_trajectory: dict[str, str] | None = None
-
 
 class SearchPipelineInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
     """Search query."""
+
+    query_images: list[ImageRef] = Field(default_factory=list)
+    """Images attached to the query; they make the search multimodal (vanilla, mode basic/enhanced)."""
+
+    multimodal: bool = False
+    """Search stored images too; implied by ``query_images``. False keeps the search text-only."""
 
     filters: dict[str, Any] | None = None
     """Public filter DSL parsed into an internal SearchFilter."""
@@ -202,6 +252,9 @@ class SearchPipelineInput(BaseModel):
     score_threshold: float | None = None
     """Minimum rerank relevance score (0–1). Only effective when rerank=True."""
 
+    token_budget: int | None = Field(default=None, ge=1)
+    """Optional strict token budget; enables token-budget retention post-processing."""
+
     agentic: bool = False
     """Whether to wrap the selected search pipeline in multi-round orchestration."""
 
@@ -210,6 +263,16 @@ class SearchPipelineInput(BaseModel):
 
     include_patches: bool = True
     """Deprecated compatibility flag; vanilla search owns archived-version lineage recall."""
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        # Text-only searches serialize exactly as before images existed (search records).
+        if not self.query_images:
+            data.pop("query_images", None)
+        if not self.multimodal:
+            data.pop("multimodal", None)
+        return data
 
 
 class SearchPipelineResult(BaseModel):
@@ -241,6 +304,75 @@ class GetPipelineResult(BaseModel):
     """Failure reason when get cannot be completed."""
 
 
+class MemoryListPipelineInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, Any] | None = None
+    """Public filter DSL; None returns project-scoped memories."""
+
+    page: int = Field(default=1, ge=1)
+    """1-based page number for management-style pagination."""
+
+    page_size: int = Field(default=20, ge=1)
+    """Number of memories returned per page."""
+
+    include_total: bool = True
+    """Whether to calculate the total matching memory count."""
+
+    include_inactive: bool = False
+    """Whether management list responses include non-active memories."""
+
+
+class MemoryListPipelineResult(BaseModel):
+    status: ServiceResultStatus = "ok"
+    """Service completion status."""
+
+    memories: list[MemorySearchItem]
+    """Returned memories."""
+
+    page: int
+    """1-based page number echoed from the request."""
+
+    page_size: int
+    """Page size echoed from the request."""
+
+    total: int | None = None
+    """Total matching memories when requested."""
+
+    has_more: bool = False
+    """Whether another page is available."""
+
+    message: str | None = None
+    """Failure reason when list cannot be completed."""
+
+
+class MemoryScrollPipelineInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, Any] | None = None
+    """Public filter DSL; None returns project-scoped memories."""
+
+    limit: int = Field(default=100, ge=1)
+    """Maximum memories returned from this cursor position."""
+
+    cursor: str | None = None
+    """Opaque cursor returned by the previous scroll page."""
+
+
+class MemoryScrollPipelineResult(BaseModel):
+    status: ServiceResultStatus = "ok"
+    """Service completion status."""
+
+    memories: list[MemorySearchItem]
+    """Returned memories."""
+
+    next_cursor: str | None = None
+    """Cursor for the next page, or None when the scan is complete."""
+
+    message: str | None = None
+    """Failure reason when scroll cannot be completed."""
+
+
 class DeletePipelineInput(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -262,8 +394,14 @@ class UpdatePipelineInput(BaseModel):
     id: str = Field(alias="memory_id")
     """Memory ID."""
 
-    content: str
+    content: str | None = None
     """New content for the target memory."""
+
+    metadata_patch: dict[str, Any] = Field(default_factory=dict)
+    """Optional metadata fields merged into the memory metadata."""
+
+    status: Literal["active", "archived"] | None = None
+    """Optional lifecycle status patch."""
 
 
 class UpdatePipelineResult(BaseModel):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from ....config import VanillaAddConfig
 from ....typing import DialogueMessage, TextMessage, Turn, TurnBoundary, TurnMessageRef
+from ...text.token_estimator import estimate_tokens
 
 _STANDARD_ROLES = {"user", "assistant", "system", "tool"}
 
@@ -20,14 +21,7 @@ def _estimate_tokens(text: str) -> int:
     Chinese text (no spaces between words) is estimated at ~1.5 chars per token.
     This is intentionally simple and deterministic — no LLM or tiktoken dependency.
     """
-    if not text:
-        return 0
-    # Heuristic: count CJK characters and latin words separately
-    cjk = sum(1 for ch in text if "一" <= ch <= "鿿" or "㐀" <= ch <= "䶿")
-    non_cjk_text = "".join(" " if ("一" <= ch <= "鿿" or "㐀" <= ch <= "䶿") else ch for ch in text)
-    latin_words = len(non_cjk_text.split())
-    # CJK: ~1.5 chars per token; Latin: ~1 word per token
-    return int(cjk / 1.5) + latin_words
+    return estimate_tokens(text)
 
 
 class TurnGrouper:

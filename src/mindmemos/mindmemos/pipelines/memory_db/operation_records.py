@@ -18,6 +18,7 @@ from ...typing import (
     SearchPipelineResult,
     SkillBinding,
 )
+from ...workers.legacy_skill_trajectory import enqueue_legacy_trajectory, legacy_skill_relay_enabled
 from .add_record_store import AddRecordStore
 
 logger = get_logger(__name__)
@@ -29,6 +30,15 @@ class MemoryOperationRecorder:
 
     def __init__(self, *, add_record_store: AddRecordStore | None = None) -> None:
         self._add_records = add_record_store or AddRecordStore()
+
+    async def _patch_add_record(self, project_id: str, add_record_id: str, payload: dict[str, object]) -> None:
+        """Save lifecycle fields and relay the updated input when it has Skill bindings."""
+        await self._add_records.patch(project_id, add_record_id, payload)
+        if not legacy_skill_relay_enabled():
+            return
+        records = await self._add_records.get_by_ids(project_id, [add_record_id])
+        if records and records[0].payload.get("skill_bindings"):
+            enqueue_legacy_trajectory(project_id, add_record_id)
 
     async def record_add(
         self,
@@ -66,6 +76,8 @@ class MemoryOperationRecorder:
             extra_payload=extra_payload,
         )
         await self._add_records.append(point)
+        if skill_bindings:
+            enqueue_legacy_trajectory(ctx.project_id, point.add_record_id)
         return point.add_record_id
 
     async def record_add_input(
@@ -79,7 +91,6 @@ class MemoryOperationRecorder:
         skill_bindings: list[SkillBinding] | None = None,
         score: float | None = None,
         task_id: str | None = None,
-        extra_payload: dict | None = None,
     ) -> str:
         """Write the add input record up front, before the output is known.
 
@@ -101,17 +112,16 @@ class MemoryOperationRecorder:
             score=score,
             task_id=task_id,
             status=status,
-            extra_payload=extra_payload,
         )
         await self._add_records.append(point)
+        if skill_bindings:
+            enqueue_legacy_trajectory(ctx.project_id, point.add_record_id)
         return point.add_record_id
 
     async def mark_add_processing(self, ctx: MemoryRequestContext, add_record_id: str) -> None:
         """Mark an async add record as being processed by a worker."""
 
-        await self._add_records.patch(
-            ctx.project_id, add_record_id, {"status": "processing", "processing_at": utcnow()}
-        )
+        await self._patch_add_record(ctx.project_id, add_record_id, {"status": "processing", "processing_at": utcnow()})
 
     async def mark_add_completed(
         self,
@@ -123,7 +133,7 @@ class MemoryOperationRecorder:
         if add_record_id is None:
             raise ValueError("Missing record id, cannot complete add record writeback")
 
-        await self._add_records.patch(
+        await self._patch_add_record(
             ctx.project_id,
             add_record_id,
             {
@@ -153,7 +163,7 @@ class MemoryOperationRecorder:
         records = await self._add_records.get_by_ids(ctx.project_id, [add_record_id])
         memories = list(records[0].payload.get("memories") or []) if records else []
         memories.extend(event.model_dump(mode="python") for event in events)
-        await self._add_records.patch(
+        await self._patch_add_record(
             ctx.project_id,
             add_record_id,
             {"status": "ok", "task_completed_at": utcnow(), "memories": memories},
@@ -162,12 +172,25 @@ class MemoryOperationRecorder:
     async def mark_add_failed(self, ctx: MemoryRequestContext, add_record_id: str, error: str) -> None:
         """Patch an async add record with worker failure details."""
 
-        await self._add_records.patch(
+        await self._patch_add_record(
             ctx.project_id,
             add_record_id,
             {
                 "status": "error",
                 "error": error,
+                "task_completed_at": utcnow(),
+            },
+        )
+
+    async def mark_add_cancelled(self, ctx: MemoryRequestContext, add_record_id: str, reason: str) -> None:
+        """Patch an add record when streaming work is explicitly cancelled."""
+
+        await self._patch_add_record(
+            ctx.project_id,
+            add_record_id,
+            {
+                "status": "cancelled",
+                "error": reason,
                 "task_completed_at": utcnow(),
             },
         )

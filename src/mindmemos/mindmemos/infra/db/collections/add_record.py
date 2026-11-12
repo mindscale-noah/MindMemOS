@@ -6,8 +6,19 @@ from typing import Any
 
 from qdrant_client import models as qmodels
 
+from ..filters import build_filter, match_value
 from ..models import AddRecordPoint, QdrantRecord
 from .base import CollectionRepository
+
+PROVENANCE_FIELDS = (
+    "add_record_id",
+    "project_id",
+    "request_id",
+    "source_type",
+    "input_type",
+    "request_submitted_at",
+    "added_at",
+)
 
 
 class AddRecordRepository(CollectionRepository):
@@ -20,20 +31,42 @@ class AddRecordRepository(CollectionRepository):
     async def upsert(self, points: list[AddRecordPoint]) -> None:
         """Upsert many add-record points."""
 
-        await self._engine.upsert(
-            self.collection,
-            [self._payload_point(point.add_record_id, point.payload) for point in points],
+        await self._upsert_payload_points_by_project(
+            [(point.add_record_id, point.payload) for point in points],
         )
+        for project_id in {str(point.payload.get("project_id") or "") for point in points}:
+            self.read_cache.invalidate(project_id)
+
+    async def memory_provenance(
+        self, project_id: str, memory_id: str, *, add_record_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Find a source using the indexed Add Record output, never its input."""
+
+        async def load() -> dict[str, Any] | None:
+            records = (
+                await self._retrieve_scoped(project_id, [add_record_id], payload_fields=list(PROVENANCE_FIELDS))
+                if add_record_id
+                else []
+            )
+            if not records:
+                records, _ = await self._scroll_scoped(
+                    project_id,
+                    filter_=build_filter(must=[match_value("memories[].memory_id", memory_id)]),
+                    limit=1,
+                    payload_fields=list(PROVENANCE_FIELDS),
+                )
+            if not records:
+                return None
+            result = {key: records[0].payload[key] for key in PROVENANCE_FIELDS if key in records[0].payload}
+            result["add_record_id"] = str(records[0].point_id)
+            return result
+
+        return await self.read_cache.get(project_id, ("provenance", memory_id, add_record_id), load)
 
     async def get(self, project_id: str, add_record_id: str) -> QdrantRecord | None:
-        """Retrieve one add-record by id, scoped to ``project_id``.
+        """Retrieve one add-record by id, scoped to ``project_id``."""
 
-        Used by skill trace rebind to patch the ``skill_bindings`` of a specific
-        trace once its skill content is registered (design §2.1).
-        """
-
-        records = await self._engine.retrieve(self.collection, [add_record_id])
-        return self._engine.first_project_match(records, project_id)
+        return await self._get_one_scoped(project_id, add_record_id)
 
     async def retrieve(self, project_id: str, add_record_ids: list[str]) -> list[QdrantRecord]:
         """Retrieve many add-records by id, keeping only records in ``project_id``."""
@@ -63,13 +96,7 @@ class AddRecordRepository(CollectionRepository):
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll add-record points across projects for internal workers."""
 
-        return await self._engine.scroll(
-            self.collection,
-            scroll_filter=filter_,
-            limit=limit,
-            offset=cursor,
-            order_by=order_by,
-        )
+        return await self._scroll_payload_global(filter_=filter_, limit=limit, cursor=cursor, order_by=order_by)
 
     async def patch(self, project_id: str, add_record_id: str, payload: dict[str, Any]) -> None:
         """Set payload fields after project ownership is checked."""
@@ -77,4 +104,5 @@ class AddRecordRepository(CollectionRepository):
         record = await self.get(project_id, add_record_id)
         if record is None:
             return
-        await self._engine.set_payload(self.collection, add_record_id, payload)
+        await self._engine.set_payload(self.collection_for_project(), add_record_id, payload)
+        self.read_cache.invalidate(project_id)

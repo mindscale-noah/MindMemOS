@@ -1,13 +1,12 @@
 [project]
 name = "mindmemos-sdk"
-version = "0.1.4"
+version = "1.0.0"
 description = "Python SDK and CLI for MindMemOS"
 readme = "README.md"
 authors = []
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "httpx>=0.28.1",
-    "mindmemos-skill>=0.1.0",
     "pydantic",
     "pyyaml",
 ]

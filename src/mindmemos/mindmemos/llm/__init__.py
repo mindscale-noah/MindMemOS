@@ -14,6 +14,7 @@ helpers and LiteLLM lifecycle cleanup).
 from ..typing import ChatResponse, EmbeddingResponse, RerankHit, RerankResponse, Usage
 from .chat import LLMClient
 from .embedding import EmbedClient
+from .mm_embedding import ImageInput, MmEmbedClient, get_mm_embed_client
 from .registry import (
     close_llm_clients,
     get_embed_client,
@@ -26,12 +27,15 @@ from .registry import (
     validate_embedding_dimension,
 )
 from .rerank import RerankClient
+from .runtime import provider_binding_runtime_enabled, require_model_endpoint
 
 __all__ = [
     "ChatResponse",
     "EmbedClient",
     "EmbeddingResponse",
+    "ImageInput",
     "LLMClient",
+    "MmEmbedClient",
     "RerankClient",
     "RerankHit",
     "RerankResponse",
@@ -39,7 +43,10 @@ __all__ = [
     "close_llm_clients",
     "get_embed_client",
     "get_llm_client",
+    "get_mm_embed_client",
     "get_rerank_client",
+    "provider_binding_runtime_enabled",
+    "require_model_endpoint",
     "init_embed_client",
     "init_llm_client",
     "init_rerank_client",

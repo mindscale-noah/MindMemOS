@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ...errors import MemoryNotFoundError
 from ...typing import (
     DeletePipelineInput,
     DeletePipelineResult,
@@ -10,10 +11,10 @@ from ...typing import (
     MemoryRequestContext,
 )
 from ..base import MemoryDbPipelineMixin
-from ..registry import PipelineType, register
+from ..registry import register
 
 
-@register(type=PipelineType.DELETE, name="default_delete")
+@register(type="delete", name="default_delete")
 class DefaultDeletePipeline(MemoryDbPipelineMixin):
     """Archive one memory through the project-scoped memory DB writer."""
 
@@ -36,5 +37,5 @@ class DefaultDeletePipeline(MemoryDbPipelineMixin):
         if result is None:
             return DeletePipelineResult(status="error", message=f"memory delete not applied: {inp.id}")
         if not result.changed:
-            return DeletePipelineResult(status="error", message=f"memory not found: {inp.id}")
+            raise MemoryNotFoundError(inp.id)
         return DeletePipelineResult(status="ok", message=None)

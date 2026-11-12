@@ -1,43 +1,34 @@
-"""Protocol shared by complete Skill evolution algorithms."""
+"""Contract for passive skill evolution from historical trajectories."""
 
-from __future__ import annotations
+from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
-from collections.abc import Iterable, Mapping
-from typing import Any, ClassVar, Protocol, runtime_checkable
-
-from ...typing import EvolveInput, EvolveOutput, Trajectory
-
-
-class EvolveAlgorithmContext(Protocol):
-    """Application dependencies exposed to configurable evolution algorithms."""
-
-    models: Mapping[str, Any]
-    agents: Mapping[str, Any]
+from ...registry.base import ConfigT
+from ...skill import Skill
+from ..base import Algorithm
+from .typing import SkillTrajectory
 
 
-@runtime_checkable
-class EvolveAlgorithm(Protocol):
-    """A complete algorithm that evolves an input Skill without persisting it."""
+class SkillEvolver(Algorithm[ConfigT], ABC):
+    """Optimize one skill from existing trajectories without executing tasks.
 
-    algorithm_name: ClassVar[str]
+    The caller collects and selects trajectories before evolution starts.
+    Implementations and their dependencies must not access databases, fetch
+    additional records, or invoke environments. Model calls for analysis and
+    rewriting are allowed. The caller persists and optionally evaluates the
+    returned skill. Register implementations with Algorithm.register.
+    """
 
-    async def evolve(self, request: EvolveInput) -> EvolveOutput:
-        """Execute the evolution run and return an unpersisted result."""
-        ...
+    @abstractmethod
+    async def evolve(self, *, skill: Skill, trajectories: Sequence[SkillTrajectory]) -> Skill:
+        """Optimize a supplied skill using existing trajectories.
 
+        Args:
+            skill: Initial skill snapshot; must not be mutated.
+            trajectories: Materialized historical execution records supplied
+                before evolution starts; must not be mutated.
 
-def trajectories_from_rollouts(outcomes: Iterable[Any]) -> list[Trajectory]:
-    """Return every physical attempt trajectory once, including failed retries."""
-
-    trajectories: list[Trajectory] = []
-    seen: set[str] = set()
-    for outcome in outcomes:
-        for attempt in outcome.attempts:
-            trajectory = attempt.trajectory
-            if trajectory is not None and trajectory.trajectory_id not in seen:
-                seen.add(trajectory.trajectory_id)
-                trajectories.append(trajectory)
-    return trajectories
-
-
-__all__ = ["EvolveAlgorithm", "EvolveAlgorithmContext", "trajectories_from_rollouts"]
+        Returns:
+            The evolved skill candidate without executing tasks or writing
+            to a database.
+        """

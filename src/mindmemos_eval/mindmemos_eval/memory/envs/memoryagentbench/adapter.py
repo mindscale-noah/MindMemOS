@@ -28,7 +28,7 @@ class MemoryAgentBenchAdapter:
         args: argparse.Namespace,
     ) -> dict[str, Any]:
         """Run MemoryAgentBench using the dedicated eval environment."""
-        del ctx, judge_llm  # MAB scores via text metrics, not a separate LLM judge
+        # BenchmarkAdapter requires ctx and judge_llm; MAB uses deterministic text metrics.
         runner = getattr(args, "runner_config", None)
         if runner is None:
             runner = _merged_runner_config(args)
@@ -70,7 +70,6 @@ class MemoryAgentBenchAdapter:
             max_context_concurrency=runner.max_conv_concurrency,
             max_qa_concurrency=runner.max_qa_concurrency,
             add=runner.add,
-            dreaming_after_add=runner.dreaming_after_add,
             score=runner.score,
             max_queries=max_queries,
             show_progress=runner.show_progress,

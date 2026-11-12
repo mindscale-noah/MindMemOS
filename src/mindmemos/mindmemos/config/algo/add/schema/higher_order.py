@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class SchemaAddHigherOrderConfig:
-    """Higher-order property generation configuration."""
+    """Higher-order property generation configuration (v1 flow)."""
 
     enabled: bool = field(default=True)
     """Whether updated non-episode entities trigger higher-order property generation."""

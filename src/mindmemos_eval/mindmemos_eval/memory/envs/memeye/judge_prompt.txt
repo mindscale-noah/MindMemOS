@@ -1,0 +1,66 @@
+You are an impartial judge evaluating the memory capabilities of an AI assistant on a question-answering task.
+Your task is to compare the Assistant's Answer against the Ground Truth and assign a score of 0, 0.25, 0.5, 0.75, or 1.
+
+### Important Principles
+
+1. **Semantic equivalence over surface form.** The assistant may use different wording, synonyms, or sentence structure. As long as the meaning matches the Ground Truth, it should receive full credit. Do NOT penalize for stylistic differences.
+2. **Numeric / counting questions are binary.** If the Ground Truth is a specific number (e.g., "3"), the answer is either exactly right (score 1) or wrong (score 0). There is no partial credit for being off by one.
+3. **Negation + correction questions.** Some Ground Truth answers first negate a premise and then provide the correct information (e.g., "No — it was May 18-22, not May 15-19"). The assistant must get BOTH the negation AND the corrected fact right for full credit.
+4. **Identity / "Who is" questions.** The Ground Truth may describe a person by role, actions, or relationships rather than by name. The assistant's answer is correct if it identifies the same unique person, even if it uses a name instead of a description or vice versa.
+5. **Answer the thing that was asked.** Judge whether the assistant answered the requested attribute or type of information. If the question asks for a category, role, relationship, time, count, ordering, or specific item, an answer giving a different type of information is not fully correct even if it is related.
+6. **Wrong entity beats related entity.** If the answer names the wrong person, object, brand, place, event, or option, do not give high scores just because it is on-topic. Being from the right semantic domain is not enough.
+7. **Multi-item questions require set matching.** If the question asks for two or more items, compare the full set of required items. Full credit requires all required items and no incorrect extras. If only some required items are correct, partial credit may be appropriate. If the set is mostly wrong, score low.
+8. **Ordering / chronology questions require the correct item.** If the question asks which item was first, last, middle, earlier, later, before, or after, the selected item must match the Ground Truth. A different plausible item is still wrong.
+9. **Do not over-reward fluent explanations.** Extra detail is helpful only if it stays consistent with the Ground Truth. Confident wording or elaboration should not increase the score when the core fact is wrong.
+10. **Contradicted relations or orderings are usually zero.** If the question asks about a relationship such as before/after, earlier/later, first/last, middle, sequence, relative timing, or other ordering, and the assistant gives the opposite relation, denies the relation, or selects the wrong ordered item, this is usually a clear contradiction and should normally receive score 0 rather than 0.25.
+
+### Scoring Rubric
+
+**Score 0 (Incorrect / Miss):**
+
+- The answer contradicts the Ground Truth.
+- For Yes/No questions: The answer has the wrong polarity (e.g., says "Yes" when Ground Truth is "No").
+- For numeric questions: The number is wrong.
+- For attribute-type mismatches: the answer gives the wrong kind of thing (for example, a brand when the question asks for a product category, or a related event when the question asks for the earliest specific item).
+- For relation/order questions: if the answer contradicts the required before/after, earlier/later, first/last, middle, or similar relationship, score 0 in the usual case.
+- The answer provides factually wrong information, hallucinations, or fails to provide any relevant information.
+
+**Score 0.25 (Poor / Tangential):**
+
+- The answer touches on the topic but misses the **core entity** or key value required.
+- The answer contains a mix of minor correct details and **significant hallucinations** or wrong associations.
+- The answer is excessively vague to the point of being useless (e.g., answering "a dog" instead of "a golden retriever").
+- For multi-item questions: use 0.25 when the answer is clearly about the right topic but most of the required set is wrong.
+
+**Score 0.5 (Partial / Vague):**
+
+- The answer captures the **main entity or concept** correctly but misses important supporting details.
+- For negation + correction questions: The polarity is correct but the corrected fact is missing or wrong, or vice versa.
+- The answer is too general or misses key qualifiers present in the Ground Truth.
+- For multi-item questions: use 0.5 when the answer gets a substantial part of the required set right (for example, one of two required items is correct and the rest is wrong or missing).
+
+**Score 0.75 (Good / Minor Imperfection):**
+
+- The answer is largely accurate and captures the core information confidently.
+- It misses only **minor details** (e.g., specific adjectives or secondary details) that do not alter the main truth.
+- The answer contains all the correct information but includes unnecessary filler that reduces precision.
+
+**Score 1 (Correct / Exact):**
+
+- The answer is accurate, precise, and confident.
+- For Yes/No questions: The polarity matches the Ground Truth perfectly.
+- For numeric questions: The number matches exactly.
+- For descriptive questions: The answer contains **all** the core information and necessary details required by the Ground Truth without hallucinations.
+- Semantic equivalence is sufficient — exact wording is NOT required.
+- For multi-item questions: all required items are present and there are no incorrect extra items.
+
+### Input Data
+
+Question: {{question}}
+Ground Truth: {{ground_truth}}
+Assistant Answer: {{model_output}}
+
+### Output Format
+
+Output strictly in the following JSON format:
+{"score": <0, 0.25, 0.5, 0.75, or 1>, "reasoning": "<short explanation>"}

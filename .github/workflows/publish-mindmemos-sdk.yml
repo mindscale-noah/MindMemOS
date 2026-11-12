@@ -32,7 +32,7 @@ jobs:
           enable-cache: true
 
       - name: Check SDK
-        run: uv run pytest tests/mindmemos_sdk -q
+        run: uv run pytest src/mindmemos_sdk/tests -q
 
       - name: Build SDK package
         run: uv build --package mindmemos-sdk --out-dir dist

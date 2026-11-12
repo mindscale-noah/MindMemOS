@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from ..logging import get_logger
 from .algo import MemoryAlgoConfig
 from .base import build, frozen_field, secret_field
+from .multimodal import BlobStoreConfig, MmEmbedRouterConfig
 from .validation import validate_config
 
 T = TypeVar("T")
@@ -86,6 +87,22 @@ def _merge_kafka_env(data: dict) -> dict:
 def _merge_telemetry_env(data: dict) -> dict:
     telemetry = data.setdefault("telemetry", {})
     _set_if_env(telemetry, "telemetry_endpoint", "MINDMEMOS_TELEMETRY_ENDPOINT")
+    return data
+
+
+def _merge_blob_env(data: dict) -> dict:
+    """Overlay blob store S3 connection settings from the environment (deploy secrets / compose ports)."""
+    blob = data.setdefault("blob_store", {})
+    _set_if_env(blob, "s3_endpoint", "MINDMEMOS_S3_ENDPOINT")
+    _set_if_env(blob, "s3_bucket", "MINDMEMOS_S3_BUCKET")
+    _set_if_env(blob, "s3_access_key", "MINDMEMOS_S3_ACCESS_KEY")
+    _set_if_env(blob, "s3_secret_key", "MINDMEMOS_S3_SECRET_KEY")
+    _set_if_env(blob, "s3_public_base_url", "MINDMEMOS_S3_PUBLIC_BASE_URL")
+    _set_if_env(blob, "s3_presign_endpoint", "MINDMEMOS_S3_PRESIGN_ENDPOINT")
+    _set_if_env(blob, "s3_presign_expiry_seconds", "MINDMEMOS_S3_PRESIGN_EXPIRY_SECONDS", caster=int)
+    _set_if_env(blob, "proxy_url_expiry_seconds", "MINDMEMOS_PROXY_URL_EXPIRY_SECONDS", caster=int)
+    _set_if_env(blob, "proxy_public_base_url", "MINDMEMOS_PROXY_PUBLIC_BASE_URL")
+    _set_if_env(blob, "url_signing_secret", "MINDMEMOS_URL_SIGNING_SECRET")
     return data
 
 
@@ -178,6 +195,9 @@ class ModelEndpointConfig:
     api_base: str
     """Model API base URL."""
 
+    transport: str = "litellm"
+    """Execution transport: upstream LiteLLM or the private Platform gateway."""
+
     rpm: int | None = None
     """Allowed requests per minute."""
 
@@ -226,6 +246,9 @@ class ModelRouterConfig:
 
     cool_down: int | float | None = None
 
+    retry_after: int | float = 0
+    """Minimum delay in seconds before LiteLLM retries a failed endpoint."""
+
     format_parser_max_attempts: int = 3
     """Maximum chat generations when format_parser rejects model output."""
 
@@ -269,23 +292,23 @@ class QdrantConfig:
     search_record_collection: str = field(default="search_record_v1")
     """Qdrant search request/response record collection name"""
 
+    image_collection: str = field(default="image_item_v1")
+    """Qdrant image collection (multimodal algorithms); sized by ``mm_embed_model_router`` dimensions"""
+
     skill_version_collection: str = field(default="skill_version_v1")
     """Qdrant skill version metadata collection name"""
 
     skill_blob_collection: str = field(default="skill_blob_v1")
     """Qdrant skill bundle content (dedup) collection name"""
 
-    skill_family_collection: str = field(default="skill_family_v1")
-    """Qdrant cloud Skill family pointer and revision collection"""
-
-    skill_operation_collection: str = field(default="skill_operation_v1")
-    """Qdrant idempotent cloud Skill operation ledger collection"""
-
     skill_trace_pending_collection: str = field(default="skill_trace_pending_v1")
     """Qdrant pending skill-trace collection name"""
 
     skill_trace_summary_collection: str = field(default="skill_trace_summary_v1")
     """Qdrant skill trajectory-summary collection name (self-evolution input)"""
+
+    provider_binding_collection: str = field(default="provider_binding_v1")
+    """Qdrant dynamic provider binding collection name."""
 
     semantic_vector_name: str = field(default="semantic")
     """Dense semantic vector name."""
@@ -295,6 +318,9 @@ class QdrantConfig:
 
     vector_size: int = field(default=1024)
     """Semantic embedding dimension."""
+
+    project_collection_namespace_enabled: bool = field(default=False)
+    """Create dimension-shared vector collections so projects can use different embedding dimensions."""
 
     distance: str = field(default="Cosine")
     """Dense vector distance function: Cosine, Euclid, Dot, or Manhattan."""
@@ -391,26 +417,12 @@ class Neo4jConfig:
 
 
 @dataclass
-class SkillDatabaseConfig:
-    """Relation database used only by the cloud Skill control plane."""
-
-    provider: str = field(default_factory=lambda: _env_str("MINDMEMOS_SKILL_DB_PROVIDER", "sqlite") or "sqlite")
-    path: str = field(default_factory=lambda: _env_str("MINDMEMOS_SKILL_DB_PATH", "./data/skill-cloud.db") or "./data/skill-cloud.db")
-    dsn: str | None = secret_field(default_factory=lambda: _env_str("MINDMEMOS_SKILL_DB_DSN"))
-    pool_size: int = field(default_factory=lambda: _env_int("MINDMEMOS_SKILL_DB_POOL_SIZE", 10))
-    auto_create: bool = field(default_factory=lambda: _env_bool("MINDMEMOS_SKILL_DB_AUTO_CREATE", True))
-
-
-@dataclass
 class DatabaseConfig:
     qdrant: QdrantConfig = field(default_factory=QdrantConfig)
     """Qdrant configuration."""
 
     neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
     """Neo4j configuration."""
-
-    skill: SkillDatabaseConfig = field(default_factory=SkillDatabaseConfig)
-    """Relational Skill control-plane configuration."""
 
     default_consistency: str = field(default="fast")
     """Default write consistency: fast or strong."""
@@ -453,6 +465,12 @@ class AuthConfig:
 
     gateway_jwt_audience: str = field(default="memory-data-plane")
     """Expected audience for Gateway JWTs."""
+
+
+@dataclass
+class ProviderBindingConfig:
+    enabled: bool = field(default=False)
+    """Whether dynamic provider binding is enabled."""
 
 
 @dataclass
@@ -580,6 +598,9 @@ class MemoryConfig:
     auth: AuthConfig = field(default_factory=AuthConfig)
     """HTTP API authentication config."""
 
+    provider_binding: ProviderBindingConfig = field(default_factory=ProviderBindingConfig)
+    """Dynamic provider binding config."""
+
     kafka: KafkaConfig = frozen_field(default_factory=KafkaConfig)
     """Kafka infrastructure config"""
 
@@ -588,6 +609,12 @@ class MemoryConfig:
 
     rerank_model_router: ModelRouterConfig = field(default_factory=ModelRouterConfig)
     """Rerank model Router configuration. Empty endpoints -> cosine fallback."""
+
+    mm_embed_model_router: MmEmbedRouterConfig = frozen_field(default_factory=MmEmbedRouterConfig)
+    """Multimodal (text + image) embedding router. Empty endpoints -> images are stored but not indexed."""
+
+    blob_store: BlobStoreConfig = frozen_field(default_factory=BlobStoreConfig)
+    """Raw image storage and allowed image sources for multimodal algorithms."""
 
 
 def build_config(config_name: str = "dev", config_path: str | Path | None = None) -> MemoryConfig:
@@ -604,6 +631,7 @@ def build_config(config_name: str = "dev", config_path: str | Path | None = None
     data = _merge_database_env(data)
     data = _merge_kafka_env(data)
     data = _merge_telemetry_env(data)
+    data = _merge_blob_env(data)
     cfg = build(MemoryConfig, data)
     validate_config(cfg)
     return cfg

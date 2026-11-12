@@ -10,10 +10,9 @@ from .api import (
 from .base import MindMemOSError
 from .config import ConfigNotInitializedError, InvalidConfigError, MissingConfigValueError
 from .llm import EmbeddingDimensionError
-from .memory import MemoryUpdateError
+from .memory import MemoryNotFoundError, MemoryUpdateError
 from .skill import (
     SkillBundleError,
-    SkillConflictError,
     SkillContentNotFoundError,
     SkillEditError,
     SkillError,
@@ -29,6 +28,7 @@ __all__ = [
     "MissingConfigValueError",
     "EmbeddingDimensionError",
     "MemoryUpdateError",
+    "MemoryNotFoundError",
     "ApiError",
     "AuthenticationError",
     "BadRequestError",
@@ -37,7 +37,6 @@ __all__ = [
     "ResourceNotFoundError",
     "SkillBundleError",
     "SkillContentNotFoundError",
-    "SkillConflictError",
     "SkillEditError",
     "SkillError",
     "SkillNotFoundError",

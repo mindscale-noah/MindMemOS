@@ -1,7 +1,6 @@
 """Memory API resource client."""
 
 from .async_client import AsyncMemoryClient
-from .backends import AsyncMemoryBackend, HttpMemoryBackend
 from .client import MemoryClient
 from .models import (
     AddResult,
@@ -9,8 +8,11 @@ from .models import (
     FeedbackMode,
     FileMessage,
     GetResult,
+    ImageRef,
     MemoryAddItem,
     MemoryLineage,
+    MemoryPageResult,
+    MemoryScrollResult,
     MemorySearchHit,
     Message,
     SearchResult,
@@ -19,12 +21,12 @@ from .models import (
     TextMessage,
     UrlMessage,
 )
+from .typing import SkillContext
 
 __all__ = [
     "MemoryClient",
+    "SkillContext",
     "AsyncMemoryClient",
-    "AsyncMemoryBackend",
-    "HttpMemoryBackend",
     "AddResult",
     "FeedbackMode",
     "SearchResult",
@@ -33,10 +35,13 @@ __all__ = [
     "StatusResult",
     "MemoryAddItem",
     "MemoryLineage",
+    "MemoryPageResult",
     "MemorySearchHit",
+    "MemoryScrollResult",
     "Message",
     "TextMessage",
     "DialogueMessage",
+    "ImageRef",
     "UrlMessage",
     "FileMessage",
 ]

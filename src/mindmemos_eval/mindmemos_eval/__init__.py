@@ -1,4 +1,4 @@
-"""Memory evaluation toolkit."""
+"""MindMemOS evaluation package and existing Memory toolkit exports."""
 
 from mindmemos_eval.memory.envs.locomo import (
     LocomoAdapter,
@@ -44,9 +44,7 @@ from mindmemos_eval.memory.envs.memoryagentbench import (
     MemoryAgentBenchAddSummary,
     MemoryAgentBenchAnswer,
     MemoryAgentBenchContextResult,
-    MemoryAgentBenchDreamingSummary,
     MemoryAgentBenchEnv,
-    MemoryAgentBenchEvaluationPhase,
     MemoryAgentBenchItem,
     MemoryAgentBenchQAResult,
     MemoryAgentBenchQuestion,
@@ -95,7 +93,6 @@ from mindmemos_eval.memory.envs.personamem import (
     load_personamem_questions,
 )
 
-from .backend import MindMemOSBackend, build_mindmemos_backend
 from .llm import LLMClient, LLMCompletion, LLMConfig, LLMProvider
 from .memory.base import (
     AlgorithmProfile,
@@ -155,28 +152,12 @@ from .memory.scorer import (
     Scorer,
     ScoreResult,
 )
-from .skills.agents import ReactAgentTools, SkillSet
-from .skills.envs.spreadsheetbench import (
-    SpreadsheetBenchCase,
-    SpreadsheetBenchCaseResult,
-    SpreadsheetBenchEnv,
-    SpreadsheetBenchRunResult,
-    compare_workbooks,
-)
-from .skills.evolve import (
-    FastAPISkillEvolutionClient,
-    MindMemOSSkillEvolutionClient,
-    NoopSkillEvolutionClient,
-    SkillEvolutionClient,
-)
 
 __all__ = [
     "LLMClient",
     "LLMCompletion",
     "LLMConfig",
     "LLMProvider",
-    "MindMemOSBackend",
-    "build_mindmemos_backend",
     "BenchmarkRunManifest",
     "BenchmarkSpec",
     "AlgorithmProfile",
@@ -263,8 +244,6 @@ __all__ = [
     "MemoryAgentBenchQAResult",
     "MemoryAgentBenchAddSummary",
     "MemoryAgentBenchContextResult",
-    "MemoryAgentBenchDreamingSummary",
-    "MemoryAgentBenchEvaluationPhase",
     "MemoryAgentBenchRunResult",
     "calculate_memoryagentbench_metrics",
     "get_memoryagentbench_template",
@@ -286,17 +265,6 @@ __all__ = [
     "generate_project_keys",
     "merge_keys_into_file",
     "remove_keys_from_file",
-    "SpreadsheetBenchEnv",
-    "SpreadsheetBenchCase",
-    "SpreadsheetBenchCaseResult",
-    "SpreadsheetBenchRunResult",
-    "compare_workbooks",
-    "FastAPISkillEvolutionClient",
-    "MindMemOSSkillEvolutionClient",
-    "NoopSkillEvolutionClient",
-    "SkillEvolutionClient",
-    "SkillSet",
-    "ReactAgentTools",
     "PERSONAMEM_EVO_HF_DATASET",
     "CompletionResult",
     "PersonaMemEvoAnswer",

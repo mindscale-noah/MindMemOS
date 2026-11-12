@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, TypeVar
 
-from ..errors import InvalidRequestError, MindMemOSSDKError
+from ..errors import ApiError, InvalidRequestError, MindMemOSSDKError
 from ..transport import Envelope
 from .models import (
     AddMode,
     AddResult,
     FeedbackMode,
     GetResult,
+    ImageRef,
+    MemoryPageResult,
+    MemoryScrollResult,
     MemorySearchHit,
     Message,
     SearchResult,
@@ -23,20 +26,14 @@ from .models import (
     build_dreaming_body,
     build_feedback_body,
     build_get_body,
+    build_list_body,
+    build_scroll_body,
     build_search_body,
     build_update_body,
 )
+from .typing import SkillContext
 
 T = TypeVar("T")
-MemoryOperation = Literal[
-    "add",
-    "search",
-    "get",
-    "update",
-    "delete",
-    "feedback",
-    "dreaming",
-]
 
 
 @dataclass(frozen=True)
@@ -45,23 +42,10 @@ class MemoryDefaults:
     app_id: str | None = None
     agent_id: str | None = None
     session_id: str | None = None
-    add_mode: AddMode = "sync"
-    add_default_role: str = "user"
-    add_auto_skill_context: bool = True
-    search_top_k: int | None = 10
-    search_strategy: SearchStrategy = "fast"
-    search_rerank: bool = False
-    search_score_threshold: float | None = None
-    search_filters: dict[str, Any] | None = None
-    get_top_k: int | None = None
-    get_filters: dict[str, Any] | None = None
-    feedback_mode: FeedbackMode | None = None
-    dreaming_mode: AddMode = "async"
 
 
 @dataclass(frozen=True)
 class MemoryRequest(Generic[T]):
-    operation: MemoryOperation
     path: str
     body: dict[str, Any]
     parse: Callable[[Envelope], T]
@@ -91,14 +75,11 @@ class MemoryCore:
         agent_id: str | None = None,
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        skill_context: list[Any] | None = None,
-        score: float | None = None,
-        task_id: str | None = None,
+        skill_context: list[SkillContext | dict[str, Any]] | None = None,
     ) -> MemoryRequest[AddResult]:
         if not messages:
             raise InvalidRequestError("`messages` must be a non-empty list.")
         return MemoryRequest(
-            operation="add",
             path="/v1/memory/add",
             body=build_add_body(
                 user_id=self._resolve_user_id(user_id),
@@ -109,8 +90,6 @@ class MemoryCore:
                 session_id=session_id or self._defaults.session_id,
                 metadata=metadata,
                 skill_context=skill_context,
-                score=score,
-                task_id=task_id,
             ),
             parse=parse_add_result,
         )
@@ -124,25 +103,30 @@ class MemoryCore:
         search_strategy: SearchStrategy = "fast",
         rerank: bool = False,
         score_threshold: float | None = None,
+        token_budget: int | None = None,
         filters: dict[str, Any] | None = None,
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        query_images: list[ImageRef | dict[str, Any]] | None = None,
+        multimodal: bool = False,
     ) -> MemoryRequest[SearchResult]:
         return MemoryRequest(
-            operation="search",
             path="/v1/memory/search",
             body=build_search_body(
-                user_id=self._resolve_user_id(user_id),
+                user_id=user_id,
                 query=query,
                 top_k=top_k,
                 search_strategy=search_strategy,
                 rerank=rerank,
                 score_threshold=score_threshold,
+                token_budget=token_budget,
                 filters=filters,
                 app_id=app_id or self._defaults.app_id,
                 agent_id=agent_id or self._defaults.agent_id,
                 session_id=session_id or self._defaults.session_id,
+                query_images=query_images,
+                multimodal=multimodal,
             ),
             parse=parse_search_result,
         )
@@ -154,15 +138,65 @@ class MemoryCore:
         top_k: int | None = None,
     ) -> MemoryRequest[GetResult]:
         return MemoryRequest(
-            operation="get",
             path="/v1/memory/get",
             body=build_get_body(filters=filters, top_k=top_k),
             parse=parse_get_result,
         )
 
+    def list(
+        self,
+        *,
+        filters: dict[str, Any] | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        include_total: bool = True,
+        user_id: str | None = None,
+        app_id: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> MemoryRequest[MemoryPageResult]:
+        return MemoryRequest(
+            path="/v1/memory/list",
+            body=build_list_body(
+                filters=filters,
+                page=page,
+                page_size=page_size,
+                include_total=include_total,
+                user_id=user_id or self._defaults.user_id,
+                app_id=app_id or self._defaults.app_id,
+                agent_id=agent_id or self._defaults.agent_id,
+                session_id=session_id or self._defaults.session_id,
+            ),
+            parse=parse_memory_page_result,
+        )
+
+    def scroll(
+        self,
+        *,
+        filters: dict[str, Any] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+        user_id: str | None = None,
+        app_id: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> MemoryRequest[MemoryScrollResult]:
+        return MemoryRequest(
+            path="/v1/memory/scroll",
+            body=build_scroll_body(
+                filters=filters,
+                limit=limit,
+                cursor=cursor,
+                user_id=user_id or self._defaults.user_id,
+                app_id=app_id or self._defaults.app_id,
+                agent_id=agent_id or self._defaults.agent_id,
+                session_id=session_id or self._defaults.session_id,
+            ),
+            parse=parse_memory_scroll_result,
+        )
+
     def update(self, memory_id: str, content: str) -> MemoryRequest[StatusResult]:
         return MemoryRequest(
-            operation="update",
             path="/v1/memory/update",
             body=build_update_body(memory_id=memory_id, content=content),
             parse=parse_status_result,
@@ -170,7 +204,6 @@ class MemoryCore:
 
     def delete(self, memory_id: str) -> MemoryRequest[StatusResult]:
         return MemoryRequest(
-            operation="delete",
             path="/v1/memory/delete",
             body=build_delete_body(memory_id=memory_id),
             parse=parse_status_result,
@@ -192,7 +225,6 @@ class MemoryCore:
             raise InvalidRequestError("explicit feedback requires non-empty messages context.")
 
         return MemoryRequest(
-            operation="feedback",
             path="/v1/memory/feedback",
             body=build_feedback_body(
                 feedback=feedback,
@@ -217,7 +249,6 @@ class MemoryCore:
         session_id: str | None = None,
     ) -> MemoryRequest[StatusResult]:
         return MemoryRequest(
-            operation="dreaming",
             path="/v1/memory/dreaming",
             body=build_dreaming_body(
                 mode=mode,
@@ -231,6 +262,8 @@ class MemoryCore:
 
 
 def parse_add_result(envelope: Envelope) -> AddResult:
+    if envelope.data is not None and not isinstance(envelope.data, dict):
+        raise ApiError("Expected an object in the Memory add response.", request_id=envelope.request_id)
     data = envelope.data or {}
     return AddResult(
         code=envelope.code,
@@ -252,6 +285,27 @@ def parse_get_result(envelope: Envelope) -> GetResult:
     return GetResult(
         request_id=envelope.request_id,
         memories=data.get("memories", []),
+    )
+
+
+def parse_memory_page_result(envelope: Envelope) -> MemoryPageResult:
+    data = envelope.data or {}
+    return MemoryPageResult(
+        request_id=envelope.request_id,
+        memories=data.get("memories", []),
+        page=data.get("page", 1),
+        page_size=data.get("page_size", 20),
+        total=data.get("total"),
+        has_more=bool(data.get("has_more", False)),
+    )
+
+
+def parse_memory_scroll_result(envelope: Envelope) -> MemoryScrollResult:
+    data = envelope.data or {}
+    return MemoryScrollResult(
+        request_id=envelope.request_id,
+        memories=data.get("memories", []),
+        next_cursor=data.get("next_cursor"),
     )
 
 

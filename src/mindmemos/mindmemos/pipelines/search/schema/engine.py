@@ -9,7 +9,14 @@ from ....components.searcher.schema import SchemaSearchExpander, SchemaSearchQue
 from ....components.text import SparseVectorEncoder, TextPreprocessor, detect_prompt_language, get_text_preprocessor
 from ....config import get_config
 from ....config.algo.search import SearchConfig
-from ....llm import EmbedClient, LLMClient, RerankClient, get_embed_client, get_llm_client
+from ....llm import (
+    EmbedClient,
+    LLMClient,
+    RerankClient,
+    get_embed_client,
+    get_llm_client,
+    require_model_endpoint,
+)
 from ....mappers import parse_schema_search_filters
 from ....prompts import SearchPromptSet, get_search_prompts
 from ....typing import (
@@ -89,13 +96,15 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
         request_prompts = self._explicit_prompts or get_search_prompts(detected_lang)
 
         # Resolve project-scoped deps from the request-scoped config (ContextVar).
+        if self._explicit_llm is None:
+            require_model_endpoint("chat")
+        if self._explicit_embed is None:
+            require_model_endpoint("embedding")
         llm = self._explicit_llm or get_llm_client()
         embed = self._explicit_embed or get_embed_client()
         rerank = self._explicit_rerank if self._explicit_rerank is not None else _optional_rerank_client()
         text_preprocessor = self._explicit_text_preprocessor or get_text_preprocessor()
-        sparse_encoder = self._explicit_sparse_encoder or SparseVectorEncoder(
-            get_config().algo_config.text_processing
-        )
+        sparse_encoder = self._explicit_sparse_encoder or SparseVectorEncoder(get_config().algo_config.text_processing)
         project_em = self._explicit_entity_manager or get_entity_manager(project_id=context.project_id)
         project_entity_schema = project_em.get_all_dicts() if project_em else []
 
@@ -111,9 +120,7 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
         property_filter = query_builder.all_property_filter(entity_schema=project_entity_schema)
         initial_time_window = None
         if not parsed_filters.has_time_filter:
-            initial_time_window = await query_builder.extract_time_from_query(
-                inp.query, prompts=request_prompts
-            )
+            initial_time_window = await query_builder.extract_time_from_query(inp.query, prompts=request_prompts)
 
         expander = self._expander or SchemaSearchExpander(
             db_reader=self.db_reader,
@@ -165,9 +172,7 @@ class SchemaSearchEngine(MemoryDbPipelineMixin):
         """Fallback to direct memory recall when schema entity recall is empty."""
 
         text_preprocessor = self._explicit_text_preprocessor or get_text_preprocessor()
-        sparse_encoder = self._explicit_sparse_encoder or SparseVectorEncoder(
-            get_config().algo_config.text_processing
-        )
+        sparse_encoder = self._explicit_sparse_encoder or SparseVectorEncoder(get_config().algo_config.text_processing)
         preprocessed = text_preprocessor.preprocess_query(inp.query, include_entities=False)
         if not preprocessed.tokens:
             return []

@@ -1,0 +1,26 @@
+environment:
+  class_name: skillsbench
+  config:
+    agent: claude-code
+    model: claude-opus-4-6
+    agent_env: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL]
+data:
+  class_name: skillsbench
+  config:
+    benchmark_root: data/mindmemos_skill/skillsbench
+cases_file: null
+cases: null
+exclude_cases: []
+case_skills: {}
+skills: []
+repeats: 3
+service_config: config/mindmemos_skill/dev.yaml
+pipeline: offline  # Built-in offline evolution pipeline.
+pipeline_overrides: {}
+skip_perfect: true
+network_retries: 3
+evolution_retries: 1
+reference_file: null
+# Maximum concurrent cases during collection and retesting; repeats and evolution stay sequential.
+concurrency: 1
+output_dir: null

@@ -1,231 +1,37 @@
-"""Local physical table catalog for unified Skill facts and outbox state."""
+"""Compose the table catalogs owned by individual data services."""
 
-from __future__ import annotations
+from sqlalchemy import Column, MetaData, Table, Text
 
-from ..infra.database import FieldSpec, FieldType, IndexSpec, TableRegistry, TableSpec
-from .migrations import SKILL_SCHEMA_MIGRATIONS
-
-SKILL_TABLE = "skill_versions"
-TRAJECTORY_TABLE = "trajectories"
-ALGORITHM_LOG_TABLE = "algorithm_logs"
-LLM_CALL_TABLE = "llm_calls"
-SKILL_SYNC_STATE_TABLE = "skill_sync_state"
-SKILL_REMOTE_OPERATION_TABLE = "skill_remote_operations"
-SKILL_FAMILY_STATE_TABLE = SKILL_SYNC_STATE_TABLE
+from ..infra.database import TableRegistry, TableSpec
+from .constants import LEGACY_SKILL_ID_MAP
+from .db_services.evaluations.tables import build_tables as build_evaluation_tables
+from .db_services.graphs.tables import build_tables as build_graph_tables
+from .db_services.skills.tables import build_tables as build_skill_tables
+from .db_services.tasks.tables import build_tables as build_task_tables
+from .db_services.trajectories.tables import build_tables as build_trajectory_tables
+from .typing import LegacySkillIdMapping
 
 
 def build_persistence_tables() -> TableRegistry:
-    specs = (
-        TableSpec(
-            name=SKILL_TABLE,
-            primary_key="version_id",
-            fields=(
-                _text("skill_id", nullable=False),
-                _text("version_id", nullable=False),
-                _text("cloud_skill_id"),
-                _json("parent_version_ids", nullable=False, default=[]),
-                _text("name", nullable=False),
-                _text("description"),
-                _text("alias"),
-                _text("bundle", nullable=False),
-                _text("resources", nullable=False, default="{}"),
-                _text("content_hash", nullable=False),
-                _text("local_snapshot_hash", nullable=False),
-                _text("runtime_type", nullable=False, default="static"),
-                _integer("runtime_schema_version", nullable=False, default=1),
-                _json("runtime_metadata", nullable=False, default={}),
-                _text("status", nullable=False, default="draft"),
-                _integer("version_revision", nullable=False, default=0),
-                _text("version_label", nullable=False),
-                _text("commit_message"),
-                _json("metadata", nullable=False, default={}),
-                _json("local_metadata", nullable=False, default={}),
-                _text("origin", nullable=False),
-                _datetime("created_at", nullable=False),
-                _datetime("updated_at", nullable=False),
-                _datetime("received_at"),
-            ),
-            indexes=(
-                IndexSpec(name="skill_versions_label_uq", fields=("skill_id", "version_label"), unique=True),
-                IndexSpec(name="skill_versions_hash_idx", fields=("content_hash",)),
-                IndexSpec(
-                    name="skill_versions_latest_idx",
-                    fields=("skill_id", "status", "created_at", "version_id"),
-                ),
-            ),
-            scope_scoped=False,
-        ),
-        TableSpec(
-            name=SKILL_SYNC_STATE_TABLE,
-            primary_key="skill_id",
-            fields=(
-                _text("skill_id", nullable=False),
-                _datetime("last_version_sync_at"),
-                _text("trajectory_pull_cursor"),
-                _datetime("last_trajectory_pull_at"),
-                _datetime("created_at", nullable=False),
-                _datetime("updated_at", nullable=False),
-            ),
-            scope_scoped=False,
-        ),
-        TableSpec(
-            name=TRAJECTORY_TABLE,
-            primary_key="trajectory_id",
-            fields=(
-                _text("trajectory_id", nullable=False),
-                _text("trajectory_hash", nullable=False),
-                _text("task_id", nullable=False),
-                _text("rollout_id", nullable=False),
-                _integer("attempt_no", nullable=False, default=0),
-                _text("rollout_type", nullable=False),
-                _text("task_instruction", nullable=False),
-                _text("task_system_prompt"),
-                _json("task_tags", nullable=False, default=[]),
-                _json("task_metadata", nullable=False, default={}),
-                _text("env_ref", nullable=False, default="unknown"),
-                _text("running_dir"),
-                _json("env_metadata", nullable=False, default={}),
-                _json("injected_skills", nullable=False, default=[]),
-                _text("agent_type", nullable=False),
-                _json("agent_profile", nullable=False, default={}),
-                _text("status", nullable=False),
-                _json("trajectory", nullable=False, default=[]),
-                _json("skill_bindings", nullable=False, default=[]),
-                _float("reward_score"),
-                _text("reward_detail"),
-                _json("reward_metadata", nullable=False, default={}),
-                _datetime("started_at", nullable=False),
-                _datetime("finished_at"),
-                _integer("n_turn", nullable=False, default=0),
-                _text("error_info"),
-                _json("metadata", nullable=False, default={}),
-                _integer("metadata_revision", nullable=False, default=0),
-                _datetime("metadata_updated_at"),
-                _text("source", nullable=False),
-                _text("source_add_record_id"),
-                _datetime("created_at", nullable=False),
-                _datetime("received_at"),
-            ),
-            indexes=(
-                IndexSpec(
-                    name="trajectories_rollout_attempt_uq",
-                    fields=("rollout_id", "attempt_no"),
-                    unique=True,
-                ),
-                IndexSpec(name="trajectories_task_idx", fields=("task_id",)),
-                IndexSpec(name="trajectories_incremental_idx", fields=("started_at", "trajectory_id")),
-            ),
-            scope_scoped=False,
-        ),
-        TableSpec(
-            name=ALGORITHM_LOG_TABLE,
-            primary_key="log_id",
-            fields=(
-                _text("log_id", nullable=False),
-                _text("algorithm_name", nullable=False),
-                _text("algorithm_version"),
-                _text("component_name", nullable=False),
-                _text("step_name", nullable=False),
-                _text("status"),
-                _json("payload", nullable=False, default={}),
-                _datetime("created_at", nullable=False),
-            ),
-            indexes=(IndexSpec(name="algorithm_logs_algorithm_created_idx", fields=("algorithm_name", "created_at")),),
-            scope_scoped=False,
-        ),
-        TableSpec(
-            name=LLM_CALL_TABLE,
-            primary_key="call_id",
-            fields=(
-                _text("call_id", nullable=False),
-                _text("run_id", nullable=False),
-                _text("task", nullable=False),
-                _text("call_type", nullable=False),
-                _json("request", nullable=False),
-                _json("response"),
-                _text("model", nullable=False),
-                _integer("input_tokens"),
-                _integer("output_tokens"),
-                _integer("total_tokens"),
-                _text("status", nullable=False),
-                _text("error"),
-                _datetime("started_at", nullable=False),
-                _datetime("finished_at", nullable=False),
-                _float("latency_ms", nullable=False),
-            ),
-            indexes=(
-                IndexSpec(
-                    name="llm_calls_run_task_started_idx",
-                    fields=("run_id", "task", "started_at"),
-                ),
-            ),
-            scope_scoped=False,
-        ),
-        TableSpec(
-            name=SKILL_REMOTE_OPERATION_TABLE,
-            primary_key="operation_id",
-            fields=(
-                _text("operation_id", nullable=False),
-                _text("operation_type", nullable=False),
-                _text("skill_id"),
-                _text("cloud_skill_id"),
-                _text("version_id"),
-                _text("trajectory_id"),
-                _text("request_hash", nullable=False),
-                _text("status", nullable=False),
-                _integer("attempt_count", nullable=False, default=0),
-                _datetime("lease_expires_at"),
-                _datetime("next_retry_at"),
-                _text("last_error_code"),
-                _json("remote_result"),
-                _datetime("created_at", nullable=False),
-                _datetime("updated_at", nullable=False),
-            ),
-            indexes=(
-                IndexSpec(
-                    name="skill_remote_operations_status_idx",
-                    fields=("operation_type", "status", "next_retry_at"),
-                ),
-                IndexSpec(name="skill_remote_operations_skill_idx", fields=("skill_id",)),
-            ),
-            scope_scoped=False,
-        ),
+    """Build an isolated registry without connecting to a database.
+
+    Returns:
+        Combined definitions with a shared foreign-key metadata graph.
+    """
+    metadata = MetaData()
+    legacy_ids = Table(
+        LEGACY_SKILL_ID_MAP,
+        metadata,
+        Column("project_id", Text, primary_key=True, comment="Namespace shared by source and destination."),
+        Column("kind", Text, primary_key=True, comment="Skill family or version."),
+        Column("legacy_id", Text, primary_key=True, comment="Exact ID in the source namespace."),
+        Column("target_id", Text, nullable=False, comment="Stable destination ID."),
     )
-    registry = TableRegistry(
-        specs,
-        migrations=SKILL_SCHEMA_MIGRATIONS,
+    return TableRegistry(
+        build_skill_tables(metadata)
+        + build_trajectory_tables(metadata)
+        + build_graph_tables(metadata)
+        + build_task_tables(metadata)
+        + build_evaluation_tables(metadata)
+        + (TableSpec(name=legacy_ids.name, table=legacy_ids, insert_model=LegacySkillIdMapping),)
     )
-    registry.freeze()
-    return registry
-
-
-def _text(name: str, *, nullable: bool = True, default=None) -> FieldSpec:
-    return FieldSpec(name=name, field_type=FieldType.TEXT, nullable=nullable, default=default)
-
-
-def _integer(name: str, *, nullable: bool = True, default=None) -> FieldSpec:
-    return FieldSpec(name=name, field_type=FieldType.INTEGER, nullable=nullable, default=default)
-
-
-def _float(name: str, *, nullable: bool = True, default=None) -> FieldSpec:
-    return FieldSpec(name=name, field_type=FieldType.FLOAT, nullable=nullable, default=default)
-
-
-def _datetime(name: str, *, nullable: bool = True, default=None) -> FieldSpec:
-    return FieldSpec(name=name, field_type=FieldType.DATETIME, nullable=nullable, default=default)
-
-
-def _json(name: str, *, nullable: bool = True, default=None) -> FieldSpec:
-    return FieldSpec(name=name, field_type=FieldType.JSON, nullable=nullable, default=default)
-
-
-__all__ = [
-    "ALGORITHM_LOG_TABLE",
-    "LLM_CALL_TABLE",
-    "SKILL_FAMILY_STATE_TABLE",
-    "SKILL_REMOTE_OPERATION_TABLE",
-    "SKILL_SYNC_STATE_TABLE",
-    "SKILL_TABLE",
-    "TRAJECTORY_TABLE",
-    "build_persistence_tables",
-]

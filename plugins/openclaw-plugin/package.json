@@ -1,7 +1,7 @@
 {
   "name": "@mindmemos/openclaw-plugin",
-  "version": "0.1.2",
-  "description": "OpenClaw plugin that recalls and writes MindMemOS memories through the mindmemos CLI.",
+  "version": "0.2.0",
+  "description": "Recalls MindMemOS memories, reports trajectories to Memory and Skill, and bundles the MindMemOS CLI Skill.",
   "type": "module",
   "repository": {
     "type": "git",
@@ -25,7 +25,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prepublishOnly": "npm run build"
+    "prebuild": "node ../shared/prepare-build.mjs --build",
+    "pretypecheck": "node ../shared/prepare-build.mjs",
+    "prepack": "npm run build"
   },
   "peerDependencies": {
     "openclaw": "*"

@@ -1,118 +1,409 @@
-"""Asynchronous public facade over ``mindmemos_skill.SkillApplication``."""
+"""Asynchronous client for every public standalone Skill service endpoint."""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
-from typing import TypeVar
-
-from mindmemos_skill.management import (
-    ExportSkillRequest,
-    ExportSkillResult,
-    ManagedSkill,
-    PublishSkillRequest,
-    PublishSkillResult,
-    PullResult,
-    PushResult,
-    RegisterSkillRequest,
-    RegisterSkillResult,
-    SkillDetail,
-    SkillDiffResult,
-    SkillManagementDetail,
-    SkillManagementOverview,
+from ..config import DIRECT_SKILL_API_PATH
+from ..transport import AsyncHttpTransport
+from .core import SkillCore, SkillRoute
+from .typing import (
+    ActivateRequest,
+    AddGraphMembersRequest,
+    CommitRequest,
+    DeleteRequest,
+    DiffRequest,
+    EvaluationQueryRequest,
+    EvolveRequest,
+    GraphResolveRequest,
+    GraphSnapshotRequest,
+    GraphSnapshotsRequest,
+    HistoryRequest,
+    ListRequest,
+    OrganizeRequest,
+    RecommendRequest,
+    RegisterRequest,
+    RemoveGraphMembersRequest,
+    ShowRequest,
+    SkillAnalyzeRequest,
+    SkillData,
+    SkillRequestBody,
+    SkillResolveRequest,
+    TaskProgressRequest,
+    TaskShowRequest,
+    TrainingRequest,
+    TrajectoryAnalyzeRequest,
+    TrajectoryListRequest,
+    TrajectoryReportRequest,
+    TrajectoryShowRequest,
+    TrajectoryStatisticsRequest,
+    UpdateInfoRequest,
+    VersionResolveRequest,
 )
-from mindmemos_skill.persistence import SkillRecord
-
-from mindmemos_skill import (
-    EvolveRunRequest,
-    MindMemOSSkillError,
-    SkillAlgorithmRunResult,
-    SkillApplication,
-    Trace2SkillRunRequest,
-)
-
-from ..errors import translate_skill_error
-
-_ResultT = TypeVar("_ResultT")
 
 
 class AsyncSkillClient:
-    """Compatibility-stable SDK entry point with no Skill business state of its own."""
+    """Call the Skill service without local registration or upload state."""
 
-    def __init__(self, application: SkillApplication) -> None:
-        if not isinstance(application, SkillApplication):
-            raise TypeError("application must be a SkillApplication")
-        self._application = application
+    def __init__(self, transport: AsyncHttpTransport, *, path_prefix: str = DIRECT_SKILL_API_PATH) -> None:
+        """Use an existing asynchronous HTTP transport.
 
-    @property
-    def application(self) -> SkillApplication:
-        return self._application
+        Args:
+            transport: Transport configured for the Skill service URL and credentials.
+            path_prefix: API path relative to the transport base URL. Use an empty string when
+                the base URL already includes the full Skill API root.
+        """
+        self._transport = transport
+        self._path_prefix = path_prefix
 
-    async def register(self, request: RegisterSkillRequest) -> RegisterSkillResult:
-        return await self._call(self._application.register(request))
+    async def _post(self, route: SkillRoute, body: SkillRequestBody) -> SkillData:
+        request = SkillCore.prepare(route, body, path_prefix=self._path_prefix)
+        envelope = await self._transport.post_envelope(request.path, json=request.body, params=request.params)
+        return envelope.data if envelope.data is not None else {}
 
-    async def publish(self, request: PublishSkillRequest) -> PublishSkillResult:
-        return await self._call(self._application.publish(request))
+    async def register(self, request: RegisterRequest) -> SkillData:
+        """Register a family from a complete content and resources.
 
-    async def list_skills(self) -> list[ManagedSkill]:
-        return await self._call(self._application.list_skills())
+        Args:
+            request: Family name, alias, initial version, and source files.
 
-    async def get_management_overview(self) -> SkillManagementOverview:
-        return await self._call(self._application.get_management_overview())
+        Returns:
+            New family and version identities.
+        """
+        return await self._post(SkillRoute.REGISTER, request)
 
-    async def get_skill(self, skill_ref: str) -> SkillDetail:
-        return await self._call(self._application.get_skill(skill_ref))
+    async def list(self, request: ListRequest) -> SkillData:
+        """List families in a cursor page.
 
-    async def get_management_detail(self, skill_ref: str) -> SkillManagementDetail:
-        return await self._call(self._application.get_management_detail(skill_ref))
+        Args:
+            request: Optional filters and pagination cursor.
 
-    async def list_versions(self, skill_ref: str) -> list[SkillRecord]:
-        return await self._call(self._application.list_versions(skill_ref))
+        Returns:
+            Items and next cursor from the service.
+        """
+        return await self._post(SkillRoute.LIST, request)
 
-    async def get_version(self, skill_ref: str, version_id: str) -> SkillRecord:
-        return await self._call(self._application.get_version(skill_ref, version_id))
+    async def show(self, request: ShowRequest) -> SkillData:
+        """Read a family and a complete selected version.
 
-    async def export(self, request: ExportSkillRequest) -> ExportSkillResult:
-        return await self._call(self._application.export(request))
+        Args:
+            request: Family identity and optional historical version.
 
-    async def diff(
-        self,
-        skill_ref: str,
-        *,
-        to_version_id: str,
-        from_version_id: str | None = None,
-    ) -> SkillDiffResult:
-        return await self._call(
-            self._application.diff(
-                skill_ref,
-                to_version_id=to_version_id,
-                from_version_id=from_version_id,
-            )
-        )
+        Returns:
+            Family metadata and portable version content.
+        """
+        return await self._post(SkillRoute.SHOW, request)
 
-    async def push(self, skill_ref: str, version_id: str | None = None) -> PushResult:
-        return await self._call(self._application.push(skill_ref, version_id))
+    async def commit(self, request: CommitRequest) -> SkillData:
+        """Commit a new immutable source version.
 
-    async def pull(self, skill_ref: str) -> PullResult:
-        return await self._call(self._application.pull(skill_ref))
+        Args:
+            request: Family, complete content and resources, version label, and activation choice.
 
-    async def sync(self, skill_ref: str) -> SkillDetail:
-        return await self._call(self._application.sync(skill_ref))
+        Returns:
+            New version identity and active-version state.
+        """
+        return await self._post(SkillRoute.COMMIT, request)
 
-    async def run_trace2skill(self, request: Trace2SkillRunRequest) -> SkillAlgorithmRunResult:
-        return await self._call(self._application.run_trace2skill(request))
+    async def history(self, request: HistoryRequest) -> SkillData:
+        """Page one family's version history.
 
-    async def run_evolve(self, request: EvolveRunRequest) -> SkillAlgorithmRunResult:
-        return await self._call(self._application.run_evolve(request))
+        Args:
+            request: Family identity and offset pagination.
 
-    @staticmethod
-    async def _call(operation: Awaitable[_ResultT]) -> _ResultT:
-        try:
-            return await operation
-        except MindMemOSSkillError as exc:
-            raise translate_skill_error(exc) from exc
+        Returns:
+            Version summaries and pagination metadata.
+        """
+        return await self._post(SkillRoute.HISTORY, request)
 
-    async def aclose(self) -> None:
-        """Do nothing: ``SDKPortalRuntime`` owns the shared Application lifecycle."""
+    async def diff(self, request: DiffRequest) -> SkillData:
+        """Compare two stored source versions.
 
+        Args:
+            request: Source and target family/version selection.
 
-__all__ = ["AsyncSkillClient"]
+        Returns:
+            Per-file and implementation differences.
+        """
+        return await self._post(SkillRoute.DIFF, request)
+
+    async def activate(self, request: ActivateRequest) -> SkillData:
+        """Select an existing version as active.
+
+        Args:
+            request: Family and owned version identities.
+
+        Returns:
+            Selected active version identity.
+        """
+        return await self._post(SkillRoute.ACTIVATE, request)
+
+    async def update_info(self, request: UpdateInfoRequest) -> SkillData:
+        """Update mutable family fields.
+
+        Args:
+            request: Family identity and fields to replace.
+
+        Returns:
+            Updated family metadata.
+        """
+        return await self._post(SkillRoute.UPDATE_INFO, request)
+
+    async def delete(self, request: DeleteRequest) -> SkillData:
+        """Delete an unreferenced family.
+
+        Args:
+            request: Exact family identity.
+
+        Returns:
+            Deletion confirmation from the service.
+        """
+        return await self._post(SkillRoute.DELETE, request)
+
+    async def version_resolve(self, request: VersionResolveRequest) -> SkillData:
+        """Resolve a canonical source hash to an owned version.
+
+        Args:
+            request: Hash and optional exact family/version selectors.
+
+        Returns:
+            Resolved version information.
+        """
+        return await self._post(SkillRoute.VERSION_RESOLVE, request)
+
+    async def skill_resolve(self, request: SkillResolveRequest) -> SkillData:
+        """Resolve a family alias or immutable Skill version.
+
+        Args:
+            request: Skill identity or alias in the configured project.
+
+        Returns:
+            Selected family and version information.
+        """
+        return await self._post(SkillRoute.SKILL_RESOLVE, request)
+
+    async def report_trajectory(self, request: TrajectoryReportRequest) -> SkillData:
+        """Report one execution with all its loaded Skill versions.
+
+        Args:
+            request: Actor, messages, exact versions, and execution timing.
+
+        Returns:
+            Stored trajectory identity.
+        """
+        return await self._post(SkillRoute.TRAJECTORY_REPORT, request)
+
+    async def trajectory_statistics(self, request: TrajectoryStatisticsRequest) -> SkillData:
+        """Read bounded aggregate counts for one Skill version.
+
+        Args:
+            request: Owning family and exact version identity.
+
+        Returns:
+            Global totals, thirty calendar buckets and latest evolution time.
+        """
+        return await self._post(SkillRoute.TRAJECTORY_STATISTICS, request)
+
+    async def show_trajectory(self, request: TrajectoryShowRequest) -> SkillData:
+        """Read one stored trajectory.
+
+        Args:
+            request: Exact trajectory identity.
+
+        Returns:
+            Complete stored execution record.
+        """
+        return await self._post(SkillRoute.TRAJECTORY_SHOW, request)
+
+    async def list_trajectories(self, request: TrajectoryListRequest) -> SkillData:
+        """Page trajectories of one family.
+
+        Args:
+            request: Family, optional filters, and cursor.
+
+        Returns:
+            Trajectory summaries and next cursor.
+        """
+        return await self._post(SkillRoute.TRAJECTORY_LIST, request)
+
+    async def organize(self, request: OrganizeRequest) -> SkillData:
+        """Request Skill graph organization.
+
+        Args:
+            request: Graph alias, message, and optional exact versions.
+
+        Returns:
+            Service task data when the pipeline is available.
+        """
+        return await self._post(SkillRoute.ORGANIZE, request)
+
+    async def graph_resolve(self, request: GraphResolveRequest) -> SkillData:
+        """Resolve a graph reference.
+
+        Args:
+            request: Graph ID, alias, or prefix.
+
+        Returns:
+            Resolved graph information when available.
+        """
+        return await self._post(SkillRoute.GRAPH_RESOLVE, request)
+
+    async def delete_graph(self, request: GraphResolveRequest) -> SkillData:
+        """Soft-delete one project-owned graph.
+
+        Args:
+            request: Graph ID, alias, or unique prefix.
+
+        Returns:
+            Deletion confirmation.
+        """
+        return await self._post(SkillRoute.GRAPH_DELETE, request)
+
+    async def add_graph_members(self, request: AddGraphMembersRequest) -> SkillData:
+        """Add new families without replacing existing members.
+
+        Args:
+            request: Graph reference, new members, and Scene refresh policy.
+
+        Returns:
+            Published snapshot and its complete member versions.
+        """
+        return await self._post(SkillRoute.GRAPH_MEMBERS_ADD, request)
+
+    async def remove_graph_members(self, request: RemoveGraphMembersRequest) -> SkillData:
+        """Remove members without deleting their canonical Skill versions.
+
+        Args:
+            request: Graph reference and member batch.
+
+        Returns:
+            Published snapshot and its remaining member versions.
+        """
+        return await self._post(SkillRoute.GRAPH_MEMBERS_REMOVE, request)
+
+    async def preview_graph(self, request: GraphResolveRequest) -> SkillData:
+        """Read the published topology selected by a graph reference.
+
+        Args:
+            request: Graph family, alias, or immutable snapshot reference.
+
+        Returns:
+            Skill/Scene nodes, relations, and snapshot identity.
+        """
+        return await self._post(SkillRoute.GRAPH_PREVIEW, request)
+
+    async def list_graphs(self) -> SkillData:
+        """List graphs owned by the authenticated project.
+
+        Returns:
+            Project-owned graph records.
+        """
+        return await self._post(SkillRoute.GRAPHS_LIST, SkillRequestBody())
+
+    async def graph_snapshots(self, request: GraphSnapshotsRequest) -> SkillData:
+        """List immutable snapshots of one graph.
+
+        Args:
+            request: Exact project-owned graph identity.
+
+        Returns:
+            Graph snapshot records and publication revisions.
+        """
+        return await self._post(SkillRoute.GRAPHS_SNAPSHOTS, request)
+
+    async def graph_snapshot(self, request: GraphSnapshotRequest) -> SkillData:
+        """Read one graph's Skill nodes and edges.
+
+        Args:
+            request: Exact graph and snapshot identities.
+
+        Returns:
+            Resolved nodes, edges, and snapshot identity.
+        """
+        return await self._post(SkillRoute.GRAPHS_SNAPSHOT, request)
+
+    async def recommend(self, request: RecommendRequest) -> SkillData:
+        """Request recommendations from a published graph.
+
+        Args:
+            request: Graph reference, query, and optional result limit.
+
+        Returns:
+            Recommended versions when the pipeline is available.
+        """
+        return await self._post(SkillRoute.RECOMMEND, request)
+
+    async def analyze_skill(self, request: SkillAnalyzeRequest) -> SkillData:
+        """Run or reuse static Skill scoring.
+
+        Args:
+            request: Exact version, optional trace identity and cache refresh choice.
+
+        Returns:
+            Evaluation record with status, scores, findings and provenance.
+        """
+        return await self._post(SkillRoute.SKILL_ANALYZE, request)
+
+    async def analyze_trajectory(self, request: TrajectoryAnalyzeRequest) -> SkillData:
+        """Run or reuse execution analysis.
+
+        Args:
+            request: Stored trajectory, optional attribution and verifier score overrides.
+
+        Returns:
+            Evaluation record with status, verdict and supporting evidence.
+        """
+        return await self._post(SkillRoute.TRAJECTORY_ANALYZE, request)
+
+    async def query_evaluations(self, request: EvaluationQueryRequest) -> SkillData:
+        """Read completed evaluations without triggering model calls.
+
+        Args:
+            request: Exact versions, optional analyzer filters and result limit.
+
+        Returns:
+            Items containing stored completed evaluation records.
+        """
+        return await self._post(SkillRoute.EVALUATIONS_QUERY, request)
+
+    async def evolve(self, request: EvolveRequest) -> SkillData:
+        """Submit a nonempty list of exact Skill versions for evolution.
+
+        Args:
+            request: Exact input versions, permissions and activation choice.
+
+        Returns:
+            Accepted task data when the pipeline is available.
+        """
+        return await self._post(SkillRoute.EVOLVE, request)
+
+    async def show_task(self, request: TaskShowRequest) -> SkillData:
+        """Read one asynchronous Skill task.
+
+        Args:
+            request: Exact task identity.
+
+        Returns:
+            Task state when task storage is available.
+        """
+        return await self._post(SkillRoute.TASK_SHOW, request)
+
+    async def train(self, request: TrainingRequest) -> SkillData:
+        """Submit a background training run.
+
+        Args:
+            request: Complete tasks, split, input version, and server run directory.
+
+        Returns:
+            Accepted task identity and state.
+        """
+        return await self._post(SkillRoute.TRAIN, request)
+
+    async def task_progress(self, request: TaskProgressRequest) -> SkillData:
+        """Read task logs after a sequence number.
+
+        Args:
+            request: Task identity and exclusive log sequence cursor.
+
+        Returns:
+            Ordered progress event records, including an empty list when no new events exist.
+        """
+        return await self._post(SkillRoute.TASK_PROGRESS, request)

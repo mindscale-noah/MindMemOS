@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from numbers import Real
 from typing import Any
 
 from omegaconf.errors import ConfigAttributeError, MissingMandatoryValue
 
 from ..errors import InvalidConfigError, MissingConfigValueError
+from .algo.multimodal import IMAGE_DETAILS, MULTIMODAL_MODES
 from .algo.search.vanilla.vanilla import (
     VANILLA_DEDUP_MAX_CANDIDATES,
     VANILLA_HYBRID_PREFETCH_FACTOR_MAX,
     VANILLA_HYBRID_PREFETCH_MAX,
     VANILLA_RECALL_SIZE_MAX,
 )
+from .multimodal import MM_IMAGE_TRANSPORTS
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,8 @@ CHOICE_RULES: tuple[ChoiceRule, ...] = (
         "telemetry.log_level", frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}), case_insensitive=True
     ),
     ChoiceRule("auth.mode", frozenset({"api_key", "gateway_jwt"})),
+    ChoiceRule("algo_config.search.retention.selector_version", frozenset({"mixed-v1", "mixed-v2"})),
+    ChoiceRule("algo_config.search.retention.estimator_version", frozenset({"heuristic-v2"})),
     ChoiceRule("database.qdrant.distance", frozenset({"Cosine", "Euclid", "Dot", "Manhattan"}), case_insensitive=True),
     ChoiceRule("database.default_consistency", frozenset({"fast", "strong"})),
     ChoiceRule("algo_config.common.prompt_language", frozenset({"EN", "ZH"}), case_insensitive=True),
@@ -52,6 +57,7 @@ CHOICE_RULES: tuple[ChoiceRule, ...] = (
     ),
     ChoiceRule("algo_config.text_processing.sparse_fallback_mode", frozenset({"tf", "log_tf"})),
     ChoiceRule("algo_config.add.schema.chunker.split_mode", frozenset({"llm", "rule"})),
+    ChoiceRule("algo_config.add.schema.version", frozenset({"v1", "v2"})),
     ChoiceRule("kafka.acks", frozenset({"0", "1", "all"})),
 )
 
@@ -101,12 +107,15 @@ RANGE_RULES: tuple[RangeRule, ...] = (
     RangeRule("database.neo4j.read_retry_base_delay", min_value=0, support="non-negative number"),
     RangeRule("chat_model_router.allowed_fails", min_value=0, allow_none=True, support="non-negative integer"),
     RangeRule("chat_model_router.cool_down", min_value=0, allow_none=True, support="non-negative number"),
+    RangeRule("chat_model_router.retry_after", min_value=0, support="non-negative number"),
     RangeRule("chat_model_router.format_parser_max_attempts", min_value=1, support="positive integer >= 1"),
     RangeRule("embed_model_router.allowed_fails", min_value=0, allow_none=True, support="non-negative integer"),
     RangeRule("embed_model_router.cool_down", min_value=0, allow_none=True, support="non-negative number"),
+    RangeRule("embed_model_router.retry_after", min_value=0, support="non-negative number"),
     RangeRule("embed_model_router.format_parser_max_attempts", min_value=1, support="positive integer >= 1"),
     RangeRule("rerank_model_router.allowed_fails", min_value=0, allow_none=True, support="non-negative integer"),
     RangeRule("rerank_model_router.cool_down", min_value=0, allow_none=True, support="non-negative number"),
+    RangeRule("rerank_model_router.retry_after", min_value=0, support="non-negative number"),
     RangeRule("rerank_model_router.format_parser_max_attempts", min_value=1, support="positive integer >= 1"),
     RangeRule("algo_config.text_processing.explicit_language_confidence", min_value=0, max_value=1),
     RangeRule("algo_config.text_processing.lang_zh_ratio", min_value=0, max_value=1),
@@ -208,15 +217,6 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         support="positive number",
     ),
     RangeRule(
-        "algo_config.add.schema.extraction.max_entities_per_conversation", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
-        "algo_config.add.schema.extraction.max_entity_resolve_concurrency", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
-        "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"
-    ),
-    RangeRule(
         "algo_config.add.schema.merge.secondary_search_retry_backoff_base",
         min_value=0,
         include_min=False,
@@ -228,7 +228,47 @@ RANGE_RULES: tuple[RangeRule, ...] = (
         include_min=False,
         support="positive number",
     ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entities_per_conversation", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_entity_resolve_concurrency", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.extraction.max_properties_per_entity", min_value=1, support="positive integer >= 1"
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.description_rewrite_threshold",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.description_max_chars",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
+    RangeRule(
+        "algo_config.add.schema.merge.reference_description_max_chars",
+        min_value=1,
+        support="positive integer >= 1",
+    ),
     RangeRule("algo_config.search.request_top_k_max", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.search.retention.min_token_budget", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.search.retention.max_token_budget", min_value=1, support="positive integer >= 1"),
+    RangeRule("algo_config.search.retention.max_candidates", min_value=1, max_value=100),
+    RangeRule("algo_config.search.retention.relevance_weight", min_value=0, support="non-negative number"),
+    RangeRule("algo_config.search.retention.query_overlap_weight", min_value=0, support="non-negative number"),
+    RangeRule("algo_config.search.retention.recency_weight", min_value=0, support="non-negative number"),
+    RangeRule("algo_config.search.retention.cost_weight", min_value=0, support="non-negative number"),
+    RangeRule(
+        "algo_config.search.retention.recency_half_life_days",
+        min_value=0,
+        include_min=False,
+        support="positive number",
+    ),
+    RangeRule("algo_config.search.retention.missing_recency_score", min_value=0, max_value=1),
+    RangeRule("algo_config.search.retention.top_m_guarantee", min_value=0, max_value=100),
+    RangeRule("algo_config.search.retention.mmr_lambda", min_value=0, max_value=1),
     RangeRule(
         "algo_config.search.vanilla.dedup_threshold",
         min_value=0,
@@ -385,8 +425,6 @@ REQUIRED_STRING_PATHS: tuple[str, ...] = (
     "database.qdrant.search_record_collection",
     "database.qdrant.skill_version_collection",
     "database.qdrant.skill_blob_collection",
-    "database.qdrant.skill_family_collection",
-    "database.qdrant.skill_operation_collection",
     "database.qdrant.skill_trace_pending_collection",
     "database.qdrant.skill_trace_summary_collection",
     "database.qdrant.semantic_vector_name",
@@ -402,7 +440,7 @@ REQUIRED_STRING_PATHS: tuple[str, ...] = (
 )
 
 
-def validate_config(cfg: Any) -> None:
+def validate_config(cfg: Any, *, allow_project_embedding_dimensions: bool = False) -> None:
     """Validate a fully built config object before it becomes the process config."""
 
     _validate_choice_rules(cfg)
@@ -413,8 +451,9 @@ def validate_config(cfg: Any) -> None:
     _validate_model_router("chat_model_router", cfg.chat_model_router)
     _validate_model_router("embed_model_router", cfg.embed_model_router)
     _validate_model_router("rerank_model_router", cfg.rerank_model_router)
-    _validate_embedding_vector_size(cfg)
+    _validate_embedding_vector_size(cfg, allow_project_embedding_dimensions=allow_project_embedding_dimensions)
     _validate_algo(cfg)
+    _validate_multimodal(cfg)
     _validate_kafka(cfg.kafka)
 
 
@@ -493,11 +532,16 @@ def _validate_model_router(path: str, router: Any) -> None:
         _positive_optional(endpoint, "dimensions", f"{prefix}.dimensions")
 
 
-def _validate_embedding_vector_size(cfg: Any) -> None:
+def _validate_embedding_vector_size(cfg: Any, *, allow_project_embedding_dimensions: bool = False) -> None:
+    allow_project_dimension = (
+        allow_project_embedding_dimensions
+        and bool(cfg.provider_binding.enabled)
+        and bool(cfg.database.qdrant.project_collection_namespace_enabled)
+    )
     vector_size = cfg.database.qdrant.vector_size
     for index, endpoint in enumerate(cfg.embed_model_router.endpoints):
         dimensions = endpoint.dimensions
-        if dimensions is not None and dimensions != vector_size:
+        if dimensions is not None and dimensions != vector_size and not allow_project_dimension:
             raise InvalidConfigError(
                 f"embed_model_router.endpoints[{index}].dimensions",
                 support=f"must equal database.qdrant.vector_size ({vector_size})",
@@ -541,6 +585,13 @@ def _validate_schema_add(schema_add: Any) -> None:
 
 
 def _validate_search(search: Any) -> None:
+    retention = search.retention
+    if retention.min_token_budget > retention.max_token_budget:
+        raise InvalidConfigError(
+            "algo_config.search.retention.min_token_budget",
+            support="<= algo_config.search.retention.max_token_budget",
+        )
+
     vanilla = search.vanilla
     if vanilla.hybrid_prefetch_min > vanilla.hybrid_prefetch_max:
         raise InvalidConfigError(
@@ -554,6 +605,129 @@ def _validate_search(search: Any) -> None:
             "algo_config.search.schema_search.property.alloc_max_factor",
             support=">= algo_config.search.schema_search.property.alloc_min_factor",
         )
+
+
+def _validate_multimodal(cfg: Any) -> None:
+    mm = cfg.algo_config.multimodal
+    if str(mm.mode) not in MULTIMODAL_MODES:
+        # YAML 1.1 reads a bare `off` as false.
+        raise InvalidConfigError(
+            "algo_config.multimodal.mode", support=", ".join(sorted(MULTIMODAL_MODES)) + ' (quote it in YAML: "off")'
+        )
+
+    dimensions: set[int] = set()
+    for index, endpoint in enumerate(cfg.mm_embed_model_router.endpoints):
+        prefix = f"mm_embed_model_router.endpoints[{index}]"
+        _require_string(f"{prefix}.model", _attr(endpoint, "model", f"{prefix}.model"))
+        _require_string(f"{prefix}.api_base", _attr(endpoint, "api_base", f"{prefix}.api_base"))
+        _validate_choice(f"{prefix}.image_transport", endpoint.image_transport, set(MM_IMAGE_TRANSPORTS))
+        if endpoint.dimensions is None:
+            raise MissingConfigValueError(f"{prefix}.dimensions", reason="it sizes the image collection")
+        _validate_range(f"{prefix}.dimensions", endpoint.dimensions, RangeRule(f"{prefix}.dimensions", min_value=1))
+        dimensions.add(int(endpoint.dimensions))
+        _validate_range(
+            f"{prefix}.timeout",
+            endpoint.timeout,
+            RangeRule(f"{prefix}.timeout", min_value=0, include_min=False, support="positive number"),
+        )
+        _validate_range(
+            f"{prefix}.num_retries",
+            endpoint.num_retries,
+            RangeRule(f"{prefix}.num_retries", min_value=0, support="non-negative integer"),
+        )
+        _validate_range(
+            f"{prefix}.max_batch_size",
+            endpoint.max_batch_size,
+            RangeRule(f"{prefix}.max_batch_size", min_value=1, support="positive integer >= 1"),
+        )
+    if len(dimensions) > 1:
+        raise InvalidConfigError(
+            "mm_embed_model_router.endpoints[].dimensions", support="one value shared by all endpoints"
+        )
+
+    blob = cfg.blob_store
+    if cfg.algo_config.multimodal.mode != "off":
+        # Images are stored as S3 blobs, so any multimodal deployment must point at
+        # MinIO/another S3 endpoint; with mode off the blob store is never touched.
+        _require_string("blob_store.s3_endpoint", blob.s3_endpoint)
+        if not blob.s3_endpoint.startswith(("http://", "https://")):
+            raise InvalidConfigError(
+                "blob_store.s3_endpoint", support="an http:// or https:// URL (the scheme decides TLS)"
+            )
+        _require_string("blob_store.s3_bucket", blob.s3_bucket)
+        _require_string("blob_store.s3_access_key", blob.s3_access_key, reason="every s3 request is signed")
+        _require_string("blob_store.s3_secret_key", blob.s3_secret_key, reason="every s3 request is signed")
+        # An explicit empty region yields a region-less client whose presigning does a live
+        # GetBucketLocation lookup — the exact network I/O presigning must avoid.
+        _require_string(
+            "blob_store.s3_region", blob.s3_region, reason="presigning stays offline only with an explicit region"
+        )
+    if blob.s3_presign_endpoint and not blob.s3_presign_endpoint.startswith(("http://", "https://")):
+        raise InvalidConfigError(
+            "blob_store.s3_presign_endpoint",
+            support="an http:// or https:// URL (the scheme decides TLS), or leave it unset",
+        )
+    _validate_range(
+        "blob_store.s3_presign_expiry_seconds",
+        blob.s3_presign_expiry_seconds,
+        RangeRule(
+            "blob_store.s3_presign_expiry_seconds",
+            min_value=1,
+            max_value=604800,
+            support="1..604800 seconds (the S3 presign limit of 7 days)",
+        ),
+    )
+    if blob.proxy_public_base_url and not blob.proxy_public_base_url.startswith(("http://", "https://")):
+        raise InvalidConfigError(
+            "blob_store.proxy_public_base_url",
+            support="an http:// or https:// URL (the scheme decides TLS), or leave it unset",
+        )
+    if blob.proxy_url_expiry_seconds is not None:
+        _validate_range(
+            "blob_store.proxy_url_expiry_seconds",
+            blob.proxy_url_expiry_seconds,
+            RangeRule(
+                "blob_store.proxy_url_expiry_seconds",
+                min_value=1,
+                max_value=604800,
+                support="1..604800 seconds, or leave it unset to reuse s3_presign_expiry_seconds",
+            ),
+        )
+    _validate_range(
+        "blob_store.max_image_bytes", blob.max_image_bytes, RangeRule("blob_store.max_image_bytes", min_value=1)
+    )
+    _validate_range(
+        "blob_store.url_fetch_timeout",
+        blob.url_fetch_timeout,
+        RangeRule("blob_store.url_fetch_timeout", min_value=0, include_min=False, support="positive number"),
+    )
+
+    mm = cfg.algo_config.multimodal
+    for name, minimum in (
+        ("image_top_k", 1),
+        ("max_images_per_request", 1),
+        ("max_query_images", 1),
+        ("max_occurrences_per_image", 1),
+        ("image_context_chars", 0),
+        ("evidence_images", 0),
+        ("anchored_fact_limit", 0),
+        ("session_expansion_images", 0),
+        ("image_hit_margin", 0),
+        ("max_visual_facts_per_image", 0),
+        ("visual_fact_limit", 0),
+        ("visual_fact_images", 0),
+        ("max_extraction_images", 1),
+        ("max_concurrent_vlm_calls", 0),
+        ("agentic_max_steps", 1),
+    ):
+        path = f"algo_config.multimodal.{name}"
+        _validate_range(path, getattr(mm, name), RangeRule(path, min_value=minimum))
+    _validate_range(
+        "algo_config.multimodal.image_text_weight",
+        mm.image_text_weight,
+        RangeRule("algo_config.multimodal.image_text_weight", min_value=0, max_value=1),
+    )
+    _validate_choice("algo_config.multimodal.extraction_image_detail", mm.extraction_image_detail, set(IMAGE_DETAILS))
 
 
 def _validate_kafka(kafka: Any) -> None:
@@ -654,6 +828,8 @@ def _validate_range(path: str, value: Any, rule: RangeRule) -> None:
         return
     if isinstance(value, bool) or not isinstance(value, Real):
         raise InvalidConfigError(path, support=rule.support or "number")
+    if not isfinite(value):
+        raise InvalidConfigError(path, support=rule.support or "finite number")
     if rule.min_value is not None:
         too_small = value < rule.min_value if rule.include_min else value <= rule.min_value
         if too_small:

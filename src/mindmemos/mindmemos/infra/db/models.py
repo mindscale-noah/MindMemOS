@@ -55,6 +55,8 @@ class QdrantCollectionSpec:
     enable_sparse: bool = False
     on_disk_payload: bool | None = None
     payload_indexes: list[PayloadIndexSpec] = field(default_factory=list)
+    extra_dense_vectors: tuple[tuple[str, int], ...] = ()
+    """Additional named dense vectors ``(name, size)`` using the same distance."""
 
 
 @dataclass(kw_only=True)
@@ -64,6 +66,7 @@ class MemoryPoint:
     memory_id: str
     payload: dict[str, Any]
     semantic_vector: list[float] | None = None
+    semantic_dimension: int | None = None
     bm25_vector: SparseVectorData | None = None
 
 
@@ -74,6 +77,7 @@ class EntityPoint:
     entity_id: str
     payload: dict[str, Any]
     vector: list[float] | None = None
+    semantic_dimension: int | None = None
     bm25_vector: SparseVectorData | None = None
 
 
@@ -84,6 +88,19 @@ class SourcePoint:
     source_id: str
     payload: dict[str, Any]
     vector: list[float] | None = None
+
+
+@dataclass(kw_only=True)
+class ImagePoint:
+    """Qdrant point for the image collection: a multimodal image vector and an optional text vector."""
+
+    image_id: str
+    payload: dict[str, Any]
+    vector: list[float]
+    # The text embedding of the image's description / visual facts (enhanced mode writes it
+    # on add via ``update_images(text_vectors=...)``), searched by the text channel of image
+    # search; None when the text embedding is unavailable and only the image vector remains.
+    text_vector: list[float] | None = None
 
 
 @dataclass(kw_only=True)
@@ -136,22 +153,6 @@ class SkillBlobPoint:
 
 
 @dataclass(kw_only=True)
-class SkillFamilyPoint:
-    """Qdrant point for additive cloud family state in ``skill_family_v1``."""
-
-    family_id: str
-    payload: dict[str, Any]
-
-
-@dataclass(kw_only=True)
-class SkillOperationPoint:
-    """Qdrant point for one durable idempotency entry in ``skill_operation_v1``."""
-
-    operation_point_id: str
-    payload: dict[str, Any]
-
-
-@dataclass(kw_only=True)
 class SkillTracePendingPoint:
     """Qdrant point for ``skill_trace_pending_v1`` (random ``uuid4`` point id)."""
 
@@ -169,6 +170,14 @@ class SkillTraceSummaryPoint:
     """
 
     summary_id: str
+    payload: dict[str, Any]
+
+
+@dataclass(kw_only=True)
+class ProviderBindingPoint:
+    """Qdrant point for ``provider_binding_v1``."""
+
+    binding_id: str
     payload: dict[str, Any]
 
 

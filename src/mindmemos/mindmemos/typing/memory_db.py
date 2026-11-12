@@ -109,6 +109,7 @@ class MemoryDbMemoryUpdateCommand(BaseModel):
     versioned content update also needs to refresh business fields such as
     ``property_name`` or ``validate_from`` without bypassing ``update_memory``.
     """
+
     status: MemoryStatus | None = None
     reinforcement_count_delta: int = 0
     reason: str | None = None
@@ -117,17 +118,26 @@ class MemoryDbMemoryUpdateCommand(BaseModel):
     """If set, skip this update when the existing metadata already has the same
     value for this key as ``metadata_patch[dedup_metadata_key]``.  Used to make
     reinforcement commands idempotent across Kafka retries."""
+
     dense_vector: list[float] | None = None
     """Dense semantic vector to replace on Qdrant.  Set by UPDATE actions that
     recompute the embedding after content changes."""
+
     sparse_vectors: dict[str, Any] | None = None
     """Sparse BM25 vector payload to replace on Qdrant (bm25_indices, bm25_values)."""
+
     embedding: list[float] | None = None
     """Precomputed dense semantic vector accepted by the public update command path."""
+
     bm25_indices: list[int] | None = None
     """Precomputed BM25 sparse indices; values default to 1.0 for API-side commands."""
+
     graph_content_sync: bool = False
     """If True, also update the Neo4j memory node content property."""
+    refresh_vectors: bool = False
+    """Rebuild vectors from stored content without rewriting content or graph data."""
+    touch_update_at: bool = True
+    """Whether this operational mutation changes the user-visible update timestamp."""
 
 
 class MemoryDbEntityUpdateCommand(BaseModel):
@@ -164,14 +174,13 @@ class MemoryDbSourceUpdateCommand(BaseModel):
 
 
 class MemoryDbMemoryDeleteCommand(BaseModel):
-    """Purpose: Archive or hard-delete one existing memory.
+    """Purpose: Archive one existing memory.
 
     Used in: delete, feedback delete, dreaming archive, and schema merge
     archive flows.
     """
 
     memory_id: str
-    hard: bool = False
     reason: str = "user_request"
     consistency: ConsistencyMode = "strong"
 
@@ -401,7 +410,6 @@ class MemoryDbMutationResult(BaseModel):
     status: str = "ok"
     memory_id: str
     changed: bool = True
-    hard: bool = False
 
 
 class MemoryDbWriteSummary(BaseModel):

@@ -29,7 +29,15 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 AddMode = Literal["sync", "async"]
 ConsistencyMode = Literal["fast", "strong"]
@@ -184,6 +192,62 @@ class UrlMessage(BaseModel):
     url: str
 
 
+IMAGE_DATA_REDACTED = "<redacted>"
+"""Placeholder written instead of inline image bytes when a request is persisted as a record."""
+
+
+class ImageRef(BaseModel):
+    """Purpose: Reference one image attached to a dialogue turn or a search query.
+
+    Used in: ``DialogueMessage.images`` and ``SearchPipelineInput.query_images``.
+    Exactly one of ``path`` / ``url`` / ``data`` / ``blob_id`` locates the bytes.
+    Accepted by ``vanilla`` when ``algo_config.multimodal.mode`` is basic or enhanced.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str | None = Field(
+        default=None,
+        description=(
+            "Server-readable local path; accepted only under configured blob_store.allowed_path_roots "
+            "(else 400 image.path_denied)."
+        ),
+    )
+
+    url: str | None = None
+    """http(s) URL the server downloads."""
+
+    data: str | None = None
+    """Inline image bytes as base64 or a ``data:<mime>;base64,`` URI."""
+
+    blob_id: str | None = None
+    """Id of an image already stored for this project (returned by search results)."""
+
+    mime_type: str | None = None
+    """Optional MIME type hint; the server sniffs the real type from the bytes."""
+
+    image_id: str | None = None
+    """Caller-side image identifier, echoed back in search results."""
+
+    caption: str | None = None
+    """Optional caller-supplied caption."""
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> ImageRef:
+        sources = [name for name in ("path", "url", "data", "blob_id") if getattr(self, name)]
+        if len(sources) != 1:
+            raise ValueError("image must set exactly one of path, url, data, blob_id")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
+        data = handler(self)
+        # Records keep the reference but not the (possibly megabytes of) inline bytes.
+        if self.data and isinstance(info.context, dict) and info.context.get("redact_image_data"):
+            data["data"] = IMAGE_DATA_REDACTED
+        return data
+
+
 class DialogueMessage(BaseModel):
     """Purpose: Carry one conversational turn for memory add.
 
@@ -200,6 +264,23 @@ class DialogueMessage(BaseModel):
 
     timestamp: int | None = None
     """Dialogue event time as a 13-digit millisecond timestamp, or None when omitted."""
+
+    images: list[ImageRef] = Field(
+        default_factory=list,
+        description=(
+            "Images attached to this turn; accepted by vanilla with algo_config.multimodal.mode "
+            "basic or enhanced, rejected (400, add.images_unsupported) while it is off. Server "
+            "path sources must fall under blob_store.allowed_path_roots (image.path_denied)."
+        ),
+    )
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        # Text-only turns serialize exactly as before images existed (records, queue messages).
+        if not self.images:
+            data.pop("images", None)
+        return data
 
 
 class SourceRef(BaseModel):
@@ -531,6 +612,7 @@ class VectorWrite(BaseModel):
 
     memory_id: str
     semantic_vector: list[float] | None = None
+    semantic_dimension: int | None = Field(default=None, gt=0)
     bm25_indices: list[int] = Field(default_factory=list)
     bm25_values: list[float] = Field(default_factory=list)
 
@@ -544,6 +626,7 @@ class EntityVectorWrite(BaseModel):
 
     entity_id: str
     semantic_vector: list[float] | None = None
+    semantic_dimension: int | None = Field(default=None, gt=0)
     bm25_indices: list[int] | None = None
     bm25_values: list[float] | None = None
 
@@ -643,16 +726,20 @@ class EntitySearchHit(BaseModel):
 
     entity_id: str
     """Canonical business entity id, never the storage-only search-field point id."""
+
     score: float
     entity: EntityView | None = None
     source: str | None = None
     rank: int | None = None
     best_search_field: str = ""
     """Highest-scoring matched search_field text for this query, empty for core-point hits."""
+
     best_search_field_index: int | None = None
     """Original index of the matched search_field on the entity metadata."""
+
     best_search_field_score: float | None = None
     """Raw recall score for the matched search_field."""
+
     matched_point_role: str = "core"
     """Storage point role for the winning hit: ``core`` or ``search_field``."""
 

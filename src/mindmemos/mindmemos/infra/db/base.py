@@ -176,8 +176,12 @@ class QdrantStore(Protocol):
         limit: int = 50,
         cursor: Any | None = None,
         with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll memories."""
+
+    async def count_memories(self, project_id: str, *, filter_: Any | None = None) -> int:
+        """Count memories."""
 
     async def scroll_add_records(
         self,
@@ -192,6 +196,11 @@ class QdrantStore(Protocol):
 
     async def get_add_records_by_ids(self, project_id: str, add_record_ids: list[str]) -> list[QdrantRecord]:
         """Retrieve add records by IDs."""
+
+    async def get_memory_provenance(
+        self, project_id: str, memory_id: str, *, add_record_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Retrieve allowlisted provenance for a memory in one project."""
 
     async def scroll_add_records_global(
         self,
@@ -312,7 +321,6 @@ class Neo4jStore(Protocol):
 
     async def close(self) -> None:
         """Close the underlying driver."""
-
 
 
 class AddRecordStore(Protocol):

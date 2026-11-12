@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..filters import SOURCE_PAYLOAD_INDEX_SCHEMA
 from ..models import QdrantRecord, SourcePoint
 from .base import CollectionRepository
 
@@ -16,10 +17,22 @@ class SourceRepository(CollectionRepository):
     async def upsert(self, points: list[SourcePoint]) -> None:
         """Upsert many source points."""
 
-        await self._engine.upsert(
-            self.collection,
-            [self._dense_point(point.source_id, point.vector, point.payload) for point in points],
-        )
+        by_collection: dict[str, list[SourcePoint]] = {}
+        for point in points:
+            vector_size = len(point.vector or []) or self._cfg.vector_size
+            collection = await self._ensure_project_vector_collection(
+                vector_size=vector_size,
+                enable_sparse=False,
+                payload_indexes=list(SOURCE_PAYLOAD_INDEX_SCHEMA),
+            )
+            by_collection.setdefault(collection, []).append(point)
+        for collection, collection_points in by_collection.items():
+            await self._engine.upsert(
+                collection,
+                [self._dense_point(point.source_id, point.vector, point.payload) for point in collection_points],
+            )
+        for project_id in {str(point.payload.get("project_id") or "") for point in points}:
+            self._invalidate_project_collection_cache(project_id)
 
     async def get(self, project_id: str, source_id: str, *, with_vectors: bool = False) -> QdrantRecord | None:
         """Retrieve one source by project and id."""

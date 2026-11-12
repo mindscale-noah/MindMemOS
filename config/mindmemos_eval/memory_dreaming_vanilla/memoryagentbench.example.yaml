@@ -1,0 +1,74 @@
+runner:
+  base_url: http://127.0.0.1:8000
+  timeout_seconds: 1800
+  max_conv_concurrency: 2
+  max_qa_concurrency: 10
+  add: true
+  score: true
+  show_progress: true
+  llm:
+    model: gpt-4.1-mini
+    api_key: your-api-key
+    base_url: https://your-base-url/v1
+    temperature: 0.0
+    max_tokens:
+    timeout: 60
+  answer_llm:
+    model: gpt-4.1-mini
+    api_key: your-api-key
+    base_url: https://your-base-url/v1
+
+benchmarks:
+  memoryagentbench:
+    dataset: data/memoryagentbench_conflict_resolution.json
+    sub_dataset: factconsolidation_sh_6k
+    default_algorithm: vanilla
+    max_queries: 0
+
+execution_params:
+  memoryagentbench:
+    chunk_size: 1024
+
+algorithm_profiles:
+  vanilla:
+    memory_algorithm: vanilla
+    search_params:
+      public_search_strategy: fast
+      top_k: 50
+      rerank: false
+    project_override_config:
+      algo_config:
+        common:
+          prompt_language: EN
+        add:
+          vanilla:
+            chunk_soft_token_budget: 26000
+            chunk_hard_token_budget: 32000
+            turn_hard_token_budget: 16000
+            history_soft_token_budget: 2000
+            history_hard_token_budget: 4000
+            history_min_turn_count: 1
+            compaction_soft_token_budget: 16000
+            compaction_head_tokens: 4000
+            compaction_tail_tokens: 4000
+            compaction_summary_context_token_budget: 200000
+            compaction_summary_output_token_budget: 8000
+            time_gap_threshold_seconds: 1800
+            template_tokens: 1000
+            recall_budget: 2000
+            output_headroom: 4000
+            enable_entities: true
+        search:
+          request_top_k_max: 100
+          vanilla:
+            recall_size: 50
+            use_reranker: true
+            graph_enabled: true
+            graph_seed_memory_limit: 5
+            graph_related_per_seed: 3
+            graph_max_candidates: 10
+            graph_decay: 0.5
+            graph_score: 0.01
+          rerank:
+            max_query_length: 200
+            max_doc_length: 2000

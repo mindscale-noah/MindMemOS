@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-from ...llm import LLMClient, get_llm_client
+from ...llm import LLMClient, get_llm_client, require_model_endpoint
 from ...logging import get_logger
 from ...prompts import CONV_BOUNDARY_DETECTION_PROMPT
 
@@ -23,7 +23,6 @@ class EpisodeBoundary:
     start_idx: int
     end_idx: int
     title: str = ""
-    reasoning: str = ""
 
 
 class EpisodesChunker:
@@ -83,6 +82,8 @@ class EpisodesChunker:
         resplit_prompt: str | None,
     ) -> list[EpisodeBoundary]:
         prompt = boundary_prompt.replace("{conversation_list}", _format_entries(entries))
+        if self.llm_client is None:
+            require_model_endpoint("chat")
         llm_client = self.llm_client or get_llm_client()
         response = await llm_client.chat(
             task="memory.add.episode_boundary",
@@ -110,25 +111,21 @@ class EpisodesChunker:
             entry_time = _entry_time(entry)
             speaker = str(entry.get("speaker") or "").lower()
             should_split = False
-            reason = ""
 
             if idx - start_idx >= self.max_messages:
                 should_split = True
-                reason = f"Reached {self.max_messages} messages."
             elif self.split_on_user_speaker and speaker == "user":
                 should_split = True
-                reason = "New user message starts a new episode."
             elif first_time is not None and entry_time is not None and entry_time - first_time > self.max_delta:
                 should_split = True
-                reason = f"More than {self.max_delta} since first message."
 
             if should_split:
-                boundaries.append(EpisodeBoundary(start_idx=start_idx, end_idx=idx - 1, reasoning=reason))
+                boundaries.append(EpisodeBoundary(start_idx=start_idx, end_idx=idx - 1))
                 start_idx = idx
                 first_time = entry_time
 
         if force and start_idx < len(entries):
-            boundaries.append(EpisodeBoundary(start_idx=start_idx, end_idx=len(entries) - 1, reasoning="Force split."))
+            boundaries.append(EpisodeBoundary(start_idx=start_idx, end_idx=len(entries) - 1))
         return _complete_boundaries(boundaries, len(entries), force=force)
 
     async def _resplit_oversized(
@@ -159,6 +156,8 @@ class EpisodesChunker:
             )
 
             try:
+                if self.llm_client is None:
+                    require_model_endpoint("chat")
                 llm_client = self.llm_client or get_llm_client()
                 response = await llm_client.chat(
                     task="memory.add.episode_resplit",
@@ -175,7 +174,6 @@ class EpisodesChunker:
                         start_idx=sb.start_idx + b.start_idx,
                         end_idx=sb.end_idx + b.start_idx,
                         title=sb.title,
-                        reasoning=sb.reasoning,
                     )
                     for sb in sub_boundaries
                 ]
@@ -211,9 +209,7 @@ def _enforce_max_size(boundaries: list[EpisodeBoundary], max_size: int) -> list[
             cursor = b.start_idx
             while cursor <= b.end_idx:
                 chunk_end = min(cursor + max_size - 1, b.end_idx)
-                result.append(
-                    EpisodeBoundary(start_idx=cursor, end_idx=chunk_end, title=b.title, reasoning=b.reasoning)
-                )
+                result.append(EpisodeBoundary(start_idx=cursor, end_idx=chunk_end, title=b.title))
                 cursor = chunk_end + 1
     return result
 
@@ -228,9 +224,7 @@ def _complete_boundaries(boundaries: list[EpisodeBoundary], entry_count: int, *,
             continue
         if not force and end_idx >= entry_count - 1:
             break
-        complete.append(
-            EpisodeBoundary(start_idx=start_idx, end_idx=end_idx, title=boundary.title, reasoning=boundary.reasoning)
-        )
+        complete.append(EpisodeBoundary(start_idx=start_idx, end_idx=end_idx, title=boundary.title))
         expected_start = end_idx + 1
     return complete
 
@@ -259,7 +253,6 @@ def _coerce_boundaries(value: Any) -> list[EpisodeBoundary]:
                     start_idx=start_idx,
                     end_idx=end_idx,
                     title=str(item.get("title") or ""),
-                    reasoning=str(item.get("reasoning") or ""),
                 )
             )
     return boundaries

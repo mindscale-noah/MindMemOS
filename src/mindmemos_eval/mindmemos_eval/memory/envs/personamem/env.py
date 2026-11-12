@@ -677,7 +677,7 @@ class PersonaMemEnv:
         """Return (user_id, session_id) for this scope.
 
         Run-to-run isolation is handled at the project_id level (each run gets its
-        own project_id via --auth-config-output / --reuse-api-key). user_id/session_id
+        own project_id via --api-key-output / --reuse-api-key). user_id/session_id
         stay stable so that --reuse-api-key + --no-add can read memories added by
         a prior run of the same project.
         """
@@ -797,9 +797,7 @@ class PersonaMemEnv:
                     error=f"search failed: {type(exc).__name__}: {exc}",
                 )
             search_elapsed = time.monotonic() - search_started
-            prompt = build_personamem_prompt(
-                item, retrieved_memories=memories, answer_prompt=self._answer_prompt
-            )
+            prompt = build_personamem_prompt(item, retrieved_memories=memories, answer_prompt=self._answer_prompt)
         else:
             prompt = build_personamem_prompt(item, visible_context=self._context_store.visible(item.scope))
 
@@ -873,7 +871,6 @@ class PersonaMemEnv:
         max_build_concurrency: int = 2,
         max_qa_concurrency: int = 4,
         add: bool = True,
-        score: bool = True,
         show_progress: bool = True,
     ) -> PersonaMemRunResult:
         """Interleave incremental context builds with boundary-scoped answering.
@@ -887,7 +884,6 @@ class PersonaMemEnv:
         then are later messages added. Each question therefore sees exactly
         the officially visible prefix ``[0, end_index)`` of its own context.
         """
-        del score  # PersonaMem scoring is deterministic and always accompanies an answer.
         started = time.monotonic()
 
         # Group by shared_context_id -> end_index.

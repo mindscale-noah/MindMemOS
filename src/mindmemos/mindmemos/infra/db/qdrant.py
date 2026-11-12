@@ -16,12 +16,15 @@ from typing import Any
 from qdrant_client import AsyncQdrantClient
 from qdrant_client import models as qmodels
 
-from ...config import QdrantConfig
+from ...config import QdrantConfig, get_config
+from ...errors import ConfigNotInitializedError
 from ...logging import get_logger
 from .collections import (
     AddRecordRepository,
     EntityRepository,
+    ImageRepository,
     MemoryRepository,
+    ProviderBindingRepository,
     SchemaAddBufferRepository,
     SearchRecordRepository,
     SourceRepository,
@@ -31,6 +34,7 @@ from .models import (
     AddRecordPoint,
     EntityPoint,
     MemoryPoint,
+    ProviderBindingPoint,
     QdrantCollectionSpec,
     QdrantRecord,
     QdrantSearchRecord,
@@ -56,6 +60,8 @@ class QdrantStore:
         self._add_record = AddRecordRepository(self._engine, cfg)
         self._schema_add_buffer = SchemaAddBufferRepository(self._engine, cfg)
         self._search_record = SearchRecordRepository(self._engine, cfg)
+        self._provider_binding = ProviderBindingRepository(self._engine, cfg)
+        self._image = ImageRepository(self._engine, cfg)
 
     @property
     def engine(self) -> QdrantEngine:
@@ -106,6 +112,18 @@ class QdrantStore:
         return self._search_record
 
     @property
+    def provider_binding(self) -> ProviderBindingRepository:
+        """Repository for ``provider_binding_v1``."""
+
+        return self._provider_binding
+
+    @property
+    def image(self) -> ImageRepository:
+        """Repository for the multimodal image collection."""
+
+        return self._image
+
+    @property
     def memory_collection(self) -> str:
         """Configured ``memory_item_v1`` collection name."""
 
@@ -142,6 +160,12 @@ class QdrantStore:
         return self._cfg.search_record_collection
 
     @property
+    def provider_binding_collection(self) -> str:
+        """Configured ``provider_binding_v1`` collection name."""
+
+        return self._cfg.provider_binding_collection
+
+    @property
     def semantic_vector_name(self) -> str:
         """Configured dense vector name."""
 
@@ -159,6 +183,14 @@ class QdrantStore:
         if not self._cfg.auto_create:
             return
         for spec in all_collection_specs(self._cfg):
+            if self._cfg.project_collection_namespace_enabled and spec.name in {
+                self._cfg.memory_collection,
+                self._cfg.entity_collection,
+                self._cfg.source_collection,
+            }:
+                continue
+            if spec.name == self._cfg.provider_binding_collection and not _provider_binding_enabled():
+                continue
             await self._engine.ensure_collection(spec)
 
     async def ensure_collection(self, spec: QdrantCollectionSpec) -> None:
@@ -167,6 +199,14 @@ class QdrantStore:
         if not self._cfg.auto_create:
             return
         await self._engine.ensure_collection(spec)
+
+    async def project_memory_vector_size(self, project_id: str) -> int | None:
+        """Return the immutable dense dimension of an existing project memory collection."""
+
+        collection = await self._memory._collection_holding_project(project_id)
+        if collection is None:
+            return None
+        return await self._engine.dense_vector_size(collection, self._cfg.semantic_vector_name)
 
     async def upsert_memory(self, point: MemoryPoint) -> None:
         """Upsert one point into ``memory_item_v1``."""
@@ -239,6 +279,28 @@ class QdrantStore:
         """Upsert many points into ``search_record_v1``."""
 
         await self._search_record.upsert(points)
+
+    async def upsert_provider_binding(self, point: ProviderBindingPoint) -> None:
+        """Upsert one point into ``provider_binding_v1``."""
+
+        await self._provider_binding.upsert([point])
+
+    async def get_provider_binding(self, project_id: str, binding_id: str) -> QdrantRecord | None:
+        """Retrieve one provider binding by project and id."""
+
+        return await self._provider_binding.get(project_id, binding_id)
+
+    async def scroll_provider_bindings(
+        self,
+        project_id: str,
+        *,
+        filter_: qmodels.Filter | None = None,
+        limit: int = 100,
+        cursor: Any | None = None,
+    ) -> tuple[list[QdrantRecord], Any | None]:
+        """Scroll provider bindings in one project."""
+
+        return await self._provider_binding.scroll(project_id, filter_=filter_, limit=limit, cursor=cursor)
 
     async def get_memory(self, project_id: str, memory_id: str, *, with_vectors: bool = False) -> QdrantRecord | None:
         """Retrieve one memory by project and memory id."""
@@ -477,12 +539,28 @@ class QdrantStore:
         limit: int = 50,
         cursor: Any | None = None,
         with_vectors: bool = False,
+        payload_fields: list[str] | None = None,
     ) -> tuple[list[QdrantRecord], Any | None]:
         """Scroll memories in one project."""
 
         return await self._memory.scroll(
-            project_id, filter_=filter_, limit=limit, cursor=cursor, with_vectors=with_vectors
+            project_id,
+            filter_=filter_,
+            limit=limit,
+            cursor=cursor,
+            with_vectors=with_vectors,
+            payload_fields=payload_fields,
         )
+
+    async def count_memories(
+        self,
+        project_id: str,
+        *,
+        filter_: qmodels.Filter | None = None,
+    ) -> int:
+        """Count memories in one project."""
+
+        return await self._memory.count(project_id, filter_=filter_)
 
     async def scroll_add_records(
         self,
@@ -501,6 +579,13 @@ class QdrantStore:
         """Retrieve add-record points by id inside one project."""
 
         return await self._add_record.retrieve(project_id, add_record_ids)
+
+    async def get_memory_provenance(
+        self, project_id: str, memory_id: str, *, add_record_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Read only allowlisted provenance, scoped and cached by project."""
+
+        return await self._add_record.memory_provenance(project_id, memory_id, add_record_id=add_record_id)
 
     async def scroll_add_records_global(
         self,
@@ -565,13 +650,20 @@ class QdrantStore:
             project_id, filter_=filter_, limit=limit, cursor=cursor, order_by=order_by
         )
 
-    async def close(self) -> None:
-        """Close the underlying client."""
-
-        await self._engine.close()
-
     @staticmethod
     def _with_project_filter(project_id: str, filter_: qmodels.Filter | None) -> qmodels.Filter:
         """Backward-compatible project filter helper."""
 
         return QdrantEngine.project_filter(project_id, filter_=filter_)
+
+    async def close(self) -> None:
+        """Close the underlying client."""
+
+        await self._engine.close()
+
+
+def _provider_binding_enabled() -> bool:
+    try:
+        return bool(get_config().provider_binding.enabled)
+    except ConfigNotInitializedError:
+        return False

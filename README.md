@@ -1,431 +1,519 @@
-<h1>
-  <img src="./assets/mindmemos-logo-small.png" alt="MindMemOS logo" width="40" height="40" align="absmiddle" style="vertical-align: middle;" />
-  MindMemOS
-</h1>
+# MindMemOS
 
-![MindMemOS Memory For AI Agents](./assets/mindmemos-hero.png)
+**Give AI agents long-term memory and Skills they can reuse and improve.**
+
+<p align="center">
+  <img src="./assets/mindmemos-readme-hero.png" alt="MindMemOS — Memory &amp; Skills for AI Agents That Keep Evolving">
+</p>
 
 <p align="center">
   <a href="https://mindmemos.cn">
-    <img src="https://img.shields.io/badge/Website-mindmemos.cn-0A66C2?logo=googlechrome&logoColor=white" alt="MindMemOS Website">
+    <img src="https://img.shields.io/badge/Website-mindmemos.cn-0A66C2?labelColor=gray&logo=googlechrome&logoColor=white" alt="MindMemOS Website">
   </a>
-  <a href="https://mindmemos.cn/api-docs">
-    <img src="https://img.shields.io/badge/FastAPI-Docs-009688?logo=fastapi&logoColor=white" alt="MindMemOS FastAPI Docs">
-  </a>
-  <a href="https://pypi.org/project/mindmemos-sdk/">
-    <img src="https://img.shields.io/pypi/v/mindmemos-sdk?color=%2334D058&label=pypi%20sdk" alt="MindMemOS SDK PyPI version">
+  <a href="https://mindmemos.cn/#/api-docs">
+    <img src="https://img.shields.io/badge/FastAPI-Docs-009688?labelColor=gray&logo=fastapi&logoColor=white" alt="MindMemOS FastAPI Docs">
   </a>
   <a href="https://pypi.org/project/mindmemos-sdk/">
-    <img src="https://img.shields.io/pypi/dm/mindmemos-sdk?label=pypi%20downloads" alt="MindMemOS SDK PyPI downloads">
+    <img src="https://img.shields.io/pypi/v/mindmemos-sdk?color=%2334D058&label=pypi%20sdk&labelColor=gray&logo=pypi&logoColor=white" alt="MindMemOS SDK PyPI version">
   </a>
   <a href="https://www.npmjs.com/package/@mindmemos/openclaw-plugin">
-    <img src="https://img.shields.io/npm/v/%40mindmemos%2Fopenclaw-plugin?label=npm%20plugin" alt="MindMemOS OpenClaw Plugin npm version">
+    <img src="https://img.shields.io/npm/v/%40mindmemos%2Fopenclaw-plugin?label=npm%20plugin&labelColor=gray&logo=npm&logoColor=white" alt="MindMemOS OpenClaw Plugin npm version">
+  </a>
+  <a href="https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin">
+    <img src="https://img.shields.io/npm/v/%40mindmemos%2Fdeepseek-harness-plugin?label=dsh%20plugin&labelColor=gray&logo=npm&logoColor=white" alt="MindMemOS DeepSeek Harness Plugin npm version">
+  </a>
+  <a href="https://arxiv.org/abs/2608.12428">
+    <img src="https://img.shields.io/badge/arXiv-2608.12428-B31B1B?labelColor=gray&logo=arxiv&logoColor=white" alt="MindMemOS arXiv paper">
   </a>
   <a href="#license">
-    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License">
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg?labelColor=gray" alt="MIT License">
   </a>
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> | <a href="README_ZH.md">简体中文</a>
+  <strong><a href="README_ZH.md">简体中文</a></strong>
+  &nbsp;&nbsp;│&nbsp;&nbsp;
+  <strong><a href="https://mindmemos.cn">Website</a></strong>
+  &nbsp;&nbsp;│&nbsp;&nbsp;
+  <strong><a href="https://mindmemos.cn/#/api-docs">API Docs</a></strong>
+  &nbsp;&nbsp;│&nbsp;&nbsp;
+  <strong><a href="https://pypi.org/project/mindmemos-sdk/">PYPI SDK</a></strong>
+  &nbsp;&nbsp;│&nbsp;&nbsp;
+  <strong><a href="docs/deploy/instruction.md">Deployment Guide</a></strong>
 </p>
 
-MindMemOS is an open-source long-term memory system for AI agents and applications. It helps agents turn conversations, files, tool traces, feedback, and offline reflection into searchable, updateable, project-isolated memory.
+> ⭐ **Star us on GitHub to automatically upgrade to a Pro quota membership.**
 
-> ⭐ **GitHub Star automatically upgrades your account to Pro quota membership.** [Website](https://mindmemos.cn)
-
-[Website](https://mindmemos.cn) · [FastAPI Docs](https://mindmemos.cn/api-docs) · [PyPI SDK](https://pypi.org/project/mindmemos-sdk/) · [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) · [Local Docs](docs/deploy/instruction.md)
-
-## Benchmark
-
-> **Dataset preparation**: LoCoMo, LongMemEval, and PersonaMem datasets are not included in this
-> repository. Download them from the respective official benchmark sources and place them at the
-> paths configured in the example config files:
-> * LoCoMo → `datasets/locomo/locomo10.json`
-> * LongMemEval → `datasets/longmemeval/longmemeval_s_cleaned.json`
-> * PersonaMem → `datasets/personamem/questions_32k.csv` and `datasets/personamem/shared_contexts_32k.jsonl`
+> **Skill SDK and plugin compatibility**
 >
-> Cross-platform downloader: `uv run python scripts/benchmark_download/download_memory_benchmarks.py`.
+> - **Stay on `/v1/skills`.** Keep your current API key and `mindmemos-sdk` `0.1.5`. If you use a plugin, keep OpenClaw `0.1.5` or DeepSeek Harness `0.1.3`.
+> - **Switch to `/v2/skills`.** Upgrade to `mindmemos-sdk` `1.0.0+` and, if you use a plugin, upgrade it to `0.2.0+` at the same time. [Enable Skill access on your API key](#grant-a-project-api-key-access-to-the-new-skill-service).
 
-### Evaluation of Conversational Memory
+## 📰 News
 
-MindMemOS-schema achieves state-of-the-art on LoCoMo, the most competitive benchmark for long-term memory systems, with an overall score of **93.64**.
+- **2026-11-09** — We officially released **MindMemOS-Skill**. It is an independently deployable service for managing Skill versions, training and evolving Skills, building Skill graphs, and recommending the best Skill combinations. [Quick start](#1-create-an-account-and-an-api-key)
+- **2026-08-18**: We released the [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin), letting DeepSeek Harness (dsh) agents automatically recall and write MindMemOS memories.
+- **2026-08-14**: We released the [MindMemOS 1.0 technical report](https://arxiv.org/abs/2608.12428), *MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents*.
+- **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.
+- **2026-06-30**: MindMemOS was officially released!
 
-* Benchmark: [LoCoMo](https://arxiv.org/abs/2402.17753), the most mainstream and fiercely contested benchmark for long-term memory systems, focused on factual memory retention and joint analysis, covering single-hop, multi-hop, temporal, and open-domain question answering.
-* Note: Answer model: gpt-4.1-mini. Comparison method metrics are cited from the [EverMemOS](https://arxiv.org/abs/2601.02163) paper.
+## 🌟 Core Features
 
-| Method              | Single Hop | Multi Hop | Temporal | Open Domain | Overall   |
-| :------------------ | :--------: | :-------: | :------: | :---------: | :-------: |
-| MemU                |    74.91   |   72.34   |  43.61   |    54.17    |   66.67   |
-| MemOS               |    85.37   |   79.43   |  75.08   |    64.58    |   80.76   |
-| Zep                 |    90.84   |   81.91   |  77.26   |    75.00    |   85.22   |
-| EverMemOS           |    96.67   |   91.84   |  89.72   |    76.04    |   93.05   |
-| **MindMemOS-schema** | **97.62**  | **93.26** | 89.01 |  75.00 | **93.64** |
+- **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable assets, allowing OpenClaw, Hermes, Claude Code, OpenHands, and other agents to share or transfer the same long-term memory.
+- **Self-evolving memory system**: Continuously improve memory quality through schema learning, dreaming, and feedback by automatically learning frequent memory patterns, consolidating memories offline, and using interaction corrections to optimize add/search workflows.
+- **Improve Skills with tasks and past trajectories**. Use MindMemOS-Skill to register and version Skills, save agent execution trajectories, and score both Skills and trajectories. Build and manage Skill graphs to recommend Skill combinations for a given task. Train Skills on tasks with TreeSkill or Skill-Forest, or use saved trajectories to evolve a specific version offline. Deploy the Skill API independently or call the Python service directly.
+- **Local Web workbench**: Connect to Memory and Skill through the SDK to search and edit memories, manage Skill versions, inspect graph snapshots, preview dynamic Skills, and edit connections.
+- **Plugin integrations**: Connect MindMemOS to different agents and workflows through plugins that retrieve and inject relevant memories before interactions and automatically write conversations back afterward. The [OpenClaw Plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) and [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin) are currently available, with more integrations in progress.
 
-Evaluation config: [`config/mindmemos_eval/memory_evaluation_locomo.example.yaml`](config/mindmemos_eval/memory_evaluation_locomo.example.yaml)
+- **Multimodal memory**. Vanilla Memory accepts text and images for add and search and stores originals in S3 or MinIO. Enhanced mode adds visual fact extraction and multimodal agentic search. The default mode is text-only.
 
-```bash
-cp config/mindmemos_eval/memory_evaluation_locomo.example.yaml config/mindmemos_eval/memory_evaluation_locomo.yaml
-# fill in API keys, then run. Start the server first — make sure its api_key_file
-# config points to the eval key file this eval command will generate:
-#   api_key_file: eval_api_keys.yaml
-uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_locomo.yaml \
-  --benchmark-list locomo \
-  --algorithm schema \
-  --manifest-output output/locomo_manifest.jsonl \
-  --auth-config-output config/mindmemos/eval_api_keys.yaml
-```
+### Packages and services
 
-`--auth-config-output` writes the complete MindMemOS HTTP benchmark identity config; it is distinct from
-the model-provider API keys configured under `runner.*llm.api_key`. `--api-key-output` is a deprecated
-compatibility alias and will be removed in a future release.
+![The Web Workbench uses the SDK, which connects to independent Memory and Skill services. Memory evaluation also uses the SDK.](./assets/mindmemos-service-architecture.png)
 
-### Evaluation of Persona Memory
+| Package | Capabilities | Access | Backend dependencies |
+| --- | --- | --- | --- |
+| `src/mindmemos` | Memory read, write, search, feedback, and consolidation | Memory HTTP API | Qdrant **and** Neo4j, S3 **or** MinIO (for multimodal memory)<br>Kafka (async tasks)<br>OpenTelemetry Collector + ClickHouse + Grafana (optional monitoring) |
+| `src/mindmemos_skill` | Skill registration, versions, trajectories, training, evolution, and graphs | Python Service, local CLI, or Skill HTTP API | PostgreSQL (pgvector) **or** SQLite (sqlite-vec)<br>In-process **or** Kafka (async tasks)<br>OpenTelemetry Collector + ClickHouse + Grafana (optional monitoring) |
+| `src/mindmemos_sdk` | API calls, connections, and credentials | Python SDK or `mindmemos` CLI | Memory API and Skill API as needed |
+| `src/mindmemos_eval` | Memory and Skill evaluation | `mindmemos-eval` | Memory evaluation uses the Memory API, Qdrant and Neo4j (cleanup), and ClickHouse (usage metrics)<br>Skill evaluation uses the in-process Skill service and SQLite |
+| `src/mindmemos_ui` | Local Memory and Skill workbench | Browser | Memory API and Skill API via the SDK as needed |
 
-MindMemOS-schema achieves state-of-the-art on PersonaMem with an overall accuracy of **70.6%**, leading the current SOTA by approximately **3 points**.
+## 🚀 Quick Start
 
-* Benchmark: [PersonaMem](https://arxiv.org/abs/2504.14225), a persona-centric memory benchmark focused on user profiling and preference understanding, evaluating recall, tracking, revisiting, suggestion, recommendation, and generalization of user traits.
-* Note: All results are from local runs of open-source code (memory model and answer model: gpt-4.1-mini).
+### 1. Create an account and an API key
 
-| Method              | Recall Sha. | Recall Men. (Ack. Latest) | Track Evo. | Revisit | Suggest | Recommend | Generalize | Overall          |
-| :------------------ | :---------: | :-----------------------: | :--------: | :-----: | :-----: | :-------: | :--------: | :--------------: |
-| MemOS               | 74.42% (96/129) | 82.35% (14/17) | 61.87% (86/139) | 77.78% (77/99) | 44.09% (41/93) | 67.27% (37/55) | 84.21% (48/57) | 67.74% (399/589) |
-| EverMemOS           | 74.42% (96/129) | 64.71% (11/17) | 64.03% (89/139) | 85.86% (85/99) | 35.48% (33/93) | 65.45% (36/55) | 84.21% (48/57) | 67.57% (398/589) |
-| MemU                | 64.34% (83/129) | 64.71% (11/17) | 66.20% (92/139) | 87.88% (87/99) | 31.18% (29/93) | 67.27% (37/55) | 84.21% (48/57) | 65.70% (387/589) |
-| **MindMemOS-schema** | **81.4% (105/129)** | 64.7% (11/17) | 64.7% (90/139) | 82.8% (82/99) | **47.3% (44/93)** | **76.4% (42/55)** | 73.7% (42/57) | **70.6% (416/589)** |
+[Create a MindMemOS account](https://mindmemos.cn/#/register) and sign in to the console. Open or create a project. For a first-time setup, open **API Keys**, choose **Create API key**, and select the project and required scopes. Save the full key after creating it.
 
-Evaluation config: [`config/mindmemos_eval/memory_evaluation_personamem.example.yaml`](config/mindmemos_eval/memory_evaluation_personamem.example.yaml)
+#### Grant a project API key access to the new Skill service
+
+1. Sign in to the [MindMemOS console](https://mindmemos.cn/) and open **API Keys**. Find the key your SDK or plugin uses by its name and prefix, then edit its permissions.
+2. Set **Skill** to **Read and write** to view and register Skills, write new versions, and report execution trajectories. Choose **Read only** if you only need to view Skills and versions. Keep the **Memory** selections you use.
+3. Save the permissions and confirm the Skill access level in the key's **Scopes** column.
+4. Rerun `mindmemos auth` with the authorized key, then use the examples below to verify Skill read and write access. [Use the CLI](#2-use-the-cli)
+
+### 2. Use the CLI
+
+With Python 3.11–3.13 and uv installed, run these commands from the repository root. Replace `alice` with your application's user ID and enter your project API key when prompted. The CLI, SDK, and agent plugins share this configuration.
 
 ```bash
-cp config/mindmemos_eval/memory_evaluation_personamem.example.yaml config/mindmemos_eval/memory_evaluation_personamem.yaml
-# fill in API keys, then run. Start the server first — make sure its api_key_file
-# config points to the eval key file this eval command will generate:
-#   api_key_file: eval_api_keys.yaml
-uv run python -m mindmemos_eval.cli memory \
-  --benchmark-config config/mindmemos_eval/memory_evaluation_personamem.yaml \
-  --benchmark-list personamem \
-  --algorithm schema \
-  --manifest-output output/personamem_manifest.jsonl \
-  --auth-config-output config/mindmemos/eval_api_keys.yaml
+uv sync --package mindmemos-sdk --no-dev --inexact
+source .venv/bin/activate
+mindmemos auth --service-type official --user-id alice
 ```
 
-### Evaluation of Dreaming
-
-* Benchmark: [MemoryAgentBench](https://arxiv.org/abs/2507.05257), a multi-session agent benchmark measuring Subsequence Exact Match (SubEM) for memory-augmented QA. Compares SubEM performance and memory count changes before and after Dreaming.
-* Experiment setting: top-k=50, chunk_size=1024
-* Note: MIRIX and mem0 baseline results are from the paper, where chunk_size=4096.
-
-| Pipeline | Memory Model | Judge Model | Answer Model | Single-hop SubEM | Single-hop Gain | Single-hop Memory Count Change | Multi-hop SubEM | Multi-hop Gain | Multi-hop Memory Count Change | Average SubEM | Average Gain | Average Memory Count Change |
-|----------|--------------|-------------|--------------|:----------------:|:---------------:|:------------------------------:|:---------------:|:--------------:|:-----------------------------:|:------------:|:------------:|:---------------------------:|
-| MIRIX | GPT-4.1-mini | - | GPT-4.1-mini | 20.00% | - | - | 3.00% | - | - | 11.50% | - | - |
-| mem0 | GPT-4o-mini | - | GPT-4o-mini | 18.00% | - | - | 2.00% | - | - | 10.00% | - | - |
-| Ours (Vanilla) | gpt-4.1-mini | - | gpt-4.1-mini | 83.00% | | - | 10.75% | | - | 46.88% | | - |
-| **Ours (Vanilla + Dreaming)** | **gpt-4.1-mini** | **-** | **gpt-4.1-mini** | **88.75%** | **+5.75%** 🟢 | **-27.5%** | **14.00%** | **+3.25%** 🟢 | **-28.3%** | **51.38%** | **+4.50%** 🟢 | **-27.9%** |
-
-### Evaluation of Skill Evolution
-
-With Skill self-evolution, MindMemOS improves task success rate on SpreadsheetBench-Verified to **57.2%**, a **+5.9 point** gain over No-skill and a **+9.2 point** gain over the unevolved Init-skill.
-
-* Benchmark: [SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz), a 400-task verified subset of SpreadsheetBench covering diverse real spreadsheet operations.
-* Note: MindMemOS-Unsup. evolves using execution traces only; MindMemOS-Sup. additionally uses task scores as supervision.
-
-| Method | Success Rate | Time / Task (s) | Agent Tokens | Evolve Tokens |
-|--------|:------------:|:---------------:|:------------:|:-------------:|
-| No-skill | 51.3% ± 0.8% | 11.227 | 10.4M | - |
-| Init-skill | 48.0% ± 1.4% | 15.350 | 16.9M | - |
-| **MindMemOS-Unsup.** | **55.3% ± 0.9%** | 15.470 | 27.3M | 5.8M |
-| **MindMemOS-Sup.** | **57.2% ± 2.4%** | 15.631 | 25.2M | 5.5M |
-
-## Core Features
-
-- **Portable across agents**: Persist user profiles, preferences, project facts, tool experience, and skill candidates as reusable user assets that can move across OpenClaw, Hermes, Claude Code, OpenHands, and other agent frameworks.
-- **Self-evolving memory**: Improve memory quality continuously through schema learning, dreaming, and feedback, so the system can learn frequent memory patterns, consolidate duplicates, and use correction signals to optimize add/search behavior.
-- **Memory-Skills loop**: Turn experience memories into skill candidates, then feed skill execution results, failures, and user feedback back into memory so skills can keep evolving.
-
-## Coming Features
-
-- **Skills system**: Route and govern large, redundant skill libraries, evolve skills from real usage, and synthesize new skills from high-frequency user scenarios through offline simulation and refinement.
-- **File system memory**: Structure scattered knowledge across local files, documents, project artifacts, and agent outputs into managed knowledge objects or graphs, so agents can use the user's file knowledge more reliably to complete tasks.
-- **Agent integrations**: Deeper integrations with coding agents, OpenClaw, Codex-style workflows, and long-running multi-agent systems.
-
-## Quickstart Guide
-
-### 1. Local Deployment
-
-MindMemOS uses `uv` for dependency management and local command execution.
-
-For detailed configuration instructions, see [docs/deploy/instruction.md](docs/deploy/instruction.md).
+**Memory · Add, search, and list memories**
 
 ```bash
-cp .env.example .env
-cp config/mindmemos/dev.example.yaml config/mindmemos/dev.yaml
+mindmemos memory add --content "I like iced Americanos."
+mindmemos memory search "coffee preferences" --top-k 3
+mindmemos memory get --top-k 5
 ```
 
-Configure `config/mindmemos/api_keys.yaml` with an API key and its bound `project_id`. Public memory APIs use bearer authentication:
-
-```text
-Authorization: Bearer <api_key>
-```
-
-Before starting the stack, edit `config/mindmemos/dev.yaml` and configure at least these model routers:
-
-- `chat_model_router`: LLM generation and extraction.
-- `embed_model_router`: semantic embedding generation.
-- `rerank_model_router`: reranking for search candidates.
-
-Also make sure `database.qdrant.vector_size` matches the embedding endpoint
-dimension.
-
-Start the local stack:
+To update or delete the test memory, replace `MEMORY_ID` with its ID from the `memory get` output.
 
 ```bash
-make dev
+mindmemos memory update MEMORY_ID --content "I like unsweetened iced Americanos."
+mindmemos memory delete MEMORY_ID
 ```
 
-`make dev` starts the full Docker dependency stack before FastAPI. To start only core dependencies:
+**Skill · Register, list, view, and export Skills**
+
+Use a project API key with Skill read and write access. Create a sample `SKILL.md`, then view and export the registered Skill by alias.
 
 ```bash
-make dev-core          # Qdrant + Neo4j + Kafka
-make db-observability  # Qdrant + Neo4j + Kafka + ClickHouse + OTel + Grafana
+skill_dir=$(mktemp -d)
+cat > "$skill_dir/SKILL.md" <<'EOF'
+---
+name: meeting-action-items
+description: Extract action items from meeting notes.
+---
+List each action item with its owner and deadline.
+EOF
+
+mindmemos skill register "$skill_dir/SKILL.md" --alias meeting-action-items
+mindmemos skill list --limit 5
+mindmemos skill show meeting-action-items
+mindmemos skill export meeting-action-items --to "$skill_dir/export"
 ```
 
-Docker tier rules:
+See the [CLI reference](docs/cli/instruction.md) for more commands.
 
-- `make dev-core` starts Qdrant, Neo4j, Kafka, Kafka UI, and kafka-exporter.
-- `make dev` and `make db-observability` start the full Docker dependency stack.
-- If `telemetry.enabled=true`, use the full stack so the OTel collector and ClickHouse endpoint exist; Grafana is only for viewing telemetry.
+### 3. Connect the Python SDK
 
-Default local services:
+After authenticating in step 2, use `python` in the same terminal to run either example.
 
-```text
-FastAPI:   http://127.0.0.1:8000
-API Docs:  http://127.0.0.1:8000/docs
-```
-
-Call the local API the same way as the hosted FastAPI service: replace the base
-URL with `http://127.0.0.1:8000` and use the API key configured in
-`config/mindmemos/api_keys.yaml`.
-
-Stop the local stack:
-
-```bash
-make dev-down
-```
-
-### 2. Call Cloud FastAPI
-
-Use this path when calling the hosted MindMemOS FastAPI service.
-Apply for an API key from the MindMemOS website: [https://mindmemos.cn](https://mindmemos.cn).
-Use the issued API key in the `Authorization: Bearer <api_key>` header.
-
-Add a memory:
-
-```bash
-curl -X POST https://mindmemos.cn/v1/memory/add \
-  -H "Authorization: Bearer <api_key>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "u_123",
-    "messages": [
-      {
-        "role": "user",
-        "content": "I prefer iced Americano."
-      }
-    ],
-    "mode": "sync"
-  }'
-```
-
-Search memories:
-
-```bash
-curl -X POST https://mindmemos.cn/v1/memory/search \
-  -H "Authorization: Bearer <api_key>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "u_123",
-    "query": "What coffee does the user prefer?",
-    "top_k": 5,
-    "search_strategy": "fast"
-  }'
-```
-
-For local deployment, replace the base URL with `http://127.0.0.1:8000`.
-
-### 3. Skills Basic Usage
-
-Skills are versioned `SKILL.md` bundles that can be attached to memory add
-traces and later evolved from real usage. Register a skill first:
-
-```bash
-curl -X POST https://mindmemos.cn/v1/skills/register \
-  -H "Authorization: Bearer <api_key>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "travel-planner",
-    "content": "# Travel Planner\n\nPrefer concise itineraries and surface hotel preferences.",
-    "version_label": "v1"
-  }'
-```
-
-The response includes `cloud_skill_id`, `version_id`, and `content_hash`. List
-or inspect managed skills:
-
-```bash
-curl -X GET https://mindmemos.cn/v1/skills \
-  -H "Authorization: Bearer <api_key>"
-
-curl -X POST https://mindmemos.cn/v1/skills/<cloud_skill_id>/get \
-  -H "Authorization: Bearer <api_key>"
-```
-
-When writing task traces, pass lightweight `skill_context` references in
-`/v1/memory/add`; do not include full skill content there:
-
-```bash
-curl -X POST https://mindmemos.cn/v1/memory/add \
-  -H "Authorization: Bearer <api_key>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "u_123",
-    "messages": [
-      {
-        "role": "user",
-        "content": "Plan a two-day Guangzhou trip."
-      }
-    ],
-    "skill_context": [
-      {
-        "name": "travel-planner",
-        "content_hash": "<content_hash>",
-        "base_version_id": "<version_id>",
-        "usage": "injected"
-      }
-    ],
-    "mode": "sync"
-  }'
-```
-
-The Python SDK exposes the same flow through `MindMemOSClient.skills`; registered
-local skills can be pushed, pulled, synced, updated, rolled back, and used by
-`client.memory.add(...)` automatically when skill detection is enabled.
-
-### 4. Python SDK
-
-The Python SDK is available on PyPI: [mindmemos-sdk](https://pypi.org/project/mindmemos-sdk/).
-
-Configure credentials once:
-
-```bash
-uv run mindmemos auth
-```
-
-Then reuse the local SDK config:
+**Memory — Store and search a memory**
 
 ```python
-import time
+from mindmemos_sdk import DialogueMessage, MindMemOSClient
 
+user_id = "alice"
+
+with MindMemOSClient(user_id=user_id) as client:
+    client.memory.add(
+        messages=[DialogueMessage(role="user", content="I like iced Americanos.")],
+        mode="sync",
+    )
+    result = client.memory.search("coffee preferences", user_id=user_id, top_k=3)
+    for memory in result.memories:
+        print(memory.memory)
+```
+
+**Skill — Register a Skill and retrieve its first version**
+
+Use a project API key with Skill read and write access.
+
+```python
 from mindmemos_sdk import MindMemOSClient
-from mindmemos_sdk.memory import DialogueMessage
+from mindmemos_sdk.skills import RegisterRequest, ShowRequest, StructuredSkillInfo
+
+skill_content = """---
+name: meeting-summary
+description: Summarize meeting notes into decisions and action items.
+---
+List decisions first. Then list each action item with its owner and deadline.
+"""
 
 with MindMemOSClient() as client:
-    add_result = client.memory.add(
-        messages=[
-            DialogueMessage(
-                role="user",
-                content="I prefer iced Americano.",
-                timestamp=int(time.time() * 1000),
-            )
-        ]
+    created = client.skills.register(
+        RegisterRequest(skill=StructuredSkillInfo(content=skill_content, commit_version="v1.0.0"))
     )
-    for item in add_result.memories:
-        print(item.operation, item.memory_id, item.content)
-
-    search_result = client.memory.search("coffee preference", top_k=5)
-    for hit in search_result.memories:
-        print(hit.id, hit.memory)
+    version_id = created["skill_version_id"]
+    detail = client.skills.show(ShowRequest(skill_version_id=version_id))
+    print(version_id)
+    print(detail["version"]["content"])
 ```
 
-Or pass credentials explicitly:
+See the SDK guide to [register and version Skills](src/mindmemos_sdk/README.md#python-sdk) or [report one execution record to both APIs](src/mindmemos_sdk/README.md#统一上报执行轨迹).
 
-```python
-from mindmemos_sdk import MindMemOSClient
-from mindmemos_sdk.memory import DialogueMessage
+### 4. Connect OpenClaw
 
-client = MindMemOSClient(
-    base_url="https://mindmemos.cn",
-    api_key="mk_xxx",
-    user_id="u_123",
-)
-
-result = client.memory.add(
-    messages=[DialogueMessage(role="user", content="I prefer iced Americano.")]
-)
-print(result.memories)
-
-client.close()
-```
-
-### 5. CLI
-
-The CLI is shipped with the Python SDK package.
-
-Configure the CLI:
+Building the plugins requires Node.js and npm. With OpenClaw installed, run the following from the repository root. The gateway uses the CLI you authenticated in step 2.
 
 ```bash
-uv run mindmemos auth
-```
-
-Add and search memories:
-
-```bash
-uv run mindmemos memory add --content "我喜欢喝冰美式"
-uv run mindmemos memory search "咖啡偏好" --top-k 5
-```
-
-Manage memories:
-
-```bash
-uv run mindmemos memory get --top-k 10
-uv run mindmemos memory update <memory_id> --content "我现在更喜欢拿铁"
-uv run mindmemos memory delete <memory_id>
-uv run mindmemos memory feedback --text "刚才召回的偏好不准确" \
-  --messages-json '[{"role":"user","content":"刚才召回的偏好不准确"}]'
-uv run mindmemos memory feedback  # implicit feedback from recent adds
-uv run mindmemos memory dreaming
-```
-
-### 6. OpenClaw Plugin
-
-The OpenClaw plugin is available on npm:
-[@mindmemos/openclaw-plugin](https://www.npmjs.com/package/@mindmemos/openclaw-plugin).
-It searches MindMemOS before each prompt and injects relevant memories as
-context, then stores completed OpenClaw conversations through the `mindmemos`
-CLI.
-
-Authenticate the CLI first:
-
-```bash
-uv run mindmemos auth
-```
-
-Then install and enable the plugin in OpenClaw:
-
-```bash
-openclaw plugins install @mindmemos/openclaw-plugin
+(cd plugins/openclaw-plugin && npm ci && npm run build)
+openclaw plugins install --link "$PWD/plugins/openclaw-plugin"
 openclaw plugins enable mindmemos-memory
+openclaw config set plugins.entries.mindmemos-memory.config.cli "$PWD/.venv/bin/mindmemos"
+openclaw config set plugins.entries.mindmemos-memory.config.userId alice
+openclaw config set plugins.entries.mindmemos-memory.hooks.allowConversationAccess true
+openclaw gateway restart
+openclaw skills list
 ```
 
-For full configuration and troubleshooting, see
-[docs/sdk/openclaw_plugin.md](docs/sdk/openclaw_plugin.md).
+The plugin recalls from **Memory** before the model runs and writes completed conversations back. OpenClaw lists the bundled `mindmemos-cli` guide in its Skill catalog. The agent can use the guide to find and load remote Skills. The plugin sends execution trajectories to **Skill** and links the exact versions it detects. See the [OpenClaw guide](skills/mindmemos-cli/references/openclaw-plugin.md).
 
-## Community
+### 5. Connect DeepSeek Harness
 
-Join the MindMemOS Feishu community for updates, discussions, and support.
+Use a dsh profile with the `agents` and `skills` services. Build from the repository root.
 
-![MindMemOS Feishu group QR code](./assets/feishu-group-small.png)
+```bash
+(cd plugins/deepseek-harness-plugin && npm ci && npm run build)
+```
+
+Add this entry to the profile's `cordis.patch.yml`. Replace `/path/to/MindMemOS` with the absolute checkout path, then restart dsh with that profile.
+
+```yaml
+- insert:
+    - id: mindmemos-memory
+      name: 'file:///path/to/MindMemOS/plugins/deepseek-harness-plugin/dist/index.js'
+      config:
+        cli: /path/to/MindMemOS/.venv/bin/mindmemos
+        userId: alice
+```
+
+The plugin recalls from **Memory** before the first model step and writes completed conversations back. It registers `mindmemos-cli` in the dsh Skill catalog so the agent can find and load remote Skills. The plugin sends execution trajectories to **Skill** and links the exact versions it detects. See the [DeepSeek Harness guide](skills/mindmemos-cli/references/deepseek-harness-plugin.md).
+
+For both plugins, make `mindmemos` available in the agent's shell and use the same SDK settings directory as in step 2. This also applies when you set a custom `MINDMEMOS_HOME`. After a test turn, check the plugin log for `Memory queued` or `Memory completed`. With a Skill-authorized key, also check for `Skill stored` with the same event ID. See how to [load and report exact Skill versions](skills/mindmemos-cli/SKILL.md#recommend-and-load-a-skill).
+
+### Self-host Memory and Skill
+
+Run the following from the repository root with Python 3.11–3.13, uv, Make, and Docker Compose installed.
+
+```bash
+uv sync --all-packages --extra postgres --extra kafka
+export UV_NO_SYNC=1
+test -f .env || cp .env.example .env
+# Set your chat and embedding model connections in .env.
+make init
+```
+
+Set a local API key in `config/presets/local.project.yaml` for a project with `memory:read`, `memory:write`, `skill:read`, and `skill:write`. Complete the service-specific settings in the [deployment guide](docs/deploy/instruction.md#12-initialize-local-configuration), then start both APIs.
+
+```bash
+uv run --no-sync python scripts/install_nlp_assets.py
+uv run --no-sync python scripts/check_nlp_assets.py
+make dev SERVICE=all FEATURE=async UI=0
+```
+
+This starts [Memory](http://127.0.0.1:8000/docs) on port 8000 and [Skill](http://127.0.0.1:8001/docs) on port 8001. The async profile enables the queue used by the plugins' default Memory writes. In a second terminal, configure the SDK for both local endpoints. Enter your local project API key at both prompts.
+
+- `--memory-base-url` takes the service address before `/v1/memory`. The SDK adds the Memory path.
+- `--skill-base-url` takes the full Skill API root. For a direct connection, include `/v1/skills`. The SDK appends the operation name. Existing configurations that contain only the Skill service address still work.
+
+```bash
+uv run --no-sync mindmemos auth --service-type custom \
+  --memory-base-url http://127.0.0.1:8000 \
+  --skill-base-url http://127.0.0.1:8001/v1/skills \
+  --user-id alice
+```
+
+For the web workbench and other startup options, see the [deployment guide](docs/deploy/instruction.md).
+
+## 📊 Benchmark
+
+Bold marks the highest score for each metric within its comparison group, including ties.
+
+### 🧠 Memory Benchmarks
+
+#### LoCoMo
+
+Long-conversation question answering across single-hop, multi-hop, temporal, and open-domain tasks. [LoCoMo paper](https://arxiv.org/abs/2402.17753)
+
+| Method | Single-hop | Multi-hop | Temporal | Open-domain | Overall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Mem0 | 68.97 | 61.70 | 58.26 | 50.00 | 64.20 |
+| MemU | 74.91 | 72.34 | 43.61 | 54.17 | 66.67 |
+| MemOS | 85.37 | 79.43 | 75.08 | 64.58 | 80.76 |
+| Zep | 90.84 | 81.91 | 77.26 | 75.00 | 85.22 |
+| EverOS | 96.67 | 91.84 | 89.72 | 76.04 | 93.05 |
+| MindMemOS-MindVanilla | 92.03 | 85.82 | 83.80 | 66.67 | 87.60 |
+| MindMemOS-MindSchema | **96.79** | **93.97** | **90.34** | **82.29** | **94.03** |
+
+#### PersonaMem
+
+Accuracy by question type for user profiles and preferences. [PersonaMem paper](https://arxiv.org/abs/2504.14225)
+
+| Method | Recall | Ack. Lat. | Trk. Evo. | Revisit | Suggest | Recom. | General. | Overall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mem0 | 46.51 | 41.18 | 65.47 | **90.91** | 12.90 | 34.55 | 43.86 | 51.61 |
+| MemU | 64.34 | 64.71 | 66.20 | 87.88 | 31.18 | 67.27 | **84.21** | 65.70 |
+| MemOS | 53.49 | 82.35 | **66.91** | 79.80 | 41.94 | 69.09 | 75.44 | 63.67 |
+| EverOS | 74.42 | 64.71 | 64.03 | 85.86 | 35.48 | 65.45 | **84.21** | 67.57 |
+| MindMemOS-MindVanilla | 76.74 | **88.24** | 65.47 | 87.88 | 17.20 | **80.00** | 82.46 | 67.74 |
+| MindMemOS-MindSchema | **81.40** | 64.71 | 64.75 | 82.83 | **47.31** | 76.36 | 73.68 | **70.63** |
+
+#### MemoryAgentBench
+
+FactConsolidation scores are the mean Substring Exact Match across four context sizes. [MemoryAgentBench paper](https://arxiv.org/abs/2507.05257)
+
+| Model | Method | SH score | SH archived | MH score | MH archived |
+| --- | --- | ---: | ---: | ---: | ---: |
+| GPT-4o-mini | Mem0 | 0.180 | — | 0.020 | — |
+|  | MemoRAG | 0.270 | — | 0.070 | — |
+|  | HippoRAG-v2 | 0.540 | — | 0.050 | — |
+|  | MindMemOS-MindVanilla | 0.635 | — | 0.118 | — |
+|  | MindMemOS-MindVanilla + Dreaming | **0.738** | 21.4% | **0.180** | 19.4% |
+| GPT-5-mini | Infini Memory | 0.800 | — | 0.220 | — |
+|  | MindMemOS-MindVanilla | 0.900 | — | 0.190 | — |
+|  | MindMemOS-MindVanilla + Dreaming | **0.920** | 23.5% | **0.250** | 21.5% |
+
+#### MemEye and Mem-Gallery
+
+[MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye) has 742 questions across 8 tasks. It scores multiple-choice answers by exact match (EM) and open-ended answers by BLEU-1 (B-1) and LLM Judge, with macro averages across tasks. [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery) has 1,711 open-ended questions across 20 tasks. It reports token-level F1, BLEU-1, and LLM Judge, with micro averages across questions.
+
+The table reports results from upstream `main`. All methods used `gpt-4.1-mini` to answer. MindMemOS used `vanilla` and local SigLIP2 (`siglip2-base-patch16-384`), averaged over two runs in October 2026. The baselines come from a paper under double-blind review and average three runs with the same answer model. **Compare Judge scores within each group.** MindMemOS used `gpt-4.1-mini` as judge, while the baselines used `GPT-5.4-mini`.
+
+| Method | MemEye EM | MemEye B-1 | MemEye Judge | Mem-Gallery F1 | Mem-Gallery B-1 | Mem-Gallery Judge |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MemoryOS | 45.75 | 13.12 | 34.91 | 43.09 | 37.76 | 64.64 |
+| A-MEM | 49.73 | 21.11 | 38.27 | 44.08 | 38.37 | 64.35 |
+| SimpleMem | 50.34 | 9.42 | 42.59 | 34.73 | 28.90 | 58.33 |
+| HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
+| M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
+| MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
+| SRAG | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
+| MindMemOS b0 (text only) | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| MindMemOS b1 (image similarity) | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| MindMemOS enhanced (VLM visual facts) | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| MindMemOS enhanced_agentic (multimodal agentic retrieval) | 65.89 | 27.09 | 53.30 | 57.06 | 50.45 | 89.14 |
+
+`enhanced_agentic` enables `search_strategy: agentic` in `enhanced` mode. [Reproduction guide](docs/evaluation/memory_evaluation.md#multimodal-memory-evaluation) · [Upstream results](https://github.com/mindscale-noah/MindMemOS/blob/f2d6c3b2e1639e0aab666203791365d295894b52/README.md#L418-L437)
+
+### 🛠️ Skill Benchmarks
+
+#### Skill-Forest
+
+Each benchmark reports the mean Hard score (%) over three runs on the held-out test split. The overall score weights the five benchmarks equally. Select and Merge each use seven trees. [Evaluation setup and results](docs/evaluation/skill_evaluation.md#validation-results)
+
+| Method | LiveMath | ALFWorld | SpreadsheetBench Verified 400 | SearchQA | OfficeQA | Overall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| No Skill | 27.42 | 56.97 | 80.24 | 76.90 | 28.49 | 54.00 |
+| Initial Skill | 28.23 | 70.65 | 79.40 | 76.67 | 43.99 | 59.79 |
+| Trace2Skill | 27.69 | 76.62 | 81.79 | 77.50 | 54.84 | 63.69 |
+| GEPA | 31.45 | 79.85 | **82.26** | 79.62 | 53.68 | 65.37 |
+| SkillOpt | 31.72 | 75.37 | 80.71 | **80.67** | 52.71 | 64.24 |
+| Select | **36.02** | 82.34 | 81.67 | 80.21 | 53.88 | 66.82 |
+| Merge | 34.68 | **82.84** | 81.07 | 80.52 | **55.23** | **66.87** |
+
+#### TreeSkill
+
+The table reports in-domain SpreadsheetBench scores. Parentheses show the gain in percentage points over the human-written Skill for the same model. The 35B baselines are previously reported scores. The TreeSkill results and the 9B baselines come from our runs. [Evaluation setup and results](docs/evaluation/skill_evaluation.md#in-domain-spreadsheetbench-results)
+
+| Policy model | Method | Vrf (%) | Soft (%) | Hard (%) |
+| --- | --- | ---: | ---: | ---: |
+| Qwen3.5-35B-A3B | No Skill | 19.00 | 18.00 | 4.60 |
+|  | Human-Written Skill | 9.67 | 13.03 | 3.37 |
+|  | Trace2Skill +Combined | 29.67 (+20.00) | 18.80 (+5.77) | 5.73 (+2.36) |
+|  | SkillCAT | 55.50 (+45.83) | 39.02 (+25.99) | 20.61 (+17.24) |
+|  | TreeSkill (routed) | **66.00 (+56.33)** | **41.72 (+28.69)** | **25.22 (+21.85)** |
+| Qwen3.5-9B | No Skill | 25.50 | 21.00 | 9.21 |
+|  | Human-Written Skill | 14.00 | 16.76 | 7.24 |
+|  | Trace2Skill +Combined | 16.50 (+2.50) | 18.97 (+2.21) | 8.66 (+1.42) |
+|  | TreeSkill (routed) | **45.50 (+31.50)** | **30.28 (+13.52)** | **14.58 (+7.34)** |
+
+#### Skill Graph
+
+##### Skill retrieval
+
+In the Skill Graph tables, underlining marks second place, including ties. Asterisks mark scores from the corresponding papers. [Retrieval results](docs/evaluation/skill_evaluation.md#table-1-skill-retrieval)
+
+**ALFWorld**
+
+| Method | Ret@1 | Ret@K | MRR |
+| --- | ---: | ---: | ---: |
+| Vector Skills | 0.7 | 4.5 | 0.4 |
+| SkillRouter (Emb.) | 13.6 | 48.6 | 26.2 |
+| SkillRouter (Emb.+RR) | 12.1 | **74.3** | <ins>36.2</ins> |
+| AgentSkillOS | 0.7 | 50.7 | 18.5 |
+| SkillRAE | 9.3 | 35.6 | 17.5 |
+| GoS | 8.6 | 9.3 | 8.9 |
+| SkillDAG | <ins>20.0</ins> | 44.8 | 29.2 |
+| MindMemOS Skill Graph | **49.3** | <ins>71.4</ins> | **57.9** |
+
+**AgentSkillOS**
+
+| Method | Ret@1 | Ret@K | MRR |
+| --- | ---: | ---: | ---: |
+| Vector Skills | 56.7 | 83.3 | 66.2 |
+| SkillRouter (Emb.) | 50.0 | <ins>86.7</ins> | 64.3 |
+| SkillRouter (Emb.+RR) | 56.7 | 70.0 | 61.9 |
+| AgentSkillOS | 70.0 | 83.3 | 76.7 |
+| SkillRAE | 40.0 | 80.0 | 55.2 |
+| GoS | <ins>76.7</ins> | <ins>86.7</ins> | <ins>80.3</ins> |
+| SkillDAG | 43.3 | 56.1 | 60.8 |
+| MindMemOS Skill Graph | **80.0** | **93.3** | **83.3** |
+
+**SkillsBench**
+
+| Method | Ret@1 | Ret@K | MRR |
+| --- | ---: | ---: | ---: |
+| Vector Skills | 3.6\* | 10.8\* | 5.8\* |
+| SkillRouter (Emb.) | <ins>77.6</ins> | **93.4** | <ins>83.1</ins> |
+| SkillRouter (Emb.+RR) | **81.6** | <ins>88.2</ins> | **84.5** |
+| AgentSkillOS | 38.2 | 44.7 | 41.0 |
+| SkillRAE | 69.7 | 86.8 | 76.8 |
+| GoS | 50.6\* | 65.5\* | 57.3\* |
+| SkillDAG | 66.7\* | 78.2\* | 71.3\* |
+| MindMemOS Skill Graph | 69.2 | 86.8 | 76.8 |
+
+##### End-to-end R scores
+
+Rankings are within each setting. Setting 1 uses MiniMax-M2.7, and the current reproduction guide covers AgentSkillOS for that setting. [End-to-end results](docs/evaluation/skill_evaluation.md#table-2-end-to-end-r-scores)
+
+| Setting | Method | ALFWorld | AgentSkillOS | SkillsBench |
+| --- | --- | ---: | ---: | ---: |
+| Setting 1 | Vanilla Skills | 47.1\* | 70.8 | 17.2\* |
+|  | Vector Skills | 50.7\* | <ins>72.4</ins> | 10.4\* |
+|  | GoS | 54.3\* | 68.0 | 18.7\* |
+|  | SkillDAG | <ins>67.9</ins> | 54.9 | <ins>27.3</ins>\* |
+|  | MindMemOS Skill Graph | **76.4** | **80.9** | **28.0** |
+| Setting 2 | Vector Skills | 60.0 | 74.9\* | 27.3 |
+|  | GoS | 63.6 | <ins>96.2</ins> | <ins>35.4</ins> |
+|  | SkillDAG | <ins>82.0</ins> | 94.2 | 31.4 |
+|  | AgentSkillOS | 13.6 | 83.5\* | 17.2\* |
+|  | SkillRouter | 29.3 | 82.3\* | 22.0\* |
+|  | SkillRAE | 27.1 | 84.6\* | 29.3\* |
+|  | MindMemOS Skill Graph | **86.0** | **97.4** | **43.2** |
+| Setting 3 | GoS | 79.3 | <ins>96.2</ins> | 40.1 |
+|  | SkillDAG | <ins>85.0</ins> | 92.3 | <ins>49.0</ins> |
+|  | MindMemOS Skill Graph | **85.7** | **96.5** | **51.0** |
+
+#### Offline Evolution
+
+The SkillsBench comparison is pending. The evaluation guide describes how to collect trajectories with the initial Skill and retest the same tasks with the evolved Skill. [Offline Evolution evaluation](docs/evaluation/skill_evaluation.md#offline-evolution)
+
+### Datasets and reproduction
+
+Run `scripts/download_datasets.py` from the repository root to list datasets and download pinned releases for either benchmark group.
+
+```bash
+uv sync --all-packages
+uv run --no-sync python scripts/download_datasets.py list memory
+uv run --no-sync python scripts/download_datasets.py list skill
+uv run --no-sync python scripts/download_datasets.py download memory --name locomo
+uv run --no-sync python scripts/download_datasets.py download skill --name spreadsheetbench
+```
+
+Memory datasets include `locomo`, `personamem` (v1), `memoryagentbench` (all four official partitions),
+and `longmemeval` (official cleaned release).
+Downloads go to `data/mindmemos_memory/<dataset>/` or `data/mindmemos_skill/<dataset>/`;
+use `--data-root` to change the parent directory and `--verify-only` on `download` to verify existing files.
+Set evaluation config paths to these downloaded files. Official formats are preserved; MemoryAgentBench
+remains Parquet and requires conversion for the current evaluator's local JSON/JSONL input.
+Experiment split manifests are maintained in the repository and are not downloaded or generated.
+
+#### Skill-Forest smoke test
+
+Prepare the [Skill-Forest evaluation config](docs/evaluation/skill_evaluation.md#2-configure-the-evaluation), then run a small LiveMath evaluation with model calls.
+
+```bash
+uv run --no-sync python scripts/download_datasets.py download skill --name livemath
+uv run --no-sync mindmemos-eval skill evaluate train --algo skill-forest \
+  --config config/mindmemos_eval/skill_train_skill_forest/paper_repro.yaml \
+  --env livemath --smoke --output-dir output/skill-forest-smoke
+```
+
+## Documentation
+
+| Goal | Guide |
+| --- | --- |
+| Deploy services, configure models, and select features | [Deployment](docs/deploy/instruction.md) |
+| Check Memory search HTTP and CLI parameters | [Memory API](https://mindmemos.cn/#/api-docs) · [CLI search](docs/cli/instruction.md#mindmemos-memory-search) |
+| Use the full CLI, configure connections, and troubleshoot | [CLI guide](docs/cli/instruction.md) |
+| Integrate the Python SDK and independent Skill API | [SDK guide](src/mindmemos_sdk/README.md) |
+| Manage Skills or integrate a custom Python environment | [Skill CLI](docs/cli/instruction.md#skill-commands) · [Skill service](src/mindmemos_skill/README.md) |
+| Start and connect the local web workbench | [UI deployment](docs/deploy/instruction.md#2-deploy-the-ui) |
+| Download datasets and reproduce Memory or Skill evaluations | [Memory evaluation](docs/evaluation/memory_evaluation.md) · [Skill evaluation](docs/evaluation/skill_evaluation.md) |
+
+## 🗺️ Coming Features
+
+- **Simpler deployment**: Further reduce dependencies and improve embedded use, building on the existing Kafka / OTel switches, local asynchronous Skill tasks, and SQLite backend.
+- **File system memory**: Structure scattered knowledge from local files, documents, project artifacts, and agent outputs into searchable and connected file knowledge objects or knowledge graphs, helping agents complete user tasks more effectively.
+- **Agent integrations**: Continue expanding support for coding agents, OpenClaw, Codex-style workflows, and long-running multi-agent systems.
+
+## Contributing
+
+Contributions of all kinds are welcome. Please open pull requests against the `develop` branch. After review,
+accepted changes will be merged into `develop`; maintainers periodically merge stable `develop` updates into `main`
+for release.
+
+## 💬 Community
+
+Join the MindMemOS Feishu group for project updates, usage discussions, and community participation.
+
+<p align="center">
+  <img src="./assets/feishu-group-small.png" alt="MindMemOS Feishu group QR code">
+</p>
+
+## 📝 Citation
+
+If you find MindMemOS useful in your research, please cite our technical report:
+
+```bibtex
+@misc{liang2026mindmemos,
+  title        = {MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents},
+  author       = {Liang, Kaichao and Cui, Yuqi and Kong, Hao and Huang, Xinyuan and Hou, Guohaotian and Kang, Qingcan and Chen, Liang and Yin, Yiyang and Ye, Ke and Guo, Jiaquan and Chen, Da and Zeng, Lingan and Peng, Yixing and Yao, Rong and Kai, Shixiong and Yuan, Mingxuan},
+  year         = {2026},
+  eprint       = {2608.12428},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.AI},
+  url          = {https://arxiv.org/abs/2608.12428},
+}
+```
 
 ## License
 
-MIT License.
+This project is open source under the MIT License.

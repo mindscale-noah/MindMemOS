@@ -5,6 +5,7 @@ from .algo import (
     DreamingConfig,
     EpisodesChunkerConfig,
     MemoryAlgoConfig,
+    MultimodalConfig,
     SchemaAddConfig,
     SchemaAddEpisodeEdgeConfig,
     SchemaAddExtractionConfig,
@@ -40,7 +41,6 @@ from .app import (
     Neo4jConfig,
     PipelineConfig,
     QdrantConfig,
-    SkillDatabaseConfig,
     TelemetryConfig,
     build_config,
     default_config_path,
@@ -57,12 +57,14 @@ from .context import (
     reset_config,
     update_config,
 )
+from .multimodal import BlobStoreConfig, MmEmbedEndpointConfig, MmEmbedRouterConfig
 from .validation import validate_config
 
 __all__ = [
     "AgenticConfig",
     "AddAlgoConfig",
     "AuthConfig",
+    "BlobStoreConfig",
     "ConfigOverrides",
     "CommonAlgoConfig",
     "DatabaseConfig",
@@ -80,6 +82,9 @@ __all__ = [
     "KafkaTopicConfig",
     "MemoryAlgoConfig",
     "MemoryConfig",
+    "MultimodalConfig",
+    "MmEmbedEndpointConfig",
+    "MmEmbedRouterConfig",
     "ModelEndpointConfig",
     "ModelRouterConfig",
     "Neo4jConfig",
@@ -94,7 +99,6 @@ __all__ = [
     "SchemaAddExtractionConfig",
     "SchemaAddHigherOrderConfig",
     "SchemaAddMergeConfig",
-    "SkillDatabaseConfig",
     "SearchConfig",
     "TelemetryConfig",
     "TextProcessingConfig",

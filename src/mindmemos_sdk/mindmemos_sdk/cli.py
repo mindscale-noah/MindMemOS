@@ -1,39 +1,111 @@
 """Command line interface for the MindMemOS SDK.
 
-This module defines the public CLI shape first. Command handlers are intentionally
-thin placeholders until the SDK managers are implemented; they make the command
-contract executable and easy to test without performing network or filesystem
-mutations yet.
+Commands reuse the SDK clients for configured Memory and Skill services.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import contextlib
 import json
+import os
 import sys
+import tempfile
 import time
 from collections.abc import Sequence
-from contextvars import ContextVar
 from getpass import getpass
 from pathlib import Path
 from typing import Any
 
+from pydantic import TypeAdapter, ValidationError
+
 from .client import MindMemOSClient
-from .config import DEFAULT_BASE_URL, ConfigManager, SDKConfigCompilerV2, mask_secret
-from .errors import ConfigError, MindMemOSSDKError
-from .memory import DialogueMessage, StatusResult
-from .skills import (
-    DuplicateSkillAction,
-    ExportSkillRequest,
-    LocalSkillManifest,
-    PublishLocalRequest,
-    RegisterLocalRequest,
-    SkillManager,
-    SkillRecord,
-)
+from .config import DEFAULT_BASE_URL, ConfigManager, SDKConfig, mask_secret
+from .config.models import AuthConfig, MemoryServiceConfig, SkillServiceConfig
+from .config.paths import set_default_mindmemos_home
+from .errors import ConfigError, InvalidRequestError, MindMemOSSDKError
+from .memory import DialogueMessage, ImageRef, SkillContext, StatusResult
+from .trajectory import TrajectoryEvent
 
 _JSON_PARSE_ERROR = object()
-_CLI_SKILL_MANAGERS: ContextVar[list[SkillManager] | None] = ContextVar("mindmemos_cli_skill_managers", default=None)
+
+_IMAGE_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+_EXT_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+}
+_MIME_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+}
+
+
+class _ImageInputError(Exception):
+    """A --image/--query-image value is unreadable or not a supported image."""
+
+
+def _sniff_image_mime(data: bytes) -> str | None:
+    """Detect the image type by magic bytes (the server checks content, not extension)."""
+
+    for magic, mime_type in _IMAGE_MAGIC:
+        if data.startswith(magic):
+            return mime_type
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    return None
+
+
+def _load_image_ref(value: str) -> ImageRef:
+    """Build an ImageRef from an http(s) URL or a local file (inlined as base64)."""
+
+    if value.startswith(("http://", "https://")):
+        return ImageRef(url=value)
+    try:
+        data = Path(value).read_bytes()
+    except OSError as exc:
+        raise _ImageInputError(f"failed to read image {value}: {exc}") from exc
+    mime_type = _sniff_image_mime(data) or _EXT_MIME.get(Path(value).suffix.lower())
+    if mime_type is None:
+        raise _ImageInputError(f"unrecognized image format: {value} (expected png/jpeg/gif/webp/bmp)")
+    return ImageRef(data=base64.b64encode(data).decode("ascii"), mime_type=mime_type)
+
+
+def _load_image_refs(values: Sequence[str] | None) -> list[ImageRef] | None:
+    if not values:
+        return None
+    return [_load_image_ref(value) for value in values]
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write bytes to path atomically (temp file + fsync + replace)."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
 
 
 def _without_none(**kwargs: Any) -> dict[str, Any]:
@@ -41,7 +113,7 @@ def _without_none(**kwargs: Any) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _CLIParser(
         prog="mindmemos",
         description="MindMemOS SDK command line interface.",
     )
@@ -50,27 +122,72 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     _add_auth_command(subparsers)
     _add_config_commands(subparsers)
-    _add_ui_command(subparsers)
-    _add_skill_commands(subparsers)
     _add_memory_commands(subparsers)
+    _add_trajectory_commands(subparsers)
+    from .skills.cli import add_skill_commands
+
+    add_skill_commands(subparsers)
     _add_doctor_command(subparsers)
     return parser
+
+
+class _CLIParser(argparse.ArgumentParser):
+    """Keep errors for script-facing commands machine-readable."""
+
+    structured_errors = False
+    """Whether the root invocation selected a command with JSON errors."""
+
+    def parse_args(self, args=None, namespace=None):
+        """Parse CLI arguments and remember whether to emit JSON errors.
+
+        Args:
+            args: Explicit arguments, or None to use the process arguments.
+            namespace: Optional argparse destination namespace.
+
+        Returns:
+            Parsed argument namespace.
+        """
+        values = list(sys.argv[1:] if args is None else args)
+        self.structured_errors = bool(values and values[0] in {"skill", "trajectory"})
+        return super().parse_args(values, namespace)
+
+    def error(self, message):
+        """Emit JSON for Skill and trajectory parsing failures.
+
+        Args:
+            message: Parser-generated validation explanation.
+        """
+        if self.prog.startswith(("mindmemos skill", "mindmemos trajectory")) or self.structured_errors:
+            print(json.dumps({"code": "invalid_argument", "message": message}), file=sys.stderr)
+            self.exit(2)
+        super().error(message)
 
 
 def _add_auth_command(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser(
         "auth",
-        help="Configure API key, user id, and API base URL.",
-        description="Run the interactive authentication and SDK configuration flow.",
+        help="Configure official or custom Memory and Skill connections.",
+        description="Choose a deployment and configure Memory and Skill service credentials.",
     )
-    parser.add_argument("--api-key", help="API key. If omitted, prompt interactively.")
+    parser.add_argument("--service-type", choices=["official", "custom"], help="Official cloud or custom deployment.")
+    parser.add_argument(
+        "--memory-base-url", "--base-url", dest="memory_base_url", help="Custom Memory service URL before /v1/memory."
+    )
+    parser.add_argument(
+        "--memory-api-key", "--api-key", dest="memory_api_key", help="Memory API key; prompted if omitted."
+    )
+    skill_destination = parser.add_mutually_exclusive_group()
+    skill_destination.add_argument(
+        "--skill-base-url", help="Custom Skill API root, e.g. http://localhost:8001/v1/skills."
+    )
+    skill_destination.add_argument("--no-skill", action="store_true", help="Clear the custom Skill connection.")
+    parser.add_argument("--skill-api-key", help="API key for an independent Skill service.")
     parser.add_argument("--user-id", help="Default user id. If omitted, prompt interactively.")
-    parser.add_argument("--base-url", default=None, help=f"API base URL. Default: {DEFAULT_BASE_URL}")
     parser.set_defaults(handler=_handle_auth)
 
 
 def _add_config_commands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    parser = subparsers.add_parser("config", help="Show, migrate, or reset local SDK settings.")
+    parser = subparsers.add_parser("config", help="Manage local SDK settings and the default home.")
     config_subparsers = parser.add_subparsers(dest="config_command", metavar="<config-command>")
     parser.set_defaults(handler=_handle_config_root)
 
@@ -82,124 +199,12 @@ def _add_config_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
     reset.add_argument("--yes", "-y", action="store_true", help="Reset without confirmation prompts.")
     reset.set_defaults(handler=_handle_config_reset)
 
-    migrate = config_subparsers.add_parser("migrate", help="Convert settings.json v1 to config.yaml v2.")
-    migrate.add_argument(
-        "--apply",
-        action="store_true",
-        help="Write config.yaml and a v1 backup. Without this flag, only show the dry-run plan.",
-    )
-    migrate.add_argument("--config-dir", default=None, help="Override the SDK configuration directory.")
-    migrate.set_defaults(handler=_handle_config_migrate)
-
-
-def _add_ui_command(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    parser = subparsers.add_parser(
-        "ui",
-        help="Launch the local MindMemOS management UI.",
-        description="Start the local browser-based console for Memory, Skills, and Settings.",
-    )
-    parser.add_argument("--port", type=int, default=0, help="Bind port. 0 selects a free local port.")
-    parser.add_argument("--no-open", action="store_true", help="Do not open the UI in a browser automatically.")
-    parser.add_argument("--config-dir", default=None, help="Override the SDK configuration directory.")
-    parser.set_defaults(handler=_handle_ui)
-
-
-def _add_skill_commands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    parser = subparsers.add_parser("skill", help="Manage SDK-registered skills.")
-    skill_subparsers = parser.add_subparsers(dest="skill_command", metavar="<skill-command>")
-    parser.set_defaults(handler=_handle_skill_root)
-
-    register = skill_subparsers.add_parser("register", help="Import a Skill into the centralized local repository.")
-    register.add_argument("path", help="Local skill directory path or SKILL.md file path.")
-    register.add_argument("--name", help="Override skill name from manifest.")
-    register.add_argument("--alias", help="Local alias for later skill commands.")
-    register.add_argument("--version", help="Override skill version from manifest.")
-    register.add_argument("-m", "--message", help="Immutable root-version commit message.")
-    register.add_argument(
-        "--duplicate-action",
-        choices=[item.value for item in DuplicateSkillAction],
-        help="Explicitly reuse an identical snapshot or create a separate Skill family.",
-    )
-    register.set_defaults(handler=_handle_skill_register)
-
-    publish = skill_subparsers.add_parser("publish", help="Create an immutable local Skill version.")
-    publish.add_argument("skill", help="SDK local skill id or alias.")
-    publish.add_argument("--from", dest="source_path", required=True, help="Directory or SKILL.md to snapshot once.")
-    publish.add_argument("--base", dest="base_version", help="Parent version. Defaults to the latest available version.")
-    publish.add_argument("--version", dest="version_label", help="Human-readable version label.")
-    publish.add_argument("-m", "--message", help="Immutable version commit message.")
-    publish.set_defaults(handler=_handle_skill_publish)
-
-    list_parser = skill_subparsers.add_parser("list", help="List SDK-registered skills.")
-    list_parser.set_defaults(handler=_handle_skill_list)
-
-    show = skill_subparsers.add_parser("show", help="Show one registered skill.")
-    show.add_argument("skill", help="SDK local skill id or alias.")
-    show.set_defaults(handler=_handle_skill_show)
-
-    pull = skill_subparsers.add_parser(
-        "pull",
-        help="Pull immutable cloud versions and lifecycle revisions.",
-    )
-    pull.add_argument("skill", help="SDK local skill id or alias.")
-    pull.set_defaults(handler=_handle_skill_pull)
-
-    push = skill_subparsers.add_parser(
-        "push",
-        help="Upload an existing immutable local version with the same UUID.",
-    )
-    push.add_argument("skill", help="SDK local skill id or alias.")
-    push.add_argument("--version", help="Version UUID. Defaults to the latest available version.")
-    push.set_defaults(handler=_handle_skill_push)
-
-    update = skill_subparsers.add_parser(
-        "update",
-        help="Deprecated alias for `skill sync`.",
-    )
-    update_target = update.add_mutually_exclusive_group(required=True)
-    update_target.add_argument("skill", nargs="?", help="SDK local skill id or alias.")
-    update_target.add_argument("--all", action="store_true", help="Update all registered skills.")
-    update.add_argument("--yes", "-y", action="store_true", help="Apply update without confirmation prompts.")
-    update.set_defaults(handler=_handle_skill_update)
-
-    sync = skill_subparsers.add_parser(
-        "sync",
-        help="Push pending versions and pull missing versions or lifecycle revisions.",
-    )
-    sync_target = sync.add_mutually_exclusive_group(required=True)
-    sync_target.add_argument("skill", nargs="?", help="SDK local skill id or alias.")
-    sync_target.add_argument("--all", action="store_true", help="Sync all registered skills.")
-    sync.set_defaults(handler=_handle_skill_update)
-
-    export = skill_subparsers.add_parser("export", help="Export the latest or selected version to a directory.")
-    export.add_argument("skill", help="SDK local skill id or alias.")
-    export.add_argument("--to", dest="target_path", required=True, help="Target directory.")
-    export.add_argument("--version", help="Version to export. Defaults to the latest available version.")
-    export.add_argument("--no-replace", action="store_true", help="Fail if the target already exists.")
-    export.set_defaults(handler=_handle_skill_export)
-
-    history = skill_subparsers.add_parser("history", help="Show skill version history.")
-    history.add_argument("skill", help="SDK local skill id or alias.")
-    history.set_defaults(handler=_handle_skill_history)
-
-    diff = skill_subparsers.add_parser("diff", help="Show cached skill version differences.")
-    diff.add_argument("skill", help="SDK local skill id or alias.")
-    diff.add_argument("--from", dest="from_version", help="Source version. Defaults to current base version.")
-    diff.add_argument("--to", dest="version", required=True, help="Target version.")
-    diff.set_defaults(handler=_handle_skill_diff)
-
-    unregister = skill_subparsers.add_parser(
-        "unregister",
-        help="Compatibility command for the legacy external-path registry.",
-    )
-    unregister.add_argument("skill", help="SDK local skill id or alias.")
-    unregister.add_argument(
-        "--delete-files",
-        action="store_true",
-        help="Deprecated and rejected: source directories are not owned by the SDK.",
-    )
-    unregister.add_argument("--yes", "-y", action="store_true", help="Unregister without confirmation prompts.")
-    unregister.set_defaults(handler=_handle_skill_unregister)
+    home = config_subparsers.add_parser("home", help="Manage the default configuration directory.")
+    home_subparsers = home.add_subparsers(dest="home_command", metavar="<home-command>")
+    home.set_defaults(handler=_handle_config_home_root)
+    set_home = home_subparsers.add_parser("set", help="Save the default directory for future processes.")
+    set_home.add_argument("directory", help="Absolute SDK configuration directory.")
+    set_home.set_defaults(handler=_handle_config_home_set)
 
 
 def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -227,12 +232,37 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
         default=None,
         help="Minimum rerank relevance score (0-1). Only effective with --rerank.",
     )
+    search.add_argument(
+        "--token-budget",
+        type=int,
+        default=None,
+        help="Strict token budget; enables token-budget retention post-processing.",
+    )
     search.add_argument("--filter", dest="filter_json", help="Filter DSL as a JSON object string.")
+    search.add_argument(
+        "--query-image",
+        dest="query_images",
+        action="append",
+        metavar="PATH_OR_URL",
+        help="Attach an image to the query (local file or http(s) URL). Repeatable.",
+    )
+    search.add_argument(
+        "--multimodal",
+        action="store_true",
+        help="Also search stored images (implied by --query-image; needs multimodal mode).",
+    )
     search.add_argument("--json", action="store_true", help="Print a machine-readable JSON result.")
     search.set_defaults(handler=_handle_memory_search)
 
     add = memory_subparsers.add_parser("add", help="Add a dialogue message as memory using configured credentials.")
     add.add_argument("--content", help="Dialogue message content to add.")
+    add.add_argument(
+        "--image",
+        dest="images",
+        action="append",
+        metavar="PATH_OR_URL",
+        help="Attach an image to the --content message (local file or http(s) URL). Repeatable.",
+    )
     add.add_argument(
         "--messages-json",
         help="JSON array of memory messages. When provided, --content/--role are ignored.",
@@ -252,7 +282,7 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
     add.add_argument("--agent-id", help="Request agent id.")
     add.add_argument("--session-id", help="Request session id.")
     add.add_argument("--metadata-json", help="Business metadata as a JSON object string.")
-    add.add_argument("--skill-context-json", help="Skill context array as JSON; overrides SDK auto-detection.")
+    add.add_argument("--skill-context-json", help="Legacy Skill reference array forwarded to the Memory API.")
     add.add_argument("--async", dest="async_mode", action="store_true", help="Use async add mode.")
     add.add_argument("--json", action="store_true", help="Print a machine-readable JSON result.")
     add.set_defaults(handler=_handle_memory_add)
@@ -261,6 +291,23 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
     get.add_argument("--filter", dest="filter_json", help="Filter DSL as a JSON object string.")
     get.add_argument("--top-k", type=int, default=None, help="Max number of memories to return.")
     get.set_defaults(handler=_handle_memory_get)
+
+    get_image = memory_subparsers.add_parser(
+        "get-image",
+        help="Download a stored image by blob id (metadata.blob_id of a search image result).",
+    )
+    get_image.add_argument("blob_id", help="Image blob id from a search result.")
+    get_image.add_argument(
+        "--user-id",
+        required=True,
+        help="Owner of the image (metadata.user_id of the search image result); verified by the server.",
+    )
+    get_image.add_argument(
+        "-o",
+        "--output",
+        help="Output file path. Default: ./{blob_id}{extension by content type}.",
+    )
+    get_image.set_defaults(handler=_handle_memory_get_image)
 
     update = memory_subparsers.add_parser("update", help="Update a memory's content by id.")
     update.add_argument("memory_id", help="Target memory id.")
@@ -310,6 +357,20 @@ def _add_memory_commands(subparsers: argparse._SubParsersAction[argparse.Argumen
     dreaming.set_defaults(handler=_handle_memory_dreaming)
 
 
+def _add_trajectory_commands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parser = subparsers.add_parser("trajectory", help="Report one execution to Memory and Skill.")
+    commands = parser.add_subparsers(dest="trajectory_command", required=True)
+    report = commands.add_parser("report", help="Send a trajectory event and read independent delivery receipts.")
+    report.add_argument("--file", required=True, help="Path to the trajectory event JSON, or - for standard input.")
+    destinations = report.add_mutually_exclusive_group()
+    destinations.add_argument("--skill-only", action="store_true", help="Send only the shared Skill trajectory.")
+    destinations.add_argument("--memory-only", action="store_true", help="Send only the Memory projection.")
+    report.add_argument(
+        "--json", action="store_true", help="Print machine-readable receipts, including partial results."
+    )
+    report.set_defaults(handler=_handle_trajectory_report)
+
+
 def _add_doctor_command(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser("doctor", help="Check SDK configuration and connectivity.")
     parser.set_defaults(handler=_handle_doctor)
@@ -322,359 +383,236 @@ def _handle_root(args: argparse.Namespace) -> int:
 
 def _handle_auth(args: argparse.Namespace) -> int:
     manager = ConfigManager()
-    existing = manager.load_portal() if manager.portal_exists() or manager.legacy_exists() else None
+    existing = manager.load_or_default() if manager.exists() else None
     if existing is not None:
-        print(f"Existing configuration detected at {manager.portal_path}.")
-        print("This will overwrite the current authentication settings.\n")
+        print(f"Updating SDK connections at {manager.config_path}.")
 
-    if existing is None:
-        default_base_url = DEFAULT_BASE_URL
-        default_user_id = None
+    default_type = existing.service_type if existing is not None else "official"
+    if args.service_type is not None:
+        service_type = args.service_type
     else:
-        profile = existing.profiles[existing.active_profile]
-        default_base_url = profile.connections[profile.default_connection].base_url
-        default_user_id = profile.identity.user_id
-    base_url = args.base_url or _prompt(f"Base URL [{default_base_url}]: ") or default_base_url
+        while True:
+            service_type = _prompt(f"Deployment [official/custom] [{default_type}]: ").lower() or default_type
+            if service_type in {"official", "custom"}:
+                break
+            print("mindmemos auth: deployment must be official or custom.")
 
-    api_key = args.api_key or _prompt_secret("API key: ")
-    if not api_key:
-        print("mindmemos auth: API key is required.")
+    if service_type == "official":
+        if args.memory_base_url is not None or args.skill_base_url is not None or args.no_skill:
+            print("mindmemos auth: official deployment does not accept custom service URLs.")
+            return 2
+        memory_url = DEFAULT_BASE_URL
+        skill_url = None
+        previous_skill_url = None
+    else:
+        if args.no_skill and args.skill_api_key is not None:
+            print("mindmemos auth: --no-skill cannot be used with --skill-api-key.")
+            return 2
+        previous_memory_url = (
+            existing.memory_service.base_url if existing is not None and existing.service_type == "custom" else None
+        )
+        try:
+            memory_url = _auth_url(
+                args.memory_base_url,
+                "Memory service URL",
+                _label("Memory service URL", previous_memory_url),
+                default=previous_memory_url,
+            )
+        except ValueError as exc:
+            print(f"mindmemos auth: {exc}")
+            return 2
+
+        previous_skill_url = existing.skill_service.base_url if existing is not None else None
+        if args.no_skill:
+            skill_url = None
+        elif args.service_type is not None and args.skill_base_url is None:
+            skill_url = previous_skill_url
+        else:
+            try:
+                skill_url = _auth_url(
+                    args.skill_base_url,
+                    "Skill service URL",
+                    _label("Skill service URL", previous_skill_url)
+                    if previous_skill_url
+                    else "Skill service URL [skip]: ",
+                    default=previous_skill_url,
+                    allow_empty=True,
+                )
+            except ValueError as exc:
+                print(f"mindmemos auth: {exc}")
+                return 2
+        if skill_url is None and args.skill_api_key is not None:
+            print("mindmemos auth: a custom Skill API key requires a Skill service URL.")
+            return 2
+
+    previous_memory_key = existing.memory_service.auth.api_key if existing is not None else None
+    previous_memory_destination = existing.resolve_memory_connection()[0] if existing is not None else None
+    matching_memory_key = previous_memory_key if memory_url == previous_memory_destination else None
+    has_skill_key = bool((args.skill_api_key or "").strip())
+    if has_skill_key and args.memory_api_key is None:
+        memory_key = matching_memory_key
+    else:
+        memory_key = _auth_key(args.memory_api_key, matching_memory_key, "Memory API key")
+    if not memory_key and not has_skill_key:
+        print("mindmemos auth: Memory API key is required.")
         return 2
 
-    user_id = args.user_id or _prompt(_label("User id", default_user_id)) or default_user_id
-    if not user_id:
-        print("mindmemos auth: user id is required.")
-        return 2
+    skill_key = None
+    previous_skill_auth = existing.skill_service.auth if existing is not None else None
+    previous_skill_key = previous_skill_auth.api_key if previous_skill_auth is not None else None
+    if skill_url is not None:
+        matching_key = previous_skill_key if skill_url == previous_skill_url else None
+        if args.service_type is not None and args.skill_base_url is None and args.skill_api_key is None:
+            skill_key = matching_key
+        else:
+            skill_key = _auth_key(args.skill_api_key, matching_key, "Skill API key")
+        if not skill_key:
+            print("mindmemos auth: independent Skill API key is required.")
+            return 2
+    elif service_type == "official":
+        skill_key = (args.skill_api_key or "").strip() or (
+            previous_skill_key if existing is not None and existing.service_type == "official" else None
+        )
+
+    default_user_id = existing.defaults.user_id if existing is not None else None
+    if args.user_id is not None:
+        user_id = args.user_id.strip()
+        if not user_id:
+            print("mindmemos auth: user id is required.")
+            return 2
+    else:
+        while True:
+            user_id = _prompt(_label("User id", default_user_id)) or default_user_id
+            if user_id:
+                break
+            print("mindmemos auth: user id is required.")
 
     try:
-        manager.update_auth(
-            base_url=base_url,
-            api_key=api_key,
-            user_id=user_id,
+        config = existing.model_copy(deep=True) if existing is not None else SDKConfig()
+        config.service_type = service_type
+        config.memory_service.base_url = None if service_type == "official" else memory_url
+        config.memory_service.auth.api_key = memory_key
+        config.skill_service = SkillServiceConfig(
+            base_url=skill_url,
+            auth=AuthConfig(api_key=skill_key) if skill_key else None,
         )
+        config.defaults.user_id = user_id
+        manager.save(config)
+        saved = manager.load()
     except ConfigError as exc:
         print(f"mindmemos auth: {exc}")
         return 1
 
-    print("Configuration saved.")
+    saved_memory_url, _ = saved.resolve_memory_connection()
+    saved_skill_url, _ = saved.resolve_skill_connection()
+    print(f"Configuration saved at {manager.config_path}.")
+    print(f"Deployment: {saved.service_type}")
+    print(f"Memory service: {saved_memory_url}")
+    print(f"Skill service: {saved_skill_url or '(not configured)'}")
     return 0
+
+
+def _auth_url(
+    provided: str | None,
+    label: str,
+    prompt: str,
+    *,
+    default: str | None = None,
+    allow_empty: bool = False,
+) -> str | None:
+    """Validate a service URL before moving to the next auth field."""
+    while True:
+        raw = provided if provided is not None else _prompt(prompt)
+        candidate = raw.strip()
+        if not candidate and provided is None:
+            candidate = default
+        if not candidate and allow_empty and provided is None:
+            return None
+        if not candidate:
+            message = f"{label} is required."
+        else:
+            try:
+                normalized = MemoryServiceConfig(base_url=candidate).base_url
+            except ValidationError:
+                message = f"Invalid {label}: enter an HTTP URL without credentials, query, or fragment."
+            else:
+                if normalized is not None:
+                    return normalized
+                message = f"{label} is required."
+        if provided is not None:
+            raise ValueError(message)
+        print(f"mindmemos auth: {message}")
+
+
+def _auth_key(provided: str | None, previous: str | None, label: str) -> str:
+    """Read a key, keeping the prior key only when its destination is unchanged."""
+    if provided is not None:
+        return provided.strip()
+    suffix = " [Enter keeps current key]" if previous else ""
+    while True:
+        key = _prompt_secret(f"{label}{suffix}: ") or previous
+        if key:
+            return key
+        print(f"mindmemos auth: {label} is required.")
 
 
 def _handle_config_root(args: argparse.Namespace) -> int:
     return _missing_subcommand("config")
 
 
+def _handle_config_home_root(args: argparse.Namespace) -> int:
+    return _missing_subcommand("config home")
+
+
+def _handle_config_home_set(args: argparse.Namespace) -> int:
+    try:
+        home = set_default_mindmemos_home(args.directory)
+    except (OSError, ValueError) as exc:
+        print(f"mindmemos config home set: {exc}")
+        return 2
+    print(f"Default SDK home saved: {home}")
+    print("Restart running MindMemOS processes to use the new default.")
+    return 0
+
+
 def _handle_config_show(args: argparse.Namespace) -> int:
     manager = ConfigManager()
-    if not manager.portal_exists() and not manager.legacy_exists():
-        print(f"No SDK config at {manager.portal_path}. Run `mindmemos auth` to create it.")
+    if not manager.exists():
+        print(f"No SDK config at {manager.config_path}. Run `mindmemos auth` to create it.")
         return 1
     try:
-        compiled = manager.compile_portal()
+        config = manager.load()
     except ConfigError as exc:
         print(f"mindmemos config show: {exc}")
         return 1
 
-    profile = compiled.profile
-    connection = profile.connections[profile.default_connection]
-    api_key = connection.api_key
-    api_key_display = api_key if args.show_secret else mask_secret(api_key)
+    memory_url, memory_key = config.resolve_memory_connection()
+    skill_url, skill_key = config.resolve_skill_connection()
+    memory_key_display = memory_key if args.show_secret else mask_secret(memory_key)
+    skill_key_display = skill_key if args.show_secret else mask_secret(skill_key)
 
-    print(f"config path: {manager.portal_path}")
-    print(f"profile:     {compiled.active_profile}")
-    print(f"connection:  {profile.default_connection}")
-    print(f"base_url:    {connection.base_url}")
-    print(f"api_key:     {api_key_display}")
-    print(f"user_id:     {profile.identity.user_id or '(not set)'}")
-    print(f"memory route:{profile.memory_connection}")
-    print(f"skill route: {_skill_route_display(profile.skill_connection)}")
+    print(f"config path: {manager.config_path}")
+    print(f"deployment:  {config.service_type}")
+    print(f"memory URL:  {memory_url}")
+    print(f"memory key:  {memory_key_display}")
+    print(f"skill URL:   {skill_url or '(not configured)'}")
+    print(f"skill key:   {skill_key_display}")
+    print(f"user_id:     {config.defaults.user_id or '(not set)'}")
     return 0
 
 
 def _handle_config_reset(args: argparse.Namespace) -> int:
     manager = ConfigManager()
-    paths = [path for path in (manager.portal_path, manager.config_path) if path.is_file()]
-    if not paths:
-        print(f"No SDK config at {manager.portal_path}. Nothing to reset.")
+    if not manager.exists():
+        print(f"No SDK config at {manager.config_path}. Nothing to reset.")
         return 0
     if not args.yes:
-        answer = _prompt(f"Reset and delete {', '.join(str(path) for path in paths)}? [y/N]: ")
+        answer = _prompt(f"Reset the current SDK connection settings at {manager.config_path}? [y/N]: ")
         if answer.strip().lower() not in {"y", "yes"}:
             print("Aborted.")
             return 1
     manager.reset()
     print("Configuration reset.")
-    return 0
-
-
-def _handle_config_migrate(args: argparse.Namespace) -> int:
-    manager = ConfigManager(args.config_dir)
-    try:
-        plan = manager.migrate_portal(dry_run=not args.apply)
-        compiled = manager.compile_portal() if args.apply and manager.portal_exists() else None
-        if compiled is None:
-            from .config import SDKConfigCompilerV2
-
-            compiled = SDKConfigCompilerV2().compile(plan.portal)
-    except ConfigError as exc:
-        print(f"mindmemos config migrate: {exc}")
-        return 1
-
-    mode = "applied" if args.apply and plan.changes_required else "dry-run"
-    if not plan.changes_required:
-        mode = "already-current"
-    profile = compiled.profile
-    print(f"migration:    {mode}")
-    print(f"source:       {plan.source_path}")
-    print(f"target:       {plan.target_path}")
-    print(f"backup:       {plan.backup_path}")
-    print(f"profile:      {compiled.active_profile}")
-    print(f"memory route: {profile.memory_connection}")
-    print(f"skill route:  {_skill_route_display(profile.skill_connection)}")
-    print(f"ignored local Skill entries: {plan.ignored_local_skill_entries}")
-    if not args.apply and plan.changes_required:
-        print("No files changed. Re-run with --apply to write portal v2.")
-    return 0
-
-
-def _handle_skill_root(args: argparse.Namespace) -> int:
-    return _missing_subcommand("skill")
-
-
-def _handle_ui(args: argparse.Namespace) -> int:
-    """Launch the unified local console without adding a web framework dependency."""
-    from .ui.server import run_ui
-
-    try:
-        run_ui(
-            host="127.0.0.1",
-            port=args.port,
-            open_browser=not args.no_open,
-            config_dir=args.config_dir,
-        )
-    except KeyboardInterrupt:
-        print("\nStopped local MindMemOS UI.")
-    return 0
-
-
-def _handle_skill_register(args: argparse.Namespace) -> int:
-    manager = _build_skill_manager(require_api_key=False)
-    if manager is None:
-        return 1
-    try:
-        result = manager.register_local(
-            RegisterLocalRequest(
-                source_path=args.path,
-                name=args.name,
-                alias=args.alias,
-                version_label=args.version,
-                commit_message=args.message,
-                duplicate_action=args.duplicate_action,
-            )
-        )
-        manifest = manager.show_local(result.skill_id)
-        version = manager.get_local_version(result.skill_id, result.version_id)
-    except MindMemOSSDKError as exc:
-        return _report_api_error("skill register", exc)
-
-    verb = "Reused" if result.action == "reused" else "Registered"
-    print(f"{verb} {manifest.name} ({manifest.skill_id}).")
-    print(f"alias:          {manifest.alias or '(none)'}")
-    print(f"cloud_skill_id: {manifest.cloud_skill_id or '(local only)'}")
-    print(f"version_id:     {result.version_id}")
-    print(f"latest_version: {manifest.latest_version_id}")
-    print(f"content_hash:   {version.content_hash}")
-    return 0
-
-
-def _handle_skill_publish(args: argparse.Namespace) -> int:
-    manager = _build_skill_manager(require_api_key=False)
-    if manager is None:
-        return 1
-    try:
-        result = manager.publish_local(
-            PublishLocalRequest(
-                skill_id=args.skill,
-                base_version_id=args.base_version,
-                source_path=args.source_path,
-                version_label=args.version_label,
-                commit_message=args.message,
-            )
-        )
-        manifest = manager.show_local(result.skill_id)
-    except MindMemOSSDKError as exc:
-        return _report_api_error("skill publish", exc)
-    print(f"Published local version {result.version_id} for {manifest.name} ({manifest.skill_id}).")
-    print(f"latest_version: {result.latest_version_id}")
-    print(f"snapshot_hash:  {result.local_snapshot_hash}")
-    return 0
-
-
-def _handle_skill_list(args: argparse.Namespace) -> int:
-    manager = _build_skill_manager(require_api_key=False)
-    if manager is None:
-        return 1
-    try:
-        records = manager.list_local()
-    except MindMemOSSDKError as exc:
-        return _report_api_error("skill list", exc)
-    if not records:
-        print("No SDK-registered skills.")
-        return 0
-    for line in _format_local_skill_manifests_table(records):
-        print(line)
-    return 0
-
-
-def _handle_skill_show(args: argparse.Namespace) -> int:
-    manager = _build_skill_manager(require_api_key=False)
-    if manager is None:
-        return 1
-    try:
-        record = manager.show_local(args.skill)
-        latest = manager.get_local_version(record.skill_id, record.latest_version_id)
-    except MindMemOSSDKError as exc:
-        return _report_api_error("skill show", exc)
-    print(f"skill_id:       {record.skill_id}")
-    print(f"alias:          {record.alias or '(none)'}")
-    print(f"name:           {record.name}")
-    print(f"cloud_skill_id: {record.cloud_skill_id or '(none)'}")
-    print(f"latest_version: {record.latest_version_id}")
-    print(f"version_count:  {len(record.version_ids)}")
-    print(f"content_hash:   {latest.content_hash}")
-    print(f"snapshot_hash:  {latest.local_snapshot_hash}")
-    print(f"sync_state:     {latest.sync_state.value}")
-    print(f"last_sync_at:   {record.last_sync_at or '(never)'}")
-    print(f"updated_at:     {record.updated_at}")
-    return 0
-
-
-def _handle_skill_pull(args: argparse.Namespace) -> int:
-    manager = _build_skill_manager(require_api_key=True)
-    if manager is None:
-        return 1
-    try:
-        versions = manager.pull_local(args.skill)
-    except MindMemOSSDKError as exc:
-        return _report_api_error("skill pull", exc)
-    print(f"Pulled {len(versions)} version(s).")
-    for version in versions:
-        cloud_status = version.cloud_status.value if version.cloud_status else "(unknown)"
-        print(f"- {version.version_id} cloud={cloud_status} sync={version.sync_state.value} {version.content_hash}")
-    return 0
-
-
-def _handle_skill_push(args: argparse.Namespace) -> int:
-    manager = _build_skill_manager(require_api_key=True)
-    if manager is None:
-        return 1
-    try:
-        result = manager.push_local(args.skill, version_id=args.version)
-        manifest = manager.show_local(args.skill)
-    except MindMemOSSDKError as exc:
-        return _report_api_error("skill push", exc)
-    print(f"Pushed {manifest.name} ({manifest.skill_id}) version {result.version_id}.")
-    print(f"cloud_skill_id: {result.cloud_skill_id}")
-    print(f"content_hash:   {result.content_hash}")
-    return 0
-
-
-def _handle_skill_update(args: argparse.Namespace) -> int:
-    if not args.skill and not args.all:
-        print("mindmemos skill update: provide a skill id/alias or --all.")
-        return 2
-    manager = _build_skill_manager(require_api_key=True)
-    if manager is None:
-        return 1
-    command = "skill sync" if getattr(args, "skill_command", None) == "sync" else "skill update"
-    try:
-        skill_refs = [record.skill_id for record in manager.list_local()] if args.all else [args.skill]
-        updated = [manager.sync_local(skill_ref) for skill_ref in skill_refs]
-    except MindMemOSSDKError as exc:
-        return _report_api_error(command, exc)
-    for record in updated:
-        print(f"Synced {record.name} ({record.skill_id}); latest={record.latest_version_id}.")
-    return 0
-
-
-def _handle_skill_export(args: argparse.Namespace) -> int:
-    manager = _build_skill_manager(require_api_key=False)
-    if manager is None:
-        return 1
-    try:
-        result = manager.export_local(
-            ExportSkillRequest(
-                skill_id=args.skill,
-                version_id=args.version,
-                target_path=args.target_path,
-                replace=not args.no_replace,
-            )
-        )
-    except MindMemOSSDKError as exc:
-        return _report_api_error("skill export", exc)
-    print(f"Exported {result.skill_id}@{result.version_id} to {result.target_path}.")
-    print(f"files:         {len(result.exported_files)}")
-    print(f"snapshot_hash: {result.local_snapshot_hash}")
-    return 0
-
-
-def _handle_skill_history(args: argparse.Namespace) -> int:
-    manager = _build_skill_manager(require_api_key=False)
-    if manager is None:
-        return 1
-    try:
-        versions = manager.local_history(args.skill)
-    except MindMemOSSDKError as exc:
-        return _report_api_error("skill history", exc)
-    if not versions:
-        print("No local skill history.")
-        return 0
-    for version in versions:
-        parents = ",".join(version.parent_version_ids) or "(root)"
-        label = version.version_label or "(none)"
-        print(
-            f"{version.version_id} parents={parents} sync={version.sync_state.value} "
-            f"origin={version.origin.value} version={label}"
-        )
-        if version.commit_message:
-            print(f"  {version.commit_message}")
-    return 0
-
-
-def _handle_skill_diff(args: argparse.Namespace) -> int:
-    manager = _build_skill_manager(require_api_key=False)
-    if manager is None:
-        return 1
-    try:
-        result = manager.diff_local(args.skill, from_version_id=args.from_version, to_version_id=args.version)
-    except MindMemOSSDKError as exc:
-        return _report_api_error("skill diff", exc)
-    if result.diff:
-        print(result.diff, end="" if result.diff.endswith("\n") else "\n")
-    else:
-        print(f"No differences between {result.from_version_id} and {result.to_version_id}.")
-    return 0
-
-
-def _handle_skill_unregister(args: argparse.Namespace) -> int:
-    if args.delete_files:
-        print("mindmemos skill unregister: --delete-files is no longer supported; source directories are not owned by the SDK.")
-        return 2
-    if not args.yes:
-        suffix = " and delete local files" if args.delete_files else ""
-        answer = _prompt(f"Unregister skill {args.skill}{suffix}? [y/N]: ")
-        if answer.strip().lower() not in {"y", "yes"}:
-            print("Aborted.")
-            return 1
-    manager = _build_skill_manager(require_api_key=False)
-    if manager is None:
-        return 1
-    try:
-        removed = manager.unregister(args.skill)
-    except MindMemOSSDKError as exc:
-        return _report_api_error("skill unregister", exc)
-    name = getattr(removed, "name", None) or getattr(removed, "skill_name", "unknown")
-    print(f"Unregistered {name} ({removed.skill_id}).")
     return 0
 
 
@@ -685,6 +623,11 @@ def _handle_memory_root(args: argparse.Namespace) -> int:
 def _handle_memory_search(args: argparse.Namespace) -> int:
     filters = _parse_json_object(args.filter_json, command="memory search", option="--filter")
     if filters is _JSON_PARSE_ERROR:
+        return 2
+    try:
+        query_images = _load_image_refs(args.query_images)
+    except _ImageInputError as exc:
+        print(f"mindmemos memory search: {exc}")
         return 2
 
     client = _build_client()
@@ -700,10 +643,13 @@ def _handle_memory_search(args: argparse.Namespace) -> int:
                     search_strategy=args.search_strategy,
                     rerank=args.rerank,
                     score_threshold=args.score_threshold,
+                    token_budget=args.token_budget,
                     filters=filters,
                     app_id=args.app_id,
                     agent_id=args.agent_id,
                     session_id=args.session_id,
+                    query_images=query_images,
+                    multimodal=args.multimodal or None,
                 ),
             )
     except MindMemOSSDKError as exc:
@@ -718,6 +664,9 @@ def _handle_memory_search(args: argparse.Namespace) -> int:
     for i, hit in enumerate(result.memories, start=1):
         when = hit.last_update_at or ""
         print(f"{i}. [{hit.id}] {hit.memory}" + (f"  ({when})" if when else ""))
+        image_url = (hit.metadata or {}).get("image_url")
+        if image_url:
+            print(f"   image: {image_url}")
     return 0
 
 
@@ -725,12 +674,28 @@ def _handle_memory_add(args: argparse.Namespace) -> int:
     messages = _parse_add_messages(args)
     if messages is None:
         return 2
+    if args.images:
+        if args.messages_json is not None or args.messages_json_file is not None:
+            print("mindmemos memory add: --image attaches to --content; embed images in --messages-json instead.")
+            return 2
+        try:
+            images = _load_image_refs(args.images)
+        except _ImageInputError as exc:
+            print(f"mindmemos memory add: {exc}")
+            return 2
+        messages[0] = messages[0].model_copy(update={"images": images})
     metadata = _parse_json_object(args.metadata_json, command="memory add", option="--metadata-json")
     if metadata is _JSON_PARSE_ERROR:
         return 2
     skill_context = _parse_json_array(args.skill_context_json, command="memory add", option="--skill-context-json")
     if skill_context is _JSON_PARSE_ERROR:
         return 2
+    if skill_context is not None:
+        try:
+            skill_context = TypeAdapter(list[SkillContext]).validate_python(skill_context)
+        except ValidationError:
+            print("mindmemos memory add: invalid --skill-context-json fields.", file=sys.stderr)
+            return 2
 
     client = _build_client()
     if client is None:
@@ -878,6 +843,26 @@ def _parse_json_array(raw: str | None, *, command: str, option: str) -> list[Any
     return value
 
 
+def _handle_memory_get_image(args: argparse.Namespace) -> int:
+    client = _build_client()
+    if client is None:
+        return 1
+    try:
+        with client:
+            data, mime_type = client.memory.get_image(args.blob_id, args.user_id)
+    except MindMemOSSDKError as exc:
+        return _report_api_error("memory get-image", exc)
+
+    output = Path(args.output) if args.output else Path(f"{args.blob_id}{_MIME_EXT.get(mime_type, '.bin')}")
+    try:
+        _atomic_write_bytes(output, data)
+    except OSError as exc:
+        print(f"mindmemos memory get-image: failed to write {output}: {exc}")
+        return 1
+    print(f"Saved {len(data)} bytes to {output} ({mime_type}).")
+    return 0
+
+
 def _handle_memory_get(args: argparse.Namespace) -> int:
     filters = _parse_json_object(args.filter_json, command="memory get", option="--filter")
     if filters is _JSON_PARSE_ERROR:
@@ -1019,31 +1004,68 @@ def _handle_memory_dreaming(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_trajectory_report(args: argparse.Namespace) -> int:
+    """Read a trajectory event and report the result of each destination write."""
+    try:
+        raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
+        event = TrajectoryEvent.model_validate_json(raw)
+    except ValidationError as exc:
+        details = exc.errors(include_input=False, include_context=False, include_url=False)
+        _print_json({"code": "invalid_event", "errors": details}, stream=sys.stderr)
+        return 2
+    except (OSError, UnicodeError) as exc:
+        _print_json({"code": "invalid_input", "message": str(exc)}, stream=sys.stderr)
+        return 2
+
+    try:
+        config = ConfigManager().load()
+        with MindMemOSClient(config=config) as client:
+            result = client.report_trajectory(
+                event,
+                include_memory=not args.skill_only,
+                include_skill=not args.memory_only,
+            )
+    except InvalidRequestError as exc:
+        _print_json({"code": "invalid_argument", "message": str(exc)}, stream=sys.stderr)
+        return 2
+    except (ConfigError, OSError):
+        _print_json(
+            {"code": "config_error", "message": "Cannot load SDK settings. Run mindmemos auth."}, stream=sys.stderr
+        )
+        return 1
+
+    if args.json:
+        _print_json(result.model_dump(mode="json", exclude_none=True))
+    else:
+        print(f"Event {result.event_id}")
+        if result.memory is not None:
+            print(f"Memory: {result.memory.status} ({result.memory.code})")
+        if result.skill is not None:
+            print(f"Skill: {result.skill.status} ({result.skill.trajectory_id or result.skill.code})")
+    return int(result.has_failures)
+
+
 def _handle_doctor(args: argparse.Namespace) -> int:
-    del args
+    # CLI handlers share the argparse namespace signature; doctor uses persisted configuration.
     manager = ConfigManager()
-    if not manager.portal_exists() and not manager.legacy_exists():
-        print(f"config: missing ({manager.portal_path})")
+    if not manager.exists():
+        print(f"config: missing ({manager.config_path})")
         print("Run `mindmemos auth` first.")
         return 1
     try:
-        compiled = manager.compile_portal()
+        config = manager.load()
     except ConfigError as exc:
         print(f"config: invalid: {exc}")
         return 1
-    profile = compiled.profile
-    connection = profile.connections[profile.default_connection]
-    print(f"config: ok ({manager.portal_path})")
-    print(f"profile: {compiled.active_profile}")
-    print(f"base_url: {connection.base_url}")
-    print(f"api_key: {'configured' if connection.api_key else 'missing'}")
-    print(f"user_id: {profile.identity.user_id or '(not set)'}")
-    print(f"memory route: {profile.memory_connection}")
-    print(f"skill route: {_skill_route_display(profile.skill_connection)}")
-    if not connection.api_key:
+    print(f"config: ok ({manager.config_path})")
+    base_url, api_key = config.resolve_memory_connection()
+    print(f"base_url: {base_url}")
+    print(f"api_key: {'configured' if api_key else 'missing'}")
+    print(f"user_id: {config.defaults.user_id or '(not set)'}")
+    if not api_key:
         return 1
     try:
-        client = MindMemOSClient(config_manager=manager)
+        client = MindMemOSClient(config=config)
         client.require_api_key()
         client.close()
     except MindMemOSSDKError as exc:
@@ -1056,109 +1078,18 @@ def _handle_doctor(args: argparse.Namespace) -> int:
 def _build_client() -> MindMemOSClient | None:
     """Build a client from local configuration."""
     manager = ConfigManager()
-    if not manager.legacy_exists() and not manager.portal_exists():
+    if not manager.exists():
         print(f"No SDK config at {manager.config_path}. Run `mindmemos auth` first.")
         return None
     try:
-        client = MindMemOSClient(config_manager=manager)
+        config = manager.load()
     except ConfigError as exc:
         print(f"mindmemos: {exc}")
         return None
-    try:
-        client.require_api_key()
-    except ConfigError:
-        client.close()
+    if not config.memory_service.auth.api_key:
         print("No api_key configured. Run `mindmemos auth` first.")
         return None
-    return client
-
-
-def _build_skill_manager(*, require_api_key: bool) -> SkillManager | None:
-    """Build the skill manager, optionally requiring cloud credentials."""
-
-    config_manager = ConfigManager()
-    try:
-        if config_manager.portal_exists() or config_manager.legacy_exists():
-            profile = config_manager.compile_portal().profile
-        else:
-            profile = SDKConfigCompilerV2().compile(config_manager.default_portal()).profile
-    except ConfigError as exc:
-        print(f"mindmemos skill: {exc}")
-        return None
-    skill_connection = profile.skill_connection
-    if require_api_key and skill_connection is not None and not profile.connections[skill_connection].api_key:
-        print("No api_key configured. Run `mindmemos auth` first.")
-        return None
-    manager = SkillManager.from_config_manager(config_manager)
-    active = _CLI_SKILL_MANAGERS.get()
-    if active is not None:
-        active.append(manager)
-    return manager
-
-
-def _skill_route_display(connection: str | None) -> str:
-    return connection if connection is not None else "(disabled)"
-
-
-def _format_skill_record(record: SkillRecord) -> str:
-    cloud = record.cloud_skill_id or "(local)"
-    version = record.base_version_id or "(unregistered)"
-    alias = record.alias or "(none)"
-    return (
-        f"{record.skill_id}  {alias}  {record.skill_name}  {version}  {cloud}  {record.hash_state.value}  {record.path}"
-    )
-
-
-def _format_skill_records_table(records: Sequence[SkillRecord]) -> list[str]:
-    """Format registered skills as a readable table."""
-
-    headers = ("skill_id", "alias", "name", "base_version_id", "cloud_skill_id", "hash_state", "path")
-    rows = [
-        (
-            record.skill_id,
-            record.alias or "(none)",
-            record.skill_name,
-            record.base_version_id or "(unregistered)",
-            record.cloud_skill_id or "(local)",
-            record.hash_state.value,
-            record.path,
-        )
-        for record in records
-    ]
-    widths = [max(len(header), *(len(row[index]) for row in rows)) for index, header in enumerate(headers)]
-
-    def format_row(row: Sequence[str]) -> str:
-        return "  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
-
-    return [format_row(headers), format_row(tuple("-" * width for width in widths)), *(format_row(row) for row in rows)]
-
-
-def _format_local_skill_manifests_table(records: Sequence[LocalSkillManifest]) -> list[str]:
-    """Format centralized Skill families without exposing external paths."""
-
-    headers = ("skill_id", "alias", "name", "latest_version_id", "versions", "last_sync_at")
-    rows = [
-        (
-            record.skill_id,
-            record.alias or "(none)",
-            record.name,
-            record.latest_version_id,
-            str(len(record.version_ids)),
-            record.last_sync_at or "(never)",
-        )
-        for record in records
-    ]
-    widths = [max(len(header), *(len(row[index]) for row in rows)) for index, header in enumerate(headers)]
-
-    def format_row(row: Sequence[str]) -> str:
-        return "  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
-
-    return [format_row(headers), format_row(tuple("-" * width for width in widths)), *(format_row(row) for row in rows)]
-
-
-    print(f"content_hash:   {plan.from_content_hash or '(none)'} -> {plan.to_content_hash}")
-    print(f"backup_path:    {plan.backup_path or '(pending)'}")
-    print(f"files:          {', '.join(plan.files) if plan.files else '(none)'}")
+    return MindMemOSClient(config=config)
 
 
 def _report_api_error(command: str, exc: MindMemOSSDKError) -> int:
@@ -1184,25 +1115,19 @@ def _status_line(action: str, target: str | None, result: StatusResult) -> str:
     return line
 
 
-def _print_json(payload: Any) -> None:
-    """Print deterministic JSON for plugins and scripts."""
-    print(json.dumps(payload, ensure_ascii=False, default=str))
+def _print_json(payload: Any, *, stream=None) -> None:
+    """Print JSON to stdout or the supplied diagnostic stream."""
+    print(json.dumps(payload, ensure_ascii=False, default=str), file=stream)
 
 
 def _prompt(message: str) -> str:
     """Read one line of user input."""
-    try:
-        return input(message).strip()
-    except EOFError:
-        return ""
+    return input(message).strip()
 
 
 def _prompt_secret(message: str) -> str:
     """Read a secret without echoing it to the terminal."""
-    try:
-        return getpass(message).strip()
-    except EOFError:
-        return ""
+    return getpass(message).strip()
 
 
 def _label(field: str, default: str | None) -> str:
@@ -1220,16 +1145,11 @@ def _missing_subcommand(command: str) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    managers: list[SkillManager] = []
-    token = _CLI_SKILL_MANAGERS.set(managers)
     try:
         return args.handler(args)
-    finally:
-        for manager in reversed(managers):
-            close = getattr(manager, "close", None)
-            if close is not None:
-                close()
-        _CLI_SKILL_MANAGERS.reset(token)
+    except EOFError:
+        print(f"\nmindmemos {args.command}: input cancelled.")
+        return 2
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from ....components.searcher.schema import SchemaSearchRanker
 from ....components.text import detect_prompt_language
 from ....config import get_config
 from ....config.algo.search import AgenticConfig
-from ....llm import LLMClient, get_llm_client
+from ....llm import LLMClient, get_llm_client, provider_binding_runtime_enabled, require_model_endpoint
 from ....mappers import parse_schema_search_filters
 from ....prompts import SearchPromptSet, get_search_prompts
 from ....typing import MemoryRequestContext, MemorySearchItem, SearchPipelineInput
@@ -37,7 +37,10 @@ class AgenticSearchWrapper:
     ) -> None:
         cfg = get_config()
         self._config = config or cfg.algo_config.search.agentic
-        self._llm = llm_client or get_llm_client()
+        self._explicit_llm = llm_client
+        self._llm = llm_client
+        if self._llm is None and not provider_binding_runtime_enabled():
+            self._llm = get_llm_client()
         self._prompts = prompts or get_search_prompts(cfg.algo_config.common.prompt_language)
         self._ranker = SchemaSearchRanker()
 
@@ -68,8 +71,9 @@ class AgenticSearchWrapper:
             enabled_tools=[tool.name],
             default_tool=tool.name,
         )
+        llm = self._resolve_llm()
         planner = LLMAgenticPlanner(
-            llm=self._llm,
+            llm=llm,
             prompts=request_prompts,
             format_entities=lambda entities: self._ranker.format_entities_for_prompt(
                 entities,
@@ -78,7 +82,7 @@ class AgenticSearchWrapper:
             enforce_min_time_window=lambda value: value,
         )
         sufficiency = LLMSufficiencyEvaluator(
-            llm=self._llm,
+            llm=llm,
             prompts=request_prompts,
             format_entities=lambda entities, max_edge_num=None: self._ranker.format_entities_for_prompt(
                 entities,
@@ -117,6 +121,16 @@ class AgenticSearchWrapper:
             )
             for entity in entities
         ]
+
+    def _resolve_llm(self) -> LLMClient:
+        if self._explicit_llm is not None:
+            return self._explicit_llm
+        if provider_binding_runtime_enabled():
+            require_model_endpoint("chat")
+            return get_llm_client()
+        if self._llm is None:
+            self._llm = get_llm_client()
+        return self._llm
 
 
 class EngineSearchTool(SearchTool):

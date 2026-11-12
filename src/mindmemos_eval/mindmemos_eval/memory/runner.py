@@ -10,17 +10,25 @@ from pathlib import Path
 from typing import Any
 
 from mindmemos_sdk.memory import AsyncMemoryClient
+from mindmemos_sdk.transport import AsyncHttpTransport
 
 from mindmemos_eval.memory.envs.locomo import LocomoAdapter
 from mindmemos_eval.memory.envs.longmemeval.adapter import LongMemEvalAdapter
+from mindmemos_eval.memory.envs.memeye import MemEyeAdapter
+from mindmemos_eval.memory.envs.memgallery import MemGalleryAdapter
 from mindmemos_eval.memory.envs.memoryagentbench.adapter import MemoryAgentBenchAdapter
 from mindmemos_eval.memory.envs.personamem import PersonaMemAdapter
 
-from ..backend import MindMemOSBackend, build_mindmemos_backend
 from ..llm import LLMClient, LLMConfig
 from .base import BenchmarkAdapter, BenchmarkSpec, RunContext, RunnerConfig
-from .config import _merged_runner_config, _option, load_benchmark_specs, validate_memory_algorithm
-from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_collections
+from .config import (
+    _merged_runner_config,
+    _option,
+    check_image_sending_consistency,
+    load_benchmark_specs,
+    validate_memory_algorithm,
+)
+from .db_reset import ProjectResetError, ResetConfig, reset_project, resolve_collections, resolve_s3_blob_settings
 from .identity import RunIdentity, new_identity, write_api_keys
 from .manifest import BenchmarkRunManifest, write_manifests
 
@@ -79,14 +87,11 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         help="Path to the JSONL manifest written for this run; parent directories are created if needed.",
     )
     parser.add_argument(
-        "--auth-config-output",
         "--api-key-output",
-        dest="auth_config_output",
         required=False,
         metavar="PATH",
-        help="Path to the complete benchmark auth config YAML generated for the MindMemOS HTTP server; "
-        "required for fresh runs, not needed with --reuse-api-key, and the target "
-        "file is completely overwritten. --api-key-output is a deprecated compatibility alias.",
+        help="Path to the generated api_keys YAML consumed by the FastAPI server; it should match the server "
+        "auth.api_key_file. Required for fresh runs; optional (unused) when --reuse-api-key is set.",
     )
     parser.add_argument(
         "--algorithm",
@@ -103,7 +108,7 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--base-url",
         metavar="URL",
-        help="Base URL of the MindMemOS FastAPI service.",
+        help="Base URL of the running MindMemOS FastAPI service used for add/search requests.",
     )
     parser.add_argument(
         "--timeout-seconds",
@@ -179,15 +184,6 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         help="Whether to execute the memory ingestion stage before answering; use --add or --no-add.",
     )
     parser.add_argument(
-        "--dreaming-after-add",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "For MemoryAgentBench, answer once after all adds as the baseline, run synchronous Dreaming, "
-            "then answer the same benchmark again."
-        ),
-    )
-    parser.add_argument(
         "--score",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -261,7 +257,8 @@ def add_memory_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Path to the MindMemOS server yaml config (e.g. config/mindmemos/dev.yaml). Used to read the actual "
         "Qdrant collection names so the add-stage cleanup clears exactly what the server writes, even when "
-        "collections are renamed away from the _v1 defaults. When omitted, the default collection names are used.",
+        "collections are renamed away from the _v1 defaults, and the S3/MinIO blob settings (stored images). "
+        "When omitted, the default collection names and blob settings are used.",
     )
 
     parser.add_argument(
@@ -357,12 +354,6 @@ class RequestIdMemoryClient:
         self._ctx.record_request_id("search", getattr(result, "request_id", None))
         return result
 
-    async def dreaming(self, *args: Any, **kwargs: Any) -> Any:
-        """Call ``dreaming`` and record the request id returned by the server."""
-        result = await self._inner.dreaming(*args, **kwargs)
-        self._ctx.record_request_id("dreaming", getattr(result, "request_id", None))
-        return result
-
 
 class NotImplementedAdapter:
     """Placeholder adapter for planned benchmark datasets."""
@@ -381,7 +372,7 @@ class NotImplementedAdapter:
         args: argparse.Namespace,
     ) -> dict[str, Any]:
         """Raise a clear phase-1 placeholder error."""
-        del memory, answer_llm, judge_llm, ctx, bench_config, args
+        # BenchmarkAdapter requires these arguments even for an unimplemented benchmark.
         raise NotImplementedError(f"{self.name} adapter is reserved for a later phase")
 
 
@@ -390,6 +381,8 @@ def default_adapters() -> dict[str, BenchmarkAdapter]:
     return {
         "locomo": LocomoAdapter(),
         "longmemeval": LongMemEvalAdapter(),
+        "memeye": MemEyeAdapter(),
+        "memgallery": MemGalleryAdapter(),
         "memoryagentbench": MemoryAgentBenchAdapter(),
         "personamem": PersonaMemAdapter(),
         "personamem_subset": PersonaMemAdapter(),
@@ -401,22 +394,11 @@ def _parse_benchmark_list(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _auth_config_output(args: argparse.Namespace) -> str | Path | None:
-    """Resolve the auth config output, including legacy Namespace compatibility."""
-    return _option(args, "auth_config_output") or _option(args, "api_key_output")
-
-
 def _build_memory_client(
-    base_url: str,
-    api_key: str,
-    timeout_seconds: float,
-) -> MindMemOSBackend:
-    return build_mindmemos_backend(
-        base_url=base_url,
-        api_key=api_key,
-        timeout_seconds=timeout_seconds,
-        app_id="mindmemos-eval",
-    )
+    base_url: str, api_key: str, timeout_seconds: float
+) -> tuple[AsyncMemoryClient, AsyncHttpTransport]:
+    transport = AsyncHttpTransport(base_url=base_url, api_key=api_key, timeout_seconds=timeout_seconds)
+    return AsyncMemoryClient(transport), transport
 
 
 def _build_llm_client(config: RunnerConfig, *, prefix: str) -> LLMClient:
@@ -446,6 +428,7 @@ def _build_reset_config(args: argparse.Namespace) -> ResetConfig:
         neo4j_password=_option(args, "neo4j_password") or env.neo4j_password,
         neo4j_database=_option(args, "neo4j_database") or env.neo4j_database,
         collections=resolve_collections(_option(args, "server_config")),
+        s3_blobs=resolve_s3_blob_settings(_option(args, "server_config")),
     )
 
 
@@ -453,19 +436,21 @@ async def run_benchmark_matrix(
     args: argparse.Namespace,
     *,
     adapters: dict[str, BenchmarkAdapter] | None = None,
-    memory_client_factory: Callable[[RunIdentity], Awaitable[MindMemOSBackend]] | None = None,
+    memory_client_factory: Callable[[RunIdentity], Awaitable[tuple[Any, Any]]] | None = None,
     answer_llm_factory: Callable[[], LLMClient] | None = None,
     judge_llm_factory: Callable[[], LLMClient] | None = None,
 ) -> list[BenchmarkRunManifest]:
-    """Run configured benchmarks and write auth-config and manifest outputs."""
+    """Run configured benchmarks and write api-key and manifest outputs."""
     specs = load_benchmark_specs(
         args.benchmark_config,
         algorithm_override=_option(args, "algorithm"),
         memory_algorithm_override=_option(args, "memory_algorithm"),
+        # With --reuse-api-key the server applies the OLD key file's override, not the YAML's,
+        # so the spec-level check is deferred to the reuse branch below.
+        validate_image_sending=not _option(args, "reuse_api_key"),
     )
     runner = _merged_runner_config(args)
     setattr(args, "runner_config", runner)
-    auth_config_output = _auth_config_output(args)
     benchmark_names = _parse_benchmark_list(args.benchmark_list)
     registry = adapters or default_adapters()
 
@@ -483,17 +468,23 @@ async def run_benchmark_matrix(
         existing = _load_existing_identity(reuse_path, benchmark=benchmark_names[0])
         identities = [existing]
         setattr(args, "_reused_key_file", reuse_path)
+        # The reused key's override is what the server actually applies per request.
+        check_image_sending_consistency(
+            benchmark_names[0], specs[benchmark_names[0]].execution_params, existing.project_override_config
+        )
+        if specs[benchmark_names[0]].project_override_config != existing.project_override_config:
+            logger.warning(
+                "reused api key carries a different project_override_config than the benchmark yaml;"
+                " the reused key's override is what the server applies"
+            )
         logger.info(
             "reusing existing api key project_id=%s api_key_prefix=%s",
             existing.project_id,
-            existing.api_key[:40],
+            existing.api_key[:8],
         )
     else:
-        if not auth_config_output:
-            raise ValueError(
-                "--auth-config-output is required for fresh runs "
-                "(omit it when --reuse-api-key is set)"
-            )
+        if not _option(args, "api_key_output"):
+            raise ValueError("--api-key-output is required for fresh runs (omit it only with --reuse-api-key)")
         identities = [
             new_identity(
                 name,
@@ -503,8 +494,7 @@ async def run_benchmark_matrix(
             )
             for name in benchmark_names
         ]
-        if auth_config_output:
-            write_api_keys(auth_config_output, identities)
+        write_api_keys(args.api_key_output, identities)
 
     reset_cfg = _build_reset_config(args)
     skip_clean = bool(_option(args, "skip_clean"))
@@ -515,19 +505,15 @@ async def run_benchmark_matrix(
         adapter = registry[identity.benchmark]
         ctx = RunContext(identity=identity)
         started_at = datetime.now(UTC)
+        transport: Any | None = None
 
         if memory_client_factory is None:
-            backend = _build_memory_client(
-                runner.base_url,
-                identity.api_key,
-                runner.timeout_seconds,
-            )
+            memory, transport = _build_memory_client(runner.base_url, identity.api_key, runner.timeout_seconds)
         else:
-            backend = await memory_client_factory(identity)
+            memory, transport = await memory_client_factory(identity)
 
         try:
-            await backend.start()
-            wrapped_memory = RequestIdMemoryClient(backend.memory, ctx)
+            wrapped_memory = RequestIdMemoryClient(memory, ctx)
             answer_llm = answer_llm_factory() if answer_llm_factory else _build_llm_client(runner, prefix="answer")
             judge_llm = judge_llm_factory() if judge_llm_factory else _build_llm_client(runner, prefix="judge")
             if runner.add and not skip_clean:
@@ -565,7 +551,8 @@ async def run_benchmark_matrix(
                 args=args,
             )
         finally:
-            await backend.aclose()
+            if transport is not None and hasattr(transport, "aclose"):
+                await transport.aclose()
 
         finished_at = datetime.now(UTC)
         manifest = BenchmarkRunManifest(
@@ -574,7 +561,7 @@ async def run_benchmark_matrix(
             key_id=identity.key_id,
             project_id=identity.project_id,
             memory_algorithm=identity.memory_algorithm,
-            api_key_file=str(getattr(args, "_reused_key_file", auth_config_output or "")),
+            api_key_file=str(getattr(args, "_reused_key_file", args.api_key_output)),
             request_ids=ctx.request_ids,
             request_metadata=ctx.request_metadata,
             eval_result=eval_result,

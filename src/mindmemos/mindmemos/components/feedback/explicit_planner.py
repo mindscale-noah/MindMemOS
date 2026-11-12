@@ -7,7 +7,7 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-from ...llm import LLMClient, get_llm_client
+from ...llm import LLMClient, get_llm_client, provider_binding_runtime_enabled, require_model_endpoint
 from ...prompts.EN.feedback import EXPLICIT_ACTION_PLANNING_PROMPT, EXPLICIT_SEARCH_DECISION_PROMPT
 from ...typing import FeedbackActionResult, FeedbackPipelineInput
 
@@ -86,7 +86,11 @@ class DefaultExplicitFeedbackPlanner:
     @property
     def _client(self) -> LLMClient:
         if self._llm_client is None:
-            self._llm_client = get_llm_client()
+            require_model_endpoint("chat")
+            client = get_llm_client()
+            if not provider_binding_runtime_enabled():
+                self._llm_client = client
+            return client
         return self._llm_client
 
 

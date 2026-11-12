@@ -64,6 +64,10 @@ class LLMClient:
             raise MindMemOSSDKError(
                 f"Unsupported LLM provider {self.config.provider!r}; only 'openai' is supported for now."
             )
+        if not self.config.api_key:
+            raise ValueError("Provide api_key in the LLM config")
+        if not self.config.base_url:
+            raise ValueError("Provide base_url in the LLM config")
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:  # pragma: no cover - dependency is declared
