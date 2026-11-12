@@ -13,6 +13,8 @@
 | [MindMemOS](https://github.com/mindscale-noah/MindMemOS) | `feat/mindmemos_skill` | 官方 `main`，`29c92af18c5ad0b670aca01e241db2db9533494c` |
 | [网关](https://gitee.com/sxkai2/mindmemos_platform) | `cyq/skill-platform-update-20261112` | `memops-v2`，`0b51a5bcfb562a5db4acd898f8981b3946af14bd` |
 
+GitHub 的目标分支 `feat/mindmemos_skill` 受保护，直接推送被服务器拒绝。当前代码已上传到官方仓库的 `cyq/skill-platform-update-20261112`，并创建指向原目标分支的[草稿 PR #84](https://github.com/mindscale-noah/MindMemOS/pull/84)。目标分支尚未合入本次代码。Gitee 新分支已直接推送。
+
 MindMemOS 的业务代码提交为 `b3e2cdd`，随后通过 `41f936a` 合并官方同名分支的已有历史；合并没有改变业务文件。网关业务代码提交为 `3b9fb5d`。后续文档提交以这两个业务版本为说明对象。
 
 这里的 v2 指实际远端分支 `memops-v2`。本文比较两个提交的完整文件状态，不把所有提交记录或文件移动都当作新功能。
