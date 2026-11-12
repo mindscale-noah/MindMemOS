@@ -16,6 +16,9 @@ class ClaudeConfig(CLIConfig):
     cli_path: str = Field(default="claude", min_length=1)
     """Executable name or path."""
 
+    transport: Literal["direct", "platform_gateway"] = "direct"
+    """Use explicit provider settings or the current authorized Platform project."""
+
     reasoning_effort: str | None = None
     """Optional model reasoning effort."""
 

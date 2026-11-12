@@ -39,8 +39,10 @@ def test_offline_default_and_explicit_backend_validation():
 
 
 def test_offline_evidence_limits_are_optional():
-    """Keep all exact-version evidence by default."""
+    """Use all unconsumed exact-version evidence by default."""
     assert OfflineTrajectoryConfig().trajectory_limit is None
+    assert OfflineTrajectoryConfig().exclude_consumed is True
+    assert OfflineTrajectoryConfig(exclude_consumed=False).exclude_consumed is False
 
 
 @pytest.mark.parametrize("field", ["trajectory_limit", "max_page_size"])
@@ -65,3 +67,4 @@ def test_example_selects_offline_as_default():
     assert pipeline.class_name == "offline_evolution"
     assert pipeline.config.evolver.class_name == "offline_evolution"
     assert pipeline.config.traj_collect.trajectory_limit is None
+    assert pipeline.config.traj_collect.exclude_consumed is True

@@ -8,13 +8,16 @@ from ...config import PipelineComponentConfig
 
 
 class OfflineTrajectoryConfig(BaseModel):
-    """Use all exact-version evidence unless the offline caller sets explicit caps."""
+    """Select unused exact-version evidence with optional collection limits."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
     """Expose offline-owned collection options and reject unknown fields."""
 
+    exclude_consumed: bool = True
+    """Skip trajectories already consumed for the exact input version; False permits reuse."""
+
     trajectory_limit: int | None = Field(default=None, ge=1)
-    """Maximum recent records collected per exact version; None reads all available records."""
+    """Maximum recent eligible records per exact version; None reads all eligible records."""
 
     max_page_size: int = Field(default=200, ge=1, le=10_000)
     """Maximum records fetched per database query; does not limit the total evidence count."""
@@ -33,7 +36,7 @@ class OfflineEvolutionPipelineConfig(BaseModel):
     """Directory where candidates are saved before publication."""
 
     traj_collect: OfflineTrajectoryConfig = Field(default_factory=OfflineTrajectoryConfig)
-    """Offline-owned collection settings; defaults use all available exact-version evidence."""
+    """Offline-owned collection settings; defaults use all unconsumed exact-version evidence."""
 
     @model_validator(mode="after")
     def validate_evolver(self, info: ValidationInfo) -> Self:

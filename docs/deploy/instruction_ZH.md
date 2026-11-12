@@ -7,6 +7,7 @@
 - [启动本地服务和 UI](#1-启动本地服务和-ui)
 - [部署 UI](#2-部署-ui)，随本地 API 启动，或单独连接官方服务和已有 API
 - [按需启动和管理](#3-按需启动和管理)，选择单个服务、减少依赖或分开启动
+- [迁移历史 Skill 和轨迹](#4-迁移历史-skill-和轨迹)
 
 ## 1. 启动本地服务和 UI
 
@@ -70,6 +71,21 @@ NLP 资源供 Memory 使用。若只运行 Skill，可跳过两条 NLP 命令。
 | Grafana | [监控面板](http://127.0.0.1:3000) | — |
 
 `make dev` 默认启用两个 API、UI、Kafka 任务和 OTLP 监控。Memory 使用 Qdrant 和 Neo4j，Skill 示例使用独立的 PostgreSQL。启动器按最终配置的连接地址选择本地容器。
+
+### 1.4 多模态 Memory
+
+在 `config/mindmemos/dev.yaml` 中将 `algo_config.multimodal.mode` 设为 `basic` 或 `enhanced`。默认值 `"off"` 保留纯文本模式。两种模式均需 `blob_store` 指向 S3 或 MinIO。配置 `mm_embed_model_router` 后可按图文相似度检索，`enhanced` 还需要支持图片输入的聊天模型。配置和评测示例见[多模态评测](../evaluation/memory_evaluation_ZH.md#多模态记忆评测)。
+
+`make dev SERVICE=memory UI=0` 在全局开启多模态、且存储地址指向本机时启动 MinIO 并初始化桶。默认端口为 9100。远端存储使用已有的 S3 地址、桶和凭据。若只对部分项目开启多模态，可用以下命令启动本地 MinIO：
+
+```bash
+docker compose --env-file .env -f dockers/compose.yaml up -d --wait minio
+docker compose --env-file .env -f dockers/compose.yaml run --rm minio-init
+```
+
+生产安装需要 `mindmemos[s3]`。通过环境变量 `MINDMEMOS_S3_ENDPOINT`、`MINDMEMOS_S3_BUCKET`、`MINDMEMOS_S3_ACCESS_KEY`、`MINDMEMOS_S3_SECRET_KEY` 提供连接。若客户端无法访问内部地址，用 `MINDMEMOS_S3_PRESIGN_ENDPOINT` 指定外部签名地址。使用代理签名链接时，网关需转发 `GET /v1/memory/images/{blob_id}` 和原始查询参数。
+
+已有部署可先保持 `"off"`，用现有集合名、项目 ID 和向量维度滚动升级 Memory API 和 Kafka worker。启用 `database.qdrant.auto_create` 时，启动会在已有 Add Record 集合中补齐溯源索引，已有记录会直接参与查询。开启多模态前确认新版 API 和 worker 全部就绪。需要回滚时先关闭多模态并让已排队的图片任务处理完，再回滚进程，保留 Qdrant 和对象存储数据。控制台的[生命周期与关系图接口](internal-memory-api.md)使用项目网关令牌。
 
 ## 2. 部署 UI
 
@@ -143,6 +159,25 @@ make api FEATURE=core UI=1           # 使用相同范围启动 API，并自动�
 - `Ctrl+C` 停止当前终端启动的 API 和 UI，保留容器。
 - `make stop` 停止受管理的应用和当前 Compose 项目的容器，保留数据。需要缩小启动范围时先执行它，再用新参数启动。
 - `make clean` 在确认后删除当前 Compose 项目的 Docker 数据卷。日常重启使用 `make stop`。
+
+## 4. 迁移历史 Skill 和轨迹
+
+客户端升级场景和版本配对见 [Skill 服务迁移说明](skill-service-migration_ZH.md)。
+
+### 旧轨迹和 evolve 版本转发
+
+给云端旧 Memory API 设置 `MINDMEMOS_LEGACY_SKILL_GATEWAY_URL`，填 Platform 网关的内网 HTTP 根地址，例如同一 Compose 网络中的 `http://backend:8010`。留空时关闭实时转发。Memory 使用现有 `auth.gateway_jwt_secret` 签发 60 秒有效的服务令牌。网关使用对应的 `MINDMEMOS_MEMORY_GATEWAY_SECRET` 验证项目和记录 ID，再用现有 Skill 签名密钥签发对应轨迹或版本的写入令牌。Memory 签名密钥至少需要 32 字节。
+
+旧 Add 保存了 Skill 绑定后，Memory 把原项目和记录 ID 交给异步后台任务。请求无需等待新版服务。后台读取原记录并经网关上报。旧版本补绑后会再次上报。新版从网关令牌取得项目，以原记录 ID 合并轨迹和版本索引。公网入口拦截转发路径，用户 Key 的权限继续由网关单独控制。
+
+旧 evolve 保存版本后异步上报。新版保留原状态、父版本和来源。缺少父版本时，后台先补发缺失的祖先，再重试子版本。导入子版本不切换新版仓库当前选中的版本。
+
+轨迹关联的版本缺失时，入口返回 `202`。后台会补发已绑定的旧版本，再重送轨迹。进程重启、队列满或重试耗尽后，需要通过运维回填补齐遗漏。先部署独立 Skill 服务，再部署 Platform 网关和旧 Memory 服务。
+
+### 单次预演与导入
+
+在网关仓库运行 `mindmemos_platform.skill_migration`。运行命令、报告验收和 API Key 补权见网关仓库
+`docker/README.md` 的「迁移历史 Skill 和轨迹」和「为历史 API Key 补齐新版 Skill 权限」。
 
 ## 任务环境与数据
 

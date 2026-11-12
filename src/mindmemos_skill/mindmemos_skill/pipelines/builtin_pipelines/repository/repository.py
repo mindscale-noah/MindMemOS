@@ -183,25 +183,29 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         """
         request = ListTrajectoriesRequest.model_validate(request)
         project_id = self._scope(request.project_id)
+        store = self.persistence.skills
+        skill_id = await store.legacy_reference("family", request.skill_id)
+        version_id = request.skill_version_id
         family = await self.persistence.database.select(
-            SKILLS_TABLE, filters={"project_id": project_id, "skill_id": request.skill_id}, fields=["skill_id"], limit=1
+            SKILLS_TABLE, filters={"project_id": project_id, "skill_id": skill_id}, fields=["skill_id"], limit=1
         )
         if not family:
             raise SkillNotFoundError("Skill not found in this project")
-        if request.skill_version_id is not None:
+        if version_id is not None:
+            version_id = await store.legacy_reference("version", version_id)
             version = await self.persistence.database.select(
                 SKILL_VERSIONS_TABLE,
-                filters={"project_id": project_id, "version_id": request.skill_version_id},
+                filters={"project_id": project_id, "version_id": version_id},
                 fields=["skill_id"],
                 limit=1,
             )
             if not version:
                 raise SkillVersionNotFoundError("Skill version not found in this project")
-            if version[0]["skill_id"] != request.skill_id:
+            if version[0]["skill_id"] != skill_id:
                 raise SkillVersionNotFoundError("Skill version does not belong to this Skill")
         return await self.persistence.trajectories.list_reported(
-            request.skill_id,
-            skill_version_id=request.skill_version_id,
+            skill_id,
+            skill_version_id=version_id,
             status=request.status,
             received_at_from=request.cursor.received_at_from,
             received_at_to=request.cursor.received_at_to,
@@ -456,15 +460,16 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
             SkillVersionNotFoundError: Version does not belong to the requested family.
         """
         owner = await self.persistence.skills.resolve_family(request.skill_id)
+        version_id = await self.persistence.skills.legacy_reference("version", request.version_id)
         rows = await self.persistence.database.select(
             SKILL_VERSIONS_TABLE,
-            filters={"skill_id": owner.skill_id, "version_id": request.version_id},
+            filters={"skill_id": owner.skill_id, "version_id": version_id},
             fields=["version_id"],
             limit=1,
         )
         if not rows:
             raise SkillVersionNotFoundError("Skill version does not belong to this family")
-        return await self.persistence.trajectories.statistics(request.version_id)
+        return await self.persistence.trajectories.statistics(version_id)
 
     async def diff_skill(self, request: DiffRequest) -> DiffResult:
         """Compare complete snapshots from the same Skill.
@@ -493,7 +498,8 @@ class RepositoryPipeline(Pipeline[RepositoryPipelineConfig]):
         version = await store.get(request.version_id)
         family = await store.resolve_family(version.skill_id)
         if request.expected_active_version_id is not None:
-            family = family.model_copy(update={"active_version_id": request.expected_active_version_id})
+            expected = await store.legacy_reference("version", request.expected_active_version_id)
+            family = family.model_copy(update={"active_version_id": expected})
         return await store.activate(family, version.version_id)
 
     async def set_skill_meta(self, request: SetMetaRequest) -> SkillRecord:

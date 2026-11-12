@@ -146,6 +146,74 @@ async def test_search_entities_dense_uses_entity_filter_mapper():
 
 
 @pytest.mark.asyncio
+async def test_node_graph_pages_are_deterministic_and_return_bound_cursor():
+    neo4j = FakeNeo4j()
+    neo4j.read_rows = [
+        {
+            "seed_id": "entity-1",
+            "seed_label": "User",
+            "seed_status": None,
+            "neighbor_labels": ["Memory"],
+            "neighbor_id": "memory-1",
+            "neighbor_label": "Likes tea",
+            "neighbor_status": "active",
+            "relation": "MENTIONS",
+            "seed_is_source": False,
+        },
+        {
+            "seed_id": "entity-1",
+            "seed_label": "User",
+            "seed_status": None,
+            "neighbor_labels": ["Memory"],
+            "neighbor_id": "memory-2",
+            "neighbor_label": "Likes coffee",
+            "neighbor_status": "active",
+            "relation": "MENTIONS",
+            "seed_is_source": False,
+        },
+        {
+            "seed_id": "entity-1",
+            "seed_label": "User",
+            "seed_status": None,
+            "neighbor_labels": ["Source"],
+            "neighbor_id": "source-1",
+            "neighbor_label": "message.txt",
+            "neighbor_status": None,
+            "relation": "EXTRACTED_FROM",
+            "seed_is_source": True,
+        },
+    ]
+    reader = MemoryDbReader(clients=SimpleNamespace(qdrant=FakeQdrant(), neo4j=neo4j))
+
+    first = await reader.get_node_graph(make_context(), "entity-1", node_type="entity", limit=2)
+
+    assert len(first.edges) == 2
+    assert first.next_cursor is not None
+    assert first.truncated is True
+    query, params = neo4j.read_calls[-1]
+    assert "ORDER BY relation, neighbor_id" in query
+    assert all(keyword not in query.upper() for keyword in (" CREATE ", " DELETE ", " MERGE ", " SET "))
+    assert params["row_offset"] == 0
+    assert params["row_limit"] == 3
+
+    await reader.get_node_graph(make_context(), "entity-1", node_type="entity", limit=2, cursor=first.next_cursor)
+    assert neo4j.read_calls[-1][1]["row_offset"] == 2
+
+
+@pytest.mark.asyncio
+async def test_node_graph_rejects_cursor_for_a_different_node_before_querying():
+    from mindmemos.pipelines.memory_db.lifecycle import encode_memory_graph_cursor
+
+    neo4j = FakeNeo4j()
+    reader = MemoryDbReader(clients=SimpleNamespace(qdrant=FakeQdrant(), neo4j=neo4j))
+    cursor = encode_memory_graph_cursor(node_type="entity", node_id="entity-1", offset=10)
+
+    with pytest.raises(ValueError, match="does not match"):
+        await reader.get_node_graph(make_context(), "entity-2", node_type="entity", limit=10, cursor=cursor)
+    assert neo4j.read_calls == []
+
+
+@pytest.mark.asyncio
 async def test_search_entities_dense_dedupes_search_field_points_to_canonical_entity():
     qdrant = FakeQdrant(record=None)
     qdrant.entity_dense_hits = [

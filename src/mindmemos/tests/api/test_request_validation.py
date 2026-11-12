@@ -11,6 +11,7 @@ from mindmemos.errors import BadRequestError
     [
         ({"messages": [], "skill_context": []}, "body.messages"),
         ({"messages": [{"text": "hello"}], "score": 1, "promt_language": "EN"}, "body.promt_language"),
+        ({"messages": [{"text": "hello"}], "task_id": 123}, "body.task_id"),
     ],
 )
 def test_request_validation_errors_return_one_message(payload: dict, location: str) -> None:

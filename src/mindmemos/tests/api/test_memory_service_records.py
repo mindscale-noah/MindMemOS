@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
+from unittest.mock import AsyncMock
 
 import mindmemos.api.mappers as api_mappers
 import pytest
@@ -14,6 +15,7 @@ from mindmemos.api.services import get_memory_service
 from mindmemos.api.services.memory_service import MemoryService
 from mindmemos.config.algo.search import SearchConfig
 from mindmemos.errors import BadRequestError
+from mindmemos.pipelines.skill import SkillVersionStore
 from mindmemos.typing.memory import DialogueMessage, MemoryRequestContext
 from mindmemos.typing.service import (
     AddPipelineAsyncResult,
@@ -29,6 +31,7 @@ from mindmemos.typing.service import (
     SearchPipelineInput,
     SearchPipelineResult,
 )
+from mindmemos.typing.skill import SkillBinding, SkillContext
 
 
 def make_context(memory_algorithm: str = "schema") -> AuthContext:
@@ -295,6 +298,9 @@ class FakeRecorder:
         request_submitted_at,
         add_record_id,
         status,
+        skill_bindings=None,
+        score=None,
+        task_id=None,
     ) -> str:
         self.add_calls.append(
             {
@@ -303,6 +309,9 @@ class FakeRecorder:
                 "ctx": ctx,
                 "request_submitted_at": request_submitted_at,
                 "status": status,
+                "skill_bindings": skill_bindings,
+                "score": score,
+                "task_id": task_id,
             }
         )
         return add_record_id
@@ -655,10 +664,14 @@ async def test_add_request_missing_optional_actor_fields_stay_empty() -> None:
     ("path", "mode", "status"),
     [("/add", "sync", "ok"), ("/add", "async", "queued"), ("/add/stream", "sync", "ok")],
 )
-def test_add_ignores_retired_skill_trace_fields(path: str, mode: str, status: str) -> None:
+def test_add_records_legacy_skill_trace_fields(path: str, mode: str, status: str) -> None:
     recorder = FakeRecorder()
     pipeline = FakeAsyncAddPipeline() if mode == "async" else FakeAddPipeline()
-    service = make_service(add_pipeline=pipeline, operation_recorder=recorder)
+    skill_context = SkillContext(name="legacy-skill", content_hash="legacy", usage="injected")
+    binding = SkillBinding(**skill_context.model_dump(), version_id="version-1")
+    skill_store = AsyncMock(spec=SkillVersionStore)
+    skill_store.bind_skill_context.return_value = [binding]
+    service = make_service(add_pipeline=pipeline, operation_recorder=recorder, skill_store=skill_store)
     app = create_app()
     app.dependency_overrides[get_request_context] = lambda: make_context().model_copy(
         update={"scopes": ["memory:write"]}
@@ -671,9 +684,9 @@ def test_add_ignores_retired_skill_trace_fields(path: str, mode: str, status: st
             "messages": [{"role": "user", "content": "hi"}],
             "mode": mode,
             "metadata": {"score": 0.5, "task_id": "memory-metadata"},
-            "skill_context": [{"name": "legacy-skill", "content_hash": "legacy"}],
+            "skill_context": [skill_context.model_dump(mode="json")],
             "score": 1,
-            "task_id": 123,
+            "task_id": "rollout-task",
         },
     )
 
@@ -684,7 +697,42 @@ def test_add_ignores_retired_skill_trace_fields(path: str, mode: str, status: st
     else:
         assert response.json()["code"] == status
     assert len(recorder.add_calls) == 1
-    assert recorder.add_calls[0]["inp"].metadata == {"score": 0.5, "task_id": "memory-metadata"}
+    recorded = recorder.add_calls[0]
+    skill_store.bind_skill_context.assert_awaited_once_with(
+        project_id=make_context().project_id,
+        add_record_id=recorded["add_record_id"],
+        skill_context=[skill_context],
+    )
+    assert recorded["inp"].metadata == {"score": 0.5, "task_id": "memory-metadata"}
+    assert recorded["skill_bindings"] == [binding]
+    assert recorded["score"] == 1
+    assert recorded["task_id"] == "rollout-task"
+    if isinstance(pipeline, FakeAsyncAddPipeline):
+        dispatched = pipeline.async_calls[0]
+        assert dispatched["add_record_id"] == recorded["add_record_id"]
+        assert dispatched["record_metadata"] == {
+            "request_submitted_at": recorded["request_submitted_at"].isoformat(),
+            "skill_bindings": [binding.model_dump(mode="json")],
+            "score": 1,
+            "task_id": "rollout-task",
+        }
+
+
+@pytest.mark.asyncio
+async def test_add_keeps_working_when_legacy_skill_binding_fails() -> None:
+    recorder = FakeRecorder()
+    skill_store = AsyncMock(spec=SkillVersionStore)
+    skill_store.bind_skill_context.side_effect = RuntimeError("skill storage unavailable")
+    service = make_service(add_pipeline=FakeAddPipeline(), operation_recorder=recorder, skill_store=skill_store)
+    request = add_request().model_copy(
+        update={"skill_context": [SkillContext(name="legacy-skill", content_hash="legacy")], "score": 0}
+    )
+
+    result = await service.add(make_context(), request)
+
+    assert result.status == "ok"
+    assert recorder.add_calls[0]["skill_bindings"] is None
+    assert recorder.add_calls[0]["score"] == 0
 
 
 @pytest.mark.asyncio

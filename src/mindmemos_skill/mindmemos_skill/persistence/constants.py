@@ -14,6 +14,12 @@ SKILLS_TABLE: Final[str] = "skills_v1"
 SKILL_VERSIONS_TABLE: Final[str] = "skill_versions_v1"
 """Immutable source snapshots, configuration, and parent-version lineage."""
 
+LEGACY_SKILL_SOURCE: Final[str] = "legacy-memory"
+"""Provenance of records replicated from the original Memory service."""
+
+LEGACY_SKILL_ID_MAP: Final[str] = "legacy_skill_id_map"
+"""Project-scoped mappings from imported legacy Skill and version IDs."""
+
 TRAJECTORIES_TABLE: Final[str] = "trajectories_v1"
 """Inputs, interactions, and results of individual rollout attempts."""
 
@@ -43,6 +49,15 @@ SKILL_GRAPH_EDGES_TABLE: Final[str] = "skill_graph_edges_v1"
 
 SKILL_TASKS_TABLE: Final[str] = "skill_tasks_v1"
 """Durable Skill execution requests and their latest state."""
+
+SKILL_PROJECT_TASKS_TABLE: Final[str] = "skill_project_tasks_v1"
+"""One lock row per project for serializing task admissions."""
+
+SKILL_PROJECT_TASK_LEASES_TABLE: Final[str] = "skill_project_task_leases_v1"
+"""Renewable reservations for individual request-owned or local tasks."""
+
+DEFAULT_MAX_ACTIVE_TASKS_PER_PROJECT: Final[int] = 1
+"""Default shared project limit for queued and running algorithm tasks."""
 
 SKILL_EVALUATIONS_TABLE: Final[str] = "skill_evaluations_v1"
 """Independent judge results linked to Skill versions or trajectories by business identity."""

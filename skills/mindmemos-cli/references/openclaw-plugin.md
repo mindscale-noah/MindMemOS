@@ -1,6 +1,6 @@
 # OpenClaw integration
 
-The plugin recalls Memory before prompt construction. It reports each successful turn to Memory and Skill through the local CLI. OpenClaw discovers the packaged `mindmemos-cli` guide through the plugin manifest and loads it on demand.
+The plugin recalls Memory before prompt construction. It reports each successful turn to Memory through the local CLI. The same call reports to Skill if the turn loads an exact version. OpenClaw discovers the packaged `mindmemos-cli` guide through the plugin manifest and loads it on demand.
 
 ## Install and configure
 
@@ -24,7 +24,7 @@ Set `plugins.entries.mindmemos-memory.config.userId` for user-scoped recall and 
 
 - Check that `openclaw skills list` includes `mindmemos-cli`.
 - Ask about a stored fact and check the gateway log for the recall hit.
-- Complete a turn and look for separate `Memory queued` or `Memory completed` and `Skill stored` lines with the same event ID. Use the returned Skill trajectory ID with `mindmemos skill trajectory show`.
+- Complete a turn and look for `Memory queued` or `Memory completed`. With an exact Skill version, look for `Skill stored` and use its ID with `mindmemos skill trajectory show`. Otherwise, expect `Skill skipped`.
 - To verify multi-Skill binding, use the shell and read tools to [load two exact versions](../SKILL.md#recommend-and-load-a-skill) in one turn, then check the trajectory's `skill_version_ids`.
 
 An `agent_end` access warning means the conversation access grant is missing. `ENOENT` points to the CLI executable path. If one destination reports `failed` or `unknown`, its line includes the available error and request identifiers. Memory's `queued` receipt confirms acceptance for extraction.

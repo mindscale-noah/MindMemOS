@@ -104,12 +104,77 @@ def test_offline_read_only_single_version_and_activation(remote):
         == 0
     )
     assert remote[-1][1] == {
-        "skill_version_id": "skv-a",
+        "skill_version_ids": ["skv-a"],
         "pipeline": "offline",
         "editable_skills": [],
         "allow_create_skills": True,
         "auto_accept": True,
     }
+
+
+@pytest.mark.parametrize("mode", [None, "--async", "--sync"])
+def test_evolve_modes_submit_once_and_wait_only_when_requested(monkeypatch, capsys, mode):
+    """Legacy mode flags use the independent Skill task protocol."""
+    calls = []
+    statuses = iter(["running", "succeeded"])
+
+    def respond(request):
+        route = request.url.path.removeprefix("/v1/skills/")
+        body = json.loads(request.content)
+        calls.append((route, body))
+        if route == "skill-resolve":
+            data = {"skill_id": "sk-demo", "skill_version_id": "skv-demo"}
+        elif route == "algos/evolve":
+            data = {"task_id": "evolve-task", "status": "queued"}
+        else:
+            assert route == "tasks/show"
+            data = {"task_id": "evolve-task", "status": next(statuses), "result": {"changed": True}}
+        return httpx.Response(200, json={"code": "ok", "data": data})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        config = SDKConfig.model_validate({"memory_service": {"auth": {"api_key": "key"}}})
+        monkeypatch.setattr(skill_cli.ConfigManager, "load", lambda self: config)
+        monkeypatch.setattr(skill_cli.time, "sleep", lambda seconds: None)
+
+        def root_factory(*, config):
+            transport = HttpTransport(base_url="http://skill.test", api_key="key", client=http)
+            return MindMemOSClient(config=config, skill_transport=transport)
+
+        monkeypatch.setattr(skill_cli, "MindMemOSClient", root_factory)
+        assert cli.main(["skill", "evolve", "demo", *([mode] if mode else [])]) == 0
+
+    output = capsys.readouterr()
+    data = json.loads(output.out)
+    assert not output.err
+    assert data["task_id"] == "evolve-task"
+    assert data["status"] == ("succeeded" if mode == "--sync" else "queued")
+    assert [route for route, _ in calls].count("algos/evolve") == 1
+    assert [route for route, _ in calls].count("tasks/show") == (2 if mode == "--sync" else 0)
+    assert calls[1][1] == {"skill_version_ids": ["skv-demo"], "auto_accept": False}
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled", "invalid"])
+def test_sync_evolve_does_not_report_unsuccessful_tasks_as_success(remote, monkeypatch, capsys, status):
+    """A failed, cancelled or malformed task response returns nonzero."""
+    monkeypatch.setattr(
+        skill_cli.SkillClient, "evolve", lambda self, request: {"task_id": "task-a", "status": "queued"}
+    )
+    monkeypatch.setattr(
+        skill_cli.SkillClient, "show_task", lambda self, request: {"task_id": "task-a", "status": status}
+    )
+    assert cli.main(["skill", "evolve", "a", "--sync"]) == 1
+    output = capsys.readouterr()
+    assert not output.out
+    error = json.loads(output.err)
+    assert error["code"] == ("invalid_response" if status == "invalid" else f"task_{status}")
+    assert "task-a" in error["message"]
+
+
+def test_sync_evolve_missing_task_id_reports_the_accepted_submission_as_unknown(remote, capsys):
+    """An invalid submission receipt must not cause a second evolution request."""
+    assert cli.main(["skill", "evolve", "a", "--sync"]) == 1
+    assert json.loads(capsys.readouterr().err)["code"] == "invalid_response"
+    assert [route for route, _, _ in remote].count("algos/evolve") == 1
 
 
 @pytest.mark.parametrize(
@@ -383,6 +448,7 @@ def test_source_registration_commit_and_export(remote, tmp_path, capsys):
         ["commit", "a"],
         ["commit", "a", "--from", "/unused", "--json-skill", json.dumps(SOURCE)],
         ["commit", "a", "--json-skill", "[1]"],
+        ["evolve", "a", "--sync", "--async"],
     ],
 )
 def test_invalid_syntax_is_json(arguments, capsys, remote):

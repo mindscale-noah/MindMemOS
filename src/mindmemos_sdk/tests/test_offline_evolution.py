@@ -1,4 +1,4 @@
-"""Verify single-version and collection requests share the evolution endpoint."""
+"""Verify the list-based evolution request across SDK clients."""
 
 import asyncio
 import json
@@ -10,22 +10,20 @@ from mindmemos_sdk.skills.core import SkillCore, SkillRoute
 from mindmemos_sdk.transport import AsyncHttpTransport, HttpTransport
 
 
-def test_single_version_wire_payload_remains_original():
-    request = SkillCore.prepare(SkillRoute.EVOLVE, EvolveRequest(skill_version_id="skv-a", auto_accept=False))
+def test_one_version_is_sent_as_a_list():
+    request = SkillCore.prepare(SkillRoute.EVOLVE, EvolveRequest(skill_version_ids=["skv-a"], auto_accept=False))
     assert request.path == "/v1/skills/algos/evolve"
-    assert request.body == {"skill_version_id": "skv-a", "auto_accept": False}
+    assert request.body == {"skill_version_ids": ["skv-a"], "auto_accept": False}
 
 
-@pytest.mark.parametrize("version_id", ["skv-a", "", "  skv-a  ", "  "])
-@pytest.mark.parametrize("auto_accept", [None, False, True])
-def test_existing_single_version_validation_and_wire_payload(version_id, auto_accept):
-    """Preserve SDK string handling and leave identifier normalization to the HTTP boundary."""
-    payload = {"skill_version_id": version_id}
-    if auto_accept is not None:
-        payload["auto_accept"] = auto_accept
-    value = EvolveRequest(**payload)
-    assert value.auto_accept is (True if auto_accept is None else auto_accept)
-    assert SkillCore.prepare(SkillRoute.EVOLVE, value).body == payload
+def test_evolution_normalizes_identities_and_defaults_to_auto_accept():
+    value = EvolveRequest(skill_version_ids=[" skv-a "], editable_skills=[" sk-a "], pipeline=" offline ")
+    assert value.auto_accept is True
+    assert SkillCore.prepare(SkillRoute.EVOLVE, value).body == {
+        "skill_version_ids": ["skv-a"],
+        "editable_skills": ["sk-a"],
+        "pipeline": "offline",
+    }
 
 
 def test_collection_uses_the_same_endpoint_with_explicit_pipeline_and_permissions():
@@ -46,11 +44,13 @@ def test_collection_uses_the_same_endpoint_with_explicit_pipeline_and_permission
     "selection",
     [
         {},
+        {"skill_version_id": "skv-a"},
         {"skill_version_id": "skv-a", "skill_version_ids": ["skv-b"]},
+        {"skill_version_ids": "skv-a"},
         {"skill_version_ids": []},
-        {"skill_version_ids": ["skv-a", "skv-a"]},
-        {"skill_version_ids": [""]},
-        {"skill_version_id": "skv-a", "pipeline": "  "},
+        {"skill_version_ids": ["skv-a", " skv-a "]},
+        {"skill_version_ids": [" "]},
+        {"skill_version_ids": ["skv-a"], "pipeline": "  "},
     ],
 )
 def test_evolution_rejects_missing_ambiguous_and_duplicate_inputs(selection):
@@ -59,10 +59,10 @@ def test_evolution_rejects_missing_ambiguous_and_duplicate_inputs(selection):
 
 
 @pytest.mark.parametrize(
-    "selection", [{"skill_version_id": "skv-a"}, {"pipeline": "offline", "skill_version_ids": ["skv-a", "skv-b"]}]
+    "selection", [{"skill_version_ids": ["skv-a"]}, {"pipeline": "offline", "skill_version_ids": ["skv-a", "skv-b"]}]
 )
 def test_sync_and_async_evolution_share_the_same_transport_contract(selection):
-    """Keep both clients on the original endpoint for either supported input shape."""
+    """Send the same list payload from either SDK client."""
     received = []
 
     def handler(request):

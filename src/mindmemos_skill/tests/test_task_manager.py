@@ -1,27 +1,38 @@
 """Local execution and durable Skill task recovery contracts."""
 
 import asyncio
+import os
+from datetime import timedelta
+from uuid import uuid4
 
 import httpx
+import jwt
 import pytest
+from mindmemos_skill.api.auth import SkillHttpIdentity
 from mindmemos_skill.api.entries.fastapi import create_app
 from mindmemos_skill.api.factory import create_service
 from mindmemos_skill.api.typing import RegisterRequest, StructuredSkillInfo, TrainingRequest
+from mindmemos_skill.config.config import HttpAuthConfig
 from mindmemos_skill.envs import Environment, Task
 from mindmemos_skill.envs.data import RewardData
-from mindmemos_skill.infra.database import Scope
+from mindmemos_skill.errors import ProjectTaskBusyError
+from mindmemos_skill.infra.database import PostgresConfig, PostgresDatabase, Scope
 from mindmemos_skill.infra.database.builtin_backends.sqlite import SQLiteDatabase
 from mindmemos_skill.infra.database.config import SQLiteConfig
+from mindmemos_skill.infra.model_access.platform import PLATFORM_MODEL_SECRET_ENV, platform_connection
 from mindmemos_skill.infra.task_manager import LocalTaskManager, TaskSpec, TaskStatus
 from mindmemos_skill.infra.task_manager.kafka import KafkaTaskManager
+from mindmemos_skill.infra.task_manager.typing import EVOLVE_TASK, GRAPH_BUILD_TASK, JUDGE_TASK
 from mindmemos_skill.logging import get_logger
 from mindmemos_skill.persistence.config import SkillPersistenceConfig
 from mindmemos_skill.persistence.db_services.tasks import TaskWorkerService
+from mindmemos_skill.persistence.db_services.tasks import admission as task_admission
 from mindmemos_skill.persistence.store import SkillPersistence
 from mindmemos_skill.pipelines import AlgoSkillEvolveResult, EvolutionPipeline, Pipeline, TrainingPipeline
-from pydantic import BaseModel
+from pydantic import AnyHttpUrl, BaseModel
 
 from .service_config import deployment_config
+from .test_infra import POSTGRES_TEST_URL
 
 
 async def finished_task(manager, project_id, task_id):
@@ -306,16 +317,18 @@ async def test_service_submits_same_training_pipeline_with_progress(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_http_evolution_accepts_task_before_algorithm_finishes(tmp_path):
+@pytest.mark.parametrize("limit", [1, 2])
+async def test_http_evolution_accepts_task_before_algorithm_finishes(tmp_path, limit):
     """Keep Skill writes immediate while evolution runs behind a task identity."""
     started = asyncio.Event()
     release = asyncio.Event()
     choices = []
+    pipeline_name = f"task_evolution_probe_{limit}"
 
     class Options(BaseModel):
         """The probe needs no external settings."""
 
-    @Pipeline.register("task_evolution_probe")
+    @Pipeline.register(pipeline_name)
     class EvolutionProbe(EvolutionPipeline[Options]):
         """Wait for explicit release after the HTTP request is accepted."""
 
@@ -328,9 +341,10 @@ async def test_http_evolution_accepts_task_before_algorithm_finishes(tmp_path):
             )
             started.set()
             await release.wait()
+            version = await self.persistence.skills.get(request.skill_version_ids[0])
             return AlgoSkillEvolveResult(
-                skill_id=request.skill_ref,
-                base_version_id=request.base_version_id,
+                skill_id=version.skill_id,
+                base_version_id=version.version_id,
                 version_id="result-version",
                 run_id="evolution-run",
                 content="Evolved",
@@ -347,7 +361,8 @@ async def test_http_evolution_accepts_task_before_algorithm_finishes(tmp_path):
             },
             "repository_pipeline": {"class_name": "repository"},
             "task_manager": {"mode": "local"},
-            "evolution_pipelines": {"probe": {"class_name": "task_evolution_probe"}},
+            "max_active_tasks_per_project": limit,
+            "evolution_pipelines": {"probe": {"class_name": pipeline_name}},
         },
         "p1",
     )
@@ -364,11 +379,11 @@ async def test_http_evolution_accepts_task_before_algorithm_finishes(tmp_path):
                 )
             )
             version_id = registered.skill_version_id
-            missing = await client.post("/v1/skills/algos/evolve", json={"skill_version_id": "missing"})
+            missing = await client.post("/v1/skills/algos/evolve", json={"skill_version_ids": ["missing"]})
             assert missing.status_code == 404
             assert missing.json()["error"]["code"] == "skill_version_not_found"
             response = await client.post(
-                "/v1/skills/algos/evolve", json={"skill_version_id": version_id, "auto_accept": False}
+                "/v1/skills/algos/evolve", json={"skill_version_ids": [version_id], "auto_accept": False}
             )
             assert response.status_code == 202, response.text
             assert response.json()["code"] == "accepted"
@@ -376,6 +391,25 @@ async def test_http_evolution_accepts_task_before_algorithm_finishes(tmp_path):
             await asyncio.wait_for(started.wait(), timeout=2)
             assert choices == [False]
             assert (await service.task_status("p1", task_id)).result is None
+            admitted_ids = {task_id}
+            if limit == 2:
+                second = await client.post("/v1/skills/algos/evolve", json={"skill_version_ids": [version_id]})
+                assert second.status_code == 202, second.text
+                admitted_ids.add(second.json()["data"]["task_id"])
+            blocked = await client.post("/v1/skills/algos/evolve", json={"skill_version_ids": [version_id]})
+            assert blocked.status_code == 429, blocked.text
+            error = blocked.json()["error"]
+            assert error["task_id"] in admitted_ids
+            assert error["task_status"] in {"queued", "running"}
+            assert error == {
+                "code": "too_many_requests",
+                "message": (
+                    f"Evolve already has a {error['task_status']} task in this project (task ID: {error['task_id']})."
+                ),
+                "task_id": error["task_id"],
+                "task_kind": "skill.evolve",
+                "task_status": error["task_status"],
+            }
             with pytest.raises(ValueError, match="default project"):
                 await service.task_status("other", task_id)
             release.set()
@@ -432,6 +466,84 @@ async def test_task_tables_reopen_and_reclaim_expired_attempt(tmp_path):
     assert (await store.scoped(Scope(fields={"project_id": "p2"})).get(spec.task_id)) is None
     assert (await store.scoped(Scope(fields={"project_id": "p1"})).get(spec.task_id)).attempt == 2
     (await database.close())
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "postgres"])
+@pytest.mark.parametrize("limit", [1, 2])
+async def test_shared_project_capacity_across_connections(backend, limit, tmp_path, monkeypatch):
+    """Count queued work and individual reservations together across database clients."""
+    if backend == "postgres":
+        url = os.environ.get(POSTGRES_TEST_URL)
+        if not url:
+            pytest.skip(f"Set {POSTGRES_TEST_URL} to run real PostgreSQL contracts")
+        first = PostgresDatabase(PostgresConfig(url=url))
+        second = PostgresDatabase(PostgresConfig(url=url))
+    else:
+        url = f"sqlite:///{tmp_path / 'shared.db'}"
+        first = SQLiteDatabase(SQLiteConfig(url=url))
+        second = SQLiteDatabase(SQLiteConfig(url=url))
+    project = uuid4().hex
+    task_id = uuid4().hex
+    reservations = []
+    try:
+        first_store = SkillPersistence(SkillPersistenceConfig(), database=first, max_active_tasks_per_project=limit)
+        second_store = SkillPersistence(SkillPersistenceConfig(), database=second, max_active_tasks_per_project=limit)
+        await first_store.initialize_storage()
+        await second_store.initialize_storage()
+        workers = (first_store.task_worker(), second_store.task_worker())
+        worker = workers[1]
+        gate = first_store.task_admission()
+        spec = TaskSpec(task_id=task_id, project_id=project, kind=EVOLVE_TASK, payload={})
+
+        async def submit(index):
+            return await workers[index % len(workers)].create(spec.model_copy(update={"task_id": f"{task_id}-{index}"}))
+
+        results = await asyncio.gather(*(submit(index) for index in range(5)), return_exceptions=True)
+        accepted = [item for item in results if not isinstance(item, BaseException)]
+        assert len(accepted) == limit, results
+        task_ids = {task.task_id for task in accepted}
+        for rejected in [item for item in results if isinstance(item, BaseException)]:
+            assert isinstance(rejected, ProjectTaskBusyError)
+            assert rejected.task_id in task_ids
+        with pytest.raises(ProjectTaskBusyError) as blocked:
+            await gate.reserve(project, "graph", GRAPH_BUILD_TASK, TaskStatus.RUNNING)
+        assert blocked.value.task_id in task_ids and blocked.value.status == TaskStatus.QUEUED
+
+        other = await gate.reserve(f"{project}-other", "judge", JUDGE_TASK, TaskStatus.RUNNING)
+        await other.close()
+        claims = [await worker.claim(task.task_id, lease_seconds=0) for task in accepted]
+        with pytest.raises(ProjectTaskBusyError) as blocked:
+            await gate.reserve(project, "judge", JUDGE_TASK, TaskStatus.RUNNING)
+        assert blocked.value.task_id in task_ids and blocked.value.status == TaskStatus.RUNNING
+        for task, token in claims:
+            assert await worker.finish(task.task_id, token, error_type="TestFailure")
+
+        for index in range(limit):
+            reservations.append(
+                await gate.reserve(project, f"{project}-graph-{index}", GRAPH_BUILD_TASK, TaskStatus.RUNNING)
+            )
+        with pytest.raises(ProjectTaskBusyError) as blocked:
+            await worker.create(spec)
+        assert blocked.value.kind == GRAPH_BUILD_TASK
+        await reservations.pop().close()
+        await worker.create(spec)
+        with pytest.raises(ProjectTaskBusyError):
+            await gate.reserve(project, "judge", JUDGE_TASK, TaskStatus.RUNNING)
+        _, token = await worker.claim(spec.task_id)
+        assert await worker.finish(spec.task_id, token, result={})
+
+        monkeypatch.setattr(task_admission, "LEASE_DURATION", timedelta(0))
+        reservations.append(await gate.reserve(project, f"{project}-expired", GRAPH_BUILD_TASK, TaskStatus.RUNNING))
+        new_task_id = f"{task_id}-after-expiry"
+        await worker.create(spec.model_copy(update={"task_id": new_task_id}))
+        with pytest.raises(ProjectTaskBusyError) as blocked:
+            await gate.reserve(project, "judge", JUDGE_TASK, TaskStatus.RUNNING)
+        assert blocked.value.task_id in {new_task_id, f"{project}-graph-0"}
+    finally:
+        for reservation in reservations:
+            await reservation.close()
+        await first.close()
+        await second.close()
 
 
 @pytest.mark.asyncio
@@ -589,7 +701,8 @@ async def test_background_training_preserves_keys_after_database_reopen(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_path):
+@pytest.mark.parametrize("via_platform", [False, True])
+async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_path, monkeypatch, via_platform):
     """Freeze the complete pipeline settings instead of adopting worker changes."""
     from mindmemos_skill.agents import OpenAIChatConfig
 
@@ -598,16 +711,24 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
 
     received = []
     closed = []
+    routes = []
+    worker_secret = "test-worker-model-signing-key".ljust(32, "-")
+    probe_name = "frozen_gateway_evolution_probe" if via_platform else "frozen_evolution_probe"
 
-    @Pipeline.register("frozen_evolution_probe")
+    @Pipeline.register(probe_name)
     class Probe(EvolutionPipeline[Options]):
         config_type = Options
 
         async def evolve(self, request):
             received.append((self.config.model.api_key, request.run_id))
+            if self.config.model.transport == "platform_gateway":
+                url, token = platform_connection()
+                claims = jwt.decode(token, worker_secret, algorithms=["HS256"], audience="platform-skill-model")
+                routes.append((url, claims["project_id"]))
+            version = await self.persistence.skills.get(request.skill_version_ids[0])
             return AlgoSkillEvolveResult(
-                skill_id=request.skill_ref,
-                base_version_id=request.base_version_id,
+                skill_id=version.skill_id,
+                base_version_id=version.version_id,
                 version_id="version",
                 run_id=request.run_id,
                 content="instructions",
@@ -631,10 +752,11 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
             "repository_pipeline": {"class_name": "repository"},
             "evolution_pipelines": {
                 "probe": {
-                    "class_name": "frozen_evolution_probe",
+                    "class_name": probe_name,
                     "config": {
                         "model": {
                             "model": "offline",
+                            "transport": "platform_gateway" if via_platform else "direct",
                             "api_key": "submitted-test-key",
                             "base_url": "https://test.invalid/v1",
                         }
@@ -644,6 +766,10 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
         },
         "p1",
     )
+    if via_platform:
+        config.service.platform_model_origin = AnyHttpUrl("http://platform.invalid")
+        config.fastapi.auth = HttpAuthConfig(mode="gateway_jwt", gateway_jwt_secret="inbound-test-key".ljust(32, "-"))
+        monkeypatch.setenv(PLATFORM_MODEL_SECRET_ENV, "test-submit-model-signing-key".ljust(32, "-"))
     service = await create_service(config)
     manager = KafkaTaskManager(
         store=TaskWorkerService(service.backends["database"]),
@@ -653,22 +779,25 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
     )
     manager._started = True
     service.attach_task_manager(manager)
-    registered = await service.register_skill(
-        RegisterRequest(
-            project_id="p1",
-            skill=StructuredSkillInfo(
-                content="Instructions",
-                name="Example",
-                description="Example",
-                standard_format=False,
-            ),
+    with service.request_principal(SkillHttpIdentity(project_id="p1")):
+        registered = await service.register_skill(
+            RegisterRequest(
+                project_id="p1",
+                skill=StructuredSkillInfo(
+                    content="Instructions",
+                    name="Example",
+                    description="Example",
+                    standard_format=False,
+                ),
+            )
         )
-    )
-    submitted = await service.submit_evolution("p1", registered.skill_version_id)
+        submitted = await service.submit_evolution("p1", [registered.skill_version_id])
     await service.close()
     worker_options = Options.model_validate(config.service.evolution_pipelines["probe"].config)
     worker_options.model.api_key = "worker-test-key"
     config.service.evolution_pipelines["probe"].config = worker_options
+    if via_platform:
+        monkeypatch.setenv(PLATFORM_MODEL_SECRET_ENV, worker_secret)
     restored = await create_service(config)
     try:
         record = (
@@ -678,6 +807,7 @@ async def test_evolution_uses_submitted_configuration_after_worker_restart(tmp_p
         )
         assert record.payload["pipeline"]["config"]["model"]["api_key"] == "submitted-test-key"
         result = await restored.execute_task(record.spec())
+        assert routes == ([("http://platform.invalid/internal/v1/skill-models", "p1")] if via_platform else [])
         assert received == [("submitted-test-key", result["run_id"])]
         assert result["run_id"].startswith("evolve_")
         audit = restored.backends["observability"]

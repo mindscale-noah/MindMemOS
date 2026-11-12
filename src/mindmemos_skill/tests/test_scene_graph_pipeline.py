@@ -5,8 +5,12 @@ import json
 import re
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
+import jwt
+import openai
 import pytest
 from mindmemos_skill.agents import AgentResult, OpenAIChatConfig
 from mindmemos_skill.algos.manage.skill_manage.algorithm import SkillManageAlgorithm
@@ -19,8 +23,11 @@ from mindmemos_skill.api.typing import (
     RegisterRequest,
     RemoveGraphMembersRequest,
 )
+from mindmemos_skill.config.config import ServiceConfig
 from mindmemos_skill.errors import GraphConflictError, GraphNotFoundError
 from mindmemos_skill.infra.database import Scope
+from mindmemos_skill.infra.model_access import platform
+from mindmemos_skill.infra.model_access.platform import PLATFORM_MODEL_SECRET_ENV, PlatformModelError
 from mindmemos_skill.persistence.constants import SKILL_GRAPH_VERSIONS_TABLE, SKILL_VERSIONS_TABLE
 from mindmemos_skill.persistence.db_services.graphs.typing import GraphNodeType
 from mindmemos_skill.persistence.db_services.graphs.writer import SkillGraphStore
@@ -476,7 +483,7 @@ async def test_force_changed_scene_does_not_reuse_and_history_is_immutable(graph
     assert await service.get_graph_snapshot(built.graph_id, built.graph_version_id) == before
 
 
-async def test_concurrent_additions_detect_conflict_instead_of_losing_members(graph_service):
+async def test_concurrent_pipeline_additions_detect_conflict_instead_of_losing_members(graph_service):
     service, embeddings, _ = graph_service
     one, two, three = await register(service, "one"), await register(service, "two"), await register(service, "three")
     built = await service.organize_skills(OrganizeRequest(project_id="project", skill_refs=[one.skill.skill_id]))
@@ -484,15 +491,16 @@ async def test_concurrent_additions_detect_conflict_instead_of_losing_members(gr
     barrier = asyncio.Barrier(2)
 
     async def embed(texts):
-        await barrier.wait()
+        await asyncio.wait_for(barrier.wait(), timeout=2)
         return await original(texts)
 
     embeddings.embed = embed
+    pipeline = service._manage_pipeline
     outcomes = await asyncio.gather(
-        service.add_graph_members(
+        pipeline.add_graph_members(
             AddGraphMembersRequest(project_id="project", graph_ref=built.graph_id, skill_refs=[two.skill.skill_id])
         ),
-        service.add_graph_members(
+        pipeline.add_graph_members(
             AddGraphMembersRequest(project_id="project", graph_ref=built.graph_id, skill_refs=[three.skill.skill_id])
         ),
         return_exceptions=True,
@@ -955,7 +963,7 @@ async def test_existing_members_ignore_changed_version_cache(graph_service, scen
 
 async def test_snapshot_config_restores_models_and_runtime_options(graph_service):
     """Keep model parameters pinned without persisting credentials or freezing query options."""
-    from mindmemos_skill.algos.manage.skill_manage.build_config import restore_build_config
+    from mindmemos_skill.pipelines.builtin_pipelines.manage.build_config import restore_build_config
 
     service, _, _ = graph_service
     item = await register(service, "connection-config")
@@ -1327,3 +1335,88 @@ async def test_model_failure_is_not_cached_as_absent_scenes(graph_service, monke
     with pytest.raises(SceneGraphError, match="SCENE_GRAPH_MODEL_FAILED"):
         await service.organize_skills(OrganizeRequest(project_id="project", skill_refs=[item.skill.skill_id]))
     assert await service.repository.persistence.skills.get_scene_data(item.version.version_id) is None
+
+
+async def test_platform_embedding_space_stays_with_snapshot(tmp_path, monkeypatch):
+    """Builds select the active space while retrieval uses the pinned snapshot space."""
+    secret = "test-graph-model-signing-key".ljust(32, "-")
+    monkeypatch.setenv(PLATFORM_MODEL_SECRET_ENV, secret)
+    active_space = "revision-a"
+    available_spaces = {"revision-a", "revision-b"}
+    requests = []
+
+    def respond(request):
+        token = request.headers["Authorization"].removeprefix("Bearer ")
+        claims = jwt.decode(token, secret, algorithms=["HS256"], audience="platform-skill-model")
+        assert claims["project_id"] == "project"
+        if request.url.path.endswith("/embedding-profile"):
+            return httpx.Response(200, json={
+                "space_id": active_space, "model": "fixture-model", "dimensions": 3,
+            })
+        assert request.url.path.endswith("/embeddings")
+        payload = json.loads(request.content)
+        space = payload["space_id"]
+        assert payload["dimensions"] == 3
+        requests.append(space)
+        if space not in available_spaces:
+            return httpx.Response(409, json={"detail": "Snapshot embedding space is unavailable"})
+        vector = [1.0, 0.0, 0.0] if space == "revision-a" else [0.0, 1.0, 0.0]
+        return httpx.Response(200, json={
+            "object": "list", "model": "fixture-model",
+            "data": [
+                {"object": "embedding", "index": index, "embedding": vector}
+                for index, _ in enumerate(payload["input"])
+            ],
+        })
+
+    def client(**kwargs):
+        return httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr(openai, "DefaultAsyncHttpxClient", client)
+    monkeypatch.setattr(platform, "httpx", SimpleNamespace(
+        AsyncClient=client, HTTPStatusError=httpx.HTTPStatusError, RequestError=httpx.RequestError,
+    ))
+    config = ServiceConfig.model_validate({
+        "home": tmp_path / "home",
+        "platform_model_origin": "http://platform.invalid",
+        "persistence": {"database": {"class_name": "sqlite"}},
+        "repository_pipeline": {"class_name": "repository"},
+        "manage_pipeline": {
+            "class_name": "graph_manage",
+            "config": {"algorithm": {
+                "embedding": {"transport": "platform_gateway", "model": "placeholder", "dimensions": 1},
+                "chat": {"model": "unused"},
+                "build_scene": False,
+                "llm_linking": False,
+                "scene_llm_linking": False,
+                "enrich_skill": False,
+                "query_rewrite": False,
+            }},
+        },
+    })
+
+    def authorize(principal, project):
+        assert principal == project == "project"
+        return Scope(fields={"project_id": project})
+
+    async with await create_service(config, project_authorizer=authorize) as service:
+        with service.request_principal("project"):
+            item = await register(service, "platform-space")
+            organize = OrganizeRequest(project_id="project", skill_refs=[item.skill.skill_id])
+            first = await service.organize_skills(organize)
+            assert requests and set(requests) == {"revision-a"}
+            active_space = "revision-b"
+            second = await service.organize_skills(organize.model_copy(update={"graph_id": first.graph_id}))
+            assert second.graph_version_id != first.graph_version_id
+            assert requests[-1] == "revision-b"
+
+            query = RecommendRequest(
+                project_id="project", graph_id=first.graph_id, graph_version_id=first.graph_version_id,
+                task="process the table", strategy="vector",
+            )
+            assert (await service.recommend_skills(query)).skills
+            assert requests[-1] == "revision-a"
+            available_spaces.remove("revision-a")
+            with pytest.raises(PlatformModelError) as failure:
+                await service.recommend_skills(query)
+            assert failure.value.status_code == 409

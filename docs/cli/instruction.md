@@ -80,6 +80,8 @@ mindmemos memory add --messages-json-file ./messages.json --async --json
 
 By default, the command processes the request synchronously for the configured user. A successful `--async` submission returns a `request_id`. Use `--json` for the full response.
 
+`--skill-context-json` accepts legacy plugin references as a JSON array. Each item contains `name`, `content_hash`, and optional `base_version_id`, `version_label`, and `usage` (`injected` or `modified`). The original Memory API receives these references; this option does not call the standalone Skill service. Omitting it does not detect or register legacy Skills automatically.
+
 ### `mindmemos memory search`
 
 Search by query text and return up to 10 results by default. Pass `--user-id` to scope the search to a user. Omit it to search the current project.
@@ -89,6 +91,17 @@ mindmemos memory search "What kind of coffee do I like?" --user-id alice --top-k
 ```
 
 Use `--search-strategy agentic` to switch from the default `fast` strategy. Pass a JSON filter object with `--filter`, constrain results with `--token-budget`, or use `--json` for the full response. `--score-threshold` applies only with `--rerank`.
+
+### Image add, search, and download
+
+When multimodal mode is enabled for the project, repeat `--image` or `--query-image` for local files and HTTP(S) URLs. Download an original with the hit's `metadata.blob_id` and `metadata.user_id`.
+
+```bash
+mindmemos memory add --content "Desk setup" --image ./desk.png
+mindmemos memory search "Desk" --query-image ./desk.png --json
+mindmemos memory search "Desk" --multimodal --json
+mindmemos memory get-image BLOB_ID --user-id alice --output desk.png
+```
 
 ### `mindmemos memory get`
 
@@ -356,13 +369,17 @@ Each static evaluation in `items` includes `skill_version_id`, `score_mean`, `sc
 
 #### `mindmemos skill evolve`
 
-Submit an asynchronous evolution task and return its `task_id`. You can submit several Skill references, with at most one version per family. Omitting `--pipeline` uses the server default. The repository example configures a pipeline named `offline`.
+By default, submit an asynchronous evolution task and return its `task_id`; explicit `--async` has the same behavior. Use `--sync` to wait for completion and print the final task snapshot, including its `result`. Failed or cancelled tasks produce a nonzero exit status. You can submit several Skill references, with at most one version per family. Omitting `--pipeline` uses the server default. The repository example configures a pipeline named `offline`.
 
 ```bash
 mindmemos skill evolve my-skill --pipeline offline
+mindmemos skill evolve my-skill another-skill --pipeline offline
+mindmemos skill evolve my-skill --pipeline offline --sync
 ```
 
 Repeat `--editable-skill` to select editable inputs, or use `--read-only` to preserve all input families. Use `--allow-create-skills` or `--no-allow-create-skills` to control creation of new families. Add `--auto-accept` to activate candidate versions of existing families.
+
+The legacy `--sync` and `--async` flags select how the CLI waits; both use the standalone Skill service. References must resolve in the new repository. The command does not read the old SDK registry or fall back to the legacy evolution API. Ctrl+C stops local waiting without cancelling the submitted task.
 
 #### `mindmemos skill train`
 

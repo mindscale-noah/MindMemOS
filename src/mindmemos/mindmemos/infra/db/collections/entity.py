@@ -21,7 +21,7 @@ class EntityRepository(CollectionRepository):
 
         by_collection: dict[str, list[EntityPoint]] = {}
         for point in points:
-            vector_size = len(point.vector or []) or self._cfg.vector_size
+            vector_size = len(point.vector or []) or point.semantic_dimension or self._cfg.vector_size
             collection = await self._ensure_project_vector_collection(
                 vector_size=vector_size,
                 enable_sparse=True,
@@ -29,10 +29,15 @@ class EntityRepository(CollectionRepository):
             )
             by_collection.setdefault(collection, []).append(point)
         for collection, collection_points in by_collection.items():
+            vector_size = self._cfg.vector_size
+            if self._cfg.project_collection_namespace_enabled:
+                vector_size = await self._engine.dense_vector_size(collection, self.semantic_vector_name)
             await self._engine.upsert(
                 collection,
-                [self._point(point) for point in collection_points],
+                [self._point(point, vector_size=vector_size) for point in collection_points],
             )
+        for project_id in {str(point.payload.get("project_id") or "") for point in points}:
+            self._invalidate_project_collection_cache(project_id)
 
     async def get(self, project_id: str, entity_id: str, *, with_vectors: bool = False) -> QdrantRecord | None:
         """Retrieve one entity by project and id."""
@@ -76,18 +81,25 @@ class EntityRepository(CollectionRepository):
     ) -> list[QdrantSearchRecord]:
         """Search entities via sparse BM25 vector."""
 
-        collection = await self._collection_holding_project(project_id)
-        if collection is None:
+        collections = await self._collections_holding_project(project_id)
+        if not collections:
             return []
-        return await self._engine.query(
-            collection,
-            source="entity_bm25",
-            query=self._engine.to_qdrant_sparse(vector),
-            using=self.bm25_vector_name,
-            query_filter=self._engine.project_filter(project_id, filter_=filter_),
-            limit=limit,
-            with_payload=with_payload,
-        )
+        hits: dict[str, QdrantSearchRecord] = {}
+        for collection in collections:
+            records = await self._engine.query(
+                collection,
+                source="entity_bm25",
+                query=self._engine.to_qdrant_sparse(vector),
+                using=self.bm25_vector_name,
+                query_filter=self._engine.project_filter(project_id, filter_=filter_),
+                limit=limit,
+                with_payload=with_payload,
+            )
+            for record in records:
+                current = hits.get(record.point_id)
+                if current is None or record.score > current.score:
+                    hits[record.point_id] = record
+        return sorted(hits.values(), key=lambda record: record.score, reverse=True)[:limit]
 
     async def search_rrf(
         self,
@@ -129,16 +141,16 @@ class EntityRepository(CollectionRepository):
             with_payload=with_payload,
         )
 
-    def _point(self, point: EntityPoint) -> qmodels.PointStruct:
+    def _point(self, point: EntityPoint, *, vector_size: int) -> qmodels.PointStruct:
         return qmodels.PointStruct(
             id=point.entity_id,
-            vector=self._vectors(point),
+            vector=self._vectors(point, vector_size=vector_size),
             payload=self._engine.safe_payload(point.payload),
         )
 
-    def _vectors(self, point: EntityPoint) -> dict[str, list[float] | qmodels.SparseVector]:
+    def _vectors(self, point: EntityPoint, *, vector_size: int) -> dict[str, list[float] | qmodels.SparseVector]:
         vectors: dict[str, list[float] | qmodels.SparseVector] = {
-            self.semantic_vector_name: point.vector or self._engine.zero_vector()
+            self.semantic_vector_name: point.vector or [0.0] * vector_size
         }
         if point.bm25_vector is not None:
             vectors[self.bm25_vector_name] = self._engine.to_qdrant_sparse(point.bm25_vector)

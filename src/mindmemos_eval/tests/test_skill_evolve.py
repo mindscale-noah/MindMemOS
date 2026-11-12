@@ -160,7 +160,7 @@ def setup_run(tmp_path, monkeypatch):
         assert resources.home == config.output_dir / "state"
         options = resources.evolution_pipelines["offline"].config
         assert options["work_dir"] == str(config.output_dir / "evolution_work")
-        assert options["traj_collect"] == {"max_page_size": 23, "trajectory_limit": 5}
+        assert options["traj_collect"] == {"max_page_size": 23, "trajectory_limit": 5, "exclude_consumed": True}
         return fake_service
 
     monkeypatch.setattr(service, "create_service", create_service)
@@ -176,6 +176,17 @@ def test_evaluate_evolve_check_prepares_selected_tasks(setup_run, tmp_path, caps
     )
     assert "Prepared 5 cases" in capsys.readouterr().out
     assert not config.output_dir.exists()
+
+
+def test_eval_pipeline_can_enable_consumed_evidence_reuse(setup_run):
+    config, _ = setup_run
+    config.pipeline_overrides["traj_collect"]["exclude_consumed"] = False
+    resources = evolve._evolution_resources(config, config.output_dir)
+    assert resources.evolution_pipelines["offline"].config["traj_collect"] == {
+        "max_page_size": 23,
+        "trajectory_limit": 5,
+        "exclude_consumed": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -210,8 +221,46 @@ async def test_fallback_without_test_calls(setup_run, mode):
     service.mode = mode
     result = await evolve.run(config)
     assert result["cases"][0]["status"] == ("evolution_failed" if mode == "fail" else "unchanged")
+    assert result["errors"] == int(mode == "fail")
     assert FixtureEnvironment.calls["zero"] == 1
     assert result["metrics"]["test"]["mean_score"] == 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "cases", "expected_errors"),
+    [
+        ("fail", ["zero"], 1),
+        ("fail", ["zero", "network"], 2),
+        ("unchanged", ["zero"], 0),
+        ("updated", ["zero"], 0),
+        ("updated", ["perfect", "timeout", "setup"], 0),
+    ],
+)
+def test_cli_exit_status_includes_evolution_failures_on_resume(setup_run, tmp_path, mode, cases, expected_errors):
+    config, service = setup_run
+    config.cases = cases
+    config.network_retries = 0
+    service.mode = mode
+    config_file = tmp_path / "evolve.yaml"
+    write_json(config_file, config)
+    args = ["skill", "evaluate", "evolve", "--config", str(config_file)]
+
+    assert main(args) == int(expected_errors > 0)
+    summary = read_json(config.output_dir / "summary.json")
+    assert summary["errors"] == expected_errors
+    if mode == "fail":
+        assert summary["cases"][0]["status"] == "evolution_failed"
+        assert summary["cases"][0]["collect"][0]["status"] == "completed"
+        assert "fixture evolution failure" in summary["cases"][0]["evolution_error"]
+    assert f"execution errors: {expected_errors}" in (config.output_dir / "report.md").read_text()
+
+    previous_calls = dict(FixtureEnvironment.calls)
+    previous_reports = len(service.reports)
+    service.mode = "updated"
+    assert main(args) == int(expected_errors > 0)
+    assert read_json(config.output_dir / "summary.json")["errors"] == expected_errors
+    assert FixtureEnvironment.calls == previous_calls
+    assert len(service.reports) == previous_reports
 
 
 def test_sanitize_and_error_categories():
@@ -288,6 +337,7 @@ async def test_evolution_retry_resumes_failed_step(setup_run, tmp_path, monkeypa
     monkeypatch.setattr(service, step, flaky)
     result = await evolve.run(config)
     assert result["cases"][0]["status"] == "evolved"
+    assert result["errors"] == 0
     assert len(calls) == (3 if step == "register_skill" else 2)
     assert len(service.skills) == 2
     assert len(service.reports) == 1

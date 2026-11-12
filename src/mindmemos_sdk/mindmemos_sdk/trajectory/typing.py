@@ -92,13 +92,13 @@ class TrajectoryEvent(BaseModel):
 
 
 class TrajectoryDelivery(BaseModel):
-    """Outcome of one destination write."""
+    """Outcome of one selected destination."""
 
-    status: Literal["queued", "completed", "stored", "failed", "unknown"]
-    """Observed result. Unknown means the server may already have accepted the write."""
+    status: Literal["queued", "completed", "stored", "skipped", "failed", "unknown"]
+    """Skipped means no write was attempted. Unknown means the server may have accepted it."""
 
     code: str | None = None
-    """Service outcome code or SDK failure reason."""
+    """Service outcome code or SDK reason."""
 
     request_id: str | None = None
     """Server request ID for support and correlation, when available."""

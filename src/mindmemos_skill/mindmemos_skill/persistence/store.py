@@ -7,11 +7,12 @@ from ..infra.database import Database, Scope, TableRegistry
 from ..infra.database.scoped import ScopedDatabase
 from .base import Persistence
 from .config import SkillPersistenceConfig
-from .constants import OPTIONAL_SCOPE_FIELDS, REQUIRED_SCOPE_FIELDS
+from .constants import DEFAULT_MAX_ACTIVE_TASKS_PER_PROJECT, OPTIONAL_SCOPE_FIELDS, REQUIRED_SCOPE_FIELDS
 from .db_services.audit.service import AuditDataService
 from .db_services.evaluations.service import EvaluationDataService
 from .db_services.graphs.service import GraphDataService
 from .db_services.skills.service import SkillDataService
+from .db_services.tasks.admission import ProjectTaskAdmission
 from .db_services.tasks.service import TaskDataService
 from .db_services.tasks.worker import TaskWorkerService
 from .db_services.trajectories.service import TrajectoryDataService
@@ -50,13 +51,21 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
     session_type = SkillPersistenceSession
     """Session implementation; subclasses may assemble additional typed repositories."""
 
-    def __init__(self, config: SkillPersistenceConfig, *, database: Database, audit_database: Database | None = None):
+    def __init__(
+        self,
+        config: SkillPersistenceConfig,
+        *,
+        database: Database,
+        audit_database: Database | None = None,
+        max_active_tasks_per_project: int = DEFAULT_MAX_ACTIVE_TASKS_PER_PROJECT,
+    ):
         """Register owned tables and retain borrowed storage resources.
 
         Args:
             config: Validated repository settings.
             database: Business database owned by the service assembly.
             audit_database: Optional independent database for project audit queries.
+            max_active_tasks_per_project: Shared admission limit for one project's algorithm tasks.
         """
         super().__init__(config)
         if not isinstance(database, Database):
@@ -71,7 +80,8 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
         self._current_session: ContextVar[SkillPersistenceSession | None] = ContextVar(
             "skill_persistence_session", default=None
         )
-        self._task_worker = TaskWorkerService(database)
+        self._task_admission = ProjectTaskAdmission(database, max_active_tasks=max_active_tasks_per_project)
+        self._task_worker = TaskWorkerService(database, admission=self._task_admission)
         if audit_database is not None:
             self.attach_audit_database(audit_database)
 
@@ -95,6 +105,10 @@ class SkillPersistence(Persistence[SkillPersistenceConfig]):
         if self._current_session.get() is not None:
             raise RuntimeError("Worker capabilities cannot be acquired inside a persistence session")
         return self._task_worker
+
+    def task_admission(self) -> ProjectTaskAdmission:
+        """Provide the shared admission gate for authorized project operations."""
+        return self._task_admission
 
     @property
     def project_id(self) -> str:

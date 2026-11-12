@@ -1,18 +1,14 @@
 """Generate complete Skill outputs and publish their versions atomically."""
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from filelock import AsyncFileLock
 
 from ....algos import Algorithm
 from ....algos.evolve.offline_evolution.config import EvolutionOptions
 from ....algos.evolve.offline_evolution.typing import EvolutionSnapshot, HistoricalTrajectory, SkillEvolutionResult
-from ....api.typing import (
-    CollectionEvolutionRequest,
-    EvolutionRequest,
-    EvolutionRunResult,
-    SkillPipelineRequest,
-)
+from ....api.typing import EvolutionRequest, EvolutionRunResult
 from ....common.checkpoint import boundary, fingerprint, read_boundary
 from ....common.ids import generate_id
 from ....common.json import read_json, write_json
@@ -50,34 +46,6 @@ class OfflineEvolutionPipeline(EvolutionPipeline[OfflineEvolutionPipelineConfig]
             raise TypeError("Evolution pipeline requires SkillPersistence")
         super().__init__(config, persistence=persistence)
         self.evolver = Algorithm.build(config.evolver.class_name, config.evolver.config)
-
-    async def prepare_request(self, request: EvolutionRequest) -> CollectionEvolutionRequest:
-        """Capture one exact version or validate a complete readable collection.
-
-        Args:
-            request: Authorized single-Skill selection or exact version collection.
-
-        Returns:
-            Exact owned collection with validated editing permissions.
-        """
-        if isinstance(request, SkillPipelineRequest):
-            owner = await self.persistence.skills.resolve_family(request.skill_ref)
-            version = await self.persistence.skills.version(owner, request.base_version_id)
-            request = CollectionEvolutionRequest(
-                project_id=request.project_id,
-                pipeline=request.pipeline,
-                skill_version_ids=[version.version_id],
-                auto_accept=request.auto_accept,
-                run_id=request.run_id,
-            )
-        request = CollectionEvolutionRequest.model_validate(request)
-        versions = [await self.persistence.skills.get(value) for value in request.skill_version_ids]
-        owners = {version.skill_id for version in versions}
-        if len(owners) != len(versions):
-            raise ValueError("Evolution accepts at most one version per Skill family")
-        if request.editable_skills is not None and not set(request.editable_skills) <= owners:
-            raise ValueError("Editable Skill IDs must belong to the input collection")
-        return request
 
     async def evolve(self, request: EvolutionRequest) -> EvolutionRunResult:
         """Generate complete outputs and save versions with optional activation.
@@ -138,15 +106,15 @@ class OfflineEvolutionPipeline(EvolutionPipeline[OfflineEvolutionPipelineConfig]
                 options = EvolutionOptions(
                     editable_skills=request.editable_skills, allow_create_skills=request.allow_create_skills
                 )
-                with stage("evolve.evolving"):
+                with TemporaryDirectory(prefix=f"{request.run_id}-") as scratch, stage("evolve.evolving"):
                     result = await self.evolver.evolve(
                         skills={key: load_runtime_skill(item.base.snapshot()) for key, item in captured.inputs.items()},
                         trajectories=trajectories,
-                        work_dir=directory / "algorithm",
+                        work_dir=Path(scratch) / "algorithm",
                         options=options,
                     )
-                candidate = result.snapshot()
-                boundary(candidate_path, input_hash, payload=candidate.model_dump(mode="json"))
+                    candidate = result.snapshot()
+                    boundary(candidate_path, input_hash, payload=candidate.model_dump(mode="json"))
             await self._consume(directory, captured.inputs)
             with stage("evolve.publish"):
                 result = await publish_candidate(self.persistence, directory, manifest, captured, candidate)
@@ -241,7 +209,8 @@ class OfflineEvolutionPipeline(EvolutionPipeline[OfflineEvolutionPipelineConfig]
             for version_id in by_version:
                 limit = self.config.traj_collect.trajectory_limit
                 if limit is None:
-                    limit = (await self.persistence.trajectories.counts(version_id)).total
+                    counts = await self.persistence.trajectories.counts(version_id)
+                    limit = counts.unconsumed if self.config.traj_collect.exclude_consumed else counts.total
                 if limit == 0:
                     continue
                 rows = await collect_skill_trajectories(
@@ -249,6 +218,7 @@ class OfflineEvolutionPipeline(EvolutionPipeline[OfflineEvolutionPipelineConfig]
                     skill_version_id=version_id,
                     limit=limit,
                     max_page_size=self.config.traj_collect.max_page_size,
+                    exclude_consumed=self.config.traj_collect.exclude_consumed,
                 )
                 for record in rows:
                     pool[record.trajectory_id] = record

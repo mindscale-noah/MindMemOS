@@ -10,8 +10,12 @@ import io
 import json
 import sys
 
+import httpx
 import pytest
+from mindmemos_sdk.client import MindMemOSClient
+from mindmemos_sdk.config import SDKConfig
 from mindmemos_sdk.memory import AddResult, DialogueMessage, GetResult, MemorySearchHit, SearchResult, StatusResult
+from mindmemos_sdk.transport import HttpTransport
 
 from mindmemos_sdk import cli
 
@@ -155,6 +159,68 @@ def test_memory_add_rejects_invalid_metadata_json(capsys):
     rc = _run(["memory", "add", "--content", "hi", "--metadata-json", "[1, 2]"])
     assert rc == 2
     assert "--metadata-json must be a JSON object" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "context", [[], [{"name": "legacy", "content_hash": "hash", "base_version_id": "v-old", "usage": "injected"}]]
+)
+def test_memory_add_preserves_legacy_context_without_calling_skill(monkeypatch, capsys, context):
+    """Old plugin arguments use only Memory, even without a Skill connection."""
+    calls = []
+
+    def respond(request):
+        calls.append((request.url.path, request.headers["Authorization"], json.loads(request.content)))
+        return httpx.Response(200, json={"code": "queued", "request_id": "legacy-add"})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        transport = HttpTransport(base_url="http://memory.test", api_key="old-key", client=http)
+        config = SDKConfig.model_validate(
+            {
+                "service_type": "custom",
+                "memory_service": {"base_url": "http://memory.test"},
+                "defaults": {"user_id": "u"},
+            }
+        )
+        monkeypatch.setattr(cli, "_build_client", lambda: MindMemOSClient(config=config, transport=transport))
+        assert (
+            cli.main(
+                [
+                    "memory",
+                    "add",
+                    "--messages-json",
+                    '[{"role":"user","content":"hi"}]',
+                    "--skill-context-json",
+                    json.dumps(context),
+                    "--async",
+                    "--json",
+                ]
+            )
+            == 0
+        )
+
+    output = capsys.readouterr()
+    assert json.loads(output.out)["request_id"] == "legacy-add"
+    assert not output.err
+    assert len(calls) == 1
+    path, auth, body = calls[0]
+    assert (path, auth) == ("/v1/memory/add", "Bearer old-key")
+    assert body["skill_context"] == context
+    assert body["mode"] == "async"
+
+
+@pytest.mark.parametrize(
+    "raw", ["{", "{}", "[1]", '[{"name":"legacy"}]', '[{"name":"legacy","content_hash":"hash","usage":"unknown"}]']
+)
+def test_memory_add_rejects_invalid_legacy_context_before_client_creation(monkeypatch, capsys, raw):
+    """Malformed legacy arguments do not send a partial or unbound request."""
+
+    def unexpected_client():
+        raise AssertionError("Invalid input must be rejected before building a client")
+
+    monkeypatch.setattr(cli, "_build_client", unexpected_client)
+    assert cli.main(["memory", "add", "--content", "hi", "--skill-context-json", raw]) == 2
+    output = capsys.readouterr()
+    assert "--skill-context-json" in output.out + output.err
 
 
 def test_memory_add_requires_content_or_messages_json(capsys):

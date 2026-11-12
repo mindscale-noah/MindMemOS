@@ -19,6 +19,7 @@ from pydantic import (
 
 from ..agents.config import AgentDefinition, AgentName
 from ..persistence.config import SkillPersistenceConfig
+from ..persistence.constants import DEFAULT_MAX_ACTIVE_TASKS_PER_PROJECT
 from ..registry.config import serialize_options
 
 Name = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
@@ -219,6 +220,9 @@ class ServiceConfig(BaseModel):
     home: Path
     """Service data root; YAML-relative paths resolve against the configuration directory."""
 
+    platform_model_origin: AnyHttpUrl | None = None
+    """Internal Platform HTTP origin for project-scoped model calls, if configured."""
+
     agents: dict[AgentName, AgentDefinition] = Field(default_factory=dict)
     """Algorithm-scoped Agent presets named <algo>_<llm_name>, resolved before constructing pipelines."""
 
@@ -227,6 +231,9 @@ class ServiceConfig(BaseModel):
 
     task_manager: TaskManagerConfig | None = None
     """Optional asynchronous Skill execution; omitted disables submission."""
+
+    max_active_tasks_per_project: int = Field(default=DEFAULT_MAX_ACTIVE_TASKS_PER_PROJECT, ge=1, strict=True)
+    """Maximum combined queued and running graph builds, judges, and evolutions in one project."""
 
     observability: ObservabilityConfig | None = None
     """Optional service-wide trace and algorithm audit backend."""
@@ -262,6 +269,24 @@ class ServiceConfig(BaseModel):
         """
         if isinstance(value, str) and not value.strip():
             raise ValueError("service.home must not be empty")
+        return value
+
+    @field_validator("platform_model_origin")
+    @classmethod
+    def validate_platform_model_origin(cls, value: AnyHttpUrl | None) -> AnyHttpUrl | None:
+        """Restrict the model gateway address to an HTTP origin.
+
+        Args:
+            value: Configured origin or None for direct-only deployments.
+
+        Returns:
+            Validated Platform origin.
+        """
+        if value is not None and (
+            value.path not in (None, "/") or value.username is not None or value.password is not None
+            or value.query is not None or value.fragment is not None
+        ):
+            raise ValueError("platform_model_origin must be an HTTP origin")
         return value
 
 

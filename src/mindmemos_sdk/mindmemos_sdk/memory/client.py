@@ -16,6 +16,7 @@ from .models import (
     AddResult,
     FeedbackMode,
     GetResult,
+    ImageRef,
     MemoryPageResult,
     MemoryScrollResult,
     MemorySearchHit,
@@ -24,6 +25,7 @@ from .models import (
     SearchStrategy,
     StatusResult,
 )
+from .typing import SkillContext
 
 
 class MemoryClient:
@@ -58,9 +60,12 @@ class MemoryClient:
         agent_id: str | None = None,
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        skill_context: list[SkillContext | dict[str, Any]] | None = None,
         retry: bool = True,
     ) -> AddResult:
         """Add content to the memory store.
+
+        Images require the project's multimodal mode.
 
         Args:
             messages: Dialogue or other Memory inputs in execution order.
@@ -70,6 +75,7 @@ class MemoryClient:
             agent_id: Optional agent identity.
             session_id: Optional session identity.
             metadata: Business metadata attached to the add request.
+            skill_context: Legacy Skill source references sent only to Memory.
             retry: Whether to apply configured HTTP transport retries.
 
         Returns:
@@ -83,6 +89,7 @@ class MemoryClient:
             agent_id=agent_id,
             session_id=session_id,
             metadata=metadata,
+            skill_context=skill_context,
         )
         options = {} if retry else {"retry": False}
         envelope = self._transport.post_envelope(request.path, json=request.body, **options)
@@ -102,8 +109,18 @@ class MemoryClient:
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        query_images: list[ImageRef | dict[str, Any]] | None = None,
+        multimodal: bool = False,
     ) -> SearchResult:
-        """Search memories."""
+        """Search memories.
+
+        ``multimodal=True`` searches stored images too (image results and facts recalled through
+        them); ``query_images`` attaches images to the query and implies it. ``query_images`` needs
+        the project's ``algo_config.multimodal.mode`` to be basic or enhanced — in off mode it is
+        rejected with error code ``search.images_unsupported`` — while a bare ``multimodal=True``
+        is silently ignored (text-only) in off mode. Image hits carry ``metadata.blob_id`` and may
+        carry ``metadata.image_url`` (see ``MemorySearchHit.metadata``).
+        """
         request = self._core.search(
             query,
             top_k=top_k,
@@ -116,9 +133,15 @@ class MemoryClient:
             app_id=app_id,
             agent_id=agent_id,
             session_id=session_id,
+            query_images=query_images,
+            multimodal=multimodal,
         )
         envelope = self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
+
+    def get_image(self, blob_id: str, user_id: str) -> tuple[bytes, str]:
+        """Download a stored image (``metadata.blob_id`` of an image result) of its owner ``user_id``."""
+        return self._transport.get_bytes(f"/v1/memory/images/{blob_id}", params={"user_id": user_id})
 
     def get(
         self,

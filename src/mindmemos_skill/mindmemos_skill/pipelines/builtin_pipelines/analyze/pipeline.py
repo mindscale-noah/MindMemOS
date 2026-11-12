@@ -18,6 +18,8 @@ from ....algos.analyze import (
     TrajectoryJudgeRequest,
     TrajectorySkillReference,
 )
+from ....algos.analyze.skill_judge.config import SkillJudgeConfig
+from ....algos.analyze.trajectory_judge.config import TrajectoryJudgeConfig
 from ....api.typing import (
     EvaluationQueryRequest,
     EvaluationQueryResult,
@@ -28,6 +30,7 @@ from ....common.checkpoint import fingerprint
 from ....common.secrets import redact_credentials
 from ....common.skill_versions import snapshot_from_version
 from ....errors import TrajectoryNotFoundError
+from ....infra.model_access.openai import capture_provider_models, has_fixed_chat_model
 from ....logging import get_logger
 from ....persistence import EvaluationRecord, SkillVersionRecord, TrajectoryRecord
 from ....persistence.store import SkillPersistence
@@ -92,7 +95,9 @@ class BuiltinAnalyzePipeline(AnalyzePipeline[AnalyzePipelineConfig]):
         version = await self.persistence.skills.get(request.skill_version_id)
         identity = self._skill_identity(version)
         key = self._skill_key(version, identity, analyzer)
-        if not request.force_refresh:
+        if isinstance(analyzer.config, SkillJudgeConfig) and not has_fixed_chat_model(analyzer.config.judge):
+            key = f"{key}:{generate_id('run_')}"
+        elif not request.force_refresh:
             cached = await self.persistence.evaluations.get_completed(key)
             if cached is not None:
                 return cached
@@ -124,7 +129,9 @@ class BuiltinAnalyzePipeline(AnalyzePipeline[AnalyzePipelineConfig]):
         trajectory = self._trajectory_input(record)
         verifier_score = request.verifier_score if request.verifier_score is not None else trajectory.reward_score
         key = self._trajectory_key(trajectory, request.attribute, verifier_score, analyzer)
-        if not request.force_refresh:
+        if isinstance(analyzer.config, TrajectoryJudgeConfig) and not has_fixed_chat_model(analyzer.config.judge):
+            key = f"{key}:{generate_id('run_')}"
+        elif not request.force_refresh:
             cached = await self.persistence.evaluations.get_completed(key)
             if cached is not None:
                 return cached
@@ -185,7 +192,8 @@ class BuiltinAnalyzePipeline(AnalyzePipeline[AnalyzePipelineConfig]):
         algorithm_version = str(analyzer.config.model_dump().get("algorithm_version", "1"))
         prompt_version = str(analyzer.config.model_dump().get("prompt_version", "1"))
         try:
-            result = await callback(request)
+            with capture_provider_models() as models:
+                result = await callback(request)
         except Exception as exc:
             failed = EvaluationRecord(
                 evaluation_id=generate_id("eval_"),
@@ -208,6 +216,10 @@ class BuiltinAnalyzePipeline(AnalyzePipeline[AnalyzePipelineConfig]):
             except Exception:
                 get_logger(__name__).exception("analyze.failed_result_persist_failed")
             raise
+        if models:
+            result = result.model_copy(update={
+                "metadata": {**result.metadata, "provider_models": list(dict.fromkeys(models))}
+            })
         record = self._success_record(
             result=result,
             judge_type=judge_type,

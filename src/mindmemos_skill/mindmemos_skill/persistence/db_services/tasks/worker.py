@@ -8,8 +8,9 @@ from sqlalchemy import and_, func, or_, select
 from mindmemos_skill.common.ids import generate_id
 
 from ....infra.database import Database, Filter, Scope
-from ....infra.task_manager.typing import TaskSpec, TaskStatus
+from ....infra.task_manager.typing import EVOLVE_TASK, TaskSpec, TaskStatus
 from ...constants import SKILL_TASKS_TABLE
+from .admission import ProjectTaskAdmission
 from .service import TaskDataService
 from .typing import TaskRecord
 
@@ -17,11 +18,12 @@ from .typing import TaskRecord
 class TaskWorkerService:
     """Expose cross-project scheduling only to a trusted worker or maintenance owner."""
 
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, *, admission: ProjectTaskAdmission | None = None):
         """Borrow an unscoped resource for trusted cross-project scheduling.
 
         Args:
             database: Service-owned database, not a request or repository handle.
+            admission: Shared configured project task limiter.
 
         Raises:
             TypeError: A scope-bound handle was supplied.
@@ -30,6 +32,7 @@ class TaskWorkerService:
             raise TypeError("Task workers require a trusted unscoped database")
         self.database = database
         self._tasks = database.tables.get(SKILL_TASKS_TABLE).table
+        self._admission = admission if admission is not None else ProjectTaskAdmission(database)
 
     def scoped(self, scope: Scope) -> TaskDataService:
         """Create a project repository for trusted task inspection."""
@@ -41,7 +44,12 @@ class TaskWorkerService:
 
     async def create(self, spec: TaskSpec) -> TaskRecord:
         """Admit a trusted task through its captured request scope."""
-        return await self.scoped(Scope(fields={"project_id": spec.project_id})).create(spec)
+        scope = Scope(fields={"project_id": spec.project_id})
+        if spec.kind == EVOLVE_TASK:
+            async with self._admission.admit(spec.project_id) as database:
+                with database.scoped(scope) as scoped:
+                    return await TaskDataService(scoped).create(spec)
+        return await self.scoped(scope).create(spec)
 
     async def append_log(self, record: dict[str, Any]) -> None:
         """Append a worker event through the task logging scope."""

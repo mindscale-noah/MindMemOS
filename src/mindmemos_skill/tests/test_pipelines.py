@@ -6,8 +6,8 @@ from mindmemos_skill.config.config import ImplementationConfig, ServiceConfig
 from mindmemos_skill.pipelines import (
     AlgoSkillEvolveResult,
     EvolutionPipeline,
+    EvolutionRequest,
     Pipeline,
-    SkillPipelineRequest,
     TrainingPipeline,
     TrainingRequest,
     TrainingSplit,
@@ -143,23 +143,24 @@ async def test_pipeline_configuration_is_validated_before_construction(monkeypat
 
 def test_request_requires_scope_and_rejects_implicit_selection_options():
     """Keep common requests strict while allowing explicitly typed extensions."""
-    request = SkillPipelineRequest(project_id=" project ", skill_ref=" skill ")
+    request = EvolutionRequest(project_id=" project ", skill_version_ids=[" version "])
     assert request.project_id == "project"
-    assert request.skill_ref == "skill"
-    assert request.base_version_id is None
+    assert request.skill_version_ids == ["version"]
     for values in (
-        {"skill_ref": "skill"},
-        {"project_id": " ", "skill_ref": "skill"},
-        {"project_id": "project", "skill_ref": "skill", "base_version_id": " "},
-        {"project_id": "project", "skill_ref": "skill", "trajectory_ids": ["t1"]},
+        {"skill_version_ids": ["version"]},
+        {"project_id": " ", "skill_version_ids": ["version"]},
+        {"project_id": "project", "skill_version_ids": []},
+        {"project_id": "project", "skill_version_ids": "version"},
+        {"project_id": "project", "skill_ref": "skill", "base_version_id": "version"},
+        {"project_id": "project", "skill_version_ids": ["version"], "trajectory_ids": ["t1"]},
     ):
         with pytest.raises(ValidationError):
-            SkillPipelineRequest.model_validate(values)
+            EvolutionRequest.model_validate(values)
 
-    class HistoricalRequest(SkillPipelineRequest):
+    class HistoricalRequest(EvolutionRequest):
         trajectory_ids: list[str] = Field(min_length=1)
 
-    extended = HistoricalRequest(project_id="project", skill_ref="skill", trajectory_ids=["t1"])
+    extended = HistoricalRequest(project_id="project", skill_version_ids=["version"], trajectory_ids=["t1"])
     assert extended.trajectory_ids == ["t1"]
 
 

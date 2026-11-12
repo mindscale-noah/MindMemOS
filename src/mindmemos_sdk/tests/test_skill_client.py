@@ -196,7 +196,7 @@ REQUESTS = [
     (
         SkillClient.evolve,
         AsyncSkillClient.evolve,
-        EvolveRequest(skill_version_id="version-1", auto_accept=False),
+        EvolveRequest(skill_version_ids=["version-1"], auto_accept=False),
         "algos/evolve",
     ),
     (SkillClient.show_task, AsyncSkillClient.show_task, TaskShowRequest(task_id="task-1"), "tasks/show"),
@@ -361,7 +361,7 @@ def test_skill_service_error_code_is_preserved():
     transport = HttpTransport(base_url="http://localhost", api_key=None, client=http, require_api_key=False)
     try:
         with pytest.raises(ApiError) as failure:
-            SkillClient(transport).evolve(EvolveRequest(skill_version_id="version-1"))
+            SkillClient(transport).evolve(EvolveRequest(skill_version_ids=["version-1"]))
         assert failure.value.code == "pipeline_unavailable"
         assert str(failure.value) == "Not configured"
     finally:

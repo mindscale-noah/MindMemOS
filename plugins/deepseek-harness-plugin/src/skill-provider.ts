@@ -1,8 +1,31 @@
 import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Context } from "@deepseek-ai/cordis";
-import { BUNDLED_SKILL_RANK, type SkillDefinition } from "@deepseek-ai/dsh-skill";
+import { BUNDLED_SKILL_RANK, renderSkillContent, type SkillDefinition } from "@deepseek-ai/dsh-skill";
+
+/** Recover the exact source of a native load whose model-facing body we observed. */
+export async function nativeSkillRead(ctx: Context, rendered: string, cwd: string | undefined) {
+  const name = rendered.match(/^<skill_content name="([a-z0-9-]+)">/)?.[1];
+  if (!name) {
+    return undefined;
+  }
+  try {
+    const skill = await ctx.skills.get(name, { cwd, signal: AbortSignal.timeout(1_000) });
+    if (!skill?.path || basename(skill.path) !== "SKILL.md" || renderSkillContent(skill) !== rendered.trim()) {
+      return undefined;
+    }
+    const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await readFile(skill.path));
+    const body = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n([\s\S]*)$/)?.[1];
+    if (body?.trim() === skill.content.trim()) {
+      return { kind: "read" as const, path: skill.path, content };
+    }
+  } catch {
+    // A provider may no longer have the observed local source.
+  }
+  return undefined;
+}
 
 export function registerBundledSkill(ctx: Context): void {
   const path = fileURLToPath(new URL("./skills/mindmemos-cli/SKILL.md", import.meta.url));

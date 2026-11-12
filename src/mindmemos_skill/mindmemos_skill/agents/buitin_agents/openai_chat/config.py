@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import Field, JsonValue
+from pydantic import Field, JsonValue, SerializerFunctionWrapHandler, model_serializer
 
 from ...config import AgentConnectionConfig
 
@@ -15,6 +15,9 @@ class OpenAIChatConfig(AgentConnectionConfig):
 
     model: str = Field(min_length=1)
     """Provider model or deployment name."""
+
+    transport: Literal["direct", "platform_gateway"] = "direct"
+    """Use explicit provider settings or the current project's Platform Chat pool."""
 
     timeout_s: float = Field(default=180, gt=0, allow_inf_nan=False)
     """HTTP timeout in seconds for each model request attempt."""
@@ -80,3 +83,11 @@ class OpenAIChatConfig(AgentConnectionConfig):
 
     parse_retry_mode: Literal["direct", "feedback"] = "direct"
     """Retry the unchanged request or append the rejected reply and feedback."""
+
+    @model_serializer(mode="wrap")
+    def _serialize_connection(self, handler: SerializerFunctionWrapHandler):
+        """Preserve serialized direct settings used in existing task and evaluation identities."""
+        data = handler(self)
+        if self.transport == "direct":
+            data.pop("transport", None)
+        return data

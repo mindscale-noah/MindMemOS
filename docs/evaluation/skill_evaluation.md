@@ -213,11 +213,26 @@ Harbor runs the `skillsbench` task environment (`environment.class_name`) in Doc
 | Role | Agent and model | Thinking | Configuration |
 | --- | --- | --- | --- |
 | Collect initial trajectories and retest | `claude-code` · `claude-opus-4-6` | Template leaves it unset for the agent launched by Harbor | `environment.config.agent` and `environment.config.model` in the evaluation YAML |
-| Evolve the Skill | `claude` · `deepseek-v4-flash` | `reasoning_effort` is unset, so the client uses its default | `service.agents.offline_evolution_evolver_deepseek_v4_flash_claude.config` in the service YAML |
+| Evolve the Skill | `claude` · `deepseek-v4-flash` | `reasoning_effort` is unset, so the client uses its default | `service.agents.offline_evolution_evolver_claude.config` in the service YAML |
 
 Keep the variable names listed in `environment.config.agent_env`. Export `ANTHROPIC_API_KEY` in the run shell, or export `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` for a compatible gateway. Set `model`, `api_key`, and `base_url` for the local evolution agent in the service YAML. `service.evolution_pipelines.offline.config.evolver.config.agent` selects that agent.
 
 For a custom download path, set `data.config.benchmark_root` in the evaluation YAML to the directory containing `tasks/`. The default is `data/mindmemos_skill/skillsbench`.
+
+Evolution skips trajectories already consumed for the same project and exact input Skill version by default. Set the policy in the service configuration:
+
+```yaml
+service:
+  evolution_pipelines:
+    offline:
+      config:
+        traj_collect:
+          exclude_consumed: true
+```
+
+Set it to `false` to reuse consumed trajectories. Evaluation YAML can override the service setting with `pipeline_overrides.traj_collect.exclude_consumed: false`. The `trajectory_limit` applies to eligible trajectories after filtering. A new run with no unconsumed evidence reports that no trajectories are available and does not call the evolution model.
+
+Consumption is recorded after saving the candidate and before publishing versions. Algorithm failures do not add consumption records. Publication failures retain the records; retrying the same `run_id` reuses the candidate. Recovery for the same run uses its frozen evidence without applying collection filters again. This setting filters completed consumption records; it does not lock trajectories against concurrent runs.
 
 ### 3. Check inputs and run
 

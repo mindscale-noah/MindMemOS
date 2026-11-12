@@ -25,6 +25,7 @@ from mindmemos.infra.db import SkillVersionRepository
 from mindmemos.infra.db.qdrant import QdrantStore
 from mindmemos.pipelines.skill import SKILL_EVOLVE_TOPIC, SkillVersionStore
 from mindmemos.typing.skill import SkillEvolveResult
+from mindmemos.workers import legacy_skill_trajectory as relay
 from qdrant_client import AsyncQdrantClient
 
 
@@ -95,6 +96,32 @@ def test_register_returns_version_envelope(client):
     assert data["status"] == "observed"
     assert data["cloud_skill_id"]
     assert data["version_id"]
+
+
+def test_register_and_delete_schedule_relay_without_trajectories(client, monkeypatch):
+    """Both registration forms and deletion produce their own delivery requests."""
+    deliveries = []
+    monkeypatch.setattr(relay, "_enqueue", lambda project, record, *, kind: deliveries.append((project, record, kind)))
+    root = client.post("/v1/skills/register", json={"name": "A", "content": "Root"}).json()["data"]
+    child = client.post(
+        "/v1/skills/register",
+        json={"name": "A", "content": "Child", "parent_version_id": root["version_id"]},
+    ).json()["data"]
+    assert deliveries == [("proj", root["version_id"], "version"), ("proj", child["version_id"], "version")]
+    response = client.post(f"/v1/skills/{root['cloud_skill_id']}/delete")
+    assert response.status_code == 200
+    assert deliveries[-1] == ("proj", root["cloud_skill_id"], "deletion")
+
+
+def test_invalid_register_does_not_schedule_relay(client, monkeypatch):
+    """Rejected registrations never request a destination write."""
+    deliveries = []
+    monkeypatch.setattr(relay, "_enqueue", lambda *args, **kwargs: deliveries.append(args))
+    response = client.post(
+        "/v1/skills/register", json={"name": "A", "content": "Child", "parent_version_id": "missing"}
+    )
+    assert response.status_code == 404
+    assert deliveries == []
 
 
 def test_register_is_idempotent_over_http(client):

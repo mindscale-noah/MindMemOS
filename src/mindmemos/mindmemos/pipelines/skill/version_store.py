@@ -46,6 +46,11 @@ from ...typing import (
     SkillVersion,
     SkillVersionStatus,
 )
+from ...workers.legacy_skill_trajectory import (
+    enqueue_legacy_skill_deletion,
+    enqueue_legacy_trajectory,
+    enqueue_legacy_version,
+)
 from ..memory_db import utcnow
 
 logger = get_logger(__name__)
@@ -103,6 +108,7 @@ class SkillVersionStore:
         existing = await self._skill.get_version(project_id, version_id)
         if existing is not None:
             version = skill_version_from_record(existing)
+            enqueue_legacy_version(project_id, version.version_id)
             await self._rebind_pending(project_id, version)
             return version
 
@@ -126,6 +132,7 @@ class SkillVersionStore:
             created_at=now,
         )
         await self._skill.upsert_version(to_skill_version_point(version))
+        enqueue_legacy_version(project_id, version.version_id)
         await self._rebind_pending(project_id, version)
         return version
 
@@ -159,7 +166,10 @@ class SkillVersionStore:
 
         existing = await self._skill.get_version(project_id, version_id)
         if existing is not None:
-            return skill_version_from_record(existing)
+            version = skill_version_from_record(existing)
+            if version.origin == SkillOrigin.CLOUD:
+                enqueue_legacy_version(project_id, version.version_id)
+            return version
 
         cloud_skill_id = await self._resolve_cloud_skill_id(project_id, parent_version_id)
         now = utcnow()
@@ -181,6 +191,7 @@ class SkillVersionStore:
             created_at=now,
         )
         await self._skill.upsert_version(to_skill_version_point(version))
+        enqueue_legacy_version(project_id, version.version_id)
         return version
 
     async def list_skills(self, *, project_id: str) -> list[SkillSummary]:
@@ -241,6 +252,7 @@ class SkillVersionStore:
 
         versions = await self.versions_since(project_id=project_id, cloud_skill_id=cloud_skill_id)
         await self._skill.delete_versions([version.version_id for version in versions])
+        enqueue_legacy_skill_deletion(project_id, cloud_skill_id)
 
     async def sync(self, *, project_id: str, items: list[SkillSyncRequestItem]) -> list[SkillSyncResult]:
         """Compare local versions with cloud published heads (design §5.3)."""
@@ -414,6 +426,8 @@ class SkillVersionStore:
 
         if changed_points:
             await self._add_record.upsert(changed_points)
+            for point in changed_points:
+                enqueue_legacy_trajectory(project_id, point.add_record_id)
         await self._skill.delete_pending_traces(rebound_trace_ids)
 
     @staticmethod

@@ -102,9 +102,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         Column("metadata", JSON, nullable=False, comment="Mutable user metadata belonging to the Skill family."),
         Column("registration_source", Text, nullable=True, comment="Initial source for provenance; never watched."),
         Column("registration_message", Text, nullable=True, comment="Initial registration explanation."),
-        Column(
-            "active_version_id", Text, nullable=False, comment="Only selected version for default reads and exports."
-        ),
+        Column("active_version_id", Text, nullable=True, comment="Selected version, if the family has published one."),
         Column("created_at", UTCDateTime(), nullable=False, comment="Central registration time."),
         Column("updated_at", UTCDateTime(), nullable=False, comment="Last metadata or selected-version change."),
         Column(
@@ -127,6 +125,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         ),
         CheckConstraint("length(project_id) > 0 AND length(skill_id) > 0 AND length(name) > 0"),
         CheckConstraint("length(active_version_id) > 0"),
+        CheckConstraint("active_version_id IS NOT NULL OR COALESCE(registration_source, '') = 'legacy-memory'"),
         CheckConstraint("alias IS NULL OR length(alias) > 0"),
         CheckConstraint("updated_at >= created_at"),
         Index(SKILL_LIST_CURSOR_INDEX, "project_id", "created_at", "skill_id"),

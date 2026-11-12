@@ -1,6 +1,5 @@
 """OpenAI-compatible chat calls with optional tool protocol callbacks."""
 
-import random
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from functools import partial
@@ -8,6 +7,7 @@ from functools import partial
 from pydantic import BaseModel, JsonValue
 
 from ....common.json import parse_model
+from ....infra.model_access.openai import complete_chat
 from ....logging import get_logger
 from ....persistence.observability import get_log_context
 from ...base import Agent
@@ -261,11 +261,6 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             RuntimeError: The response is refused, truncated, empty, or violates the requested protocol.
             ValueError: The configured credential is unavailable.
         """
-        from openai import APIConnectionError, APIStatusError, AsyncOpenAI, DefaultAsyncHttpxClient
-        from tenacity import AsyncRetrying, RetryCallState, retry_if_exception, stop_after_attempt, wait_exponential
-
-        self.config.require_connection()
-        api_key = self.config.api_key
         options = {}
         effective_format = response_format if response_format is not None else self.config.response_format
         if effective_format is not None:
@@ -290,55 +285,7 @@ class OpenAIChatAgent(Agent[OpenAIChatConfig]):
             options["tools"] = tools
             options["tool_choice"] = "auto"
 
-        def is_retryable(error: BaseException) -> bool:
-            """Retry transport failures and transient provider status codes."""
-            if self.config.retry_policy == "all":
-                return True
-            return isinstance(error, APIConnectionError) or (
-                isinstance(error, APIStatusError)
-                and (error.status_code in {408, 409, 425, 429} or error.status_code >= 500)
-            )
-
-        def log_retry(state: RetryCallState) -> None:
-            """Log the scheduled retry and its cause immediately before sleeping."""
-            assert state.outcome is not None and state.next_action is not None
-            error = state.outcome.exception()
-            get_logger(__name__).warning(
-                f"agent.retry | attempt={state.attempt_number}/{self.config.max_retries}"
-                f" sleep={state.next_action.sleep:.3f}s | error={type(error).__name__}: {error}"
-            )
-
-        def retry_delay(state: RetryCallState) -> float:
-            """Select the configured wait without changing request attempt counts."""
-            if self.config.retry_wait == "schedule":
-                index = min(state.attempt_number - 1, len(self.config.retry_waits_s) - 1)
-                return self.config.retry_waits_s[index]
-            nominal = wait_exponential(multiplier=self.config.retry_initial_wait_s, max=self.config.retry_max_wait_s)(
-                state
-            )
-            if self.config.retry_wait == "equal_jitter":
-                return nominal * (0.5 + 0.5 * random.random())
-            return nominal
-
-        async with AsyncOpenAI(
-            api_key=api_key,
-            base_url=self.config.base_url,
-            timeout=self.config.timeout_s,
-            # Preserve explicit SDK retries independently of the outer retry policy.
-            max_retries=self.config.sdk_max_retries,
-            http_client=DefaultAsyncHttpxClient(trust_env=False),
-        ) as client:
-
-            async def request():
-                return await client.chat.completions.create(model=self.config.model, messages=messages, **options)
-
-            response = await AsyncRetrying(
-                stop=stop_after_attempt(self.config.max_retries + 1),
-                wait=retry_delay,
-                retry=retry_if_exception(is_retryable),
-                before_sleep=log_retry,
-                reraise=True,
-            )(request)
+        response = await complete_chat(self.config, messages=messages, **options)
         if not response.choices:
             raise RuntimeError("The model returned no choices")
         choice = response.choices[0]

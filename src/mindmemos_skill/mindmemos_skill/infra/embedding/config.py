@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 
 class EmbeddingConfig(BaseModel):
@@ -27,8 +27,14 @@ class OpenAIEmbeddingConfig(EmbeddingConfig):
     model: str = Field(min_length=1)
     """Provider model or deployment name."""
 
-    base_url: str = Field(min_length=1)
-    """Explicit OpenAI-compatible API base URL."""
+    base_url: str | None = Field(default=None, min_length=1)
+    """Explicit OpenAI-compatible API base URL for direct calls."""
+
+    transport: Literal["direct", "platform_gateway"] = "direct"
+    """Select the direct provider or the Platform gateway."""
+
+    space_id: str | None = Field(default=None, min_length=1)
+    """Pinned Platform vector space resolved before graph construction."""
 
     api_key: str | None = Field(default=None)
     """Provider credential; None supports unauthenticated local endpoints."""
@@ -47,3 +53,20 @@ class OpenAIEmbeddingConfig(EmbeddingConfig):
 
     max_retries: int = Field(default=3, ge=0, strict=True)
     """Additional SDK attempts after a transient request failure."""
+
+    @model_validator(mode="after")
+    def _validate_connection(self):
+        """Require an endpoint in direct mode and reserve space IDs for Platform."""
+        if self.transport == "direct" and (self.base_url is None or self.space_id is not None):
+            raise ValueError("Direct embeddings require a base_url and cannot specify a Platform space_id")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_connection(self, handler: SerializerFunctionWrapHandler):
+        """Preserve the serialized identity of existing direct embedding snapshots."""
+        data = handler(self)
+        if self.transport == "direct":
+            data.pop("transport", None)
+        if self.space_id is None:
+            data.pop("space_id", None)
+        return data

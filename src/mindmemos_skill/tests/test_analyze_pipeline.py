@@ -1,6 +1,7 @@
 """Offline cache, persistence, and failure contracts for the Analyze pipeline."""
 
 import pytest
+from mindmemos_skill.algos.analyze.skill_judge.config import SkillJudgeConfig
 from mindmemos_skill.algos.analyze.typing import SkillAnalysisResult
 from mindmemos_skill.api.typing import (
     EvaluationQueryRequest,
@@ -9,6 +10,7 @@ from mindmemos_skill.api.typing import (
 )
 from mindmemos_skill.errors import TrajectoryNotFoundError
 from mindmemos_skill.infra.database import Scope, SQLiteConfig, SQLiteDatabase
+from mindmemos_skill.infra.model_access.openai import record_provider_model
 from mindmemos_skill.persistence import (
     SkillRecord,
     SkillVersionRecord,
@@ -145,6 +147,30 @@ async def test_completed_result_is_reused_without_reinvoking_judge(store):
         second = await analyze.analyze_skill(request)
     assert analyzer.calls == 1
     assert first.status == "completed" and second.evaluation_id == first.evaluation_id
+
+
+async def test_platform_judge_runs_again_and_preserves_prior_model_provenance(store):
+    """A pool change produces a new evaluation for the same exact Skill version."""
+
+    class PlatformAnalyzer(_FakeAnalyzer):
+        async def analyze(self, request):
+            record_provider_model(f"actual-model-{self.calls + 1}")
+            return await super().analyze(request)
+
+    analyzer = PlatformAnalyzer()
+    analyzer.config = SkillJudgeConfig(judge={"model": "platform-chat", "transport": "platform_gateway"})
+    analyze = pipeline(store, skill_judge=analyzer)
+    version = skill_version()
+    with store.session(Scope(fields={"project_id": PROJECT})) as scoped:
+        await add_version(scoped, version)
+        request = SkillAnalyzeRequest(project_id=PROJECT, skill_version_id=version.version_id)
+        first = await analyze.analyze_skill(request)
+        second = await analyze.analyze_skill(request)
+        rows = await scoped.evaluations.list_for_versions([version.version_id])
+
+    assert analyzer.calls == 2
+    assert first.evaluation_id != second.evaluation_id
+    assert {row.metadata["provider_models"][0] for row in rows} == {"actual-model-1", "actual-model-2"}
 
 
 async def test_failed_result_is_persisted_and_retryable(store):

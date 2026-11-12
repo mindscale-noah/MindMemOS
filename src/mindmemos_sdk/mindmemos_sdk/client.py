@@ -92,7 +92,7 @@ class MindMemOSClient:
         Args:
             event: The captured execution and exact Skill versions used.
             include_memory: Whether to submit the Memory projection.
-            include_skill: Whether to submit the single shared Skill trajectory.
+            include_skill: Whether to submit the shared Skill trajectory when exact versions are known.
 
         Returns:
             Independent receipts. An unknown outcome may have been stored and
@@ -152,6 +152,8 @@ class MindMemOSClient:
         self, event: TrajectoryEvent, user_id: str | None, agent_id: str | None, session_id: str | None
     ) -> TrajectoryDelivery:
         """Submit the full version list as one trajectory."""
+        if not event.skill_version_ids:
+            return TrajectoryDelivery(status="skipped", code="no_skill_versions")
         if not user_id or not agent_id:
             reason = "missing_user_id" if not user_id else "missing_agent_id"
             return TrajectoryDelivery(status="failed", code=reason)

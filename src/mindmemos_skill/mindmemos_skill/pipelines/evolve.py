@@ -2,7 +2,8 @@
 
 from abc import ABC, abstractmethod
 
-from ..api.typing import EvolutionRequest, EvolutionResult, SkillPipelineRequest
+from ..api.typing import EvolutionRequest, EvolutionResult
+from ..errors import SkillNotFoundError, SkillVersionNotFoundError
 from ..registry.base import ConfigT
 from .base import Pipeline
 
@@ -29,7 +30,7 @@ class EvolutionPipeline(Pipeline[ConfigT], ABC):
         They must not mutate the request or return success before persistence.
 
         Args:
-            request: Prepared single-Skill selection or exact version collection.
+            request: Prepared list of exact versions and editing permissions.
 
         Returns:
             Persisted single-Skill or collection version identities.
@@ -40,12 +41,29 @@ class EvolutionPipeline(Pipeline[ConfigT], ABC):
         """
 
     async def prepare_request(self, request: EvolutionRequest) -> EvolutionRequest:
-        """Validate supported input before task admission or direct execution.
+        """Validate input versions and editing permissions before execution.
 
         Args:
-            request: Authorized evolution selection.
+            request: Exact versions and editing permissions in the active project.
 
         Returns:
-            The original single-Skill request; collection implementations override this method.
+            Validated evolution request.
+
+        Raises:
+            SkillVersionNotFoundError: A version is not visible in the active project.
+            ValueError: A Skill appears more than once or the editable list names a non-input Skill.
         """
-        return SkillPipelineRequest.model_validate(request)
+        request = EvolutionRequest.model_validate(request)
+        if self.persistence is None:
+            return request
+
+        try:
+            versions = [await self.persistence.skills.get(version_id) for version_id in request.skill_version_ids]
+        except SkillNotFoundError as exc:
+            raise SkillVersionNotFoundError("Skill version not found in this project") from exc
+        owners = {version.skill_id for version in versions}
+        if len(owners) != len(versions):
+            raise ValueError("Evolution accepts at most one version per Skill family")
+        if request.editable_skills is not None and not set(request.editable_skills) <= owners:
+            raise ValueError("Editable Skill IDs must belong to the input collection")
+        return request

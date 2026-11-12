@@ -125,12 +125,47 @@ def test_cli_version_lifecycle_resources_and_trajectories(cli_server, tmp_path):
     assert len(run("history", second_id)["items"]) == 2
     run("activate", family, "--version", "v0.0.2")
     assert run("resolve", family)["skill_version_id"] == second_id
+    evidence = tmp_path / "loaded-skills.json"
+    evidence.write_text(
+        json.dumps(
+            [
+                {"kind": "shell", "command": "mindmemos skill show cli-demo", "content": "Skill source displayed."},
+                {
+                    "kind": "shell",
+                    "command": f"mindmemos skill commit {first} --from source",
+                    "content": json.dumps(shown),
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert run("identify", "--file", str(evidence))["skill_version_ids"] == []
+    evidence.write_text(
+        json.dumps(
+            [
+                {"kind": "read", "path": str(source / "SKILL.md"), "content": CONTENT},
+                {
+                    "kind": "read",
+                    "path": str(source / "SKILL.md"),
+                    "content": CONTENT.replace("Initial", "Unregistered edit"),
+                },
+                {
+                    "kind": "shell",
+                    "command": '"/path with spaces/mindmemos" skill show "$VERSION"',
+                    "content": f"[stdout]\n{json.dumps(shown)}\n[done]",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    identified = run("identify", "--file", str(evidence))
+    assert identified["skill_version_ids"] == [first, second_id]
     run("activate", family, "--version-id", first)
     exported = tmp_path / "exported"
     exported = Path(run("export", second_id, "--to", str(exported))["directory"])
     assert (exported / "resource.bin").read_bytes() == b"\x00\xff"
     report = {
-        "skill_version_ids": [first, second_id],
+        **identified,
         "event_id": "cli-session/turn-1",
         "user_id": "u",
         "agent_id": "a",
@@ -221,8 +256,12 @@ def test_cli_async_endpoints_and_text_progress(cli_server, monkeypatch):
     run = cli_server
     submissions = []
 
-    async def submit_evolution(self, project_id, version_id, *, pipeline, auto_accept):
-        submissions.append({"project_id": project_id, "version_id": version_id, "auto_accept": auto_accept})
+    async def submit_evolution(
+        self, project_id, skill_version_ids, *, pipeline, auto_accept, editable_skills, allow_create_skills
+    ):
+        submissions.append(
+            {"project_id": project_id, "skill_version_ids": skill_version_ids, "auto_accept": auto_accept}
+        )
         return {"task_id": "task-cli", "status": "queued"}
 
     async def submit_training(self, request):
@@ -251,6 +290,9 @@ def test_cli_async_endpoints_and_text_progress(cli_server, monkeypatch):
     monkeypatch.setattr(SkillService, "task_progress", task_progress)
     registered = run("register", "--json-skill", json.dumps({"content": CONTENT}), "--alias", "async")
     assert run("evolve", "async")["status"] == "queued"
+    assert run("evolve", "async", "--async")["status"] == "queued"
+    assert run("evolve", "async", "--sync")["status"] == "succeeded"
+    assert submissions[-1]["skill_version_ids"] == [registered["skill_version_id"]]
     assert submissions[-1]["auto_accept"] is False
     sample = {"task": {"id": "t1", "instruction": "Do the task"}, "reward_data": {}}
     assert (

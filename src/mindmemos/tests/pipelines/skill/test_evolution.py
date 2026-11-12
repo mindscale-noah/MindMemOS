@@ -10,18 +10,27 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
-from mindmemos.components.skill import deserialize_bundle, serialize_bundle
-from mindmemos.config import QdrantConfig, SkillEvolutionConfig
+from mindmemos.api.schemas import AddRequest, AuthContext
+from mindmemos.api.services.memory_service import MemoryService
+from mindmemos.components.skill import compute_content_hash, deserialize_bundle, serialize_bundle
+from mindmemos.config import QdrantConfig, SkillEvolutionConfig, TextProcessingConfig
 from mindmemos.infra.db import SkillVersionRepository
 from mindmemos.infra.db.models import AddRecordPoint
 from mindmemos.infra.db.qdrant import QdrantStore
+from mindmemos.infra.kafka import ConsumedMessage
+from mindmemos.pipelines.add import default as default_add
+from mindmemos.pipelines.memory_db import MemoryDbWriter, MemoryOperationRecorder
+from mindmemos.pipelines.memory_db.add_record_store import AddRecordStore
 from mindmemos.pipelines.skill import SkillVersionStore
 from mindmemos.pipelines.skill.evolution import SkillEvolver
 from mindmemos.prompts.EN.skills import REWRITE_SKILL_SYSTEM, rewrite_skill_user
-from mindmemos.typing.skill import SkillVersionStatus
+from mindmemos.typing.skill import SkillContext, SkillVersionStatus
+from mindmemos.workers import memory_add
 from qdrant_client import AsyncQdrantClient
 
 PROJECT = "proj"
@@ -189,6 +198,66 @@ async def test_evolves_single_version_when_threshold_met(harness, patched_cfg):
     assert new_version.version.status is SkillVersionStatus.DRAFT
     assert new_version.version.origin.value == "cloud"
     assert deserialize_bundle(new_version.content)["SKILL.md"] == "evolved skill body v1"
+
+
+@pytest.mark.asyncio
+async def test_evolution_consumes_legacy_memory_add_traces(harness, patched_cfg, monkeypatch):
+    store, skill_repo, qdrant, evolver, _ = harness
+    patched_cfg(_evolution_cfg(min_aggregate=2))
+    recorder = MemoryOperationRecorder(add_record_store=AddRecordStore(clients=SimpleNamespace(qdrant=qdrant)))
+    pipeline = default_add.DefaultAddPipeline(
+        db_writer=AsyncMock(spec=MemoryDbWriter),
+        recorder=recorder,
+        consistency="fast",
+        text_config=TextProcessingConfig(bm25_use_spacy_lemma=False),
+    )
+    producer = AsyncMock()
+    monkeypatch.setattr(default_add, "get_producer", lambda: producer)
+    monkeypatch.setattr(memory_add, "create_pipeline", lambda **kwargs: pipeline)
+    monkeypatch.setattr(memory_add, "MemoryOperationRecorder", lambda: recorder)
+    service = MemoryService(add_pipeline=pipeline, operation_recorder=recorder, skill_store=store)
+    auth = AuthContext(
+        request_id="req-legacy",
+        account_id="acct",
+        project_id=PROJECT,
+        api_key_uuid="key",
+        memory_algorithm="vanilla",
+    )
+    files = {"SKILL.md": "v1"}
+    request = AddRequest(
+        user_id="user",
+        messages=[{"role": "user", "content": "Use the skill to write a PRD."}],
+        skill_context=[SkillContext(name="prd-writer", content_hash=compute_content_hash(files), usage="injected")],
+        score=0.75,
+        task_id="task-before-register",
+        mode="async",
+    )
+
+    queued = await service.add(auth, request)
+    assert queued.status == "queued"
+    message = producer.send.call_args.kwargs["value"]
+    add_record_id = message["add_record_id"]
+    pending = await qdrant.add_record.get(PROJECT, add_record_id)
+    assert pending.payload["skill_bindings"][0]["version_id"] is None
+
+    root = await store.register(project_id=PROJECT, name="prd-writer", content=serialize_bundle(files))
+    await memory_add.handle_memory_add(
+        ConsumedMessage(topic=memory_add.TOPIC, partition=0, offset=1, key=None, value=json.dumps(message).encode())
+    )
+    completed = await qdrant.add_record.get(PROJECT, add_record_id)
+    assert completed.payload["status"] == "ok"
+    assert completed.payload["skill_bindings"][0]["version_id"] == root.version_id
+
+    added = await service.add(auth, request.model_copy(update={"mode": "sync", "task_id": "task-after-register"}))
+    assert added.status == "ok"
+    result = await evolver.evolve(project_id=PROJECT, cloud_skill_id=root.cloud_skill_id)
+
+    assert result.evolved is True
+    assert result.consumed_count == 2
+    summaries, _ = await skill_repo.scroll_summaries(PROJECT, root.cloud_skill_id)
+    assert {item.payload["task_id"] for item in summaries} == {"task-before-register", "task-after-register"}
+    assert all(item.payload["score"] == 0.75 for item in summaries)
+    assert all(item.payload["consumed_version_id"] == result.new_version_id for item in summaries)
 
 
 @pytest.mark.asyncio

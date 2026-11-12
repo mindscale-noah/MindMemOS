@@ -223,7 +223,7 @@ class VersionResolveRequest(SkillRequestBody):
     """Optional family identity narrowing the lookup."""
 
     skill_version_id: str | None = None
-    """Optional exact version identity requiring a family identity."""
+    """Optional exact version identity narrowing the lookup."""
 
 
 class SkillResolveRequest(SkillRequestBody):
@@ -231,6 +231,36 @@ class SkillResolveRequest(SkillRequestBody):
 
     skill_ref: str = Field(min_length=1)
     """Project-owned alias or unique prefixed Skill identity."""
+
+
+class SkillReadEvidence(SkillRequestBody):
+    """Exact text returned by a completed local Skill load."""
+
+    kind: Literal["read"]
+    """Local document read or verified host-native load."""
+
+    path: NonemptyIdentity
+    """Path of the loaded SKILL.md."""
+
+    content: str
+    """Unmodified source text observed by the host."""
+
+
+class SkillShellEvidence(SkillRequestBody):
+    """One completed shell call and its output."""
+
+    kind: Literal["shell"]
+    """Shell tool result."""
+
+    command: NonemptyIdentity
+    """Original command to inspect without executing it."""
+
+    content: str
+    """Observed shell output, possibly wrapped by the host."""
+
+
+SkillLoadEvidence = Annotated[SkillReadEvidence | SkillShellEvidence, Field(discriminator="kind")]
+"""Host evidence accepted by the local Skill identification command."""
 
 
 class TrajectoryReportRequest(SkillRequestBody):
@@ -441,19 +471,16 @@ class RemoveGraphMembersRequest(GraphMembersRequest):
 class EvolveRequest(SkillRequestBody):
     """Submit exact Skill versions to one configured evolution pipeline."""
 
-    skill_version_id: str | None = None
-    """Single baseline version; exclusive with skill_version_ids."""
+    skill_version_ids: list[NonemptyIdentity] = Field(min_length=1)
+    """One or more exact input versions, with at most one version per Skill family."""
 
     auto_accept: bool = True
     """Whether to activate the published candidate version."""
 
-    pipeline: str | None = Field(default=None, min_length=1)
+    pipeline: NonemptyIdentity | None = None
     """Allowed server pipeline name; omission uses the configured HTTP default."""
 
-    skill_version_ids: list[str] | None = Field(default=None, min_length=1)
-    """Collection of exact readable versions; exclusive with skill_version_id."""
-
-    editable_skills: list[str] | None = None
+    editable_skills: list[NonemptyIdentity] | None = None
     """Input Skill IDs whose contents may change; None permits all, [] permits none."""
 
     allow_create_skills: bool = True
@@ -461,14 +488,10 @@ class EvolveRequest(SkillRequestBody):
 
     @model_validator(mode="after")
     def validate_selection(self):
-        """Validate the selection shape and newly supported collection options."""
-        if (self.skill_version_id is None) == (self.skill_version_ids is None):
-            raise ValueError("Provide exactly one of skill_version_id or skill_version_ids")
-        if self.pipeline is not None and not self.pipeline.strip():
-            raise ValueError("Evolution pipeline must not be blank")
+        """Reject duplicate version and editable Skill IDs."""
         for values in (self.skill_version_ids, self.editable_skills):
-            if values is not None and (any(not value.strip() for value in values) or len(values) != len(set(values))):
-                raise ValueError("Evolution identities must be nonempty and unique")
+            if values is not None and len(values) != len(set(values)):
+                raise ValueError("Evolution identities must be unique")
         return self
 
 

@@ -14,10 +14,12 @@ from mindmemos_skill.common.ids import generate_id
 from ..common.checkpoint import fingerprint
 from ..config.config import FastAPIConfig, ServiceName
 from ..envs import Environment
-from ..errors import SkillNotFoundError, SkillVersionNotFoundError
+from ..errors import SkillNotFoundError
 from ..infra.database import Database, Scope
+from ..infra.model_access.platform import PlatformModelGateway, bind_platform_models
 from ..infra.observability import OpenTelemetryRecorder
 from ..infra.task_manager import TaskManager, TaskSnapshot, TaskSpec
+from ..infra.task_manager.typing import EVOLVE_TASK, GRAPH_BUILD_TASK, JUDGE_TASK, TaskStatus
 from ..logging import get_logger, log_context, stage, traced
 from ..logging.context import _context
 from ..logging.tracing import bind_tracer
@@ -30,6 +32,7 @@ from ..persistence import (
     TrajectoryRecord,
     TrajectorySummary,
 )
+from ..persistence.constants import LEGACY_SKILL_SOURCE
 from ..persistence.db_services.trajectories.typing import TrajectoryStatistics
 from ..persistence.observability import AlgorithmAuditPersistence, AuditLog, AuditRun, AuditSpan
 from ..persistence.store import SkillPersistence, validate_skill_scope
@@ -38,12 +41,12 @@ from ..pipelines.builtin_pipelines.repository.repository import RepositoryPipeli
 from ..pipelines.builtin_pipelines.training.training import training_run_id
 from ..skill.typing import DiffResult
 from .base import MindMemOSSkill
+from .legacy_skill import build_legacy_version
+from .legacy_trajectory import build_legacy_binding, build_legacy_trajectory
 from .typing import (
-    EVOLUTION_REQUEST_ADAPTER,
     ActiveRequest,
     AddGraphMembersRequest,
     AlgoSkillEvolveResult,
-    CollectionEvolutionRequest,
     CommitFromLocalRequest,
     CommitRequest,
     DiffRequest,
@@ -53,6 +56,9 @@ from .typing import (
     EvolutionResult,
     ExportRequest,
     HistoryRequest,
+    LegacySkillDeletion,
+    LegacySkillVersion,
+    LegacyTrajectoryDelivery,
     ListRequest,
     ListTrajectoriesRequest,
     OrganizeRequest,
@@ -75,7 +81,6 @@ from .typing import (
     SkillListCursor,
     SkillPage,
     SkillPageRequest,
-    SkillPipelineRequest,
     SkillRequest,
     TrainingRequest,
     TrajectoryAnalyzeRequest,
@@ -152,6 +157,7 @@ class SkillService(MindMemOSSkill):
         api_config: Complete HTTP policy from the deployment configuration, if supplied.
         persistence: Shared Skill storage, if configured.
         project_authorizer: Trusted project authorization callback for authenticated requests.
+        model_gateway: Deployment connection for project-scoped Platform inference.
         disabled_services: Business capabilities omitted from this service.
     """
 
@@ -169,6 +175,7 @@ class SkillService(MindMemOSSkill):
         api_config: FastAPIConfig | None = None,
         persistence: SkillPersistence | None = None,
         project_authorizer: Callable[[object, str], Scope | Awaitable[Scope]] | None = None,
+        model_gateway: PlatformModelGateway | None = None,
         disabled_services: set[ServiceName] | None = None,
     ) -> None:
         self._backends = backends.copy()
@@ -182,9 +189,11 @@ class SkillService(MindMemOSSkill):
         self.api_config = api_config
         self._persistence = persistence
         self._project_authorizer = project_authorizer
+        self._model_gateway = model_gateway
         self.disabled_services = frozenset(disabled_services or ())
         self._principal: ContextVar[_PrincipalLease | None] = ContextVar("skill_service_principal", default=None)
         self._task_manager: TaskManager | None = None
+        self._task_admission = persistence.task_admission() if persistence is not None else None
 
     @property
     def telemetry(self) -> OpenTelemetryRecorder:
@@ -343,11 +352,94 @@ class SkillService(MindMemOSSkill):
     async def _execute(self, project_id: str, operation, *args, **kwargs):
         """Run one pipeline call within a request-scoped persistence handle."""
         scope = await self._authorized_scope(project_id)
-        if self._persistence is None:
-            with self._observability.session(scope):
+        with bind_platform_models(self._model_gateway, scope.require("project_id")):
+            if self._persistence is None:
+                with self._observability.session(scope):
+                    return await operation(*args, **kwargs)
+            with self._persistence.session(scope), self._observability.session(scope):
                 return await operation(*args, **kwargs)
-        with self._persistence.session(scope), self._observability.session(scope):
-            return await operation(*args, **kwargs)
+
+    async def _execute_limited(self, project_id: str, kind: str, operation, *args, **kwargs):
+        """Acquire the shared project slot after authorization and before pipeline work."""
+
+        async def run():
+            if self._task_admission is None:
+                return await operation(*args, **kwargs)
+            task_id = generate_id()
+            reservation = await self._task_admission.reserve(project_id, task_id, kind, TaskStatus.RUNNING)
+            try:
+                with log_context(task_id=task_id):
+                    return await reservation.run(operation, *args, **kwargs)
+            finally:
+                await reservation.close()
+
+        return await self._execute(project_id, run)
+
+    async def ingest_legacy_version(self, project_id: str, delivery: LegacySkillVersion) -> bool:
+        """Import a version under the authenticated Memory project.
+
+        Args:
+            project_id: Project selected by the verified gateway token.
+            delivery: Exact old snapshot and lineage.
+
+        Returns:
+            Whether the version is available in the independent repository.
+        """
+        if self._persistence is None:
+            raise NotImplementedError("Repository persistence is not configured")
+        scope = await self._authorized_scope(project_id)
+        version = build_legacy_version(project_id, delivery)
+        with self._persistence.session(scope) as session:
+            async with session.transaction() as transaction:
+                return await transaction.skills.replicate_legacy_version(
+                    version, delivery.cloud_skill_id, delivery.version_id
+                )
+
+    async def ingest_legacy_deletion(self, project_id: str, delivery: LegacySkillDeletion) -> None:
+        """Hide a migrated family while retaining its versions and evidence.
+
+        Args:
+            project_id: Project selected by the verified gateway token.
+            delivery: Exact family removed from Memory.
+        """
+        if self._persistence is None:
+            raise NotImplementedError("Repository persistence is not configured")
+        scope = await self._authorized_scope(project_id)
+        with self._persistence.session(scope) as session:
+            async with session.transaction() as transaction:
+                await transaction.skills.delete_legacy_family(delivery.cloud_skill_id)
+
+    async def ingest_legacy_trajectory(self, project_id: str, delivery: LegacyTrajectoryDelivery) -> bool:
+        """Apply an authenticated Memory delivery to the original project.
+
+        Args:
+            project_id: Project selected by the verified gateway token.
+            delivery: Persisted Add evidence received through the private ingress.
+
+        Returns:
+            Whether every old version has a usable destination binding.
+        """
+        if self._persistence is None:
+            raise NotImplementedError("Repository persistence is not configured")
+        scope = await self._authorized_scope(project_id)
+        with self._persistence.session(scope) as session:
+            bindings = []
+            for binding in delivery.skill_bindings:
+                if binding.version_id is None:
+                    continue
+                try:
+                    version = await session.skills.get(binding.version_id)
+                except SkillNotFoundError:
+                    continue
+                original = version.local_metadata.get(LEGACY_SKILL_SOURCE)
+                if not isinstance(original, dict) or original.get("version_id") != binding.version_id:
+                    continue
+                bindings.append(build_legacy_binding(binding, version))
+            if bindings:
+                record = build_legacy_trajectory(project_id, delivery.add_record_id, delivery, bindings)
+                async with session.transaction() as transaction:
+                    await transaction.trajectories.replicate_legacy(record)
+            return len(bindings) == len(delivery.skill_bindings)
 
     def attach_task_manager(self, manager: TaskManager) -> None:
         """Attach the factory-owned manager before the service becomes visible.
@@ -389,7 +481,7 @@ class SkillService(MindMemOSSkill):
     async def submit_evolution(
         self,
         project_id: str | None,
-        version_id: str | list[str],
+        skill_version_ids: list[str],
         *,
         pipeline: str | None = None,
         auto_accept: bool = True,
@@ -400,7 +492,7 @@ class SkillService(MindMemOSSkill):
 
         Args:
             project_id: Authorized project or the configured default project.
-            version_id: One exact baseline version or an ordered collection of exact versions.
+            skill_version_ids: Ordered list of one or more exact baseline versions.
             pipeline: Configured evolution pipeline name; omission requires one pipeline.
             auto_accept: Whether to select the evolved version as active.
             editable_skills: Editable collection member IDs; None allows all input members.
@@ -423,38 +515,20 @@ class SkillService(MindMemOSSkill):
         pipeline_name = pipeline or next(iter(self._evolution_pipelines))
         project_id = self._project_id(project_id)
 
-        async def prepare() -> EvolutionRequest:
-            """Resolve supported inputs within the authorized storage session."""
-            if isinstance(version_id, list) or editable_skills is not None or not allow_create_skills:
-                request = CollectionEvolutionRequest(
-                    project_id=project_id,
-                    pipeline=pipeline_name,
-                    skill_version_ids=version_id if isinstance(version_id, list) else [version_id],
-                    editable_skills=editable_skills,
-                    allow_create_skills=allow_create_skills,
-                    auto_accept=auto_accept,
-                    run_id=generate_id("evolve_"),
-                )
-                return await selected_pipeline.prepare_request(request)
-            try:
-                version = await self._persistence.skills.get(version_id)
-            except SkillNotFoundError as exc:
-                raise SkillVersionNotFoundError("Skill version not found in this project") from exc
-            request = SkillPipelineRequest(
-                pipeline=pipeline_name,
-                run_id=generate_id("evolve_"),
-                project_id=project_id,
-                skill_ref=version.skill_id,
-                base_version_id=version.version_id,
-                auto_accept=auto_accept,
-            )
-            return await selected_pipeline.prepare_request(request)
-
-        request = await self._execute(project_id, prepare)
+        request = EvolutionRequest(
+            project_id=project_id,
+            pipeline=pipeline_name,
+            skill_version_ids=skill_version_ids,
+            editable_skills=editable_skills,
+            allow_create_skills=allow_create_skills,
+            auto_accept=auto_accept,
+            run_id=generate_id("evolve_"),
+        )
+        request = await self._execute(project_id, selected_pipeline.prepare_request, request)
         spec = TaskSpec(
             task_id=generate_id(),
             project_id=project_id,
-            kind="skill.evolve",
+            kind=EVOLVE_TASK,
             payload={
                 "request": request.model_dump(mode="json"),
                 "pipeline": {
@@ -515,8 +589,8 @@ class SkillService(MindMemOSSkill):
                 request
             ):
                 raise ValueError("Training configuration changed after task submission")
-        elif spec.kind == "skill.evolve":
-            request = EVOLUTION_REQUEST_ADAPTER.validate_python(spec.payload["request"])
+        elif spec.kind == EVOLVE_TASK:
+            request = EvolutionRequest.model_validate(spec.payload["request"])
         else:
             raise ValueError("Unknown Skill task kind")
         if request.project_id != spec.project_id:
@@ -524,6 +598,7 @@ class SkillService(MindMemOSSkill):
         if self._persistence is None:
             raise RuntimeError("Skill task worker requires persistence")
         with (
+            bind_platform_models(self._model_gateway, spec.project_id),
             self._persistence.session(Scope(fields={"project_id": spec.project_id})),
             self._observability.session(Scope(fields={"project_id": spec.project_id})),
         ):
@@ -687,7 +762,7 @@ class SkillService(MindMemOSSkill):
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         scoped = self._scoped(OrganizeRequest.model_validate(request))
-        return await self._execute(scoped.project_id, self._manage_pipeline.organize, scoped)
+        return await self._execute_limited(scoped.project_id, GRAPH_BUILD_TASK, self._manage_pipeline.organize, scoped)
 
     @_service_call
     async def recommend_skills(self, request: RecommendRequest) -> RecommendResult:
@@ -744,7 +819,7 @@ class SkillService(MindMemOSSkill):
         if self._analyze_pipeline is None:
             raise NotImplementedError("Analyze pipeline is not configured")
         scoped = self._scoped(SkillAnalyzeRequest.model_validate(request))
-        return await self._execute(scoped.project_id, self._analyze_pipeline.analyze_skill, scoped)
+        return await self._execute_limited(scoped.project_id, JUDGE_TASK, self._analyze_pipeline.analyze_skill, scoped)
 
     @_service_call
     async def analyze_trajectory(self, request: TrajectoryAnalyzeRequest) -> EvaluationRecord:
@@ -759,7 +834,9 @@ class SkillService(MindMemOSSkill):
         if self._analyze_pipeline is None:
             raise NotImplementedError("Analyze pipeline is not configured")
         scoped = self._scoped(TrajectoryAnalyzeRequest.model_validate(request))
-        return await self._execute(scoped.project_id, self._analyze_pipeline.analyze_trajectory, scoped)
+        return await self._execute_limited(
+            scoped.project_id, JUDGE_TASK, self._analyze_pipeline.analyze_trajectory, scoped
+        )
 
     @_service_call
     async def query_evaluations(self, request: EvaluationQueryRequest) -> EvaluationQueryResult:
@@ -789,7 +866,9 @@ class SkillService(MindMemOSSkill):
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         scoped = self._scoped(AddGraphMembersRequest.model_validate(request))
-        return await self._execute(scoped.project_id, self._manage_pipeline.add_graph_members, scoped)
+        return await self._execute_limited(
+            scoped.project_id, GRAPH_BUILD_TASK, self._manage_pipeline.add_graph_members, scoped
+        )
 
     @_service_call
     async def remove_graph_members(self, request: RemoveGraphMembersRequest) -> OrganizeResult:
@@ -804,7 +883,9 @@ class SkillService(MindMemOSSkill):
         if self._manage_pipeline is None:
             raise NotImplementedError("Management pipeline is not configured")
         scoped = self._scoped(RemoveGraphMembersRequest.model_validate(request))
-        return await self._execute(scoped.project_id, self._manage_pipeline.remove_graph_members, scoped)
+        return await self._execute_limited(
+            scoped.project_id, GRAPH_BUILD_TASK, self._manage_pipeline.remove_graph_members, scoped
+        )
 
     @_service_call
     async def preview_graph(self, graph_ref: str, project_id: str | None = None) -> dict:
@@ -1127,7 +1208,7 @@ class SkillService(MindMemOSSkill):
             raise NotImplementedError("Automatic Skill evolution is not implemented")
         if request is None:
             raise ValueError("An evolution request is required")
-        request = EVOLUTION_REQUEST_ADAPTER.validate_python(request)
+        request = EvolutionRequest.model_validate(request)
         scoped = request.model_copy(update={"project_id": self._project_id(request.project_id)})
         pipeline = _select_pipeline(self._evolution_pipelines, request.pipeline)
         return await self._execute(scoped.project_id, self._run_evolution, scoped, pipeline=pipeline)
@@ -1141,14 +1222,7 @@ class SkillService(MindMemOSSkill):
         previous = (
             (await self._observability.get_run(request.run_id)) if self._observability.database is not None else None
         )
-        if previous is not None:
-            base_version_id = previous.base_version_id
-        elif isinstance(request, CollectionEvolutionRequest):
-            base_version_id = request.skill_version_ids[0]
-        else:
-            owner = await self._persistence.skills.resolve_family(request.skill_ref)
-            base = await self._persistence.skills.version(owner, request.base_version_id)
-            base_version_id = base.version_id
+        base_version_id = previous.base_version_id if previous is not None else request.skill_version_ids[0]
 
         async with self._observability.trace_run(
             run_id=request.run_id,

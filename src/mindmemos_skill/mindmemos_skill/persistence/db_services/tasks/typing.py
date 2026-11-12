@@ -7,6 +7,32 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from ....infra.task_manager.typing import TaskSnapshot, TaskSpec, TaskStatus
 
 
+class ProjectTaskLock(BaseModel):
+    """Database row used to serialize admissions for one project."""
+
+    project_id: str
+    """Project whose admissions acquire this row lock."""
+
+
+class ProjectTaskLease(BaseModel):
+    """Renewable reservation for one process-owned task."""
+
+    project_id: str
+    """Project owning the reservation."""
+
+    task_id: str
+    """Server-generated task identity."""
+
+    kind: str
+    """Algorithm represented by the reservation."""
+
+    status: TaskStatus
+    """Queued or running state of the task."""
+
+    expires_at: AwareDatetime
+    """Deadline by which the temporary owner must renew."""
+
+
 class TaskRecord(BaseModel):
     """One durable request and the current execution attempt."""
 

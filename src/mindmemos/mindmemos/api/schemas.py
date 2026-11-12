@@ -24,14 +24,16 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from ..typing import (
     AddMode,
     DialogueMessage,
     FileMessage,
+    ImageRef,
     MemoryAddEventItem,
     MemorySearchItem,
+    SkillContext,
     TextMessage,
     UrlMessage,
 )
@@ -115,13 +117,14 @@ class AddRequest(ActorIdentityRequest):
     prompt_language: Literal["EN", "ZH"] | None = None
     """Optional request-level prompt language for extraction."""
 
-    @model_validator(mode="before")
-    @classmethod
-    def _drop_retired_skill_fields(cls, data: Any) -> Any:
-        """Discard retired Skill annotations sent by older Memory clients."""
-        if not isinstance(data, dict):
-            return data
-        return {key: value for key, value in data.items() if key not in ("skill_context", "score", "task_id")}
+    skill_context: list[SkillContext] | None = None
+    """Skill references for binding this turn's add record to existing versions."""
+
+    score: float | None = None
+    """Evaluation score stored on the add record for Skill evolution."""
+
+    task_id: NonEmptyStr | None = None
+    """Task identifier shared by add records from repeated rollouts of one task."""
 
     @field_validator("messages")
     @classmethod
@@ -143,6 +146,23 @@ class SearchRequest(ActorIdentityRequest):
 
     query: NonEmptyStr
     """Search query."""
+
+    query_images: list[ImageRef] = Field(
+        default_factory=list,
+        description=(
+            "Images attached to the query; they make the search multimodal. Rejected (400, "
+            "search.images_unsupported) while the project's algo_config.multimodal.mode is off or "
+            "the algorithm has no image support."
+        ),
+    )
+    multimodal: bool = Field(
+        default=False,
+        description=(
+            "Search stored images too (image results, image-recalled facts). Implied by "
+            "query_images; silently ignored (text search) while algo_config.multimodal.mode is "
+            "off. False: text search only, exactly vanilla."
+        ),
+    )
 
     filters: dict[str, Any] | None = None
     """Custom structured filter DSL parsed by ``mappers.api.parse_search_dsl``."""
@@ -347,6 +367,9 @@ class ApiResponse(BaseModel, Generic[T]):
 
 def validate_messages_have_content(messages) -> None:
     for index, message in enumerate(messages):
+        if isinstance(message, DialogueMessage) and message.images:
+            # Image-only turns are valid; the selected pipeline checks image support.
+            continue
         text = (
             getattr(message, "content", None)
             or getattr(message, "text", None)

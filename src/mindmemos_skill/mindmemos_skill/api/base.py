@@ -273,7 +273,7 @@ class MindMemOSSkill(ABC):
     async def submit_evolution(
         self,
         project_id: str | None,
-        version_id: str | list[str],
+        skill_version_ids: list[str],
         *,
         pipeline: str | None = None,
         auto_accept: bool = True,
@@ -284,7 +284,7 @@ class MindMemOSSkill(ABC):
 
         Args:
             project_id: Authorized project or local bound scope.
-            version_id: One exact version identity or an ordered collection of exact versions.
+            skill_version_ids: Ordered list of one or more exact version identities.
             pipeline: Configured evolution pipeline name; omission requires one pipeline.
             auto_accept: Whether to select the evolved version as active.
             editable_skills: Editable input member IDs; None permits all input members.

@@ -370,7 +370,7 @@ class SkillClient:
         return self._post(SkillRoute.EVALUATIONS_QUERY, request)
 
     def evolve(self, request: EvolveRequest) -> SkillData:
-        """Submit one version or a collection through the evolution endpoint.
+        """Submit a nonempty list of exact Skill versions for evolution.
 
         Args:
             request: Exact input versions, permissions and activation choice.

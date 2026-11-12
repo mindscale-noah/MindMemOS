@@ -11,6 +11,7 @@ from ..config.config import FastAPIConfig, ImplementationConfig, ServiceConfig, 
 from ..config.loader import read_skill_config, resolve_service_config, validate_service_config
 from ..infra import Infrastructure
 from ..infra.database import Database, Scope
+from ..infra.model_access.platform import PlatformModelGateway
 from ..infra.task_manager import LocalTaskManager
 from ..infra.task_manager.kafka import KafkaTaskManager
 from ..persistence.observability import AlgorithmAuditPersistence
@@ -86,6 +87,10 @@ async def _assemble_service(
 ) -> SkillService:
     """Validate definitions, build one store, and inject it into independent pipelines."""
     validate_service_config(config)
+    origin = config.platform_model_origin
+    if origin is not None and project_authorizer is None:
+        raise ValueError("Platform model routing requires authenticated project authorization")
+    model_gateway = PlatformModelGateway.from_origin(origin) if origin is not None else None
     disabled = config.disabled_services
     backends: dict[str, Any] = {}
     observability = None
@@ -96,7 +101,11 @@ async def _assemble_service(
             database_spec = config.persistence.database
             database = Infrastructure.build(database_spec.class_name, database_spec.config)
             backends["database"] = database
-            persistence = SkillPersistence(config.persistence.config, database=database)
+            persistence = SkillPersistence(
+                config.persistence.config,
+                database=database,
+                max_active_tasks_per_project=config.max_active_tasks_per_project,
+            )
             backends["persistence"] = persistence
         if (
             "observability" not in disabled
@@ -164,6 +173,7 @@ async def _assemble_service(
             api_config=api_config,
             persistence=persistence,
             project_authorizer=project_authorizer,
+            model_gateway=model_gateway,
             disabled_services=config.disabled_services,
         )
         if config.task_manager is not None and "tasks" not in disabled:
@@ -173,6 +183,7 @@ async def _assemble_service(
                     tracer=observability.telemetry.tracer,
                     max_concurrency=config.task_manager.max_concurrency,
                     max_buffered=config.task_manager.max_buffered,
+                    admission=persistence.task_admission() if persistence is not None else None,
                 )
             else:
                 manager = KafkaTaskManager(

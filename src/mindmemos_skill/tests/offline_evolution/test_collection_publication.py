@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from mindmemos_skill.algos.evolve.offline_evolution.typing import EvolutionSnapshot
 from mindmemos_skill.algos.train.treeskill import TreeSkill, TreeSkillConfig
-from mindmemos_skill.api.typing import CollectionEvolutionRequest
+from mindmemos_skill.api.typing import EvolutionRequest
 from mindmemos_skill.common.checkpoint import fingerprint
 from mindmemos_skill.errors import SkillConflictError, SkillNotFoundError
 from mindmemos_skill.infra.database import Scope, SQLiteConfig, SQLiteDatabase
@@ -80,7 +80,7 @@ async def test_repository_does_not_impose_offline_creation_formats(repository, d
 
 async def publish(repository, inputs, candidate, run_id=None, *, auto_accept=True):
     """Publish through the original repositories and reuse the run directory on retry."""
-    request = CollectionEvolutionRequest(
+    request = EvolutionRequest(
         project_id="project",
         auto_accept=auto_accept,
         skill_version_ids=[item.base.version_id for item in inputs.values()],

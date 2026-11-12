@@ -365,7 +365,7 @@ class AsyncSkillClient:
         return await self._post(SkillRoute.EVALUATIONS_QUERY, request)
 
     async def evolve(self, request: EvolveRequest) -> SkillData:
-        """Submit one version or a collection through the evolution endpoint.
+        """Submit a nonempty list of exact Skill versions for evolution.
 
         Args:
             request: Exact input versions, permissions and activation choice.

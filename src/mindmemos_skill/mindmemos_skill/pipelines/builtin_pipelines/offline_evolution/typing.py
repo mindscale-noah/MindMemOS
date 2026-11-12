@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from ....api.typing import CollectionEvolutionRequest
+from ....api.typing import EvolutionRequest
 from ....envs.typing import Task
 from ....persistence import SkillRecord, SkillVersionRecord
 
@@ -52,7 +52,7 @@ class EvolutionRunManifest(BaseModel):
     input_hash: str
     """Compared execution configuration fingerprint."""
 
-    request: CollectionEvolutionRequest
+    request: EvolutionRequest
     """Original scoped request including mutation and activation policy."""
 
     algorithm: str

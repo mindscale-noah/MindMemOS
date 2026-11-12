@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from ..client import MindMemOSClient
 from ..config import ConfigManager
@@ -18,6 +18,7 @@ from ..errors import ApiError, ConfigError, ConfigValidationError, MindMemOSSDKE
 from .cli_files import collect_resources, export_source, read_source
 from .client import SkillClient
 from .config import EnvironmentConfig
+from .identification import identify_loaded_versions
 from .typing import (
     ActivateRequest,
     AddGraphMembersRequest,
@@ -41,6 +42,7 @@ from .typing import (
     RemoveGraphMembersRequest,
     ShowRequest,
     SkillAnalyzeRequest,
+    SkillLoadEvidence,
     SkillResolveRequest,
     TaskProgressRequest,
     TaskShowRequest,
@@ -121,6 +123,8 @@ def add_skill_commands(subparsers: argparse._SubParsersAction) -> None:
             parser.add_argument(
                 "--overwrite", action="store_true", help="Replace only the named Skill subfolder, removing stale files."
             )
+    identify = command("identify", _identify, "Resolve loaded Skill evidence to exact versions.")
+    identify.add_argument("--file", required=True, help="Evidence JSON file, or - for standard input.")
     commit = command("commit", _commit, "Publish a child of the selected Skill version.")
     commit.allow_abbrev = False
     commit.description = "Supply exactly one --from or --json-skill; JSON must include a nonempty commit_message."
@@ -171,6 +175,12 @@ def add_skill_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Allow or forbid new Skills; omission uses the service default.",
     )
     evolve.add_argument("--auto-accept", action="store_true")
+    mode = evolve.add_mutually_exclusive_group()
+    mode.add_argument("--sync", dest="mode", action="store_const", const="sync", help="Wait for the evolution task.")
+    mode.add_argument(
+        "--async", dest="mode", action="store_const", const="async", help="Return immediately after submission."
+    )
+    evolve.set_defaults(mode="async")
     train = command("train", _train, "Submit training of the selected version.")
     train.add_argument("skill_ref")
     train.add_argument("--work-dir", required=True)
@@ -397,6 +407,13 @@ def _export(client, args):
     return export_source(data["version"], args.to, args.overwrite)
 
 
+def _identify(client: SkillClient, args: argparse.Namespace) -> dict[str, list[str]]:
+    """Read observed loads and resolve their version IDs for trajectory binding."""
+    raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
+    evidence = TypeAdapter(list[SkillLoadEvidence]).validate_json(raw)
+    return {"skill_version_ids": identify_loaded_versions(client, evidence)}
+
+
 def _commit(client, args):
     """Commit one complete source as a child of the resolved version."""
     source = CLICommitInput(
@@ -510,7 +527,7 @@ def _evolve(client, args):
     if len(families) != len(selected):
         raise ValueError("Evolution accepts at most one version per Skill family")
     versions = [item["skill_version_id"] for item in selected]
-    fields = {"skill_version_id": versions[0]} if len(versions) == 1 else {"skill_version_ids": versions}
+    fields = {"skill_version_ids": versions}
     if args.pipeline is not None:
         fields["pipeline"] = args.pipeline
     if args.read_only:
@@ -522,7 +539,35 @@ def _evolve(client, args):
         fields["editable_skills"] = editable
     if args.allow_create_skills is not None:
         fields["allow_create_skills"] = args.allow_create_skills
-    return client.evolve(EvolveRequest(**fields, auto_accept=args.auto_accept))
+    submission = client.evolve(EvolveRequest(**fields, auto_accept=args.auto_accept))
+    return _wait_for_evolution(client, submission) if args.mode == "sync" else submission
+
+
+def _wait_for_evolution(client: SkillClient, snapshot: dict) -> dict:
+    """Wait for one submitted task and surface failures without resubmitting it."""
+    task_id = snapshot.get("task_id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ApiError("Evolution submission did not return a task_id; cannot wait.", code="invalid_response")
+    while snapshot.get("status") not in ("succeeded", "failed", "cancelled"):
+        snapshot = client.show_task(TaskShowRequest(task_id=task_id))
+        if snapshot.get("task_id") != task_id or snapshot.get("status") not in (
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+        ):
+            raise ApiError(f"Invalid status response for evolution task {task_id}.", code="invalid_response")
+        if snapshot["status"] in ("queued", "running"):
+            time.sleep(1)
+    if snapshot["status"] != "succeeded":
+        status = snapshot["status"]
+        raise ApiError(
+            f"Evolution task {task_id} {status}. Inspect it with `mindmemos skill task show {task_id}`.",
+            code=f"task_{status}",
+            response_body=snapshot,
+        )
+    return snapshot
 
 
 def _analyze_skill(client, args):

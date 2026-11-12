@@ -104,6 +104,7 @@ def prepare_environment(path: Path) -> None:
         (env.QDRANT_URL, env.QDRANT_HTTP_PORT, "http://localhost:6333"),
         (env.NEO4J_URI, env.NEO4J_PORT, "bolt://localhost:7687"),
         (env.OTLP_ENDPOINT, env.OTLP_PORT, "http://localhost:4318"),
+        (env.S3_ENDPOINT, env.MINIO_PORT, "http://localhost:9100"),
     ):
         if os.environ.get(port):
             value = os.environ.get(address) or default
@@ -203,6 +204,14 @@ def memory_document(path: Path, plan: DependencyPlan, *, async_tasks: bool = Fal
     data.setdefault("auth", {})["api_key_file"] = config.auth.api_key_file
     data.setdefault("kafka", {})["enabled"] = async_tasks
     data.setdefault("telemetry", {})["enabled"] = otel
+    if config.algo_config.multimodal.mode != "off":
+        blob = config.blob_store
+        port = 443 if urlsplit(blob.s3_endpoint).scheme == "https" else 80
+        _endpoint(plan, blob.s3_endpoint, "minio", env.MINIO_PORT, port)
+        if "minio" in plan.services:
+            os.environ[env.S3_BUCKET] = blob.s3_bucket
+            os.environ[env.S3_ACCESS_KEY] = blob.s3_access_key
+            os.environ[env.S3_SECRET_KEY] = blob.s3_secret_key
     if async_tasks:
         _kafka(plan, config.kafka.bootstrap_servers)
         data.setdefault("kafka", {})["bootstrap_servers"] = config.kafka.bootstrap_servers

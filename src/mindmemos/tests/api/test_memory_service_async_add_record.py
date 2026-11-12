@@ -48,6 +48,9 @@ class _Recorder:
         request_submitted_at,
         add_record_id,
         status,
+        skill_bindings=None,
+        score=None,
+        task_id=None,
     ):
         self.add_inputs.append(
             {
@@ -56,12 +59,52 @@ class _Recorder:
                 "request_submitted_at": request_submitted_at,
                 "add_record_id": add_record_id,
                 "status": status,
+                "skill_bindings": skill_bindings,
+                "score": score,
+                "task_id": task_id,
             }
         )
         return add_record_id
 
     async def mark_add_failed(self, ctx, add_record_id, error):
         self.failures.append({"ctx": ctx, "add_record_id": add_record_id, "error": error})
+
+
+@pytest.mark.asyncio
+async def test_async_add_without_kafka_is_a_clean_request_error(tmp_path) -> None:
+    """mode=async on a server without Kafka must 400 with a precise code, not a 500."""
+
+    import yaml
+    from mindmemos.config import init_config, reset_config
+    from mindmemos.errors import BadRequestError
+
+    config_path = tmp_path / "dev.yaml"
+    config_path.write_text(yaml.safe_dump({"kafka": {"enabled": False}}), encoding="utf-8")
+    init_config(config_path=config_path)
+    try:
+        pipeline = _AsyncAddPipeline()
+        service = MemoryService(
+            add_pipeline=pipeline,
+            get_pipeline=object(),
+            delete_pipeline=object(),
+            update_pipeline=object(),
+            operation_recorder=_Recorder(),
+            skill_store=object(),
+        )
+
+        with pytest.raises(BadRequestError) as excinfo:
+            await service.add(
+                _auth(),
+                AddRequest(
+                    user_id="user-1",
+                    mode="async",
+                    messages=[DialogueMessage(role="user", content="remember this", timestamp=1770000000000)],
+                ),
+            )
+        assert excinfo.value.code == "add.async_unavailable"
+        assert pipeline.calls == []  # rejected before any queueing
+    finally:
+        reset_config()
 
 
 @pytest.mark.asyncio
@@ -90,5 +133,13 @@ async def test_async_add_records_input_before_queue_ack() -> None:
     assert len(recorder.add_inputs) == 1
     add_input = recorder.add_inputs[0]
     assert add_input["status"] == "queued"
+    assert add_input["skill_bindings"] is None
+    assert add_input["score"] is None
+    assert add_input["task_id"] is None
     assert pipeline.calls[0]["add_record_id"] == add_input["add_record_id"]
-    assert pipeline.calls[0]["record_metadata"]["request_submitted_at"]
+    assert pipeline.calls[0]["record_metadata"] == {
+        "request_submitted_at": add_input["request_submitted_at"].isoformat(),
+        "skill_bindings": [],
+        "score": None,
+        "task_id": None,
+    }

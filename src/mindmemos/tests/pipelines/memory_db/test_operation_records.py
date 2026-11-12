@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from mindmemos.pipelines.memory_db.operation_records import MemoryOperationRecorder
 from mindmemos.typing.memory import MemoryRequestContext
@@ -9,9 +11,14 @@ from mindmemos.typing.service import AddPipelineSyncResult, MemoryAddEventItem
 class FakeAddRecordStore:
     def __init__(self) -> None:
         self.patches: list[tuple[str, str, dict]] = []
+        self.skill_bindings = []
 
     async def patch(self, project_id: str, add_record_id: str, payload: dict) -> None:
         self.patches.append((project_id, add_record_id, payload))
+
+    async def get_by_ids(self, project_id: str, add_record_ids: list[str]):
+        """Return the saved input needed by lifecycle relay selection."""
+        return [SimpleNamespace(payload={"skill_bindings": self.skill_bindings})]
 
 
 def make_context() -> MemoryRequestContext:
@@ -54,3 +61,25 @@ async def test_operation_recorder_patches_async_add_lifecycle_payloads() -> None
     assert failed[0:2] == ("proj-1", "add-rec-2")
     assert failed[2]["status"] == "error"
     assert failed[2]["error"] == "pipeline db error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bound", [True, False])
+async def test_lifecycle_relay_only_sends_skill_bound_records(monkeypatch, bound):
+    """Status updates relay bound evidence and leave ordinary Memory alone."""
+    from mindmemos.pipelines.memory_db import operation_records
+
+    store = FakeAddRecordStore()
+    if bound:
+        store.skill_bindings = [{"version_id": "version-1"}]
+    sent = []
+    monkeypatch.setattr(operation_records, "legacy_skill_relay_enabled", lambda: True)
+    monkeypatch.setattr(operation_records, "enqueue_legacy_trajectory", lambda project, record: sent.append(record))
+    recorder = MemoryOperationRecorder(add_record_store=store)
+    ctx = make_context()
+    await recorder.mark_add_processing(ctx, "processing")
+    await recorder.mark_add_completed(ctx, "completed", AddPipelineSyncResult(status="ok", memories=[]))
+    await recorder.append_add_output(ctx, "partial", [])
+    await recorder.mark_add_failed(ctx, "failed", "Failure")
+    await recorder.mark_add_cancelled(ctx, "cancelled", "Cancelled")
+    assert sent == (["processing", "completed", "partial", "failed", "cancelled"] if bound else [])

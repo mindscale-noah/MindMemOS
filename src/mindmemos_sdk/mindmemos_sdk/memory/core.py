@@ -13,6 +13,7 @@ from .models import (
     AddResult,
     FeedbackMode,
     GetResult,
+    ImageRef,
     MemoryPageResult,
     MemoryScrollResult,
     MemorySearchHit,
@@ -30,6 +31,7 @@ from .models import (
     build_search_body,
     build_update_body,
 )
+from .typing import SkillContext
 
 T = TypeVar("T")
 
@@ -73,6 +75,7 @@ class MemoryCore:
         agent_id: str | None = None,
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        skill_context: list[SkillContext | dict[str, Any]] | None = None,
     ) -> MemoryRequest[AddResult]:
         if not messages:
             raise InvalidRequestError("`messages` must be a non-empty list.")
@@ -86,6 +89,7 @@ class MemoryCore:
                 agent_id=agent_id or self._defaults.agent_id,
                 session_id=session_id or self._defaults.session_id,
                 metadata=metadata,
+                skill_context=skill_context,
             ),
             parse=parse_add_result,
         )
@@ -104,6 +108,8 @@ class MemoryCore:
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        query_images: list[ImageRef | dict[str, Any]] | None = None,
+        multimodal: bool = False,
     ) -> MemoryRequest[SearchResult]:
         return MemoryRequest(
             path="/v1/memory/search",
@@ -119,6 +125,8 @@ class MemoryCore:
                 app_id=app_id or self._defaults.app_id,
                 agent_id=agent_id or self._defaults.agent_id,
                 session_id=session_id or self._defaults.session_id,
+                query_images=query_images,
+                multimodal=multimodal,
             ),
             parse=parse_search_result,
         )

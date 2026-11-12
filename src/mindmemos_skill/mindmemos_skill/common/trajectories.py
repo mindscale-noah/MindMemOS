@@ -14,6 +14,7 @@ async def collect_skill_trajectories(
     skill_version_id: str,
     limit: int,
     max_page_size: int = 200,
+    exclude_consumed: bool = False,
     created_from: datetime | None = None,
     created_to: datetime | None = None,
     status: str | None = None,
@@ -26,6 +27,7 @@ async def collect_skill_trajectories(
         skill_version_id: Exact loaded Skill version; family IDs are not accepted.
         limit: Maximum retained matching attempts.
         max_page_size: Maximum matching rows fetched per database query; defaults to 200.
+        exclude_consumed: Skip attempts already consumed for this exact version when True.
         created_from: Inclusive lower creation time, or no lower bound.
         created_to: Inclusive upper creation time, or the current time.
         status: Optional exact execution outcome.
@@ -62,5 +64,10 @@ async def collect_skill_trajectories(
         if not rows:
             break
         offset += len(rows)
+        if exclude_consumed:
+            consumed = await persistence.trajectories.consumed_ids(
+                skill_version_id, [row.trajectory_id for row in rows]
+            )
+            rows = [row for row in rows if row.trajectory_id not in consumed]
         selected.extend(rows)
     return selected

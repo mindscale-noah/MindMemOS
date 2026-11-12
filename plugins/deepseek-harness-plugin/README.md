@@ -1,16 +1,18 @@
 # @mindmemos/deepseek-harness-plugin
 
 A DeepSeek Harness (dsh) plugin for automatic Memory recall and unified
-trajectory reporting. It recalls Memory before the first model step, reports
-each completed turn to Memory and Skill with one CLI call, and registers the
-bundled `mindmemos-cli` guide in the host's Skill catalog.
+trajectory reporting. It recalls Memory before the first model step and reports
+completed turns to Memory. The same CLI call reports to Skill when the turn
+loads an exact version. The plugin registers the bundled `mindmemos-cli` guide
+in the host's Skill catalog.
 
 Use a dsh profile with `agents` and `skills` services. This plugin is built
-against dsh 0.1.0-rc.6. Install and authenticate an SDK 1.0.0 build before enabling
-the plugin.
+against dsh 0.1.0-rc.6. Install and authenticate an SDK build that exposes
+`skill identify` and `trajectory report` before enabling the plugin.
 
 ```bash
 mindmemos auth
+mindmemos skill identify --help
 mindmemos trajectory report --help
 ```
 
@@ -72,8 +74,9 @@ the row.
 | --- | --- | --- |
 | `cli` | `mindmemos` | Executable used to invoke the CLI — a name on dsh's `PATH` or an absolute path. It is not a shell command, so a wrapper like `uv run mindmemos` will not work; point it at the real executable instead. |
 | `topK` | `5` | Number of memories injected per turn. |
+| `multimodal` | `true` | Also search stored images by passing `memory search --multimodal`; set `false` for text-only recall. The server ignores the flag when the project's multimodal mode is off. |
 | `tokenBudget` | *(none)* | Optional strict token budget for recall; when set, `memory search --token-budget` caps the injected memories by estimated tokens (token-budget retention) in addition to `topK` — whichever limit is tighter applies. |
-| `addMode` | `async` | `sync` blocks until extraction finishes; `async` enqueues and returns. In `async` mode the Memory receipt confirms acceptance for extraction. |
+| `addMode` | `sync` | `sync` blocks until extraction finishes; `async` enqueues and returns. In `async` mode the Memory receipt confirms acceptance for extraction. |
 | `userId` | *(none)* | Scopes recall and reporting. Omit for project-wide recall and use the CLI profile's default user for reporting. |
 | `appId` | `deepseek-harness` | Application scope for Memory recall and reporting. |
 | `sessionId` | *(none)* | Override the harness session id used as the CLI session scope. |
@@ -87,12 +90,14 @@ the row.
 2. Ask about a stored fact and look for a recall hit in the plugin log.
 3. Finish a turn. The log shows separate Memory and Skill receipts with the
    same event ID. Use `mindmemos skill trajectory show TRAJECTORY_ID` to read the
-   Skill receipt's stored trajectory.
+   Skill receipt's stored trajectory. `Skill skipped` means the turn had no
+   identified Skill versions and the SDK sent no Skill request.
 
-For multi-Skill binding, run `mindmemos skill show VERSION_ID` in the shell tool
-or use `skill export` and read the exported `SKILL.md` with the read tool in the
-same turn. Every identified version is added to the same trajectory.
-Recommendations and exports alone leave the list empty.
+The plugin identifies successful `skill show` results and local `SKILL.md` reads.
+For a native Skill invocation, it checks the observed instructions against the
+host's file-backed Skill before matching the exact source hash through the SDK.
+Identified versions share one trajectory. Recommendations and exports alone
+leave the version list empty.
 
 If dsh logs `ENOENT`, set `cli` to the absolute path to the executable.
 If recall is absent, check `minQueryLength` and the CLI profile. Reporting

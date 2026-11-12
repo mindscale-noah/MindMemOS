@@ -1,13 +1,18 @@
 """Verify retry policy, exponential waits, and observable retry reasons."""
 
+import asyncio
+import json
 import logging
 from unittest.mock import AsyncMock
 
 import httpx
+import jwt
 import openai
 import pytest
 import tenacity
 from mindmemos_skill.agents import OpenAIChatAgent, OpenAIChatConfig
+from mindmemos_skill.infra.model_access.openai import capture_provider_models
+from mindmemos_skill.infra.model_access.platform import PlatformModelError, PlatformModelGateway, bind_platform_models
 
 
 @pytest.mark.parametrize(
@@ -192,3 +197,74 @@ async def test_experiment_retry_waits(monkeypatch, wait_mode, waits):
         (await OpenAIChatAgent(config).run(system="system", user="task"))
     assert len(calls) == 4
     assert sleeps == waits
+
+
+async def test_platform_transport_is_request_scoped(monkeypatch):
+    """Concurrent calls through the same agent carry distinct authenticated projects."""
+    gateway = PlatformModelGateway("http://gateway.invalid/internal/v1/skill-models", "test-model-secret".ljust(32, "-"))
+    seen = {}
+
+    async def respond(request):
+        await asyncio.sleep(0)
+        assert request.url.path == "/internal/v1/skill-models/chat/completions"
+        token = request.headers["Authorization"].removeprefix("Bearer ")
+        claims = jwt.decode(token, gateway.secret, algorithms=["HS256"], audience="platform-skill-model")
+        project = claims["project_id"]
+        seen[project] = json.loads(request.content)
+        return httpx.Response(200, json={
+            "id": "response",
+            "object": "chat.completion",
+            "created": 1,
+            "model": f"actual-{project}",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": project}}],
+        })
+
+    monkeypatch.setattr(
+        openai, "DefaultAsyncHttpxClient",
+        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    agent = OpenAIChatAgent(OpenAIChatConfig(model="placeholder", transport="platform_gateway"))
+
+    async def run(project):
+        with bind_platform_models(gateway, project), capture_provider_models() as models:
+            response = await agent.run(system="system", user=project)
+            assert response.output == project
+            assert models == [f"actual-{project}"]
+
+    await asyncio.gather(run("first"), run("second"))
+    assert {project: payload["model"] for project, payload in seen.items()} == {
+        "first": "platform-chat", "second": "platform-chat",
+    }
+    with pytest.raises(RuntimeError, match="authorized Platform model route"):
+        await agent.run(system="system", user="outside scope")
+
+
+async def test_platform_chat_rate_limit_is_not_retried_or_sent_to_direct_provider(monkeypatch):
+    """Keep gateway failures sanitized and confined to the authorized route."""
+    calls = []
+
+    def respond(request):
+        calls.append(request.url.host)
+        return httpx.Response(429, json={"error": {"message": "private upstream details"}})
+
+    monkeypatch.setattr(
+        openai,
+        "DefaultAsyncHttpxClient",
+        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    gateway = PlatformModelGateway("https://gateway.invalid", "test-model-secret".ljust(32, "-"))
+    agent = OpenAIChatAgent(
+        OpenAIChatConfig(
+            model="direct-model",
+            base_url="https://direct.invalid/v1",
+            api_key="direct-test-key",
+            transport="platform_gateway",
+            max_retries=2,
+            sdk_max_retries=2,
+        )
+    )
+    with bind_platform_models(gateway, "project"), pytest.raises(PlatformModelError) as error:
+        await agent.run(system="system", user="task")
+    assert error.value.status_code == 429
+    assert "private upstream details" not in str(error.value)
+    assert calls == ["gateway.invalid"]

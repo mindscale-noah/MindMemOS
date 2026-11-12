@@ -1,21 +1,32 @@
 """Memory HTTP business logic."""
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
+from urllib.parse import quote
 from uuid import uuid4
 
 from ...config import get_config
-from ...errors import MemoryNotFoundError, ResourceNotFoundError
-from ...logging import traced
+from ...errors import BadRequestError, ConfigNotInitializedError, MemoryNotFoundError, ResourceNotFoundError
+from ...infra.blob import get_blob_store, is_valid_blob_id
+from ...infra.blob.signed_url import image_url_signature, resolve_signing_secret
+from ...logging import get_logger, traced
 from ...pipelines import create_pipeline
 from ...pipelines.add import AddPipeline
 from ...pipelines.delete import DefaultDeletePipeline, DeletePipeline
 from ...pipelines.dreaming import DreamingPipeline
 from ...pipelines.feedback import FeedbackPipeline
 from ...pipelines.get import DefaultGetPipeline, GetPipeline
-from ...pipelines.memory_db import MemoryCatalog, MemoryOperationRecorder, suppress_recording_errors, utcnow
+from ...pipelines.memory_db import (
+    ImageMemoryStore,
+    MemoryCatalog,
+    MemoryOperationRecorder,
+    suppress_recording_errors,
+    utcnow,
+)
 from ...pipelines.search import SearchPipeline
+from ...pipelines.skill import SkillVersionStore, get_skill_version_store
 from ...pipelines.update import DefaultUpdatePipeline, UpdatePipeline
 from ...provider_bindings import ProviderBindingResolver, provider_config_context
 from ...typing import (
@@ -29,6 +40,8 @@ from ...typing import (
     MemoryListPipelineResult,
     MemoryScrollPipelineResult,
     SearchPipelineResult,
+    SkillBinding,
+    SkillContext,
     UpdatePipelineResult,
 )
 from ..algorithm import binding_for_memory_algorithm
@@ -58,6 +71,8 @@ from ..schemas import (
     UpdateRequest,
 )
 
+logger = get_logger(__name__)
+
 PipelineKind = Literal["add", "search", "get", "delete", "update", "feedback", "dreaming"]
 SEARCH_PIPELINE_NAME = "search_pipeline"
 
@@ -84,6 +99,7 @@ class MemoryService:
         feedback_pipeline_name: str | None = None,
         dreaming_pipeline_name: str | None = None,
         operation_recorder: MemoryOperationRecorder | None = None,
+        skill_store: SkillVersionStore | None = None,
         provider_binding_resolver: ProviderBindingResolver | None = None,
     ) -> None:
         self._add = add_pipeline
@@ -114,6 +130,7 @@ class MemoryService:
             "_dreaming": ("dreaming", dreaming_pipeline_name),
         }
         self._recorder = operation_recorder or MemoryOperationRecorder()
+        self._skill_store = skill_store if skill_store is not None else get_skill_version_store()
         self._algorithm_add_pipelines: dict[str, AddPipeline] = {}
         self._provider_binding_resolver = provider_binding_resolver
 
@@ -159,6 +176,7 @@ class MemoryService:
         # Stamp request identity onto the handler-root span so downstream LLM spans
         # (which live in this trace, not the auth dependency's trace) are attributable.
         annotate_request_trace(auth)
+        _reject_images_unless_supported(auth, request)
         pipeline, _add_pipeline_name = self._add_pipeline_for_auth(auth)
         if pipeline is None:
             raise NotImplementedError("add pipeline implementation is not wired yet")
@@ -168,12 +186,15 @@ class MemoryService:
         request_submitted_at = utcnow()
         config_ctx = await self._provider_config_context(ctx)
         with config_ctx:
+            skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
             return await self._add_with_context(
                 pipeline,
                 payload,
                 ctx,
+                request,
                 add_record_id,
                 request_submitted_at,
+                skill_bindings,
             )
 
     @traced("memory_service.add_stream")
@@ -187,6 +208,7 @@ class MemoryService:
         """Run sync add while streaming progress events."""
 
         annotate_request_trace(auth)
+        _reject_images_unless_supported(auth, request)
         pipeline, _add_pipeline_name = self._add_pipeline_for_auth(auth)
         if pipeline is None:
             raise NotImplementedError("add pipeline implementation is not wired yet")
@@ -204,6 +226,7 @@ class MemoryService:
         request_submitted_at = utcnow()
         config_ctx = await self._provider_config_context(ctx)
         with config_ctx:
+            skill_bindings = await self._bind_skill_context(ctx.project_id, add_record_id, request.skill_context)
             yield {
                 "event": "progress",
                 "stage": "accepted",
@@ -217,6 +240,9 @@ class MemoryService:
                     request_submitted_at=request_submitted_at,
                     add_record_id=add_record_id,
                     status="processing",
+                    skill_bindings=skill_bindings,
+                    score=request.score,
+                    task_id=request.task_id,
                 ),
                 operation="add",
             )
@@ -357,17 +383,32 @@ class MemoryService:
         pipeline: AddPipeline,
         payload,
         ctx,
+        request: AddRequest,
         add_record_id: str,
         request_submitted_at,
+        skill_bindings: list[SkillBinding] | None,
     ):
         try:
             if payload.mode == "async":
+                try:
+                    kafka_enabled = get_config().kafka.enabled
+                except ConfigNotInitializedError:
+                    # no bootstrapped config (unit tests): the pipeline enforces its own rule
+                    kafka_enabled = True
+                if not kafka_enabled:
+                    # a client-selectable mode the server cannot serve is a request error,
+                    # not a 500: the pipeline would raise a bare RuntimeError downstream
+                    raise BadRequestError(
+                        "async add requires Kafka to be enabled (kafka.enabled=true); "
+                        "use mode='sync' or enable Kafka in config",
+                        code="add.async_unavailable",
+                    )
                 # Keep the existing async payload shape during rolling deployment.
                 record_metadata = {
                     "request_submitted_at": request_submitted_at.isoformat(),
-                    "skill_bindings": [],
-                    "score": None,
-                    "task_id": None,
+                    "skill_bindings": [binding.model_dump(mode="json") for binding in skill_bindings or []],
+                    "score": request.score,
+                    "task_id": request.task_id,
                 }
                 await suppress_recording_errors(
                     self._recorder.record_add_input(
@@ -376,6 +417,9 @@ class MemoryService:
                         request_submitted_at=request_submitted_at,
                         add_record_id=add_record_id,
                         status="queued",
+                        skill_bindings=skill_bindings,
+                        score=request.score,
+                        task_id=request.task_id,
                     ),
                     operation="add",
                 )
@@ -392,6 +436,9 @@ class MemoryService:
                     request_submitted_at=request_submitted_at,
                     add_record_id=add_record_id,
                     status="processing",
+                    skill_bindings=skill_bindings,
+                    score=request.score,
+                    task_id=request.task_id,
                 ),
                 operation="add",
             )
@@ -403,19 +450,46 @@ class MemoryService:
             )
             raise
 
+    async def _bind_skill_context(
+        self,
+        project_id: str,
+        add_record_id: str,
+        skill_context: list[SkillContext] | None,
+    ) -> list[SkillBinding] | None:
+        """Resolve trace bindings without blocking Memory add on binding errors."""
+
+        if not skill_context:
+            return None
+        try:
+            return await self._skill_store.bind_skill_context(
+                project_id=project_id,
+                add_record_id=add_record_id,
+                skill_context=skill_context,
+            )
+        except Exception as exc:  # noqa: BLE001 - binding must never block add
+            logger.warning("skill_context binding failed", error=str(exc), add_record_id=add_record_id)
+            return None
+
     @traced("memory_service.search")
     async def search(
         self,
         auth: AuthContext,
         request: SearchRequest,
     ) -> SearchPipelineResult:
-        """Run the search pipeline."""
+        """Run the search pipeline.
+
+        Image hits are decorated with ``metadata.image_url``: a public-mirror or presigned
+        link when the blob backend can address the bytes, otherwise a signed keyless proxy
+        path (see ``_attach_image_urls``).
+        """
 
         # Stamp request identity onto the handler-root span so downstream LLM spans
         # (which live in this trace, not the auth dependency's trace) are attributable.
         annotate_request_trace(auth)
         ctx = to_memory_request_context(auth, request)
         binding = binding_for_memory_algorithm(auth.memory_algorithm)
+        if request.query_images and (reason := _images_unsupported_reason(auth)):
+            raise BadRequestError(f"query_images {reason}", code="search.images_unsupported")
         payload = to_search_pipeline_input(request, search_pipeline=binding.search_pipeline)
         pipeline = self._pipeline("_search")
         if pipeline is None:
@@ -452,7 +526,28 @@ class MemoryService:
             ),
             operation="search",
         )
+        # Decorated after recording: telemetry keeps signed URLs (short-lived secrets) out.
+        _attach_image_urls(result, project_id=ctx.project_id)
         return result
+
+    @traced("memory_service.get_image")
+    async def get_image(self, auth: AuthContext, blob_id: str, user_id: str) -> tuple[bytes, str]:
+        """Read one stored image of the caller's project, naming its owner.
+
+        The caller-declared ``user_id`` is verified against the project's image records; another
+        user's blob and a missing blob raise the same ``image.not_found``, so the response does
+        not reveal which blobs exist.
+        """
+
+        annotate_request_trace(auth)
+        ctx = to_memory_request_context(auth)
+        if not await ImageMemoryStore().blob_owned_by(ctx, blob_id, user_id):
+            raise ResourceNotFoundError(f"image {blob_id} not found", code="image.not_found")
+        found = await get_blob_store().get(auth.project_id, blob_id)
+        if found is None:
+            raise ResourceNotFoundError(f"image {blob_id} not found", code="image.not_found")
+        blob, data = found
+        return data, blob.mime_type
 
     @traced("memory_service.get")
     async def get(self, auth: AuthContext, request: GetRequest) -> GetPipelineResult:
@@ -562,6 +657,90 @@ class MemoryService:
 
 _service: MemoryService | None = None
 _service_key: tuple[str, ...] | None = None
+
+
+def _reject_images_unless_supported(auth: AuthContext, request: AddRequest) -> None:
+    """Keep images away from text-only configurations instead of silently dropping them."""
+
+    if not any(getattr(message, "images", None) for message in request.messages):
+        return
+    if reason := _images_unsupported_reason(auth):
+        raise BadRequestError(f"images {reason}", code="add.images_unsupported")
+
+
+def _images_unsupported_reason(auth: AuthContext) -> str | None:
+    """Why this request may not carry images, or None when it may (reads the request-bound config)."""
+
+    if not binding_for_memory_algorithm(auth.memory_algorithm).supports_images:
+        return f"are not supported by memory_algorithm {auth.memory_algorithm}"
+    if get_config().algo_config.multimodal.mode == "off":
+        return "require algo_config.multimodal.mode basic or enhanced; it is off for this project"
+
+
+def _attach_image_urls(
+    result: SearchPipelineResult,
+    *,
+    project_id: str,
+    store: Any | None = None,
+    expires_seconds: int | None = None,
+) -> None:
+    """Attach ``metadata.image_url`` to search hits that reference a stored image.
+
+    An S3 backend with a public mirror (``blob_store.s3_public_base_url``) gets that
+    permanent URL; otherwise the store returns a short-lived presigned URL clients can
+    GET directly (lazy loading; bytes never transit this API). When presigning yields
+    nothing, the hit falls back to an equally short-lived *signed* proxy URL — the same
+    ``/v1/memory/images/{blob_id}`` route, plus ``project_id``/``expires``/``signature``
+    query params, so it too is a direct GET without an API key. Signed proxy URLs are
+    absolute when ``blob_store.proxy_public_base_url`` is configured (a trusted
+    deployment value — never the request's Host header, which is client-controlled and
+    must not be reflected into a credential-bearing URL) and relative otherwise.
+    ``metadata.blob_id`` remains the stable canonical reference; failures degrade
+    silently — search results never break over URL decoration.
+    """
+
+    hits = [
+        item
+        for item in result.memories
+        if isinstance(getattr(item, "metadata", None), dict) and is_valid_blob_id(item.metadata.get("blob_id") or "")
+    ]
+    if not hits:
+        return
+    try:
+        blob_store = store if store is not None else get_blob_store()
+        cfg = get_config().blob_store
+        proxy_expiry = (
+            expires_seconds
+            if expires_seconds is not None
+            else (cfg.proxy_url_expiry_seconds or cfg.s3_presign_expiry_seconds)
+        )
+        secret = resolve_signing_secret(cfg.url_signing_secret, get_config().auth.gateway_jwt_secret)
+        base = (cfg.proxy_public_base_url or "").rstrip("/")
+        for item in hits:
+            blob_id = item.metadata["blob_id"]
+            url = blob_store.public_url(project_id, blob_id)
+            if url is None:
+                url = blob_store.presigned_get(
+                    project_id,
+                    blob_id,
+                    expires_seconds=expires_seconds if expires_seconds is not None else cfg.s3_presign_expiry_seconds,
+                )
+            # with no signing secret the tier is skipped, not minted with an empty key
+            # (an empty-key HMAC is forgeable by anyone — see resolve_signing_secret)
+            if url is None and secret and item.metadata.get("user_id"):
+                owner = str(item.metadata["user_id"])
+                expires_at = int(time.time()) + proxy_expiry
+                # self-declared ids may hold '&'/'#'/non-ASCII; quote keeps each id one query value
+                signature = image_url_signature(project_id, blob_id, owner, expires_at, secret)
+                url = (
+                    f"{base}/v1/memory/images/{blob_id}"
+                    f"?user_id={quote(owner, safe='')}&project_id={quote(project_id, safe='')}"
+                    f"&expires={expires_at}&signature={signature}"
+                )
+            if url:
+                item.metadata["image_url"] = url
+    except Exception as exc:  # noqa: BLE001 - decoration must never fail the search (e.g. s3 extra missing)
+        logger.warning("search_image_url_decoration_failed", project_id=project_id, error=str(exc))
 
 
 def get_memory_service() -> MemoryService:

@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, resolve } from "node:path";
+
+export const skillEvidenceText = Symbol("skillEvidenceText");
 
 export type ToolCall = {
   id?: string;
@@ -14,6 +16,7 @@ export type TrajectoryMessage = {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   is_error?: boolean;
+  [skillEvidenceText]?: string;
 };
 
 export type TrajectoryEvent = {
@@ -32,7 +35,7 @@ export type TrajectoryEvent = {
 };
 
 type Delivery = {
-  status: "queued" | "completed" | "stored" | "failed" | "unknown";
+  status: "queued" | "completed" | "stored" | "skipped" | "failed" | "unknown";
   code?: string;
   request_id?: string;
   trajectory_id?: string;
@@ -81,11 +84,37 @@ export async function reportTrajectory(
   }
 }
 
-/** Attribute only completed reads or shows paired with their own tool results. */
-export function loadedSkillVersions(messages: readonly TrajectoryMessage[], cwd?: string): string[] {
+type SkillReadEvidence = { kind: "read"; path: string; content: string };
+type SkillEvidence = SkillReadEvidence | { kind: "shell"; command: string; content: string };
+
+/** Send only observed loads to the SDK, which owns Skill hashing and resolution. */
+export async function loadedSkillVersions(
+  cli: string,
+  messages: readonly TrajectoryMessage[],
+  cwd: string | undefined,
+  logger: { warn: (message: string) => void },
+  nativeReads: readonly SkillReadEvidence[] = [],
+): Promise<string[]> {
+  const evidence: SkillEvidence[] = [...toolSkillEvidence(messages, cwd), ...nativeReads];
+  if (!evidence.length) {
+    return [];
+  }
+  try {
+    const result = await spawnFile(cli, ["skill", "identify", "--file", "-"], JSON.stringify(evidence), 10_000);
+    const versions = parseObject(result.stdout)?.skill_version_ids;
+    if (result.code === 0 && Array.isArray(versions) && versions.every(isVersionId)) {
+      return versions;
+    }
+  } catch {
+    // An unavailable resolver must not suppress the Memory report.
+  }
+  logger.warn("Skill identification did not return version IDs; continuing with Memory reporting");
+  return [];
+}
+
+function toolSkillEvidence(messages: readonly TrajectoryMessage[], cwd?: string): SkillEvidence[] {
   const pending = new Map<string, ToolCall>();
-  const exported = new Map<string, string>();
-  const loaded = new Set<string>();
+  const evidence: SkillEvidence[] = [];
   for (const message of messages) {
     for (const call of message.tool_calls ?? []) {
       if (call.id) {
@@ -102,42 +131,18 @@ export function loadedSkillVersions(messages: readonly TrajectoryMessage[], cwd?
     }
     const args = typeof call.arguments === "string" ? parseObject(call.arguments) : call.arguments;
     const tool = call.name.toLowerCase();
+    const content = message[skillEvidenceText] ?? message.content;
     const command = args?.command;
-    if (["exec", "bash"].includes(tool) && typeof command === "string") {
-      // Require a CLI invocation, not arbitrary output that happens to contain a version ID.
-      const action = command.match(/^\s*(?:uv\s+run\s+)?mindmemos\s+skill\s+(export|show)\s+[^;&|\r\n`<>]+$/)?.[1];
-      if (action === "export") {
-        const result = parseObject(message.content);
-        if (typeof result?.directory === "string" && isAbsolute(result.directory) && isVersionId(result.skill_version_id)) {
-          exported.set(join(result.directory, "SKILL.md"), result.skill_version_id);
-        }
-      } else if (action === "show") {
-        const version = parseObject(message.content)?.version;
-        if (isRecord(version) && isVersionId(version.skill_version_id) && typeof version.content === "string" && version.content.trim()) {
-          loaded.add(version.skill_version_id);
-        }
-      }
+    if (["exec", "bash", "shell"].includes(tool) && typeof command === "string" && /mindmemos/i.test(command)) {
+      evidence.push({ kind: "shell", command, content });
       continue;
     }
     const path = args?.path ?? args?.file_path ?? args?.filepath;
-    if (typeof path !== "string" || (!cwd && !isAbsolute(path))) {
-      continue;
-    }
-    const file = resolve(cwd ?? "", path);
-    const version = exported.get(file);
-    if (tool === "read" && version && message.content.trim()) {
-      loaded.add(version);
-    } else if (tool === "write" || tool === "edit") {
-      // A subsequent read may see modified content. Invalidate the whole exported bundle.
-      for (const document of exported.keys()) {
-        const directory = dirname(document);
-        if (file === directory || file.startsWith(directory + sep)) {
-          exported.delete(document);
-        }
-      }
+    if (["read", "read_file"].includes(tool) && typeof path === "string" && basename(path) === "SKILL.md" && content.trim()) {
+      evidence.push({ kind: "read", path: cwd ? resolve(cwd, path) : path, content });
     }
   }
-  return [...loaded];
+  return evidence;
 }
 
 export function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -154,7 +159,7 @@ function isVersionId(value: unknown): value is string {
 
 function isDelivery(value: unknown): value is Delivery {
   return isRecord(value) && typeof value.status === "string"
-    && ["queued", "completed", "stored", "failed", "unknown"].includes(value.status);
+    && ["queued", "completed", "stored", "skipped", "failed", "unknown"].includes(value.status);
 }
 
 function parseObject(json: string): Record<string, unknown> | undefined {
@@ -165,10 +170,11 @@ function parseObject(json: string): Record<string, unknown> | undefined {
   }
 }
 
-function spawnFile(command: string, args: string[], stdin?: string): Promise<SpawnResult> {
+function spawnFile(command: string, args: string[], stdin?: string, timeout?: number): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
+      timeout,
       env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
     });
     let stdout = "";

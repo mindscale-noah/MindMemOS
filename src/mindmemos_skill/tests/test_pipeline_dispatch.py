@@ -210,7 +210,7 @@ async def test_factory_closes_constructed_database_after_dependency_failure(tmp_
 async def test_multiple_pipeline_request_selection(monkeypatch, operation):
     """Select configured pipelines through explicit supported request fields."""
     from fastapi.testclient import TestClient
-    from mindmemos_skill.pipelines import EvolutionPipeline, SkillPipelineRequest
+    from mindmemos_skill.pipelines import EvolutionPipeline, EvolutionRequest
 
     monkeypatch.setattr(Pipeline, "_registry", {})
     calls = []
@@ -257,7 +257,7 @@ async def test_multiple_pipeline_request_selection(monkeypatch, operation):
         names, wrong = list(config.service.training_pipelines), "evolve_a"
     else:
         invoke = service.run_evolution
-        request = SkillPipelineRequest(project_id="project", skill_ref="skill")
+        request = EvolutionRequest(project_id="project", skill_version_ids=["v1"])
         names, wrong = list(config.service.evolution_pipelines), "train_a"
 
     selector = "algo" if operation == "training" else "pipeline"
@@ -275,9 +275,10 @@ async def test_multiple_pipeline_request_selection(monkeypatch, operation):
                 invalid = request.model_copy(update={selector: name})
                 with pytest.raises(ValueError):
                     await invoke(invalid)
-                assert client.post("/v1/skills/algos/evolve", json=invalid.model_dump()).status_code == 422
+                body = invalid.model_dump(exclude={"project_id", "run_id"})
+                assert client.post("/v1/skills/algos/evolve", json=body).status_code == 422
             assert len(calls) == count
-            response = client.post("/v1/skills/algos/evolve", json={"skill_version_id": "v1"})
+            response = client.post("/v1/skills/algos/evolve", json={"skill_version_ids": ["v1"]})
             assert response.status_code == 422
             assert response.json()["error"]["code"] == "pipeline_unavailable"
             assert len(calls) == count

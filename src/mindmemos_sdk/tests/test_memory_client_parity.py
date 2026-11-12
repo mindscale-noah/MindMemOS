@@ -8,8 +8,36 @@ from typing import Any
 
 import httpx
 import pytest
-from mindmemos_sdk.memory import AsyncMemoryClient, DialogueMessage, MemoryClient, MemorySearchHit, TextMessage
+from mindmemos_sdk.memory import (
+    AsyncMemoryClient,
+    DialogueMessage,
+    MemoryClient,
+    MemorySearchHit,
+    SkillContext,
+    TextMessage,
+)
 from mindmemos_sdk.transport import AsyncHttpTransport, HttpTransport
+
+
+@pytest.mark.asyncio
+async def test_legacy_skill_context_has_the_same_memory_wire_format_for_both_clients():
+    """Typed and dictionary references preserve old Memory binding fields."""
+    sync_calls = []
+    async_calls = []
+    sync_client = _sync_client(sync_calls)
+    async_client = _async_client(async_calls)
+    fields = {
+        "name": "legacy",
+        "content_hash": "hash",
+        "base_version_id": "v-old",
+        "version_label": "v1",
+        "usage": "modified",
+    }
+    sync_client.add([TextMessage(text="hello")], skill_context=[SkillContext(**fields)])
+    await async_client.add([TextMessage(text="hello")], skill_context=[fields])
+    assert sync_calls == async_calls
+    assert sync_calls[0]["path"] == "/v1/memory/add"
+    assert sync_calls[0]["body"]["skill_context"] == [fields]
 
 
 def _response_for(path: str) -> httpx.Response:

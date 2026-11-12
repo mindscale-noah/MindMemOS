@@ -12,6 +12,7 @@ from typing import Any, TypeVar, cast
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from ..errors import ProjectTaskBusyError
 from .config import get_logger
 from .context import _context, _reported_error, log_context
 from .sanitization import safe_text, structured_text
@@ -181,6 +182,10 @@ def traced(
                 except asyncio.CancelledError:
                     body.update(status="cancelled", duration_ms=(perf_counter() - started) * 1000)
                     logger.info("traced call cancelled", extra={"event_body": body})
+                    raise
+                except ProjectTaskBusyError as exc:
+                    span.set_attribute("task.blocking_id", exc.task_id)
+                    span.add_event("task.admission.rejected")
                     raise
                 except BaseException as exc:
                     body.update(

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { buildJsonPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  asRecord, loadedSkillVersions, reportTrajectory, spawnFileJson,
+  asRecord, loadedSkillVersions, reportTrajectory, skillEvidenceText, spawnFileJson,
   type ToolCall, type TrajectoryMessage,
 } from "./generated/mindmemos-cli.js";
 
@@ -11,6 +11,8 @@ type PluginConfig = {
   cli: string;
   topK: number;
   tokenBudget?: number;
+  /** Search stored images too; image hits carry a short-lived directly-fetchable image_url. */
+  multimodal: boolean;
   addMode: "sync" | "async";
   userId?: string;
   appId: string;
@@ -25,6 +27,10 @@ type MemoryHit = {
   last_update_at?: string | null;
   event_time?: string | null;
   source_timestamp?: string | null;
+  metadata?: {
+    image_url?: string;
+    [key: string]: unknown;
+  };
 };
 
 type MemorySearchResult = {
@@ -39,7 +45,10 @@ const DEFAULT_CONFIG: PluginConfig = {
   enabled: true,
   cli: "mindmemos",
   topK: 5,
-  addMode: "async",
+  multimodal: true,
+  // sync by default: async enqueues through Kafka and silently stores nothing on a
+  // server without kafka.enabled=true — sync works on every deployment.
+  addMode: "sync",
   appId: "openclaw",
   minQueryLength: 2,
   maxConversationMessages: 80,
@@ -58,6 +67,10 @@ const CONFIG_SCHEMA = {
     topK: {
       type: "integer",
       minimum: 1,
+    },
+    multimodal: {
+      type: "boolean",
+      description: "Search stored images too (image hits carry a short-lived fetchable image_url).",
     },
     tokenBudget: {
       type: "integer",
@@ -140,11 +153,14 @@ function register(api: OpenClawPluginApi): void {
     const eventId = `openclaw:${turnId ?? randomUUID()}`;
 
     try {
+      const skillVersions = await loadedSkillVersions(config.cli, turn, ctx.workspaceDir, {
+        warn: (message) => api.logger.warn(`[mindmemos] ${message}`),
+      });
       await reportTrajectory(config.cli, {
         event_id: eventId,
         source: "openclaw-plugin",
         messages: turn.slice(-config.maxConversationMessages),
-        skill_version_ids: loadedSkillVersions(turn, ctx.workspaceDir),
+        skill_version_ids: skillVersions,
         user_id: config.userId,
         agent_id: agentId,
         app_id: config.appId,
@@ -165,11 +181,12 @@ function register(api: OpenClawPluginApi): void {
 
 function loadConfig(raw: unknown): PluginConfig {
   const obj = isRecord(raw) ? raw : {};
-  const addMode = obj.addMode === "sync" ? "sync" : "async";
+  const addMode = obj.addMode === "async" ? "async" : DEFAULT_CONFIG.addMode;
   return {
     enabled: obj.enabled !== false,
     cli: typeof obj.cli === "string" && obj.cli.trim() ? obj.cli.trim() : DEFAULT_CONFIG.cli,
     topK: positiveInteger(obj.topK, DEFAULT_CONFIG.topK),
+    multimodal: obj.multimodal !== false,
     tokenBudget: optionalPositiveInteger(obj.tokenBudget),
     addMode,
     appId: typeof obj.appId === "string" && obj.appId.trim() ? obj.appId.trim() : DEFAULT_CONFIG.appId,
@@ -185,6 +202,11 @@ function loadConfig(raw: unknown): PluginConfig {
 
 async function searchMemories(config: PluginConfig, query: string, sessionId: string): Promise<MemorySearchResult> {
   const args = ["memory", "search", query, "--top-k", String(config.topK), "--json"];
+  if (config.multimodal) {
+    // Image hits carry metadata.blob_id + a short-lived image_url the agent can GET directly;
+    // the server silently ignores this flag while the project's multimodal mode is off.
+    args.push("--multimodal");
+  }
   if (config.tokenBudget) {
     args.push("--token-budget", String(config.tokenBudget));
   }
@@ -196,15 +218,22 @@ async function searchMemories(config: PluginConfig, query: string, sessionId: st
 }
 
 function formatMemoryContext(memories: MemoryHit[], userId: string | undefined, isSubagent: boolean): string {
+  let hasImage = false;
   const lines = memories
     .map((hit, index) => {
       const text = typeof hit.memory === "string" ? hit.memory.trim() : "";
-      if (!text) {
+      const imageUrl =
+        typeof hit.metadata?.image_url === "string" && hit.metadata.image_url
+          ? hit.metadata.image_url
+          : undefined;
+      if (!text && !imageUrl) {
         return null;
       }
+      hasImage = hasImage || Boolean(imageUrl);
       const label = hit.id ? `${index + 1}. [${hit.id}]` : `${index + 1}.`;
       const when = hit.last_update_at ?? hit.event_time ?? hit.source_timestamp;
-      return when ? `${label} ${text} (${when})` : `${label} ${text}`;
+      const body = [text || "[image memory]", imageUrl ? `<image: ${imageUrl}>` : ""].filter(Boolean).join(" ");
+      return when ? `${label} ${body} (${when})` : `${label} ${body}`;
     })
     .filter((line): line is string => line !== null);
 
@@ -212,7 +241,10 @@ function formatMemoryContext(memories: MemoryHit[], userId: string | undefined, 
     return "";
   }
   const preamble = buildPreamble(userId, isSubagent);
-  return [MEMORY_CONTEXT_OPEN, preamble, ...lines, MEMORY_CONTEXT_CLOSE].join("\n");
+  const imageHint = hasImage
+    ? "(<image: …> URLs point at the stored images, fetch directly with no API key, and expire; relative paths resolve against the MindMemOS API base)"
+    : "";
+  return [MEMORY_CONTEXT_OPEN, preamble, imageHint, ...lines, MEMORY_CONTEXT_CLOSE].filter(Boolean).join("\n");
 }
 
 /**
@@ -377,13 +409,17 @@ function normalizeMessage(raw: unknown): TrajectoryMessage | null {
     return null;
   }
 
+  const details = asRecord(raw.details);
+  const toolError = raw.isError === true || details?.status === "failed" || details?.status === "running"
+    || (typeof details?.exitCode === "number" && details.exitCode !== 0)
+    || /\(Command exited with code [1-9]\d*\)\s*$/.test(content);
   return {
     role,
     content,
     timestamp: timestampMillis(raw.timestamp ?? raw.createdAt ?? raw.time),
     ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
     ...(toolCallId ? { tool_call_id: toolCallId } : {}),
-    ...(role === "tool" && typeof raw.isError === "boolean" ? { is_error: raw.isError } : {}),
+    ...(role === "tool" ? { is_error: toolError, [skillEvidenceText]: textFromUnknown(rawContent, true) } : {}),
   };
 }
 
@@ -436,19 +472,20 @@ function normalizeRole(raw: unknown): TrajectoryMessage["role"] | null {
   return null;
 }
 
-function textFromUnknown(value: unknown): string {
+function textFromUnknown(value: unknown, preserveWhitespace = false): string {
   if (typeof value === "string") {
-    return value.trim();
+    return preserveWhitespace ? value : value.trim();
   }
   if (Array.isArray(value)) {
-    return value.map(textFromUnknown).filter(Boolean).join("\n").trim();
+    const text = value.map((item) => textFromUnknown(item, preserveWhitespace)).filter(Boolean).join("\n");
+    return preserveWhitespace ? text : text.trim();
   }
   if (isRecord(value)) {
     const toolCall = textFromToolCall(value);
     if (toolCall) {
       return toolCall;
     }
-    return textFromUnknown(value.text ?? value.content ?? value.value);
+    return textFromUnknown(value.text ?? value.content ?? value.value, preserveWhitespace);
   }
   return "";
 }

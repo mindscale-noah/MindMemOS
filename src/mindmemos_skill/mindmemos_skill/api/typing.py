@@ -1,5 +1,6 @@
 """Transport-independent inputs and results of Skill service operations."""
 
+from datetime import UTC, datetime
 from typing import Annotated, Literal, Self
 
 from pydantic import (
@@ -11,7 +12,6 @@ from pydantic import (
     JsonValue,
     SecretStr,
     StringConstraints,
-    TypeAdapter,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -184,36 +184,8 @@ class StructuredSkillInfo(SkillCommit):
         return self
 
 
-class SkillPipelineRequest(RequestAuth):
-    """Select one existing Skill for evolution.
-
-    Backend choices and evidence preparation policies belong to the concrete
-    pipeline configuration. Implementations needing additional per-call inputs
-    may define typed request extensions and must validate them before I/O.
-    This contract does not prescribe trajectory queries or dataset selection.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-    """Reject undeclared inputs rather than silently ignoring selection options."""
-
-    pipeline: Nonempty | None = None
-    """Configured instance name; omission requires exactly one available pipeline."""
-
-    skill_ref: Nonempty
-    """Skill identity or reference resolved within the selected project."""
-
-    base_version_id: Nonempty | None = None
-    """Owned parent version; None captures the active version at run start."""
-
-    auto_accept: bool = True
-    """Whether to select the evolved version as the active Skill version."""
-
-    run_id: str | None = Field(default=None, pattern=r"^evolve_[0-9a-f]{32}$")
-    """Stable evolution identity for retries; None starts an independent run."""
-
-
-class CollectionEvolutionRequest(RequestAuth):
-    """Select exact readable Skill versions for collection evolution.
+class EvolutionRequest(RequestAuth):
+    """Select one or more exact readable Skill versions for evolution.
 
     Backend choices and evidence preparation policies belong to the concrete
     pipeline configuration. Implementations needing additional per-call inputs
@@ -250,13 +222,6 @@ class CollectionEvolutionRequest(RequestAuth):
         if self.editable_skills is not None and len(set(self.editable_skills)) != len(self.editable_skills):
             raise ValueError("Editable Skill IDs must be unique")
         return self
-
-
-EvolutionRequest = SkillPipelineRequest | CollectionEvolutionRequest
-"""Prepared single-Skill or collection input accepted by evolution pipelines."""
-
-EVOLUTION_REQUEST_ADAPTER = TypeAdapter(EvolutionRequest)
-"""Validate stored and library evolution requests without algorithm-specific dispatch."""
 
 
 class TrainingSplit(BaseModel):
@@ -538,6 +503,130 @@ class ListRequest(RequestAuth):
         if self.cursor.snapshot_at is not None and self.cursor.offset != 0:
             raise ValueError("Cursor paging cannot use offset")
         return self
+
+
+class LegacySkillDeletion(BaseModel):
+    """Family removal sent by the authenticated Memory service."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Project ownership is supplied by the gateway credential."""
+
+    cloud_skill_id: str = Field(min_length=1)
+    """Exact family identity removed from Memory."""
+
+
+class LegacySkillVersion(BaseModel):
+    """Exact Skill snapshot sent by Memory or read by historical import."""
+
+    model_config = ConfigDict(extra="forbid")
+    """Project ownership is supplied outside the payload."""
+
+    version_id: str = Field(min_length=1)
+    """Exact version identity in Memory."""
+
+    cloud_skill_id: str = Field(min_length=1)
+    """Identity of the owning legacy Skill family."""
+
+    parent_version_id: str | None = Field(default=None, min_length=1)
+    """Exact parent in the legacy family, if any."""
+
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    """SHA-256 digest of the old canonical bundle, used by legacy trajectory bindings."""
+
+    skill_name: str | None = None
+    """Display name saved by the legacy service."""
+
+    version_label: str | None = None
+    """Original legacy label, retained in provenance."""
+
+    status: Literal["observed", "draft", "evaluating", "published", "superseded", "rolled_back"]
+    """Lifecycle status recorded by Memory."""
+
+    origin: Literal["edge", "cloud"]
+    """Whether Memory observed or evolved this version."""
+
+    created_at: datetime
+    """Creation time in Memory."""
+
+    content: str
+    """Exact text of the verified legacy SKILL.md bundle entry."""
+
+    @field_validator("created_at")
+    @classmethod
+    def _as_utc(cls, value: datetime) -> datetime:
+        """Normalize timestamps using the legacy UTC convention."""
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+class LegacyBinding(BaseModel):
+    """Old Skill usage, possibly still waiting for registration."""
+
+    version_id: str | None = None
+    """Exact legacy version ID once the old service resolves it."""
+
+    content_hash: str | None = None
+    """Legacy bundle digest for validating a resolved binding."""
+
+    usage: str | None = None
+    """Usage reported by the legacy client."""
+
+
+class LegacyTrajectory(BaseModel):
+    """Original evidence carried by one Memory Add record."""
+
+    messages: list[dict[str, JsonValue]] = Field(min_length=1)
+    """Ordered dialogue from the stored Add record."""
+
+    request_submitted_at: datetime | None = None
+    """Time when the original request reached Memory."""
+
+    task_completed_at: datetime | None = None
+    """Time when the Memory operation finished."""
+
+    event_time: datetime | None = None
+    """Original event time supplied by the client, when present."""
+
+    status: str | None = None
+    """Memory operation outcome, separate from the trajectory outcome."""
+
+    error: str | None = None
+    """Memory processing failure or cancellation reason, when present."""
+
+    user_id: str | None = None
+    """Original business user."""
+
+    agent_id: str | None = None
+    """Original Agent identity."""
+
+    session_id: str | None = None
+    """Original logical session."""
+
+    task_id: str | None = None
+    """Original task grouping."""
+
+    score: FiniteFloat | None = None
+    """Original numeric grade, when available."""
+
+    @field_validator("request_submitted_at", "task_completed_at", "event_time")
+    @classmethod
+    def _as_utc(cls, value: datetime | None) -> datetime | None:
+        """Normalize timestamps to the old storage convention."""
+        if value is None:
+            return None
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+class LegacyTrajectoryDelivery(LegacyTrajectory):
+    """Project-scoped delivery from the trusted Memory service."""
+
+    model_config = ConfigDict(extra="forbid")
+    """The project namespace comes from the gateway credential."""
+
+    add_record_id: str = Field(min_length=1)
+    """Original record ID and stable destination trajectory identity."""
+
+    skill_bindings: list[LegacyBinding] = Field(min_length=1)
+    """Skill references saved with the original Add."""
 
 
 class TrajectoryReportPayload(BaseModel):

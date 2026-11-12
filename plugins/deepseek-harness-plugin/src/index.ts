@@ -5,10 +5,10 @@ import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { ContentBlock, UserMessage } from "@deepseek-ai/dsh-llm";
 import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
 import {
-  loadedSkillVersions, reportTrajectory, spawnFileJson,
+  loadedSkillVersions, reportTrajectory, skillEvidenceText, spawnFileJson,
   type ToolCall, type TrajectoryMessage,
 } from "./generated/mindmemos-cli.js";
-import { registerBundledSkill } from "./skill-provider.js";
+import { nativeSkillRead, registerBundledSkill } from "./skill-provider.js";
 
 type MemoryHit = {
   id?: string;
@@ -16,6 +16,10 @@ type MemoryHit = {
   last_update_at?: string | null;
   event_time?: string | null;
   source_timestamp?: string | null;
+  metadata?: {
+    image_url?: string;
+    [key: string]: unknown;
+  };
 };
 
 type MemorySearchResult = {
@@ -38,6 +42,8 @@ export interface Config {
   cli: string;
   /** Number of memories injected per turn. */
   topK: number;
+  /** Search stored images too; image hits carry a short-lived directly-fetchable image_url. */
+  multimodal: boolean;
   /** Optional strict token budget for recall; enables token-budget retention when set. */
   tokenBudget?: number;
   /** `sync` blocks until extraction finishes; `async` enqueues and returns. */
@@ -58,8 +64,12 @@ export interface Config {
 export const Config: z<Config> = z.object({
   cli: z.string().default("mindmemos"),
   topK: z.natural().min(1).default(5),
+  multimodal: z.boolean().default(true),
   tokenBudget: z.natural().min(1),
-  addMode: z.union([z.const("sync"), z.const("async")]).default("async"),
+  // sync by default: async needs kafka.enabled=true on the server — without Kafka the
+  // add is rejected with a clean 400 (add.async_unavailable) rather than stored;
+  // sync works on every deployment.
+  addMode: z.union([z.const("sync"), z.const("async")]).default("sync"),
   userId: z.string(),
   appId: z.string().default("deepseek-harness"),
   sessionId: z.string(),
@@ -136,23 +146,27 @@ export function apply(ctx: Context, config: Config): void {
     const turnId = String(event.data.turn);
     const eventId = `deepseek-harness:${hostSessionId}:${turnId}`;
     const logger = ctx.logger(name);
-    void reportTrajectory(config.cli, {
-      event_id: eventId,
-      source: "deepseek-harness-plugin",
-      messages: turn.messages.slice(-config.maxConversationMessages),
-      skill_version_ids: loadedSkillVersions(turn.messages, session.header.cwd),
-      user_id: config.userId?.trim() || undefined,
-      agent_id: session.header.agentPreset ?? config.appId,
-      app_id: config.appId,
-      session_id: resolveSessionId(config, hostSessionId),
-      turn_id: turnId,
-      started_at: new Date(turn.startTime).toISOString(),
-      finished_at: new Date(event.time).toISOString(),
-      memory_mode: config.addMode,
-    }, {
-      info: (message) => logger.info(message),
-      warn: (message) => logger.warn(message),
-    }).catch((error: unknown) => {
+    void (async () => {
+      const cwd = session.header.cwd;
+      const reads = await Promise.all(turn.nativeLoads.map((content) => nativeSkillRead(ctx, content, cwd)));
+      const skillVersions = await loadedSkillVersions(
+        config.cli, turn.messages, cwd, logger, reads.filter((read) => read !== undefined),
+      );
+      await reportTrajectory(config.cli, {
+        event_id: eventId,
+        source: "deepseek-harness-plugin",
+        messages: turn.messages.slice(-config.maxConversationMessages),
+        skill_version_ids: skillVersions,
+        user_id: config.userId?.trim() || undefined,
+        agent_id: session.header.agentPreset ?? config.appId,
+        app_id: config.appId,
+        session_id: resolveSessionId(config, hostSessionId),
+        turn_id: turnId,
+        started_at: new Date(turn.startTime).toISOString(),
+        finished_at: new Date(event.time).toISOString(),
+        memory_mode: config.addMode,
+      }, logger);
+    })().catch((error: unknown) => {
       logger.warn(`trajectory ${eventId}: ${errorMessage(error)}`);
     });
   });
@@ -162,6 +176,11 @@ export function apply(ctx: Context, config: Config): void {
 
 async function searchMemories(config: Config, query: string, sessionId: string): Promise<MemorySearchResult> {
   const args = ["memory", "search", query, "--top-k", String(config.topK), "--json"];
+  if (config.multimodal) {
+    // Image hits carry metadata.blob_id + a short-lived image_url the agent can GET directly;
+    // the server silently ignores this flag while the project's multimodal mode is off.
+    args.push("--multimodal");
+  }
   if (config.tokenBudget) {
     args.push("--token-budget", String(config.tokenBudget));
   }
@@ -173,15 +192,22 @@ async function searchMemories(config: Config, query: string, sessionId: string):
 }
 
 function formatMemoryContext(memories: MemoryHit[], userId: string | undefined): string {
+  let hasImage = false;
   const lines = memories
     .map((hit, index) => {
       const text = typeof hit.memory === "string" ? hit.memory.trim() : "";
-      if (!text) {
+      const imageUrl =
+        typeof hit.metadata?.image_url === "string" && hit.metadata.image_url
+          ? hit.metadata.image_url
+          : undefined;
+      if (!text && !imageUrl) {
         return null;
       }
+      hasImage = hasImage || Boolean(imageUrl);
       const label = hit.id ? `${index + 1}. [${hit.id}]` : `${index + 1}.`;
       const when = hit.last_update_at ?? hit.event_time ?? hit.source_timestamp;
-      return when ? `${label} ${text} (${when})` : `${label} ${text}`;
+      const body = [text || "[image memory]", imageUrl ? `<image: ${imageUrl}>` : ""].filter(Boolean).join(" ");
+      return when ? `${label} ${body} (${when})` : `${label} ${body}`;
     })
     .filter((line): line is string => line !== null);
 
@@ -189,7 +215,10 @@ function formatMemoryContext(memories: MemoryHit[], userId: string | undefined):
     return "";
   }
   const preamble = userId ? `Relevant memories for ${userId}:` : "Relevant memories:";
-  return [MEMORY_CONTEXT_OPEN, preamble, ...lines, MEMORY_CONTEXT_CLOSE].join("\n");
+  const imageHint = hasImage
+    ? "(<image: …> URLs point at the stored images, fetch directly with no API key, and expire; relative paths resolve against the MindMemOS API base)"
+    : "";
+  return [MEMORY_CONTEXT_OPEN, preamble, imageHint, ...lines, MEMORY_CONTEXT_CLOSE].filter(Boolean).join("\n");
 }
 
 /** The recall query: the real human prompt(s) entering step 1, not injected context. */
@@ -206,17 +235,32 @@ function extractQuery(messages: readonly UserMessage[]): string {
 function collectTurnMessages(
   session: Session,
   end: SessionEvent<"turn/end">,
-): { messages: TrajectoryMessage[]; startTime: number } | undefined {
+): { messages: TrajectoryMessage[]; startTime: number; nativeLoads: string[] } | undefined {
   const messages: TrajectoryMessage[] = [];
+  const invocations: string[] = [];
   for (let i = session.events.length - 1; i >= 0; i -= 1) {
     const event = session.events[i];
     if (event.seq >= end.seq) {
       continue;
     }
     if (event.type === "turn/start") {
-      return event.data.turn === end.data.turn
-        ? { messages: messages.reverse(), startTime: event.time }
-        : undefined;
+      if (event.data.turn !== end.data.turn) {
+        return undefined;
+      }
+      messages.reverse();
+      const skillCalls = new Set(messages.flatMap(({ tool_calls }) =>
+        (tool_calls ?? []).filter(({ name }) => name === "skill").map(({ id }) => id),
+      ));
+      const nativeLoads = invocations.reverse();
+      for (const message of messages) {
+        if (message.role === "tool" && !message.is_error && skillCalls.has(message.tool_call_id)) {
+          nativeLoads.push(message.content);
+        }
+      }
+      return { messages, startTime: event.time, nativeLoads: [...new Set(nativeLoads)] };
+    }
+    if (event.type === "user/message" && event.data.source.kind === "skill-invocation") {
+      invocations.push(textFromContent(event.data.content));
     }
     const message = messageFromEvent(event);
     if (message) {
@@ -252,6 +296,7 @@ function messageFromEvent(event: SessionEvent): TrajectoryMessage | null {
         timestamp: event.time,
         tool_call_id: String(message.source.callId),
         is_error: message.content[0]?.isError === true || event.data.error !== undefined,
+        [skillEvidenceText]: textFromContent(message.content, true),
       };
     }
     default:
@@ -268,22 +313,22 @@ function toolCallsFromContent(content: readonly ContentBlock[]): ToolCall[] {
 }
 
 /** Render message content blocks as one plain-text string; tool calls stay visible as `[tool_call]`. */
-function textFromContent(content: readonly ContentBlock[]): string {
-  return content
-    .map(textFromBlock)
+function textFromContent(content: readonly ContentBlock[], preserveWhitespace = false): string {
+  const text = content
+    .map((block) => textFromBlock(block, preserveWhitespace))
     .filter(Boolean)
-    .join("\n")
-    .trim();
+    .join("\n");
+  return preserveWhitespace ? text : text.trim();
 }
 
-function textFromBlock(block: ContentBlock): string {
+function textFromBlock(block: ContentBlock, preserveWhitespace: boolean): string {
   switch (block.type) {
     case "text":
       return block.text;
     case "tool-call":
       return `[tool_call] ${block.name}(${block.arguments})`;
     case "tool-result":
-      return textFromContent(block.content);
+      return textFromContent(block.content, preserveWhitespace);
     default:
       // reasoning and image blocks carry no durable fact text worth storing.
       return "";

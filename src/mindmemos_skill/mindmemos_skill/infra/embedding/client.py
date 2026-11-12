@@ -1,15 +1,17 @@
 """Concurrent batches of validated AsyncOpenAI-compatible embeddings."""
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 
 from ..database.vector import Vector
+from ..model_access.openai import open_embedding_batches
 from .base import EmbeddingModel
 from .config import OpenAIEmbeddingConfig
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
+    from openai.types import CreateEmbeddingResponse
 
 
 @EmbeddingModel.register("openai_embedding")
@@ -46,31 +48,20 @@ class OpenAIEmbeddingClient(EmbeddingModel[OpenAIEmbeddingConfig]):
             return []
         if any(not isinstance(text, str) for text in texts):
             raise TypeError("Embedding inputs must be strings")
-        if self._client is not None:
-            return await self._embed(self._client, texts)
-        from openai import AsyncOpenAI
+        async with open_embedding_batches(self.config, client=self._client) as send:
+            return await self._embed(send, texts)
 
-        async with AsyncOpenAI(
-            base_url=self.config.base_url,
-            api_key=self.config.api_key if self.config.api_key else "unused",
-            timeout=self.config.timeout_s,
-            max_retries=self.config.max_retries,
-        ) as client:
-            return await self._embed(client, texts)
-
-    async def _embed(self, client: "AsyncOpenAI", texts: Sequence[str]) -> list[list[float]]:
+    async def _embed(
+        self,
+        send: Callable[[list[str]], Awaitable["CreateEmbeddingResponse"]],
+        texts: Sequence[str],
+    ) -> list[list[float]]:
         """Run all batches concurrently and flatten validated vectors in input order."""
         validator = Vector(self.config.dimensions)
-        options = {"dimensions": self.config.dimensions} if self.config.send_dimensions else {}
 
         async def embed_batch(batch: list[str]) -> list[list[float]]:
             """Request and validate the vectors for one input batch."""
-            try:
-                response = await client.embeddings.create(
-                    model=self.config.model, input=batch, encoding_format="float", **options
-                )
-            except Exception as exc:
-                raise RuntimeError(f"Embedding request failed: {type(exc).__name__}") from None
+            response = await send(batch)
             entries = sorted(response.data, key=lambda entry: entry.index)
             if [entry.index for entry in entries] != list(range(len(batch))):
                 raise ValueError("Embedding response indices must match the input batch")

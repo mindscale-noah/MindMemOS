@@ -8,6 +8,7 @@ from .models import (
     FeedbackMode,
     FileMessage,
     GetResult,
+    ImageRef,
     MemoryAddItem,
     MemoryLineage,
     MemoryPageResult,
@@ -20,9 +21,11 @@ from .models import (
     TextMessage,
     UrlMessage,
 )
+from .typing import SkillContext
 
 __all__ = [
     "MemoryClient",
+    "SkillContext",
     "AsyncMemoryClient",
     "AddResult",
     "FeedbackMode",
@@ -38,6 +41,7 @@ __all__ = [
     "Message",
     "TextMessage",
     "DialogueMessage",
+    "ImageRef",
     "UrlMessage",
     "FileMessage",
 ]

@@ -71,6 +71,21 @@ The NLP assets are for Memory. Skip the two NLP commands when running only Skill
 
 By default, `make dev` enables both APIs, the UI, Kafka tasks, and OTLP monitoring. Memory uses Qdrant and Neo4j. The Skill example uses a separate PostgreSQL database. The launcher selects local containers from the resolved connection settings.
 
+### 1.4 Multimodal Memory
+
+In `config/mindmemos/dev.yaml`, set `algo_config.multimodal.mode` to `basic` or `enhanced`. The default `"off"` keeps text-only mode. Both image modes require an S3-compatible `blob_store`. Configure `mm_embed_model_router` for image similarity search and a vision-capable chat model for enhanced extraction. See the [multimodal evaluation guide](../evaluation/memory_evaluation.md#multimodal-memory-evaluation) for configuration examples.
+
+`make dev SERVICE=memory UI=0` starts MinIO and initializes the bucket when multimodal mode is enabled globally and the storage endpoint is local. The default port is 9100. Remote storage uses the configured S3 endpoint, bucket, and credentials. To start local MinIO for a project-specific override, run:
+
+```bash
+docker compose --env-file .env -f dockers/compose.yaml up -d --wait minio
+docker compose --env-file .env -f dockers/compose.yaml run --rm minio-init
+```
+
+Install `mindmemos[s3]` for production. Set `MINDMEMOS_S3_ENDPOINT`, `MINDMEMOS_S3_BUCKET`, `MINDMEMOS_S3_ACCESS_KEY`, and `MINDMEMOS_S3_SECRET_KEY` for the connection. Set `MINDMEMOS_S3_PRESIGN_ENDPOINT` if clients need a different address from the internal storage endpoint. For signed proxy URLs, forward `GET /v1/memory/images/{blob_id}` with the original query parameters through the gateway.
+
+For rolling upgrades, keep multimodal mode `"off"` while updating the Memory API and Kafka workers. Keep existing collection names, project IDs, and vector dimensions. With `database.qdrant.auto_create` enabled, startup adds the provenance index to the existing Add Record collection and existing records are immediately queryable. Enable multimodal mode once the upgraded API and workers are ready. To roll back, disable multimodal mode and drain queued image tasks before rolling back the processes. Retain Qdrant and object storage data. The Console's [lifecycle and relationship graph API](internal-memory-api.md) uses project-scoped gateway tokens.
+
 ## 2. Deploy the UI
 
 ### Start the UI with local APIs

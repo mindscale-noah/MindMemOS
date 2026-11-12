@@ -2,11 +2,11 @@
 
 from ..api.typing import (
     AlgoSkillEvolveResult,
+    EvolutionRequest,
     OrganizeRequest,
     OrganizeResult,
     RecommendRequest,
     RecommendResult,
-    SkillPipelineRequest,
     TrainingRequest,
     TrainingSplit,
 )
@@ -35,7 +35,7 @@ __all__ = [
     "RecommendRequest",
     "RecommendResult",
     "TrainingPipeline",
-    "SkillPipelineRequest",
+    "EvolutionRequest",
     "AlgoSkillEvolveResult",
     "TrainingRequest",
     "TrainingSplit",

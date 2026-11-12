@@ -6,8 +6,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from ....infra.database import TableSpec
 from ....infra.database.typing import UTCDateTime
 from ....logging.typing import TaskLogRecord
-from ...constants import SKILL_TASK_LOGS_TABLE, SKILL_TASKS_TABLE
-from .typing import TaskRecord
+from ...constants import (
+    SKILL_PROJECT_TASK_LEASES_TABLE,
+    SKILL_PROJECT_TASKS_TABLE,
+    SKILL_TASK_LOGS_TABLE,
+    SKILL_TASKS_TABLE,
+)
+from .typing import ProjectTaskLease, ProjectTaskLock, TaskRecord
 
 
 def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
@@ -17,7 +22,7 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         metadata: Shared business table metadata.
 
     Returns:
-        Task and log registrations.
+        Task, log, and project admission registrations.
     """
     json_type = JSON().with_variant(JSONB(), "postgresql")
     tasks = Table(
@@ -41,8 +46,24 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
         Column("created_at", UTCDateTime(), nullable=False, comment="Initial commit time."),
         Column("updated_at", UTCDateTime(), nullable=False, comment="Latest state change time."),
         Index("skill_tasks_project_idx", "project_id", "created_at"),
+        Index("skill_tasks_project_active_idx", "project_id", "kind", "status"),
         Index("skill_tasks_dispatch_idx", "status", "next_notify_at"),
         Index("skill_tasks_lease_idx", "status", "lease_expires_at"),
+    )
+    projects = Table(
+        SKILL_PROJECT_TASKS_TABLE,
+        metadata,
+        Column("project_id", Text, primary_key=True, comment="Project whose admissions share this lock row."),
+    )
+    leases = Table(
+        SKILL_PROJECT_TASK_LEASES_TABLE,
+        metadata,
+        Column("task_id", Text, primary_key=True, comment="Server-generated identity of the task holding the lease."),
+        Column("project_id", Text, nullable=False, comment="Project whose capacity the task uses."),
+        Column("kind", Text, nullable=False, comment="Algorithm type of the admitted task."),
+        Column("status", Text, nullable=False, comment="Queued or running state of the admitted task."),
+        Column("expires_at", UTCDateTime(), nullable=False, comment="Deadline by which the task must renew its lease."),
+        Index("skill_project_task_leases_project_expiry_idx", "project_id", "expires_at"),
     )
     logs = Table(
         SKILL_TASK_LOGS_TABLE,
@@ -60,4 +81,6 @@ def build_tables(metadata: MetaData) -> tuple[TableSpec, ...]:
     return (
         TableSpec(name=SKILL_TASK_LOGS_TABLE, table=logs, insert_model=TaskLogRecord),
         TableSpec(name=SKILL_TASKS_TABLE, table=tasks, insert_model=TaskRecord),
+        TableSpec(name=SKILL_PROJECT_TASKS_TABLE, table=projects, insert_model=ProjectTaskLock),
+        TableSpec(name=SKILL_PROJECT_TASK_LEASES_TABLE, table=leases, insert_model=ProjectTaskLease),
     )

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from mindmemos_skill.api.service import SkillService
 from mindmemos_skill.api.typing import (
-    CollectionEvolutionRequest,
+    EvolutionRequest,
     EvolutionRunResult,
     RegisterRequest,
     ReportTrajectoryRequest,
@@ -387,7 +387,7 @@ async def _evolve_case(
     if state["members"]:
         return
     result = await service.run_evolution(
-        CollectionEvolutionRequest(
+        EvolutionRequest(
             project_id=project_id,
             pipeline=pipeline,
             skill_version_ids=version_ids,
@@ -412,7 +412,7 @@ def _stats(slots):
 
 
 def _summary(rows, config):
-    """Compute paired case means and execution token totals, including resumed slots."""
+    """Compute paired means, token totals, and final errors across all stages, including resumed runs."""
     included = [
         row
         for row in rows
@@ -447,6 +447,7 @@ def _summary(rows, config):
         for key in ("baseline", "offline-evolution")
     }
     errors = sum(slot["status"] in {"error", "retryable"} for row in rows for slot in row["collect"] + row["test"])
+    errors += sum(row["status"] == "evolution_failed" for row in rows)
     return dict(
         cases=rows,
         included_cases=len(included),

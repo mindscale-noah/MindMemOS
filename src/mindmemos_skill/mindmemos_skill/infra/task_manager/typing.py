@@ -9,6 +9,10 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field
 
 from ...logging.context import capture_trace_context, current_request_id
 
+GRAPH_BUILD_TASK = "skill.graph_build"
+JUDGE_TASK = "skill.judge"
+EVOLVE_TASK = "skill.evolve"
+
 
 class TaskStatus(StrEnum):
     """Lifecycle state of one submitted task."""

@@ -43,3 +43,21 @@ class GraphConflictError(MindMemosSkillError):
 
 class UnsupportedPipelineError(MindMemosSkillError):
     """The selected pipeline cannot run in this deployment."""
+
+
+class ProjectTaskBusyError(MindMemosSkillError):
+    """A project has reached its limit for queued and running algorithm tasks."""
+
+    def __init__(self, task_id: str, kind: str, status: str):
+        """Identify the existing task within the caller's authorized project.
+
+        Args:
+            task_id: Identity of the task holding the slot.
+            kind: Trusted Skill task name.
+            status: Current queued or running state.
+        """
+        self.task_id = task_id
+        self.kind = kind
+        self.status = status
+        service = kind.removeprefix("skill.").replace("_", " ").capitalize()
+        super().__init__(f"{service} already has a {status} task in this project (task ID: {task_id}).")

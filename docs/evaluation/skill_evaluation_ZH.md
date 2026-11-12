@@ -305,11 +305,26 @@ cp -n config/mindmemos_eval/skill_evolve_offline/dev.example.yaml config/mindmem
 | 用途 | 代理与模型 | 思考模式 | 配置位置 |
 | --- | --- | --- | --- |
 | 采集初始轨迹和复测 | `claude-code` · `claude-opus-4-6` | 示例未显式设置，由 Harbor 启动的代理决定 | 评测 YAML 的 `environment.config.agent` 和 `environment.config.model` |
-| 演进 Skill | `claude` · `deepseek-v4-flash` | `reasoning_effort` 未设置，客户端使用默认行为 | 服务 YAML 中 `service.agents.offline_evolution_evolver_deepseek_v4_flash_claude.config` |
+| 演进 Skill | `claude` · `deepseek-v4-flash` | `reasoning_effort` 未设置，客户端使用默认行为 | 服务 YAML 中 `service.agents.offline_evolution_evolver_claude.config` |
 
 在评测 YAML 中，保留 `environment.config.agent_env` 列出的变量名。在运行终端导出供应商要求的 `ANTHROPIC_API_KEY`，或网关使用的 `ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_BASE_URL`。本机演进代理的 `model`、`api_key` 和 `base_url` 填在上表对应的服务配置中。`service.evolution_pipelines.offline.config.evolver.config.agent` 选择该代理。
 
 如果数据下载到了其他位置，将评测 YAML 的 `data.config.benchmark_root` 指向包含 `tasks/` 的目录。默认是 `data/mindmemos_skill/skillsbench`。
+
+演进默认跳过同一项目、同一输入 Skill 版本已消费的轨迹。服务配置中的开关为：
+
+```yaml
+service:
+  evolution_pipelines:
+    offline:
+      config:
+        traj_collect:
+          exclude_consumed: true
+```
+
+设为 `false` 可重复使用已消费轨迹。评测也可在自己的 YAML 中用 `pipeline_overrides.traj_collect.exclude_consumed: false` 覆盖服务设置。`trajectory_limit` 限制筛选后纳入的轨迹数；没有未消费轨迹时，新运行报告无可用轨迹，不调用演进模型。
+
+消费记录在候选结果保存后、版本发布前写入。算法失败不会新增消费记录；发布失败保留记录，同一 `run_id` 可以复用候选结果继续发布。同一运行的恢复使用已冻结证据，不受重新筛选影响。此开关过滤已消费记录，不提供不同运行之间的并发领取锁。
 
 ### 3. 检查输入并运行
 

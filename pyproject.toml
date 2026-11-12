@@ -17,6 +17,7 @@ dependencies = [
 dev = [
     "harbor==0.24.0; python_version >= '3.12'",
     "httpx[socks]>=0.28.1",
+    "mindmemos[s3]",
     "openai>=2.37.0",
     "pre-commit>=4.6.0",
     "py-spy>=0.4.2",

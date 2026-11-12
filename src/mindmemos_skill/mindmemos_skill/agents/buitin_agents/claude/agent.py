@@ -1,12 +1,18 @@
-"""Claude Code integration using the shared synchronous agent contract."""
+"""Run Claude Code through the shared native agent contract."""
 
+from os import getenv
 from pathlib import Path
 
+from ....infra.model_access.platform import PLATFORM_CHAT_MODEL
 from ...base import Agent
 from ...typing import AgentResult
 from ..cli import environment, parse_json_lines, run_cli, token_usage
-from ..constants import ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV, ANTHROPIC_BASE_URL_ENV, CLAUDE_MAX_TOKENS_ENV
+from ..constants import ANTHROPIC_AUTH_TOKEN_ENV, ANTHROPIC_BASE_URL_ENV, CLAUDE_MAX_TOKENS_ENV
 from .config import ClaudeConfig
+
+_NO_PROXY_ENV = "NO_PROXY"
+_NO_PROXY_LOWER_ENV = "no_proxy"
+_DISABLE_NONESSENTIAL_TRAFFIC_ENV = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
 
 
 @Agent.register("claude")
@@ -27,7 +33,9 @@ class ClaudeAgent(Agent[ClaudeConfig]):
         Returns:
             Final answer, native event trajectory, and reported token usage.
         """
-        self.config.require_connection()
+        use_platform = self.config.transport == "platform_gateway"
+        if not use_platform:
+            self.config.require_connection()
         command = [
             self.config.cli_path,
             "--print",
@@ -38,11 +46,12 @@ class ClaudeAgent(Agent[ClaudeConfig]):
             "--permission-mode",
             "dontAsk",
         ]
-        if self.config.api_key is not None or self.config.base_url is not None:
+        if use_platform or self.config.api_key is not None or self.config.base_url is not None:
             # Settings-file env values otherwise override the explicit process environment.
             command.extend(["--setting-sources", ""])
-        if self.config.model:
-            command.extend(["--model", self.config.model])
+        model = PLATFORM_CHAT_MODEL if use_platform else self.config.model
+        if model:
+            command.extend(["--model", model])
         if self.config.reasoning_effort:
             command.extend(["--effort", self.config.reasoning_effort])
         if self.config.max_turns is not None:
@@ -50,14 +59,27 @@ class ClaudeAgent(Agent[ClaudeConfig]):
         if system:
             command.extend(["--system-prompt", system])
         command.extend(self.config.extra_args)
-        overrides = environment(
-            self.config,
-            ANTHROPIC_AUTH_TOKEN_ENV if self.config.base_url else ANTHROPIC_API_KEY_ENV,
-            ANTHROPIC_BASE_URL_ENV,
-        )
+        overrides = {}
         if self.config.max_completion_tokens is not None:
             overrides[CLAUDE_MAX_TOKENS_ENV] = str(self.config.max_completion_tokens)
-        stream = parse_json_lines((await self._run_cli(command, workspace, overrides, user)), cli_name="Claude")
+        if use_platform:
+            from ....infra.model_access.anthropic import open_messages_relay
+
+            async with open_messages_relay() as (base_url, capability):
+                overrides.update(
+                    {
+                        ANTHROPIC_BASE_URL_ENV: base_url,
+                        ANTHROPIC_AUTH_TOKEN_ENV: capability,
+                        _NO_PROXY_ENV: f"{getenv(_NO_PROXY_ENV, '')},127.0.0.1".lstrip(","),
+                        _NO_PROXY_LOWER_ENV: f"{getenv(_NO_PROXY_LOWER_ENV, '')},127.0.0.1".lstrip(","),
+                        _DISABLE_NONESSENTIAL_TRAFFIC_ENV: "1",
+                    }
+                )
+                stdout = await self._run_cli(command, workspace, overrides, user)
+        else:
+            overrides.update(environment(self.config, ANTHROPIC_AUTH_TOKEN_ENV, ANTHROPIC_BASE_URL_ENV))
+            stdout = await self._run_cli(command, workspace, overrides, user)
+        stream = parse_json_lines(stdout, cli_name="Claude")
         terminal = next((event for event in reversed(stream) if event.get("type") == "result"), None)
         if terminal is None or terminal.get("is_error") or terminal.get("subtype") not in {None, "success"}:
             raise RuntimeError(f"Claude did not complete: {terminal}")

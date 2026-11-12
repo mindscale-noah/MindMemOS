@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from typing import Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .typing import SkillContext
 
 AddMode = Literal["sync", "async"]
 FeedbackMode = Literal["sync", "async"]
@@ -25,6 +27,30 @@ class TextMessage(BaseModel):
     text: str
 
 
+class ImageRef(BaseModel):
+    """An image attached to a dialogue turn or a search query.
+
+    Mirrors :class:`mindmemos.typing.memory.ImageRef`. Set exactly one of ``path`` (readable by
+    the server under its allowed roots), ``url``, ``data`` (base64 or a data URI) or ``blob_id``
+    (an image already stored for the project, as returned in search results). Images are
+    accepted by ``vanilla`` when the project's ``algo_config.multimodal.mode`` is basic or enhanced.
+    """
+
+    path: str | None = None
+    url: str | None = None
+    data: str | None = None
+    blob_id: str | None = None
+    mime_type: str | None = None
+    image_id: str | None = None
+    caption: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> ImageRef:
+        if sum(1 for value in (self.path, self.url, self.data, self.blob_id) if value) != 1:
+            raise ValueError("image must set exactly one of path, url, data, blob_id")
+        return self
+
+
 class DialogueMessage(BaseModel):
     """One conversational turn to add as memory.
 
@@ -35,6 +61,8 @@ class DialogueMessage(BaseModel):
     content: str
     timestamp: int | None = None
     """Dialogue timestamp in 13-digit milliseconds. Leave unset when unavailable."""
+    images: list[ImageRef] = Field(default_factory=list)
+    """Images attached to this turn (multimodal mode only). May be the only content."""
 
 
 class UrlMessage(BaseModel):
@@ -119,7 +147,15 @@ class MemorySearchHit(BaseModel):
     source_timestamp: str | None = None
     lineage: MemoryLineage | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    """Business metadata attached to the memory by the server."""
+    """Business metadata attached to the memory by the server.
+
+    Image hits carry ``blob_id`` (stable id for ``get_image`` / re-adding) and may carry
+    ``image_url`` — a permanent public-mirror URL or a short-lived presigned link you can fetch
+    directly, or a signed ``/v1/memory/images/{blob_id}?...&expires=<unix>&signature=<hmac>``
+    proxy path (resolve against your ``base_url``; also fetchable directly with no API key,
+    until it expires). ``get_image(blob_id, metadata['user_id'])`` re-downloads by id whatever
+    the shape or expiry.
+    """
 
 
 class SearchResult(BaseModel):
@@ -189,11 +225,20 @@ def serialize_messages(messages: list[Message | dict[str, Any]]) -> list[dict[st
     """Serialize typed or raw message objects for request bodies."""
     result: list[dict[str, Any]] = []
     for msg in messages:
-        if isinstance(msg, BaseModel):
+        if isinstance(msg, DialogueMessage):
+            data = msg.model_dump(exclude={"images"})
+            if msg.images:
+                data["images"] = [_serialize_image(image) for image in msg.images]
+            result.append(data)
+        elif isinstance(msg, BaseModel):
             result.append(msg.model_dump())
         else:
             result.append(msg)
     return result
+
+
+def _serialize_image(image: ImageRef | dict[str, Any]) -> dict[str, Any]:
+    return image.model_dump(exclude_none=True) if isinstance(image, BaseModel) else dict(image)
 
 
 def serialize_feedback_recalled_memories(
@@ -229,8 +274,27 @@ def build_add_body(
     agent_id: str | None = None,
     session_id: str | None = None,
     metadata: dict[str, Any] | None = None,
+    skill_context: list[SkillContext | dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build a memory add request body without empty optional fields."""
+    """Build a Memory add body, preserving explicit legacy Skill references.
+
+    Args:
+        user_id: Business user who owns the messages.
+        messages: Typed or JSON Memory inputs in execution order.
+        mode: Synchronous processing or asynchronous queueing.
+        app_id: Optional application identity.
+        agent_id: Optional agent identity.
+        session_id: Optional conversation identity.
+        metadata: Optional business metadata.
+        skill_context: Legacy source references containing name, content_hash,
+            optional base_version_id, version_label and usage; None omits the field.
+
+    Returns:
+        The original Memory protocol body, without a standalone Skill request.
+
+    Raises:
+        ValidationError: A legacy Skill reference does not match the Memory contract.
+    """
     body: dict[str, Any] = {"user_id": user_id, "messages": serialize_messages(messages), "mode": mode}
     if app_id:
         body["app_id"] = app_id
@@ -240,6 +304,13 @@ def build_add_body(
         body["session_id"] = session_id
     if metadata:
         body["metadata"] = metadata
+    if skill_context is not None:
+        body["skill_context"] = [
+            SkillContext.model_validate(item.model_dump() if isinstance(item, BaseModel) else item).model_dump(
+                mode="json", exclude_none=True
+            )
+            for item in skill_context
+        ]
     return body
 
 
@@ -256,6 +327,8 @@ def build_search_body(
     app_id: str | None = None,
     agent_id: str | None = None,
     session_id: str | None = None,
+    query_images: list[ImageRef | dict[str, Any]] | None = None,
+    multimodal: bool = False,
 ) -> dict[str, Any]:
     """Build a memory search request body without empty optional fields."""
     if not isinstance(rerank, bool):
@@ -278,6 +351,10 @@ def build_search_body(
         body["session_id"] = session_id
     if filters:
         body["filters"] = filters
+    if query_images:
+        body["query_images"] = [_serialize_image(image) for image in query_images]
+    if multimodal:
+        body["multimodal"] = True
     return body
 
 

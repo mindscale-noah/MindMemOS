@@ -20,10 +20,9 @@ from ....infra.database import Database, Filter
 from ....infra.database.scoped import ScopedDatabase
 from ....skill import Skill, SkillSnapshot
 from ...access import _project_id_from_database
-from ...constants import (
-    SKILL_VERSIONS_TABLE,
-    SKILLS_TABLE,
-)
+from ...constants import LEGACY_SKILL_ID_MAP, LEGACY_SKILL_SOURCE, SKILL_VERSIONS_TABLE, SKILLS_TABLE
+from ...typing import LegacySkillIdMapping
+from .legacy import legacy_target_id, same_legacy_version
 from .typing import SceneData, SkillRecord, SkillVersionRecord, SkillVersionSummary, SkillVersionWrite, VersionNaming
 from .versions import next_label
 
@@ -106,7 +105,7 @@ class SkillDataService:
                 },
                 filters={
                     "project_id": project_id,
-                    "version_id": version_id,
+                    "version_id": version.version_id,
                     "version_revision": version.version_revision,
                 },
             )
@@ -148,6 +147,7 @@ class SkillDataService:
         Raises:
             SkillNotFoundError: The version or its visible family is absent.
         """
+        version_id = await self.legacy_reference("version", version_id)
         row = await self.database.get(SKILL_VERSIONS_TABLE, version_id)
         if row is None:
             raise SkillNotFoundError(f"Version not found: {version_id}")
@@ -165,7 +165,7 @@ class SkillDataService:
         Raises:
             SkillNotFoundError: Any version or its visible owning Skill is absent.
         """
-        identities = list(dict.fromkeys(version_ids))
+        identities = list(dict.fromkeys([await self.legacy_reference("version", item) for item in version_ids]))
         if not identities:
             return
         project_id = _project_id_from_database(self.database)
@@ -263,6 +263,114 @@ class SkillDataService:
                 visible.append(SkillVersionRecord.model_validate(row))
         return visible
 
+    async def replicate_legacy_version(
+        self, version: SkillVersionRecord, legacy_family_id: str, legacy_version_id: str
+    ) -> bool:
+        """Store an immutable legacy version and its ID mappings in the active transaction.
+
+        Args:
+            version: Converted version with central IDs and legacy provenance.
+            legacy_family_id: Exact family ID used by Memory.
+            legacy_version_id: Exact version ID used by Memory.
+
+        Returns:
+            Whether the version was saved or already present. False means its parent is missing.
+        """
+        key = {"project_id": version.project_id, "skill_id": version.skill_id}
+        family = await self.database.get(SKILLS_TABLE, key)
+        if family is None:
+            old_family = await self.database.get(SKILLS_TABLE, key | {"skill_id": legacy_family_id})
+            if old_family is not None and old_family["registration_source"] == LEGACY_SKILL_SOURCE:
+                raise ValueError("Legacy family was imported under an incompatible ID")
+        elif family["registration_source"] != LEGACY_SKILL_SOURCE or family["is_deleted"]:
+            raise ValueError("Destination legacy Skill family conflicts")
+
+        existing = await self.database.get(SKILL_VERSIONS_TABLE, version.version_id)
+        if existing is None:
+            parent = None
+            if version.parent_version_ids:
+                parent = await self.database.get(SKILL_VERSIONS_TABLE, version.parent_version_ids[0])
+                if parent is None or family is None:
+                    return False
+                if parent["skill_id"] != version.skill_id or parent["origin"] != LEGACY_SKILL_SOURCE:
+                    raise ValueError("Legacy parent belongs to another Skill family")
+                # Serialize label allocation and deletion against concurrent deliveries to the same family.
+                locked = await self.database.update(
+                    SKILLS_TABLE,
+                    {"registration_source": LEGACY_SKILL_SOURCE},
+                    filters=key | {"is_deleted": False, "registration_source": LEGACY_SKILL_SOURCE},
+                )
+                if not locked:
+                    raise ValueError("Destination legacy Skill family conflicts")
+            labels = [
+                row["version_label"]
+                for row in await self.database.select(SKILL_VERSIONS_TABLE, filters=key, fields=["version_label"])
+            ]
+            label = next_label(parent["version_label"] if parent else None, labels, algorithm="legacy-relay")
+            version = version.model_copy(update={"version_label": label})
+            inserted = await self.database.upsert(
+                SKILL_VERSIONS_TABLE, [version.model_dump()], conflict_fields=["project_id", "version_id"]
+            )
+            if not inserted:
+                existing = await self.database.get(SKILL_VERSIONS_TABLE, version.version_id)
+        if existing is not None and not same_legacy_version(SkillVersionRecord.model_validate(existing), version):
+            raise ValueError("Legacy Skill version conflicts with stored data")
+        if family is None:
+            initial = SkillRecord(
+                **key,
+                name=version.name,
+                metadata=version.metadata,
+                registration_source=LEGACY_SKILL_SOURCE,
+                active_version_id=version.version_id,
+                created_at=version.created_at,
+                updated_at=version.created_at,
+            )
+            await self.database.upsert(SKILLS_TABLE, [initial.model_dump()])
+        mappings = [
+            LegacySkillIdMapping(
+                project_id=version.project_id, kind="family", legacy_id=legacy_family_id, target_id=version.skill_id
+            ),
+            LegacySkillIdMapping(
+                project_id=version.project_id, kind="version", legacy_id=legacy_version_id, target_id=version.version_id
+            ),
+        ]
+        for mapping in mappings:
+            inserted = await self.database.upsert(LEGACY_SKILL_ID_MAP, [mapping.model_dump()])
+            if not inserted:
+                lookup = mapping.model_dump(exclude={"target_id"})
+                existing_mapping = await self.database.get(LEGACY_SKILL_ID_MAP, lookup)
+                if existing_mapping is None or existing_mapping["target_id"] != mapping.target_id:
+                    raise ValueError("Legacy ID mapping conflicts with stored data")
+        return True
+
+    async def delete_legacy_family(self, legacy_family_id: str) -> None:
+        """Soft-delete only the exact family imported from Memory.
+
+        Args:
+            legacy_family_id: Original Memory family identity in the active project.
+
+        Raises:
+            ValueError: The mapped family is not owned by the legacy importer.
+        """
+        project_id = _project_id_from_database(self.database)
+        key = {"project_id": project_id, "skill_id": legacy_target_id(project_id, legacy_family_id, "sk-")}
+        family = await self.database.get(SKILLS_TABLE, key)
+        if family is None or family["is_deleted"]:
+            return
+        if family["registration_source"] != LEGACY_SKILL_SOURCE:
+            raise ValueError("Destination Skill family is not a legacy import")
+        await self.delete(SkillRecord.model_validate(family))
+
+    async def legacy_reference(self, kind: str, reference: str) -> str:
+        """Translate an exact legacy ID within the active project."""
+        if "-" not in reference or len(reference) != 36:
+            return reference
+        project_id = _project_id_from_database(self.database)
+        row = await self.database.get(
+            LEGACY_SKILL_ID_MAP, {"project_id": project_id, "kind": kind, "legacy_id": reference}
+        )
+        return row["target_id"] if row is not None else reference
+
     async def resolve_family(self, reference: str) -> SkillRecord:
         """Resolve an exact ID/alias, then a unique ID prefix.
 
@@ -272,6 +380,7 @@ class SkillDataService:
         Returns:
             The resolved central record.
         """
+        reference = await self.legacy_reference("family", reference)
         project_id = _project_id_from_database(self.database)
         candidates = await self._rows(
             SKILLS_TABLE,
@@ -330,6 +439,7 @@ class SkillDataService:
         Returns:
             Owning family and selected version; a family selects its active version.
         """
+        reference = await self.legacy_reference("version", reference)
         project_id = _project_id_from_database(self.database)
         if reference.startswith(("skv-", "v_")):
             if reference in ("skv-", "v_"):
@@ -439,7 +549,11 @@ class SkillDataService:
         """
         if skill.is_deleted:
             raise SkillNotFoundError("Skill not found")
-        row = await self.database.get(SKILL_VERSIONS_TABLE, version_id or skill.active_version_id)
+        selected = version_id or skill.active_version_id
+        if selected is None:
+            raise SkillVersionNotFoundError("Skill has no active version; supply an exact version ID")
+        selected = await self.legacy_reference("version", selected)
+        row = await self.database.get(SKILL_VERSIONS_TABLE, selected)
         if row is None or row["project_id"] != skill.project_id or row["skill_id"] != skill.skill_id:
             raise SkillNotFoundError(f"Version does not belong to this Skill: {version_id or skill.active_version_id}")
         return SkillVersionRecord.model_validate(row)
@@ -485,6 +599,10 @@ class SkillDataService:
         project_id = _project_id_from_database(self.database)
         if content_hash is None and skill_hash is None and version_id is None:
             raise ValueError("Supply a hash or version_id")
+        if skill_id is not None:
+            skill_id = await self.legacy_reference("family", skill_id)
+        if version_id is not None:
+            version_id = await self.legacy_reference("version", version_id)
         filters = {"project_id": project_id}
         for key, value in (
             ("content_hash", content_hash),
@@ -678,6 +796,9 @@ class SkillDataService:
         naming = naming or VersionNaming()
         version_id = version_id or self.new_version_id()
         parent_id = base_version_id or skill.active_version_id
+        if parent_id is None:
+            raise SkillVersionNotFoundError("Skill has no active version; supply an exact base version ID")
+        parent_id = await self.legacy_reference("version", parent_id)
         version = self._new_version(skill, snapshot, version_id, [parent_id], message)
         version = version.model_copy(update={"origin": commit_source})
         if file_meta is not None:
@@ -840,8 +961,8 @@ class SkillDataService:
         """
         async with self.database.transaction() as tx:
             (await self._advance(tx, skill, skill.active_version_id))
-            await SkillDataService(tx).version(skill, version_id)
-            (await self._advance(tx, skill, version_id))
+            version = await SkillDataService(tx).version(skill, version_id)
+            (await self._advance(tx, skill, version.version_id))
             return SkillRecord.model_validate((await tx.get(SKILLS_TABLE, self._key(skill))))
 
     async def set_meta(
@@ -871,7 +992,7 @@ class SkillDataService:
         try:
             async with self.database.transaction() as tx:
                 await SkillDataService(tx)._check_alias(skill, alias)
-                if (await tx.update(SKILLS_TABLE, values, filters=self._key(skill))) != 1:
+                if (await tx.update(SKILLS_TABLE, values, filters=self._key(skill) | {"is_deleted": False})) != 1:
                     raise SkillNotFoundError("Skill was removed during metadata update")
                 return SkillRecord.model_validate((await tx.get(SKILLS_TABLE, self._key(skill))))
         except IntegrityError as exc:

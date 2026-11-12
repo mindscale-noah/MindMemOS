@@ -160,6 +160,10 @@ class SkillManageConfig(RetrievalStrategyConfig):
                 raise ValueError("Unsupported node embedding template")
             if profile.query_template not in ("legacy_query_v1", "scene_graph_query_v2"):
                 raise ValueError("Unsupported query embedding template")
+        if self.embedding.space_id is not None and (
+            self.embedding_profile is None or self.embedding_profile.space_id != self.embedding.space_id
+        ):
+            raise ValueError("Pinned Platform embeddings require their matching embedding profile")
         if self.skill_seeds > self.skill_candidates or self.scene_seeds > self.scene_candidates:
             raise ValueError("Seed budgets cannot exceed candidate budgets")
         if (

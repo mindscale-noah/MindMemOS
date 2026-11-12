@@ -1,6 +1,6 @@
 # DeepSeek Harness integration
 
-The plugin recalls Memory before the first model step and reports completed turns to Memory and Skill through the local CLI. It registers the packaged `mindmemos-cli` guide in `ctx.skills`, so the host can discover it and load its Markdown and references on demand.
+The plugin recalls Memory before the first model step and reports completed turns to Memory through the local CLI. The same call reports to Skill if the turn loads an exact version. The plugin registers the packaged `mindmemos-cli` guide in `ctx.skills`, so the host can discover it and load its Markdown and references on demand.
 
 ## Install and configure
 
@@ -25,7 +25,7 @@ Use a `file://` URL for the local entry, including on Windows. After publication
 
 - Check that `mindmemos-cli` appears in the host's Skill catalog and can load its relative references.
 - Ask about a stored fact and look for the recall hit in the plugin log.
-- Complete a turn and look for separate `Memory queued` or `Memory completed` and `Skill stored` lines with the same event ID. Use the returned Skill trajectory ID with `mindmemos skill trajectory show`.
+- Complete a turn and look for `Memory queued` or `Memory completed`. With an exact Skill version, look for `Skill stored` and use its ID with `mindmemos skill trajectory show`. Otherwise, expect `Skill skipped`.
 - To verify multi-Skill binding, use the shell and read tools to [load two exact versions](../SKILL.md#recommend-and-load-a-skill) in one turn, then check the trajectory's `skill_version_ids`.
 
 `ENOENT` points to the CLI executable path. If one destination reports `failed` or `unknown`, its line includes the available error and request identifiers. The report hook runs after `turn/end` with a completed reason. Injected context is excluded from the report.

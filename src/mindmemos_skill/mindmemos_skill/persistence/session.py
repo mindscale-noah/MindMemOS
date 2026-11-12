@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from ..infra.database.scoped import ScopedDatabase
 from .access import RepositoryDatabase, _project_id_from_database
 from .constants import (
+    LEGACY_SKILL_ID_MAP,
     SKILL_EVALUATIONS_TABLE,
     SKILL_GRAPH_EDGES_TABLE,
     SKILL_GRAPH_NODES_TABLE,
@@ -47,11 +48,10 @@ class SkillPersistenceSession:
         self._state = state
         self._active = True
         self._handles: list[RepositoryDatabase] = []
-        self.skills = SkillDataService(
-            self.repository(frozenset({SKILLS_TABLE, SKILL_VERSIONS_TABLE})), prefixed_ids=prefixed_ids
-        )
+        skill_tables = frozenset({SKILLS_TABLE, SKILL_VERSIONS_TABLE})
+        self.skills = SkillDataService(self.repository(skill_tables | {LEGACY_SKILL_ID_MAP}), prefixed_ids=prefixed_ids)
         skill_reader = SkillDataService(
-            self.repository(frozenset(), read_tables=frozenset({SKILLS_TABLE, SKILL_VERSIONS_TABLE})),
+            self.repository(frozenset(), read_tables=skill_tables | {LEGACY_SKILL_ID_MAP}),
             prefixed_ids=prefixed_ids,
         )
         self.trajectories = TrajectoryDataService(

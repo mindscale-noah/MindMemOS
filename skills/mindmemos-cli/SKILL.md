@@ -9,7 +9,7 @@ Use Memory for facts, preferences, and project decisions. Use Skills for reusabl
 
 ## Setup
 
-The plugin workflow requires an SDK 1.0.0 build that exposes `mindmemos trajectory report --help`. From a repository checkout, run `uv sync --all-packages` and use `uv run mindmemos` or the installed `.venv/bin/mindmemos`.
+The plugin workflow requires an SDK build that exposes `mindmemos skill identify --help` and `mindmemos trajectory report --help`. From a repository checkout, run `uv sync --all-packages` and use `uv run mindmemos` or the installed `.venv/bin/mindmemos`.
 
 Run `mindmemos auth` when setup is needed. In official mode, omit the URL flags. Memory uses `https://mindmemos.cn/v1/memory/*` and Skill uses `https://mindmemos.cn/v2/skills/*`. An authorized project key can serve both. For a custom deployment, give Memory the service address and Skill the full API root, then enter each key at its prompt.
 
@@ -52,7 +52,9 @@ Use `skill resolve REF` to pin an alias or family to its active version. If the 
 mindmemos skill export VERSION_ID --to DIRECTORY
 ```
 
-In OpenClaw and DeepSeek Harness, use a standalone CLI call in the host's shell tool. After export, use the host's read tool on the returned directory's `SKILL.md` in the same turn. The plugins can then associate the loaded exact version with the turn. A successful `skill show` through the shell tool also loads an exact version. If you only want to look up the identifier, use `skill resolve`.
+OpenClaw and DeepSeek Harness identify versions from successful `skill show` calls and observed reads of `SKILL.md`. For a local read, the SDK parses the Skill name and description and matches the exact source hash against registered versions. An export followed by a read can use the returned version ID to narrow the hash lookup. A recommendation, a resolve, or an export on its own is a lookup or download.
+
+Shell evidence must come from a recognized `skill show` command and identify an immutable version or match an observed source hash. An alias or family reference alone cannot identify the loaded version: its active version may change before reporting. Incomplete output and unrecognized command wrappers leave the Skill unbound; Memory reporting continues.
 
 ## Create, update, and publish
 
@@ -62,7 +64,7 @@ In OpenClaw and DeepSeek Harness, use a standalone CLI call in the host's shell 
 
 ## Report, evaluate, and evolve
 
-OpenClaw and DeepSeek Harness report each captured completed turn once through the unified CLI. When a turn loads several exact versions, one Skill trajectory records all of them. Unattributed turns use an empty version list. When there is no reporting plugin, use `mindmemos trajectory report --file event.json --json` with a stable event ID, the ordered messages, and `skill_version_ids`.
+OpenClaw and DeepSeek Harness report each captured completed turn once through the unified CLI. When a turn loads several exact versions, one Skill trajectory records all of them. An empty version list skips Skill delivery and still reports to Memory. When there is no reporting plugin, use `mindmemos trajectory report --file event.json --json` with a stable event ID, the ordered messages, and `skill_version_ids`.
 
 - Read history with `skill trajectory list REF` and `skill trajectory show TRAJECTORY_ID`.
 - Score a version or execution with `skill analyze skill REF` or `skill analyze trajectory TRAJECTORY_ID`. Read stored evaluations with `skill evaluations query REF`.

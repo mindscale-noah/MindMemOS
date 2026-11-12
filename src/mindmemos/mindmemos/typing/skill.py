@@ -29,6 +29,9 @@ from pydantic import BaseModel, Field, StringConstraints
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
+LegacySkillDeliveryKind = Literal["trajectory", "version", "deletion"]
+"""Operation sent through the Memory-to-Skill delivery queue."""
+
 
 class SkillVersionStatus(str, Enum):
     """Lifecycle status of a skill version (design §3 state machine).

@@ -13,7 +13,12 @@ from ....errors import SkillConflictError, SkillNotFoundError, SkillVersionNotFo
 from ....infra.database import Database, Filter
 from ....infra.database.scoped import ScopedDatabase
 from ...access import _project_id_from_database
-from ...constants import TRAJECTORIES_TABLE, TRAJECTORY_CONSUMPTIONS_TABLE, TRAJECTORY_VERSIONS_TABLE
+from ...constants import (
+    LEGACY_SKILL_SOURCE,
+    TRAJECTORIES_TABLE,
+    TRAJECTORY_CONSUMPTIONS_TABLE,
+    TRAJECTORY_VERSIONS_TABLE,
+)
 from ...typing import TrajectoryCounts
 from ..skills.service import SkillDataService
 from .typing import (
@@ -71,8 +76,58 @@ class TrajectoryDataService:
             await transaction.insert(TRAJECTORIES_TABLE, [record.model_dump(mode="python")])
             await self._index_versions(transaction, record)
 
+    async def replicate_legacy(self, record: TrajectoryRecord) -> int:
+        """Append resolved legacy bindings inside the caller's replication transaction."""
+        key = {"project_id": record.project_id, "trajectory_id": record.trajectory_id}
+        inserted = await self.database.upsert(
+            TRAJECTORIES_TABLE, [record.model_dump()], conflict_fields=["project_id", "trajectory_id"]
+        )
+        if inserted:
+            await self._index_versions(self.database, record)
+            return 1
+        locked = await self.database.update(
+            TRAJECTORIES_TABLE,
+            {"source": "reported"},
+            filters=key
+            | {
+                "source": "reported",
+                "rollout_id": f"{LEGACY_SKILL_SOURCE}:{record.trajectory_id}",
+                "trajectory_hash": record.trajectory_hash,
+            },
+        )
+        if not locked:
+            raise ValueError("Legacy trajectory conflicts with an existing attempt")
+        existing = await self.get(record.trajectory_id)
+        assert existing is not None  # The successful update holds the row until commit.
+        present = existing.bound_versions
+        additions = [
+            binding
+            for binding in record.skill_bindings
+            if isinstance(binding, dict) and binding["version_id"] not in present
+        ]
+        bindings = [*existing.skill_bindings, *additions]
+        original = existing.metadata.get(LEGACY_SKILL_SOURCE)
+        incoming = record.metadata[LEGACY_SKILL_SOURCE]
+        assert isinstance(incoming, dict)
+        provenance = dict(original) if isinstance(original, dict) else {}
+        if provenance.get("memory_completed_at") and not incoming.get("memory_completed_at"):
+            incoming = {k: v for k, v in incoming.items() if k not in {"memory_completed_at", "add_status"}}
+        metadata = {**existing.metadata, LEGACY_SKILL_SOURCE: provenance | incoming}
+        if additions or metadata != existing.metadata or record.reward_score != existing.reward_score:
+            await self.database.update(
+                TRAJECTORIES_TABLE,
+                {"skill_bindings": bindings, "metadata": metadata, "reward_score": record.reward_score},
+                filters=key,
+            )
+        if additions:
+            merged = existing.model_copy(update={"skill_bindings": bindings})
+            await self._index_versions(self.database, merged, existing_ids=set(present))
+        return 0
+
     @staticmethod
-    async def _index_versions(transaction, record: TrajectoryRecord) -> None:
+    async def _index_versions(
+        transaction, record: TrajectoryRecord, *, existing_ids: frozenset[str] | set[str] = frozenset()
+    ) -> None:
         """Index every exact version in the same transaction as the shared attempt."""
         seen_families = set()
         rows = []
@@ -94,7 +149,8 @@ class TrajectoryDataService:
                 received_at=record.received_at,
             )
             seen_families.add(skill_id)
-            rows.append(entry.model_dump(mode="python"))
+            if version_id not in existing_ids:
+                rows.append(entry.model_dump(mode="python"))
         if rows:
             await transaction.insert(TRAJECTORY_VERSIONS_TABLE, rows)
 
@@ -124,6 +180,29 @@ class TrajectoryDataService:
             total = await transaction.count(TRAJECTORY_VERSIONS_TABLE, filters=filters)
             consumed = await transaction.count(TRAJECTORY_CONSUMPTIONS_TABLE, filters=filters)
         return TrajectoryCounts(total=total, consumed=consumed, unconsumed=total - consumed)
+
+    async def consumed_ids(self, skill_version_id: str, trajectory_ids: list[str]) -> set[str]:
+        """Find consumed attempts within one bounded page in the active project.
+
+        Args:
+            skill_version_id: Exact input version whose consumption records to check.
+            trajectory_ids: Stored attempt IDs from the current evidence page.
+
+        Returns:
+            IDs already consumed for this version in the active project.
+        """
+        if not trajectory_ids:
+            return set()
+        rows = await self.database.select(
+            TRAJECTORY_CONSUMPTIONS_TABLE,
+            filters=[
+                Filter(field="skill_version_id", value=skill_version_id),
+                Filter(field="trajectory_id", op="in", value=trajectory_ids),
+            ],
+            fields=["trajectory_id"],
+            limit=None,
+        )
+        return {row["trajectory_id"] for row in rows}
 
     async def mark_consumed(self, skill_version_id: str, trajectory_ids: list[str], run_id: str) -> None:
         """Record first successful use without counting repeated evolution twice.
@@ -451,7 +530,8 @@ class TrajectoryDataService:
         project_id = _project_id_from_database(self.database)
         reader = self.skills or SkillDataService(self.database)
         try:
-            versions = [await reader.get(version_id) for version_id in dict.fromkeys(skill_version_ids)]
+            resolved = [await reader.get(version_id) for version_id in dict.fromkeys(skill_version_ids)]
+            versions = list({version.version_id: version for version in resolved}.values())
         except SkillNotFoundError as exc:
             raise SkillVersionNotFoundError("Skill version not found in this project") from exc
 

@@ -15,11 +15,14 @@ from mindmemos_skill.persistence import (
     ensure_collection,
 )
 from mindmemos_skill.persistence.constants import (
+    LEGACY_SKILL_ID_MAP,
     SKILL_EVALUATIONS_TABLE,
     SKILL_GRAPH_EDGES_TABLE,
     SKILL_GRAPH_NODES_TABLE,
     SKILL_GRAPH_VERSIONS_TABLE,
     SKILL_GRAPHS_TABLE,
+    SKILL_PROJECT_TASK_LEASES_TABLE,
+    SKILL_PROJECT_TASKS_TABLE,
     SKILL_TASK_LOGS_TABLE,
     SKILL_TASKS_TABLE,
     SKILL_VERSIONS_TABLE,
@@ -142,7 +145,7 @@ async def test_registration_is_lazy_and_all_columns_are_documented(tmp_path):
     try:
         persistence = create_persistence(database)
         assert not path.exists()
-        assert len(database.tables.values()) == 12
+        assert len(database.tables.values()) == 15
         for spec in database.tables.values():
             assert all(column.comment for column in spec.table.columns)
             assert set(spec.insert_model.model_fields) == set(spec.table.c.keys())
@@ -198,6 +201,9 @@ async def test_trajectory_consumption_counts_exact_versions_and_projects(store):
         (await scoped.trajectories.mark_consumed("v1", ["one"], "repeat"))
         assert (await scoped.trajectories.counts("v1")).model_dump() == {"total": 2, "consumed": 1, "unconsumed": 1}
         assert (await scoped.database.select(TRAJECTORY_CONSUMPTIONS_TABLE))[0]["run_id"] == "first"
+        assert await scoped.trajectories.consumed_ids("v1", ["one", "two", "foreign"]) == {"one"}
+        assert await scoped.trajectories.consumed_ids("v2", ["one", "three"]) == set()
+        assert await scoped.trajectories.consumed_ids("v1", []) == set()
         for identities in [["two", "foreign"], ["three"], ["missing"]]:
             with pytest.raises(ValueError, match="exact Skill version and project"):
                 (await scoped.trajectories.mark_consumed("v1", identities, "invalid"))
@@ -205,6 +211,7 @@ async def test_trajectory_consumption_counts_exact_versions_and_projects(store):
         assert (await scoped.trajectories.counts("v2")).model_dump() == {"total": 1, "consumed": 0, "unconsumed": 1}
     with store.session(Scope(fields={"project_id": "other-project"})) as scoped:
         assert (await scoped.trajectories.counts("v1")).model_dump() == {"total": 1, "consumed": 0, "unconsumed": 1}
+        assert await scoped.trajectories.consumed_ids("v1", ["one", "foreign"]) == set()
     with store.session(Scope(fields={"project_id": "local-project"})) as scoped:
         assert (await scoped.trajectories.counts("v1")).consumed == 1
 
@@ -234,9 +241,12 @@ async def test_core_only_and_no_global_registry_state(tmp_path):
             SKILL_GRAPH_NODES_TABLE,
             SKILL_GRAPH_EDGES_TABLE,
             SKILL_TASKS_TABLE,
+            SKILL_PROJECT_TASKS_TABLE,
+            SKILL_PROJECT_TASK_LEASES_TABLE,
             SKILL_TASK_LOGS_TABLE,
+            LEGACY_SKILL_ID_MAP,
         }
-        assert len(build_persistence_tables().values()) == 12
+        assert len(build_persistence_tables().values()) == 15
         (await ensure_collection(persistence))
         with persistence.maintenance():
             await persistence.skills.add(version())
@@ -425,7 +435,7 @@ async def test_central_skill_switch_preserves_history_and_checks_owner(store):
         (await store.skills.add(invalid))
         with pytest.raises(IntegrityError):
             (await store.database.update(SKILLS_TABLE, {"active_version_id": invalid.version_id}, filters=key))
-    with pytest.raises(ValueError):
+    with pytest.raises(IntegrityError):
         (await store.database.update(SKILLS_TABLE, {"active_version_id": None}, filters=key))
     with pytest.raises(IntegrityError):
         (await store.database.delete(SKILL_VERSIONS_TABLE, filters={"version_id": second.version_id}))

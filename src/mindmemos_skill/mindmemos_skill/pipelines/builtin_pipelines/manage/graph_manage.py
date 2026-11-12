@@ -8,7 +8,6 @@ from typing import cast
 
 from ....agents import Agent, OpenAIChatAgent
 from ....algos.manage.skill_manage.algorithm import SkillManageAlgorithm
-from ....algos.manage.skill_manage.build_config import restore_build_config
 from ....algos.manage.skill_manage.config import SkillManageConfig
 from ....algos.manage.skill_manage.constant import (
     METADATA_COLLECTION_SKILL_ID,
@@ -30,6 +29,7 @@ from ....api.typing import (
 from ....common.ids import generate_id
 from ....envs.typing import Task
 from ....errors import GraphNotFoundError
+from ....infra.model_access.openai import resolve_embedding_space
 from ....logging import get_logger
 from ....persistence.db_services.graphs.service import GraphDataService
 from ....persistence.db_services.graphs.typing import GraphNodeType, GraphResolution, SkillGraphRecord
@@ -41,6 +41,7 @@ from ....skill import Skill
 from ...base import Pipeline
 from ...manage import ManagePipeline
 from ...typing import GraphListItem, GraphSnapshotListItem, GraphTopology
+from .build_config import pin_embedding_space, restore_build_config
 from .config import GraphManagePipelineConfig
 
 
@@ -343,6 +344,13 @@ class GraphManagePipeline(ManagePipeline[GraphManagePipelineConfig]):
         sources = self._skills_from_versions(versions)
         prior = await self._read_prior_graph(graph)
         config = self._build_config(prior)
+        embedding = self.config.algorithm.embedding
+        space = await resolve_embedding_space(embedding)
+        if space is not None:
+            pinned = pin_embedding_space(config, embedding, space)
+            if pinned.embedding_profile != config.embedding_profile or config.embedding.space_id != space.space_id:
+                prior = None
+            config = pinned
         captured = (
             {
                 node.metadata[METADATA_COLLECTION_SKILL_ID]: node.skill_version_id

@@ -18,6 +18,9 @@
         "type": "integer",
         "minimum": 1
       },
+      "multimodal": {
+        "type": "boolean"
+      },
       "tokenBudget": {
         "type": "integer",
         "minimum": 1

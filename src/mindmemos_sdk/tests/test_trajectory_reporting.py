@@ -56,10 +56,9 @@ def delivery():
             yield client, calls
 
 
-@pytest.mark.parametrize("versions", [["version-a", "version-b", "version-a"], []])
-def test_one_call_delivers_one_skill_trajectory(delivery, versions):
+def test_one_call_delivers_one_skill_trajectory(delivery):
     client, calls = delivery
-    report = client.report_trajectory(event(versions=versions))
+    report = client.report_trajectory(event(versions=["version-a", "version-b", "version-a"]))
     assert report.memory.status == "queued"
     assert report.memory.request_id == "memory-receipt"
     assert report.skill.status == "stored"
@@ -70,9 +69,25 @@ def test_one_call_delivers_one_skill_trajectory(delivery, versions):
     assert memory[2]["messages"] == [{"role": "user", "content": "Hello"}, {"role": "tool", "content": "Done"}]
     assert memory[2]["metadata"] == {"event_id": "test-session/1", "source": "test", "turn_id": "1"}
     assert skill[2]["messages"][1]["tool_calls"][0]["id"] == skill[2]["messages"][2]["tool_call_id"]
-    assert skill[2]["skill_version_ids"] == list(dict.fromkeys(versions))
+    assert skill[2]["skill_version_ids"] == ["version-a", "version-b"]
     assert skill[2]["event_id"] == report.event_id
     assert memory[2]["user_id"] == skill[2]["user_id"] == "alice"
+
+
+@pytest.mark.parametrize("omit_versions", [False, True])
+def test_report_skips_skill_without_versions(delivery, omit_versions):
+    client, calls = delivery
+    payload = event(versions=[]).model_dump()
+    if omit_versions:
+        del payload["skill_version_ids"]
+
+    report = client.report_trajectory(payload)
+
+    assert report.memory.status == "queued"
+    assert report.skill.status == "skipped"
+    assert report.skill.code == "no_skill_versions"
+    assert not report.has_failures
+    assert [url for url, _, _ in calls] == ["https://memory.test/v1/memory/add"]
 
 
 def test_cli_retains_successful_receipt_after_timeout(delivery, monkeypatch, capsys):

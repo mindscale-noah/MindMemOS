@@ -12,6 +12,7 @@ from .models import (
     AddResult,
     FeedbackMode,
     GetResult,
+    ImageRef,
     MemoryPageResult,
     MemoryScrollResult,
     MemorySearchHit,
@@ -20,6 +21,7 @@ from .models import (
     SearchStrategy,
     StatusResult,
 )
+from .typing import SkillContext
 
 
 class AsyncMemoryClient:
@@ -54,8 +56,23 @@ class AsyncMemoryClient:
         agent_id: str | None = None,
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        skill_context: list[SkillContext | dict[str, Any]] | None = None,
     ) -> AddResult:
-        """Add content to the memory store."""
+        """Add content while preserving legacy Skill references in the Memory request.
+
+        Args:
+            messages: Typed or JSON Memory inputs in execution order.
+            user_id: Business user, falling back to the client default.
+            mode: Synchronous processing or asynchronous queueing.
+            app_id: Optional application identity.
+            agent_id: Optional agent identity.
+            session_id: Optional conversation identity.
+            metadata: Business metadata attached to the add request.
+            skill_context: Legacy Skill source references sent only to Memory.
+
+        Returns:
+            The result or enqueue receipt from Memory.
+        """
         request = self._core.add(
             messages=messages,
             user_id=user_id,
@@ -64,6 +81,7 @@ class AsyncMemoryClient:
             agent_id=agent_id,
             session_id=session_id,
             metadata=metadata,
+            skill_context=skill_context,
         )
         envelope = await self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
@@ -82,8 +100,18 @@ class AsyncMemoryClient:
         app_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        query_images: list[ImageRef | dict[str, Any]] | None = None,
+        multimodal: bool = False,
     ) -> SearchResult:
-        """Search memories."""
+        """Search memories.
+
+        ``multimodal=True`` searches stored images too (image results and facts recalled through
+        them); ``query_images`` attaches images to the query and implies it. ``query_images`` needs
+        the project's ``algo_config.multimodal.mode`` to be basic or enhanced — in off mode it is
+        rejected with error code ``search.images_unsupported`` — while a bare ``multimodal=True``
+        is silently ignored (text-only) in off mode. Image hits carry ``metadata.blob_id`` and may
+        carry ``metadata.image_url`` (see ``MemorySearchHit.metadata``).
+        """
         request = self._core.search(
             query,
             top_k=top_k,
@@ -96,9 +124,15 @@ class AsyncMemoryClient:
             app_id=app_id,
             agent_id=agent_id,
             session_id=session_id,
+            query_images=query_images,
+            multimodal=multimodal,
         )
         envelope = await self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)
+
+    async def get_image(self, blob_id: str, user_id: str) -> tuple[bytes, str]:
+        """Download a stored image (``metadata.blob_id`` of an image result) of its owner ``user_id``."""
+        return await self._transport.get_bytes(f"/v1/memory/images/{blob_id}", params={"user_id": user_id})
 
     async def get(
         self,

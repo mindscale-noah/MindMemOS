@@ -179,3 +179,94 @@ async def test_log_initialization_failure_does_not_start_a_child(tmp_path, monke
     with pytest.raises(IsADirectoryError):
         await run_claude(config(), user="prompt", workspace=tmp_path, session=request)
     launch.assert_not_called()
+
+
+async def test_platform_claude_renews_project_token_for_each_native_request(tmp_path, native, monkeypatch):
+    """Use the ordinary offline subprocess path with a session-local loopback relay."""
+    from time import time
+
+    import httpx
+    import jwt
+    from mindmemos_skill.infra.model_access import anthropic, platform
+
+    signing_key = "only-on-host-test-gateway-signing-key"
+    monkeypatch.setenv(platform.PLATFORM_MODEL_SECRET_ENV, signing_key)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "ambient-oauth")
+    monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-key")
+    now = int(time())
+    clock = iter((now, now, now + 61))
+    monkeypatch.setattr(platform, "time", lambda: next(clock))
+    tokens = []
+    original_client = httpx.AsyncClient
+
+    def provider(request):
+        assert request.url == "https://platform.invalid/internal/v1/skill-models/v1/messages?beta=true"
+        assert request.headers["anthropic-version"] == "2023-06-01"
+        assert "x-api-key" not in request.headers
+        jwt_value = request.headers["authorization"].removeprefix("Bearer ")
+        tokens.append(
+            jwt.decode(
+                jwt_value,
+                signing_key,
+                algorithms=["HS256"],
+                audience="platform-skill-model",
+                options={"verify_iat": False},
+            )
+        )
+        return httpx.Response(
+            200, text="event: message_stop\ndata: {}\n\n", headers={"Content-Type": "text/event-stream"}
+        )
+
+    monkeypatch.setattr(
+        anthropic.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(provider), **kwargs),
+    )
+    script, calls = native
+    script.write_text(
+        """
+import json
+import os
+import urllib.error
+import urllib.request
+
+for name in ('MINDMEMOS_SKILL_MODEL_GATEWAY_SECRET', 'CLAUDE_CODE_OAUTH_TOKEN',
+             'CLAUDE_CODE_USE_BEDROCK', 'ANTHROPIC_API_KEY'):
+    assert name not in os.environ
+
+base = os.environ['ANTHROPIC_BASE_URL']
+assert base.startswith('http://127.0.0.1:')
+def send(token):
+    request = urllib.request.Request(
+        base + '/v1/messages?beta=true', data=b'{"stream":true}', headers={
+            'Authorization': 'Bearer ' + token, 'anthropic-version': '2023-06-01',
+        },
+    )
+    return urllib.request.urlopen(request)
+
+try:
+    send('unrelated-session')
+except urllib.error.HTTPError as exc:
+    assert exc.code == 401
+else:
+    raise AssertionError('accepted unrelated credentials')
+
+for _ in range(2):
+    with send(os.environ['ANTHROPIC_AUTH_TOKEN']) as response:
+        assert b'event: message_stop' in response.read()
+print(json.dumps({'type': 'result', 'subtype': 'success', 'result': base}))
+"""
+    )
+    settings = ClaudeConfig(
+        transport="platform_gateway", cli_path=sys.executable, api_key="unused", base_url="https://unused.invalid"
+    )
+    gateway = platform.PlatformModelGateway("https://platform.invalid/internal/v1/skill-models", signing_key)
+    with platform.bind_platform_models(gateway, "authorized-project"):
+        result = await run_claude(settings, user="prompt", workspace=tmp_path, session=options(tmp_path))
+    assert calls[0][calls[0].index("--model") + 1] == "platform-chat"
+    assert [claims["project_id"] for claims in tokens] == ["authorized-project"] * 2
+    assert [claims["exp"] for claims in tokens] == [now + 60, now + 121]
+    async with original_client(trust_env=False) as client:
+        with pytest.raises(httpx.ConnectError):
+            await client.post(f"{result.output}/v1/messages")

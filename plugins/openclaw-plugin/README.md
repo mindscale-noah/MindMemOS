@@ -33,7 +33,7 @@ This plugin connects OpenClaw conversations to MindMemOS through the local
 
 - On every user turn, it searches memories and injects the hits as prompt context.
 - At the end of a successful turn, it calls `mindmemos trajectory report` once
-  for Memory and Skill and logs each destination's receipt.
+  for Memory and any exact Skill versions loaded in that turn.
 - The plugin manifest makes the bundled `mindmemos-cli` Skill discoverable by OpenClaw.
 
 ## Captured messages
@@ -52,10 +52,11 @@ message in OpenClaw, so it is never persisted either.
 
 ## Requirements
 
-Install an SDK 1.0.0 build that exposes `trajectory report`, then authenticate the CLI:
+Install an SDK build that exposes `skill identify` and `trajectory report`, then authenticate the CLI:
 
 ```bash
 mindmemos auth
+mindmemos skill identify --help
 mindmemos trajectory report --help
 ```
 
@@ -112,8 +113,9 @@ Optional plugin config:
   "enabled": true,
   "cli": "mindmemos",
   "topK": 5,
+  "multimodal": true,
   "tokenBudget": 2000,
-  "addMode": "async",
+  "addMode": "sync",
   "userId": "alice",
   "appId": "openclaw",
   "sessionId": "optional-session-override",
@@ -125,7 +127,11 @@ Optional plugin config:
 `userId` scopes both recall and storage to the same user. `tokenBudget` is
 optional: when set, recall runs with `memory search --token-budget` so the
 injected memories are capped by estimated tokens (token-budget retention) in
-addition to `topK`; omit it to keep legacy behavior. Configure the user with:
+addition to `topK`; omit it to keep legacy behavior. `multimodal` (default
+`true`) adds `--multimodal` to `memory search` so stored images are searched
+too; the server ignores it while the project's multimodal mode is off. `addMode`
+defaults to `sync`; `async` enqueues through the server's Kafka queue and
+requires `kafka.enabled=true`. Configure the user with:
 
 ```bash
 openclaw config set plugins.entries.mindmemos-memory.config.userId alice
@@ -158,16 +164,17 @@ assume it is the user. This avoids a subagent adopting the main user's identity.
 
 ## Skill discovery and reporting
 
-Run `openclaw skills list` to find the bundled `mindmemos-cli` guide. To bind
-remote business Skill versions to a turn, run `mindmemos skill show VERSION_ID`
-in the shell tool, or export a version and read the returned directory's
-`SKILL.md` using the read tool in the same turn. A recommendation or export
-alone leaves the version list empty. Multiple loads produce one list in a
-single Skill trajectory.
+Run `openclaw skills list` to find the bundled `mindmemos-cli` guide. The plugin
+collects successful `skill show` results and complete `SKILL.md` reads. The SDK
+resolves CLI references or returned version IDs and hashes. For a local read, it
+matches the Skill name and exact document hash against registered versions.
+Unmatched or ambiguous reads are skipped. A recommendation or export alone
+leaves the version list empty. Identified versions share one Skill trajectory.
 
-The log shows both delivery statuses and the stored Skill trajectory ID.
-`Memory queued` confirms acceptance for background extraction. Check the stored
-versions with `mindmemos skill trajectory show TRAJECTORY_ID`.
+`Memory queued` confirms acceptance for background extraction. `Skill stored`
+includes the trajectory ID. Check the stored versions with
+`mindmemos skill trajectory show TRAJECTORY_ID`. `Skill skipped` means the turn
+had no identified Skill versions and the SDK sent no Skill request.
 
 ## License
 

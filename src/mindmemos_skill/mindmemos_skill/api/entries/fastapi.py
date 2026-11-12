@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
+from mindmemos_sdk.skills import EvolveRequest
 
 from mindmemos_skill.common.ids import generate_id
 
@@ -19,6 +20,7 @@ from ...config.loader import read_skill_config
 from ...errors import (
     GraphConflictError,
     GraphNotFoundError,
+    ProjectTaskBusyError,
     SkillAliasConflictError,
     SkillAmbiguousVersionError,
     SkillConflictError,
@@ -26,8 +28,10 @@ from ...errors import (
     SkillNotFoundError,
     SkillVersionNotFoundError,
 )
+from ...infra.model_access.platform import PlatformModelError
 from ...logging import log_context
 from ...logging.http import RequestLoggingMiddleware
+from ...persistence.constants import LEGACY_SKILL_SOURCE
 from ..auth import SkillHttpError, SkillHttpIdentity, build_identity_resolver
 from ..base import MindMemOSSkill
 from ..constants import SKILL_API_HOST_ENV, SKILL_CONFIG_PATH_ENV
@@ -40,6 +44,9 @@ from ..typing import (
     DiffRequest,
     EvaluationQueryRequest,
     HistoryRequest,
+    LegacySkillDeletion,
+    LegacySkillVersion,
+    LegacyTrajectoryDelivery,
     ListTrajectoriesRequest,
     OrganizeRequest,
     RecommendRequest,
@@ -67,7 +74,6 @@ from .typing import (
     DeleteHttpRequest,
     DiffHttpRequest,
     EvaluationQueryHttpRequest,
-    EvolveHttpRequest,
     GraphResolveHttpRequest,
     GraphSnapshotHttpRequest,
     GraphSnapshotsHttpRequest,
@@ -285,14 +291,16 @@ def create_app(
             ),
         )
 
-    def error(request: Request, status_code: int, code: str, message: str) -> JSONResponse:
+    def error(
+        request: Request, status_code: int, code: str, message: str, *, details: dict[str, str] | None = None
+    ) -> JSONResponse:
         """Serialize one stable error without exposing a traceback."""
         return JSONResponse(
             status_code=status_code,
             content={
                 "code": "error",
                 "request_id": request.state.request_id,
-                "error": {"code": code, "message": message},
+                "error": {"code": code, "message": message, **(details or {})},
             },
         )
 
@@ -300,6 +308,22 @@ def create_app(
     async def http_error(request: Request, exc: SkillHttpError) -> JSONResponse:
         """Return classified capability and identity errors."""
         return error(request, exc.status_code, exc.code, exc.message)
+
+    @app.exception_handler(ProjectTaskBusyError)
+    async def project_task_busy(request: Request, exc: ProjectTaskBusyError) -> JSONResponse:
+        """Return the project-owned task blocking a new submission."""
+        return error(
+            request,
+            429,
+            "too_many_requests",
+            str(exc),
+            details={"task_id": exc.task_id, "task_kind": exc.kind, "task_status": exc.status},
+        )
+
+    @app.exception_handler(PlatformModelError)
+    async def platform_model_failure(request: Request, exc: PlatformModelError) -> JSONResponse:
+        """Expose sanitized model gateway failures to Skill API clients."""
+        return error(request, exc.status_code, "platform_model_error", str(exc))
 
     @app.exception_handler(RequestValidationError)
     async def invalid_body(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -400,6 +424,55 @@ def create_app(
             return identity
 
         return dependency
+
+    @app.post("/internal/v1/legacy-skill/versions", include_in_schema=False)
+    async def ingest_legacy_version(
+        request: Request, body: LegacySkillVersion, identity: SkillHttpIdentity = Depends(authenticated)
+    ):
+        """Accept legacy Skill snapshots only under the dedicated gateway scope."""
+        if policy.auth.mode != "gateway_jwt" or not isinstance(service, SkillService):
+            raise SkillHttpError(404, "not_found", "Legacy version ingress is disabled")
+        if identity.actor_id != "mindmemos-memory" or identity.scopes != {"skill:legacy-version-ingest"}:
+            raise SkillHttpError(403, "auth.insufficient_scope", "Legacy version relay scope required")
+        try:
+            complete = await service.ingest_legacy_version(identity.project_id, body)
+        except ValueError:
+            raise SkillHttpError(409, "legacy_version_conflict", "Legacy version conflicts with stored data") from None
+        return envelope(request, {"version_id": body.version_id}, status_code=200 if complete else 202)
+
+    @app.post("/internal/v1/legacy-skill/deletions", include_in_schema=False)
+    async def ingest_legacy_deletion(
+        request: Request, body: LegacySkillDeletion, identity: SkillHttpIdentity = Depends(authenticated)
+    ):
+        """Apply family removals only under the dedicated Memory deletion scope."""
+        if policy.auth.mode != "gateway_jwt" or not isinstance(service, SkillService):
+            raise SkillHttpError(404, "not_found", "Legacy deletion ingress is disabled")
+        if identity.actor_id != "mindmemos-memory" or identity.scopes != {"skill:legacy-delete"}:
+            raise SkillHttpError(403, "auth.insufficient_scope", "Legacy deletion relay scope required")
+        try:
+            await service.ingest_legacy_deletion(identity.project_id, body)
+        except ValueError:
+            raise SkillHttpError(
+                409, "legacy_deletion_conflict", "Legacy deletion conflicts with stored data"
+            ) from None
+        return envelope(request, {"cloud_skill_id": body.cloud_skill_id})
+
+    @app.post("/internal/v1/legacy-skill/trajectories", include_in_schema=False)
+    async def ingest_legacy_trajectory(
+        request: Request, body: LegacyTrajectoryDelivery, identity: SkillHttpIdentity = Depends(authenticated)
+    ):
+        """Accept saved evidence only under the gateway's legacy relay scope."""
+        if policy.auth.mode != "gateway_jwt" or not isinstance(service, SkillService):
+            raise SkillHttpError(404, "not_found", "Legacy trajectory ingress is disabled")
+        if identity.actor_id != "mindmemos-memory" or identity.scopes != {"skill:legacy-ingest"}:
+            raise SkillHttpError(403, "auth.insufficient_scope", "Legacy trajectory relay scope required")
+        try:
+            complete = await service.ingest_legacy_trajectory(identity.project_id, body)
+        except ValueError:
+            raise SkillHttpError(
+                409, "legacy_trajectory_conflict", "Legacy trajectory conflicts with stored data"
+            ) from None
+        return envelope(request, {"trajectory_id": body.add_record_id}, status_code=200 if complete else 202)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -728,6 +801,7 @@ def create_app(
                 "trajectory_id": record.trajectory_id,
                 "task_id": record.task_id,
                 "source": record.source,
+                "origin": LEGACY_SKILL_SOURCE if LEGACY_SKILL_SOURCE in record.metadata else record.source,
                 "skill_version_ids": list(record.bound_versions),
                 "skill_bindings": record.skill_bindings,
                 "user_id": record.user_id,
@@ -1022,19 +1096,18 @@ def create_app(
 
     @app.post("/v1/skills/algos/evolve", status_code=202)
     async def evolve(
-        request: Request, body: EvolveHttpRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
+        request: Request, body: EvolveRequest, identity: SkillHttpIdentity = Depends(require("skill:write"))
     ):
-        """Accept evolution of one exact version or an authorized version collection."""
+        """Queue evolution for an authorized list of exact Skill versions."""
         pipeline = evolution_pipeline(body.pipeline)
-        version_id = body.skill_version_ids if body.skill_version_ids is not None else body.skill_version_id
-        options = {}
-        if body.editable_skills is not None:
-            options["editable_skills"] = body.editable_skills
-        if not body.allow_create_skills:
-            options["allow_create_skills"] = False
         try:
             snapshot = await service.submit_evolution(
-                identity.project_id, version_id, pipeline=pipeline, auto_accept=body.auto_accept, **options
+                identity.project_id,
+                body.skill_version_ids,
+                pipeline=pipeline,
+                auto_accept=body.auto_accept,
+                editable_skills=body.editable_skills,
+                allow_create_skills=body.allow_create_skills,
             )
         except (NotImplementedError, ValueError) as exc:
             raise SkillHttpError(422, "pipeline_unavailable", str(exc)) from exc

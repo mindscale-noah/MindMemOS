@@ -4,7 +4,11 @@
 # Tuning values follow their Python config defaults; models, connections, and enabled features are explicit choices.
 # Models, storage, and enabled features. Config: ServiceConfig.
 service:
+  # Shared limit for queued and running graph builds, judges, and evolutions in each project.
+  max_active_tasks_per_project: 1
   home: ../../data/mindmemos_skill
+  # Set the internal Platform HTTP origin before enabling platform_gateway below.
+  platform_model_origin: null
 
   # Named model presets used by the pipelines below. Each entry: AgentDefinition.
   agents:
@@ -42,10 +46,11 @@ service:
         reasoning_effort: null
         timeout_s: 300
 
-    # Improve Skills with a CLI agent. config: ClaudeConfig.
-    offline_evolution_evolver_deepseek_v4_flash_claude:
+    # For Platform routing, set platform_model_origin, transport: platform_gateway, and model: platform-chat.
+    offline_evolution_evolver_claude:
       class_name: claude
       config:
+        transport: direct
         model: deepseek-v4-flash
         timeout_s: 300
 
@@ -53,6 +58,7 @@ service:
     skill_manage_chat_deepseek_v4_flash:
       class_name: openai_chat
       config:
+        transport: direct
         model: deepseek-v4-flash
         max_completion_tokens: 4096
         timeout_s: 180
@@ -62,6 +68,7 @@ service:
     skill_judge_evaluator_deepseek_v4_flash_feedback:
       class_name: openai_chat
       config:
+        transport: direct
         model: deepseek-v4-flash
         parse_retry_mode: feedback
         max_completion_tokens: 4096
@@ -72,6 +79,7 @@ service:
     trajectory_judge_evaluator_deepseek_v4_flash_feedback:
       class_name: openai_chat
       config:
+        transport: direct
         model: deepseek-v4-flash
         parse_retry_mode: feedback
         max_completion_tokens: 4096
@@ -99,6 +107,7 @@ service:
       algorithm:
         # Turn text into search vectors. Config: OpenAIEmbeddingConfig.
         embedding:
+          transport: direct
           model: qwen3-embedding-4b
           base_url: https://api.openai.com/v1
           dimensions: 2560
@@ -250,7 +259,7 @@ service:
         evolver:
           class_name: offline_evolution
           config:
-            agent: offline_evolution_evolver_deepseek_v4_flash_claude
+            agent: offline_evolution_evolver_claude
             # Raise to allow more feedback rounds per stage; increases runtime and model calls.
             retries: 1
             # Raise for slow evidence checks; separate from the CLI Agent timeout_s.
@@ -260,7 +269,9 @@ service:
         work_dir: ./output/offline_evolution
         # Limit historical evidence for large runs. Config: OfflineTrajectoryConfig.
         traj_collect:
-          # Set a count to use only recent records per Skill version; null uses all.
+          # Set false to reuse trajectories already consumed for the same Skill version.
+          exclude_consumed: true
+          # Set a count to use only recent eligible records per Skill version; null uses all eligible records.
           trajectory_limit: null
           # Lower for smaller database reads; does not limit the total evidence.
           max_page_size: 200

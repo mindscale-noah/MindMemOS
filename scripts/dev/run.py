@@ -342,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.action in {"dev", "docker"} and plan.services:
             prepare_collector(ROOT, plan)
             compose(ROOT, "up", "-d", "--wait", "--wait-timeout", "180", *sorted(plan.services))
+            if "minio" in plan.services:
+                compose(ROOT, "run", "--rm", "--no-deps", "minio-init")
         if args.action == "docker":
             print("Docker dependencies ready; no API or UI processes were started.", flush=True)
             return 0

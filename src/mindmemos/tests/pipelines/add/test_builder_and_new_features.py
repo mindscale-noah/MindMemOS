@@ -94,6 +94,10 @@ class FakeEmbedClient:
         self.calls: list[str | list[str]] = []
         self.task_calls: list[tuple[str, str | list[str]]] = []
 
+    @property
+    def expected_dimension(self) -> int:
+        return self._dim
+
     async def embed(self, task: str, text: str | list[str], **kwargs) -> EmbeddingResponse:
         self.calls.append(text)
         self.task_calls.append((task, text))
@@ -349,6 +353,11 @@ class TestDenseVectors:
         assert len(plan.vectors) == 1
         assert plan.vectors[0].semantic_vector is None
         assert plan.memories[0].metadata.get("vector_pending") is True
+        assert plan.memories[0].metadata.get("vector_expected_dimension") == 8
+        assert plan.memories[0].metadata.get("vector_retry_count") == 0
+        assert plan.memories[0].metadata.get("vector_next_retry_at_ms") == 0
+        assert plan.memories[0].metadata.get("vector_last_error_code") == "embedding.provider_unavailable"
+        assert isinstance(plan.memories[0].metadata.get("vector_model_fingerprint"), str)
 
     @pytest.mark.asyncio
     async def test_embed_failure_strong_mode_raises(self):

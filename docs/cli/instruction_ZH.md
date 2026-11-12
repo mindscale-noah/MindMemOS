@@ -80,6 +80,8 @@ mindmemos memory add --messages-json-file ./messages.json --async --json
 
 默认使用配置中的用户并同步处理。`--async` 排队成功后返回 `request_id`，`--json` 输出完整结果。
 
+为兼容旧插件，保留 `--skill-context-json`。它接收 Skill 引用的 JSON 数组，每项包含 `name`、`content_hash`，以及可选的 `base_version_id`、`version_label` 和 `usage`（`injected` 或 `modified`）。这些引用随请求交给原 Memory 接口处理，不会调用独立 Skill 服务。省略该参数时不自动检测或注册旧 Skill。
+
 ### `mindmemos memory search`
 
 按查询文本检索记忆，默认最多返回 10 条。使用 `--user-id` 限定用户，省略时检索当前项目。
@@ -89,6 +91,17 @@ mindmemos memory search "我喜欢喝什么咖啡？" --user-id alice --top-k 5
 ```
 
 用 `--search-strategy agentic` 切换默认的 `fast` 策略。还可用 `--filter` 传入 JSON 过滤对象、用 `--token-budget` 限制结果的 token 数，或用 `--json` 输出完整结果。`--score-threshold` 只在启用 `--rerank` 时生效。
+
+### 图文写入、检索和下载
+
+项目启用多模态后，`--image` 和 `--query-image` 接受本地文件或 HTTP(S) URL，可重复传入。图片命中的 `metadata.blob_id` 和 `metadata.user_id` 可用于下载原图。
+
+```bash
+mindmemos memory add --content "Desk setup" --image ./desk.png
+mindmemos memory search "Desk" --query-image ./desk.png --json
+mindmemos memory search "Desk" --multimodal --json
+mindmemos memory get-image BLOB_ID --user-id alice --output desk.png
+```
 
 ### `mindmemos memory get`
 
@@ -356,13 +369,17 @@ mindmemos skill evaluations query SKILL_VERSION_ID --judge-type static_skill --l
 
 #### `mindmemos skill evolve`
 
-提交异步演进任务，返回 `task_id`。一次可提交多个 Skill 引用，每个家族最多选一个版本。省略 `--pipeline` 时使用服务端默认流水线，仓库示例中的流水线名为 `offline`。
+默认提交异步演进任务，返回 `task_id`；显式传入 `--async` 行为相同。加 `--sync` 会等待任务结束，成功时输出含 `result` 的最终任务信息，失败或取消时返回非零退出码。一次可提交多个 Skill 引用，每个家族最多选一个版本。省略 `--pipeline` 时使用服务端默认流水线，仓库示例中的流水线名为 `offline`。
 
 ```bash
 mindmemos skill evolve my-skill --pipeline offline
+mindmemos skill evolve my-skill another-skill --pipeline offline
+mindmemos skill evolve my-skill --pipeline offline --sync
 ```
 
 重复 `--editable-skill` 可指定允许修改的输入，也可用 `--read-only` 保持输入家族不变。用 `--allow-create-skills` 或 `--no-allow-create-skills` 控制新增家族。加 `--auto-accept` 可激活已有家族的候选版本。
+
+`--sync` 和 `--async` 保留旧命令的等待方式，但均调用新版独立 Skill 服务。引用须能在新版仓库中解析；不读取旧 SDK 的本地注册表，也不回退到旧 Skill evolve API。按 Ctrl+C 停止本地等待不会取消已提交的任务。
 
 #### `mindmemos skill train`
 

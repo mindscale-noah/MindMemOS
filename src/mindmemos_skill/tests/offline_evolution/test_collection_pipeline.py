@@ -13,12 +13,7 @@ from mindmemos_skill.algos.evolve.offline_evolution import engine as engine_modu
 from mindmemos_skill.algos.evolve.offline_evolution.evolver import OfflineSkillEvolver
 from mindmemos_skill.algos.evolve.offline_evolution.typing import RunLayout, SkillEvolutionResult
 from mindmemos_skill.api.entries.fastapi import create_app
-from mindmemos_skill.api.typing import (
-    AlgoSkillEvolveResult,
-    CollectionEvolutionRequest,
-    ReportTrajectoryRequest,
-    SkillPipelineRequest,
-)
+from mindmemos_skill.api.typing import EvolutionRequest, ReportTrajectoryRequest
 from mindmemos_skill.errors import SkillConflictError, SkillNotFoundError
 from mindmemos_skill.infra.database import Scope
 from mindmemos_skill.persistence.constants import (
@@ -27,9 +22,7 @@ from mindmemos_skill.persistence.constants import (
     SKILLS_TABLE,
 )
 from mindmemos_skill.persistence.db_services.trajectories.typing import TrajectoryWrite
-from mindmemos_skill.pipelines import EvolutionPipeline, Pipeline
 from mindmemos_skill.pipelines.builtin_pipelines.offline_evolution.config import OfflineTrajectoryConfig
-from pydantic import BaseModel
 
 from mindmemos_skill import create_service
 
@@ -111,7 +104,7 @@ async def counts(service):
 
 def request(members, *, auto_accept=False):
     """Keep all inputs readable while authorizing only the first two mutations."""
-    return CollectionEvolutionRequest(
+    return EvolutionRequest(
         project_id="project",
         skill_version_ids=[item.base.version_id for item in members],
         editable_skills=[item.owner.skill_id for item in members[:2]],
@@ -231,7 +224,7 @@ async def test_offline_uses_all_available_evidence_unless_explicitly_capped(
     monkeypatch.setattr(OfflineSkillEvolver, "_evolve", inspect)
     before = await counts(service)
     result = await service.run_evolution(
-        CollectionEvolutionRequest(project_id="project", skill_version_ids=[member.base.version_id], auto_accept=False)
+        EvolutionRequest(project_id="project", skill_version_ids=[member.base.version_id], auto_accept=False)
     )
     assert result.members and len(observed) == expected
     assert {record.trajectory_id for record in observed} <= reports.keys()
@@ -250,31 +243,111 @@ async def test_offline_requires_some_evidence_before_calling_the_algorithm(scena
         member = await capture(store, "no-evidence")
     with pytest.raises(ValueError, match="No trajectories available"):
         await service.run_evolution(
-            CollectionEvolutionRequest(
-                project_id="project", skill_version_ids=[member.base.version_id], auto_accept=False
-            )
+            EvolutionRequest(project_id="project", skill_version_ids=[member.base.version_id], auto_accept=False)
         )
     assert calls == []
 
 
-async def test_offline_recovery_reuses_frozen_evidence_after_new_uploads(scenario, monkeypatch):
-    """Keep the original complete evidence set after an interrupted algorithm call."""
+@pytest.mark.parametrize("exclude_consumed", [True, False])
+async def test_new_evolution_runs_respect_consumption_policy(scenario, monkeypatch, exclude_consumed):
+    """Skip consumed evidence by default and allow explicit reuse across new runs."""
+    service, members, _, _ = scenario
+    version_id = members[0].base.version_id
+    pipeline = service.backends["evolution_pipelines.offline"]
+    if not exclude_consumed:
+        pipeline.config.traj_collect.exclude_consumed = False
+    observed = []
+
+    async def unchanged(self, request):
+        observed.append([record.trajectory_id for record in request.trajectories])
+        return SkillEvolutionResult(skills=request.skills)
+
+    monkeypatch.setattr(OfflineSkillEvolver, "_evolve", unchanged)
+    body = EvolutionRequest(
+        project_id="project", skill_version_ids=[version_id], run_id="evolve_" + uuid4().hex, auto_accept=False
+    )
+    first = await service.run_evolution(body)
+    assert first.members[0].action == "unchanged"
+    assert await service.run_evolution(body) == first
+    assert len(observed) == 1
+    for _ in range(2):
+        fresh = body.model_copy(update={"run_id": "evolve_" + uuid4().hex})
+        if exclude_consumed:
+            with pytest.raises(ValueError, match="No trajectories available"):
+                await service.run_evolution(fresh)
+        else:
+            await service.run_evolution(fresh)
+    assert len(observed) == (1 if exclude_consumed else 3)
+    assert all(records == observed[0] for records in observed)
+    with service._persistence.session(Scope(fields={"project_id": "project"})) as store:
+        assert (await store.trajectories.counts(version_id)).consumed == 1
+    new = await service.report_trajectory(
+        ReportTrajectoryRequest(
+            project_id="project", skill_version_ids=[version_id], messages=[{"role": "user", "content": "New evidence"}]
+        )
+    )
+    await service.run_evolution(body.model_copy(update={"run_id": "evolve_" + uuid4().hex}))
+    assert new.trajectory_id in observed[-1]
+    assert len(observed[-1]) == (1 if exclude_consumed else 2)
+
+
+async def test_consumed_pages_do_not_hide_older_eligible_evidence(scenario, monkeypatch):
+    """Apply the evidence cap to eligible rows after crossing fully consumed pages."""
+    service, members, _, _ = scenario
+    version_id = members[0].base.version_id
+    pipeline = service.backends["evolution_pipelines.offline"]
+    pipeline.config.traj_collect = OfflineTrajectoryConfig(trajectory_limit=2, max_page_size=2)
+    for index in range(6):
+        await service.report_trajectory(
+            ReportTrajectoryRequest(
+                project_id="project",
+                skill_version_ids=[version_id],
+                messages=[{"role": "user", "content": f"Evidence {index}"}],
+            )
+        )
+    with service._persistence.session(Scope(fields={"project_id": "project"})) as store:
+        rows = await store.trajectories.list_for_version(version_id, filters=[], limit=20, offset=0)
+        consumed = [row.trajectory_id for row in rows[:3]] + [rows[4].trajectory_id]
+        await store.trajectories.mark_consumed(version_id, consumed, "earlier-run")
+    observed = []
+
+    async def unchanged(self, request):
+        observed.extend(record.trajectory_id for record in request.trajectories)
+        return SkillEvolutionResult(skills=request.skills)
+
+    monkeypatch.setattr(OfflineSkillEvolver, "_evolve", unchanged)
+    await service.run_evolution(
+        EvolutionRequest(project_id="project", skill_version_ids=[version_id], auto_accept=False)
+    )
+    assert observed == [rows[3].trajectory_id, rows[5].trajectory_id]
+
+
+@pytest.mark.parametrize("interruption", [RuntimeError, asyncio.CancelledError])
+async def test_offline_recovery_reuses_frozen_evidence_after_new_uploads(scenario, monkeypatch, interruption):
+    """Retry with the original evidence in a fresh workspace after failure or cancellation."""
     service, members, _, _ = scenario
     version_id = members[0].base.version_id
     observed = []
+    workspaces = []
 
     async def interrupt(self, request):
         observed.append([record.trajectory_id for record in request.trajectories])
+        workspaces.append(request.work_dir.parent)
+        request.work_dir.mkdir()
+        (request.work_dir / "partial.txt").write_text("scratch data")
         if len(observed) == 1:
-            raise RuntimeError("Interrupted after collecting evidence")
+            raise interruption("Interrupted after collecting evidence")
         return SkillEvolutionResult(skills=request.skills)
 
     monkeypatch.setattr(OfflineSkillEvolver, "_evolve", interrupt)
-    body = CollectionEvolutionRequest(
+    body = EvolutionRequest(
         project_id="project", skill_version_ids=[version_id], run_id="evolve_" + uuid4().hex, auto_accept=False
     )
-    with pytest.raises(RuntimeError, match="Interrupted"):
+    with pytest.raises(interruption, match="Interrupted"):
         await service.run_evolution(body)
+    with service._persistence.session(Scope(fields={"project_id": "project"})) as store:
+        assert (await store.trajectories.counts(version_id)).consumed == 0
+    assert not workspaces[0].exists()
     await service.report_trajectory(
         ReportTrajectoryRequest(
             project_id="project", skill_version_ids=[version_id], messages=[{"role": "user", "content": "Later"}]
@@ -283,6 +356,10 @@ async def test_offline_recovery_reuses_frozen_evidence_after_new_uploads(scenari
     result = await service.run_evolution(body)
     assert result.members
     assert len(observed[0]) == 1 and observed[0] == observed[1]
+    with service._persistence.session(Scope(fields={"project_id": "project"})) as store:
+        assert (await store.trajectories.counts(version_id)).consumed == 1
+    assert workspaces[0] != workspaces[1]
+    assert not workspaces[1].exists()
 
 
 @pytest.mark.parametrize("instruction", [None, "", "  \n"])
@@ -311,7 +388,7 @@ async def test_reported_trajectories_without_instruction_remain_eligible(scenari
     monkeypatch.setattr(OfflineSkillEvolver, "_evolve", inspect_evidence)
     before = await counts(service)
     result = await service.run_evolution(
-        CollectionEvolutionRequest(
+        EvolutionRequest(
             project_id="project",
             skill_version_ids=[member.base.version_id],
             auto_accept=False,
@@ -381,12 +458,20 @@ Path(args.out).write_text(json.dumps({"processed": [relative], "findings": findi
 """,
         )
 
+    reports = []
+
+    async def run_and_read_report(self, algorithm_request):
+        result = await self._run(algorithm_request)
+        report_path = observed[0].evidence / "report.json"
+        reports.append(json.loads(report_path.read_text()))
+        return result
+
     # Exercise the real export and gates instead of the fixture's candidate substitute.
-    monkeypatch.setattr(OfflineSkillEvolver, "_evolve", OfflineSkillEvolver._run)
+    monkeypatch.setattr(OfflineSkillEvolver, "_evolve", run_and_read_report)
     backend = FakeAgent([inspect_s1])
     monkeypatch.setattr(engine_module, "run_agent", backend.run)
     result = await service.run_evolution(
-        CollectionEvolutionRequest(
+        EvolutionRequest(
             project_id="project",
             skill_version_ids=[member.base.version_id],
             auto_accept=False,
@@ -394,7 +479,8 @@ Path(args.out).write_text(json.dumps({"processed": [relative], "findings": findi
     )
     assert result.members
     assert len(observed) == 1
-    report = json.loads((observed[0].evidence / "report.json").read_text())
+    assert not observed[0].root.exists()
+    report = reports[0]
     assert report["status"] == "accepted"
     assert {finding["id"] for finding in report["findings"]} == {"terminal", "outcome"}
 
@@ -422,8 +508,9 @@ async def test_changed_current_version_rejects_atomic_activation(scenario, monke
     assert len(calls) == 1
 
 
-async def test_corrupt_unpublished_candidate_is_not_rerun(scenario, monkeypatch):
-    """Validate a retained candidate after a publication failure before writing versions."""
+@pytest.mark.parametrize("corrupt_candidate", [False, True])
+async def test_unpublished_candidate_is_reused_or_rejected_without_rerun(scenario, monkeypatch, corrupt_candidate):
+    """Retry publication from a valid candidate or reject a corrupt checkpoint."""
     from pathlib import Path
 
     from mindmemos_skill.common.json import read_json, write_json
@@ -433,20 +520,28 @@ async def test_corrupt_unpublished_candidate_is_not_rerun(scenario, monkeypatch)
     body = request(members).model_copy(update={"run_id": "evolve_" + uuid4().hex})
 
     async def interrupted(*args):
+        assert not calls[0].work_dir.parent.exists()
         raise OSError("publication interrupted")
 
     with monkeypatch.context() as patch:
         patch.setattr(pipeline_module, "publish_candidate", interrupted)
         with pytest.raises(OSError, match="publication interrupted"):
             await service.run_evolution(body)
+    with service._persistence.session(Scope(fields={"project_id": "project"})) as store:
+        assert (await store.trajectories.counts(members[0].base.version_id)).consumed == 1
     path = Path(service.backends["evolution_pipelines.offline"].config.work_dir) / body.run_id / "candidate.json"
-    payload = read_json(path)
-    payload["payload"]["skills"].pop(members[1].owner.skill_id)
-    write_json(path, payload)
-    with pytest.raises(ValueError, match="checkpoint mismatch"):
-        await service.run_evolution(body)
+    if corrupt_candidate:
+        payload = read_json(path)
+        payload["payload"]["skills"].pop(members[1].owner.skill_id)
+        write_json(path, payload)
+        with pytest.raises(ValueError, match="checkpoint mismatch"):
+            await service.run_evolution(body)
+        assert (await counts(service))[SKILL_VERSIONS_TABLE] == 3
+    else:
+        result = await service.run_evolution(body)
+        assert {item.action for item in result.members} == {"updated", "created", "unchanged"}
+        assert (await counts(service))[SKILL_VERSIONS_TABLE] == 5
     assert len(calls) == 1
-    assert (await counts(service))[SKILL_VERSIONS_TABLE] == 3
 
 
 async def test_sdk_can_activate_saved_version_after_evolution(scenario):
@@ -527,42 +622,9 @@ async def test_evolve_route_resolves_service_after_factory_startup(scenario):
             assert task["status"] == "succeeded", task
 
 
-async def test_single_and_collection_evolution_share_sdk_route_and_task_kind(scenario, monkeypatch):
-    """Keep default single-Skill calls while admitting collections through the same API."""
+async def test_evolution_accepts_one_or_more_versions_through_the_same_list_contract(scenario):
+    """Run the same pipeline and task contract for lists of either size."""
     service, members, calls, config = scenario
-    monkeypatch.setattr(Pipeline, "_registry", Pipeline.registered_types())
-    single_calls = []
-
-    class SingleConfig(BaseModel):
-        """Configure the test's single-Skill evolution implementation."""
-
-    @Pipeline.register("test_original_single_evolution")
-    class SinglePipeline(EvolutionPipeline):
-        """Return a stored version without invoking an external optimizer."""
-
-        config_type = SingleConfig
-        """No extra runtime parameters are required by this test implementation."""
-
-        async def evolve(self, request):
-            request = SkillPipelineRequest.model_validate(request)
-            single_calls.append(request)
-            version = await self.persistence.skills.get(request.base_version_id)
-            return AlgoSkillEvolveResult(
-                skill_id=version.skill_id,
-                base_version_id=version.version_id,
-                version_id=version.version_id,
-                run_id=request.run_id,
-                content=version.content,
-                resources=version.resources,
-                content_hash=version.content_hash,
-                skill_hash=version.skill_hash,
-            )
-
-    single = SinglePipeline(SingleConfig(), persistence=service._persistence)
-    monkeypatch.setitem(service._evolution_pipelines, "custom", single)
-    monkeypatch.setitem(service._backends, "evolution_pipelines.custom", single)
-    config.fastapi.evolution_pipelines = {"custom", "offline"}
-    config.fastapi.default_evolution_pipeline = "custom"
     app = create_app(service, api_config=config.fastapi)
     assert "/v1/skills/algos/evolve/offline" not in app.openapi()["paths"]
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as http:
@@ -580,11 +642,18 @@ async def test_single_and_collection_evolution_share_sdk_route_and_task_kind(sce
                 await asyncio.sleep(0.01)
             raise AssertionError("Evolution did not finish")
 
-        original = await completed(
-            await client.evolve(EvolveRequest(skill_version_id=members[0].base.version_id, auto_accept=False))
-        )
-        assert original["version_id"] == members[0].base.version_id
-        assert len(single_calls) == 1 and not calls
+        version_id = members[0].base.version_id
+        for body in ({"skill_version_id": version_id}, {"skill_version_ids": version_id}, {"skill_version_ids": []}):
+            invalid = await http.post("/v1/skills/algos/evolve", json=body)
+            assert invalid.status_code == 422
+            assert invalid.json()["error"]["code"] == "invalid_request"
+        assert not calls
+
+        single = await completed(await client.evolve(EvolveRequest(skill_version_ids=[version_id], auto_accept=False)))
+        assert len(single["members"]) == 2
+        assert list(single["skills"]) == [members[0].owner.skill_id]
+        assert len(calls) == 1
+
         collection = await completed(
             await client.evolve(
                 EvolveRequest(
@@ -596,19 +665,4 @@ async def test_single_and_collection_evolution_share_sdk_route_and_task_kind(sce
             )
         )
         assert len(collection["members"]) == 4
-        assert len(collection["skills"]) == 3 and len(calls) == 1
-        invalid = await http.post(
-            "/v1/skills/algos/evolve",
-            json={
-                "pipeline": "custom",
-                "skill_version_ids": [members[0].base.version_id],
-                "auto_accept": False,
-            },
-        )
-        assert invalid.status_code == 422
-        config.fastapi.default_evolution_pipeline = "offline"
-        scalar_offline = await completed(
-            await client.evolve(EvolveRequest(skill_version_id=members[0].base.version_id, auto_accept=False))
-        )
-        assert len(scalar_offline["members"]) == 2
-        assert len(scalar_offline["skills"]) == 1 and len(calls) == 2
+        assert len(collection["skills"]) == 3 and len(calls) == 2

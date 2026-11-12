@@ -44,6 +44,11 @@
 
 > ⭐ **GitHub Star 后自动升级 Pro 额度会员。**
 
+> **Skill SDK 与插件版本搭配**
+>
+> - **继续使用旧版 `/v1/skills`。** 沿用原 API Key 和 `mindmemos-sdk` `0.1.5`。如果使用插件，保留 OpenClaw `0.1.5` 或 DeepSeek Harness `0.1.3`。
+> - **切换到新版 `/v2/skills`。** 将 `mindmemos-sdk` 升级到 `1.0.0+`。如果使用插件，同时将插件升级到 `0.2.0+`。[为 API Key 开通新版 Skill 权限](#为项目-api-key-开通新版-skill-服务权限)。
+
 ## 📰 News
 
 - **2026-11-09** — 我们正式发布 **MindMemOS-Skill**。它是可独立部署的 Skill 服务，支持管理 Skill 版本、训练和演化 Skill、构建Skill图谱并推荐最优Skill组合。[快速开始](#1-注册账号并创建-api-key)
@@ -52,8 +57,6 @@
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
 - **2026-06-30**：MindMemOS 正式发布！
 
-> **Skill API 更新提示。** 旧版 Skill API 已弃用。新版 Skill 服务地址为 `https://mindmemos.cn/v2/skills`。请将 `mindmemos-sdk` 升级至 **1.0.0 或更高版本**。如果使用 OpenClaw 或 DeepSeek Harness，请同时将对应的 `@mindmemos/openclaw-plugin` 或 `@mindmemos/deepseek-harness-plugin` 升级至 **0.2.0 或更高版本**。升级后，先在 MindMemOS 控制台编辑项目 API Key，添加 `skill:read` 和 `skill:write`，保存后再用同一个 Key 运行 `mindmemos auth`。下方快速开始提供了从本仓库安装这些版本的步骤。[新版 Skill 服务权限设置](#为项目-api-key-开通新版-skill-服务权限)
-
 ## 🌟 Core Features
 
 - **跨 Agent 可迁移**：将用户画像、偏好、项目事实、工具经验和 skill candidates 沉淀为可复用资产，让 OpenClaw、Hermes、Claude Code、OpenHands 等不同 Agent 共享或迁移同一套长期记忆。
@@ -61,20 +64,19 @@
 - **从任务和历史轨迹中改进 Skill**。MindMemOS-Skill 支持注册 Skill、管理版本、保存 Agent 执行轨迹，并对 Skill 和执行轨迹评分。你可以构建和管理 Skill 图谱，按任务推荐合适的 Skill 组合，也可以用 TreeSkill 或 Skill-Forest 基于任务训练 Skill，或用已保存的轨迹离线演化指定版本。你可以独立部署 Skill API，也可以直接调用 Python 服务。
 - **本机 Web 工作台**可通过 SDK 连接 Memory 和 Skill 服务，搜索和编辑记忆、管理 Skill 版本、查看图谱快照、预览动态 Skill，并编辑服务连接配置。
 - **插件集成能力**：支持通过插件将 MindMemOS 接入不同 Agent 与工作流，在交互前检索并注入相关记忆、回合结束后自动写回对话，当前已提供 [OpenClaw 插件](https://www.npmjs.com/package/@mindmemos/openclaw-plugin) 和 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，并持续扩展更多集成。
+- **多模态记忆**。Vanilla Memory 支持图文写入与检索，原图存入 S3 或 MinIO。增强模式提供视觉事实抽取和多模态 Agent 检索。默认模式为纯文本。
 
 ### 项目组成与服务关系
 
 ![Web 工作台通过 SDK 分别连接独立的 Memory 和 Skill 服务，Memory 评测也使用 SDK。](./assets/mindmemos-service-architecture.png)
 
-| 包 | 提供的能力 | 使用方式 |
-| --- | --- | --- |
-| `src/mindmemos` | 记忆写入、检索、查询、修改、删除、反馈与巩固（dreaming） | Memory HTTP API |
-| `src/mindmemos_skill` | Skill 注册、版本管理、轨迹保存、训练与演化，已发布图的查询和管理 | Python Service、本地 CLI 或 Skill HTTP API |
-| `src/mindmemos_sdk` | 调用 Memory 与 Skill API，管理连接和凭据 | Python SDK 与 `mindmemos` CLI |
-| `src/mindmemos_eval` | Memory 和 Skill 测评，汇总评分、耗时与模型用量 | `mindmemos-eval` 与评测配置 |
-| `src/mindmemos_ui` | Memory 与 Skill 的本机 Web 工作台 | 浏览器访问 UI，UI 后端通过 SDK 调用服务 |
-
-Memory 与 Skill 各自管理业务数据，可分别部署。默认本地部署中，Memory 使用 Qdrant 和 Neo4j，Skill 使用独立 PostgreSQL；直接使用 Skill Python Service 时也可配置 SQLite。两个 API 可共享 Kafka 和监控设施，UI 通过 SDK 访问业务数据。
+| 包 | 能力 | 使用方式 | 依赖后端 |
+| --- | --- | --- | --- |
+| `src/mindmemos` | 记忆读写、检索、反馈与巩固 | Memory HTTP API | Qdrant **和** Neo4j，S3 **或** MinIO（启用图文记忆时）<br>Kafka（异步任务）<br>OpenTelemetry Collector + ClickHouse + Grafana（可选监控） |
+| `src/mindmemos_skill` | Skill 注册、版本、轨迹、训练、演化与图谱 | Python Service、本地 CLI 或 Skill HTTP API | PostgreSQL（pgvector）**或** SQLite（sqlite-vec）<br>进程内 **或** Kafka（异步任务）<br>OpenTelemetry Collector + ClickHouse + Grafana（可选监控） |
+| `src/mindmemos_sdk` | 服务调用、连接与凭据管理 | Python SDK 或 `mindmemos` CLI | 按需连接 Memory API、Skill API |
+| `src/mindmemos_eval` | Memory 和 Skill 测评 | `mindmemos-eval` | Memory 测评用 Memory API、Qdrant 和 Neo4j（清库）、ClickHouse（用量统计）<br>Skill 测评用进程内 Skill 服务和 SQLite |
+| `src/mindmemos_ui` | Memory 与 Skill 的本机工作台 | 浏览器 | 通过 SDK 按需连接 Memory API、Skill API |
 
 ## 🚀 快速开始
 
@@ -85,29 +87,60 @@ Memory 与 Skill 各自管理业务数据，可分别部署。默认本地部署
 #### 为项目 API Key 开通新版 Skill 服务权限
 
 1. 登录 [MindMemOS 控制台](https://mindmemos.cn/)，打开 **API Keys**（API 密钥）。按名称和前缀找到 SDK 或插件当前使用的项目 Key，进入权限编辑。
-2. 在 **权限** 中新增 `skill:read` 和 `skill:write`。`skill:read` 用于查看 Skill 和版本，`skill:write` 用于注册 Skill、写入新版本和上报执行轨迹。同时使用 Memory 时，保留已有的 `memory:read` 和 `memory:write`。
-3. 保存权限，在 Key 列表的 **权限** 列确认 `skill:read` 和 `skill:write` 已显示。
-4. 按[接入 Python SDK](#2-接入-python-sdk)中的命令重新运行 `mindmemos auth`，选择官方服务，按提示输入刚完成授权的项目 Key。用 `mindmemos skill list --limit 1` 验证读取权限，再用下方的 Skill 注册示例验证写入权限。
+2. 将 **Skill** 设为 **读写**，以查看和注册 Skill、写入新版本和上报执行轨迹。如果只需要查看 Skill 和版本，选择 **只读**。保留需要使用的 **Memory** 权限。
+3. 保存权限，在 Key 列表的 **权限** 列确认所选的 Skill 权限。
+4. 用授权后的项目 Key 重新运行 `mindmemos auth`，再按下方示例验证 Skill 读写权限。[使用 CLI 命令](#2-使用-cli-命令)
 
-### 2. 接入 Python SDK
+### 2. 使用 CLI 命令
 
-准备 Python 3.11–3.13 和 uv，在仓库根目录运行以下命令，按提示输入已配置权限的项目 API Key。SDK 和 Agent 插件共用这份配置。
-
-官方模式下省略两个 `base_url`。Memory 继续使用 `https://mindmemos.cn` 和原项目 Key，请求路径仍是 `/v1/memory/*`。新版 Skill 的 API 根地址是 `https://mindmemos.cn/v2/skills`，使用具有 Skill 权限的项目 Key。网关负责转发到独立 Skill 服务，对外地址保持稳定时，云端调整内部路由无需修改本地配置。
+安装 Python 3.11–3.13 和 uv 后，在仓库根目录运行。把 `alice` 换成应用中的用户 ID，按提示输入项目 API Key。CLI、SDK 和 Agent 插件共用这份配置。
 
 ```bash
 uv sync --package mindmemos-sdk --no-dev --inexact
-uv run --no-sync mindmemos auth --service-type official --user-id alice
-uv run --no-sync mindmemos memory get --top-k 1
+source .venv/bin/activate
+mindmemos auth --service-type official --user-id alice
 ```
 
-把 `alice` 替换为应用中的用户 ID。如果项目 Key 已获 Skill 权限，再运行以下命令验证 Skill 连接。
+**Memory · 写入、检索和列出记忆**
 
 ```bash
-uv run --no-sync mindmemos skill list --limit 1
+mindmemos memory add --content "我喜欢喝冰美式。"
+mindmemos memory search "咖啡偏好" --top-k 3
+mindmemos memory get --top-k 5
 ```
 
-用 `uv run --no-sync python` 分别运行下面两个示例。
+要修改或删除测试记忆，把 `MEMORY_ID` 换成 `memory get` 输出中对应的 ID。
+
+```bash
+mindmemos memory update MEMORY_ID --content "我喜欢喝无糖冰美式。"
+mindmemos memory delete MEMORY_ID
+```
+
+**Skill · 注册、列出、查看和导出**
+
+使用有 Skill 读写权限的项目 Key。先创建一个示例 `SKILL.md`，再按别名查看和导出。
+
+```bash
+skill_dir=$(mktemp -d)
+cat > "$skill_dir/SKILL.md" <<'EOF'
+---
+name: meeting-action-items
+description: Extract action items from meeting notes.
+---
+List each action item with its owner and deadline.
+EOF
+
+mindmemos skill register "$skill_dir/SKILL.md" --alias meeting-action-items
+mindmemos skill list --limit 5
+mindmemos skill show meeting-action-items
+mindmemos skill export meeting-action-items --to "$skill_dir/export"
+```
+
+更多操作见 [CLI 命令参考](docs/cli/instruction_ZH.md)。
+
+### 3. 接入 Python SDK
+
+完成第 2 步的认证后，在同一终端用 `python` 分别运行下面两个示例。
 
 **Memory：写入并检索记忆**
 
@@ -153,7 +186,7 @@ with MindMemOSClient() as client:
 
 SDK 文档提供了[注册 Skill 和管理版本](src/mindmemos_sdk/README.md#python-sdk)与[向两个服务统一上报执行轨迹](src/mindmemos_sdk/README.md#统一上报执行轨迹)的示例。
 
-### 3. 接入 OpenClaw
+### 4. 接入 OpenClaw
 
 构建插件需要 Node.js 和 npm。安装 OpenClaw 后，在仓库根目录构建并链接插件，让 Gateway 使用第 2 步已配置认证的 CLI。
 
@@ -170,7 +203,7 @@ openclaw skills list
 
 插件在模型运行前从 **Memory** 召回相关记忆，回合完成后写回对话。Agent 可通过 OpenClaw Skill 目录中的 `mindmemos-cli` 指南查找和加载远端 Skill。插件向 **Skill** 上报执行轨迹，并关联检测到的确切版本。详见 [OpenClaw 接入指南](skills/mindmemos-cli/references/openclaw-plugin.md)。
 
-### 4. 接入 DeepSeek Harness
+### 5. 接入 DeepSeek Harness
 
 使用提供 `agents` 和 `skills` 服务的 dsh profile，然后在仓库根目录构建插件。
 
@@ -231,7 +264,7 @@ Web 工作台和其他启动方式见[部署指南](docs/deploy/instruction_ZH.m
 
 粗体标出同组、同指标的最高分，包含并列。
 
-### Memory 基准评测
+### 🧠 Memory 基准评测
 
 #### LoCoMo
 
@@ -275,7 +308,30 @@ FactConsolidation 分数为四种上下文规模下的平均 Substring Exact Mat
 |  | MindMemOS-MindVanilla | 0.900 | — | 0.190 | — |
 |  | MindMemOS-MindVanilla + Dreaming | **0.920** | 23.5% | **0.250** | 21.5% |
 
-### Skill 基准评测
+#### MemEye 与 Mem-Gallery
+
+[MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye) 包含 8 项任务、742 道题。选择题用精确匹配（EM）评分，开放题用 BLEU-1（B-1）和 LLM Judge，按任务宏平均。[Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery) 包含 20 项任务、1,711 道开放题，按题微平均计算 token 级 F1、BLEU-1 和 LLM Judge。
+
+下表为上游 `main` 报告的结果。所有方法均用 `gpt-4.1-mini` 作答。MindMemOS 使用 `vanilla` 算法和本地 SigLIP2（`siglip2-base-patch16-384`），取 2026 年 10 月两次运行的均值。上游基线来自双盲评审中的论文，取同一作答设置下三次运行的均值。**Judge 分数只在组内比较**，MindMemOS 使用 `gpt-4.1-mini` 判分，基线使用 `GPT-5.4-mini`。
+
+| 方法 | MemEye EM | MemEye B-1 | MemEye Judge | Mem-Gallery F1 | Mem-Gallery B-1 | Mem-Gallery Judge |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MemoryOS | 45.75 | 13.12 | 34.91 | 43.09 | 37.76 | 64.64 |
+| A-MEM | 49.73 | 21.11 | 38.27 | 44.08 | 38.37 | 64.35 |
+| SimpleMem | 50.34 | 9.42 | 42.59 | 34.73 | 28.90 | 58.33 |
+| HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
+| M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
+| MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
+| SRAG | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
+| MindMemOS b0（纯文本） | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| MindMemOS b1（图片相似度检索） | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| MindMemOS enhanced（VLM 视觉事实） | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| MindMemOS enhanced_agentic（多模态 Agent 检索） | 65.89 | 27.09 | 53.30 | 57.06 | 50.45 | 89.14 |
+
+`enhanced_agentic` 在 `enhanced` 模式下启用 `search_strategy: agentic`。[复现指南](docs/evaluation/memory_evaluation_ZH.md#多模态记忆评测) · [上游结果](https://github.com/mindscale-noah/MindMemOS/blob/f2d6c3b2e1639e0aab666203791365d295894b52/README_ZH.md#L416-L435)
+
+### 🛠️ Skill 基准评测
 
 #### Skill-Forest
 

@@ -6,8 +6,19 @@ from typing import Any
 
 from qdrant_client import models as qmodels
 
+from ..filters import build_filter, match_value
 from ..models import AddRecordPoint, QdrantRecord
 from .base import CollectionRepository
+
+PROVENANCE_FIELDS = (
+    "add_record_id",
+    "project_id",
+    "request_id",
+    "source_type",
+    "input_type",
+    "request_submitted_at",
+    "added_at",
+)
 
 
 class AddRecordRepository(CollectionRepository):
@@ -23,6 +34,34 @@ class AddRecordRepository(CollectionRepository):
         await self._upsert_payload_points_by_project(
             [(point.add_record_id, point.payload) for point in points],
         )
+        for project_id in {str(point.payload.get("project_id") or "") for point in points}:
+            self.read_cache.invalidate(project_id)
+
+    async def memory_provenance(
+        self, project_id: str, memory_id: str, *, add_record_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Find a source using the indexed Add Record output, never its input."""
+
+        async def load() -> dict[str, Any] | None:
+            records = (
+                await self._retrieve_scoped(project_id, [add_record_id], payload_fields=list(PROVENANCE_FIELDS))
+                if add_record_id
+                else []
+            )
+            if not records:
+                records, _ = await self._scroll_scoped(
+                    project_id,
+                    filter_=build_filter(must=[match_value("memories[].memory_id", memory_id)]),
+                    limit=1,
+                    payload_fields=list(PROVENANCE_FIELDS),
+                )
+            if not records:
+                return None
+            result = {key: records[0].payload[key] for key in PROVENANCE_FIELDS if key in records[0].payload}
+            result["add_record_id"] = str(records[0].point_id)
+            return result
+
+        return await self.read_cache.get(project_id, ("provenance", memory_id, add_record_id), load)
 
     async def get(self, project_id: str, add_record_id: str) -> QdrantRecord | None:
         """Retrieve one add-record by id, scoped to ``project_id``."""
@@ -66,3 +105,4 @@ class AddRecordRepository(CollectionRepository):
         if record is None:
             return
         await self._engine.set_payload(self.collection_for_project(), add_record_id, payload)
+        self.read_cache.invalidate(project_id)

@@ -22,7 +22,7 @@ from .versions import ALGORITHM_PATTERN, USER_VERSION_PATTERN
 
 
 class SkillRecord(RecordModel):
-    """One centrally managed Skill with exactly one selected version."""
+    """One centrally managed Skill and its selected version."""
 
     project_id: str = Field(min_length=1)
     """Local project owning the Skill."""
@@ -45,7 +45,7 @@ class SkillRecord(RecordModel):
     registration_message: str | None = None
     """Initial registration explanation, separate from per-version commit messages."""
 
-    active_version_id: str = Field(min_length=1)
+    active_version_id: str | None = Field(min_length=1)
     """Only selected version for default reads and exports; belongs to this Skill."""
 
     created_at: AwareDatetime = Field(default_factory=utcnow)

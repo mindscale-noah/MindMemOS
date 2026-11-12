@@ -133,7 +133,12 @@ with MindMemOSClient(user_id="alice", app_id="my-agent") as client:
 
 Skill 接口按配置的 API 根地址发送请求，官方走 `/v2/skills/*`，直连独立服务走 `/v1/skills/*`。请求类型位于
 `mindmemos_sdk.skills`。客户端不维护本地 Skill 注册表，也不会在 `memory.add`
-时检测或上传本地 Skill：
+时检测或上传本地 Skill。为兼容旧插件，`memory add --skill-context-json` 和同步、异步
+`memory.add(skill_context=...)` 可显式传入旧引用。这些引用只交给原 Memory 接口，
+不调用独立 Skill 服务。每项包含 `name`、`content_hash`，以及可选的
+`base_version_id`、`version_label` 和 `usage`（`injected` 或 `modified`）。
+
+以下示例通过独立入口管理新版 Skill：
 
 ```python
 from mindmemos_sdk import MindMemOSClient
@@ -226,8 +231,8 @@ accepted = client.skills.evolve(
 task = client.skills.show_task(TaskShowRequest(task_id=accepted["task_id"]))
 ```
 
-`pipeline` 是服务端配置并允许调用的流水线名称。单版本也可使用 `skill_version_id`，
-它与 `skill_version_ids` 互斥；集合中每个家族最多选择一个版本。
+`pipeline` 是服务端配置并允许调用的流水线名称。`skill_version_ids` 必须是非空列表。
+单版本传 `["skv-a"]`。每个家族最多选择一个版本。
 `editable_skills` 使用输入家族 ID：省略允许修改全部输入，空列表保持全部输入不变。
 `allow_create_skills=False` 禁止创建独立的新 Skill。
 SDK 的 `auto_accept` 默认 `True`，上述示例显式禁用；CLI 默认禁用。
@@ -283,7 +288,7 @@ with MindMemOSClient() as client:
     print(receipts.model_dump_json(exclude_none=True))
 ```
 
-CLI 可用 `mindmemos trajectory report --file event.json --json` 提交同一结构，`--file -` 从标准输入读取。Memory 和 Skill 各有一份回执。Memory 的 `queued` 表示已接收，Skill 的 `stored` 返回一条关联所有精确版本的轨迹。没有已知版本时，Skill 仍接收该轮轨迹。
+CLI 可用 `mindmemos trajectory report --file event.json --json` 提交同一结构，`--file -` 从标准输入读取。Memory 的 `queued` 表示已接收，Skill 的 `stored` 返回一条关联所有精确版本的轨迹。`skill_version_ids` 为空或省略时，SDK 跳过 Skill 请求并返回 `skipped`（`no_skill_versions`），Memory 照常上报。
 
 同一项目内，Skill 用相同 `event_id` 重放同一份输入时返回原轨迹 ID。用 `--skill-only` 或 `--memory-only` 仅投递指定服务。Memory 写入结果为 `unknown` 时，先核实服务端是否接收，再决定是否补报。任一路失败或结果未知时，CLI 仍输出已有回执并以状态码 1 退出。
 
@@ -292,6 +297,9 @@ CLI 可用 `mindmemos trajectory report --file event.json --json` 提交同一�
 ```bash
 mindmemos memory add --content "I prefer iced Americano" --user-id alice
 mindmemos memory search "coffee preference" --top-k 5 --user-id alice --token-budget 2000
+# multimodal (needs the server's multimodal mode)
+mindmemos memory add --content "my desk" --image ./desk.png --user-id alice
+mindmemos memory search "desk setup" --multimodal --user-id alice
 ```
 
 
@@ -313,6 +321,7 @@ Offline 演化支持单个或多个 Skill：
 
 ```bash
 mindmemos skill evolve my-skill --pipeline offline
+mindmemos skill evolve my-skill --pipeline offline --sync
 mindmemos skill evolve my-skill another-skill --pipeline offline --editable-skill my-skill --no-allow-create-skills
 mindmemos skill evolve my-skill another-skill --pipeline offline --read-only --allow-create-skills
 mindmemos skill task show TASK_ID
@@ -323,5 +332,8 @@ mindmemos skill task progress TASK_ID --follow
 `--read-only` 保持输入不变，仍可配合 `--allow-create-skills` 从证据创建独立 Skill。
 `--auto-accept` 才会激活已有家族的新版本；省略时仅保存候选。
 不传 `--pipeline` 时保留原有行为，使用服务端默认流水线；要指定 offline，应显式传入。
-命令立即返回任务快照，不等待模型演化完成。所有 Skill 命令成功时输出 JSON；
+默认或显式 `--async` 时立即返回任务快照；`--sync` 等待完成并输出最终任务信息及结果。
+失败或取消的同步任务返回非零退出码。按 Ctrl+C 只停止等待，不取消远端任务。
+这两个选项均使用新版 Skill 引用和任务 API，不读取旧 SDK 本地注册表。
+所有 Skill 命令成功时输出 JSON；
 参数或服务错误输出到 stderr，并返回非零退出码。

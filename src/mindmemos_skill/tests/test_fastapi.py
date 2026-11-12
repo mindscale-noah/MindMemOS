@@ -1,5 +1,6 @@
 """Verify the public Skill HTTP entry and explicit backend capability boundaries."""
 
+import asyncio
 import base64
 import os
 import subprocess
@@ -108,6 +109,29 @@ def gateway_token(
 async def service(tmp_path):
     """Build one local Skill service with an isolated persistent database."""
     return await create_service(repository_config(tmp_path / "home", "project"))
+
+
+def test_legacy_deletion_requires_dedicated_service_scope(authenticated_service):
+    """Only the Memory service can remove its imported family through the private route."""
+    app = create_app(
+        authenticated_service,
+        api_config=FastAPIConfig(auth=HttpAuthConfig(mode="gateway_jwt", gateway_jwt_secret=GATEWAY_SECRET)),
+    )
+    path = "/internal/v1/legacy-skill/deletions"
+    assert path not in app.openapi()["paths"]
+    client = TestClient(app)
+    body = {"cloud_skill_id": "absent-legacy-family"}
+    assert client.post(path, json=body).status_code == 401
+    for actor, scopes in (
+        ("mindmemos-memory", ["skill:write"]),
+        ("ordinary-user", ["skill:legacy-delete"]),
+    ):
+        token = gateway_token(project_id="project", sub=actor, scopes=scopes)
+        assert client.post(path, json=body, headers={"Authorization": f"Bearer {token}"}).status_code == 403
+    token = gateway_token(project_id="project", sub="mindmemos-memory", scopes=["skill:legacy-delete"])
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(path, json=body | {"project_id": "another-project"}, headers=headers).status_code == 422
+    assert client.post(path, json=body, headers=headers).status_code == 200
 
 
 @pytest_asyncio.fixture
@@ -231,7 +255,7 @@ def test_unavailable_backends_return_stable_errors(service):
                 "graph_version_id": "00000000-0000-0000-0000-000000000001",
                 "query": "hello",
             },
-            "/v1/skills/algos/evolve": {"skill_version_id": "v"},
+            "/v1/skills/algos/evolve": {"skill_version_ids": ["v"]},
             "/v1/skills/algos/analyze/skill": {"skill_version_id": "v"},
             "/v1/skills/algos/analyze/trajectory": {"trajectory_id": "t"},
             "/v1/skills/algos/evaluations/query": {"skill_version_ids": ["v"]},
@@ -361,6 +385,51 @@ async def test_manage_http_routes_publish_and_recommend_pinned_versions(manageme
             client.post("/v1/skills/algos/recommend", headers=headers, json=query | {"project_id": "other"}).status_code
             == 422
         )
+
+
+async def test_graph_build_blocks_judge_until_cancelled(management_service, monkeypatch):
+    """Reject competing operations before invoking the judge and release on cancellation."""
+    _, judge = install_offline_analyze(management_service)
+    started = asyncio.Event()
+
+    async def hold_graph(request):
+        started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(management_service._manage_pipeline, "organize", hold_graph)
+    app = create_app(management_service)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
+        registered = await client.post(
+            "/v1/skills/register",
+            json={
+                "skill": {
+                    "content": "---\nname: example\ndescription: Example\n---\nBody",
+                    "name": "example",
+                    "commit_version": "v1.0.0",
+                    "commit_message": "Initial version",
+                },
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        version_id = registered.json()["data"]["skill_version_id"]
+        body = {"skill_version_id": version_id}
+        graph = asyncio.create_task(client.post("/v1/skills/algos/organize", json={"skill_refs": [version_id]}))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            blocked = await client.post("/v1/skills/algos/analyze/skill", json=body)
+            assert blocked.status_code == 429, blocked.text
+            error = blocked.json()["error"]
+            assert error["code"] == "too_many_requests"
+            assert error["task_kind"] == "skill.graph_build"
+            assert error["task_status"] == "running"
+            assert error["task_id"] and error["task_id"] in error["message"]
+            assert judge.calls == 0
+        finally:
+            graph.cancel()
+            await asyncio.gather(graph, return_exceptions=True)
+        analyzed = await client.post("/v1/skills/algos/analyze/skill", json=body)
+        assert analyzed.status_code == 200, analyzed.text
+        assert judge.calls == 1
 
 
 async def test_skill_rollout_mode_keeps_legacy_id_generation(tmp_path):
@@ -923,6 +992,7 @@ def test_gateway_jwt_controls_project_and_skill_scopes(authenticated_service):
             headers={"Authorization": f"Bearer {gateway_token(scopes=['memory:read'])}"},
         )
         assert memory_only.status_code == 403
+
         assert memory_only.json()["error"]["code"] == "auth.insufficient_scope"
         for obsolete_scope in ("skill:*", "skill:manage", "skill:evolve", "skill:train"):
             obsolete_headers = {"Authorization": f"Bearer {gateway_token(scopes=[obsolete_scope])}"}
@@ -1079,7 +1149,10 @@ async def test_custom_service_reports_unavailable_evolution_through_common_contr
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app), base_url="http://127.0.0.1", headers={"authorization": "Bearer test"}
     ) as client:
-        for body in ({"skill_version_id": "skv-a"}, {"pipeline": "offline", "skill_version_ids": ["skv-a", "skv-b"]}):
+        for body in (
+            {"skill_version_ids": ["skv-a"]},
+            {"pipeline": "offline", "skill_version_ids": ["skv-a", "skv-b"]},
+        ):
             response = await client.post("/v1/skills/algos/evolve", json=body)
             assert response.status_code == 422
             assert service.submit_evolution.call_args.kwargs["pipeline"] == "offline"
