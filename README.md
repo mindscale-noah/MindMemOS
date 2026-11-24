@@ -52,6 +52,7 @@
 ## 📰 News
 
 - **2026-11-09** — We officially released **MindMemOS-Skill**. It is an independently deployable service for managing Skill versions, training and evolving Skills, building Skill graphs, and recommending the best Skill combinations. [Quick start](#1-create-an-account-and-an-api-key)
+- **2026-10-31**: Multimodal memory is here — `memory.add` / `memory.search` accept images (originals stored in S3-compatible object storage / MinIO, indexed by multimodal embeddings), with `enhanced` mode adding VLM visual-fact extraction and multimodal agent retrieval. Benchmark results and the run guide: the [multimodal section](docs/evaluation/memory_evaluation.md#multimodal-memory-evaluation) of the evaluation guide.
 - **2026-08-18**: We released the [DeepSeek Harness Plugin](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin), letting DeepSeek Harness (dsh) agents automatically recall and write MindMemOS memories.
 - **2026-08-14**: We released the [MindMemOS 1.0 technical report](https://arxiv.org/abs/2608.12428), *MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents*.
 - **2026-07-17**: MindMemOS integrated with [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next), providing searchable long-term memory for algorithm design tasks and enabling the accumulation and reuse of cross-task experience, domain knowledge, and constraints.
@@ -477,6 +478,27 @@ uv run --no-sync mindmemos-eval skill evaluate train --algo skill-forest \
 | Manage Skills or integrate a custom Python environment | [Skill CLI](docs/cli/instruction.md#skill-commands) · [Skill service](src/mindmemos_skill/README.md) |
 | Start and connect the local web workbench | [UI deployment](docs/deploy/instruction.md#2-deploy-the-ui) |
 | Download datasets and reproduce Memory or Skill evaluations | [Memory evaluation](docs/evaluation/memory_evaluation.md) · [Skill evaluation](docs/evaluation/skill_evaluation.md) |
+
+### 🖼️ Multimodal Memory: MemEye & Mem-Gallery
+
+- **Benchmarks**: [MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye) (8 tasks, 742 questions — multi-turn dialogs interleaving images; EM on MCQ, BLEU-1 and LLM-Judge on open questions, macro-averaged over tasks) and [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery) (20 tasks, 1,711 open questions; token-level F1, BLEU-1 and LLM-Judge, micro-averaged over questions).
+
+| Method | MemEye EM | MemEye B-1 | MemEye Judge | Mem-Gallery F1 | Mem-Gallery B-1 | Mem-Gallery Judge |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| MemoryOS | 45.75 | 13.12 | 34.91 | 43.09 | 37.76 | 64.64 |
+| A-MEM | 49.73 | 21.11 | 38.27 | 44.08 | 38.37 | 64.35 |
+| SimpleMem | 50.34 | 9.42 | 42.59 | 34.73 | 28.90 | 58.33 |
+| HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
+| M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
+| MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
+| SRAG | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
+| MindMemOS b0 (text-only baseline) | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| MindMemOS b1 (image-similarity retrieval) | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| MindMemOS enhanced (VLM visual facts) | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| MindMemOS enhanced_agentic (multimodal agent) | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
+
+Setup: `vanilla` algorithm; every row answers with `gpt-4.1-mini`; image embeddings local SigLIP2 (`siglip2-base-patch16-384`). The baseline rows are reproductions under identical conditions (mean of 3 runs; source: a paper under double-blind review, not linked yet); the four MindMemOS rows are this repository's implementation (mean of 2 runs, 2026-10). `enhanced_agentic` is not a fourth mode — it is `enhanced` with `search_strategy: agentic` (multimodal agent retrieval). Judge models differ between the groups (`gpt-4.1-mini` here vs `GPT-5.4-mini` for the baselines), so compare Judge scores within a group, not across. Step-by-step run guide: the [multimodal section](docs/evaluation/memory_evaluation.md#multimodal-memory-evaluation) of the evaluation guide.
 
 ## 🗺️ Coming Features
 

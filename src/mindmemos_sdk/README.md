@@ -292,6 +292,26 @@ CLI 可用 `mindmemos trajectory report --file event.json --json` 提交同一�
 
 同一项目内，Skill 用相同 `event_id` 重放同一份输入时返回原轨迹 ID。用 `--skill-only` 或 `--memory-only` 仅投递指定服务。Memory 写入结果为 `unknown` 时，先核实服务端是否接收，再决定是否补报。任一路失败或结果未知时，CLI 仍输出已有回执并以状态码 1 退出。
 
+When the project's multimodal mode is enabled, messages accept images (local
+path, URL, base64 data, or a stored `blob_id`) and search accepts `query_images`
+/ `multimodal`; in off mode image sends are rejected with error codes
+`add.images_unsupported` / `search.images_unsupported`. Image hits carry
+`metadata.blob_id` and may carry `metadata.image_url` — a permanent
+public-mirror URL or short-lived presigned link you can fetch directly, or a
+signed `/v1/memory/images/{blob_id}?...&expires=<unix>&signature=<hmac>` proxy
+path (resolve against your `base_url`; also fetchable directly with no API key,
+until it expires) — and `client.memory.get_image(blob_id, user_id)`
+re-downloads by id regardless of shape or expiry:
+
+```python
+from mindmemos_sdk import ImageRef
+
+client.memory.add(messages=[DialogueMessage(role="user", content="my desk",
+                                            images=[ImageRef(path="/data/desk.png")])])
+hits = client.memory.search("desk setup", multimodal=True, user_id="alice")
+data, mime_type = client.memory.get_image(blob_id, user_id="alice")
+```
+
 ## CLI
 
 ```bash

@@ -152,9 +152,10 @@ openclaw config set plugins.entries.mindmemos-memory.config.cli \
 ```
 
 The `.venv/bin/mindmemos` shim has an absolute-path shebang, so it runs without
-activating the venv. Alternatively set `cli` to a wrapper such as
-`uv run mindmemos`, but only if the gateway can resolve `uv` and the repo
-working directory. If the gateway logs `ENOENT`, check the `cli` path.
+activating the venv. `cli` is passed as a single executable to
+`child_process.spawn` without a shell. Use a name on PATH or an absolute
+executable path; a multi-word value such as `uv run mindmemos` fails with
+`ENOENT`. If you need uv, point `cli` at an executable wrapper script.
 
 ## Subagent Behavior
 

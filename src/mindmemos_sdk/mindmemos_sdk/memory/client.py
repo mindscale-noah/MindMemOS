@@ -65,7 +65,9 @@ class MemoryClient:
     ) -> AddResult:
         """Add content to the memory store.
 
-        Images require the project's multimodal mode.
+        Images require the project's multimodal mode. In off mode image sends are
+        rejected with ``add.images_unsupported``. Server-side paths outside
+        ``blob_store.allowed_path_roots`` fail with ``image.path_denied``.
 
         Args:
             messages: Dialogue or other Memory inputs in execution order.

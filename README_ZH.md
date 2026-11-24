@@ -52,6 +52,7 @@
 ## 📰 News
 
 - **2026-11-09** — 我们正式发布 **MindMemOS-Skill**。它是可独立部署的 Skill 服务，支持管理 Skill 版本、训练和演化 Skill、构建Skill图谱并推荐最优Skill组合。[快速开始](#1-注册账号并创建-api-key)
+- **2026-10-31**：多模态记忆发布——`memory.add` / `memory.search` 支持图片（原图存 S3 兼容对象存储 / MinIO，按多模态 embedding 建索引），`enhanced` 模式提供 VLM 视觉事实抽取与多模态 agent 检索；评测结果与复现指南见 [评测指南的多模态一节](docs/evaluation/memory_evaluation_ZH.md#多模态记忆评测)。
 - **2026-08-18**：我们发布了 [DeepSeek Harness 插件](https://www.npmjs.com/package/@mindmemos/deepseek-harness-plugin)，让 DeepSeek Harness（dsh）Agent 自动召回并写入 MindMemOS 记忆。
 - **2026-08-14**：我们发布了 [MindMemOS 1.0 技术报告](https://arxiv.org/abs/2608.12428)《MindMemOS: A Portable and Self-Evolving Memory Operating Layer for AI Agents》。
 - **2026-07-17**: MindMemOS 接入 [LLM4AD_NEXT](https://github.com/Optima-CityU/LLM4AD_Next)，为算法设计任务提供可检索的长期记忆能力，实现跨任务经验、领域知识与约束条件的沉淀和复用。
@@ -475,6 +476,27 @@ uv run --no-sync mindmemos-eval skill evaluate train --algo skill-forest \
 | 管理 Skill 或接入自定义 Python 环境 | [Skill CLI](docs/cli/instruction_ZH.md#skill-命令) · [Skill 服务](src/mindmemos_skill/README.md) |
 | 启动本地 Web 工作台并连接服务 | [UI 部署](docs/deploy/instruction_ZH.md#2-部署-ui) |
 | 下载数据、复现 Memory 或 Skill 测评 | [Memory 评测](docs/evaluation/memory_evaluation_ZH.md) · [Skill 评测](docs/evaluation/skill_evaluation_ZH.md) |
+
+### 🖼️ 多模态记忆：MemEye 与 Mem-Gallery
+
+- **评测基准**：[MemEye](https://huggingface.co/datasets/MemEyeBench/MemEye)（8 任务共 742 题，多轮对话穿插图片；MCQ 计 EM、开放题计 BLEU-1 与 LLM Judge，按任务宏平均）与 [Mem-Gallery](https://huggingface.co/datasets/Ethan-Bei/Mem-Gallery)（20 任务共 1711 开放题；token 级 F1、BLEU-1 与 LLM Judge，按题微平均）。
+
+| 方法 | MemEye EM | MemEye B-1 | MemEye Judge | Mem-Gallery F1 | Mem-Gallery B-1 | Mem-Gallery Judge |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| MemoryOS | 45.75 | 13.12 | 34.91 | 43.09 | 37.76 | 64.64 |
+| A-MEM | 49.73 | 21.11 | 38.27 | 44.08 | 38.37 | 64.35 |
+| SimpleMem | 50.34 | 9.42 | 42.59 | 34.73 | 28.90 | 58.33 |
+| HyperMem | 47.82 | 19.64 | 36.43 | 44.57 | 33.42 | 66.76 |
+| M2A | 52.31 | 6.31 | 44.50 | 15.04 | 10.28 | 51.81 |
+| MMA | 50.96 | 16.32 | 43.81 | 26.99 | 20.60 | 60.87 |
+| SRAG | 58.36 | 31.48 | 50.54 | 41.07 | 35.03 | 67.06 |
+| UniversalRAG | 60.49 | 11.23 | 52.61 | 48.36 | 41.90 | 70.63 |
+| MindMemOS b0（纯文本基线） | 43.03 | 20.32 | 26.26 | 38.72 | 32.59 | 70.68 |
+| MindMemOS b1（图片相似度检索） | 59.77 | 27.02 | 47.80 | 54.73 | 47.75 | 85.06 |
+| MindMemOS enhanced（VLM 视觉事实） | 63.45 | 25.49 | 50.80 | 55.66 | 48.98 | 87.06 |
+| MindMemOS enhanced_agentic（多模态 agent） | **65.89** | 27.09 | **53.30** | **57.06** | **50.45** | **89.14** |
+
+配置：vanilla 算法；所有行均以 `gpt-4.1-mini` 作答；图片 embedding 为本地 SigLIP2（`siglip2-base-patch16-384`）。基线行为同一实验条件下的复现（3 次均值；出处为双盲评审中的在投论文，暂不附链接）；MindMemOS 四行为本仓库当前实现的评测（2 次均值，2026-10）。`enhanced_agentic` 不是第四种模式，而是 `enhanced` 开启 `search_strategy: agentic`（多模态 agent 检索）。两组 Judge 模型不同（本文 `gpt-4.1-mini`、基线 `GPT-5.4-mini`），Judge 分数请各组内比较、勿跨组对比。完整运行指南见 [docs/evaluation/memory_evaluation_ZH.md 的多模态一节](docs/evaluation/memory_evaluation_ZH.md#多模态记忆评测)。
 
 ## 🗺️ Coming Features
 
