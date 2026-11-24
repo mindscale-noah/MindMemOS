@@ -255,6 +255,21 @@ def test_provider_binding_patch_allows_runtime_config_changes() -> None:
     )
 
 
+def test_provider_binding_patch_allows_initial_embedding_configuration() -> None:
+    old = router_config()
+    old.pop("embed_model_router")
+    new = router_config(embed_model="openai/qwen3-embedding-4b", dimensions=2560)
+
+    validate_provider_binding_patch(
+        old,
+        new,
+        project_id="proj-1",
+        binding_id="binding-1",
+        scope=ProviderBindingScope(user_id="user-1"),
+        request_id="req-1",
+    )
+
+
 def test_provider_binding_patch_rejects_embedding_model_and_dimensions_changes(monkeypatch) -> None:
     warnings: list[dict[str, Any]] = []
 
