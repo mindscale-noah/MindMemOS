@@ -134,7 +134,7 @@ class SchemaAddPlanner:
         context: MemoryRequestContext,
         prompt_set: AddPromptSet | None = None,
     ) -> list[tuple[EntityView, str]]:
-        """Plan edges between the new episode and historical episodes (二.1.c).
+        """Plan edges between the new episode and historical episodes.
 
         Returns ``(target_episode, relation)`` pairs. The episode EntityWrite is not
         built yet, so graph relationships are materialized later in
@@ -300,7 +300,6 @@ class SchemaAddPlanner:
         dto_by_name.update(entity_by_name)
         relationships.extend(edge_relationships(raw_edges, dto_by_name, context.project_id))
 
-        # Episode-to-episode edges planned during 二.1.c.
         for target, relation in episode_edges:
             relationship = Edge.from_entity_dtos(
                 episode_write,

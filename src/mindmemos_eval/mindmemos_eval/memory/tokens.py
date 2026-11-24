@@ -49,9 +49,7 @@ def aggregate_stage_metrics(items: Iterable[Any], *prefixes: str) -> dict[str, i
                 prefix,
                 llm_calls=sum(int(getattr(item, f"{prefix}_llm_calls", 0) or 0) for item in values),
                 prompt_tokens=sum(int(getattr(item, f"{prefix}_prompt_tokens", 0) or 0) for item in values),
-                completion_tokens=sum(
-                    int(getattr(item, f"{prefix}_completion_tokens", 0) or 0) for item in values
-                ),
+                completion_tokens=sum(int(getattr(item, f"{prefix}_completion_tokens", 0) or 0) for item in values),
                 total_tokens=sum(int(getattr(item, f"{prefix}_total_tokens", 0) or 0) for item in values),
             )
         )

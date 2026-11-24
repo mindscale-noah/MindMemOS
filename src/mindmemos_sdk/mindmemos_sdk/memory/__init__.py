@@ -21,9 +21,11 @@ from .models import (
     TextMessage,
     UrlMessage,
 )
+from .typing import SkillContext
 
 __all__ = [
     "MemoryClient",
+    "SkillContext",
     "AsyncMemoryClient",
     "AddResult",
     "FeedbackMode",

@@ -21,6 +21,7 @@ from .models import (
     SearchStrategy,
     StatusResult,
 )
+from .typing import SkillContext
 
 
 class AsyncMemoryClient:
@@ -55,11 +56,23 @@ class AsyncMemoryClient:
         agent_id: str | None = None,
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        skill_context: list[Any] | None = None,
-        score: float | None = None,
-        task_id: str | None = None,
+        skill_context: list[SkillContext | dict[str, Any]] | None = None,
     ) -> AddResult:
-        """Add content to the memory store."""
+        """Add content while preserving legacy Skill references in the Memory request.
+
+        Args:
+            messages: Typed or JSON Memory inputs in execution order.
+            user_id: Business user, falling back to the client default.
+            mode: Synchronous processing or asynchronous queueing.
+            app_id: Optional application identity.
+            agent_id: Optional agent identity.
+            session_id: Optional conversation identity.
+            metadata: Business metadata attached to the add request.
+            skill_context: Legacy Skill source references sent only to Memory.
+
+        Returns:
+            The result or enqueue receipt from Memory.
+        """
         request = self._core.add(
             messages=messages,
             user_id=user_id,
@@ -69,8 +82,6 @@ class AsyncMemoryClient:
             session_id=session_id,
             metadata=metadata,
             skill_context=skill_context,
-            score=score,
-            task_id=task_id,
         )
         envelope = await self._transport.post_envelope(request.path, json=request.body)
         return request.parse(envelope)

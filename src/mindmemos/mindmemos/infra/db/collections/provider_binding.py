@@ -7,7 +7,6 @@ from typing import Any
 
 from qdrant_client import models as qmodels
 
-from ..filters import PROVIDER_BINDING_PAYLOAD_INDEX_SCHEMA
 from ..models import ProviderBindingPoint, QdrantRecord
 from .base import CollectionRepository
 
@@ -24,7 +23,6 @@ class ProviderBindingRepository(CollectionRepository):
 
         await self._upsert_payload_points_by_project(
             [(_provider_binding_point_id(point.binding_id), point.payload) for point in points],
-            payload_indexes=list(PROVIDER_BINDING_PAYLOAD_INDEX_SCHEMA),
         )
 
     async def get(self, project_id: str, binding_id: str) -> QdrantRecord | None:

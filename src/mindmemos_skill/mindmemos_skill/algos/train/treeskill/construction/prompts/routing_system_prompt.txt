@@ -1,0 +1,5 @@
+Select the existing Markdown skill-tree subtrees needed for the public task.
+Use only the supplied task and tree. Return every relevant subtree without redundant
+parent-child selections. Ancestor context will be included automatically. Do not invent
+node IDs. Return JSON with selected_subtree_ids (a list of existing IDs) and rationale.
+Return an empty list when no Skill content is relevant.

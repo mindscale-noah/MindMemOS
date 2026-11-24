@@ -63,14 +63,14 @@ def is_latin(ch: str) -> bool:
 
 
 def detect_prompt_language(text: str, *, fallback: str = "EN") -> str:
-    """检测文本语言并返回 prompt 语言码（"ZH" 或 "EN"）。
+    """Detect the language of the text and return its prompt language code.
 
     Args:
-        text: 待检测文本。
-        fallback: 当检测结果为 mixed/unknown 时的回退值。
+        text: Text to classify.
+        fallback: Prompt language code to use for mixed or unknown text.
 
     Returns:
-        "ZH" 或 "EN"。
+        The prompt language code, either "ZH" or "EN".
     """
     from ...config import get_config
 

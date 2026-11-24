@@ -1,15 +1,12 @@
 # Python SDK usage
 
 Besides the CLI, MindMemOS ships a Python SDK in the same `mindmemos-sdk` package.
-Use it when memory operations live inside a Python agent/app rather than a shell
-call. The SDK and CLI hit the same API and share the same local config written by
-`mindmemos auth`.
+Use it when MindMemOS operations live inside a Python agent or app. The SDK and
+CLI share the local config written by `mindmemos auth`.
 
 ## Setup
 
-```bash
-pip install mindmemos-sdk   # exposes the `mindmemos` CLI too
-```
+Use the same 1.0.0 build described under [Install the CLI](../SKILL.md#install-the-cli).
 
 Credentials resolve in this order: explicit constructor args → the local config
 from `mindmemos auth` → empty (calls then raise `AuthRequiredError`). A configured
@@ -90,7 +87,7 @@ SDK results and API errors; callers cannot provide them.
 
 Useful memory kwargs:
 
-- `add(..., mode="sync"|"async", metadata={...}, skill_context=[...], score=0.8, task_id="...")`
+- `add(..., mode="sync"|"async", metadata={...})`
 - `search(..., search_strategy="fast"|"agentic", rerank=True, score_threshold=0.5, token_budget=2000, filters={...})`
 - `feedback(feedback="...", mode="sync"|"async", messages=[...], recalled_memories=[...])`;
   explicit feedback text requires `messages`, while omitting `feedback` runs implicit feedback from recent adds.
@@ -171,25 +168,63 @@ asyncio.run(main())
 - `search` / `get` → `SearchResult` / `GetResult` with `memories=[{id, memory, last_update_at, ...}]`.
 - `update` / `delete` / `feedback` / `dreaming` → `StatusResult(code, message, request_id)`.
 
-## Skill version commands
+## Skill client
 
-SDK-managed skills are controlled through the CLI:
+`MindMemOSClient().skills` uses the Skill connection saved by `mindmemos auth`.
+Use request types from `mindmemos_sdk.skills`. To recommend from a graph,
+resolve its snapshot first:
 
-```bash
-mindmemos skill register ./skills/demo/SKILL.md --alias demo
-mindmemos skill pull <skill_id_or_alias>
-mindmemos skill update <skill_id_or_alias> --yes
-mindmemos skill rollback <skill_id_or_alias> --to <version_id> --yes
-mindmemos skill diff <skill_id_or_alias> --from <version_id> --to <version_id>
+```python
+from mindmemos_sdk import MindMemOSClient
+from mindmemos_sdk.skills import GraphResolveRequest, RecommendRequest
+
+with MindMemOSClient() as client:
+    graph = client.skills.graph_resolve(GraphResolveRequest(graph_ref="my-catalog"))
+    snapshot_id = graph["graph_version_id"]
+    if not snapshot_id:
+        raise ValueError("The Skill graph has no published snapshot")
+    result = client.skills.recommend(
+        RecommendRequest(
+            graph_ref=graph["graph_id"],
+            graph_version_id=snapshot_id,
+            query="Validate a CSV schema and report invalid rows",
+            top_k=3,
+        )
+    )
+    for candidate in result["skills"]:
+        print(candidate["version_id"], candidate["name"])
 ```
 
-`register` accepts either a skill directory or its `SKILL.md` path; the SDK stores the parent directory as the managed path. `register --alias` stores a local alias in the SDK registry. All single-skill commands accept either the generated `skill_id` or that alias. `update` checks the cloud published head and applies the same checkout/backup flow as rollback. `rollback` downloads missing target content into the local cache, prints a replacement plan with file, hash, and backup path details, then applies only after confirmation unless `--yes` is set. `diff` is read-only: it compares cached or downloaded version content and never changes the working skill directory.
+## Report a turn to Memory and Skill
 
-`memory add` also accepts explicit skill traces:
+```python
+from mindmemos_sdk import MindMemOSClient, TrajectoryEvent, TrajectoryMessage
 
-```bash
-mindmemos memory add --messages-json-file turn.json \
-  --skill-context-json '[{"name":"demo","content_hash":"...","base_version_id":"v1","usage":"injected"}]'
+event = TrajectoryEvent(
+    event_id="example:session-42:turn-7",
+    source="my-agent",
+    user_id="alice",
+    agent_id="assistant",
+    session_id="session-42",
+    skill_version_ids=["skv-a", "skv-b"],
+    messages=[
+        TrajectoryMessage(role="user", content="Validate the CSV schema"),
+        TrajectoryMessage(role="assistant", content="The schema passed validation."),
+    ],
+)
+with MindMemOSClient() as client:
+    result = client.report_trajectory(event)
+    print(result.memory, result.skill)
 ```
 
-When `--skill-context-json` is omitted, the sync SDK/CLI has a best-effort fallback for OpenClaw-style `[tool_call] read|write|edit({"path":".../SKILL.md"})` messages in the same add payload: it computes the canonical bundle hash, ensures registered local skills when possible, and sends `skill_context` with the add request. Host integrations such as the OpenClaw plugin can still run their own skill detection and pass `--skill-context-json` explicitly.
+Replace the example IDs with the exact versions loaded in that turn. Use an empty
+list when no exact versions were identified. One call yields separate Memory and
+Skill receipts. Memory `queued` means extraction was accepted. Skill `stored`
+returns the ID of the single trajectory that links all versions. Skill `skipped`
+with `no_skill_versions` means the SDK sent no Skill request.
+
+For a manual retry after confirming which destination rejected the write, retain
+the original event ID and use `include_memory=False` or `include_skill=False`.
+Reconcile `unknown` outcomes before resending, since the service may already
+have accepted the request. The CLI equivalent is
+`mindmemos trajectory report --file event.json --json`.

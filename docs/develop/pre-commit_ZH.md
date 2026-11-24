@@ -36,13 +36,13 @@ gitleaks version
 然后在仓库根目录安装依赖和 Git hooks：
 
 ```bash
-make dev-setup
+make setup
 ```
 
 如果已经装过开发依赖，只想安装 hooks：
 
 ```bash
-make hooks-install
+make hook
 ```
 
 ## 使用

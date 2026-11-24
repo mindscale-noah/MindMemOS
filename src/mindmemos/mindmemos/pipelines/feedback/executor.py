@@ -112,18 +112,16 @@ class FeedbackActionExecutor:
         action: FeedbackUpdateAction,
         context: MemoryRequestContext,
     ) -> FeedbackActionResult:
-        """通过创建新记忆版本 + 归档旧记忆来实现更新，版本关系通过 Neo4j DERIVED_FROM 维系。"""
+        """Create a new memory version linked to the archived version by a DERIVED_FROM edge."""
         now = datetime.now(UTC)
         memory = await self._db_reader.get_memory(context, action.target_memory_id)
         if memory is None:
             return action.model_copy(update={"result_memory_id": action.target_memory_id, "status": "error"})
 
-        # 创建新版本记忆
         new_memory_id = str(uuid4())
         vector_text = memory_embedding_text(memory.model_copy(update={"content": action.after_content}))
         vector = await self._vectorize(vector_text)
 
-        # 合并旧 metadata 与 feedback 元信息
         merged_metadata = (memory.metadata or {}).copy()
         merged_metadata.update(_feedback_metadata(action.reason, now))
 
@@ -152,12 +150,8 @@ class FeedbackActionExecutor:
             vectors=[vector.model_copy(update={"memory_id": new_memory_id})],
             relationships=[
                 GraphRelationship(
-                    source=GraphNodeRef(
-                        kind="Memory", project_id=context.project_id, node_id=new_memory_id
-                    ),
-                    target=GraphNodeRef(
-                        kind="Memory", project_id=context.project_id, node_id=action.target_memory_id
-                    ),
+                    source=GraphNodeRef(kind="Memory", project_id=context.project_id, node_id=new_memory_id),
+                    target=GraphNodeRef(kind="Memory", project_id=context.project_id, node_id=action.target_memory_id),
                     rel_type=REL_DERIVED_FROM,
                     project_id=context.project_id,
                     metadata={"reason": action.reason or "", "created_at": now.isoformat()},
@@ -165,7 +159,6 @@ class FeedbackActionExecutor:
             ],
         )
 
-        # 归档旧记忆
         archive_meta = _feedback_metadata(action.reason, now)
         archive_meta["derived_to"] = new_memory_id
         archive_command = MemoryDbUpdateCommand(
@@ -195,7 +188,7 @@ class FeedbackActionExecutor:
         action: FeedbackDeleteAction,
         context: MemoryRequestContext,
     ) -> FeedbackActionResult:
-        """归档记忆并记录原因。旧记忆在 Qdrant 中保留（status="archived"），不再写 FeedbackPatch。"""
+        """Archive the memory and record the deletion reason."""
         memory = await self._db_reader.get_memory(context, action.target_memory_id)
         command = MemoryDbDeleteCommand(memory_id=action.target_memory_id, reason="feedback_delete")
         result = await self._db_writer.apply_mutation_plan(
@@ -206,9 +199,7 @@ class FeedbackActionExecutor:
         mutation = result.mutations[0] if result.mutations else None
         changed = bool(mutation and mutation.changed)
         status = "ok" if changed else "error"
-        return action.model_copy(
-            update={"result_memory_id": action.target_memory_id, "status": status}
-        )
+        return action.model_copy(update={"result_memory_id": action.target_memory_id, "status": status})
 
     async def _vectorize(self, text: str) -> VectorWrite:
         embed_resp = await self._embed_client.embed(task="memory.feedback.mutation", text=text)
@@ -277,8 +268,6 @@ class FeedbackActionExecutor:
     @_sparse_encoder.setter
     def _sparse_encoder(self, value: SparseVectorEncoder | None) -> None:
         self.__sparse_encoder = value
-
-
 
 
 def _feedback_metadata(reason: str | None, now: datetime) -> dict[str, str]:

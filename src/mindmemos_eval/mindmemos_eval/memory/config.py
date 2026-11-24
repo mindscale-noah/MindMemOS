@@ -122,9 +122,7 @@ def load_benchmark_specs(
             else (profile.project_override_config if profile is not None else None)
         )
         if validate_image_sending:
-            check_image_sending_consistency(
-                str(name), benchmark_execution_params, project_override_config
-            )
+            check_image_sending_consistency(str(name), benchmark_execution_params, project_override_config)
         specs[str(name)] = BenchmarkSpec(
             name=str(name),
             dataset=dataset,

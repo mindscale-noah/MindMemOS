@@ -1,0 +1,6 @@
+# Task execution libraries from Trace2Skill's official spreadsheet Skill.
+# https://github.com/Qwen-Applications/Trace2Skill/blob/main/spreadsheet_agent/skills/xlsx/SKILL.md
+# Upstream does not pin these versions; these are the locally validated versions.
+# LibreOffice is a separate system requirement for formula recalculation.
+openpyxl==3.1.5
+pandas==2.3.3

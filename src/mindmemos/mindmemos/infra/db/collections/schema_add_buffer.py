@@ -6,7 +6,6 @@ from typing import Any
 
 from qdrant_client import models as qmodels
 
-from ..filters import SCHEMA_ADD_BUFFER_PAYLOAD_INDEX_SCHEMA
 from ..models import QdrantRecord, SchemaAddBufferPoint
 from .base import CollectionRepository
 
@@ -23,7 +22,6 @@ class SchemaAddBufferRepository(CollectionRepository):
 
         await self._upsert_payload_points_by_project(
             [(point.schema_buffer_record_id, point.payload) for point in points],
-            payload_indexes=list(SCHEMA_ADD_BUFFER_PAYLOAD_INDEX_SCHEMA),
         )
 
     async def get(self, project_id: str, schema_buffer_record_id: str) -> QdrantRecord | None:
@@ -72,4 +70,4 @@ class SchemaAddBufferRepository(CollectionRepository):
         record = await self.get(project_id, schema_buffer_record_id)
         if record is None:
             return
-        await self._engine.set_payload(self.collection_for_project(project_id), schema_buffer_record_id, payload)
+        await self._engine.set_payload(self.collection_for_project(), schema_buffer_record_id, payload)

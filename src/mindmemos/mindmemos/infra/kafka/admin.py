@@ -33,11 +33,15 @@ async def ensure_topics(config: KafkaConfig) -> None:
                 existing.add(topic.name)
 
         if expandable:
-            descriptions = await admin.describe_topics([topic.name for topic in config.topics if topic.name in expandable])
+            descriptions = await admin.describe_topics(
+                [topic.name for topic in config.topics if topic.name in expandable]
+            )
             expansions = _partition_expansions(config.topics, descriptions)
             if expansions:
                 await admin.create_partitions(expansions, timeout_ms=config.request_timeout_ms)
-                logger.info("kafka topics expanded", topics={name: spec.total_count for name, spec in expansions.items()})
+                logger.info(
+                    "kafka topics expanded", topics={name: spec.total_count for name, spec in expansions.items()}
+                )
     finally:
         await admin.close()
 

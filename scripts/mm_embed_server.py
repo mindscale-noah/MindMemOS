@@ -129,7 +129,12 @@ def make_handler(encoder: Siglip2, served_name: str, max_concurrent: int = 4):
             if not limit.acquire(blocking=False):
                 return self._send(
                     503,
-                    {"error": {"message": f"overloaded: {max(1, max_concurrent)} requests already running", "type": "overloaded"}},
+                    {
+                        "error": {
+                            "message": f"overloaded: {max(1, max_concurrent)} requests already running",
+                            "type": "overloaded",
+                        }
+                    },
                     {"Retry-After": "2"},
                 )
             try:
@@ -209,9 +214,7 @@ def main() -> None:
     args = parser.parse_args()
     device = _device(args.device)
     encoder = Siglip2(args.model, device)
-    server = ThreadingHTTPServer(
-        (args.host, args.port), make_handler(encoder, args.served_name, args.max_concurrent)
-    )
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(encoder, args.served_name, args.max_concurrent))
     print(
         f"mm embed server: {args.served_name} ({encoder.dimensions}d, {device}, "
         f"max {max(1, args.max_concurrent)} concurrent) on {args.host}:{args.port}",

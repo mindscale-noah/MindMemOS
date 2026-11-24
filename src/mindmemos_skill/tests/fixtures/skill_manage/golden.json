@@ -1,0 +1,311 @@
+{
+  "context": {
+    "edge_count": 4,
+    "retrieval": {
+      "rendered_context": "# Skill bundle for query: parse a csv file, filter its records, and merge them into a json document\n\n## Retrieval Status\n\nRetrieval Status: SKILL_HIT\n\nUse retrieved skills to narrow the solution space and take the shortest path to verifier pass.\n\nBefore implementing, inspect the task tests/verifier and identify the minimum acceptance requirements.\n\nSatisfy only the minimum requirements first.\n\nTreat retrieved skills as constraints and reusable implementations, not permission to branch out.\n\nUse the exact Source paths already provided. Do not reconstruct paths from the skill name or scan the whole library if a Source path is already available.\n\nPrefer adapting retrieved scripts/interfaces over building a more general replacement.\n\n## Skill: CSV Parser Skill\nSource: skills/csv_parser.md\n---\nname: CSV Parser Skill\ndescription: Parses raw CSV text into structured rows of records.\ndomain:\n  - data-processing\n  - text\ninputs:\n  - raw_csv_text\noutputs:\n  - parsed_records\n---\n\n# CSV Parser Skill\n\nParses raw CSV text into structured records ready for downstream processing.\n\n## Inputs\n\n- raw_csv_text\n\n## Outputs\n\n- parsed_records\n\n\n## Skill: JSON Merger Skill\nSource: skills/json_merger.md\n---\nname: JSON Merger Skill\ndescription: Merges filtered records into one JSON document.\ndomain:\n  - data-processing\n  - json\ninputs:\n  - filtered_records\noutputs:\n  - merged_json\n---\n\n# JSON Merger Skill\n\nMerges record arrays into a single JSON document.\n\n## Inputs\n\n- filtered_records\n\n## Outputs\n\n- merged_json\n\n\n## Skill: Record Filter Skill\nSource: skills/record_filter.md\n---\nname: Record Filter Skill\ndescription: Filters structured records by predicate to produce filtered records.\ndomain:\n  - data-processing\ninputs:\n  - parsed_records\noutputs:\n  - filtered_records\n---\n\n# Record Filter Skill\n\nTakes structured records and filters them by a predicate.\n\n## Inputs\n\n- parsed_records\n\n## Outputs\n\n- filtered_records\n\n\n## Skill: S3 Upload Skill\nSource: skills/s3_upload.md\n---\nname: S3 Upload Skill\ndescription: Uploads a local file to an S3 bucket and returns the object URI.\ndomain:\n  - data-transfer\n  - cloud\ninputs:\n  - file_path\noutputs:\n  - s3_uri\n---\n\n# S3 Upload Skill\n\nUploads a local file to an S3 bucket.\n\n## Inputs\n\n- file_path\n\n## Outputs\n\n- s3_uri\n\n\n## Skill: Random Name Skill\nSource: skills/isolated.md\n---\nname: Random Name Skill\ndescription: Generates random placeholder names for demos and tests.\n---\n\n# Random Name Skill\n\nCreates random fake names for demos.\n\n## Notes\n\nThis skill deliberately declares no typed inputs or outputs and no shared\ndomain, so it must stay isolated in the skill graph.\n\n\n## Graph evidence\n- CSV Parser Skill --(dependency)--> Record Filter Skill: CSV Parser Skill produces data that Record Filter Skill consumes: parsed_records.\n- JSON Merger Skill --(dependency)--> Record Filter Skill: Record Filter Skill produces data that JSON Merger Skill consumes: filtered_records.\n- CSV Parser Skill --(dependency)--> Record Filter Skill: CSV Parser Skill produces data that Record Filter Skill consumes: parsed_records.\n- JSON Merger Skill --(dependency)--> Record Filter Skill: Record Filter Skill produces data that JSON Merger Skill consumes: filtered_records.",
+      "summary": "### Retrieval Status\n- Retrieval Status: SKILL_HIT\n- Use retrieved skills to narrow the solution space and take the shortest path to verifier pass.\n- Before coding, inspect the task verifier/tests and identify the minimum acceptance requirements.\n- Satisfy only those minimum requirements first.\n- Treat retrieved skills as constraints and reusable implementations, not permission to open extra branches.\n- Use the exact `Source:` path returned below. Do not reconstruct paths from the skill name or scan the whole library if a Source path is already available.\n- Prefer adapting the retrieved skill's scripts/interfaces over writing a broader replacement.\n\n### Retrieved Skills\n- CSV Parser Skill: Parses raw CSV text into structured rows of records. (score=0.2404, rerank=1.0182, seed rank 2)\n  Source: skills/csv_parser.md\n- JSON Merger Skill: Merges filtered records into one JSON document. (score=0.2950, rerank=0.9505, seed rank 1)\n  Source: skills/json_merger.md\n- Record Filter Skill: Filters structured records by predicate to produce filtered records. (score=0.4646, rerank=0.9258, seed rank 3)\n  Source: skills/record_filter.md\n- S3 Upload Skill: Uploads a local file to an S3 bucket and returns the object URI. (score=0.0000, rerank=0.1556)\n  Source: skills/s3_upload.md\n- Random Name Skill: Generates random placeholder names for demos and tests. (score=0.0000, rerank=0.1556)\n  Source: skills/isolated.md\n\n### Query Schema\n- goal: parse a csv file, filter its records, and merge them into a json document\n- task_name: parse-a-csv-file-filter-its-records-and\n\n### Semantic Seeds\n- JSON Merger Skill (seed weight=0.5455, rank=1)\n- CSV Parser Skill (seed weight=0.2727, rank=2)\n- Record Filter Skill (seed weight=0.1818, rank=3)\n\n### Graph Edges\n- CSV Parser Skill --(dependency)--> Record Filter Skill: CSV Parser Skill produces data that Record Filter Skill consumes: parsed_records. (weight=1.000)\n- JSON Merger Skill --(dependency)--> Record Filter Skill: Record Filter Skill produces data that JSON Merger Skill consumes: filtered_records. (weight=1.000)\n- CSV Parser Skill --(dependency)--> Record Filter Skill: CSV Parser Skill produces data that Record Filter Skill consumes: parsed_records. (weight=1.000)\n- JSON Merger Skill --(dependency)--> Record Filter Skill: Record Filter Skill produces data that JSON Merger Skill consumes: filtered_records. (weight=1.000)"
+    },
+    "scene_count": 1,
+    "scene_stats": {
+      "containment_edges": 1,
+      "flow_edges": 0,
+      "scene_nodes": 1,
+      "skills_with_ssl": 1
+    },
+    "skill_count": 6,
+    "sync_result": {
+      "inserted": 6,
+      "reused": 0,
+      "updated": 0
+    }
+  },
+  "description": "GOS minimal baseline golden (real engine, content-hash stubs)",
+  "edges": [
+    {
+      "source": "CSV Parser Skill",
+      "target": "CSV Parser Skill::scene_parse",
+      "type": "containment",
+      "weight": 1.0
+    },
+    {
+      "source": "CSV Parser Skill",
+      "target": "Record Filter Skill",
+      "type": "dependency",
+      "weight": 1.0
+    },
+    {
+      "source": "Data Sync Skill",
+      "target": "S3 Upload Skill",
+      "type": "semantic",
+      "weight": 0.36000000000000004
+    },
+    {
+      "source": "JSON Merger Skill",
+      "target": "Record Filter Skill",
+      "type": "dependency",
+      "weight": 1.0
+    }
+  ],
+  "embedding_stub_seed": "fixed-seed-12345",
+  "llm_stub_seed": "fixed-seed-67890",
+  "nodes": [
+    {
+      "description": "Parses raw CSV text into structured rows of records.",
+      "domain_tags": [
+        "data-processing",
+        "text"
+      ],
+      "inputs": [
+        "raw_csv_text"
+      ],
+      "name": "CSV Parser Skill",
+      "one_line_capability": "Parses raw CSV text into structured rows of records.",
+      "outputs": [
+        "parsed_records"
+      ],
+      "tooling": [],
+      "type": "Skill"
+    },
+    {
+      "description": "Syncs data between two storage endpoints.",
+      "domain_tags": [
+        "data-transfer",
+        "sync"
+      ],
+      "inputs": [
+        "source_endpoint"
+      ],
+      "name": "Data Sync Skill",
+      "one_line_capability": "Syncs data between two storage endpoints.",
+      "outputs": [
+        "sync_status"
+      ],
+      "tooling": [],
+      "type": "Skill"
+    },
+    {
+      "description": "Merges filtered records into one JSON document.",
+      "domain_tags": [
+        "data-processing",
+        "json"
+      ],
+      "inputs": [
+        "filtered_records"
+      ],
+      "name": "JSON Merger Skill",
+      "one_line_capability": "Merges filtered records into one JSON document.",
+      "outputs": [
+        "merged_json"
+      ],
+      "tooling": [],
+      "type": "Skill"
+    },
+    {
+      "description": "Generates random placeholder names for demos and tests.",
+      "domain_tags": [],
+      "inputs": [],
+      "name": "Random Name Skill",
+      "one_line_capability": "Generates random placeholder names for demos and tests.",
+      "outputs": [],
+      "tooling": [],
+      "type": "Skill"
+    },
+    {
+      "description": "Filters structured records by predicate to produce filtered records.",
+      "domain_tags": [
+        "data-processing"
+      ],
+      "inputs": [
+        "parsed_records"
+      ],
+      "name": "Record Filter Skill",
+      "one_line_capability": "Filters structured records by predicate to produce filtered records.",
+      "outputs": [
+        "filtered_records"
+      ],
+      "tooling": [],
+      "type": "Skill"
+    },
+    {
+      "description": "Uploads a local file to an S3 bucket and returns the object URI.",
+      "domain_tags": [
+        "data-transfer",
+        "cloud"
+      ],
+      "inputs": [
+        "file_path"
+      ],
+      "name": "S3 Upload Skill",
+      "one_line_capability": "Uploads a local file to an S3 bucket and returns the object URI.",
+      "outputs": [
+        "s3_uri"
+      ],
+      "tooling": [],
+      "type": "Skill"
+    },
+    {
+      "description": "Parse raw CSV text into records",
+      "domain_tags": [],
+      "inputs": [],
+      "name": "CSV Parser Skill::scene_parse",
+      "one_line_capability": "Parse CSV",
+      "outputs": [],
+      "tooling": [],
+      "type": "Scene"
+    }
+  ],
+  "parsed": [
+    {
+      "description": "Parses raw CSV text into structured rows of records.",
+      "domain_tags": [
+        "data-processing",
+        "text"
+      ],
+      "inputs": [
+        "raw_csv_text"
+      ],
+      "name": "CSV Parser Skill",
+      "outputs": [
+        "parsed_records"
+      ],
+      "source_path": "skills/csv_parser.md"
+    },
+    {
+      "description": "Syncs data between two storage endpoints.",
+      "domain_tags": [
+        "data-transfer",
+        "sync"
+      ],
+      "inputs": [
+        "source_endpoint"
+      ],
+      "name": "Data Sync Skill",
+      "outputs": [
+        "sync_status"
+      ],
+      "source_path": "skills/data_sync.md"
+    },
+    {
+      "description": "Merges filtered records into one JSON document.",
+      "domain_tags": [
+        "data-processing",
+        "json"
+      ],
+      "inputs": [
+        "filtered_records"
+      ],
+      "name": "JSON Merger Skill",
+      "outputs": [
+        "merged_json"
+      ],
+      "source_path": "skills/json_merger.md"
+    },
+    {
+      "description": "Generates random placeholder names for demos and tests.",
+      "domain_tags": [],
+      "inputs": [],
+      "name": "Random Name Skill",
+      "outputs": [],
+      "source_path": "skills/isolated.md"
+    },
+    {
+      "description": "Filters structured records by predicate to produce filtered records.",
+      "domain_tags": [
+        "data-processing"
+      ],
+      "inputs": [
+        "parsed_records"
+      ],
+      "name": "Record Filter Skill",
+      "outputs": [
+        "filtered_records"
+      ],
+      "source_path": "skills/record_filter.md"
+    },
+    {
+      "description": "Uploads a local file to an S3 bucket and returns the object URI.",
+      "domain_tags": [
+        "data-transfer",
+        "cloud"
+      ],
+      "inputs": [
+        "file_path"
+      ],
+      "name": "S3 Upload Skill",
+      "outputs": [
+        "s3_uri"
+      ],
+      "source_path": "skills/s3_upload.md"
+    }
+  ],
+  "ppr": {
+    "damping": 0.2,
+    "max_iter": 50,
+    "scores": {
+      "CSV Parser Skill": 0.2404060587341109,
+      "Data Sync Skill": 0.0,
+      "JSON Merger Skill": 0.2949515132795654,
+      "Random Name Skill": 0.0,
+      "Record Filter Skill": 0.46464242798632366,
+      "S3 Upload Skill": 0.0
+    }
+  },
+  "query": "parse a csv file, filter its records, and merge them into a json document",
+  "scenes": [
+    {
+      "scenes": [
+        {
+          "scene_goal": "Parse raw CSV text into records",
+          "scene_id": "scene_parse",
+          "scene_name": "Parse CSV"
+        }
+      ],
+      "skill": "CSV Parser Skill"
+    }
+  ],
+  "schema_version": 1,
+  "seeds": [
+    {
+      "name": "JSON Merger Skill",
+      "seed_weight": 0.5454545454545455,
+      "semantic_rank": 1
+    },
+    {
+      "name": "CSV Parser Skill",
+      "seed_weight": 0.27272727272727276,
+      "semantic_rank": 2
+    },
+    {
+      "name": "Record Filter Skill",
+      "seed_weight": 0.18181818181818182,
+      "semantic_rank": 3
+    }
+  ],
+  "top_k": [
+    {
+      "name": "CSV Parser Skill",
+      "rerank_score": 1.0181838365118887,
+      "score": 0.2404060587341109
+    },
+    {
+      "name": "JSON Merger Skill",
+      "rerank_score": 0.9505070688351209,
+      "score": 0.2949515132795654
+    },
+    {
+      "name": "Record Filter Skill",
+      "rerank_score": 0.9257535390974346,
+      "score": 0.46464242798632366
+    },
+    {
+      "name": "S3 Upload Skill",
+      "rerank_score": 0.15555555555555553,
+      "score": 0.0
+    },
+    {
+      "name": "Random Name Skill",
+      "rerank_score": 0.15555555555555553,
+      "score": 0.0
+    }
+  ]
+}

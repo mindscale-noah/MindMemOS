@@ -1,0 +1,4 @@
+{
+  "skill_merge_user": "## Skill Candidate 1\n\nValidation Score: 0.75\n\n# Left\nRules.\n\n## Skill Candidate 2\n\nValidation Score: 0.5\n\n# Right\nNew.\n\n## Diff\n\n```diff\n--- skill_candidate_1\n+++ skill_candidate_2\n@@ -1,2 +1,2 @@\n-# Left\n-Rules.\n+# Right\n+New.\n```\n",
+  "identical_skill_merge_user": "## Skill Candidate 1\n\nValidation Score: 0.75\n\n# Left\nRules.\n\n## Skill Candidate 2\n\nValidation Score: 0.5\n\n# Left\nRules.\n\n## Diff\n\n```diff\nThe Skill texts have no line differences.\n```\n"
+}

@@ -19,10 +19,8 @@ class SourceRepository(CollectionRepository):
 
         by_collection: dict[str, list[SourcePoint]] = {}
         for point in points:
-            project_id = str(point.payload.get("project_id") or "")
             vector_size = len(point.vector or []) or self._cfg.vector_size
             collection = await self._ensure_project_vector_collection(
-                project_id,
                 vector_size=vector_size,
                 enable_sparse=False,
                 payload_indexes=list(SOURCE_PAYLOAD_INDEX_SCHEMA),

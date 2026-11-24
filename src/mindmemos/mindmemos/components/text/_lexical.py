@@ -125,7 +125,9 @@ class Bm25TextAnalyzer:
             return [self._analyze_en_fallback(text) for text in texts]
 
         spacy_terms = self._analyze_en_spacy_many(texts)
-        return [terms if terms else self._analyze_en_fallback(text) for text, terms in zip(texts, spacy_terms, strict=True)]
+        return [
+            terms if terms else self._analyze_en_fallback(text) for text, terms in zip(texts, spacy_terms, strict=True)
+        ]
 
     def _analyze_en_fallback(self, text: str) -> list[str]:
         source_text = text.lower() if self.config.bm25_lowercase_en else text
@@ -168,7 +170,11 @@ class Bm25TextAnalyzer:
             return [
                 [
                     term
-                    for term in (normalize_term(token.lemma_.lower()) for token in doc if token.is_alpha and not token.is_stop and token.lemma_)
+                    for term in (
+                        normalize_term(token.lemma_.lower())
+                        for token in doc
+                        if token.is_alpha and not token.is_stop and token.lemma_
+                    )
                     if self._keep_term(term, self.en_stopwords)
                 ]
                 for doc in docs

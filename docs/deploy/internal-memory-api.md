@@ -101,3 +101,7 @@ performs the bounded database scan.
 The platform cache uses the upstream snapshot's remaining freshness rather than
 starting another full TTL. Aggregated responses report the oldest available
 project snapshot time, so a cache hit is not presented as newly generated data.
+
+## Relationship graphs
+
+`GET /internal/v1/projects/{project_id}/memories/{memory_id}/graph` returns a bounded neighborhood for one memory. `GET /internal/v1/projects/{project_id}/graph/neighbors` expands a `memory`, `entity`, or `source` node by ID and accepts the previous page's cursor. Both routes enforce the token's project and `memory:read` scope.

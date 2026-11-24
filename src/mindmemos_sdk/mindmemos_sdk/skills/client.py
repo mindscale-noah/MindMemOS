@@ -1,0 +1,414 @@
+"""Synchronous client for every public standalone Skill service endpoint."""
+
+from __future__ import annotations
+
+from ..config import DIRECT_SKILL_API_PATH
+from ..errors import AuthRequiredError
+from ..transport import HttpTransport
+from .core import SkillCore, SkillRoute
+from .typing import (
+    ActivateRequest,
+    AddGraphMembersRequest,
+    CommitRequest,
+    DeleteRequest,
+    DiffRequest,
+    EvaluationQueryRequest,
+    EvolveRequest,
+    GraphResolveRequest,
+    GraphSnapshotRequest,
+    GraphSnapshotsRequest,
+    HistoryRequest,
+    ListRequest,
+    OrganizeRequest,
+    RecommendRequest,
+    RegisterRequest,
+    RemoveGraphMembersRequest,
+    ShowRequest,
+    SkillAnalyzeRequest,
+    SkillData,
+    SkillRequestBody,
+    SkillResolveRequest,
+    TaskProgressRequest,
+    TaskShowRequest,
+    TrainingRequest,
+    TrajectoryAnalyzeRequest,
+    TrajectoryListRequest,
+    TrajectoryReportRequest,
+    TrajectoryShowRequest,
+    TrajectoryStatisticsRequest,
+    UpdateInfoRequest,
+    VersionResolveRequest,
+)
+
+
+class SkillClient:
+    """Call the Skill service without local registration or upload state."""
+
+    def __init__(self, transport: HttpTransport | None, *, path_prefix: str = DIRECT_SKILL_API_PATH) -> None:
+        """Use an existing synchronous HTTP transport.
+
+        Args:
+            transport: Configured Skill transport, or None when Skill is unconfigured.
+            path_prefix: API path relative to the transport base URL. Use an empty string when
+                the base URL already includes the full Skill API root.
+        """
+        self._transport = transport
+        self._path_prefix = path_prefix
+
+    def _post(self, route: SkillRoute, body: SkillRequestBody, *, retry: bool = True) -> SkillData:
+        if self._transport is None:
+            raise AuthRequiredError("Configure an independent Skill service before using Skills.")
+        request = SkillCore.prepare(route, body, path_prefix=self._path_prefix)
+        options = {} if retry else {"retry": False}
+        envelope = self._transport.post_envelope(request.path, json=request.body, params=request.params, **options)
+        return envelope.data if envelope.data is not None else {}
+
+    def register(self, request: RegisterRequest) -> SkillData:
+        """Register a family from a complete content and resources.
+
+        Args:
+            request: Family name, alias, initial version, and source files.
+
+        Returns:
+            New family and version identities.
+        """
+        return self._post(SkillRoute.REGISTER, request)
+
+    def list(self, request: ListRequest) -> SkillData:
+        """List families in a cursor page.
+
+        Args:
+            request: Optional filters and pagination cursor.
+
+        Returns:
+            Items and next cursor from the service.
+        """
+        return self._post(SkillRoute.LIST, request)
+
+    def show(self, request: ShowRequest) -> SkillData:
+        """Read a family and a complete selected version.
+
+        Args:
+            request: Family identity and optional historical version.
+
+        Returns:
+            Family metadata and portable version content.
+        """
+        return self._post(SkillRoute.SHOW, request)
+
+    def commit(self, request: CommitRequest) -> SkillData:
+        """Commit a new immutable source version.
+
+        Args:
+            request: Family, complete content and resources, version label, and activation choice.
+
+        Returns:
+            New version identity and active-version state.
+        """
+        return self._post(SkillRoute.COMMIT, request)
+
+    def history(self, request: HistoryRequest) -> SkillData:
+        """Page one family's version history.
+
+        Args:
+            request: Family identity and offset pagination.
+
+        Returns:
+            Version summaries and pagination metadata.
+        """
+        return self._post(SkillRoute.HISTORY, request)
+
+    def diff(self, request: DiffRequest) -> SkillData:
+        """Compare two stored source versions.
+
+        Args:
+            request: Source and target family/version selection.
+
+        Returns:
+            Per-file and implementation differences.
+        """
+        return self._post(SkillRoute.DIFF, request)
+
+    def activate(self, request: ActivateRequest) -> SkillData:
+        """Select an existing version as active.
+
+        Args:
+            request: Family and owned version identities.
+
+        Returns:
+            Selected active version identity.
+        """
+        return self._post(SkillRoute.ACTIVATE, request)
+
+    def update_info(self, request: UpdateInfoRequest) -> SkillData:
+        """Update mutable family fields.
+
+        Args:
+            request: Family identity and fields to replace.
+
+        Returns:
+            Updated family metadata.
+        """
+        return self._post(SkillRoute.UPDATE_INFO, request)
+
+    def delete(self, request: DeleteRequest) -> SkillData:
+        """Delete an unreferenced family.
+
+        Args:
+            request: Exact family identity.
+
+        Returns:
+            Deletion confirmation from the service.
+        """
+        return self._post(SkillRoute.DELETE, request)
+
+    def version_resolve(self, request: VersionResolveRequest) -> SkillData:
+        """Resolve a canonical source hash to an owned version.
+
+        Args:
+            request: Hash and optional exact family/version selectors.
+
+        Returns:
+            Resolved version information.
+        """
+        return self._post(SkillRoute.VERSION_RESOLVE, request)
+
+    def skill_resolve(self, request: SkillResolveRequest) -> SkillData:
+        """Resolve a family alias or immutable Skill version.
+
+        Args:
+            request: Skill identity or alias in the configured project.
+
+        Returns:
+            Selected family and version information.
+        """
+        return self._post(SkillRoute.SKILL_RESOLVE, request)
+
+    def report_trajectory(self, request: TrajectoryReportRequest, *, retry: bool = True) -> SkillData:
+        """Report one execution with all its loaded Skill versions.
+
+        Args:
+            request: Actor, messages, exact versions, and execution timing.
+            retry: Whether to apply configured HTTP transport retries.
+
+        Returns:
+            Stored trajectory identity.
+        """
+        return self._post(SkillRoute.TRAJECTORY_REPORT, request, retry=retry)
+
+    def trajectory_statistics(self, request: TrajectoryStatisticsRequest) -> SkillData:
+        """Read bounded aggregate counts for one Skill version.
+
+        Args:
+            request: Owning family and exact version identity.
+
+        Returns:
+            Global totals, thirty calendar buckets and latest evolution time.
+        """
+        return self._post(SkillRoute.TRAJECTORY_STATISTICS, request)
+
+    def show_trajectory(self, request: TrajectoryShowRequest) -> SkillData:
+        """Read one stored trajectory.
+
+        Args:
+            request: Exact trajectory identity.
+
+        Returns:
+            Complete stored execution record.
+        """
+        return self._post(SkillRoute.TRAJECTORY_SHOW, request)
+
+    def list_trajectories(self, request: TrajectoryListRequest) -> SkillData:
+        """Page trajectories of one family.
+
+        Args:
+            request: Family, optional filters, and cursor.
+
+        Returns:
+            Trajectory summaries and next cursor.
+        """
+        return self._post(SkillRoute.TRAJECTORY_LIST, request)
+
+    def organize(self, request: OrganizeRequest) -> SkillData:
+        """Request Skill graph organization.
+
+        Args:
+            request: Graph alias, message, and optional exact versions.
+
+        Returns:
+            Service task data when the pipeline is available.
+        """
+        return self._post(SkillRoute.ORGANIZE, request)
+
+    def graph_resolve(self, request: GraphResolveRequest) -> SkillData:
+        """Resolve a graph reference.
+
+        Args:
+            request: Graph ID, alias, or prefix.
+
+        Returns:
+            Resolved graph information when available.
+        """
+        return self._post(SkillRoute.GRAPH_RESOLVE, request)
+
+    def delete_graph(self, request: GraphResolveRequest) -> SkillData:
+        """Soft-delete one project-owned graph.
+
+        Args:
+            request: Graph ID, alias, or unique prefix.
+
+        Returns:
+            Deletion confirmation.
+        """
+        return self._post(SkillRoute.GRAPH_DELETE, request)
+
+    def add_graph_members(self, request: AddGraphMembersRequest) -> SkillData:
+        """Add new families without replacing existing members.
+
+        Args:
+            request: Graph reference, new members, and Scene refresh policy.
+
+        Returns:
+            Published snapshot and its complete member versions.
+        """
+        return self._post(SkillRoute.GRAPH_MEMBERS_ADD, request)
+
+    def remove_graph_members(self, request: RemoveGraphMembersRequest) -> SkillData:
+        """Remove members without deleting their canonical Skill versions.
+
+        Args:
+            request: Graph reference and member batch.
+
+        Returns:
+            Published snapshot and its remaining member versions.
+        """
+        return self._post(SkillRoute.GRAPH_MEMBERS_REMOVE, request)
+
+    def preview_graph(self, request: GraphResolveRequest) -> SkillData:
+        """Read the published topology selected by a graph reference.
+
+        Args:
+            request: Graph family, alias, or immutable snapshot reference.
+
+        Returns:
+            Skill/Scene nodes, relations, and snapshot identity.
+        """
+        return self._post(SkillRoute.GRAPH_PREVIEW, request)
+
+    def list_graphs(self) -> SkillData:
+        """List graphs owned by the authenticated project.
+
+        Returns:
+            Project-owned graph records.
+        """
+        return self._post(SkillRoute.GRAPHS_LIST, SkillRequestBody())
+
+    def graph_snapshots(self, request: GraphSnapshotsRequest) -> SkillData:
+        """List immutable snapshots of one graph.
+
+        Args:
+            request: Exact project-owned graph identity.
+
+        Returns:
+            Graph snapshot records and publication revisions.
+        """
+        return self._post(SkillRoute.GRAPHS_SNAPSHOTS, request)
+
+    def graph_snapshot(self, request: GraphSnapshotRequest) -> SkillData:
+        """Read one graph's Skill nodes and edges.
+
+        Args:
+            request: Exact graph and snapshot identities.
+
+        Returns:
+            Resolved nodes, edges, and snapshot identity.
+        """
+        return self._post(SkillRoute.GRAPHS_SNAPSHOT, request)
+
+    def recommend(self, request: RecommendRequest) -> SkillData:
+        """Request recommendations from a published graph.
+
+        Args:
+            request: Graph reference, query, and optional result limit.
+
+        Returns:
+            Recommended versions when the pipeline is available.
+        """
+        return self._post(SkillRoute.RECOMMEND, request)
+
+    def analyze_skill(self, request: SkillAnalyzeRequest) -> SkillData:
+        """Run or reuse static Skill scoring.
+
+        Args:
+            request: Exact version, optional trace identity and cache refresh choice.
+
+        Returns:
+            Evaluation record with status, scores, findings and provenance.
+        """
+        return self._post(SkillRoute.SKILL_ANALYZE, request)
+
+    def analyze_trajectory(self, request: TrajectoryAnalyzeRequest) -> SkillData:
+        """Run or reuse execution analysis.
+
+        Args:
+            request: Stored trajectory, optional attribution and verifier score overrides.
+
+        Returns:
+            Evaluation record with status, verdict and supporting evidence.
+        """
+        return self._post(SkillRoute.TRAJECTORY_ANALYZE, request)
+
+    def query_evaluations(self, request: EvaluationQueryRequest) -> SkillData:
+        """Read completed evaluations without triggering model calls.
+
+        Args:
+            request: Exact versions, optional analyzer filters and result limit.
+
+        Returns:
+            Items containing stored completed evaluation records.
+        """
+        return self._post(SkillRoute.EVALUATIONS_QUERY, request)
+
+    def evolve(self, request: EvolveRequest) -> SkillData:
+        """Submit a nonempty list of exact Skill versions for evolution.
+
+        Args:
+            request: Exact input versions, permissions and activation choice.
+
+        Returns:
+            Accepted task data when the pipeline is available.
+        """
+        return self._post(SkillRoute.EVOLVE, request)
+
+    def show_task(self, request: TaskShowRequest) -> SkillData:
+        """Read one asynchronous Skill task.
+
+        Args:
+            request: Exact task identity.
+
+        Returns:
+            Task state when task storage is available.
+        """
+        return self._post(SkillRoute.TASK_SHOW, request)
+
+    def train(self, request: TrainingRequest) -> SkillData:
+        """Submit a background training run.
+
+        Args:
+            request: Complete tasks, split, input version, and server run directory.
+
+        Returns:
+            Accepted task identity and state.
+        """
+        return self._post(SkillRoute.TRAIN, request)
+
+    def task_progress(self, request: TaskProgressRequest) -> SkillData:
+        """Read task logs after a sequence number.
+
+        Args:
+            request: Task identity and exclusive log sequence cursor.
+
+        Returns:
+            Ordered progress event records, including an empty list when no new events exist.
+        """
+        return self._post(SkillRoute.TASK_PROGRESS, request)

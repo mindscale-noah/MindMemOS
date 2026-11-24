@@ -75,14 +75,14 @@ class KafkaProducer:
             logger.info("kafka producer stopped")
 
     async def send(
-            self,
-            topic: str,
-            value: Any,
-            *,
-            key: str | None = None,
-            dispatch_key: str | None = None,
-            headers: dict[str, str] | None = None,
-            wait: bool = False,
+        self,
+        topic: str,
+        value: Any,
+        *,
+        key: str | None = None,
+        dispatch_key: str | None = None,
+        headers: dict[str, str] | None = None,
+        wait: bool = False,
     ) -> asyncio.Future[Any]:
         """Enqueue one Kafka message for asynchronous delivery.
 
@@ -112,15 +112,14 @@ class KafkaProducer:
                 key = dispatch_key
 
         with tracer.start_as_current_span(
-                f"kafka.publish {topic}",
-                kind=SpanKind.PRODUCER,
+            f"kafka.publish {topic}",
+            kind=SpanKind.PRODUCER,
         ) as span:
             span.set_attribute("messaging.system", "kafka")
             span.set_attribute("messaging.destination.name", topic)
             if key is not None:
                 span.set_attribute("messaging.kafka.message.key", key)
 
-            # 1. 记录准备阶段开始
             prepare_start = time.perf_counter()
 
             # Inject while the publish span is active so downstream spans use it as parent.
@@ -132,11 +131,9 @@ class KafkaProducer:
             payload = serialize_value(value)
             encoded_key = key.encode("utf-8") if key is not None else None
 
-            # 1. 记录准备阶段结束
             prepare_duration = time.perf_counter() - prepare_start
             span.set_attribute("kafka.publish.prepare.duration_ms", prepare_duration * 1000)
 
-            # 2. 记录信号量获取阶段开始
             semaphore_start = time.perf_counter()
             if self._inflight is not None:
                 await self._inflight.acquire()
@@ -144,7 +141,6 @@ class KafkaProducer:
             span.set_attribute("kafka.publish.semaphore.duration_ms", semaphore_duration * 1000)
 
             try:
-                # 3. 记录发送阶段开始
                 send_start = time.perf_counter()
                 send_future = await self._producer.send(
                     topic,
@@ -179,23 +175,19 @@ class KafkaProducer:
 
             send_future.add_done_callback(_cleanup_done)
 
-            # 4. 记录回调设置完成时间（用于总耗时统计）
             span.set_attribute("kafka.publish.enqueue.complete", True)
 
         # Outside the publish span: optionally block on this message's broker
         # ack so the caller can report delivery success/failure. Awaiting the future
         # re-raises the delivery exception when the send ultimately failed.
         if wait:
-            # 5. 记录等待确认阶段
             wait_start = time.perf_counter()
             await send_future
             wait_duration = time.perf_counter() - wait_start
-            # 注意：这里在span外部，需要用当前的trace上下文或者创建一个新的span
-            # 但为了不影响主span，我们可以用logger记录，或者创建一个子span
             logger.info(
                 f"kafka message wait duration: {wait_duration * 1000:.2f}ms",
                 topic=topic,
-                wait_duration_ms=wait_duration * 1000
+                wait_duration_ms=wait_duration * 1000,
             )
         return send_future
 

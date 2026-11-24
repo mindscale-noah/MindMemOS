@@ -43,8 +43,6 @@ class RunIdentity:
         return entry
 
 
-
-
 def new_identity(
     benchmark: str,
     memory_algorithm: str,

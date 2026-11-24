@@ -299,6 +299,11 @@ def validate_provider_binding_patch(
 def _changed_embedding_identity_fields(old_routers: dict[str, Any], new_routers: dict[str, Any]) -> list[str]:
     old_endpoints = _router_endpoints(old_routers, "embed_model_router")
     new_endpoints = _router_endpoints(new_routers, "embed_model_router")
+    # A binding created before an embedding model was selected cannot have
+    # produced embedding vectors. Allow it to acquire its initial embedding
+    # identity; once present, the identity remains immutable.
+    if not old_endpoints:
+        return []
     blocked: list[str] = []
     max_len = max(len(old_endpoints), len(new_endpoints))
     for index in range(max_len):
@@ -325,10 +330,7 @@ def _hydrate_memory_gateway_routers(routers: dict[str, Any], ctx: MemoryRequestC
         for router_name in ("chat_model_router", "embed_model_router", "rerank_model_router")
         for endpoint in _router_endpoints(hydrated, router_name)
         if endpoint.get("transport") == "platform_gateway"
-        or (
-            endpoint.get("transport") is None
-            and MEMORY_GATEWAY_ROUTE_MARKER in str(endpoint.get("api_base") or "")
-        )
+        or (endpoint.get("transport") is None and MEMORY_GATEWAY_ROUTE_MARKER in str(endpoint.get("api_base") or ""))
     ]
     if not memory_endpoints:
         return hydrated

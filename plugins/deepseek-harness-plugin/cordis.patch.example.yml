@@ -23,7 +23,7 @@
       config:
         topK: 5
         addMode: async
-        # Scope search + add to one user. Omit for project-wide search (add
+        # Scope recall and reporting. Omit for project-wide recall (reporting
         # then inherits the CLI's default user).
         userId: alice
         appId: deepseek-harness

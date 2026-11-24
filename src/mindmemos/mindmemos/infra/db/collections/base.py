@@ -41,15 +41,14 @@ class CollectionRepository:
 
         raise NotImplementedError
 
-    def collection_for_project(self, project_id: str | None) -> str:
-        """Return the default physical collection for a project.
+    def collection_for_project(self) -> str:
+        """Return the default shared physical collection.
 
         Payload-only repositories always use their base collection. Vector
         repositories use the configured default dimension; operations that
         already have an actual vector call :meth:`collection_for_vector_size`.
         """
 
-        del project_id
         if not self._cfg.project_collection_namespace_enabled or not self._is_vector_repository:
             return self.collection
         return self.collection_for_vector_size(self._cfg.vector_size)
@@ -308,7 +307,6 @@ class CollectionRepository:
 
     async def _ensure_project_vector_collection(
         self,
-        project_id: str | None,
         *,
         vector_size: int,
         enable_sparse: bool,
@@ -317,7 +315,6 @@ class CollectionRepository:
     ) -> str:
         """Ensure the dimension-compatible shared vector collection exists."""
 
-        del project_id
         collection = self.collection_for_vector_size(vector_size)
         if not self._cfg.project_collection_namespace_enabled:
             return collection
@@ -336,29 +333,20 @@ class CollectionRepository:
         )
         return collection
 
-    async def _ensure_project_payload_collection(
-        self,
-        project_id: str | None,
-        *,
-        payload_indexes: list[PayloadIndexSpec],
-        on_disk_payload: bool | None = None,
-    ) -> str:
+    async def _ensure_project_payload_collection(self) -> str:
         """Return the already bootstrapped shared payload-only collection."""
 
-        del project_id, payload_indexes, on_disk_payload
         return self.collection
 
     async def _upsert_payload_points_by_project(
         self,
         points: list[tuple[str, dict[str, Any]]],
-        *,
-        payload_indexes: list[PayloadIndexSpec],
     ) -> None:
         """Upsert payload-only points into the shared base collection."""
 
         if not points:
             return
-        collection = await self._ensure_project_payload_collection(None, payload_indexes=payload_indexes)
+        collection = await self._ensure_project_payload_collection()
         await self._engine.upsert(
             collection,
             [self._payload_point(point_id, payload) for point_id, payload in points],

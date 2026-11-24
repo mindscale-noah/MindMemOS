@@ -1,0 +1,21 @@
+environment:
+  class_name: livemath
+  config:
+    agent:
+      model: gpt-5.4-mini
+      api_key: null
+      base_url: null
+      reasoning_effort: medium
+      max_completion_tokens: 16384
+data:
+  class_name: livemath
+  config:
+    data_path: data/mindmemos_skill/livemath/data
+samples_file: null
+split_file: resources/mindmemos_skill_eval/skill_forest-livemath/data_splits/splits.json
+split: test
+limit: null
+skills: []
+concurrency: 1
+output_dir: null
+skill_body_only: false

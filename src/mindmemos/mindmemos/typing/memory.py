@@ -726,16 +726,20 @@ class EntitySearchHit(BaseModel):
 
     entity_id: str
     """Canonical business entity id, never the storage-only search-field point id."""
+
     score: float
     entity: EntityView | None = None
     source: str | None = None
     rank: int | None = None
     best_search_field: str = ""
     """Highest-scoring matched search_field text for this query, empty for core-point hits."""
+
     best_search_field_index: int | None = None
     """Original index of the matched search_field on the entity metadata."""
+
     best_search_field_score: float | None = None
     """Raw recall score for the matched search_field."""
+
     matched_point_role: str = "core"
     """Storage point role for the winning hit: ``core`` or ``search_field``."""
 

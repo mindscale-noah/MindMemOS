@@ -1,7 +1,7 @@
 [project]
 name = "mindmemos-sdk"
-version = "0.1.5"
-description = "Python SDK and CLI for MindMemOS (text and multimodal memory)"
+version = "1.0.0"
+description = "Python SDK and CLI for MindMemOS"
 readme = "README.md"
 authors = []
 requires-python = ">=3.11,<3.14"

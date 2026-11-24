@@ -1,0 +1,1 @@
+"""Shared structured Scene semantics."""

@@ -8,11 +8,11 @@ import asyncio
 try:
     from .memory import add_memory_args, run_benchmark_matrix
     from .memory.db_reset import ProjectResetError
-    from .skills import add_skill_args, run_skill_benchmark
+    from .skills import add_skill_args, run_skill_command
 except ImportError:  # pragma: no cover - used when running this file directly
     from mindmemos_eval.memory import add_memory_args, run_benchmark_matrix
     from mindmemos_eval.memory.db_reset import ProjectResetError
-    from mindmemos_eval.skills import add_skill_args, run_skill_benchmark
+    from mindmemos_eval.skills import add_skill_args, run_skill_command
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -23,7 +23,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     memory = subparsers.add_parser("memory", help="Run memory benchmark matrix add/search evaluations.")
     add_memory_args(memory)
 
-    skill = subparsers.add_parser("skill", help="Run skill benchmark self-evolution evaluation.")
+    skill = subparsers.add_parser("skill", help="List Skill evaluation inputs or evaluate Skill pipelines.")
     add_skill_args(skill)
 
     return parser
@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
     if args.command == "skill":
-        return run_skill_benchmark(args)
+        return run_skill_command(args)
     raise ValueError(f"Unknown command: {args.command}")
 
 

@@ -386,7 +386,7 @@ class MemoryService:
         request: AddRequest,
         add_record_id: str,
         request_submitted_at,
-        skill_bindings,
+        skill_bindings: list[SkillBinding] | None,
     ):
         try:
             if payload.mode == "async":
@@ -403,6 +403,7 @@ class MemoryService:
                         "use mode='sync' or enable Kafka in config",
                         code="add.async_unavailable",
                     )
+                # Keep the existing async payload shape during rolling deployment.
                 record_metadata = {
                     "request_submitted_at": request_submitted_at.isoformat(),
                     "skill_bindings": [binding.model_dump(mode="json") for binding in skill_bindings or []],
@@ -455,9 +456,9 @@ class MemoryService:
         add_record_id: str,
         skill_context: list[SkillContext] | None,
     ) -> list[SkillBinding] | None:
-        """Resolve ``skill_context`` to trace bindings, swallowing all failures."""
+        """Resolve trace bindings without blocking Memory add on binding errors."""
 
-        if self._skill_store is None or not skill_context:
+        if not skill_context:
             return None
         try:
             return await self._skill_store.bind_skill_context(

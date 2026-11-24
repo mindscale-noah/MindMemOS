@@ -1,0 +1,11 @@
+Here is the target agent's task execution log (raw text). The task description is included in the first user message:
+
+<agent_log>
+{agent_log}
+</agent_log>
+
+Please analyze this log and produce:
+1. A **Lean Solution Path** — the minimal, clean action sequence that led to the correct answer, with all failed attempts removed.
+2. A set of **Success Memory Items** (at most 3) capturing generalizable strategies that could help solve similar problems in the future.
+
+Follow the output format defined in the system prompt exactly.

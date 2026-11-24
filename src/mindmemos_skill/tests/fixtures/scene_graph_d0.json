@@ -1,0 +1,771 @@
+{
+  "provenance": {
+    "baseline_commit": "31b6dedd77b34789b76b6277bd5fb5e61b78626c",
+    "reference": "scene_of_skills/core (read-only local source, raw-byte SHA-256)",
+    "reference_sha256": {
+      "engine.py": "bdb0e9d0080f0381e43a543c422e25f386bdb7755e7578b69cfd3002a2f79155",
+      "retrieval.py": "f024c186f37fff93a5ffb6633443376258e513653af0bfff56eceac9c792d2a3",
+      "scene_edges.py": "f927ce9e05b91146f4fc8811b6d75eb58d2a7585963d75574a62d03b338e5a9e",
+      "scene_nodes.py": "3ca233a31defc9aec97c598ce21c033f038dc02cc7c00407df3b5011080f9997",
+      "ssl_normalize.py": "d57cfe8ef552d0b2c15153ff98b9c11155e65187a5811b83a47ff455cb3ad534",
+      "ssl_annotate.py": "bf2c91107b8e7cf2ee53f6d8d7d26c17d91d80b511d9597b16ac592036954989",
+      "prompts.py": "802acf39b22afbba44b8b49f805630f830fd93924ce754269470bb67c54d1e2f",
+      "parsing.py": "33f97576eecb2ee30207b69567d3967d7debf763254115b8cc22e738e4074d4e"
+    },
+    "oracle": "Exact rational solve of (I - 0.8 T^T) p = 0.2 e_seed; no imported GOS code or model calls",
+    "baseline_sha256": {
+      "src/mindmemos_skill/mindmemos_skill/algos/manage/skill_manage/algorithm.py": "fa404e9b0be45f6e2fedbdc9adf8a63aa5dcc558f0879b31ce3bd2a8b97e31c7",
+      "src/mindmemos_skill/mindmemos_skill/algos/manage/skill_manage/config.py": "1068025ed24ec963363f87214480f92d928e34bcceb0d63aa0431e2daca81df4",
+      "src/mindmemos_skill/mindmemos_skill/algos/manage/skill_manage/retrieval.py": "d5f00e0ab7667cf8a923fb19cb5ba67a445091e37286d439c6842bc41106c2b4",
+      "src/mindmemos_skill/mindmemos_skill/persistence/db_services/skill_management/writer.py": "3d12f9e8bea37f475cb8c3e3d41659a3bce5b7a831efe8caa30723c5bf89980c",
+      "uv.lock": "1b1ea0e937fd02aa87ba087255ad38248b8eb3a4707b293b92013089e0056ee1"
+    }
+  },
+  "documents": {
+    "a::csv": "---\nname: CSV transformer\ndescription: Read and export tabular rows\n---\nRead and export tabular rows.\nRun the nebula dedupe stage to validate rows. If rows valid, export clean_rows; if rows invalid, abort. Each action yields its result.\n",
+    "b": "---\nname: CSV transformer\ndescription: Create a chart from clean rows\n---\nCreate a chart from clean rows.\n",
+    "c": "---\nname: Isolated\ndescription: Write plain notes\n---\nWrite plain notes.\n",
+    "d": "---\nname: Isolated\ndescription: Draw a sketch\n---\nDraw a sketch.\n"
+  },
+  "build_input": {
+    "project_id": "fixture-project",
+    "graph_id": "fixture-graph",
+    "config": {
+      "scene_source": "provided",
+      "embedding": {
+        "space_id": "synthetic-v1",
+        "model": "fixture-only",
+        "dimensions": 3
+      }
+    },
+    "members": [
+      {
+        "member_id": "a::csv",
+        "family_id": "family-csv",
+        "version_id": "version-family-csv-1",
+        "content_hash": "3e32a80b81579c454b09a30dc759d52dd86a39a7117bd8524aaa75f3baf30bcf",
+        "local_snapshot_hash": "efce640c859a4dcec96fec9b5b9436e1923c5064953fa0dfeb0a8a58e3ce39f4"
+      },
+      {
+        "member_id": "b",
+        "family_id": "family-chart",
+        "version_id": "version-family-chart-1",
+        "content_hash": "1a988d9edabfa432a3fd863cf9506ed8d628ca619b80c76070624a823fb51b0a",
+        "local_snapshot_hash": "9588d408e4bfb2df070d0bb11aa27855038f1c07cb0388e2a354b9c7dd37913e"
+      },
+      {
+        "member_id": "c",
+        "family_id": "family-notes",
+        "version_id": "version-family-notes-1",
+        "content_hash": "30cb71179e2720bfec67f7d97ff5bc978d50dce279b67f4f3905d2444a50af83",
+        "local_snapshot_hash": "b00af7b94f80fc5612baee69329fbeb755f06a60aa328d8cdc33e98800587c12"
+      },
+      {
+        "member_id": "d",
+        "family_id": "family-sketch",
+        "version_id": "version-family-sketch-1",
+        "content_hash": "7e3dbd823306c1d4a56eb7c8c2e7607f29821a57c7aa921030544e6dfe0b3092",
+        "local_snapshot_hash": "459e78d5c8593c791f41cd72dad65ca848d40e2904e30e2d37b8c42304192399"
+      }
+    ],
+    "provided": [
+      {
+        "member_id": "a::csv",
+        "record": {
+          "skill": {
+            "name": "CSV transformer",
+            "goal": "Read and export tabular rows",
+            "inputs": [
+              "raw.csv"
+            ],
+            "outputs": [
+              "clean_rows"
+            ]
+          },
+          "entry_scene_id": "validate",
+          "scenes": [
+            {
+              "scene_id": "validate",
+              "name": "Stage validate",
+              "goal": "nebula dedupe stage",
+              "inputs": [
+                "raw.csv"
+              ],
+              "outputs": [
+                "clean_rows"
+              ],
+              "scene_type": "VALIDATE",
+              "entry_logic_step_id": "step-validate",
+              "contained_logic_steps": [
+                "step-validate"
+              ],
+              "next_scene_rules": [
+                {
+                  "target": "export",
+                  "condition": "rows valid"
+                },
+                {
+                  "target": "END_ABORT",
+                  "condition": "rows invalid"
+                }
+              ]
+            },
+            {
+              "scene_id": "export",
+              "name": "Stage export",
+              "goal": "Perform export",
+              "inputs": [
+                "raw.csv"
+              ],
+              "outputs": [
+                "clean_rows"
+              ],
+              "scene_type": "TRANSFORM",
+              "entry_logic_step_id": "step-export",
+              "contained_logic_steps": [
+                "step-export"
+              ],
+              "next_scene_rules": [
+                {
+                  "target": "END_SUCCESS"
+                }
+              ]
+            }
+          ],
+          "logic_steps": [
+            {
+              "logic_step_id": "step-validate",
+              "action": "nebula dedupe stage",
+              "next_step_rules": [
+                {
+                  "target": "YIELD_DONE"
+                }
+              ]
+            },
+            {
+              "logic_step_id": "step-export",
+              "action": "Perform export",
+              "next_step_rules": [
+                {
+                  "target": "YIELD_DONE"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "member_id": "b",
+        "record": {
+          "skill": {
+            "name": "CSV transformer",
+            "goal": "Create a chart from clean rows",
+            "inputs": [
+              "clean_rows"
+            ],
+            "outputs": [
+              "chart.svg"
+            ]
+          },
+          "entry_scene_id": "chart",
+          "scenes": [
+            {
+              "scene_id": "chart",
+              "name": "Stage chart",
+              "goal": "Perform chart",
+              "inputs": [
+                "clean_rows"
+              ],
+              "outputs": [
+                "chart.svg"
+              ],
+              "scene_type": "TRANSFORM",
+              "entry_logic_step_id": "step-chart",
+              "contained_logic_steps": [
+                "step-chart"
+              ],
+              "next_scene_rules": [
+                {
+                  "target": "END_SUCCESS"
+                }
+              ]
+            }
+          ],
+          "logic_steps": [
+            {
+              "logic_step_id": "step-chart",
+              "action": "Perform chart",
+              "next_step_rules": [
+                {
+                  "target": "YIELD_DONE"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "member_id": "c",
+        "record": {
+          "skill": {
+            "name": "Isolated",
+            "goal": "Write plain notes",
+            "inputs": [
+              "notes"
+            ],
+            "outputs": [
+              "text"
+            ]
+          },
+          "entry_scene_id": "notes",
+          "scenes": [
+            {
+              "scene_id": "notes",
+              "name": "Stage notes",
+              "goal": "Perform notes",
+              "inputs": [
+                "notes"
+              ],
+              "outputs": [
+                "text"
+              ],
+              "scene_type": "TRANSFORM",
+              "entry_logic_step_id": "step-notes",
+              "contained_logic_steps": [
+                "step-notes"
+              ],
+              "next_scene_rules": [
+                {
+                  "target": "END_SUCCESS"
+                }
+              ]
+            }
+          ],
+          "logic_steps": [
+            {
+              "logic_step_id": "step-notes",
+              "action": "Perform notes",
+              "next_step_rules": [
+                {
+                  "target": "YIELD_DONE"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "member_id": "d",
+        "record": {
+          "skill": {
+            "name": "Isolated",
+            "goal": "Draw a sketch",
+            "inputs": [
+              "pencil"
+            ],
+            "outputs": [
+              "sketch"
+            ]
+          },
+          "entry_scene_id": "sketch",
+          "scenes": [
+            {
+              "scene_id": "sketch",
+              "name": "Stage sketch",
+              "goal": "Perform sketch",
+              "inputs": [
+                "pencil"
+              ],
+              "outputs": [
+                "sketch"
+              ],
+              "scene_type": "TRANSFORM",
+              "entry_logic_step_id": "step-sketch",
+              "contained_logic_steps": [
+                "step-sketch"
+              ],
+              "next_scene_rules": [
+                {
+                  "target": "END_SUCCESS"
+                }
+              ]
+            }
+          ],
+          "logic_steps": [
+            {
+              "logic_step_id": "step-sketch",
+              "action": "Perform sketch",
+              "next_step_rules": [
+                {
+                  "target": "YIELD_DONE"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "content": {
+    "embedding": {
+      "space_id": "synthetic-v1",
+      "model": "fixture-only",
+      "dimensions": 3
+    },
+    "nodes": [
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "node_id": "[\"skill\",\"a::csv\"]",
+        "name": "CSV transformer",
+        "node_type": "skill",
+        "skill_version_id": "version-family-csv-1",
+        "description": "Read and export tabular rows",
+        "inputs": [
+          "raw.csv"
+        ],
+        "outputs": [
+          "clean_rows"
+        ],
+        "metadata": {
+          "collection_skill_id": "a::csv",
+          "family_id": "family-csv"
+        },
+        "embedding": [
+          0,
+          1,
+          0
+        ],
+        "embedding_input_hash": "077b05885da1ef01fa98120d0cd538d4103c71c12a1e0a906934d7298b13648b"
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "node_id": "[\"scene\",\"a::csv\",\"validate\"]",
+        "node_type": "scene",
+        "owner_node_id": "[\"skill\",\"a::csv\"]",
+        "name": "Stage validate",
+        "description": "nebula dedupe stage",
+        "inputs": [
+          "raw.csv"
+        ],
+        "outputs": [
+          "clean_rows"
+        ],
+        "metadata": {
+          "collection_skill_id": "a::csv",
+          "family_id": "family-csv",
+          "scene_id": "validate",
+          "scene_type": "VALIDATE",
+          "flow_text": "nebula dedupe stage => YIELD_DONE",
+          "exit_conditions": [
+            "END_ABORT"
+          ]
+        },
+        "embedding": [
+          1,
+          0,
+          0
+        ],
+        "embedding_input_hash": "9899176170c3533f2191c9c7e3790c04c0631e5ae1450abdba1485e7b7f8bfa0"
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "node_id": "[\"scene\",\"a::csv\",\"export\"]",
+        "node_type": "scene",
+        "owner_node_id": "[\"skill\",\"a::csv\"]",
+        "name": "Stage export",
+        "description": "Perform export",
+        "inputs": [
+          "raw.csv"
+        ],
+        "outputs": [
+          "clean_rows"
+        ],
+        "metadata": {
+          "collection_skill_id": "a::csv",
+          "family_id": "family-csv",
+          "scene_id": "export",
+          "scene_type": "TRANSFORM",
+          "flow_text": "Perform export => YIELD_DONE",
+          "exit_conditions": [
+            "END_SUCCESS"
+          ]
+        },
+        "embedding": [
+          0,
+          1,
+          0
+        ],
+        "embedding_input_hash": "4231fde2ec1ef8939272d01452ba378c9da15d104e15e615681b4b8d38e6e950"
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "node_id": "[\"skill\",\"b\"]",
+        "name": "CSV transformer",
+        "node_type": "skill",
+        "skill_version_id": "version-family-chart-1",
+        "description": "Create a chart from clean rows",
+        "inputs": [
+          "clean_rows"
+        ],
+        "outputs": [
+          "chart.svg"
+        ],
+        "metadata": {
+          "collection_skill_id": "b",
+          "family_id": "family-chart"
+        },
+        "embedding": [
+          0,
+          1,
+          0
+        ],
+        "embedding_input_hash": "12ad5fa55d0211fbb1284c16dc0665fab74df5eb5bd9ee40a73e450079c31384"
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "node_id": "[\"scene\",\"b\",\"chart\"]",
+        "node_type": "scene",
+        "owner_node_id": "[\"skill\",\"b\"]",
+        "name": "Stage chart",
+        "description": "Perform chart",
+        "inputs": [
+          "clean_rows"
+        ],
+        "outputs": [
+          "chart.svg"
+        ],
+        "metadata": {
+          "collection_skill_id": "b",
+          "family_id": "family-chart",
+          "scene_id": "chart",
+          "scene_type": "TRANSFORM",
+          "flow_text": "Perform chart => YIELD_DONE",
+          "exit_conditions": [
+            "END_SUCCESS"
+          ]
+        },
+        "embedding": [
+          0,
+          1,
+          0
+        ],
+        "embedding_input_hash": "5779504e0928b96ca98ab3ef5b4f5197915800344b904c9d23ff77e0374dc9fe"
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "node_id": "[\"skill\",\"c\"]",
+        "name": "Isolated",
+        "node_type": "skill",
+        "skill_version_id": "version-family-notes-1",
+        "description": "Write plain notes",
+        "inputs": [
+          "notes"
+        ],
+        "outputs": [
+          "text"
+        ],
+        "metadata": {
+          "collection_skill_id": "c",
+          "family_id": "family-notes"
+        },
+        "embedding": [
+          0,
+          1,
+          0
+        ],
+        "embedding_input_hash": "d2c5743e121cc131e3763dd45ef91281e8c33761634be5877189040c0cfd6a15"
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "node_id": "[\"scene\",\"c\",\"notes\"]",
+        "node_type": "scene",
+        "owner_node_id": "[\"skill\",\"c\"]",
+        "name": "Stage notes",
+        "description": "Perform notes",
+        "inputs": [
+          "notes"
+        ],
+        "outputs": [
+          "text"
+        ],
+        "metadata": {
+          "collection_skill_id": "c",
+          "family_id": "family-notes",
+          "scene_id": "notes",
+          "scene_type": "TRANSFORM",
+          "flow_text": "Perform notes => YIELD_DONE",
+          "exit_conditions": [
+            "END_SUCCESS"
+          ]
+        },
+        "embedding": [
+          0,
+          1,
+          0
+        ],
+        "embedding_input_hash": "5f1181fd4906c202b186b0c55e929de649d40395054743622b4e717ed23563cc"
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "node_id": "[\"skill\",\"d\"]",
+        "name": "Isolated",
+        "node_type": "skill",
+        "skill_version_id": "version-family-sketch-1",
+        "description": "Draw a sketch",
+        "inputs": [
+          "pencil"
+        ],
+        "outputs": [
+          "sketch"
+        ],
+        "metadata": {
+          "collection_skill_id": "d",
+          "family_id": "family-sketch"
+        },
+        "embedding": [
+          0,
+          1,
+          0
+        ],
+        "embedding_input_hash": "79f26bd83c09e0c39632fd77c43fdb4218c19b634684412e34f56221e92a2b42"
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "node_id": "[\"scene\",\"d\",\"sketch\"]",
+        "node_type": "scene",
+        "owner_node_id": "[\"skill\",\"d\"]",
+        "name": "Stage sketch",
+        "description": "Perform sketch",
+        "inputs": [
+          "pencil"
+        ],
+        "outputs": [
+          "sketch"
+        ],
+        "metadata": {
+          "collection_skill_id": "d",
+          "family_id": "family-sketch",
+          "scene_id": "sketch",
+          "scene_type": "TRANSFORM",
+          "flow_text": "Perform sketch => YIELD_DONE",
+          "exit_conditions": [
+            "END_SUCCESS"
+          ]
+        },
+        "embedding": [
+          0,
+          1,
+          0
+        ],
+        "embedding_input_hash": "662b8bf2987c32bff6fdf45af00ce3b063954602a5e7cc514dc4e1ed2e769426"
+      }
+    ],
+    "edges": [
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "edge_id": "00000000-0000-0000-0000-00000000000a",
+        "source_node_id": "[\"scene\",\"a::csv\",\"validate\"]",
+        "target_node_id": "[\"skill\",\"a::csv\"]",
+        "edge_type": "containment",
+        "weight": 1.0,
+        "metadata": {}
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "edge_id": "00000000-0000-0000-0000-00000000000b",
+        "source_node_id": "[\"scene\",\"a::csv\",\"export\"]",
+        "target_node_id": "[\"skill\",\"a::csv\"]",
+        "edge_type": "containment",
+        "weight": 1.0,
+        "metadata": {}
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "edge_id": "00000000-0000-0000-0000-00000000000c",
+        "source_node_id": "[\"scene\",\"b\",\"chart\"]",
+        "target_node_id": "[\"skill\",\"b\"]",
+        "edge_type": "containment",
+        "weight": 1.0,
+        "metadata": {}
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "edge_id": "00000000-0000-0000-0000-00000000000d",
+        "source_node_id": "[\"scene\",\"c\",\"notes\"]",
+        "target_node_id": "[\"skill\",\"c\"]",
+        "edge_type": "containment",
+        "weight": 1.0,
+        "metadata": {}
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "edge_id": "00000000-0000-0000-0000-00000000000e",
+        "source_node_id": "[\"scene\",\"d\",\"sketch\"]",
+        "target_node_id": "[\"skill\",\"d\"]",
+        "edge_type": "containment",
+        "weight": 1.0,
+        "metadata": {}
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "edge_id": "00000000-0000-0000-0000-00000000000f",
+        "source_node_id": "[\"scene\",\"a::csv\",\"validate\"]",
+        "target_node_id": "[\"scene\",\"a::csv\",\"export\"]",
+        "edge_type": "flow",
+        "weight": 0.3,
+        "metadata": {
+          "condition": "rows valid"
+        }
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "edge_id": "00000000-0000-0000-0000-000000000010",
+        "source_node_id": "[\"skill\",\"a::csv\"]",
+        "target_node_id": "[\"skill\",\"b\"]",
+        "edge_type": "dependency",
+        "weight": 1.0,
+        "metadata": {
+          "evidence": "clean_rows output matches input"
+        }
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "edge_id": "00000000-0000-0000-0000-000000000011",
+        "source_node_id": "[\"scene\",\"a::csv\",\"export\"]",
+        "target_node_id": "[\"scene\",\"b\",\"chart\"]",
+        "edge_type": "dependency",
+        "weight": 1.0,
+        "metadata": {
+          "evidence": "clean_rows output matches input"
+        }
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "edge_id": "00000000-0000-0000-0000-000000000012",
+        "source_node_id": "[\"scene\",\"a::csv\",\"export\"]",
+        "target_node_id": "[\"skill\",\"b\"]",
+        "edge_type": "dependency",
+        "weight": 1.0,
+        "metadata": {
+          "evidence": "clean_rows output matches input"
+        }
+      },
+      {
+        "project_id": "fixture-project",
+        "graph_id": "fixture-graph",
+        "graph_version_id": "00000000-0000-0000-0000-000000000001",
+        "edge_id": "00000000-0000-0000-0000-000000000013",
+        "source_node_id": "[\"skill\",\"a::csv\"]",
+        "target_node_id": "[\"scene\",\"b\",\"chart\"]",
+        "edge_type": "dependency",
+        "weight": 1.0,
+        "metadata": {
+          "evidence": "clean_rows output matches input"
+        }
+      }
+    ]
+  },
+  "scene_only_query": {
+    "text": "nebula dedupe stage",
+    "embedding": [
+      1,
+      0,
+      0
+    ],
+    "similarity_threshold": 0.9,
+    "seeds": [
+      "[\"scene\",\"a::csv\",\"validate\"]"
+    ]
+  },
+  "expected": {
+    "stationary_ppr_fraction": {
+      "[\"skill\",\"a::csv\"]": "194839480/682749807",
+      "[\"scene\",\"a::csv\",\"validate\"]": "144510275/682749807",
+      "[\"scene\",\"a::csv\",\"export\"]": "36833084/227583269",
+      "[\"skill\",\"b\"]": "42666400/227583269",
+      "[\"scene\",\"b\",\"chart\"]": "34967200/227583269",
+      "[\"skill\",\"c\"]": "0",
+      "[\"scene\",\"c\",\"notes\"]": "0",
+      "[\"skill\",\"d\"]": "0",
+      "[\"scene\",\"d\",\"sketch\"]": "0"
+    },
+    "scores": {
+      "a::csv": {
+        "ppr_score": 0.28537463943948066,
+        "scene_boost": 0.1058295978397838,
+        "graph_score": 0.39120423727926446,
+        "mean_graph_score": 0.3787505453663204,
+        "develop_sum": 0.6588782631468397
+      },
+      "b": {
+        "ppr_score": 0.1874759958738443,
+        "scene_boost": 0.07682287048965801,
+        "graph_score": 0.2642988663635023,
+        "mean_graph_score": 0.2642988663635023,
+        "develop_sum": 0.34112173685316033
+      },
+      "c": {
+        "ppr_score": 0.0,
+        "scene_boost": 0.0,
+        "graph_score": 0.0,
+        "mean_graph_score": 0.0,
+        "develop_sum": 0.0
+      },
+      "d": {
+        "ppr_score": 0.0,
+        "scene_boost": 0.0,
+        "graph_score": 0.0,
+        "mean_graph_score": 0.0,
+        "develop_sum": 0.0
+      }
+    },
+    "graph_order": [
+      "a::csv",
+      "b",
+      "c",
+      "d"
+    ],
+    "isolated_tie": [
+      "c",
+      "d"
+    ],
+    "zero_weight_policy": "No transition mass; intentionally differs from reference and develop weight-or-one",
+    "no_seed_policy": "Empty recommendation; no lexical rescue"
+  }
+}

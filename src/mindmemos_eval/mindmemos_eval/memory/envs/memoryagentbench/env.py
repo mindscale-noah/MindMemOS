@@ -768,7 +768,6 @@ class MemoryAgentBenchEnv:
         split: str | None = None,
         sub_dataset: str = "",
         limit: int = 0,
-        seed: int = 42,
     ) -> list[MemoryAgentBenchItem]:
         """Load MemoryAgentBench data from local JSON/JSONL or HuggingFace.
 
@@ -776,7 +775,6 @@ class MemoryAgentBenchEnv:
         top-level ``data`` list. HuggingFace loading is used when ``path`` is not
         supplied.
         """
-        del seed  # reserved for future random sampling; official configs use head sampling
         items: list[MemoryAgentBenchItem]
         if path:
             raw = _read_local_dataset(Path(path))

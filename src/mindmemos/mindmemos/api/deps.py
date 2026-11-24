@@ -186,9 +186,7 @@ async def get_image_access_context(
         )
     cfg = get_config()
     secret = resolve_signing_secret(cfg.blob_store.url_signing_secret, cfg.auth.gateway_jwt_secret)
-    if not verify_image_url_signature(
-        project_id, blob_id, user_id, expires, signature, secret, now=int(time.time())
-    ):
+    if not verify_image_url_signature(project_id, blob_id, user_id, expires, signature, secret, now=int(time.time())):
         raise AuthenticationError("invalid or expired image url signature", code="image.signature_invalid")
     ctx = AuthContext(
         request_id=str(uuid.uuid4()),

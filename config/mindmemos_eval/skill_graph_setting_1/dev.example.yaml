@@ -1,0 +1,13 @@
+# AgentSkillOS accuracy arm using the Setting 1 execution model.
+benchmark_root: data/mindmemos_skill/agentskillos
+agent:
+  class_name: claude
+  model: MiniMax-M2.7
+  base_url: null
+  api_key: null
+  timeout_s: 1800
+  extra_args: ["--allowedTools", "Read,Write,Edit,Glob,Grep,Bash,Skill"]
+execution_top_k: 5
+concurrency: 1
+
+output_dir: null

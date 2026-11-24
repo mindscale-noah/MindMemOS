@@ -25,6 +25,5 @@ def get_auth_provider() -> AuthProvider:
         )
     else:
         raise AuthenticationError(
-            f"unsupported auth mode: {cfg.mode}, only support api_key, gateway_jwt",
-            code="auth.unsupported_mode"
+            f"unsupported auth mode: {cfg.mode}, only support api_key, gateway_jwt", code="auth.unsupported_mode"
         )
